@@ -43,227 +43,13 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/threshold-exporter/pkg/confdname"
-)
-
-// Common error codes. Add new ones here as new error classes appear;
-// keeping them in a single var block makes the catalog grep-able.
-const (
-	CodeInvalidBody  = "INVALID_BODY"
-	CodeRateLimited  = "RATE_LIMITED"
-	CodePendingPR    = "PENDING_PR_EXISTS"
-	CodeTaskNotFound = "TASK_NOT_FOUND"
-	CodeForbidden    = "FORBIDDEN"
-	CodeNotFound     = "NOT_FOUND"
-	CodeConflict     = "CONFLICT"
-	CodeBadRequest   = "BAD_REQUEST"
-	CodeInternal     = "INTERNAL_ERROR"
-	// CodeConfigDecode marks a 500 whose text describes conf.d content the
-	// server could not decode or merge — /effective's `parse defaults[i]: …`,
-	// a tenant file the custom-alerts or PR-mode write cannot merge, an
-	// unparseable _groups.yaml / _views.yaml. The decoder's own message names
-	// no path. It is not INTERNAL_ERROR because WriteErrorEnvelope withholds
-	// every INTERNAL_ERROR text (#1700); the problem is in the operator's
-	// config, and the text says what is wrong.
-	CodeConfigDecode = "CONFIG_DECODE_ERROR"
-	// CodeBaseRestoreFailed marks a 500 from a PR-mode write whose worktree
-	// could not return to the base branch (#2070). Its text names the branch
-	// and whether it was pushed, so it is not INTERNAL_ERROR (#1700).
-	CodeBaseRestoreFailed = "BASE_RESTORE_FAILED"
-	CodePayloadTooLarge   = "PAYLOAD_TOO_LARGE"
-	// CodeStateFull marks an HTTP 507: the write would push tenant-api's
-	// state store past its size budget (#2856). Retrying does not help.
-	CodeStateFull = "STATE_FULL"
-	// CodeGroupIDUnavailable marks the 409 of a PUT /groups/{id} whose id is
-	// held by a group the caller cannot see (#3123). It is NOT CONFLICT:
-	// clients retry a CONFLICT (a state write that lost a race), and retrying
-	// this one cannot succeed — the caller must pick another id.
-	CodeGroupIDUnavailable = "GROUP_ID_UNAVAILABLE"
-	CodeUpstream           = "UPSTREAM_ERROR"
-	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
-	// middleware's 401 mirrors this value in its own package-local const
-	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet
-	// forbids rbac importing this package, so the alignment is pinned by the
-	// envelope-shape assertions in access_test.go (which route through the
-	// real middleware).
-	CodeUnauthorized = "UNAUTHORIZED"
-	// CodeNotImplemented marks a 501 (feature disabled at deploy time, e.g.
-	// custom alerts without --custom-alerts-dir).
-	CodeNotImplemented = "NOT_IMPLEMENTED"
-	// CodeForgeUnavailable marks an HTTP 503 caused by the forge circuit
-	// breaker being open (#632 / #645) — the forge (GitHub/GitLab) is
-	// degraded and the breaker is fast-failing to avoid 30s-per-request
-	// hangs. Clients should retry after a short backoff.
-	CodeForgeUnavailable = "FORGE_UNAVAILABLE"
-	// CodeWriteOverloaded marks an HTTP 503 from the write-plane load-shedding
-	// admission queue being full (TRK-320). The single-writer queue is saturated;
-	// the client should back off and retry rather than the server piling up
-	// unbounded goroutines.
-	CodeWriteOverloaded = "WRITE_OVERLOADED"
-	// CodeTreeNotOnBase marks an HTTP 503 from a direct commit that found the
-	// config worktree on a PR feature branch a failed PR-mode write left behind
-	// (#1723, gitops.ErrTreeNotOnBase). The write is refused whether or not the
-	// tree could be returned to base, because the request was prepared on the
-	// branch. Nothing was committed or pushed, so a retry is safe — and once
-	// the tree is back on base, it is the retry that succeeds.
-	CodeTreeNotOnBase = "TREE_NOT_ON_BASE"
-	// CodeGitPushFailed marks an HTTP 503 from a PR-mode write (PUT
-	// /tenants/{id}, a tenant or group batch) whose feature branch could not
-	// be pushed to origin — rejected, unreachable or timed out (#1724,
-	// gitops.ErrPushFailed). No PR/MR was opened and the local branch was
-	// dropped, so a retry cuts a new branch; the branch may still have reached
-	// origin (a push that timed out after the remote took it), where it is
-	// left with no PR/MR. The text is fixed; the git error goes to the log
-	// under the request_id.
-	CodeGitPushFailed = "GIT_PUSH_FAILED"
-	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
-	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
-	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
-	// parse detail inline against the submitted document.
-	CodeCandidateInvalid = "CANDIDATE_INVALID"
-	// CodeTenantDeclaredElsewhere marks a 409 from a tenant write that would
-	// create `<id>.yaml` for an id another conf.d file already declares (a
-	// subdirectory file, or a shared file's `tenants:` map — #2078). One id in
-	// two files makes the exporter reject the whole config, so nothing is
-	// written. Also carried per op on a direct-mode batch (BatchResult.Code).
-	CodeTenantDeclaredElsewhere = "TENANT_DECLARED_ELSEWHERE"
-	// CodeTenantConfigNotLoadable marks a 409 from a PARTIAL write
-	// (PUT …/custom-alerts, the PR-mode tenant batch) into a tenant file that
-	// cannot be loaded as a tenant config — config_error malformed_yaml or
-	// invalid_config, the file threshold-exporter skips whole (#2373). The
-	// envelope carries tenant_id and config_error. Distinct from CONFLICT,
-	// which tells the client to refresh and retry: a retry cannot succeed
-	// until the tenant file itself is repaired. Also carried per op on a
-	// direct-mode batch (BatchResult.Code).
-	//
-	// #2477: also the 409 of GET /tenants/{id}, PUT /tenants/{id} and
-	// PUT …/custom-alerts when the tenant's conf.d entry is not a regular
-	// file (config_error not_regular_file — the list row's value): tenant-api
-	// neither reads nor replaces such an entry, so the answer is immediate
-	// and names the reason instead of waiting on the file.
-	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
-	// CodeTenantTreeUnreadable marks a write refused because conf.d holds a
-	// symlink that cannot be resolved — a dangling target, a loop, a path
-	// through a non-directory (a stat_error of ENOENT / ELOOP / ENOTDIR) —
-	// other than
-	// the file(s) the write itself replaces (#2939, ADR-036 §4: the tree
-	// after the write is judged, and the route generator refuses such a tree
-	// whole). The link is content git holds, so the client repairs it in
-	// git. 409 on a single write (PUT /tenants/{id}, PUT …/custom-alerts, and
-	// the POST …/diff preview); carried per op on a rejected (422) tenant or
-	// group batch (BatchResult.Code), in both write modes. Nothing was
-	// written. A tenant file that is itself an unresolvable symlink does not
-	// count: the write replaces it (the repair path). The entries are named
-	// only to a caller with write permission on all tenants
-	// (rbac.PlatformUnrestricted); every other caller gets their number
-	// (treeUnreadableText), and an async task's stored results never carry
-	// the names.
-	CodeTenantTreeUnreadable = "TENANT_TREE_UNREADABLE"
-	// CodeTenantStoreFault marks an HTTP 500 from a write refused because
-	// tenant-api's own copy of conf.d holds an entry the server cannot read
-	// and git cannot hold — a FIFO, socket or device named like a config
-	// file (special_file), a failed read (read_error), a sub-directory that
-	// cannot be listed (walk_error), a failed stat that is not an
-	// unresolvable link (e.g. EACCES) — other than the written tenant file (#2939 D3c). It is a fault of
-	// the server's storage, not of the configuration, so it is repaired on
-	// the server or its volume (or the copy is reset from git), never through
-	// a write. Wins over TENANT_TREE_UNREADABLE when both are present. A
-	// batch fails whole with it (no per-op shape: no op could be fixed or
-	// dropped to get past it). Not ADR-036 §5's 503 (the generator container
-	// being unavailable). Entry names are disclosed as for
-	// TENANT_TREE_UNREADABLE; tenant_api_store_unreadable_entries counts the
-	// entries, alert TenantApiStoreUnreadable.
-	CodeTenantStoreFault = "TENANT_STORE_FAULT"
-	// CodeMaskedPreviewUnavailable marks a 422 from POST /tenants/{id}/diff
-	// for a caller who may read the tenant but not write it (#1560): the
-	// preview shown to such a caller is computed on the masked form of both
-	// sides, and one side cannot be masked with certainty (not YAML, several
-	// documents, an anchor, alias or merge key). Falling back to the raw
-	// diff would show the credentials the mask exists to hide.
-	CodeMaskedPreviewUnavailable = "MASKED_PREVIEW_UNAVAILABLE"
-	// CodeTenantGitManaged marks a 409 refusing a write, or a write's
-	// preview, for a git-managed tenant (#3064): its conf.d file is not
-	// API-shaped (confd.TenantFileManagement — shared with other tenants,
-	// declaring a tenant other than its name, several documents, YAML
-	// indirection where tenants are declared), so tenant-api neither shows
-	// nor writes it; GET /tenants/{id} marks it managed_by: git. 409, not
-	// 422: the request is well-formed and would be accepted for an
-	// API-managed tenant — it conflicts with the state of the file, as
-	// TENANT_CONFIG_NOT_LOADABLE does, and like it a refresh-and-retry
-	// cannot succeed (unlike CONFLICT). The envelope carries tenant_id and
-	// git_managed_reason (a fixed code naming no other tenant). Nothing
-	// written.
-	CodeTenantGitManaged = "TENANT_GIT_MANAGED"
-	// CodeTenantFileDirty marks a 409 refusing a direct-mode tenant write, or
-	// its preview, because the tenant's conf.d file in tenant-api's copy
-	// differs from the commit it would land on (#1535 item 6,
-	// gitops.ErrTenantFileDirty): modified, staged, deleted, untracked or
-	// marked skip-worktree / assume-unchanged outside tenant-api, or — for a
-	// tenant file reached through symlinks — a link on the way or the target
-	// inside the repository changed. Every verdict a write takes (base hash, merge,
-	// no-op) is on that file, so a write over it would judge or commit
-	// bytes no commit holds. Fixed text, no path. Nothing written; commit or
-	// discard the change in the repository, then retry. Also carried per op
-	// on a direct-mode batch (BatchResult.Code).
-	CodeTenantFileDirty = "TENANT_FILE_DIRTY"
-	// CodeGeneratorFindings marks a 422 from a write the generator container
-	// judged and refused (#2903, ADR-036 §4): the conf.d tree at the commit
-	// the write lands on, with the write applied, does not pass
-	// `generate-routes --validate --strict`. The envelope carries findings[]
-	// — the generator's --findings-json entries, the ones naming a file or a
-	// tenant of this write first and marked related — and
-	// findings_compared_with_base: when true every finding carries
-	// pre_existing (it is also reported without this write); when false the
-	// base was not judged (too little time left) and pre_existing is absent.
-	// A finding unrelated to this write is shown only to a caller with write
-	// permission on all tenants; others get unrelated_findings_withheld (a
-	// count). Nothing was written. A batch is refused whole (one envelope);
-	// an async batch's results carry the code and the related findings'
-	// text.
-	CodeGeneratorFindings = "GENERATOR_FINDINGS"
-	// CodeGeneratorRejected marks a write the generator container gave no
-	// verdict on this time (#2903, ADR-036 §3 "拒收該筆"); reason says why.
-	// 429 with Retry-After — the same write may pass when resent — for busy,
-	// deadline, git_read, mismatch (what was judged is still not what would
-	// be written after one re-judgement) and no_time (too little of the
-	// request's time left to judge); 422 for memory, incomplete, too_large
-	// (the files the write produces are too large for one judgement: split
-	// the batch), invalid_request and normalized (git attributes would
-	// commit other bytes than the ones judged: .gitattributes eol, text or a
-	// filter rewrote a file as it was staged). A reason tenant-api does not
-	// know is shown as unknown (generator.ClientReason). The text never
-	// carries the error's message (see generatorDetailInLog). Counted in
-	// tenant_api_generator_rejections_total{reason}. Nothing was written. Not
-	// a 503: the container itself is fine.
-	CodeGeneratorRejected = "GENERATOR_REJECTED"
-	// CodeValidatorUnavailable marks an HTTP 503 from a content-changing
-	// write while the generator container cannot judge at all (#2903,
-	// ADR-036 §5): no answer (unreachable — not running, or no answer within
-	// the request's time), an unreadable answer (bad_response), amtool
-	// missing (amtool_missing), a generator older than the deployment
-	// policy's min_generator_version (generator_too_old), or the service's
-	// own error (internal_error). reason names which; the detail (the
-	// service's or tenant-api's message) is in the server log only.
-	// Retry-After. Nothing was written. The generator's POLICY_UNAVAILABLE
-	// (the deployment policy file is unusable; reason policy_unusable, or
-	// policy_unreadable when tenant-api's own copy cannot be read) is passed
-	// through the same way with that code.
-	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
-	// CodePolicyUnavailable is CodeValidatorUnavailable's 503 when the
-	// generator's deployment policy file is unusable (generator's own
-	// POLICY_UNAVAILABLE, passed through).
-	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
-	// CodeGitDriverConfigured marks the 500 of a write or preview refused
-	// because the git config tenant-api runs under names a filter, diff or
-	// merge driver program (#3175, #3226). Retrying does not help: an
-	// operator must remove the key. The text is fixed (msgGitDriverConfigured);
-	// the scope and key are in the server log only.
-	CodeGitDriverConfigured = "GIT_DRIVER_CONFIGURED"
 )
 
 // notRegularText is the text of a TENANT_CONFIG_NOT_LOADABLE refusal of a
@@ -288,7 +74,7 @@ const msgTenantFileNotRegular = "a tenant's conf.d file is not a regular file (c
 func writeTenantFileNotRegular(w http.ResponseWriter, r *http.Request, tenantID string) {
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: notRegularText(tenantID),
-		Code:  CodeTenantConfigNotLoadable,
+		Code:  errcode.TenantConfigNotLoadable,
 		Extra: map[string]any{
 			"tenant_id":    tenantID,
 			"config_error": string(confd.ProblemNotRegularFile),
@@ -356,7 +142,7 @@ func treeUnreadableText(te *gitops.TreeUnreadableError, visible bool) string {
 // treeRefusal is the fixed text of te, and the code and single-write status
 // of its kind (kindTable): a store fault is TENANT_STORE_FAULT 500, the rest
 // TENANT_TREE_UNREADABLE 409.
-func treeRefusal(te *gitops.TreeUnreadableError) (head, code string, status int) {
+func treeRefusal(te *gitops.TreeUnreadableError) (head string, code errcode.Code, status int) {
 	spec := kindSpecOf(te.ErrorKind())
 	head = msgTenantTreeUnreadable
 	if te.StoreFault {
@@ -398,13 +184,13 @@ func logTreeUnreadable(msg, tenantID string, err error) {
 // previously hid three legacy emitters (access.go / me.go / rbac
 // middleware, migrated in the same change that added the required marks).
 type ErrorResponse struct {
-	Error       string      `json:"error" binding:"required"`
-	Code        string      `json:"code,omitempty" binding:"required"`
-	RequestID   string      `json:"request_id,omitempty"`
-	Violations  []Violation `json:"violations,omitempty"`
-	RetryAfterS int         `json:"retry_after_s,omitempty"`
-	Help        string      `json:"help,omitempty"`
-	Action      string      `json:"action,omitempty"`
+	Error       string       `json:"error" binding:"required"`
+	Code        errcode.Code `json:"code,omitempty" binding:"required"`
+	RequestID   string       `json:"request_id,omitempty"`
+	Violations  []Violation  `json:"violations,omitempty"`
+	RetryAfterS int          `json:"retry_after_s,omitempty"`
+	Help        string       `json:"help,omitempty"`
+	Action      string       `json:"action,omitempty"`
 
 	// Extra carries per-error custom fields (existing_pr_url,
 	// pr_number, hint, etc.). Inlined at the top level via the
@@ -478,7 +264,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		// the discard keeps writeJSON free of recursion.
 		body, _ = json.Marshal(ErrorResponse{
 			Error: "response encode failed: " + err.Error(),
-			Code:  CodeInternal,
+			Code:  errcode.Internal,
 		})
 		status = http.StatusInternalServerError
 	}
@@ -506,13 +292,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // The fixed messages in publicInternalMessages say nothing about the server
 // and are kept, because they tell the client which operation failed. An error
 // whose own text is meant for the client (a config decode error) uses its own
-// code rather than INTERNAL_ERROR — CodeConfigDecode — so it never reaches
+// code rather than INTERNAL_ERROR — errcode.ConfigDecode — so it never reaches
 // this branch. Other codes, 503s included, are untouched.
 func WriteErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env ErrorResponse) {
 	if env.RequestID == "" && r != nil {
 		env.RequestID = middleware.GetReqID(r.Context())
 	}
-	if env.Code == CodeInternal && !publicInternalMessages[env.Error] {
+	if env.Code == errcode.Internal && !publicInternalMessages[env.Error] {
 		logWithheldError(r, status, env.RequestID, env.Error)
 		env.Error = msgInternal
 	}
@@ -639,7 +425,7 @@ func WriteJSONError(w http.ResponseWriter, r *http.Request, status int, msg stri
 // with an explicit machine-readable token (e.g. RATE_LIMITED,
 // PENDING_PR_EXISTS). Use this when the error class is more
 // specific than "any 400".
-func WriteJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+func WriteJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, code errcode.Code, msg string) {
 	WriteErrorEnvelope(w, r, status, ErrorResponse{
 		Error: msg,
 		Code:  code,
@@ -658,35 +444,37 @@ func WriteJSONErrorWithCode(w http.ResponseWriter, r *http.Request, status int, 
 // is deliberately kept (not defaulted to INTERNAL_ERROR) so a new
 // unmapped status surfaces as a contract-test failure instead of
 // silently mislabeling the error class.
-func codeFromStatus(status int) string {
+//
+// No 409: a 409 has no one meaning a client can act on (#3202) — a race to
+// refresh and retry (CONFLICT), a file to repair in git, an id to change —
+// so every 409 names its code (a kindTable row, or WriteJSONErrorWithCode).
+func codeFromStatus(status int) errcode.Code {
 	switch status {
 	case http.StatusBadRequest:
-		return CodeBadRequest
+		return errcode.BadRequest
 	case http.StatusUnauthorized:
-		return CodeUnauthorized
+		return errcode.Unauthorized
 	case http.StatusForbidden:
-		return CodeForbidden
+		return errcode.Forbidden
 	case http.StatusNotFound:
-		return CodeNotFound
-	case http.StatusConflict:
-		return CodeConflict
+		return errcode.NotFound
 	case http.StatusRequestEntityTooLarge:
 		// 413 = the request body exceeded an endpoint's byte budget (#1722).
-		// Distinct from CodeBadRequest: the body is well-formed, and the
+		// Distinct from errcode.BadRequest: the body is well-formed, and the
 		// client's remedy is to send less, not to fix its shape.
-		return CodePayloadTooLarge
+		return errcode.PayloadTooLarge
 	case http.StatusNotImplemented:
-		return CodeNotImplemented
+		return errcode.NotImplemented
 	case http.StatusInsufficientStorage:
-		return CodeStateFull
+		return errcode.StateFull
 	case http.StatusBadGateway:
 		// 502 = a proxied upstream (e.g. federation Prometheus) answered
 		// badly; same client-facing class as the 503 mapping below.
-		return CodeUpstream
+		return errcode.Upstream
 	case http.StatusServiceUnavailable:
-		return CodeUpstream
+		return errcode.Upstream
 	case http.StatusInternalServerError:
-		return CodeInternal
+		return errcode.Internal
 	}
 	return ""
 }
@@ -708,7 +496,7 @@ func codeFromStatus(status int) string {
 func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []Violation) {
 	WriteErrorEnvelope(w, r, http.StatusBadRequest, ErrorResponse{
 		Error:      "validation failed",
-		Code:       CodeInvalidBody,
+		Code:       errcode.InvalidBody,
 		Violations: violations,
 	})
 }
@@ -803,7 +591,7 @@ func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
 // configFileParseError marks parseGroupsFile / parseViewsFile failing on the
 // file's content, as opposed to the git failures writeConfigFileError also
 // sees. Its text is unchanged; writeConfigFileError answers it with
-// CodeConfigDecode instead of a withheld INTERNAL_ERROR (#1700).
+// errcode.ConfigDecode instead of a withheld INTERNAL_ERROR (#1700).
 type configFileParseError struct{ err error }
 
 func (e *configFileParseError) Error() string { return e.err.Error() }
@@ -927,8 +715,8 @@ func nonNilFindings(f []generator.Finding) []generator.Finding {
 	return f
 }
 
-// The client text of the generator's refusals (GENERATOR_REJECTED and the
-// 503s) is one rule: a fixed sentence for the code, the reason as the
+// The client text of the generator's refusals (GENERATOR_REJECTED,
+// GENERATOR_BUSY and the 503s) is one rule: a fixed sentence for the code, the reason as the
 // client may see it (generator.ClientReason) — never the error's Message.
 // Messages carry server and tree detail whatever their reason: tenant-api's
 // own (socket paths, transport errors, an os.ReadFile error naming the
@@ -942,7 +730,8 @@ func nonNilFindings(f []generator.Finding) []generator.Finding {
 // disclosed by disclosedFindings, not here.
 const generatorDetailInLog = " — the server log has the detail"
 
-// generatorRejectedText is the client text of GENERATOR_REJECTED.
+// generatorRejectedText is the client text of GENERATOR_REJECTED and
+// GENERATOR_BUSY (#3202: the retryable reasons).
 func generatorRejectedText(e *generator.RejectedError) string {
 	if e.Reason == generator.ReasonTooLarge {
 		return msgGeneratorTooLarge

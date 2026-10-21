@@ -123,16 +123,52 @@ For the exits this section lists, the status, `code`, `Retry-After` header and `
 | Case | Answer now | Before |
 |---|---|---|
 | No route matches | 404 `NOT_FOUND` | plain-text `404 page not found` |
-| The route exists, the method does not | 405 `BAD_REQUEST`, with the `Allow` header listing the methods as before | 405 with an empty body |
-| The per-request deadline (30 s by default) passed and the handler did not answer | 504 `UPSTREAM_ERROR`, **without** `Retry-After`: the handler did not answer, so whether a write took effect is unknown — read before resending | 504 with an empty body |
+| The route exists, the method does not | 405 `METHOD_NOT_ALLOWED`, with the `Allow` header listing the methods as before | 405 with an empty body |
+| The per-request deadline (30 s by default) passed and the handler did not answer | 504 `REQUEST_TIMEOUT`, **without** `Retry-After`: the handler did not answer, so whether a write took effect is unknown — read before resending | 504 with an empty body |
 | A handler panicked | Before any answer: 500 `INTERNAL_ERROR` (the fixed text; the `request_id` finds the log line with the stack); once the answer began: the connection is aborted, so the client's read fails instead of taking a truncated answer for a whole one | 500 with an empty body; an answer under way ended normally |
 | `GET /api/v1/events` while shutting down | 503 `UPSTREAM_ERROR`, `Retry-After: 1` (reconnect to the new pod) | plain-text 503 |
 | `GET /api/v1/events` through a writer that cannot flush | 500 `INTERNAL_ERROR`, text `streaming not supported` | plain-text 500 |
-| Logs federation not configured (`POST /federation/tokens` with the `logs` capability, `POST /federation/accounts/backfill`) | 503 `UPSTREAM_ERROR`, without `Retry-After`: a deployment setting, a retry does not change it | the same (now decided by the table) |
+| Logs federation not configured (`POST /federation/tokens` with the `logs` capability, `POST /federation/accounts/backfill`) | 503 `FEDERATION_NOT_CONFIGURED`, without `Retry-After`: a deployment setting, a retry does not change it | the same (now decided by the table) |
 
-**Per-op batch results** (`results[].code`, an async task's results included): every result whose `status` is `error` carries a `code`, the one the same failure gets as a whole-request answer; before, only a few classes had one and the rest were empty. For example: overload is `WRITE_OVERLOADED`, a conflict `CONFLICT`, a cancelled write or an unknown outcome `UPSTREAM_ERROR`, validation and tenant-id errors `BAD_REQUEST`, missing permission `FORBIDDEN`. Also: a base sync timeout (`FORGE_UNAVAILABLE`) is no longer answered as an internal error; a batch that IS committed but did not finish cleanly says so per op instead of "conflict, retry"; and a multiply wrapped error is judged in the same order as the synchronous answer, so the per-op result and that answer agree.
+**Per-op batch results** (`results[].code`, an async task's results included): every result whose `status` is `error` carries a `code`, the one the same failure gets as a whole-request answer; before, only a few classes had one and the rest were empty. For example: overload is `WRITE_OVERLOADED`, a conflict `CONFLICT`, a cancelled write `UPSTREAM_ERROR`, an unknown outcome `WRITE_OUTCOME_UNKNOWN`, validation and tenant-id errors `BAD_REQUEST`, missing permission `FORBIDDEN`. Also: a base sync timeout (`FORGE_UNAVAILABLE`) is no longer answered as an internal error; a batch that IS committed but did not finish cleanly says so per op instead of "conflict, retry"; and a multiply wrapped error is judged in the same order as the synchronous answer, so the per-op result and that answer agree.
 
 **A tenant file that is not a regular file** (FIFO, socket, device): every write entry answers 409 `TENANT_CONFIG_NOT_LOADABLE`, as the handler's early refusal of the same file does (`config_error: not_regular_file`; a single-tenant write adds `tenant_id`, a batch's whole-request answer names no tenant and has a fixed text); found during the write, a direct write used to answer 400 `BAD_REQUEST`, PR mode and batches 500.
+
+### 2.6 One error code, one remedy ([#3202](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3202), ⚠️ breaking)
+
+An error answer's `code` now stands for one remedy: every failure under one `code` asks the client for the same thing, so a client may decide on the `code` alone. A few codes used to mean both "refresh and resend and it will pass" and "resending will not help"; the cases below get codes of their own (status and text unchanged):
+
+| Case | Before | Now | Remedy (`remedy`) |
+|---|---|---|---|
+| Two top-level files declare one tenant (`<id>.yaml` and `<id>.yml`; two files under `_federation/`) | 409 `CONFLICT` | 409 `TENANT_FILE_AMBIGUOUS` | `fix_in_repo` |
+| `/effective`: the tenant is declared again by another file (not the two top-level spellings) | 409 `CONFLICT` | 409 `TENANT_DECLARED_ELSEWHERE` | `fix_in_repo` |
+| A direct-mode batch that IS committed but did not finish cleanly on the server (`committed: true`) | 409 `CONFLICT` | 409 `BATCH_COMMITTED` | `refresh` |
+| The tenant holds as many federation tokens as it may | 409 `CONFLICT` | 409 `TOKEN_LIMIT_REACHED` | `existing` |
+| No verdict from the generator this time, retryable (`busy`, `deadline`, `git_read`, `mismatch`, `no_time`) | 429 `GENERATOR_REJECTED` | 429 `GENERATOR_BUSY` | `retry_after` |
+| Write outcome unknown (the branch update failed and the branch could not be read back) | 503 `UPSTREAM_ERROR` | 503 `WRITE_OUTCOME_UNKNOWN` | `refresh` |
+| The per-request deadline passed and the handler did not answer | 504 `UPSTREAM_ERROR` | 504 `REQUEST_TIMEOUT` | `refresh` |
+| Federation not configured (logs federation; metric discovery without `--federation-prometheus-url`) | 503 `UPSTREAM_ERROR` | 503 `FEDERATION_NOT_CONFIGURED` | `operator` |
+| The route exists, the method does not | 405 `BAD_REQUEST` | 405 `METHOD_NOT_ALLOWED` | `fix_request` |
+| PR mode: the forge refuses tenant-api's own configured token when opening the PR/MR | 403 `FORBIDDEN` | 403 `FORGE_FORBIDDEN` | `operator` |
+
+After the split, `CONFLICT` only means "refresh and resend" (a `base_hash` that no longer matches, the branch moved while a batch ran, a state-store write that lost a race), `UPSTREAM_ERROR` only "resend later" (the state store or the forge failing this time, the server shutting down, a write cancelled before it committed), and `FORBIDDEN` only the caller's own missing permission. An answer whose `code` is inferred from its status no longer labels a 409 `CONFLICT`: every 409 names its own `code`.
+
+`remedy` is a closed set:
+
+| `remedy` | What the client does |
+|---|---|
+| `refresh_retry` | What the request was prepared on changed: reload, re-apply the change, resend |
+| `retry_after` | Resend the same request later, after `Retry-After` / `retry_after_s` when the answer carries one |
+| `fix_request` | The request itself must change (body, method, size, id) |
+| `fix_in_repo` | The configuration in the config repository must be repaired in git; no request through tenant-api gets past it |
+| `choose_other` | The name or id asked for cannot be had; pick another |
+| `permission` | The caller lacks the identity or permission |
+| `operator` | An operator of tenant-api must fix the server, its storage or its deployment settings; the caller cannot |
+| `not_found` | What the request names does not exist |
+| `existing` | Something already there stands in the way (an open PR/MR, the tokens the tenant holds); act on that one |
+| `refresh` | The write may (or did) take effect: reload and look first, do not resend blindly |
+
+**One source**: every `code` is declared in tenant-api's `internal/errcode` (the handler, the RBAC middleware, the generator client and async tasks all name it from there instead of copying the string), so the OpenAPI `ErrorResponse.code` is an enum (`ErrorCode`). The contract file `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json` (for the portal to read; the portal side is not wired yet) is generated by `make error-contract` from that table, the error kind table and the answers handlers and middleware write directly (read from the source; a writer call whose status or code is not a literal makes the generator fail), listing per code its `remedy`, `retryable` (`always` / `never`), the statuses it is answered with, default `retry_after_s` and error kinds; `make error-contract-check`, pre-commit and CI catch drift. `SIMULATE_NOT_PROVIDED` is not in it: that is the portal deployment's own nginx 501, never sent by tenant-api.
 
 ---
 
@@ -303,12 +339,12 @@ Every write that changes a conf.d file — `PUT /tenants/{id}`, `PUT /tenants/{i
 | Outcome | HTTP | `code` | Notes |
 |---|---|---|---|
 | Findings | 422 | `GENERATOR_FINDINGS` | `findings[]` holds the generator's findings, the ones naming a file or tenant of this write first and marked `related: true`; with `findings_compared_with_base: true` each also carries `pre_existing` (already there before the write). Unrelated findings are shown only to a caller with write permission on all tenants; others get `unrelated_findings_withheld` (a count). A batch gets the usual 422 `status: rejected`, every result with this code and a message listing the findings about its tenant |
-| No verdict this time, retryable | 429 (`Retry-After`) | `GENERATOR_REJECTED` | `reason`: `busy`, `deadline`, `git_read`, `mismatch`, `no_time` (too little time left to judge) |
+| No verdict this time, retryable | 429 (`Retry-After`) | `GENERATOR_BUSY` | `reason`: `busy`, `deadline`, `git_read`, `mismatch`, `no_time` (too little time left to judge) |
 | No verdict, and resending will not help | 422 | `GENERATOR_REJECTED` | `reason`: `memory`, `incomplete`, `too_large` (the files the write produces are too large — split the batch), `invalid_request`, `normalized` (a `.gitattributes` eol or text rule rewrote the content as it was staged, so the commit would not be the bytes judged; a filter driver never gets this far, see §3.11), `unknown` (the generator gave a reason tenant-api does not know) |
 | The generator container cannot judge | 503 (`Retry-After`) | `VALIDATOR_UNAVAILABLE` | `reason`: `unreachable` (no connection, or no answer in time), `bad_response`, `amtool_missing`, `generator_too_old`, `internal_error` |
 | The deployment policy file is unusable | 503 (`Retry-After`) | `POLICY_UNAVAILABLE` | `reason`: `policy_unusable` (the generator cannot use it), `policy_unreadable` (tenant-api cannot read its own copy) |
 
-A `GENERATOR_REJECTED` or 503 response carries the code, `reason` and a fixed sentence — never the generator's or tenant-api's error message (it can hold paths, exception text or another tenant's file name); a reason tenant-api does not know is shown as `unknown`. The original reason and message go to tenant-api's log only. The `findings[]` of `GENERATOR_FINDINGS` are the judgement itself and are disclosed by the visibility rule above.
+A `GENERATOR_REJECTED`, `GENERATOR_BUSY` or 503 response carries the code, `reason` and a fixed sentence — never the generator's or tenant-api's error message (it can hold paths, exception text or another tenant's file name); a reason tenant-api does not know is shown as `unknown`. The original reason and message go to tenant-api's log only. The `findings[]` of `GENERATOR_FINDINGS` are the judgement itself and are disclosed by the visibility rule above.
 
 - **Monitoring**: `tenant_api_policy_available` (whether the generator container can judge; its status endpoint is read at scrape time), `tenant_api_generator_rejections_total{reason}`, `tenant_api_generator_scrape_success`, and the generator's own `da_generator_*` appended to tenant-api's `/metrics`; alerts `TenantApiPolicyUnavailable`, `GeneratorJudgementMemoryNearLimit`.
 - **The flat key `_routing_receiver_type`** is a 400 on every write; the receiver type is `_routing.receiver.type`. `PUT` is refused by the tenant key validation (`BAD_REQUEST`, message `unknown routing key`), a batch patch by the patch key validation (`INVALID_BODY`).

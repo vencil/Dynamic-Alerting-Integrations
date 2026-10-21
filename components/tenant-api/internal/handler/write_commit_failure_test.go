@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -67,8 +68,8 @@ func wantInternalWriteFailure(t *testing.T, status int, body []byte, configDir s
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", body, err)
 	}
-	if got.Code != CodeInternal {
-		t.Errorf("code = %q, want %q; body: %s", got.Code, CodeInternal, body)
+	if got.Code != errcode.Internal {
+		t.Errorf("code = %q, want %q; body: %s", got.Code, errcode.Internal, body)
 	}
 	if !publicInternalMessages[got.Error] {
 		t.Errorf("error = %q, want one of the fixed INTERNAL_ERROR texts (#1700)", got.Error)
@@ -130,8 +131,8 @@ func TestBatch_CommitFailureIsInternalError(t *testing.T) {
 		t.Fatal("the batch committed: the fault did not fire")
 	}
 	got := run.Results[0]
-	if got.Status != "error" || got.Code != CodeInternal || got.Message != msgBatchOpFailed {
-		t.Errorf("op result = %+v, want status error, code %s, message %q", got, CodeInternal, msgBatchOpFailed)
+	if got.Status != "error" || got.Code != errcode.Internal || got.Message != msgBatchOpFailed {
+		t.Errorf("op result = %+v, want status error, code %s, message %q", got, errcode.Internal, msgBatchOpFailed)
 	}
 }
 
@@ -180,8 +181,8 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"validation", errors.Join(gitops.ErrValidation, errors.New("bad key")), http.StatusBadRequest, CodeBadRequest},
-		{"commit stage", errors.New("git commit: git commit: exit status 1 — "), http.StatusInternalServerError, CodeInternal},
+		{"validation", errors.Join(gitops.ErrValidation, errors.New("bad key")), http.StatusBadRequest, string(errcode.BadRequest)},
+		{"commit stage", errors.New("git commit: git commit: exit status 1 — "), http.StatusInternalServerError, string(errcode.Internal)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -194,7 +195,7 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Code != tc.code {
+			if string(got.Code) != tc.code {
 				t.Errorf("code = %q, want %q", got.Code, tc.code)
 			}
 			if fault != (tc.status == http.StatusInternalServerError) {
@@ -443,8 +444,8 @@ func TestBatchFailure_DefaultBranchWithholdsErrorText(t *testing.T) {
 	if jerr := json.Unmarshal(w.Body.Bytes(), &got); jerr != nil {
 		t.Fatal(jerr)
 	}
-	if got.Code != CodeInternal || got.Error != msgInternal {
-		t.Errorf("answer = code %q error %q, want %q %q", got.Code, got.Error, CodeInternal, msgInternal)
+	if got.Code != errcode.Internal || got.Error != msgInternal {
+		t.Errorf("answer = code %q error %q, want %q %q", got.Code, got.Error, errcode.Internal, msgInternal)
 	}
 	if strings.Contains(w.Body.String(), secret) || strings.Contains(w.Body.String(), "permission denied") {
 		t.Errorf("the body carries the original error text: %s", w.Body.String())

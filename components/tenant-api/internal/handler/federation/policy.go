@@ -22,6 +22,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -101,7 +103,7 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 		// Allowed(p, "*", admin) is org-blind and would let an org-scoped
 		// "*" admin rewrite the whole fleet's whitelist.
 		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 				"platform admin (non-org-scoped) permission required to edit the federation whitelist")
 			return
 		}
@@ -198,7 +200,7 @@ func runFederationAdmission(d *handler.Deps, w http.ResponseWriter, r *http.Requ
 	if len(hard) > 0 {
 		handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
 			Error: "federation admission: hard block — metric(s) have data but no series carries the tenant label and cannot be whitelisted",
-			Code:  handler.CodeInvalidBody,
+			Code:  errcode.InvalidBody,
 			Extra: map[string]any{"admission": hard},
 		})
 		return "", true
@@ -206,7 +208,7 @@ func runFederationAdmission(d *handler.Deps, w http.ResponseWriter, r *http.Requ
 	if len(soft) > 0 && !force {
 		handler.WriteErrorEnvelope(w, r, http.StatusBadRequest, handler.ErrorResponse{
 			Error: "federation admission: soft warning(s) — re-submit with force=true and a reason to proceed",
-			Code:  handler.CodeInvalidBody,
+			Code:  errcode.InvalidBody,
 			Extra: map[string]any{"admission": soft},
 		})
 		return "", true
@@ -375,7 +377,7 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 			// stance and status as GET /tenants/{id} on the tenant plane
 			// (#1673): the request is fine, the on-disk state is not, and
 			// picking one file would serve a coin flip.
-			handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
+			handler.WriteKind(w, r, errkind.AmbiguousTenantFile, err.Error())
 			return
 		case err != nil:
 			if handler.WriteStateError(w, r, err) {
@@ -421,7 +423,7 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 		}
 		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as token issuance.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 				"admin permission required on tenant "+tenantID+" to edit its federation subset")
 			return
 		}

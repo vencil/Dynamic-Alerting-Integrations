@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 )
 
@@ -141,8 +142,8 @@ func assertInvalidBody(t *testing.T, w *httptest.ResponseRecorder, field, reason
 	if err := json.Unmarshal(w.Body.Bytes(), &bad); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if bad.Code != CodeInvalidBody || (!many && len(bad.Violations) != 1) {
-		t.Fatalf("response = %+v, want %s with one violation on %s", bad, CodeInvalidBody, field)
+	if bad.Code != errcode.InvalidBody || (!many && len(bad.Violations) != 1) {
+		t.Fatalf("response = %+v, want %s with one violation on %s", bad, errcode.InvalidBody, field)
 	}
 	for _, v := range bad.Violations {
 		if v.Field == field && strings.Contains(v.Reason, reason) {

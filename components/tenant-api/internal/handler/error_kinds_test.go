@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 )
@@ -123,6 +124,43 @@ func TestKindTable_CoversEveryKindOnce(t *testing.T) {
 	}
 }
 
+// TestKindTable_OneCodeOneMeaning (#3202): a code means one thing to a
+// client. Every kindTable code is an errcode code, and every kind answered
+// with it agrees with that code's Remedy — a kind a resend may get past
+// (Retryable) has a remedy that resends, one with a Retry-After the remedy
+// that waits for it, and the other way round. There is no exception list:
+// a kind that needs another remedy needs another code.
+//
+// ClientError is deliberately not compared: it decides how tenant-api
+// renders the error (whose text is shown, the fallback's 400), not what the
+// client can do, and TENANT_CONFIG_NOT_LOADABLE's kinds differ in it.
+func TestKindTable_OneCodeOneMeaning(t *testing.T) {
+	t.Parallel()
+	byCode := map[errcode.Code][]errkind.Kind{}
+	for _, sp := range kindTable {
+		if sp.Code == "" {
+			continue // NoChanges: not a failure (TestKindTable_CoversEveryKindOnce)
+		}
+		spec, ok := errcode.Lookup(sp.Code)
+		if !ok {
+			t.Errorf("kindTable row %q: code %q is not in internal/errcode's table", sp.Kind, sp.Code)
+			continue
+		}
+		byCode[sp.Code] = append(byCode[sp.Code], sp.Kind)
+		if sp.Retryable != spec.Remedy.Retryable() {
+			t.Errorf("kindTable row %q: Retryable %v, but %s's remedy %q says %v — give the kind its own code",
+				sp.Kind, sp.Retryable, sp.Code, spec.Remedy, spec.Remedy.Retryable())
+		}
+		if sp.RetryAfterS > 0 && spec.Remedy != errcode.RemedyRetryAfter {
+			t.Errorf("kindTable row %q: Retry-After %ds, but %s's remedy is %q, not %q",
+				sp.Kind, sp.RetryAfterS, sp.Code, spec.Remedy, errcode.RemedyRetryAfter)
+		}
+	}
+	if len(byCode) < 10 {
+		t.Fatalf("kindTable names %d codes; the table is not being read", len(byCode))
+	}
+}
+
 // retryableWithoutRetryAfter are the retryable 5xx kinds that deliberately
 // carry no Retry-After, each with why. Anything else retryable at 5xx must
 // say when to come back (TestKindTable_RetryableServerErrorsSayWhen).
@@ -222,8 +260,8 @@ func TestNotRegularFile_BatchAnswerNamesNoTenant(t *testing.T) {
 		if jerr := json.Unmarshal(w.Body.Bytes(), &body); jerr != nil {
 			t.Fatal(jerr)
 		}
-		if _, ok := body["tenant_id"]; ok || body["error"] != msgTenantFileNotRegular || body["code"] != CodeTenantConfigNotLoadable {
-			t.Errorf("%s: body %s, want %s with msgTenantFileNotRegular and no tenant_id", name, w.Body.String(), CodeTenantConfigNotLoadable)
+		if _, ok := body["tenant_id"]; ok || body["error"] != msgTenantFileNotRegular || body["code"] != string(errcode.TenantConfigNotLoadable) {
+			t.Errorf("%s: body %s, want %s with msgTenantFileNotRegular and no tenant_id", name, w.Body.String(), errcode.TenantConfigNotLoadable)
 		}
 	}
 }

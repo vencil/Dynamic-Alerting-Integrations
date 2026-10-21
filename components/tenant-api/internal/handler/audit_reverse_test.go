@@ -32,6 +32,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
@@ -207,7 +208,7 @@ func TestAuditReverse_BarConstant403(t *testing.T) {
 				ids[i], ids[0], bodies[i], bodies[0])
 		}
 	}
-	if !strings.Contains(bodies[0], CodeForbidden) {
+	if !strings.Contains(bodies[0], string(errcode.Forbidden)) {
 		t.Errorf("bar 403 missing machine-readable code: %s", bodies[0])
 	}
 }

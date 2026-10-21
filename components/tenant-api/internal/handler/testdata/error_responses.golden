@@ -84,15 +84,15 @@ fault=false | 409 TENANT_FILE_DIRTY counted=conflict error=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
-fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+fault=false | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 fault=true | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 fault=false | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-fault=false | 409 CONFLICT counted=conflict error="confd: more than one config file for tenant"
+fault=false | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-fault=false | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
+fault=false | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 fault=false | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
   <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
@@ -130,23 +130,23 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="validation failed: tenant
   <- generator.FindingsError{ComparedWithBase: false}
 fault=false | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -180,15 +180,15 @@ written=true | 409 TENANT_FILE_DIRTY counted=conflict error=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 written=true | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout)
-written=true | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+written=true | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 written=true | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 written=true | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-written=true | 409 CONFLICT counted=conflict error="confd: more than one config file for tenant"
+written=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-written=true | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
+written=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
   <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
@@ -232,23 +232,23 @@ written=true | 500 CONFIG_DECODE_ERROR counted=error error="the tenant organizat
   <- generator.FindingsError{ComparedWithBase: false}
 written=true | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -299,7 +299,7 @@ fault=false | 409 TENANT_FILE_DIRTY counted=conflict error=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
-fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+fault=false | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 fault=true | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
@@ -345,23 +345,23 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="validation failed: tenant
   <- generator.FindingsError{ComparedWithBase: false}
 fault=false | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-fault=false | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+fault=false | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 fault=false | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -395,21 +395,21 @@ fault=false | 503 POLICY_UNAVAILABLE counted=error Retry-After=5 retry_after_s=5
   <- gitops.ErrTenantFileDirty ≡ %w
 - | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
-- | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+- | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 - | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 - | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-- | 409 CONFLICT counted=conflict error="confd: more than one config file for tenant"
+- | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-- | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
+- | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 - | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
   <- confd.ErrNotRegularFile ≡ %w
 - | 400 BAD_REQUEST counted=uncounted error="validation failed: invalid tenant id"
   <- ErrValidation %w ErrInvalidTenantID
-- | 409 CONFLICT counted=conflict extra={"commit":"c0ffee","committed":true} error=msgBatchCommittedIncomplete
+- | 409 BATCH_COMMITTED counted=conflict extra={"commit":"c0ffee","committed":true} error=msgBatchCommittedIncomplete
   <- BatchCommittedError
 [hidden] - | 409 TENANT_TREE_UNREADABLE counted=conflict extra={"unreadable_count":2} error=treeUnreadableText(symlinks, hidden)
 [visible] - | 409 TENANT_TREE_UNREADABLE counted=conflict extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(symlinks, visible)
@@ -431,23 +431,23 @@ fault=false | 503 POLICY_UNAVAILABLE counted=error Retry-After=5 retry_after_s=5
   <- generator.FindingsError{ComparedWithBase: false}
 - | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-- | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+- | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 - | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 - | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-- | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+- | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-- | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+- | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 - | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 - | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-- | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+- | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-- | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+- | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 - | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -477,15 +477,15 @@ written=true | 409 TENANT_FILE_DIRTY counted=conflict error=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 written=true | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout)
-written=true | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+written=true | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 written=true | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 written=true | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-written=true | 409 CONFLICT counted=conflict error="confd: more than one config file for tenant"
+written=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-written=true | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
+written=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
   <- confd.ErrNotRegularFile ≡ %w
@@ -513,23 +513,23 @@ written=true | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reaso
   <- generator.FindingsError{ComparedWithBase: false}
 written=true | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-written=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+written=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 written=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -560,9 +560,9 @@ handled=true | 500 GIT_DRIVER_CONFIGURED counted=error error=msgGitDriverConfigu
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 handled=true | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-handled=true | 409 CONFLICT counted=conflict error="confd: more than one config file for tenant"
+handled=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-handled=true | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
+handled=true | 409 TENANT_FILE_AMBIGUOUS counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
   <- confd.ErrNotRegularFile ≡ %w
@@ -588,23 +588,23 @@ handled=true | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reaso
   <- generator.FindingsError{ComparedWithBase: false}
 handled=true | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -648,23 +648,23 @@ no response (handled=false): BaseRestoreError{Pushed: false}, BaseRestoreError{P
   <- generator.FindingsError{ComparedWithBase: false}
 handled=true | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true} error=findingsText(compared)
   <- wrapped(generator.FindingsError)
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"deadline"} error=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"memory"} error=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"incomplete"} error=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"git_read"} error=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"busy"} error=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"too_large"} error=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"invalid_request"} error=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"mismatch"} error=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-handled=true | 429 GENERATOR_REJECTED counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
+handled=true | 429 GENERATOR_BUSY counted=error Retry-After=5 retry_after_s=5 extra={"reason":"no_time"} error=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 handled=true | 422 GENERATOR_REJECTED counted=uncounted extra={"reason":"normalized"} error=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -679,7 +679,7 @@ no response (handled=false): BaseRestoreError{Pushed: false}, BaseRestoreError{P
 ### writeForgeCreateError(GitHub)
 - | 503 UPSTREAM_ERROR counted=error Retry-After=5 retry_after_s=5 error="GitHub PR/MR creation failed — please retry shortly"
   <- BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, BatchCommittedError, BatchRejectedError{op0: ErrValidation}, ErrForgeDegraded fetch timeout, ErrGitTimeout %w DeadlineExceeded, ErrMergeFailed %w merge error, ErrNoChanges %w context.Canceled, ErrPushFailed %w ErrNoChanges, ErrTenantTreeScan %w ErrGitTimeout, ErrTenantTreeScan %w ErrTreeNotOnBase, ErrTenantTreeScan %w ErrWriteOverloaded, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrValidation %w ErrInvalidTenantID, ErrValidation %w ErrNoChanges, ErrWriteOverloaded %w ErrNoChanges, GitDriverError, GitManagedError, PlaceholderError, PreconditionError{Current=""}, PreconditionError{Current=API file hash}, PreconditionError{Current=other hash}, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, TargetUnreadableError{read_error}, TargetUnreadableError{special_file}, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), TreeUnreadableError{StoreFault: false}, TreeUnreadableError{StoreFault: true}, WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, confd.ErrAmbiguousTenantFile ≡ %w, confd.ErrNotRegularFile ≡ %w, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}, generator.RejectedError{busy}, generator.RejectedError{deadline}, generator.RejectedError{git_read}, generator.RejectedError{incomplete}, generator.RejectedError{invalid_request}, generator.RejectedError{memory}, generator.RejectedError{mismatch}, generator.RejectedError{no_time}, generator.RejectedError{normalized}, generator.RejectedError{not_a_known_reason}, generator.RejectedError{too_large}, generator.UnavailableError{POLICY_UNAVAILABLE, policy_unusable}, generator.UnavailableError{VALIDATOR_UNAVAILABLE, unreachable}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrConflict ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitConfigUnreadable ≡ %w, gitops.ErrGitDriverConfigured ≡ %w, gitops.ErrGitTimeout ≡ %w, gitops.ErrInvalidTenantID ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeFailed ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrReservedTenantID ≡ %w, gitops.ErrTenantDeclaredElsewhere ≡ %w, gitops.ErrTenantFileDirty ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantGitManaged ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeScan ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, gitops.ErrTreeNotOnBase ≡ %w, gitops.ErrValidation ≡ %w, gitops.ErrWriteOutcomeUnknown ≡ %w, gitops.ErrWriteOverloaded ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, git config unreadable), leavePRBranch(back on base, retry), plain error (server path in text), platform.APIError{403, RateLimited}, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError, wrapped(TreeUnreadableError{StoreFault: true}), wrapped(generator.FindingsError)
-- | 403 FORBIDDEN counted=error error="insufficient GitHub permissions to open PR/MR — the configured token lacks write scope"
+- | 403 FORGE_FORBIDDEN counted=error error="insufficient GitHub permissions to open PR/MR — the configured token lacks write scope"
   <- platform.APIError{403}, platform.ErrForbidden ≡ %w
 - | 503 FORGE_UNAVAILABLE counted=error Retry-After=5 retry_after_s=5 error="GitHub is currently unavailable — please retry shortly"
   <- platform.ErrCircuitOpen ≡ %w
@@ -730,7 +730,7 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="op ctx: the tenant is git
   <- wrapped(gitops.ErrTenantGitManaged)
 fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, ErrTenantTreeScan %w ErrGitTimeout, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout)
-fault=false | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+fault=false | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 fault=false | 400 BAD_REQUEST counted=uncounted error="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
@@ -758,7 +758,7 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="validation failed: tenant
 ### writeErr(kindsOutcome)
 handled=true | 503 UPSTREAM_ERROR counted=error error=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, ErrTenantTreeScan %w ErrGitTimeout, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout)
-handled=true | 503 UPSTREAM_ERROR counted=error error=msgWriteOutcomeUnknown
+handled=true | 503 WRITE_OUTCOME_UNKNOWN counted=error error=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 no response (handled=false): BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, BatchCommittedError, BatchRejectedError{op0: ErrValidation}, ErrForgeDegraded fetch timeout, ErrMergeFailed %w merge error, ErrPushFailed %w ErrNoChanges, ErrTenantTreeScan %w ErrTreeNotOnBase, ErrTenantTreeScan %w ErrWriteOverloaded, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrValidation %w ErrInvalidTenantID, ErrValidation %w ErrNoChanges, ErrWriteOverloaded %w ErrNoChanges, GitDriverError, GitManagedError, PlaceholderError, PreconditionError{Current=""}, PreconditionError{Current=API file hash}, PreconditionError{Current=other hash}, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, TargetUnreadableError{read_error}, TargetUnreadableError{special_file}, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), TreeUnreadableError{StoreFault: false}, TreeUnreadableError{StoreFault: true}, confd.ErrAmbiguousTenantFile ≡ %w, confd.ErrNotRegularFile ≡ %w, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}, generator.RejectedError{busy}, generator.RejectedError{deadline}, generator.RejectedError{git_read}, generator.RejectedError{incomplete}, generator.RejectedError{invalid_request}, generator.RejectedError{memory}, generator.RejectedError{mismatch}, generator.RejectedError{no_time}, generator.RejectedError{normalized}, generator.RejectedError{not_a_known_reason}, generator.RejectedError{too_large}, generator.UnavailableError{POLICY_UNAVAILABLE, policy_unusable}, generator.UnavailableError{VALIDATOR_UNAVAILABLE, unreachable}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrConflict ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitConfigUnreadable ≡ %w, gitops.ErrGitDriverConfigured ≡ %w, gitops.ErrInvalidTenantID ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeFailed ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrReservedTenantID ≡ %w, gitops.ErrTenantDeclaredElsewhere ≡ %w, gitops.ErrTenantFileDirty ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantGitManaged ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeScan ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, gitops.ErrTreeNotOnBase ≡ %w, gitops.ErrValidation ≡ %w, gitops.ErrWriteOverloaded ≡ %w, leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, git config unreadable), leavePRBranch(back on base, retry), plain error (server path in text), platform.APIError{403, RateLimited}, platform.APIError{403}, platform.ErrCircuitOpen ≡ %w, platform.ErrForbidden ≡ %w, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError, wrapped(TreeUnreadableError{StoreFault: true}), wrapped(generator.FindingsError)
 
@@ -827,15 +827,15 @@ code=TENANT_FILE_DIRTY message=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 code=UPSTREAM_ERROR message=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
-code=UPSTREAM_ERROR message=msgWriteOutcomeUnknown
+code=WRITE_OUTCOME_UNKNOWN message=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 code=GIT_DRIVER_CONFIGURED message=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 code=UPSTREAM_ERROR message="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-code=CONFLICT message="confd: more than one config file for tenant"
+code=TENANT_FILE_AMBIGUOUS message="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-code=CONFLICT message="op ctx: confd: more than one config file for tenant"
+code=TENANT_FILE_AMBIGUOUS message="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 code=TENANT_CONFIG_NOT_LOADABLE message=targetUnreadableText(special_file)
   <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
@@ -845,7 +845,7 @@ code=BAD_REQUEST message="validation failed: no changes: batch produced no commi
   <- ErrValidation %w ErrNoChanges
 code=BAD_REQUEST message="merge tenant config for tu-a: yaml: line 3: mapping values are not allowed"
   <- ErrMergeFailed %w merge error
-code=CONFLICT message=msgBatchCommittedIncomplete
+code=BATCH_COMMITTED message=msgBatchCommittedIncomplete
   <- BatchCommittedError
 code=BAD_REQUEST message="batch rejected: an operation was refused, nothing was written (op 0: validation failed: bad threshold)"
   <- BatchRejectedError{op0: ErrValidation}
@@ -867,23 +867,23 @@ code=GENERATOR_FINDINGS message="the route generator refuses the configuration t
   <- generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}
 code=GENERATOR_FINDINGS message="the route generator refuses the configuration this batch would produce; nothing was written (1 finding(s) in all, 1 naming this tenant): receiver unreachable for tu-a"
   <- wrapped(generator.FindingsError)
-code=GENERATOR_REJECTED message=generatorRejectedText(deadline)
+code=GENERATOR_BUSY message=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 code=GENERATOR_REJECTED message=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 code=GENERATOR_REJECTED message=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-code=GENERATOR_REJECTED message=generatorRejectedText(git_read)
+code=GENERATOR_BUSY message=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-code=GENERATOR_REJECTED message=generatorRejectedText(busy)
+code=GENERATOR_BUSY message=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 code=GENERATOR_REJECTED message=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 code=GENERATOR_REJECTED message=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-code=GENERATOR_REJECTED message=generatorRejectedText(mismatch)
+code=GENERATOR_BUSY message=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-code=GENERATOR_REJECTED message=generatorRejectedText(no_time)
+code=GENERATOR_BUSY message=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 code=GENERATOR_REJECTED message=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -933,15 +933,15 @@ code=TENANT_FILE_DIRTY message=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 code=UPSTREAM_ERROR message=msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
-code=UPSTREAM_ERROR message=msgWriteOutcomeUnknown
+code=WRITE_OUTCOME_UNKNOWN message=msgWriteOutcomeUnknown
   <- WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, gitops.ErrWriteOutcomeUnknown ≡ %w
 code=GIT_DRIVER_CONFIGURED message=msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
 code=UPSTREAM_ERROR message="the server could not read its git configuration to check it; nothing was written — please retry shortly"
   <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
-code=CONFLICT message="confd: more than one config file for tenant"
+code=TENANT_FILE_AMBIGUOUS message="confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
-code=CONFLICT message="op ctx: confd: more than one config file for tenant"
+code=TENANT_FILE_AMBIGUOUS message="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
 code=TENANT_CONFIG_NOT_LOADABLE message=targetUnreadableText(special_file)
   <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
@@ -953,7 +953,7 @@ code=FORBIDDEN message="insufficient permissions for the tenant metadata this op
   <- freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put}
 code=BAD_REQUEST message="merge tenant config for tu-a: yaml: line 3: mapping values are not allowed"
   <- ErrMergeFailed %w merge error
-code=CONFLICT message=msgBatchCommittedIncomplete
+code=BATCH_COMMITTED message=msgBatchCommittedIncomplete
   <- BatchCommittedError
 code=BAD_REQUEST message="batch rejected: an operation was refused, nothing was written (op 0: validation failed: bad threshold)"
   <- BatchRejectedError{op0: ErrValidation}
@@ -979,23 +979,23 @@ code=GENERATOR_FINDINGS message="the route generator refuses the configuration t
   <- generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}
 code=GENERATOR_FINDINGS message="the route generator refuses the configuration this batch would produce; nothing was written (1 finding(s) in all, 1 naming this tenant): receiver unreachable for tu-a"
   <- wrapped(generator.FindingsError)
-code=GENERATOR_REJECTED message=generatorRejectedText(deadline)
+code=GENERATOR_BUSY message=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 code=GENERATOR_REJECTED message=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 code=GENERATOR_REJECTED message=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-code=GENERATOR_REJECTED message=generatorRejectedText(git_read)
+code=GENERATOR_BUSY message=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-code=GENERATOR_REJECTED message=generatorRejectedText(busy)
+code=GENERATOR_BUSY message=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 code=GENERATOR_REJECTED message=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 code=GENERATOR_REJECTED message=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-code=GENERATOR_REJECTED message=generatorRejectedText(mismatch)
+code=GENERATOR_BUSY message=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-code=GENERATOR_REJECTED message=generatorRejectedText(no_time)
+code=GENERATOR_BUSY message=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 code=GENERATOR_REJECTED message=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -1013,23 +1013,23 @@ ok=true code=GENERATOR_FINDINGS message="the route generator refuses the configu
   <- generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}
 ok=true code=GENERATOR_FINDINGS message="the route generator refuses the configuration this batch would produce; nothing was written (1 finding(s) in all, 1 naming this tenant): receiver unreachable for tu-a"
   <- wrapped(generator.FindingsError)
-ok=true code=GENERATOR_REJECTED message=generatorRejectedText(deadline)
+ok=true code=GENERATOR_BUSY message=generatorRejectedText(deadline)
   <- generator.RejectedError{deadline}
 ok=true code=GENERATOR_REJECTED message=generatorRejectedText(memory)
   <- generator.RejectedError{memory}
 ok=true code=GENERATOR_REJECTED message=generatorRejectedText(incomplete)
   <- generator.RejectedError{incomplete}
-ok=true code=GENERATOR_REJECTED message=generatorRejectedText(git_read)
+ok=true code=GENERATOR_BUSY message=generatorRejectedText(git_read)
   <- generator.RejectedError{git_read}
-ok=true code=GENERATOR_REJECTED message=generatorRejectedText(busy)
+ok=true code=GENERATOR_BUSY message=generatorRejectedText(busy)
   <- generator.RejectedError{busy}
 ok=true code=GENERATOR_REJECTED message=msgGeneratorTooLarge
   <- generator.RejectedError{too_large}
 ok=true code=GENERATOR_REJECTED message=generatorRejectedText(invalid_request)
   <- generator.RejectedError{invalid_request}
-ok=true code=GENERATOR_REJECTED message=generatorRejectedText(mismatch)
+ok=true code=GENERATOR_BUSY message=generatorRejectedText(mismatch)
   <- generator.RejectedError{mismatch}
-ok=true code=GENERATOR_REJECTED message=generatorRejectedText(no_time)
+ok=true code=GENERATOR_BUSY message=generatorRejectedText(no_time)
   <- generator.RejectedError{no_time}
 ok=true code=GENERATOR_REJECTED message=generatorRejectedText(normalized)
   <- generator.RejectedError{normalized}
@@ -1220,7 +1220,7 @@ gateBatchOpPostStateAt(_profile, team, tu-a) => refused=false
 fresh_base_scope => 403 FORBIDDEN
 fresh_base_orgs => 500 CONFIG_DECODE_ERROR
 generator_findings => 422 GENERATOR_FINDINGS
-generator_rejected_retryable => 429 GENERATOR_REJECTED retryable retry_after_s=5
+generator_rejected_retryable => 429 GENERATOR_BUSY retryable retry_after_s=5
 generator_rejected => 422 GENERATOR_REJECTED
 validator_unavailable => 503 VALIDATOR_UNAVAILABLE retryable retry_after_s=5
 policy_unavailable => 503 POLICY_UNAVAILABLE retryable retry_after_s=5
@@ -1234,16 +1234,16 @@ tenant_tree_scan => 500 INTERNAL_ERROR
 tenant_file_dirty => 409 TENANT_FILE_DIRTY
 tenant_file_not_regular => 409 TENANT_CONFIG_NOT_LOADABLE client_error
 tenant_config_not_loadable => 409 TENANT_CONFIG_NOT_LOADABLE
-ambiguous_tenant_file => 409 CONFLICT client_error
+ambiguous_tenant_file => 409 TENANT_FILE_AMBIGUOUS client_error
 precondition_failed => 409 CONFLICT retryable
 conflict => 409 CONFLICT retryable
-batch_committed => 409 CONFLICT
+batch_committed => 409 BATCH_COMMITTED
 git_push_failed => 503 GIT_PUSH_FAILED retryable retry_after_s=5
 base_restore_failed => 500 BASE_RESTORE_FAILED
 tree_not_on_base => 503 TREE_NOT_ON_BASE retryable retry_after_s=1
 write_overloaded => 503 WRITE_OVERLOADED retryable retry_after_s=1
 forge_degraded => 503 FORGE_UNAVAILABLE retryable retry_after_s=5
-write_outcome_unknown => 503 UPSTREAM_ERROR
+write_outcome_unknown => 503 WRITE_OUTCOME_UNKNOWN
 write_cancelled => 503 UPSTREAM_ERROR retryable
 git_driver_configured => 500 GIT_DRIVER_CONFIGURED fault
 git_config_unreadable => 503 UPSTREAM_ERROR retryable retry_after_s=5
@@ -1258,15 +1258,15 @@ state_conflict => 409 CONFLICT retryable
 state_unavailable => 503 UPSTREAM_ERROR retryable retry_after_s=5
 state_full => 507 STATE_FULL
 config_file_parse => 500 CONFIG_DECODE_ERROR
-forge_forbidden => 403 FORBIDDEN fault
+forge_forbidden => 403 FORGE_FORBIDDEN fault
 forge_circuit_open => 503 FORGE_UNAVAILABLE retryable retry_after_s=5
 forge_create_failed => 503 UPSTREAM_ERROR retryable retry_after_s=5
-federation_token_limit => 409 CONFLICT
+federation_token_limit => 409 TOKEN_LIMIT_REACHED
 federation_mint_rate_limited => 429 RATE_LIMITED retryable retry_after_s=60
-federation_not_configured => 503 UPSTREAM_ERROR
+federation_not_configured => 503 FEDERATION_NOT_CONFIGURED
 route_not_found => 404 NOT_FOUND client_error
-method_not_allowed => 405 BAD_REQUEST client_error
-request_timeout => 504 UPSTREAM_ERROR
+method_not_allowed => 405 METHOD_NOT_ALLOWED client_error
+request_timeout => 504 REQUEST_TIMEOUT
 stream_unsupported => 500 INTERNAL_ERROR fault
 server_shutting_down => 503 UPSTREAM_ERROR retryable retry_after_s=1
 internal => 500 INTERNAL_ERROR fault

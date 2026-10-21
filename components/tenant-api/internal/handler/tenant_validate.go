@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -106,9 +107,9 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
 			switch {
 			case errors.Is(err, gitops.ErrTenantGitManaged):
-				code = CodeTenantGitManaged
+				code = string(errcode.TenantGitManaged)
 			case errors.Is(err, gitops.ErrTenantFileDirty):
-				code = CodeTenantFileDirty
+				code = string(errcode.TenantFileDirty)
 			}
 		}
 		writeJSON(w, http.StatusOK, ValidateResponse{

@@ -123,16 +123,52 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 | 情況 | 現在的回應 | 原本 |
 |---|---|---|
 | 沒有符合的路由 | 404 `NOT_FOUND` | 純文字 `404 page not found` |
-| 路由存在但方法不對 | 405 `BAD_REQUEST`，`Allow` 標頭照舊列出可用方法 | 空 body 的 405 |
-| 超過每個請求的期限（預設 30 秒）而 handler 沒回應 | 504 `UPSTREAM_ERROR`，**不帶** `Retry-After`：handler 沒有回應，寫入是否生效不明，重送前先讀一次 | 空 body 的 504 |
+| 路由存在但方法不對 | 405 `METHOD_NOT_ALLOWED`，`Allow` 標頭照舊列出可用方法 | 空 body 的 405 |
+| 超過每個請求的期限（預設 30 秒）而 handler 沒回應 | 504 `REQUEST_TIMEOUT`，**不帶** `Retry-After`：handler 沒有回應，寫入是否生效不明，重送前先讀一次 | 空 body 的 504 |
 | handler panic | 還沒回應時：500 `INTERNAL_ERROR`（固定文字，`request_id` 對得到帶 stack 的 log）；回應已開始寫出時：中斷連線，client 讀取會失敗，不會把截斷的回應當成完整 | 空 body 的 500；已開始寫出的回應照樣正常結束 |
 | `GET /api/v1/events` 在關機中 | 503 `UPSTREAM_ERROR`，`Retry-After: 1`（重連到新的 pod） | 純文字 503 |
 | `GET /api/v1/events` 的 writer 不能 flush | 500 `INTERNAL_ERROR`，文字 `streaming not supported` | 純文字 500 |
-| logs federation 未設定（`POST /federation/tokens` 的 `logs` capability、`POST /federation/accounts/backfill`） | 503 `UPSTREAM_ERROR`，不帶 `Retry-After`：是部署設定，重試不會變 | 同（改由種類表決定） |
+| logs federation 未設定（`POST /federation/tokens` 的 `logs` capability、`POST /federation/accounts/backfill`） | 503 `FEDERATION_NOT_CONFIGURED`，不帶 `Retry-After`：是部署設定，重試不會變 | 同（改由種類表決定） |
 
-**批次的逐筆結果**（`results[].code`，含非同步 task 的結果）：`status` 為 `error` 的每一筆都帶 `code`，與同一失敗作為整個請求回應時的 `code` 相同；原本只有少數類別有，其餘是空字串。例如過載是 `WRITE_OVERLOADED`、conflict 是 `CONFLICT`、取消或結果未知是 `UPSTREAM_ERROR`、驗證與 tenant id 錯誤是 `BAD_REQUEST`、沒有權限是 `FORBIDDEN`。同時：base 同步逾時（`FORGE_UNAVAILABLE`）不再當成內部錯誤；批次已 commit 但沒乾淨收尾時，逐筆文字改為「已 commit」那一句，不再是「conflict, retry」；多重包裝的錯誤依同一個順序判斷，逐筆結果與同步回應一致。
+**批次的逐筆結果**（`results[].code`，含非同步 task 的結果）：`status` 為 `error` 的每一筆都帶 `code`，與同一失敗作為整個請求回應時的 `code` 相同；原本只有少數類別有，其餘是空字串。例如過載是 `WRITE_OVERLOADED`、conflict 是 `CONFLICT`、取消是 `UPSTREAM_ERROR`、結果未知是 `WRITE_OUTCOME_UNKNOWN`、驗證與 tenant id 錯誤是 `BAD_REQUEST`、沒有權限是 `FORBIDDEN`。同時：base 同步逾時（`FORGE_UNAVAILABLE`）不再當成內部錯誤；批次已 commit 但沒乾淨收尾時，逐筆文字改為「已 commit」那一句，不再是「conflict, retry」；多重包裝的錯誤依同一個順序判斷，逐筆結果與同步回應一致。
 
 **租戶檔不是一般檔案**（FIFO、socket、device）：所有寫入入口一律 409 `TENANT_CONFIG_NOT_LOADABLE`，與 handler 提早拒絕同一個檔時相同（`config_error: not_regular_file`；單一租戶的寫入另帶 `tenant_id`，批次的整體回應不帶租戶、文字固定）；原本寫入途中才發現時，直寫回 400 `BAD_REQUEST`、PR 模式與批次回 500。
+
+### 2.6 一個錯誤碼只有一種處理方式（[#3202](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3202)，⚠️ breaking）
+
+錯誤回應的 `code` 現在等於一種處理方式：同一個 `code` 底下的所有失敗，client 該做的事都一樣，可以只看 `code` 決定下一步。原本有幾個 `code` 同時代表「重整後重送就會過」與「重送也不會過」，下表這些情況因此換成新的 `code`（status 與文字不變）：
+
+| 情況 | 原本 | 現在 | 處理方式（`remedy`） |
+|---|---|---|---|
+| 兩個頂層檔宣告同一租戶（`<id>.yaml` 與 `<id>.yml`；`_federation/` 下兩個檔） | 409 `CONFLICT` | 409 `TENANT_FILE_AMBIGUOUS` | `fix_in_repo` |
+| `/effective`：租戶被其他檔重複宣告（不是頂層的兩種拼法） | 409 `CONFLICT` | 409 `TENANT_DECLARED_ELSEWHERE` | `fix_in_repo` |
+| 直寫批次已經 commit、但伺服器端沒乾淨收尾（`committed: true`） | 409 `CONFLICT` | 409 `BATCH_COMMITTED` | `refresh` |
+| 租戶的 federation token 已達上限 | 409 `CONFLICT` | 409 `TOKEN_LIMIT_REACHED` | `existing` |
+| 產生器這次沒判出結果、可重試（`busy`、`deadline`、`git_read`、`mismatch`、`no_time`） | 429 `GENERATOR_REJECTED` | 429 `GENERATOR_BUSY` | `retry_after` |
+| 寫入結果未知（更新分支失敗且讀不回分支） | 503 `UPSTREAM_ERROR` | 503 `WRITE_OUTCOME_UNKNOWN` | `refresh` |
+| 超過每個請求的期限、handler 沒回應 | 504 `UPSTREAM_ERROR` | 504 `REQUEST_TIMEOUT` | `refresh` |
+| federation 未設定（logs federation；`--federation-prometheus-url` 未設時的 metric discovery） | 503 `UPSTREAM_ERROR` | 503 `FEDERATION_NOT_CONFIGURED` | `operator` |
+| 路由存在但方法不對 | 405 `BAD_REQUEST` | 405 `METHOD_NOT_ALLOWED` | `fix_request` |
+| PR 模式開 PR/MR 時，forge 拒絕 tenant-api 自己設定的 token | 403 `FORBIDDEN` | 403 `FORGE_FORBIDDEN` | `operator` |
+
+拆碼之後，`CONFLICT` 只剩「重整後重送」（`base_hash` 不符、分支在批次執行期間被移動、state store 寫入搶輸），`UPSTREAM_ERROR` 只剩「稍後重送」（state store 或 forge 暫時失敗、伺服器關機中、寫入在 commit 前被取消），`FORBIDDEN` 只剩呼叫者自己的權限不足。由 status 推出 `code` 的回應不再把 409 標成 `CONFLICT`：每個 409 都帶自己的 `code`。
+
+`remedy` 是封閉集合：
+
+| `remedy` | client 該做的事 |
+|---|---|
+| `refresh_retry` | 請求所依據的狀態變了：重新讀取、重新套用變更後重送 |
+| `retry_after` | 同一個請求稍後重送；回應帶 `Retry-After`／`retry_after_s` 時照它等 |
+| `fix_request` | 請求本身要改（body、方法、大小、id） |
+| `fix_in_repo` | 設定 repo 裡的內容要在 git 修好，經 tenant-api 的請求過不去 |
+| `choose_other` | 要的名稱或 id 拿不到，換一個 |
+| `permission` | 呼叫者缺身分或權限 |
+| `operator` | 要由 tenant-api 的維運者修伺服器、儲存或部署設定，呼叫者無法處理 |
+| `not_found` | 請求指名的東西不存在 |
+| `existing` | 已經有東西擋著（已開的 PR/MR、租戶已持有的 token），處理那一個 |
+| `refresh` | 寫入可能（或已經）生效：先重新讀取確認，不要直接重送 |
+
+**單一來源**：所有 `code` 寫在 tenant-api 的 `internal/errcode`（handler、RBAC 中介層、產生器 client、非同步 task 都從這裡取，不再各自抄字串）。OpenAPI 的 `ErrorResponse.code` 因此成為列舉（`ErrorCode`）。契約檔 `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json`（供 portal 讀取；portal 端尚未接上）由 `make error-contract` 從同一份表、錯誤種類表，以及 handler／中介層直接寫出的回應（掃描原始碼取得；status 或 code 不是字面常數的寫法會讓產生器直接失敗）產生，逐碼列出 `remedy`、`retryable`（`always`／`never`）、會出現的 status、預設的 `retry_after_s` 與對應的錯誤種類；`make error-contract-check`、pre-commit 與 CI 擋漂移。`SIMULATE_NOT_PROVIDED` 不在其中：那是 portal 部署自己的 nginx 501，不是 tenant-api 發出的。
 
 ---
 
@@ -303,12 +339,12 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | 結果 | HTTP | `code` | 說明 |
 |---|---|---|---|
 | 有 finding | 422 | `GENERATOR_FINDINGS` | `findings[]` 是產生器的 finding，與這次寫入的檔或租戶相關的排前面並標 `related: true`；`findings_compared_with_base: true` 時每筆另有 `pre_existing`（寫入前就有）。不相關的 finding 只給對所有租戶有寫入權限的呼叫者看，其他人只拿到 `unrelated_findings_withheld`（數量）。批次則是一般的 422 `status: rejected`，每筆結果都是這個 code，訊息列出與該筆租戶相關的 finding |
-| 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_REJECTED` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
+| 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_BUSY` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
 | 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol 或 text 在 staging 時改了內容，commit 的不會是判定過的那份；filter driver 不會走到這裡，見 §3.11）、`unknown`（產生器回了 tenant-api 不認得的 reason） |
 | 產生器容器不可用 | 503（`Retry-After`） | `VALIDATOR_UNAVAILABLE` | `reason`：`unreachable`（連不上或期限內沒回應）、`bad_response`、`amtool_missing`、`generator_too_old`、`internal_error` |
 | 部署端 policy 檔不可用 | 503（`Retry-After`） | `POLICY_UNAVAILABLE` | `reason`：`policy_unusable`（產生器讀不了）、`policy_unreadable`（tenant-api 讀不了自己掛的那份） |
 
-`GENERATOR_REJECTED` 與 503 的回應只帶 code、`reason` 與固定說明，不帶產生器或 tenant-api 的錯誤訊息（可能含路徑、例外內容或其他租戶的檔名）；不認得的 reason 一律顯示 `unknown`。原本的 reason 與訊息只寫進 tenant-api 的 log。`GENERATOR_FINDINGS` 的 `findings[]` 是判定結果本身，依上面的可見性規則揭露。
+`GENERATOR_REJECTED`、`GENERATOR_BUSY` 與 503 的回應只帶 code、`reason` 與固定說明，不帶產生器或 tenant-api 的錯誤訊息（可能含路徑、例外內容或其他租戶的檔名）；不認得的 reason 一律顯示 `unknown`。原本的 reason 與訊息只寫進 tenant-api 的 log。`GENERATOR_FINDINGS` 的 `findings[]` 是判定結果本身，依上面的可見性規則揭露。
 
 - **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
 - **寫入扁平鍵 `_routing_receiver_type`** 一律 400，receiver type 寫在 `_routing.receiver.type`：`PUT` 由租戶鍵驗證擋下（`BAD_REQUEST`，訊息 `unknown routing key`），批次 patch 由 patch 鍵驗證擋下（`INVALID_BODY`）。

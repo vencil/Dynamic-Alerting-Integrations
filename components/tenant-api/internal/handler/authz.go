@@ -34,6 +34,7 @@ import (
 	"sync"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -353,7 +354,7 @@ func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
 	if OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, want, meta) {
 		return true
 	}
-	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, denyMsg)
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden, denyMsg)
 	return false
 }
 

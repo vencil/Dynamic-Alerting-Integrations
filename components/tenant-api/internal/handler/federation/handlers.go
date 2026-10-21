@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -144,7 +145,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		// (ADR-027 / LD-6 P4b): an org-scoped rule only grants admin on
 		// a tenant inside the caller's org.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 				"admin permission required on tenant "+req.TenantID+" to issue a federation token")
 			return
 		}
@@ -222,7 +223,7 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 		// token records are an enumeration oracle for federation activity,
 		// so the list gate matches the issue/revoke gates.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 				"admin permission required on tenant "+tenantID)
 			return
 		}

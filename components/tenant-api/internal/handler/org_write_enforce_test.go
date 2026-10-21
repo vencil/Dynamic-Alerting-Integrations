@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -283,8 +284,8 @@ func TestOrgWriteEnforce_PutTenant_GateRunsBeforeHeaderParsing(t *testing.T) {
 			w.Code, BaseHashHeader, w.Body.String())
 	}
 	code, errText := decodeEnvelope(t, w)
-	if code != CodeForbidden {
-		t.Errorf("code = %q, want %q", code, CodeForbidden)
+	if code != string(errcode.Forbidden) {
+		t.Errorf("code = %q, want %q", code, errcode.Forbidden)
 	}
 	if want := "(permission and organization-scope checks, ADR-027)"; !strings.Contains(errText, want) {
 		t.Errorf("error = %q, want it to contain %q — that suffix is what separates the\n"+
@@ -382,8 +383,8 @@ func orgEnfCheckBatchResults(t *testing.T, results []BatchResult) {
 		t.Errorf("member-org tenant result = %+v, want not_applied", got)
 	}
 	out := byTenant[orgEnfTenantOut]
-	if out.Status != "error" || !strings.Contains(out.Message, "insufficient permissions") || out.Code != CodeForbidden {
-		t.Errorf("other-org tenant result = %+v, want the per-item permissions error, code %s (#3226)", out, CodeForbidden)
+	if out.Status != "error" || !strings.Contains(out.Message, "insufficient permissions") || out.Code != errcode.Forbidden {
+		t.Errorf("other-org tenant result = %+v, want the per-item permissions error, code %s (#3226)", out, errcode.Forbidden)
 	}
 }
 
@@ -900,8 +901,8 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 					t.Errorf("writer commits = %d, want 0", n)
 				}
 				if c.wantGitManaged {
-					if !strings.Contains(body, CodeTenantGitManaged) {
-						t.Errorf("readable=%v: want %s: %s", readable, CodeTenantGitManaged, body)
+					if !strings.Contains(body, string(errcode.TenantGitManaged)) {
+						t.Errorf("readable=%v: want %s: %s", readable, errcode.TenantGitManaged, body)
 					}
 					for _, h := range hidden {
 						if strings.Contains(body, h) {
@@ -991,8 +992,8 @@ func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
 				}
 				w := c.call(t, f)
 				body := w.Body.String()
-				if w.Code != c.code || !strings.Contains(body, CodeTenantGitManaged) {
-					t.Fatalf("readable=%v: status %d (want %d %s): %s", readable, w.Code, c.code, CodeTenantGitManaged, body)
+				if w.Code != c.code || !strings.Contains(body, string(errcode.TenantGitManaged)) {
+					t.Fatalf("readable=%v: status %d (want %d %s): %s", readable, w.Code, c.code, errcode.TenantGitManaged, body)
 				}
 				for _, h := range []string{orgEnfTenantOut, "secret_key_b"} {
 					if strings.Contains(body, h) {
@@ -1043,8 +1044,8 @@ func TestValidationMessagesAsyncBatchNamesNoOtherTenant(t *testing.T) {
 	}
 	check := func(what, got string) {
 		t.Helper()
-		if !strings.Contains(got, CodeTenantGitManaged) {
-			t.Errorf("%s: want %s: %s", what, CodeTenantGitManaged, got)
+		if !strings.Contains(got, string(errcode.TenantGitManaged)) {
+			t.Errorf("%s: want %s: %s", what, errcode.TenantGitManaged, got)
 		}
 		for _, h := range []string{orgEnfTenantOut, "secret_key_b"} {
 			if strings.Contains(got, h) {

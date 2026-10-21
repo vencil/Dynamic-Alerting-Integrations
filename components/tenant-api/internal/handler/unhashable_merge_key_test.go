@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -136,16 +137,16 @@ func TestBatchTenants_UnhashableMergeKeyInCurrentFileIsRefused(t *testing.T) {
 					if task.Status != async.TaskFailed || len(task.Results) != 1 {
 						t.Fatalf("%s async: task %+v, want failed with one result", name, task)
 					}
-					status, code, msg = task.Results[0].Status, task.Results[0].Code, task.Results[0].Message
+					status, code, msg = task.Results[0].Status, string(task.Results[0].Code), task.Results[0].Message
 				} else {
 					var resp BatchResponse
 					if w.Code != http.StatusUnprocessableEntity || json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Results) != 1 {
 						t.Fatalf("%s sync: status %d, body %s", name, w.Code, w.Body.String())
 					}
-					status, code, msg = resp.Results[0].Status, resp.Results[0].Code, resp.Results[0].Message
+					status, code, msg = resp.Results[0].Status, string(resp.Results[0].Code), resp.Results[0].Message
 				}
-				if status != "error" || code != CodeTenantConfigNotLoadable {
-					t.Errorf("%s (async=%v): result %s/%s %q, want error/%s", name, async_, status, code, msg, CodeTenantConfigNotLoadable)
+				if status != "error" || code != string(errcode.TenantConfigNotLoadable) {
+					t.Errorf("%s (async=%v): result %s/%s %q, want error/%s", name, async_, status, code, msg, errcode.TenantConfigNotLoadable)
 				}
 				if got, _ := os.ReadFile(filepath.Join(dir, unhashableTenant+".yaml")); string(got) != doc {
 					t.Errorf("%s (async=%v): the current file changed:\n%s", name, async_, got)

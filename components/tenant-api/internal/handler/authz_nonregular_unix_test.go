@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -256,8 +257,8 @@ func (f *nonRegularFixture) assertNotRegularRefusal(t *testing.T, w *httptest.Re
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body is not JSON: %v: %s", err, w.Body.String())
 	}
-	if body["code"] != CodeTenantConfigNotLoadable {
-		t.Errorf("code = %v, want %s", body["code"], CodeTenantConfigNotLoadable)
+	if body["code"] != string(errcode.TenantConfigNotLoadable) {
+		t.Errorf("code = %v, want %s", body["code"], errcode.TenantConfigNotLoadable)
 	}
 	if body["config_error"] != "not_regular_file" || body["tenant_id"] != nonRegularTenantID {
 		t.Errorf("config_error/tenant_id = %v/%v, want not_regular_file/%s",
@@ -287,9 +288,9 @@ func (f *nonRegularFixture) assertOtherTenantRefusedWholeTree(t *testing.T) {
 	if took >= immediate {
 		t.Errorf("answered after %v, want under %v", took, immediate)
 	}
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeTenantStoreFault) {
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), string(errcode.TenantStoreFault)) {
 		t.Fatalf("PUT to another tenant after the refusal = %d, want 500 %s: %s",
-			w.Code, CodeTenantStoreFault, w.Body.String())
+			w.Code, errcode.TenantStoreFault, w.Body.String())
 	}
 	f.assertNothingWritten(t, before)
 }

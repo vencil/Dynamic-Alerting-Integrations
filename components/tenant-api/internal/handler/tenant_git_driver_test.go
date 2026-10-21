@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 func TestGitDriverConfig_WriteAndPreviewAnswers(t *testing.T) {
@@ -52,8 +54,8 @@ func TestGitDriverConfig_WriteAndPreviewAnswers(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 			t.Fatal(err)
 		}
-		if env.Code != CodeGitDriverConfigured || env.Error != msgGitDriverConfigured {
-			t.Errorf("%s envelope = %+v, want %s with msgGitDriverConfigured", name, env, CodeGitDriverConfigured)
+		if env.Code != errcode.GitDriverConfigured || env.Error != msgGitDriverConfigured {
+			t.Errorf("%s envelope = %+v, want %s with msgGitDriverConfigured", name, env, errcode.GitDriverConfigured)
 		}
 		if ra := w.Header().Get("Retry-After"); ra != "" {
 			t.Errorf("%s Retry-After = %q: an operator must remove the key, a retry cannot pass", name, ra)
@@ -72,8 +74,8 @@ func TestGitDriverConfig_WriteAndPreviewAnswers(t *testing.T) {
 	noKey("/validate", vw)
 
 	bw := wmBatch(d, "")
-	if bw.Code != http.StatusInternalServerError || !strings.Contains(bw.Body.String(), CodeGitDriverConfigured) {
-		t.Errorf("batch = %d %s, want 500 %s", bw.Code, bw.Body.String(), CodeGitDriverConfigured)
+	if bw.Code != http.StatusInternalServerError || !strings.Contains(bw.Body.String(), string(errcode.GitDriverConfigured)) {
+		t.Errorf("batch = %d %s, want 500 %s", bw.Code, bw.Body.String(), errcode.GitDriverConfigured)
 	}
 	noKey("batch", bw)
 
@@ -118,8 +120,8 @@ func TestGitConfigUnreadable_WriteAnswers(t *testing.T) {
 	if err := json.Unmarshal(pw.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Code != CodeUpstream || env.Error != msgGitConfigUnreadable || env.RetryAfterS != 5 {
-		t.Errorf("PUT envelope = %+v, want %s, msgGitConfigUnreadable, retry_after_s 5", env, CodeUpstream)
+	if env.Code != errcode.Upstream || env.Error != msgGitConfigUnreadable || env.RetryAfterS != 5 {
+		t.Errorf("PUT envelope = %+v, want %s, msgGitConfigUnreadable, retry_after_s 5", env, errcode.Upstream)
 	}
 	if ra := pw.Header().Get("Retry-After"); ra != "5" {
 		t.Errorf("PUT Retry-After = %q, want 5", ra)
@@ -129,8 +131,8 @@ func TestGitConfigUnreadable_WriteAnswers(t *testing.T) {
 	}
 
 	bw := wmBatch(d, "")
-	if bw.Code != http.StatusServiceUnavailable || strings.Contains(bw.Body.String(), CodeGitDriverConfigured) {
-		t.Errorf("batch = %d %s, want 503, not %s", bw.Code, bw.Body.String(), CodeGitDriverConfigured)
+	if bw.Code != http.StatusServiceUnavailable || strings.Contains(bw.Body.String(), string(errcode.GitDriverConfigured)) {
+		t.Errorf("batch = %d %s, want 503, not %s", bw.Code, bw.Body.String(), errcode.GitDriverConfigured)
 	}
 
 	// Readable again, so the checks below can run git.

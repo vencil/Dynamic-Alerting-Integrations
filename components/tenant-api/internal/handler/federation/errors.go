@@ -22,7 +22,7 @@ func writeFederationGitError(w http.ResponseWriter, r *http.Request, err error, 
 }
 
 // writeIssueError answers a federation token mint that Issue / IssueLogs
-// refused: the tenant's token limit (409 CONFLICT), the mint rate limit
+// refused: the tenant's token limit (409 TOKEN_LIMIT_REACHED), the mint rate limit
 // (429 RATE_LIMITED + Retry-After: when the next mint is admitted, #3226),
 // else a 500 whose text goes to the log only.
 func writeIssueError(w http.ResponseWriter, r *http.Request, err error) {

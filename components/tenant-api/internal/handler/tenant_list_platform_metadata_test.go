@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -290,8 +291,8 @@ func TestPutTenant_RootPlatformFileUnreadablePassesTheGateRefusedOnTheTree(t *te
 	req.Header.Set("X-Forwarded-Groups", "prod-ops")
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantTreeUnreadable) {
-		t.Fatalf("PUT status = %d, body %s; want 409 %s", w.Code, w.Body.String(), CodeTenantTreeUnreadable)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), string(errcode.TenantTreeUnreadable)) {
+		t.Fatalf("PUT status = %d, body %s; want 409 %s", w.Code, w.Body.String(), errcode.TenantTreeUnreadable)
 	}
 	if got, err := os.ReadFile(filepath.Join(configDir, "tx.yaml")); err != nil || string(got) == body {
 		t.Errorf("tx.yaml after the refused PUT = %q, %v; want it unchanged", got, err)

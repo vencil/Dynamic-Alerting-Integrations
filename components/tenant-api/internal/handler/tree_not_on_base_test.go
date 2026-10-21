@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -127,7 +128,7 @@ func TestDirectWrite_StrandedOnPRBranch_ReturnsToBase503ThenRetry(t *testing.T) 
 			t.Parallel()
 			dir := strandedRepo(t, false)
 			refs := snapshotRefs(t, dir)
-			assertRetryable503(t, do(t, dir), CodeTreeNotOnBase, dir, refs)
+			assertRetryable503(t, do(t, dir), string(errcode.TreeNotOnBase), dir, refs)
 
 			// The retry lands on base.
 			if rec := do(t, dir); rec.Code != http.StatusOK {
@@ -157,7 +158,7 @@ func TestDirectWrite_StrandedOnPRBranch_ReturnFails503(t *testing.T) {
 			t.Parallel()
 			dir := strandedRepo(t, true)
 			refs := snapshotRefs(t, dir)
-			assertRetryable503(t, do(t, dir), CodeWriteOverloaded, dir, refs)
+			assertRetryable503(t, do(t, dir), string(errcode.WriteOverloaded), dir, refs)
 		})
 	}
 }
@@ -170,8 +171,8 @@ func TestApplyPatch_StrandedOnPRBranch_PerOpCode(t *testing.T) {
 	res := applyPatch(context.Background(), gitopstest.NewWriter(dir, dir), dir,
 		BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "disable"}},
 		"op@example.com")
-	if res.Status != "error" || res.Code != CodeTreeNotOnBase {
-		t.Fatalf("result = %+v, want status error, code %s", res, CodeTreeNotOnBase)
+	if res.Status != "error" || res.Code != errcode.TreeNotOnBase {
+		t.Fatalf("result = %+v, want status error, code %s", res, errcode.TreeNotOnBase)
 	}
 	if strings.Contains(res.Message, "db-z") {
 		t.Errorf("message leaks the stranded branch: %q", res.Message)

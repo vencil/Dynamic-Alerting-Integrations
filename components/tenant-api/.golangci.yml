@@ -131,6 +131,7 @@ linters:
             - "**/internal/configwatcher/**"
             - "**/internal/credmask/**"
             - "**/internal/customalerts/**"
+            - "**/internal/errcode/**"
             - "**/internal/errkind/**"
             - "**/internal/federation/account/**"
             - "**/internal/federation/fedpolicy/**"
@@ -166,6 +167,21 @@ linters:
               desc: errkind is a leaf — it imports nothing of tenant-api (#3226)
             - pkg: net/http
               desc: errkind holds names only; statuses and codes are the handler's kindTable (#3226)
+        # #3202: errcode is the one list of the error codes — the handler, the
+        # RBAC middleware, the generator client and the async task store all
+        # name a code from it instead of a copy of its string. That holds only
+        # while every one of them may import it: a leaf, nothing of this module
+        # (a code knows no kind, no status, no handler) and not net/http (which
+        # status a code is answered with is the handler's kindTable).
+        errcode-leaf:
+          list-mode: lax
+          files:
+            - "**/internal/errcode/**"
+          deny:
+            - pkg: github.com/vencil/tenant-api/internal
+              desc: errcode is a leaf — it imports nothing of tenant-api (#3202)
+            - pkg: net/http
+              desc: errcode holds codes and remedies only; statuses are the handler's kindTable (#3202)
   exclusions:
     rules:
       - path: _test\.go
