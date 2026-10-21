@@ -95,7 +95,7 @@ class BinaryMissing(ParseTreeError):
 
 class FileUnreadable(ParseTreeError):
     """A selected file parse-tree could not read: `kind` is its closed-list code
-    (internal/parsetree Kinds), `message` the reason for a person."""
+    (pkg/parsetree Kinds), `message` the reason for a person."""
 
     def __init__(self, file: str, kind: str, message: str) -> None:
         super().__init__(f"{file}: {kind}: {message}")

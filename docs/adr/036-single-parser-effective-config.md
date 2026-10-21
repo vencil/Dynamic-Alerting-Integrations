@@ -570,7 +570,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | 產生器另外讀的 policy 檔名 | `_grar_parse.py` 的 `_POLICY_FILENAMES`；exporter 不讀巢狀 `_` 檔的說明在 `flat_build.go` |
 | portal 只做預覽的解析 | js-yaml 經 `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`；手寫的逐行解析 `tools/portal/src/interactive/tools/config-lint/lint.js` |
 | 與解析無關、步驟 0 搬出的小工具 | `IsValidTenantID`（呼叫端改用 `pkg/tenantid`）、`LevelOf` 與 `IsDomainPolicyFile`（`internal/confdlayout`）；routing profiles 的檔名是 `cmd/da-guard` 的 `routingProfilesNames` |
-| 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`internal/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已在步驟 3 刪除 |
+| 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`pkg/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已在步驟 3 刪除 |
 | Go 端模仿 PyYAML 讀法的程式（已在步驟 3 刪除） | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
 | Go 端模仿產生器語意的程式（已在步驟 3 刪除） | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`、`IsDisabled`；da-guard 的路由檢查 `internal/guard/routing.go` 與它們的 finding kind |
 | vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已在步驟 3 刪除）、非特定 tag（步驟 4 刪除）、大型 mapping 的重複鍵檢查（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |

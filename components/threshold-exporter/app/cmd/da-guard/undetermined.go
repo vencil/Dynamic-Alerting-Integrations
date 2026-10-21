@@ -33,8 +33,8 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/confdname"
-	"github.com/vencil/threshold-exporter/internal/parsetree"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
