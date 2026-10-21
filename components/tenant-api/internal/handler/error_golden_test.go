@@ -293,6 +293,9 @@ func goldenCaller(t *testing.T, mgr *rbac.Manager, group string) *http.Request {
 	return got
 }
 
+// noResponse ends the cell of an entry that wrote nothing.
+const noResponse = " | (no response)"
+
 // renderGoldenCell runs one entry on one error and renders the answer on one
 // line: what the entry returned, the status, code, how the write attempt
 // counts (tenant_api_writes_total's result: writeResultOfStatus over the
@@ -300,9 +303,6 @@ func goldenCaller(t *testing.T, mgr *rbac.Manager, group string) *http.Request {
 // header / retry_after_s pair when either is set, NO-REQUEST-ID when the
 // envelope lacks it, the other body fields as sorted JSON when there are any,
 // and the error text.
-// noResponse ends the cell of an entry that wrote nothing.
-const noResponse = " | (no response)"
-
 func renderGoldenCell(e goldenEntry, r *http.Request, d *Deps, err error) string {
 	rec := httptest.NewRecorder()
 	sink := &WriteResults{}
