@@ -22,7 +22,7 @@ Revised 2026-10-17: `disable_partial` is reported only when the sibling still se
 
 Revised 2026-10-17: the custom alert compiler compiles the exporter's own reading, so the two read `_custom_alerts` in the same layers (decision 2).
 
-Revised 2026-10-21: the generator half follows the registry's declarations, kept consistent with the code by the two-way probe, rather than measuring the generator's output on every verdict (decisions 1 and 5); Go's write check keeps only its value and structure checks and leaves key names to the shared verdict (decision 2); before the generator container is wired to the shared verdict, served-values must be able to compute only the named tenants, within the memory budget of ADR-036 §3 (decisions 5 and 11).
+Revised 2026-10-21: the generator half follows the registry's declarations, kept consistent with the code by the two-way probe, rather than measuring the generator's output on every verdict (decisions 1 and 5); Go's write check keeps only its value and structure checks and leaves key names to the shared verdict (decision 2); a `_` key in a profile is judged directly from the registry's profile layer, not through tenants (decision 4); before the generator container is wired to the shared verdict, served-values must be able to compute only the named tenants, within the memory budget of ADR-036 §3 (decisions 5 and 11).
 
 ## Summary
 
@@ -184,6 +184,8 @@ For each key of each tenant, the shared function gives:
 | `undecidable` | No root platform file was read, so the exporter half cannot judge the threshold keys the tenant wrote; reserved keys are judged as usual (see decision 7) | The verdict output returns rc 2 |
 
 The same typo coming from a platform file is reported only once (deduplicated by file and key), listing the affected tenants, rather than one finding per tenant.
+
+A `_` key in a profile is also judged directly from the registry's profile layer, not through tenants: a key no reader reads in the profile layer is one notice on that profile file, listing the tenants that bind the profile (possibly none). The verdict and reason are the same whether or not a tenant binds the profile and whether or not a tenant's own value shadows it; a `_profile` written in a profile, for example, is always shadowed by the tenant layer and is reported only this way. Policy-as-Code reads the configuration a tenant sees, so a rule naming the key counts as a read only when some tenant actually gets the value.
 
 `disable_noop` is only a warning while a misspelled threshold key is an error, because a `disable` that turns nothing off makes no value take wrong effect, and it may be a deliberate safety entry (for example for a key the defaults will only add later); its risk is that what was meant to be turned off was not, so besides the warning, a newly introduced one also appears in the config-diff PR comment (see decision 8). `disable_partial` does not change the verdict (the key is read); it is reported as a separate warning.
 
