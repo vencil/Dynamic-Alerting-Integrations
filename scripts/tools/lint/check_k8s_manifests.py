@@ -99,12 +99,10 @@ MANIFEST_ROOT = "k8s"
 # docs/internal/iac-lint-baseline.md. CRITICAL is never exemptable. Adding an
 # entry is a deliberate, reviewable act — the single audit surface for "what
 # privileges has the platform opened" in raw manifests.
-EXEMPTIONS: dict[tuple[str, str], str] = {
-    ("k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs"):
-        "tenant-api git-clone init + api container need a writable workspace to "
-        "clone/commit conf.d (same rationale as the helm chart's tenant-api "
-        "exemption); the oauth2-proxy sidecar IS read-only",
-}
+# Empty since #1594: its only entry was the raw tenant-api Deployment, removed
+# when helm/tenant-api became tenant-api's only deployment source (the same
+# writable-workspace fact stays registered at L2, check_iac_helm.py).
+EXEMPTIONS: dict[tuple[str, str], str] = {}
 
 
 # ---------------------------------------------------------------------------

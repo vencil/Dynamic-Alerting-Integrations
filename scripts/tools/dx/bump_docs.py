@@ -470,9 +470,9 @@ def _build_tenant_api_rules():
     # SSOT said 2.9.20.
     #
     # ⚠️ It tracks Chart.yaml `version:` (this line's SSOT), NOT `appVersion`.
-    # That distinction is the whole reason three OTHER stale-looking
-    # `tenant-api:v2.7.0` strings in this repo are correct and must be left
-    # alone: k8s/04-tenant-api/deployment.yaml, docs/assets/platform-data.json
+    # That distinction is the whole reason two OTHER stale-looking
+    # `tenant-api:vX.Y.Z` strings in this repo are correct and must be left
+    # alone: docs/assets/platform-data.json
     # (which is GENERATED from the deploy SSOT — a rule here would fight
     # generate_platform_data.py) and the portal's images.js are IMAGE-RUNTIME
     # pins, and the chart deploys `:v${appVersion}` on purpose. This row is a

@@ -49,14 +49,20 @@ type prBackendFlags struct {
 // TA_WRITE_MODE value was rejected. Split out from wirePRBackend so the
 // parse contract is testable without the process-exit the real call site
 // needs (#1559), the same split parseEnvBool/envBool uses in main.go.
-var errWriteModeUnknown = errors.New("not one of the four write-back modes")
+var errWriteModeUnknown = errors.New("not one of the three write-back modes")
 
-// writeModeLegalValues is the set --write-mode is checked against. The four
-// values already existed as constants in internal/handler; what was missing
-// was any code comparing the input to them.
+// writeModeLegalValues is the set the --write-mode INPUT is checked against.
+// The values already existed as constants in internal/handler; what was
+// missing was any code comparing the input to them.
+//
+// ⛔ handler.WriteModePR ("pr") is NOT an input (#1594). It is the value
+// pr-github normalizes to inside wirePRBackend, which downstream code compares
+// against. Accepting it as an input too gave the binary a fourth spelling the
+// Helm chart never wired (the chart keys its GitHub flags on pr-github), so the
+// one SSOT for "what an operator may write" is this three-value set, and
+// helm/tenant-api/values.schema.json is pinned to it by chart_schema_test.go.
 var writeModeLegalValues = []handler.WriteMode{
 	handler.WriteModeDirect,
-	handler.WriteModePR,
 	handler.WriteModePRGitHub,
 	handler.WriteModePRGitLab,
 }
@@ -109,23 +115,23 @@ func parseWriteMode(raw string) (handler.WriteMode, error) {
 func wirePRBackend(f prBackendFlags) (platform.Client, platform.Tracker, handler.WriteMode) {
 	wm, err := parseWriteMode(f.Mode)
 	if err != nil {
-		log.Fatalf("FATAL: --write-mode (or TA_WRITE_MODE) = %q is %v — accepted: direct, pr, pr-github, pr-gitlab. "+
+		log.Fatalf("FATAL: --write-mode (or TA_WRITE_MODE) = %q is %v — accepted: direct, pr-github, pr-gitlab. "+
 			"Refusing to start rather than falling back to direct commit-on-write, because that fallback is "+
 			"indistinguishable from a deliberate --write-mode=direct, down to the startup log line (ADR-034).",
 			f.Mode, err)
 	}
 	switch wm {
-	case handler.WriteModePR, handler.WriteModePRGitHub:
-		// Normalize the "pr-github" spelling → "pr" so downstream
+	case handler.WriteModePRGitHub:
+		// Normalize pr-github → the internal WriteModePR ("pr") so downstream
 		// comparisons don't have to handle both. This was the v2.6.0
-		// behavior; preserving it.
+		// behavior; preserving it. "pr" itself is no longer an INPUT (#1594).
 		wm = handler.WriteModePR
 		ghToken := os.Getenv("TA_GITHUB_TOKEN")
 		if ghToken == "" {
-			log.Fatalf("FATAL: TA_GITHUB_TOKEN is required when write-mode=pr/pr-github")
+			log.Fatalf("FATAL: TA_GITHUB_TOKEN is required when write-mode=pr-github")
 		}
 		if f.GitHubRepo == "" {
-			log.Fatalf("FATAL: --github-repo (or TA_GITHUB_REPO) is required when write-mode=pr/pr-github")
+			log.Fatalf("FATAL: --github-repo (or TA_GITHUB_REPO) is required when write-mode=pr-github")
 		}
 		ghClient, err := gh.NewClient(ghToken, f.GitHubRepo, f.GitHubBase)
 		if err != nil {
