@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
@@ -55,32 +54,11 @@ func judgeConfFile(data []byte) error {
 	return defaultVerdictCache.judge(data)
 }
 
-// unreadableFileError is the error for parse-tree's refusal bad, its message
-// cut to maxUnreadableMessage bytes. One rule, applied before a verdict is
-// kept, so a reader sees the same text whether the verdict was judged now or
-// taken from the cache.
+// unreadableFileError is the error for parse-tree's refusal bad, as parse-tree
+// gives it: its Message is already bounded at the source
+// (parsetree.MaxMessageBytes), so every interface carries the same text.
 func unreadableFileError(bad *parsetree.Unreadable) *UnreadableFileError {
-	return &UnreadableFileError{Kind: bad.Kind, Message: cutMessage(bad.Message)}
-}
-
-// maxUnreadableMessage bounds an *UnreadableFileError's Message. parse-tree
-// quotes what it refuses (a repeated key, a tag), and a quoted key can be as
-// long as the file: measured, a 1 MiB duplicate key made a 1,048,644-byte
-// message. The kind is a field of its own and the line number leads the
-// message ("line N: …"), so both survive the cut.
-const maxUnreadableMessage = 512
-
-// cutMessage is msg cut to maxUnreadableMessage bytes at a rune boundary,
-// with how much was cut; msg itself when it fits.
-func cutMessage(msg string) string {
-	if len(msg) <= maxUnreadableMessage {
-		return msg
-	}
-	cut := maxUnreadableMessage
-	for cut > 0 && !utf8.RuneStart(msg[cut]) {
-		cut--
-	}
-	return fmt.Sprintf("%s… (%d more bytes)", msg[:cut], len(msg)-cut)
+	return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
 }
 
 // verdictCache keeps verdicts by content SHA-256 (a nil value: the file can
@@ -109,8 +87,8 @@ type verdictCache struct {
 
 // verdictCacheMax is the process cache's bound: above the largest tree
 // measured (5,000 files, ScanDirTree_Hierarchical_5000_Cold), so one load
-// keeps every verdict; an entry is a key and a pointer (messages are cut,
-// cutMessage).
+// keeps every verdict; an entry is a key and a pointer (a message is at most
+// parsetree.MaxMessageBytes).
 const verdictCacheMax = 8192
 
 // defaultVerdictCache is judgeConfFile's. Its log goes to log.Default(): the
@@ -133,15 +111,16 @@ func (c *verdictCache) judge(data []byte) error {
 			v = unreadableFileError(bad)
 		}
 		c.mu.Lock()
-		if len(c.m) >= c.max {
+		cleared := len(c.m) >= c.max
+		if cleared {
 			c.m = make(map[[sha256.Size]byte]*UnreadableFileError)
-			if c.logf != nil {
-				c.logf("DEBUG: parse-tree verdict cache reached %d entries and was cleared; "+
-					"files are judged again (more distinct conf.d contents than the cache holds)", c.max)
-			}
 		}
 		c.m[key] = v
 		c.mu.Unlock()
+		if cleared && c.logf != nil { // outside the lock: a logger may block
+			c.logf("DEBUG: parse-tree verdict cache reached %d entries and was cleared; "+
+				"files are judged again (more distinct conf.d contents than the cache holds)", c.max)
+		}
 	}
 	if v == nil {
 		return nil // not a typed nil in the error interface

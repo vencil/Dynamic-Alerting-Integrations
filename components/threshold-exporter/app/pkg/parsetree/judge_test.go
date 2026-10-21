@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func assertJudgeIsParse(t *testing.T, where string, data []byte) {
@@ -171,4 +172,35 @@ func FuzzParseJudgeSameVerdict(f *testing.F) {
 			t.Errorf("%q: Judge %v, Parse %v", data, got, want)
 		}
 	})
+}
+
+// A message is bounded where it is made (fail): a 1 MiB repeated key keeps
+// its head (the line number, what was refused) and its tail (the line the key
+// was first written on), stays valid UTF-8 — the cut lands inside multi-byte
+// runes here — and is the same for Parse and Judge.
+func TestMessageIsCutAtTheSourceKeepingHeadAndTail(t *testing.T) {
+	t.Parallel()
+	for _, unit := range []string{"k", "é", "😀"} {
+		k := strings.Repeat(unit, (1<<20)/len(unit))
+		data := []byte("x: 1\n? " + k + "\n: 1\n? " + k + "\n: 2\n")
+		_, bad := Parse(data)
+		if bad == nil || bad.Kind != KindDuplicateKey {
+			t.Fatalf("%q: %v, want duplicate_key", unit, bad)
+		}
+		m := bad.Message
+		if len(m) > MaxMessageBytes || !utf8.ValidString(m) {
+			t.Errorf("%q: message %d bytes (bound %d), valid UTF-8 %v", unit, len(m), MaxMessageBytes, utf8.ValidString(m))
+		}
+		if !strings.HasPrefix(m, "line 4: the key ") || !strings.HasSuffix(m, "(first at line 2)") ||
+			!strings.Contains(m, " bytes omitted) …") {
+			t.Errorf("%q: head %.40q … tail %q", unit, m, m[len(m)-40:])
+		}
+		if j := Judge(data); j == nil || j.Message != m {
+			t.Errorf("%q: Judge's message differs from Parse's", unit)
+		}
+	}
+	short := "a: 1\na: 2\n"
+	if _, bad := Parse([]byte(short)); bad == nil || strings.Contains(bad.Message, "omitted") {
+		t.Errorf("a short message is cut: %v", bad)
+	}
 }

@@ -100,32 +100,24 @@ func TestVerdictCache_ConcurrentJudgementsAgree(t *testing.T) {
 	}
 }
 
-// A refusal quoting a 1 MiB key: the message is cut to the bound, keeps its
-// line number, and is the same text on a miss, on a hit and through the
-// public decode entry.
-func TestVerdictCache_LongMessageIsCutByOneRule(t *testing.T) {
+// A refusal quoting a 1 MiB key: the message is parse-tree's own, already
+// bounded at its source (parsetree.MaxMessageBytes), and the same text on a
+// miss, on a hit and through the public decode entry.
+func TestVerdictCache_LongMessageIsParseTreesOwn(t *testing.T) {
 	t.Parallel()
 	k := strings.Repeat("k", 1<<20)
 	data := []byte("? " + k + "\n: 1\n? " + k + "\n: 2\n")
-	if _, bad := parsetree.Parse(data); bad == nil || len(bad.Message) < 1<<20 {
-		t.Fatalf("precondition: parse-tree's own message is not the long one: %d bytes", len(bad.Message))
+	_, bad := parsetree.Parse(data)
+	if bad == nil || bad.Kind != parsetree.KindDuplicateKey {
+		t.Fatalf("precondition: parse-tree gives %v, want duplicate_key", bad)
 	}
 	c := newVerdictCache(8, nil)
 	miss, hit := c.judge(data), c.judge(data)
 	_, public := ParseTenantFile(data)
 	for name, err := range map[string]error{"miss": miss, "hit": hit, "ParseTenantFile": public} {
-		kind, ok := UnreadableKindOf(err)
-		if !ok || kind != parsetree.KindDuplicateKey {
-			t.Fatalf("%s: %v, want duplicate_key", name, err)
-		}
 		var ue *UnreadableFileError
-		_ = errors.As(err, &ue)
-		if len(ue.Message) > maxUnreadableMessage+40 || !strings.HasPrefix(ue.Message, "line 3: ") ||
-			!strings.HasSuffix(ue.Message, "more bytes)") {
-			t.Errorf("%s: message %d bytes, starts %.20q, ends %q", name, len(ue.Message), ue.Message, ue.Message[len(ue.Message)-20:])
-		}
-		if err.Error() != miss.Error() {
-			t.Errorf("%s: text differs from the miss", name)
+		if !errors.As(err, &ue) || ue.Kind != bad.Kind || ue.Message != bad.Message {
+			t.Errorf("%s: %v; want parse-tree's %s with its message as is", name, err, bad.Kind)
 		}
 	}
 }

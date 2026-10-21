@@ -113,7 +113,40 @@ type Unreadable struct {
 func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.Message }
 
 func fail(k Kind, format string, args ...any) *Unreadable {
-	return &Unreadable{Kind: k, Message: fmt.Sprintf(format, args...)}
+	return &Unreadable{Kind: k, Message: cutMessage(fmt.Sprintf(format, args...))}
+}
+
+// MaxMessageBytes bounds Unreadable.Message. A message quotes what it refuses
+// (a repeated key, a tag, yaml.v3's own error), and a quoted key can be as
+// long as the file — measured, a 1 MiB duplicate key made a 1,048,644-byte
+// message, which every reader then logged, kept and wrote into JSON. Cut
+// here, where every message is made, so each interface (exporter log,
+// tenant-api, da-guard's reports, the parse-tree JSON) carries the same text.
+const MaxMessageBytes = 512
+
+// messageTailBytes is how much of a cut message's end is kept: what a message
+// says last (a repeated key's "first at line M"). The head — the line number
+// and what was refused — gets the rest of MaxMessageBytes.
+const messageTailBytes = 120
+
+// cutMessage is msg itself when it fits MaxMessageBytes, else its first and
+// last bytes around "… (N bytes omitted) …", at most MaxMessageBytes in all,
+// cut at rune boundaries so a valid UTF-8 msg stays valid.
+func cutMessage(msg string) string {
+	if len(msg) <= MaxMessageBytes {
+		return msg
+	}
+	// The marker's longest form for this msg: N is below len(msg).
+	marker := len(fmt.Sprintf("… (%d bytes omitted) …", len(msg)))
+	head := MaxMessageBytes - messageTailBytes - marker
+	for head > 0 && !utf8.RuneStart(msg[head]) {
+		head--
+	}
+	tail := len(msg) - messageTailBytes
+	for tail < len(msg) && !utf8.RuneStart(msg[tail]) {
+		tail++
+	}
+	return fmt.Sprintf("%s… (%d bytes omitted) …%s", msg[:head], tail-head, msg[tail:])
 }
 
 // Scalar is one scalar of the output: its source text, the tag yaml.v3
