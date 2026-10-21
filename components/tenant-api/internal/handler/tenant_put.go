@@ -267,65 +267,23 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
-		// #2857: the write scope refuses it on the fresh base, or the
-		// base's org file cannot be read.
-		var freshScope *freshBaseScopeError
-		if errors.As(err, &freshScope) {
-			writeFreshBaseScopeViolation(rw, r, freshScope)
-			return
-		}
-		var freshOrgs *freshBaseOrgsError
-		if errors.As(err, &freshOrgs) {
-			writeFreshBaseOrgsError(rw, r, freshOrgs)
+		if writePRPutError(rw, r, d, err) {
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no
 		// branch and no PR/MR. That is a success, not a forge error; mirrors
 		// the all-no-op batch's clean 200 (#1102). Carries the deprecation
 		// notices for the same reason the batch path does.
-		if errors.Is(err, gitops.ErrNoChanges) {
-			var warnings []string
-			if result != nil {
-				warnings = result.Notices
-			}
-			writeJSON(rw, http.StatusOK, PutTenantResponse{
-				Status:   "no_changes",
-				TenantID: tenantID,
-				Message:  "No changes to apply; no PR/MR created.",
-				Warnings: warnings,
-			})
-			return
+		var warnings []string
+		if result != nil {
+			warnings = result.Notices
 		}
-		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-		// retry-hinting 503s (shared with the batch path).
-		if writeWriteFlowError(rw, r, d, err) {
-			return
-		}
-		// #1724: the branch did not reach origin — 503 GIT_PUSH_FAILED, no
-		// PR/MR; the deferred ReleaseClaim frees the tenant for the retry.
-		if writePushFailed(rw, r, err) {
-			return
-		}
-		// #795 F1: malformed body is a CLIENT error → 400 (matches the
-		// direct-write path), not a server 500.
-		if errors.Is(err, gitops.ErrValidation) {
-			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-			return
-		}
-		if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
-			return
-		}
-		if writeMergeFailed(rw, r, "PR write failed: ", err) {
-			return
-		}
-		// #1724: cancelled, or a git command past its own deadline → the 503
-		// the direct path answers (#1535), not the generic 500.
-		if writeWriteCancelled(rw, r, err) {
-			return
-		}
-		// Anything else is an unexpected git failure → generic 500 (its text
-		// stays in the log — WriteErrorEnvelope, #1700).
-		WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
+		writeJSON(rw, http.StatusOK, PutTenantResponse{
+			Status:   "no_changes",
+			TenantID: tenantID,
+			Message:  "No changes to apply; no PR/MR created.",
+			Warnings: warnings,
+		})
 		return
 	}
 
@@ -358,6 +316,61 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		Message:  "PR/MR created. Configuration will take effect after merge.",
 		Warnings: result.Notices,
 	})
+}
+
+// writePRPutError answers a PR-mode PUT whose WritePRChecked failed, and
+// reports whether it wrote the answer. It reports false for exactly one
+// error, gitops.ErrNoChanges: not a failure — the body matched the branch
+// base — so the caller answers it 200 no_changes with the write's notices.
+// The order of the checks is the answer's: the fresh-base scope refusals
+// first (#2857), ErrNoChanges before every failure mapping.
+func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
+	// #2857: the write scope refuses it on the fresh base, or the
+	// base's org file cannot be read.
+	var freshScope *freshBaseScopeError
+	if errors.As(err, &freshScope) {
+		writeFreshBaseScopeViolation(rw, r, freshScope)
+		return true
+	}
+	var freshOrgs *freshBaseOrgsError
+	if errors.As(err, &freshOrgs) {
+		writeFreshBaseOrgsError(rw, r, freshOrgs)
+		return true
+	}
+	if errors.Is(err, gitops.ErrNoChanges) {
+		return false
+	}
+	// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+	// retry-hinting 503s (shared with the batch path).
+	if writeWriteFlowError(rw, r, d, err) {
+		return true
+	}
+	// #1724: the branch did not reach origin — 503 GIT_PUSH_FAILED, no
+	// PR/MR; the deferred ReleaseClaim frees the tenant for the retry.
+	if writePushFailed(rw, r, err) {
+		return true
+	}
+	// #795 F1: malformed body is a CLIENT error → 400 (matches the
+	// direct-write path), not a server 500.
+	if errors.Is(err, gitops.ErrValidation) {
+		WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+		return true
+	}
+	if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
+		return true
+	}
+	// No gitops.ErrMergeFailed check: WritePRChecked writes the body whole
+	// and never merges (only readMerge, behind WriteMerged / WriteBatch /
+	// WritePRBatch, returns it).
+	// #1724: cancelled, or a git command past its own deadline → the 503
+	// the direct path answers (#1535), not the generic 500.
+	if writeWriteCancelled(rw, r, err) {
+		return true
+	}
+	// Anything else is an unexpected git failure → generic 500 (its text
+	// stays in the log — WriteErrorEnvelope, #1700).
+	WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
+	return true
 }
 
 // BaseHashHeader is the request header carrying the optimistic-concurrency
