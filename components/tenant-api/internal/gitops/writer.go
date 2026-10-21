@@ -456,6 +456,7 @@ type Writer struct {
 	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
+	gitTestEnv     []string      // TEST-ONLY (#3175): added to every git command's environment, after the process's; nil in prod
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
@@ -668,8 +669,20 @@ func (w *Writer) lockTreeOnBase() error {
 // between the branch update and the worktree update, or a write whose
 // outcome was unknown — is settled before this write reads anything. On
 // error the lock is already released.
+//
+// #3175: before the recovery, the git config is checked again for a filter, diff
+// or merge driver (CheckGitDrivers) — the first thing every write does
+// under the lock, before any git command of it can run one. Startup
+// checked it already; this catches a driver added since (an init container
+// or a sidecar editing .git/config, a replaced global config). It checks
+// the context HEAD is in now; a write that then moves HEAD to base checks
+// again there (checkoutBaseClean).
 func (w *Writer) lockTreeRecovered() error {
 	w.lockTree()
+	if err := w.CheckGitDrivers(); err != nil {
+		w.unlockTree()
+		return err
+	}
 	if err := w.RecoverBatchPublish(); err != nil {
 		w.unlockTree()
 		return err
@@ -730,6 +743,10 @@ var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
 // a reader, it took no lock, and a lock present in .git belongs to someone
 // else. #638's stale-lock sweep is for the writer's own killed commands only.
 func (w *Writer) TreeOnBase() error {
+	// #3175: the status below would run a clean filter the config names.
+	if err := w.CheckGitDrivers(); err != nil {
+		return fmt.Errorf("%w: %w", ErrTreeNotOnBase, err)
+	}
 	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil { // detached HEAD exits non-zero, as does a timeout
 		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
@@ -1668,7 +1685,11 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 		}
 	}
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", diffCurrentFile, diffProposedFile)
+	// #3175: --no-ext-diff keeps diff.external / GIT_EXTERNAL_DIFF (a
+	// program named only by config or the environment, which the driver
+	// check does not cover) from running for a preview; --no-textconv is a
+	// second layer behind that check's refusal of diff.*.textconv.
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--no-ext-diff", "--no-textconv", "--", diffCurrentFile, diffProposedFile)
 	defer cancel()
 	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error

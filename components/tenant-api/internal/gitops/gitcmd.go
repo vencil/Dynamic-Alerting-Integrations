@@ -120,8 +120,8 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 		bin = "git"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = gitEnv(literalPathspecs(args))
+	cmd := exec.CommandContext(ctx, bin, append(append([]string{}, gitFixedConfig...), args...)...)
+	cmd.Env = append(gitEnv(literalPathspecs(args)), w.gitTestEnv...)
 	// Bound how long Wait blocks for pipe I/O after the deadline kill, so a
 	// surviving remote-helper grandchild holding stdout can't keep the writer
 	// mutex pinned past the deadline (see defaultGitKillGrace).
@@ -131,6 +131,18 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 	}
 	return cmd, ctx, cancel
 }
+
+// gitFixedConfig goes in front of every git command tenant-api runs
+// (#3175). core.fsmonitor names a program — or, set to true, git's own
+// daemon — that git asks which files changed whenever it looks at the
+// worktree (status, add, diff, checkout, …); set in the conf repo's or a
+// global config, it would run on every read as well as every write.
+// tenant-api has git compare the files itself. Being a `-c` setting it
+// also reaches the hooks those commands run (git passes it on in
+// GIT_CONFIG_PARAMETERS), so a hook's own git commands do not run it
+// either. Unlike the filter and diff drivers (git_drivers.go), turning it
+// off changes no result: fsmonitor only makes git's scan faster.
+var gitFixedConfig = []string{"-c", "core.fsmonitor=false"}
 
 // pathspecEnv are git's global pathspec settings. gitEnv drops every one
 // of them that tenant-api inherited before it decides what git gets.
@@ -211,9 +223,12 @@ func isPathspecEnv(kv string) bool {
 // take no pathspec (rev-parse, cat-file, show, commit-tree, write-tree,
 // merge-base, status, …) gain nothing from the setting and are left out too.
 //
-// What the setting still reaches inside an allowed command is a program the
-// conf repo configures for it — a clean filter on `add`, a textconv driver on
-// `log -p`, a core.fsmonitor hook — none of which tenant-api's repos use.
+// What the setting would still reach inside an allowed command is a program
+// the git config names for it — a clean filter on `add`, a textconv driver on
+// `log -p`, a core.fsmonitor hook. tenant-api runs none of them (#3175): it
+// refuses to run against a config that names a filter, diff or merge driver
+// (CheckGitDrivers, git_drivers.go), and passes core.fsmonitor=false to
+// every command (gitFixedConfig).
 func literalPathspecs(args []string) bool {
 	sub, rest := gitSubcommand(args)
 	switch sub {

@@ -473,6 +473,13 @@ def main() -> int:
             "TA_RATE_LIMIT_PER_MIN": "0",
             # #2903: every write asks the generator started above.
             "TA_GENERATOR_SOCKET": generator_sock,
+            # #3175: tenant-api refuses to start when its git config names
+            # a filter / diff / merge driver, and a host with git-lfs
+            # installed has filter.lfs.* in its system or global config.
+            # The fixture repo needs neither file (its identity is
+            # repo-local, see init_git_repo).
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
         }
         print(f"[contract] starting tenant-api on {addr} (config={config_dir})")
         # Server output goes to a FILE, not subprocess.PIPE: nothing drains a
