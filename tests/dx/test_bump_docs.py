@@ -1020,32 +1020,48 @@ class TestTenantApiVersionLine:
             "read_current_versions() 沒讀 tenant-api——少了它，--check 迭代"
             "versions.items() 時整條線的規則永遠不會被執行。")
 
-    def test_tenant_api_version_comes_from_chart_version_not_appversion(self):
-        """SoT 是 Chart.yaml `version:`，不是 `appVersion:`。
-
-        release.yaml 的 release-tenant-api job 用 `version:` 對 git tag 做
-        gate；`appVersion` 是「最後發布的 binary」，刻意與 version 解耦
-        （見 release.yaml 的 ⚠️ Verify image digest 註解）。兩者取錯會讓
-        --check 拿 binary 版號去改 chart 版號、或反過來。
-        """
+    def test_tenant_api_version_comes_from_chart_version(self):
+        """SoT 是 Chart.yaml `version:`——release.yaml 的 release-tenant-api job
+        用它對 git tag 做 gate。#3228 起 appVersion 與它相等，由下一條測試
+        釘的那條規則一起搬。"""
         chart = (bump_docs.REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
                  ).read_text(encoding="utf-8")
-        import re as _re
-        chart_ver = _re.search(r'^version:\s*"?([0-9.]+)"?', chart, _re.MULTILINE)
-        app_ver = _re.search(r'^appVersion:\s*"?([0-9.]+)"?', chart, _re.MULTILINE)
+        chart_ver = re.search(r'^version:\s*"?([0-9.]+)"?', chart, re.MULTILINE)
         assert bump_docs.read_current_versions()["tenant-api"] == chart_ver.group(1)
-        if app_ver and app_ver.group(1) != chart_ver.group(1):
-            assert bump_docs.read_current_versions()["tenant-api"] != app_ver.group(1)
 
-    def test_no_rule_writes_tenant_api_chart_appversion(self):
-        """appVersion 的解耦是 release 不變量，不能有規則去改它。"""
-        offenders = [r["desc"] for r in bump_docs._build_tenant_api_rules()
-                     if r.get("file") == "helm/tenant-api/Chart.yaml"
-                     and "appVersion" in r["pattern"]]
-        assert not offenders, (
-            f"這些規則會覆寫 tenant-api 的 Chart.yaml appVersion：{offenders}。"
-            f"appVersion 追的是最後發布的 binary，與 chart version 刻意解耦"
-            f"（release.yaml L3 digest 檢查會去 probe :v${{appVersion}}）。")
+    def test_tenant_api_line_writes_chart_appversion(self, tmp_path, monkeypatch):
+        """#3228：`--tenant-api X` 必須連 appVersion 一起改成 X。
+
+        appVersion 另記一個數字時，它只會指向比 chart 自己更舊的 binary
+        （2.9.24 的 chart 預設跑 2.7.0，template 傳的 flag 那版沒有，起不來）。
+        這裡在複本上實際套用整條線，確認 version 與 appVersion 落在同一個值，
+        而不是只檢查「有一條規則的 pattern 含 appVersion」。
+        """
+        rules = [r for r in bump_docs._build_tenant_api_rules()
+                 if r.get("file") == "helm/tenant-api/Chart.yaml"]
+        app_rules = [r for r in rules if "appVersion" in r["pattern"]]
+        assert len(app_rules) == 1, [r["desc"] for r in rules]
+        assert app_rules[0].get("require_match") is True
+
+        real = bump_docs.REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
+        target = tmp_path / "helm" / "tenant-api" / "Chart.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+
+        bump_docs.apply_rules(rules, "9.9.9")
+        out = target.read_text(encoding="utf-8")
+        assert re.search(r"^version: 9\.9\.9$", out, re.MULTILINE), out
+        assert re.search(r'^appVersion: "9\.9\.9"$', out, re.MULTILINE), out
+
+    def test_repo_tenant_api_appversion_is_in_sync(self):
+        """現況的 appVersion 已等於 version：`--check` 對這條規則回 OK。"""
+        version = bump_docs.read_current_versions()["tenant-api"]
+        rule = [r for r in bump_docs._build_tenant_api_rules()
+                if r.get("file") == "helm/tenant-api/Chart.yaml"
+                and "appVersion" in r["pattern"]]
+        changes = bump_docs.apply_rules(rule, version, check_only=True)
+        assert [c[0] for c in changes] == ["OK"], changes
 
 
 class TestCountRulesAreLive:
@@ -1895,13 +1911,12 @@ class TestReleaseLineTableRows:
       components/da-portal/QUICKSTART.md `docker run … da-portal:v2.8.0`
                                       ——2 分鐘上手路徑真的會被複製貼上的那行。
 
-    ⛔ 反面同樣重要：repo 內另外三處 `tenant-api:v2.7.0`（k8s deployment /
-    docs/assets/platform-data.json / portal images.js）**是對的**，不可以順手
-    「修好」。tenant-api 的 image tag 刻意追 Chart.yaml 的 `appVersion`（最後
-    發布的 binary），chart 部署 `:v${appVersion}`、release.yaml 的 L3 digest
-    step 也是探那個 tag；而本表列的是 **release line**（它直接寫出 git tag
-    `tenant-api/vX.Y.Z`），追的是 `version:`。platform-data.json 更是
-    generate_platform_data.py 產生的，加規則會跟產生器打架。
+    ⛔ 反面同樣重要：repo 內另外三處 tenant-api image pin（k8s deployment /
+    docs/assets/platform-data.json / portal images.js）**不由本線的規則驅動**。
+    platform-data.json 由 generate_platform_data.py 從 chart 的 appVersion
+    產生（#3228 起 == `version:`），加規則會跟產生器打架；images.js 是它的
+    離線鏡像，由 images-fallback-drift.test.ts 逐 key 對齊；k8s deployment
+    釘的是它手寫 args 所對應的 binary。
     """
 
     def _rule(self, builder, desc):
@@ -1935,18 +1950,11 @@ class TestReleaseLineTableRows:
                                         check_only=True)
         assert [c[0] for c in changes] == ["OK"], changes
 
-    def test_tenant_api_row_tracks_chart_version_not_appversion(self):
-        """該列的數字必須等於 Chart.yaml 的 `version:`，而不是 `appVersion:`。
-
-        兩者在這個 chart 上刻意脫鉤，抓錯來源就會把 release-line 引用寫成
-        image-runtime pin（或反之）。"""
+    def test_tenant_api_row_tracks_chart_version(self):
+        """該列的數字（版號與 git tag 兩處）必須等於 Chart.yaml 的 `version:`。"""
         chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
         chart_version = re.search(r'^version:\s*"?([^"\s]+)"?', chart,
                                   re.MULTILINE).group(1)
-        app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
-                                re.MULTILINE).group(1)
-        assert chart_version != app_version, (
-            "前提沒了：這條測試的意義建立在兩者脫鉤上")
 
         readme = (bump_docs.REPO_ROOT / "components" / "da-tools"
                   / "README.md").read_text(encoding="utf-8")
@@ -1955,29 +1963,32 @@ class TestReleaseLineTableRows:
         assert row.group(1) == chart_version, (row.group(1), chart_version)
         assert row.group(2) == chart_version, (row.group(2), chart_version)
 
-    def test_image_runtime_pins_are_left_alone(self):
-        """沒有任何規則會去動那三處刻意追 appVersion 的 image pin。"""
+    def test_image_runtime_pins_have_no_rule(self):
+        """沒有任何 tenant-api 線規則會去動那三處 image pin。
+
+        產生出來的 platform-data.json 與它的鏡像 images.js 必須等於 chart 的
+        appVersion——那是 `make platform-data` 的產物，bump 之後沒重跑就會在這裡
+        先紅。k8s deployment 不比對數字，只確認沒有規則碰它。
+        """
         chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
         app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
                                 re.MULTILINE).group(1)
-        targets = ["k8s/04-tenant-api/deployment.yaml",
-                   "docs/assets/platform-data.json",
-                   "tools/portal/src/interactive/tools/_common/data/images.js"]
-        for rel in targets:
+        generated = ["docs/assets/platform-data.json",
+                     "tools/portal/src/interactive/tools/_common/data/images.js"]
+        targets = ["k8s/04-tenant-api/deployment.yaml", *generated]
+        for rel in generated:
             path = bump_docs.REPO_ROOT / rel
-            if not path.exists():        # 檔案搬走了不是本測試要管的事
-                continue
             pins = re.findall(r"tenant-api:v?(\d+\.\d+\.\d+)",
                               path.read_text(encoding="utf-8"))
             assert pins, f"{rel} 的 tenant-api pin 不見了"
             assert all(p == app_version for p in pins), (
-                f"{rel} 的 image pin {pins} 應該追 appVersion {app_version}；"
-                f"若有人替它加了 bump 規則，這裡會先紅")
+                f"{rel} 的 image pin {pins} 應該等於 appVersion {app_version}；"
+                f"跑 `make platform-data` 並同步 images.js 的鏡像")
 
         covered = {r.get("file") for r in bump_docs._build_rules()["tenant-api"]}
         assert covered.isdisjoint(targets), (
-            f"這三個檔案是 appVersion-tracking 的 image pin，不該有 tenant-api "
-            f"版號線規則：{covered & set(targets)}")
+            f"這三個檔案的 tenant-api image pin 不由版號線規則驅動："
+            f"{covered & set(targets)}")
 
 
 class TestChangelogReachingGlobsSkipFrozenHistory:
@@ -2441,9 +2452,9 @@ class TestRoundFourSurvivors:
         assert exc.value.code != 0, (
             "plain（會寫檔的）--sync-counts 對壞掉的 count 規則仍 exit 0")
 
-    def test_a_glob_rule_cannot_smuggle_a_rule_over_the_appversion_pins(self):
+    def test_a_glob_rule_cannot_smuggle_a_rule_over_the_image_pins(self):
         """⛔ 反向釘只看了 `"file"` 這個 key，而 glob 規則的 `"file"` 是字面
-        字串 `"__glob__"`——所以一條掃過那三個 appVersion pin 的 glob 完全
+        字串 `"__glob__"`——所以一條掃過那三個 image pin 的 glob 完全
         繞過它。要比對的是**展開後**的檔案集合。
         """
         protected = {
@@ -2457,7 +2468,7 @@ class TestRoundFourSurvivors:
                 bump_docs._build_rules()["tenant-api"])
         }
         assert expanded.isdisjoint(protected), (
-            "tenant-api 線有規則會改寫刻意追 appVersion 的 image pin："
+            "tenant-api 線有規則會改寫不該由規則驅動的 image pin："
             f"{sorted(expanded & protected)}")
 
     def test_the_portal_jsx_globs_are_actually_targeted(self):

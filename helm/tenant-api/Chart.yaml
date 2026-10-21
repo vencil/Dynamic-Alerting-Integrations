@@ -37,15 +37,13 @@ type: application
 #          --deploy-policy with a policy ConfigMap); conf.d must hold a git
 #          repository or the render fails. policy.unavailableOpen removed.
 version: 2.9.24
-# appVersion: Go binary 版本
-# ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
-# tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values
-# PREREQUISITE warn on this). appVersion is deliberately NOT bumped in this
-# feature PR — the release owner sets it when the D2-B image (with PR-1b's
-# machine-identity flags, also not yet in a published image) is cut. Until then
-# humanSocket.enabled stays false (safe no-op) and appVersion tracks the last
-# published binary.
-appVersion: "2.7.0"
+# appVersion == version == release tag (#3228). release.yaml publishes the
+# tenant-api image as `:v<version>` from the same commit as the chart, and the
+# deployment defaults to `:v<appVersion>`, so the two must be the same number
+# or the chart runs a binary older than its own templates. Move both with
+# `bump_docs.py --tenant-api <ver>`; release.yaml's release-tenant-api job and
+# tests/helm/test_image_tag_derivation.py fail when they differ.
+appVersion: "2.9.24"
 keywords:
   - dynamic-alerting
   - tenant-management
