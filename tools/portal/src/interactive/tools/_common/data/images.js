@@ -55,7 +55,7 @@ const IMAGE_MIRROR = {
   oauth2Proxy: 'quay.io/oauth2-proxy/oauth2-proxy:v7.15.4',
   thresholdExporter: 'ghcr.io/vencil/threshold-exporter:v2.9.0',
   daPortal: 'ghcr.io/vencil/da-portal:v2.9.0',
-  tenantApi: 'ghcr.io/vencil/tenant-api:v2.7.0',
+  tenantApi: 'ghcr.io/vencil/tenant-api:v2.9.24',
 };
 
 const PLATFORM_IMAGES = { ...IMAGE_MIRROR, ...(window.__PLATFORM_DATA?.images || {}) };

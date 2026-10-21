@@ -28,10 +28,11 @@
 # Two-tag rationale:
 #   Round-3 self-review on PR #494 caught a semantic gap. The earlier
 #   single-tag design probed ONLY `:v${appVersion}` when chart-yaml was
-#   provided. For tenant-api specifically (`appVersion="2.7.0"` ≠
-#   `version="2.8.0"`), this verified the chart's claimed binary still
-#   has an image — but did NOT verify the just-pushed v2.8.0 image. So
-#   a silent push failure of v2.8.0 would slip through.
+#   provided. For tenant-api at the time (`appVersion="2.7.0"` ≠
+#   `version="2.8.0"`; the two have been equal since #3228), this verified
+#   the chart's claimed binary still had an image — but did NOT verify the
+#   just-pushed v2.8.0 image. So a silent push failure of v2.8.0 would
+#   slip through.
 #
 #   Fix: always verify `:v${VERSION}` (the just-pushed tag). When
 #   chart-yaml is provided AND its appVersion differs, ALSO verify
@@ -108,9 +109,10 @@ if [ -n "${CHART_YAML}" ]; then
     exit 1
   fi
   if [ "${APP_VERSION}" != "${VERSION}" ]; then
-    # Legitimate decoupling (e.g. tenant-api chart 2.8.0 wraps appVersion
-    # 2.7.0). Probe the additional tag too — catches "chart claims a
-    # binary version with no image".
+    # No current caller gets here: every chart passed in keeps appVersion ==
+    # version (tenant-api since #3228, gated in its release job). Kept so a
+    # future decoupled chart still has its claimed binary probed — catches
+    # "chart claims a binary version with no image".
     TAGS_TO_VERIFY+=("${APP_VERSION}")
     TAG_SOURCES+=("Chart.yaml appVersion (${CHART_YAML}=${APP_VERSION})")
     echo "▸ Detected appVersion≠VERSION decoupling — will probe BOTH tags:"

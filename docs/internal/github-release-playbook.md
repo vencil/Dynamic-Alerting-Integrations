@@ -172,6 +172,7 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 > **⛔ Component tag 版號 = 該 component 的 `Chart.yaml` `version`**（**不是** `appVersion`，**不是**平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate：`grep '^version:' <chart>` ≠ tag → `ERROR: Chart.yaml version (X) != tag (Y)` → fail。
 > - **exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`、`recipe-preview/v2.9.0`）。recipe-preview 之所以**同步升而非獨立 cadence**：它打包平台 compiler 的 byte-identical 快照，獨立版號會讓 bundled compiler 悄悄漂離平台 rule-pack（#657 PR-D2）。⛔ 這是**設計**不是**紀錄**：`recipe-preview/v2.9.0` 只是這條規則推導出來的名字，實際上 origin 沒有任何 `recipe-preview/v*` tag（#1352 案例 B），所以那個「同步升」至今一次都沒發生過。
 > - **tenant-api** chart 是 **per-change**（每次 PR bump，dev-rule #7），版號會走在平台線前面，故 tenant-api **以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台 2.9.0**。硬壓 chart 回平台版 = 降級，禁止。
+>   - **tenant-api 的 `appVersion` 一律等於 `version`**（[#3228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3228)）：image 由同一個 commit 建、標 `:v<version>`，chart 預設跑 `:v<appVersion>`，兩者不同就是讓 chart 跑別版 binary。`bump_docs.py --tenant-api <ver>` 兩個一起改；`release-tenant-api` job 的 `Verify Chart.yaml appVersion matches version and tag` 與 `tests/helm/test_image_tag_derivation.py` 在不相等時 fail。
 
 ```bash
 # 情況 A：六線全升（所有 component 有變更）
