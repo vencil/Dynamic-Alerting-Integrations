@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -44,10 +45,10 @@ func TestBatchTenants_UnknownRoutingKeyRefused(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &bad); err != nil {
 				t.Fatal(err)
 			}
-			if w.Code != http.StatusBadRequest || bad.Code != CodeInvalidBody || len(bad.Violations) != 1 ||
+			if w.Code != http.StatusBadRequest || bad.Code != errcode.InvalidBody || len(bad.Violations) != 1 ||
 				!strings.HasPrefix(bad.Violations[0].Field, `operations[0].patch["_routing`) ||
 				!strings.Contains(bad.Violations[0].Reason, "not a key the route generator reads") {
-				t.Fatalf("status %d, response %+v: want 400 %s naming the key", w.Code, bad, CodeInvalidBody)
+				t.Fatalf("status %d, response %+v: want 400 %s naming the key", w.Code, bad, errcode.InvalidBody)
 			}
 			b, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
 			if strings.Contains(string(b), "_routing_receiver_type") || strings.Contains(string(b), "_routing_profle") {

@@ -81,11 +81,11 @@ networkPolicy:
     # a `monitoring`-ns tenantApiUrl (they must always point at the same place).
     tenantApiNamespace: tenant-api
     tenantApiPort: 8080
-    # OR-ed pod selectors admitted as egress targets: helm-deployed tenant-api
-    # uses app.kubernetes.io/name; the raw k8s/04-tenant-api manifests use `app`.
-    # Both are listed so either stack works out of the box.
+    # OR-ed pod selectors admitted as egress targets: helm/tenant-api labels its
+    # pods app.kubernetes.io/name. (`app: tenant-api` was dropped in #1594 with
+    # the raw manifests that set it; a tenant-api run from your own manifests
+    # must carry this label or be added here.)
     tenantApiPodSelectors:
       - app.kubernetes.io/name: tenant-api
-      - app: tenant-api
 
 podAnnotations: {}              # no /metrics endpoint yet (deferred), so no scrape annotations

@@ -173,7 +173,7 @@ SETTING_NOT_COMPARED = "not_compared"
 SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
                                 SETTING_NOT_COMPARED})
 
-_EMPTY_TREE = {"files": {}, "unreadable": [], "not_read": [], "selected": {},
+_EMPTY_TREE = {"da_guard_version": None, "mode": "tree", "entries": [], "files": {},
                "defaults_carriers": {}, "rendered_by": {}}
 
 
@@ -234,8 +234,8 @@ def _platform_files(doc):
 
 
 def _unreadable_platform_files(doc):
-    return {u["file"]: u["kind"] for u in doc["unreadable"]
-            if PurePosixPath(u["file"]).name.startswith("_")}
+    return {e.path: e.problem[0] for e in _lib_parse_tree.entries_of(doc)
+            if e.problem is not None and e.name.startswith("_")}
 
 
 def _setting_row(rel, key, change, status, note, views=()):
@@ -280,9 +280,9 @@ def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
     bytes differ between the sides or it is on one side only."""
     reasons = {}
     for doc in (old_doc, new_doc):
-        for e in doc.get("not_read") or []:
-            if PurePosixPath(e["file"]).name.startswith("_"):
-                reasons.setdefault(e["file"], e["reason"])
+        for e in _lib_parse_tree.entries_of(doc):
+            if e.not_read is not None and e.name.startswith("_"):
+                reasons.setdefault(e.path, e.not_read)
     rows = []
     for rel in sorted(reasons):
         old = _read_bytes(old_dir, rel)

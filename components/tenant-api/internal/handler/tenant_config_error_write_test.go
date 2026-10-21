@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -68,7 +69,7 @@ var rejFiles = []struct {
 // rejFiles row c gets.
 func rejRefusal(name, reason, gitManaged string) (code, text string) {
 	if gitManaged != "" {
-		return CodeTenantGitManaged, "git-managed (" + gitManaged + ")"
+		return string(errcode.TenantGitManaged), "git-managed (" + gitManaged + ")"
 	}
 	return wantNotLoadableCode, "config_error: " + reason
 }
@@ -193,7 +194,7 @@ func TestApplyPatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if code, text := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || res.Code != code ||
+			if code, text := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || string(res.Code) != code ||
 				!strings.Contains(res.Message, "db-a") || !strings.Contains(res.Message, text) {
 				t.Errorf("result = %+v, want status error, code %s, message naming db-a and %q", res, code, text)
 			}
@@ -241,7 +242,7 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if code, _ := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || res.Code != code || !strings.Contains(res.Message, "db-a") {
+			if code, _ := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || string(res.Code) != code || !strings.Contains(res.Message, "db-a") {
 				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, code)
 			}
 			if after := mustRead(t, path); after != before {
@@ -453,8 +454,8 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
 				after := mustRead(t, filepath.Join(dir, id+".yaml"))
 				if c.gitManaged {
-					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantGitManaged) {
-						t.Fatalf("PUT status = %d, want 409 %s; body: %s", w.Code, CodeTenantGitManaged, w.Body.String())
+					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), string(errcode.TenantGitManaged)) {
+						t.Fatalf("PUT status = %d, want 409 %s; body: %s", w.Code, errcode.TenantGitManaged, w.Body.String())
 					}
 					if after != c.body {
 						t.Errorf("file changed on a refused PUT:\n%s", after)
@@ -593,12 +594,12 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 		wantCode                int
 		wantRefusal             string
 	}{
-		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusConflict, CodeTenantGitManaged},
-		{"unparseable_own_section_only_platform_writer_is_refused", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusConflict, CodeTenantGitManaged},
+		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusConflict, string(errcode.TenantGitManaged)},
+		{"unparseable_own_section_only_platform_writer_is_refused", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusConflict, string(errcode.TenantGitManaged)},
 		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusBadRequest, "and no other tenant"},
 		{"unparseable_with_co_resident_platform_writer_is_refused", unparseable, withOther, "platform", "malformed_yaml", http.StatusBadRequest, "and no other tenant"},
-		{"non_utf8_with_co_resident_is_refused", nonUTF8, ownOnly, "ops", "invalid_config", http.StatusConflict, CodeTenantGitManaged},
-		{"non_utf8_with_co_resident_platform_writer_is_refused", nonUTF8, ownOnly, "platform", "invalid_config", http.StatusConflict, CodeTenantGitManaged},
+		{"non_utf8_with_co_resident_is_refused", nonUTF8, ownOnly, "ops", "invalid_config", http.StatusConflict, string(errcode.TenantGitManaged)},
+		{"non_utf8_with_co_resident_platform_writer_is_refused", nonUTF8, ownOnly, "platform", "invalid_config", http.StatusConflict, string(errcode.TenantGitManaged)},
 		{"non_utf8_declaring_co_resident_scoped_is_refused", nonUTF8, withOther, "ops", "invalid_config", http.StatusBadRequest, "and no other tenant"},
 	}
 	kept := map[string]string{}

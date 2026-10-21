@@ -99,7 +99,7 @@ func assertRejectedOp(t *testing.T, w *httptest.ResponseRecorder, op int, tenant
 		t.Fatalf("status %d, body %s; want 422 rejected with result %d", w.Code, w.Body.String(), op)
 	}
 	r := resp.Results[op]
-	if r.TenantID != tenant || r.Status != "error" || r.Code != code || !strings.Contains(r.Message, msg) {
+	if r.TenantID != tenant || r.Status != "error" || string(r.Code) != code || !strings.Contains(r.Message, msg) {
 		t.Errorf("result %d = %+v; want %s refused with %s, message containing %q", op, r, tenant, code, msg)
 	}
 	if strings.Contains(r.Message, "operations[") {

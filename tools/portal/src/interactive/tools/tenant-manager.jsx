@@ -56,6 +56,7 @@ import { useURLState } from './_common/hooks/useURLState.js';
 import { useVirtualGrid } from './_common/hooks/useVirtualGrid.js';
 import { Loading } from './_common/components/Loading.jsx';
 import { EmptyState } from './_common/components/EmptyState.jsx';
+import { classifyApiError, apiErrorMessage } from './_common/api/classify-error.js';
 
 // `t` and `__DA_LANG` stay as window globals (jsx-loader.html injects
 // them at host-page level; the dist bundle inherits these from the host
@@ -415,22 +416,17 @@ export default function TenantManager() {
       });
       if (resp.ok) return { ok: true, data: await resp.json().catch(() => ({})) };
       const body = await resp.json().catch(() => ({ error: resp.statusText }));
-      if (resp.status === 409 && (body.code === 'TENANT_FILE_DIRTY' || body.code === 'TENANT_GIT_MANAGED')) {
-        // #1535 / #3064: a state of the file in the server's repository,
-        // not someone else's update — a refresh does not help; the backend
-        // text says what to do.
-        showNotification('error', body.error || t('寫入被拒。', 'Write refused.'));
-      } else if (resp.status === 409) {
-        showNotification('error', t(
-          '配置已被其他人更新，請重新整理頁面後再試。',
-          'Configuration was updated by someone else. Please refresh the page and try again.'
-        ));
-      } else if (resp.status === 403) {
-        showNotification('error', body.error || t('權限不足。', 'Insufficient permissions.'));
-      } else {
-        showNotification('error', body.error || t('操作失敗。', 'Operation failed.'));
-      }
-      return { ok: false, status: resp.status, error: body.error };
+      // #3202: the message follows the code's remedy in the generated
+      // contract, not the status — a 409 GROUP_ID_UNAVAILABLE means "pick
+      // another id", not "someone else updated it, refresh"; a missing or
+      // unknown code gets the generic message, never "refresh and retry".
+      // The backend text is kept (TENANT_FILE_DIRTY / TENANT_GIT_MANAGED
+      // say there what to do).
+      const classified = classifyApiError(resp.status, body, {
+        retryAfter: resp.headers && resp.headers.get ? resp.headers.get('Retry-After') : null,
+      });
+      showNotification('error', apiErrorMessage(classified, body && body.error));
+      return { ok: false, status: resp.status, error: body.error, remedy: classified.remedy };
     } catch (e) {
       // Network error or no API available — fall through to local-only mode
       return { ok: true, localOnly: true };
@@ -724,7 +720,7 @@ export default function TenantManager() {
             </div>
             <div style={{ display: 'flex', gap: 'var(--da-space-2)', flexWrap: 'wrap' }}>
               {pendingPRs.slice(0, 3).map(pr => (
-                <a key={pr.number} href={pr.html_url} target="_blank" rel="noopener noreferrer"
+                <a key={pr.number} href={pr.web_url} target="_blank" rel="noopener noreferrer"
                   style={{
                     padding: '2px 8px', borderRadius: 'var(--da-radius-sm)',
                     backgroundColor: 'var(--da-color-warning)', color: 'white',

@@ -48,6 +48,31 @@ func TestNameRuleTable(t *testing.T) {
 		}
 	}
 
+	// IsDefaultsDocument: a `_defaults` PREFIX on a scanned name — wider
+	// than IsDefaults (the exact chain carrier), on purpose.
+	for _, tc := range []struct {
+		name          string
+		document, ext bool // IsDefaultsDocument, IsDefaults
+	}{
+		{"_defaults.yaml", true, true},
+		{"_DEFAULTS.YML", true, true},
+		{"_defaults-multidb.yaml", true, false},
+		{"_Defaults_extra.yml", true, false},
+		{"_defaults", false, false},      // no config extension
+		{"_defaults.json", false, false}, // not scanned
+		{"defaults.yaml", false, false},  // no `_`
+		{"x_defaults.yaml", false, false},
+		{"._defaults.yaml", false, false}, // hidden
+		{"_defaultſ.yaml", false, false},  // ToLower leaves ſ alone
+	} {
+		if got := IsDefaultsDocument(tc.name); got != tc.document {
+			t.Errorf("IsDefaultsDocument(%q) = %v, want %v", tc.name, got, tc.document)
+		}
+		if got := IsDefaults(tc.name); got != tc.ext {
+			t.Errorf("IsDefaults(%q) = %v, want %v", tc.name, got, tc.ext)
+		}
+	}
+
 	for _, tc := range []struct {
 		rel            string
 		hidden, reader bool // HasHiddenSegment, IsScannedPath

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // Regression tests for #1673: the enumerating plane (confdname.TenantNamedBy, via confd.ListTenantFiles)
@@ -166,9 +168,9 @@ func TestTenantFileSpelling_BrokenSiblingStillClaimsTheID(t *testing.T) {
 	})
 }
 
-// assertConflictWithoutDir requires a 409 CONFLICT envelope whose body does not
-// carry dir (the conf.d root as the server sees it).
-func assertConflictWithoutDir(t *testing.T, w *httptest.ResponseRecorder, dir string) map[string]any {
+// assertConflictWithoutDir requires a 409 envelope with code whose body does
+// not carry dir (the conf.d root as the server sees it).
+func assertConflictWithoutDir(t *testing.T, w *httptest.ResponseRecorder, dir string, code errcode.Code) map[string]any {
 	t.Helper()
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
@@ -177,8 +179,8 @@ func assertConflictWithoutDir(t *testing.T, w *httptest.ResponseRecorder, dir st
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("response is not JSON: %v (%s)", err, w.Body.String())
 	}
-	if env["code"] != CodeConflict {
-		t.Errorf("code = %v, want %s; body=%s", env["code"], CodeConflict, w.Body.String())
+	if env["code"] != string(code) {
+		t.Errorf("code = %v, want %s; body=%s", env["code"], code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), dir) {
 		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, w.Body.String())
@@ -217,7 +219,7 @@ func TestTenantFileSpelling_AmbiguousConflictNamesNoServerPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			tc.h(w, tc.req)
-			env := assertConflictWithoutDir(t, w, dir)
+			env := assertConflictWithoutDir(t, w, dir, errcode.TenantFileAmbiguous)
 			msg, _ := env["error"].(string)
 			for _, name := range []string{spellingTenant + ".yaml", spellingTenant + ".yml"} {
 				if !strings.Contains(msg, name) {
@@ -243,7 +245,7 @@ func TestGetTenantEffective_NestedDuplicateIsConflictWithoutPaths(t *testing.T) 
 	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
 		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
 
-	env := assertConflictWithoutDir(t, w, dir)
+	env := assertConflictWithoutDir(t, w, dir, errcode.TenantDeclaredElsewhere)
 	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
 		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
 	}
@@ -262,7 +264,7 @@ func TestGetTenantEffective_SubdirSpellingPairIsFixedText(t *testing.T) {
 	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
 		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
 
-	env := assertConflictWithoutDir(t, w, dir)
+	env := assertConflictWithoutDir(t, w, dir, errcode.TenantDeclaredElsewhere)
 	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
 		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
 	}
@@ -282,7 +284,7 @@ func TestGetTenantEffective_TopLevelSharedFileIsFixedText(t *testing.T) {
 	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
 		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
 
-	env := assertConflictWithoutDir(t, w, dir)
+	env := assertConflictWithoutDir(t, w, dir, errcode.TenantDeclaredElsewhere)
 	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
 		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
 	}
@@ -306,7 +308,7 @@ func TestGetTenantEffective_AmbiguousSpellingThroughSymlinkedRoot(t *testing.T) 
 	GetTenantEffective(&Deps{ConfigDir: link})(w, newRequestWithChiParam("GET",
 		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
 
-	env := assertConflictWithoutDir(t, w, real)
+	env := assertConflictWithoutDir(t, w, real, errcode.TenantFileAmbiguous)
 	msg, _ := env["error"].(string)
 	if strings.Contains(msg, link) || !strings.Contains(msg, spellingTenant+".yml") {
 		t.Errorf("error = %q, want the two base names and no path", msg)

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/ws"
@@ -60,7 +61,18 @@ func StateChangeEvent(entity string) ws.Event {
 // The cost is one in-memory RBAC evaluation per event per subscriber; writes
 // are rare next to that, and the evaluation does no I/O.
 func EventStream(d *Deps, hub *ws.Hub) http.HandlerFunc {
-	return hub.Handler(eventFilterFor(d))
+	return hub.HandlerRefusing(eventFilterFor(d), refuseEventStream)
+}
+
+// refuseEventStream answers the hub's refusals of a stream request in the
+// error envelope (#3226): ws.ErrStreamingUnsupported as a 500
+// (errkind.StreamUnsupported), ws.ErrShuttingDown as a 503 with Retry-After
+// (errkind.ServerShuttingDown) — reconnect, to the replacement pod.
+func refuseEventStream(w http.ResponseWriter, r *http.Request, err error) {
+	writeErr(w, r, nil, err, errCtx{
+		accept:   kindsOf(errkind.StreamUnsupported, errkind.ServerShuttingDown),
+		fallback: fallbackInternal,
+	})
 }
 
 // eventFilterFor builds each SSE request's subscriber filter: eventVisible for

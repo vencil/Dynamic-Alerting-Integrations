@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -53,7 +54,7 @@ func TestBatchConflict_SyncAndAsyncSayNothingWasWritten(t *testing.T) {
 		} else {
 			var env map[string]any
 			_ = json.Unmarshal(w.Body.Bytes(), &env)
-			if w.Code != http.StatusConflict || env["code"] != CodeConflict || env["committed"] != false || env["error"] != msgBatchConflict {
+			if w.Code != http.StatusConflict || env["code"] != string(errcode.Conflict) || env["committed"] != false || env["error"] != msgBatchConflict {
 				t.Errorf("status %d, body %s; want 409 CONFLICT, committed false", w.Code, w.Body.String())
 			}
 		}
@@ -70,9 +71,9 @@ func TestBatchCommitted_ReportedAsCommitted(t *testing.T) {
 	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), nil, err)
 	var env map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &env)
-	if w.Code != http.StatusConflict || env["code"] != CodeConflict || env["committed"] != true || env["commit"] != "abc123" ||
+	if w.Code != http.StatusConflict || env["code"] != string(errcode.BatchCommitted) || env["committed"] != true || env["commit"] != "abc123" ||
 		strings.Contains(w.Body.String(), "nothing was written") {
-		t.Errorf("status %d, body %s; want 409 CONFLICT committed true, commit abc123", w.Code, w.Body.String())
+		t.Errorf("status %d, body %s; want 409 BATCH_COMMITTED committed true, commit abc123", w.Code, w.Body.String())
 	}
 	run := directBatchRun{Results: []BatchResult{{TenantID: "t-a", Status: "ok"}}, Err: err, Committed: "abc123"}
 	if te := batchTaskError(run); te == nil || strings.Contains(te.Error(), "nothing was written") || !strings.Contains(te.Error(), "abc123") {

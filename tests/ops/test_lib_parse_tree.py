@@ -279,13 +279,27 @@ def test_scalar_text() -> None:
         lpt.scalar_text({"a": _s("1", "!!int", "1")})
 
 
+def _entry(path, readers=("exporter", "generator"), *, cls="tenant", tenant="t", not_read=None,
+           role="config", problem=None, document=False) -> dict:
+    return {"path": path, "depth": path.count("/"), "class": cls,
+            "tenant_named": tenant if cls == "tenant" else None, "defaults_document": document,
+            "readers": list(readers), "not_read": not_read, "role": role,
+            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
+
+
 def _doc(**over) -> dict:
     doc = {
         "schema": lpt.SCHEMA, "da_guard_version": "test", "mode": "tree",
-        "selected": {"t.yaml": ["exporter", "generator"], "bad.yaml": ["exporter", "generator"]},
-        "defaults_carriers": {}, "not_read": [{"file": "a/_defaults.yml", "reason": "unselected_defaults_carrier"}],
+        "defaults_carriers": {},
+        "entries": [
+            _entry("a/_defaults.yml", (), cls="defaults", not_read="unselected_defaults_carrier",
+                   document=True),
+            _entry("bad.yaml", tenant="bad", problem=("duplicate_key", "line 2: twice")),
+            _entry("gone.yaml", tenant="gone", role="not_a_file",
+                   problem=("read_failure", "the path cannot be statted (stat_error)")),
+            _entry("t.yaml"),
+        ],
         "files": {"t.yaml": {"cpu": _s("80", "!!int", "80")}},
-        "unreadable": [{"file": "bad.yaml", "kind": "duplicate_key", "message": "line 2: twice"}],
         "rendered_by": {},
     }
     doc.update(over)
@@ -297,11 +311,28 @@ def test_tree_reads_a_selected_file() -> None:
     tree = lpt.tree_of(_doc())
     assert tree.value("t.yaml") == {"cpu": 80}
     assert lpt.is_scalar(tree.node("t.yaml")["cpu"])
+    # Computed from the entries: every path a reader tries, with its readers.
     assert dict(tree.selected) == {"t.yaml": ("exporter", "generator"),
-                                   "bad.yaml": ("exporter", "generator")}
-    assert dict(tree.unreadable) == {"bad.yaml": ("duplicate_key", "line 2: twice")}
+                                   "bad.yaml": ("exporter", "generator"),
+                                   "gone.yaml": ("exporter", "generator")}
+    assert dict(tree.unreadable) == {"bad.yaml": ("duplicate_key", "line 2: twice"),
+                                     "gone.yaml": ("read_failure", "the path cannot be statted (stat_error)")}
     assert dict(tree.not_read) == {"a/_defaults.yml": "unselected_defaults_carrier"}
     assert tree.value("t.yaml") is not tree.value("t.yaml")   # a new object each call
+
+
+def test_tree_entries_carry_go_s_role() -> None:
+    """The role is read, never composed: `gone.yaml` has the same problem kind
+    a permission refusal would have, and only its role says it is no file."""
+    tree = lpt.tree_of(_doc())
+    by = {e.path: e for e in tree.entries}
+    assert [e.path for e in tree.entries] == ["a/_defaults.yml", "bad.yaml", "gone.yaml", "t.yaml"]
+    assert by["gone.yaml"].not_a_file and not by["gone.yaml"].config_file
+    assert by["bad.yaml"].config_file and by["bad.yaml"].problem == ("duplicate_key", "line 2: twice")
+    assert by["a/_defaults.yml"].config_file and by["a/_defaults.yml"].readers == ()
+    doc = _doc()
+    doc["entries"][2]["role"] = "config"   # the same facts, Go's other verdict
+    assert lpt.tree_of(doc).entries[2].config_file
 
 
 def test_an_unreadable_file_raises_never_reads_empty() -> None:
@@ -331,26 +362,92 @@ def test_tree_is_read_only() -> None:
         tree.unreadable["x"] = ("k", "m")  # type: ignore[index]
 
 
-def test_rendered_by_is_kept_when_present_and_none_when_absent() -> None:
+def test_rendered_by_is_read() -> None:
     tree = lpt.tree_of(_doc(rendered_by={"_defaults.yaml": {"defaults": ["exporter"]}}))
     assert tree.rendered_by is not None
     assert tree.rendered_by["_defaults.yaml"]["defaults"] == ("exporter",)
-    doc = _doc()
-    del doc["rendered_by"]
-    assert lpt.tree_of(doc).rendered_by is None
 
 
-@pytest.mark.parametrize("over", [
-    {"rendered_by": {"_defaults.yaml": {"defaults": "exporter"}}},
-    {"rendered_by": []},
-    {"unreadable": [{"file": "bad.yaml", "kind": "duplicate_key", "message": "m"}] * 2},
-    {"not_read": [{"file": "x.txt", "reason": "not_config_name"}] * 2},
-])
-def test_a_malformed_document_is_unusable_whole(over) -> None:
-    doc = _doc()
-    doc.update(over)
+def _without(field):
+    def drop(doc):
+        del doc[field]
+    return drop
+
+
+def _entry_without(field):
+    def drop(doc):
+        del doc["entries"][3][field]
+    return drop
+
+
+def _set(**kv):
+    def put(doc):
+        doc.update(kv)
+    return put
+
+
+def _entry_set(i, **kv):
+    def put(doc):
+        doc["entries"][i].update(kv)
+    return put
+
+
+@pytest.mark.parametrize("change", [
+    _set(rendered_by={"_defaults.yaml": {"defaults": "exporter"}}),
+    _set(rendered_by=[]),
+    _without("rendered_by"),
+    _without("entries"),
+    _without("defaults_carriers"),
+    _without("da_guard_version"),
+    _set(da_guard_version=1),
+    _set(mode="list"),
+    _set(entries=[_entry("t.yaml"), _entry("t.yaml")]),          # a path twice
+    _entry_without("role"),                                       # a da-guard before roles
+    _entry_without("defaults_document"),
+    _entry_set(3, role="maybe"),                                  # a role nobody knows
+    _entry_set(3, extra=1),
+    _entry_set(3, readers=[]),                                    # no reader, no reason
+    _entry_set(1, problem={"kind": "duplicate_key"}),
+    _entry_set(1, problem=None),                                  # a config file with no content
+    _set(files={"t.yaml": {}, "bad.yaml": {}}),                   # content beside a problem
+    _set(files={"t.yaml": {}, "elsewhere.yaml": {}}),             # content of no entry
+], ids=lambda f: f.__qualname__)
+def test_a_malformed_document_is_unusable_whole(change) -> None:
+    doc = {**_doc(), "entries": [dict(e) for e in _doc()["entries"]]}
+    change(doc)
     with pytest.raises(lpt.ParseTreeError):
         lpt.tree_of(doc)
+
+
+@pytest.mark.parametrize("schema", ["da-guard.parse-tree/v1", "da-guard.parse-tree-list/v1"])
+def test_an_older_da_guard_s_document_is_named_as_such(schema) -> None:
+    raw = json.dumps({**_doc(), "schema": schema}).encode()
+    with pytest.raises(lpt.ParseTreeError, match="older than this tool"):
+        lpt.read_document(raw)
+
+
+def test_a_document_without_a_mode_names_an_older_da_guard() -> None:
+    doc = _doc()
+    del doc["mode"]
+    with pytest.raises(lpt.ParseTreeError, match="no 'mode' .*older than this tool"):
+        lpt.read_document(json.dumps(doc).encode())
+
+
+def test_content_on_an_entry_that_is_no_config_file_is_refused() -> None:
+    """Tree mode reads only config files: content beside a `not_a_file`
+    entry is a document wrong somewhere, refused whole."""
+    doc = _doc()
+    doc["entries"][2]["problem"] = None
+    doc["files"]["gone.yaml"] = {}
+    with pytest.raises(lpt.ParseTreeError, match="content but role 'not_a_file'"):
+        lpt.tree_of(doc)
+
+
+def test_an_entry_without_a_field_names_an_older_da_guard() -> None:
+    doc = _doc()
+    del doc["entries"][0]["role"]
+    with pytest.raises(lpt.ParseTreeError, match="no role .*older than this tool"):
+        lpt.read_document(json.dumps(doc).encode())
 
 
 def test_load_reads_the_real_document(tmp_path, da_guard_binary) -> None:

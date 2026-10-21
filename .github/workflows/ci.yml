@@ -171,6 +171,10 @@ jobs:
               #     skipped the leg that would catch the drift. Found by
               #     go_test_reads.py's first measurement (#1399).
               - "helm/tenant-api/values.yaml"
+              #   - helm/tenant-api/values.schema.json — TestChartSchemaWriteModesMatchTheBinary
+              #     (tenant-api cmd/server) pins its writeBack.mode enum to the
+              #     binary's --write-mode set (#1594).
+              - "helm/tenant-api/values.schema.json"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
               #   - the #1399 read check the Go legs run after their tests,
@@ -415,6 +419,10 @@ jobs:
               # #2711: parseDuration.test.ts holds the portal's parser to the
               # verdicts Go writes into this table (pytest holds Python to it).
               - "tests/shared/am_duration_matrix.json"
+              # #2833: api-fixture.ts validates every tenant-api response
+              # fixture against these definitions, so a swagger regen alone
+              # must re-run the Portal leg.
+              - "components/tenant-api/docs/swagger.json"
               # The Deployment Profile Wizard's Vitest resolves every emitted
               # values key against the target chart's templates (and lists
               # helm/ to prove each target chart exists), so a chart-only PR
@@ -876,7 +884,10 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # tenant-api's too: the error-contract gate below builds it (#3202).
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/tenant-api/go.sum
 
       - name: RETIRE-ordering gate (#869 — no K8s-target delete with conf.d _metadata残留)
         # Unfiltered over HEAD (the pre-commit mirror's path filter can miss
@@ -1201,6 +1212,14 @@ jobs:
       - name: "am-duration.json matches the schema's definitions.duration (HARD gate — #2711)"
         run: python scripts/tools/dx/gen_am_duration_json.py --check
 
+      # #3202: the portal's tenant-api-errors.json is DERIVED from tenant-api's
+      # internal/errcode and its error kind table. Add a code or change a
+      # kind's answer but forget `make error-contract` → fail here. Go comes
+      # from the da-guard setup step above (same go version as tenant-api).
+      - name: "tenant-api-errors.json matches errcode + the kind table (HARD gate — #3202)"
+        working-directory: components/tenant-api
+        run: go run ./cmd/gen-error-contract --check
+
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
     #   L2 (Helm template): renders every chart via helm + kube-linter (~1-2 min).
@@ -1345,6 +1364,10 @@ jobs:
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.
       VIBE_REQUIRE_HELM: "1"
+      # And for the role verdict's permission cases
+      # (tests/shared/test_lib_parse_tree_entries.py): run as root without
+      # setpriv they would skip, leaving EACCES unmeasured.
+      VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
       # Same fail-closed pattern for the #1347 generated-CI-artifact gate
       # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
       # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
@@ -1731,6 +1754,10 @@ jobs:
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.
       VIBE_REQUIRE_HELM: "1"
+      # And for the role verdict's permission cases
+      # (tests/shared/test_lib_parse_tree_entries.py): run as root without
+      # setpriv they would skip, leaving EACCES unmeasured.
+      VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
       # Same fail-closed pattern for the #1347 generated-CI-artifact gate
       # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
       # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
@@ -2226,6 +2253,11 @@ jobs:
 
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app
+        # pkg/config TestRoleUnderRealModes measures the role verdict where a
+        # mode bit really denies (as uid 65534 via setpriv when run as root).
+        # Set here, a setup that cannot do that fails instead of skipping.
+        env:
+          VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
         # Wrapped with ci_flake_retry.py (TRK-010, PR #325): consults
         # `flaky-tests.yaml` registry to retry only the listed tests; any
         # unlisted failure fails immediately (regression doesn't get

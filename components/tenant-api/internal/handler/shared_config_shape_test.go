@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -189,9 +190,9 @@ func TestPutGroup_ParseTreeRefusedRecordIsNotRebuilt(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
-			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) ||
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), string(errcode.ConfigDecode)) ||
 				!strings.Contains(w.Body.String(), "kind "+c.kind) {
-				t.Fatalf("status %d body %s; want 500 %s naming kind %s", w.Code, w.Body.String(), CodeConfigDecode, c.kind)
+				t.Fatalf("status %d body %s; want 500 %s naming kind %s", w.Code, w.Body.String(), errcode.ConfigDecode, c.kind)
 			}
 			if after, _ := os.ReadFile(path); string(after) != c.record {
 				t.Errorf("the refused write rewrote the record:\n%s", after)

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -37,8 +38,8 @@ func TestWriteJSON_UnencodableValue_Is500Envelope(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 			t.Fatalf("%v: body is not JSON: %v (%q)", v, err, w.Body.String())
 		}
-		if env["code"] != CodeInternal {
-			t.Errorf("%v: code = %v, want %s", v, env["code"], CodeInternal)
+		if env["code"] != string(errcode.Internal) {
+			t.Errorf("%v: code = %v, want %s", v, env["code"], errcode.Internal)
 		}
 		if msg, _ := env["error"].(string); !strings.Contains(msg, "unsupported value") {
 			t.Errorf("%v: error = %q, want it to name the encode error", v, msg)

@@ -58,10 +58,10 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 | L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 9 Dockerfile | **0** | 7 | 2 |
 | L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
 | L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
-| L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 1 | 0 |
-| **總計** | | | | **0** ✅ | **13** | 5 |
+| L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 0 | 0 |
+| **總計** | | | | **0** ✅ | **12** | 5 |
 
-13 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api`、L4 `tenant-api` 為同一架構事實（git workdir 需可寫）；L1 7 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate、issue 1444 da-tools 的 git）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
+12 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L1 7 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate、issue 1444 da-tools 的 git）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
 > **Critical → BLOCK 已真正上鎖**（非裝飾）：`main` branch protection 已將 `Lint`（含 L1+L3）與 `Container SAST (Helm L2 + raw k8s L4)`（L2+L4）列為 required status checks（owner 已設，2026-05-24）。驗證：`gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection/required_status_checks --jq '.checks[].context'`。
 
@@ -138,9 +138,11 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 > **變更（TRK-314 follow-up，PR #600 後續）**：maintenance-scheduler CronJob 原列 2 筆 FIX CANDIDATE（`run-as-non-root` / `no-read-only-root-fs`），已加固 securityContext 解除（pod `runAsNonRoot:true`/`runAsUser:65534`/`seccompProfile:RuntimeDefault` + container `readOnlyRootFilesystem:true`/`allowPrivilegeEscalation:false`/`capabilities.drop:[ALL]` + `/tmp` emptyDir + `PYTHONDONTWRITEBYTECODE=1`）。已 runtime-test：用發行 image 在 `--read-only --tmpfs /tmp --user 65534` 下跑 maintenance-scheduler，report-only 模式 exit 0、HTTP 路徑僅見連線錯誤（無 EROFS）。EXEMPTIONS 兩筆 key 已移除。
 
+> **變更（#1594）**：唯一一筆 baseline-High（tenant-api raw Deployment 的 `no-read-only-root-fs`）隨 raw tenant-api manifest 目錄一起刪除而退場——`helm/tenant-api` 成為 tenant-api 唯一部署來源，同一架構事實改由 L2 #3 列管。`EXEMPTIONS` 現為空：raw manifest 再出現任何 High 一律 BLOCK，要豁免須重新登記。scope 計數（42）是 2026-05-24 的量測，未隨本次重量。
+
 | # | Path:check | severity | Rationale（= EXEMPTIONS 登記） | 退場 / 修補 |
 |---|---|---|---|---|
-| 1 | `k8s/04-tenant-api/deployment.yaml:no-read-only-root-fs` | High | git-clone init + tenant-api container 需可寫工作區 clone/commit conf.d（同 L2 tenant-api chart 豁免;oauth2-proxy sidecar 已 `readOnlyRootFilesystem:true`） | 架構事實;同 L2 #3「修補候選」（git workdir 移到 writable volume） |
+| — | （無） | | | |
 
 > **與其他層的關係**：L4 抓 raw manifest 的 **container misconfig**（kube-linter）;raw Secret 的**硬編字面**由 L3 抓（scope 含 k8s/）;**高熵值**由 #445 trufflehog 抓 —— 三者互補不雙重 fire（kube-linter 無 hardcoded-secret-value check）。
 

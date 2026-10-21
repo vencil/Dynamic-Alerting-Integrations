@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CustomAlertsModal } from '../src/interactive/tools/tenant-manager/components/CustomAlertsModal.jsx';
+import { apiFixture } from './helpers/api-fixture';
 
 const mockMetrics = (catalog: string[]) =>
   vi.fn((_t: string, q: string) => Promise.resolve(catalog.filter((m) => m.startsWith(q || ''))));
 
+// fetchTenant resolves GET /api/v1/tenants/{id}'s body (TenantDetail); every
+// such body below goes through apiFixture (#2833), so it can only carry what
+// the API sends.
 function fetchTenant(custom_alerts: any[], source_hash = 'h1') {
-  return vi.fn(() => Promise.resolve({ custom_alerts, source_hash }));
+  return vi.fn(() => Promise.resolve(apiFixture('TenantDetail', { custom_alerts, source_hash })));
 }
 
 function fillRecipeForm(name: string, metric: string) {
@@ -59,7 +63,7 @@ describe('CustomAlertsModal', () => {
 
   it('save sends {custom_alerts, base_hash} and shows a notice on 200', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'a', metric: 'm', threshold: '1', window: '5m' }], 'h1');
-    const save = vi.fn(() => Promise.resolve({ ok: true, status: 200, data: { source_hash: 'h2' } }));
+    const save = vi.fn(() => Promise.resolve({ ok: true, status: 200, data: apiFixture('PutCustomAlertsResponse', { source_hash: 'h2' }) }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('save'));
@@ -75,7 +79,7 @@ describe('CustomAlertsModal', () => {
     const apiWarning = 'NOTICE: tenant=db-a: key "mysql_cpu" was renamed to "mysql_threads_running" (#1231)';
     const save = vi.fn(() => Promise.resolve({
       ok: true, status: 200,
-      data: { source_hash: 'h2', warnings: [apiWarning] },
+      data: apiFixture('PutCustomAlertsResponse', { source_hash: 'h2', warnings: [apiWarning] }),
     }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
@@ -91,7 +95,13 @@ describe('CustomAlertsModal', () => {
 
   it('Reef 6: a 409 is non-destructive — conflict shown, recipes preserved', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
-    const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: { current_source_hash: 'hX' } }));
+    // #3202: the base_hash race is code CONFLICT with current_source_hash; a
+    // bare 409 no longer reads as one. Not through apiFixture: current_source_hash
+    // is an envelope Extra field the spec does not model yet.
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' },
+    }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('save'));
@@ -105,7 +115,7 @@ describe('CustomAlertsModal', () => {
   it('#2406: GET with config_error does not open the editor and explains why', async () => {
     // GET on an unloadable file: raw_yaml + source_hash + config_error, and
     // custom_alerts ABSENT (not []).
-    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', raw_yaml: 'tenants: [', source_hash: 'h1', config_error: 'malformed_yaml' }));
+    const ft = vi.fn(() => Promise.resolve(apiFixture('TenantDetail', { id: 'tenant-x', raw_yaml: 'tenants: [', source_hash: 'h1', config_error: 'malformed_yaml' })));
     const save = vi.fn();
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('config-not-loadable')).toBeInTheDocument());
@@ -139,7 +149,7 @@ describe('CustomAlertsModal', () => {
   // edited in git. GET marks it managed_by: git with no custom_alerts and no
   // source_hash; every write is a 409 TENANT_GIT_MANAGED.
   it('#3064: GET managed_by git does not open the editor and says the tenant is managed in git', async () => {
-    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', resolved_thresholds: [], managed_by: 'git', git_managed_reason: 'tenant_count' }));
+    const ft = vi.fn(() => Promise.resolve(apiFixture('TenantDetail', { id: 'tenant-x', resolved_thresholds: [], managed_by: 'git', git_managed_reason: 'tenant_count' })));
     const save = vi.fn();
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('git-managed')).toBeInTheDocument());
@@ -152,7 +162,7 @@ describe('CustomAlertsModal', () => {
   });
 
   it('#3064: a git-managed tenant with config_error is shown as git-managed, not as a file to repair here', async () => {
-    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', config_error: 'malformed_yaml', managed_by: 'git', git_managed_reason: 'not_tenant_document' }));
+    const ft = vi.fn(() => Promise.resolve(apiFixture('TenantDetail', { id: 'tenant-x', config_error: 'malformed_yaml', managed_by: 'git', git_managed_reason: 'not_tenant_document' })));
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
     await waitFor(() => expect(screen.getByTestId('git-managed')).toBeInTheDocument());
     expect(screen.queryByTestId('config-not-loadable')).toBeNull();
@@ -161,7 +171,7 @@ describe('CustomAlertsModal', () => {
   it('#3064: GET with raw_yaml_withheld (no source_hash) does not open an empty editor', async () => {
     // Before: the modal ignored raw_yaml_withheld, listed [] and the save
     // was a 400 (no base_hash).
-    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', raw_yaml: '', source_hash: '', custom_alerts: [], raw_yaml_withheld: true, managed_by: 'api' }));
+    const ft = vi.fn(() => Promise.resolve(apiFixture('TenantDetail', { id: 'tenant-x', raw_yaml: '', source_hash: '', custom_alerts: [], raw_yaml_withheld: true, managed_by: 'api' })));
     const save = vi.fn();
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('read-only')).toBeInTheDocument());
@@ -174,10 +184,10 @@ describe('CustomAlertsModal', () => {
     // Regression guard: the #3064 change first refused to open the modal on
     // any GET without source_hash, so a read-only caller lost the list they
     // could see before.
-    const ft = vi.fn(() => Promise.resolve({
+    const ft = vi.fn(() => Promise.resolve(apiFixture('TenantDetail', {
       id: 'tenant-x', source_hash: '', masked: true, managed_by: 'api',
       custom_alerts: [{ recipe: 'threshold', name: 'a', metric: 'm', threshold: '1', window: '5m' }],
-    }));
+    })));
     const save = vi.fn();
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('recipe-a')).toBeInTheDocument());
@@ -218,7 +228,7 @@ describe('CustomAlertsModal', () => {
   it('#1535: a 409 TENANT_FILE_DIRTY on save shows the backend text, keeps the edits, no refresh-and-retry', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
     const serverError = "the tenant's config file has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry";
-    const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: { error: serverError, code: 'TENANT_FILE_DIRTY' } }));
+    const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: apiFixture('ErrorResponse', { error: serverError, code: 'TENANT_FILE_DIRTY' }) }));
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('save'));
@@ -242,10 +252,81 @@ describe('CustomAlertsModal', () => {
     expect(screen.queryByTestId('not-loadable')).toBeNull();
   });
 
+  // #3202 (original ticket): a fix-in-git 409 used to fall through to the
+  // Reef 6 "updated by someone else — refresh and retry" box; a refresh
+  // re-reads the same repository and the retry 409s again. Each must say
+  // "fix it in git" and offer no retry. Bodies carry only error + code, so
+  // they go through apiFixture (code is the ErrorCode enum).
+  for (const code of ['TENANT_DECLARED_ELSEWHERE', 'TENANT_TREE_UNREADABLE', 'TENANT_FILE_AMBIGUOUS']) {
+    it(`#3202: a 409 ${code} is fix-in-git — no base_hash conflict box, no retry, edits kept`, async () => {
+      const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+      const serverError = `server text for ${code}`;
+      const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: apiFixture('ErrorResponse', { error: serverError, code }) }));
+      render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+      await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('save'));
+      await waitFor(() => expect(screen.getByTestId('save-error')).toBeInTheDocument());
+      const box = screen.getByTestId('save-error');
+      expect(box.getAttribute('data-remedy')).toBe('fix_in_repo');
+      expect(box.textContent).toMatch(/fixed in git/);
+      expect(box.textContent).toContain(serverError);
+      expect(screen.queryByTestId('conflict')).toBeNull();
+      expect(document.body.textContent).not.toMatch(/updated by someone else/);
+      expect(within(box).queryByRole('button', { name: /retry|refresh/i })).toBeNull();
+      expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
+    });
+  }
+
+  it('#3202: an unknown code gets the generic message — even a 409 with current_source_hash is no conflict box', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    // Deliberately NOT through apiFixture: the enum would reject a code the
+    // contract does not have, which is exactly the case under test.
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: { error: 'something new happened', code: 'SOME_FUTURE_CODE', current_source_hash: 'hX' },
+    }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('save-error')).toBeInTheDocument());
+    const box = screen.getByTestId('save-error');
+    expect(box.getAttribute('data-remedy')).toBe('unknown');
+    expect(box.textContent).toContain('something new happened');
+    expect(screen.queryByTestId('conflict')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/updated by someone else/);
+  });
+
+  it('#3202: a 409 with no code at all gets the generic message, not the conflict box', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: { current_source_hash: 'hX' } }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('save-error')).toBeInTheDocument());
+    expect(screen.getByTestId('save-error').getAttribute('data-remedy')).toBe('unknown');
+    expect(screen.getByTestId('save-error').textContent).toMatch(/Operation failed/);
+    expect(screen.queryByTestId('conflict')).toBeNull();
+  });
+
+  it('#3202: CONFLICT without current_source_hash says refresh-and-retry but opens no base_hash conflict box', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: apiFixture('ErrorResponse', { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT' }),
+    }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('save-error')).toBeInTheDocument());
+    expect(screen.getByTestId('save-error').getAttribute('data-remedy')).toBe('refresh_retry');
+    expect(screen.getByTestId('save-error').textContent).toMatch(/Your edits are kept/);
+    expect(screen.queryByTestId('conflict')).toBeNull();
+  });
+
   it('Reef 4: a 400 surfaces violations and flags the offending recipe', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'legacy_bad', metric: 'a:b', threshold: '1', window: '5m' }]);
     // real backend format from ValidateTenantCustomAlerts: `_custom_alerts[N] (name): ...`
-    const save = vi.fn(() => Promise.resolve({ ok: false, status: 400, data: { violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (legacy_bad): metric "a:b" is not a valid identifier' }] } }));
+    const save = vi.fn(() => Promise.resolve({ ok: false, status: 400, data: apiFixture('ErrorResponse', { error: 'validation failed', code: 'INVALID_BODY', violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (legacy_bad): metric "a:b" is not a valid identifier' }] }) }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('save'));
@@ -263,7 +344,7 @@ describe('CustomAlertsModal', () => {
     ]);
     const save = vi.fn(() => Promise.resolve({
       ok: false, status: 400,
-      data: { violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (CamelOffender): metric "a:b" is not a valid identifier' }] },
+      data: apiFixture('ErrorResponse', { error: 'validation failed', code: 'INVALID_BODY', violations: [{ field: '_custom_alerts', reason: '_custom_alerts[0] (CamelOffender): metric "a:b" is not a valid identifier' }] }),
     }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());

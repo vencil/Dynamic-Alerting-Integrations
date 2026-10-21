@@ -817,11 +817,12 @@ repos:
       # a broken admin config cannot merge. pass_filenames: true + a stem regex
       # matches these files ANYWHERE in the repo (try-local seed, examples, future
       # deployment overlays); the script maps each basename STEM → its docs/schemas/
-      # schema. The two extra path-anchored alternatives cover PRODUCTION RBAC that
-      # ships EMBEDDED as a block-scalar string (basename is NOT _rbac.yaml): the raw
-      # k8s ConfigMap (data._rbac.yaml) and the Helm chart values (rbac._rbacYaml);
-      # the script EXTRACTS + validates the embedded RBAC (EMBEDDED_RBAC_SOURCES).
-      # These are PATH-anchored (not a bare `values.yaml`) so the 10 other chart
+      # schema. The extra path-anchored alternative covers PRODUCTION RBAC that
+      # ships EMBEDDED as a block-scalar string (basename is NOT _rbac.yaml): the Helm
+      # chart values (rbac._rbacYaml) — the chart is tenant-api's only deployment
+      # source since the raw k8s/04 manifests were removed (#1594); the script
+      # EXTRACTS + validates the embedded RBAC (EMBEDDED_RBAC_SOURCES).
+      # It is PATH-anchored (not a bare `values.yaml`) so the other chart
       # values.yaml and the Helm TEMPLATE configmap-rbac.yaml (Go `{{ }}`, deferred)
       # are NOT selected. ⚠️ The regex MUST stay in step with ADMIN_EXTENSIONS +
       # EMBEDDED_RBAC_SOURCES in the script: a file this regex SELECTS but the script
@@ -834,7 +835,7 @@ repos:
         name: admin meta-config (_rbac / _domain_policy / _tenant_orgs + embedded RBAC) ↔ JSON schemas
         entry: python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
         language: python
-        files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$|(^|/)k8s/04-tenant-api/configmap-rbac\.yaml$|(^|/)helm/tenant-api/values\.yaml$'
+        files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$|(^|/)helm/tenant-api/values\.yaml$'
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # --- v2.4.0 Phase A: 防守工具補強 ---
@@ -1187,7 +1188,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|k8s/04-tenant-api/.*\.ya?ml|scripts/tools/lint/check_single_writer_invariant\.py)$
+        files: ^(helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
         # FATAL: the write plane (internal/gitops/Writer) is a single writer —
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
@@ -1392,6 +1393,21 @@ repos:
         # duration syntax, #2490) and imported by the portal's parseDuration.
         # Edit the rule but forget to regenerate → this fails before CI. Fix:
         # `make am-duration-json`.
+
+      - id: error-contract-check
+        name: "#3202: tenant-api-errors.json must match tenant-api's errcode, kind table and direct answers"
+        entry: bash -c 'cd components/tenant-api && go run ./cmd/gen-error-contract --check'
+        language: system
+        pass_filenames: false
+        files: ^(components/tenant-api/(internal|cmd)/.*\.go|tools/portal/src/interactive/tools/_common/data/tenant-api-errors\.json)$
+        # tenant-api-errors.json is DERIVED from internal/errcode (the codes
+        # and their remedies), the handler's kind table (internal/errkind's
+        # kinds, their statuses) and the answers handlers and middleware write
+        # directly — read from every non-test .go file under internal/ and cmd/
+        # (cmd/gen-error-contract/scan.go), hence that whole range here: a new
+        # WriteJSONErrorWithCode in any package changes the contract. The
+        # portal reads it (_common/api/classify-error.js). Add a code or an answer but
+        # forget to regenerate → this fails before CI. Fix: `make error-contract`.
 
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"

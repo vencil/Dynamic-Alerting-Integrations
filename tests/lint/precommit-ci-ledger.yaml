@@ -249,6 +249,13 @@ hooks:
     workflow: .github/workflows/ci.yml
     job: lint-rule-packs
     note: Runs `python scripts/tools/dx/gen_am_duration_json.py --check` (HARD gate, #2711).
+- id: error-contract-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Runs `go run ./cmd/gen-error-contract --check` in components/tenant-api (HARD gate,
+      #3202); no job `if:`.
 - id: ksm-version-allowlist
   category: b
   evidence:

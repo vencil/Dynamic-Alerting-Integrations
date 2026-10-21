@@ -209,8 +209,10 @@ def test_cadvisor_three_filter_layers_parse_from_real_configmap():
 # ── sanity anchor: the pre-#1203 face classifies the victims DEAD ─────────
 
 def test_pre_fix_tenant_api_is_dead():
-    """Injected pre-fix scrape face: tenant-api svc is annotated but its ns is
-    in no SD list → DEAD. This is the regression pin for the #1203 bug."""
+    """Injected pre-fix scrape face: tenant-api's ns is in no SD list → DEAD.
+    This is the regression pin for the #1203 bug. (Since #1594 the family is
+    helm-service, so the injected Service is not consulted — the verdict rests
+    on the SD face alone; the chart's annotation is pinned by the render test.)"""
     result = _check(
         consumed={"tenant_api_sse_clients": {"platform::TenantApiReadHANeeded"}},
         jobs=_pre_fix_jobs(),
@@ -413,7 +415,9 @@ def test_generator_family_is_tenant_apis_not_threshold_exporters():
     never through `da_` to threshold-exporter — and the rules that read it
     (GeneratorJudgementMemoryNearLimit) must find it reachable."""
     key, kind, spec = gate._resolve_family("da_generator_judgement_peak_rss_bytes")
-    assert (key, kind, spec) == ("da_generator_", "service", ("tenant-api", "tenant-api"))
+    # Literal namespace, not gate.TENANT_API_NAMESPACE: the row and the
+    # constant must not be able to drift together.
+    assert (key, kind, spec) == ("da_generator_", "helm-service", "tenant-api")
     classes = gate.run_check()["classes"]
     gen = {m for m in classes if m.startswith("da_generator_")}
     assert gen >= {"da_generator_judgement_peak_rss_bytes", "da_generator_judgement_memory_limit_bytes"}, gen
@@ -520,6 +524,17 @@ _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm binary not on PATH"
 _HELM_SERVICE_CHART_FACE = {
     "monitoring": "helm/threshold-exporter",
     "vector": "helm/vector",
+    "tenant-api": "helm/tenant-api",
+}
+
+# Charts that refuse to render under bare defaults by design: each needs one
+# operator choice that has nothing to do with its scrape Service. Rendered with
+# the minimum that choice requires — tenant-api refuses until writeBack.mode is
+# chosen (#2855) and needs a git repository in conf.d (#2903); the shared test
+# baseline picks acknowledged direct mode + a hostPath conf.d, adding no
+# Service or annotation of its own.
+_RENDER_MINIMUM = {
+    "helm/tenant-api": ["-f", str(REPO_ROOT / "tests" / "helm" / "tenant_api_render_baseline.yaml")],
 }
 
 # Charts whose scrape Service does NOT render under DEFAULT values, so the
@@ -538,9 +553,10 @@ _KNOWN_UNRENDERED_UNDER_DEFAULTS = {
 
 
 def _helm_template(chart_rel: str, namespace: str) -> list[dict]:
-    """Render a chart with its DEFAULT values into *namespace*."""
+    """Render a chart with its DEFAULT values (plus _RENDER_MINIMUM) into *namespace*."""
     out = subprocess.run(
-        ["helm", "template", "t", str(REPO_ROOT / chart_rel), "-n", namespace],
+        ["helm", "template", "t", str(REPO_ROOT / chart_rel), "-n", namespace,
+         *_RENDER_MINIMUM.get(chart_rel, [])],
         capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 

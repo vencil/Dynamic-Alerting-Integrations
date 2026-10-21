@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
@@ -65,7 +66,7 @@ func GetTask(d *Deps) http.HandlerFunc {
 func writeTaskNotFound(w http.ResponseWriter, r *http.Request) {
 	WriteErrorEnvelope(w, r, http.StatusNotFound, ErrorResponse{
 		Error: "task_not_found",
-		Code:  CodeTaskNotFound,
+		Code:  errcode.TaskNotFound,
 		Extra: map[string]any{
 			"hint": "pod_may_have_restarted",
 		},

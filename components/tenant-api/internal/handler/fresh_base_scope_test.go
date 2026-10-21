@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
@@ -94,9 +95,9 @@ func TestPRModeScopeAuthoritativeOnFreshBase(t *testing.T) {
 			before := gitRev(t, f.bare, "main")
 			w := c.run(t, f)
 			tenant, code, msg := freshRefusal(t, w)
-			if w.Code != freshRefusalStatus(c.put == "") || code != CodeForbidden || tenant != "db-a" ||
+			if w.Code != freshRefusalStatus(c.put == "") || code != string(errcode.Forbidden) || tenant != "db-a" ||
 				!strings.Contains(msg, "latest base branch") {
-				t.Fatalf("status %d, body %s; want %d %s for db-a on the latest base", w.Code, w.Body.String(), freshRefusalStatus(c.put == ""), CodeForbidden)
+				t.Fatalf("status %d, body %s; want %d %s for db-a on the latest base", w.Code, w.Body.String(), freshRefusalStatus(c.put == ""), errcode.Forbidden)
 			}
 			if pre := strings.Contains(msg, "permission and organization-scope checks"); pre != c.preState {
 				t.Errorf("pre-state message = %v, want %v: %s", pre, c.preState, msg)
@@ -401,8 +402,8 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 			"db-a.yaml": freshScopeProduction, "_tenant_orgs.yaml": orgsFile("acme")}
 		f := newStaleFixture(t, local, map[string]string{"_tenant_orgs.yaml": "tenant_orgs: [unclosed\n"})
 		w := putStale(t, f, "db-a", freshScopeProduction)
-		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) || f.prOpened {
-			t.Errorf("status %d, PR opened %v; want 500 %s: %s", w.Code, f.prOpened, CodeConfigDecode, w.Body.String())
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), string(errcode.ConfigDecode)) || f.prOpened {
+			t.Errorf("status %d, PR opened %v; want 500 %s: %s", w.Code, f.prOpened, errcode.ConfigDecode, w.Body.String())
 		}
 	})
 	// A batch answers the same refusal per op: 422, the op's code
@@ -412,8 +413,8 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || f.prOpened {
 			t.Fatalf("status %d, PR opened %v; want 422: %s", w.Code, f.prOpened, w.Body.String())
 		}
-		if tenant, code, _ := freshRefusal(t, w); tenant != "db-a" || code != CodeConfigDecode {
-			t.Errorf("refused op = (%q, %q), want (db-a, %s): %s", tenant, code, CodeConfigDecode, w.Body.String())
+		if tenant, code, _ := freshRefusal(t, w); tenant != "db-a" || code != string(errcode.ConfigDecode) {
+			t.Errorf("refused op = (%q, %q), want (db-a, %s): %s", tenant, code, errcode.ConfigDecode, w.Body.String())
 		}
 	})
 }
@@ -467,7 +468,7 @@ func freshRefusal(t *testing.T, w *httptest.ResponseRecorder) (tenant, code, msg
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
 		for _, r := range resp.Results {
 			if r.Status == "error" {
-				return r.TenantID, r.Code, r.Message
+				return r.TenantID, string(r.Code), r.Message
 			}
 		}
 		return "", "", ""

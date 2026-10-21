@@ -136,13 +136,14 @@ func main() {
 		"Comma-separated IdP groups injected by --dev-bypass-auth (must map to tenants in _rbac.yaml)")
 
 	// v2.6.0: PR-based write-back mode (ADR-011)
-	// Supports: "direct" (default), "pr" or "pr-github" (GitHub PRs), "pr-gitlab" (GitLab MRs)
+	// Supports: "direct" (default), "pr-github" (GitHub PRs), "pr-gitlab" (GitLab MRs).
+	// "pr" is no longer accepted (#1594): it was an alias the Helm chart never wired.
 	writeMode := flag.String("write-mode", envNonEmptyOrDefault("TA_WRITE_MODE", "direct"),
-		"Write-back mode: 'direct' (commit-on-write), 'pr' or 'pr-github' (GitHub PR), 'pr-gitlab' (GitLab MR)")
+		"Write-back mode: 'direct' (commit-on-write), 'pr-github' (GitHub PR), 'pr-gitlab' (GitLab MR)")
 
 	// GitHub flags
 	ghRepo := flag.String("github-repo", envOrDefault("TA_GITHUB_REPO", ""),
-		"GitHub repository in owner/repo format (required for pr/pr-github mode)")
+		"GitHub repository in owner/repo format (required for pr-github mode)")
 	ghBaseBranch := flag.String("github-base-branch", envOrDefault("TA_GITHUB_BASE_BRANCH", "main"),
 		"Target branch for GitHub PRs (default: main)")
 
@@ -394,6 +395,11 @@ func main() {
 	// checkout below would run a smudge filter). Every write and preview
 	// checks again.
 	if err := writer.CheckGitDrivers(); err != nil {
+		if errors.Is(err, gitops.ErrGitConfigUnreadable) {
+			// #3226: not "a driver is configured" — the config could not
+			// be read to check it; fix what git reports and start again.
+			log.Fatalf("FATAL: cannot start: the git config could not be read to check it for filter, diff or merge drivers (#3175): %v", err)
+		}
 		log.Fatalf("FATAL: %v", err)
 	}
 	// #2903 (ADR-036 §4): every content-changing write asks the generator

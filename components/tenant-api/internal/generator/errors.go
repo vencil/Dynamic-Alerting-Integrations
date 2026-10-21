@@ -3,6 +3,9 @@ package generator
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // Results of a verdict (the service's `result`).
@@ -13,10 +16,11 @@ const (
 )
 
 // The service's 503 codes, passed through to the HTTP client as they are
-// (ADR-036 §5).
+// (ADR-036 §5). The strings are internal/errcode's (#3202): the service and
+// tenant-api name these two failures alike, so they are not a second copy.
 const (
-	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
-	CodePolicyUnavailable    = "POLICY_UNAVAILABLE"
+	CodeValidatorUnavailable = string(errcode.ValidatorUnavailable)
+	CodePolicyUnavailable    = string(errcode.PolicyUnavailable)
 )
 
 // Reasons of a *RejectedError. The first five are the service's own
@@ -153,4 +157,25 @@ func ClientReason(reason string) string {
 		}
 	}
 	return ReasonUnknown
+}
+
+// ErrorKind is errkind.GeneratorFindings.
+func (e *FindingsError) ErrorKind() errkind.Kind { return errkind.GeneratorFindings }
+
+// ErrorKind splits on Retryable: a reason a resend may get past is
+// errkind.GeneratorRejectedRetryable, the rest errkind.GeneratorRejected.
+func (e *RejectedError) ErrorKind() errkind.Kind {
+	if Retryable(e.Reason) {
+		return errkind.GeneratorRejectedRetryable
+	}
+	return errkind.GeneratorRejected
+}
+
+// ErrorKind is errkind.PolicyUnavailable for CodePolicyUnavailable and
+// errkind.ValidatorUnavailable for every other code.
+func (e *UnavailableError) ErrorKind() errkind.Kind {
+	if e.Code == CodePolicyUnavailable {
+		return errkind.PolicyUnavailable
+	}
+	return errkind.ValidatorUnavailable
 }

@@ -406,14 +406,18 @@ spec:
         - protocol: TCP
           port: 9090
     # tenant-api internal port (8080) in the tenant-api namespace — open PRs.
-    # Matching ingress: k8s/04-tenant-api/networkpolicy.yaml (monitoring ns → 8080).
+    # Matching ingress: helm/tenant-api templates/networkpolicy.yaml
+    # (internalPortAllow.thresholdGovern, monitoring ns → 8080). The pod
+    # selector is the chart's label: the chart never set `app: tenant-api`
+    # (only the raw manifests removed in #1594 did), so the previous
+    # `app: tenant-api` selector matched no chart-deployed pod.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: tenant-api
           podSelector:
             matchLabels:
-              app: tenant-api
+              app.kubernetes.io/name: tenant-api
       ports:
         - protocol: TCP
           port: 8080

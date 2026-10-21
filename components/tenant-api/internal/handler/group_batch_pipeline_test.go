@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -143,8 +144,8 @@ func TestGroupBatch_PatchValueValidation(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &bad); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if bad.Code != CodeInvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != `patch["_timeout_ms"]` {
-				t.Errorf("response = %+v, want one %s violation on patch[\"_timeout_ms\"]", bad, CodeInvalidBody)
+			if bad.Code != errcode.InvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != `patch["_timeout_ms"]` {
+				t.Errorf("response = %+v, want one %s violation on patch[\"_timeout_ms\"]", bad, errcode.InvalidBody)
 			}
 			if f.prCalls != 0 {
 				t.Errorf("CreatePR calls = %d, want 0", f.prCalls)
