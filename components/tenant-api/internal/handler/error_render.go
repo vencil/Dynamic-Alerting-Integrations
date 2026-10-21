@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errkind"
@@ -188,11 +187,9 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:
 		var te *gitops.TreeUnreadableError
 		errors.As(err, &te)
-		var id string
-		if r != nil {
-			id = chi.URLParam(r, "id")
-		}
-		logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", id, err)
+		// The request's own tenant (errCtx.tenantID) only: a route's {id} is
+		// not always a tenant (POST /groups/{id}/batch names a group).
+		logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", ec.tenantID, err)
 		visible := d != nil && r != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
 		extra := map[string]any{"unreadable_count": len(te.Entries)}
 		if visible {
@@ -223,16 +220,17 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		return msgTenantFileDirty, nil
 	case errkind.TenantFileNotRegular:
 		// The early refusal's text and fields (writeTenantFileNotRegular)
-		// when the request names its tenant; else the error's own text,
-		// which names the base name only.
-		id := ec.tenantID
-		if id == "" && r != nil {
-			id = chi.URLParam(r, "id")
+		// when the entry writes one tenant it names (errCtx.tenantID). Never
+		// the route's {id}: on POST /groups/{id}/batch that is a group id.
+		// Without one — a batch — a fixed text naming no tenant, not the
+		// error's own ("op ctx: confd: not a regular file: …").
+		slog.Warn("tenant write refused: a tenant file is not a regular file", "tenant", ec.tenantID, "error", err)
+		extra := map[string]any{"config_error": string(confd.ProblemNotRegularFile)}
+		if ec.tenantID == "" {
+			return msgTenantFileNotRegular, extra
 		}
-		if id == "" {
-			return err.Error(), nil
-		}
-		return notRegularText(id), map[string]any{"tenant_id": id, "config_error": string(confd.ProblemNotRegularFile)}
+		extra["tenant_id"] = ec.tenantID
+		return notRegularText(ec.tenantID), extra
 
 	case errkind.PreconditionFailed:
 		var pre *gitops.PreconditionError

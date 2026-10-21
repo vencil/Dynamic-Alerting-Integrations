@@ -182,6 +182,12 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 		// keys in the log.
 		slog.Error("tenant dry-run: refused, git config names a driver program", "error", err)
 		return msgGitDriverConfigured
+	case errors.Is(err, gitops.ErrGitConfigUnreadable):
+		// #3226: PreviewPut skips the HEAD check on it today, so it does
+		// not reach here; if it ever does, the fixed text, not the
+		// resolver's.
+		slog.Error("tenant dry-run: refused, the git config could not be read to check it for driver programs", "error", err)
+		return msgGitConfigUnreadable
 	default:
 		slog.Error("tenant dry-run: cannot resolve tenant file", "error", err)
 		return msgTenantFileUnresolved

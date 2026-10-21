@@ -134,7 +134,9 @@ func Timeout(d time.Duration) func(http.Handler) http.Handler {
 // and the request_id. When nothing of the response was written yet, the
 // answer is 500 INTERNAL_ERROR in the error envelope (msgInternal, the
 // request_id finds the log line) — chi wrote a bare 500. A response already
-// under way cannot be replaced and is left as it is.
+// under way cannot be replaced: the connection is aborted
+// (http.ErrAbortHandler), so the client sees a failed read, not a truncated
+// answer it could take for a whole one.
 func Recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		aw := &answerWriter{ResponseWriter: w}
@@ -148,7 +150,16 @@ func Recoverer(next http.Handler) http.Handler {
 			}
 			slog.Error("panic serving request", "request_id", requestIDOf(r), "method", r.Method,
 				"path", r.URL.Path, "panic", fmt.Sprint(rvr), "stack", string(debug.Stack()))
-			if aw.wrote || r.Header.Get("Connection") == "Upgrade" {
+			if aw.wrote {
+				// The answer is under way (a status, a body byte or a
+				// flush went out): it cannot be replaced, and ending the
+				// handler normally would let the client read a truncated
+				// response as complete. Abort the connection instead —
+				// net/http closes it (HTTP/2: resets the stream) and logs
+				// nothing more for ErrAbortHandler.
+				panic(http.ErrAbortHandler)
+			}
+			if r.Header.Get("Connection") == "Upgrade" {
 				return
 			}
 			WriteKind(w, r, errkind.Internal, msgInternal)

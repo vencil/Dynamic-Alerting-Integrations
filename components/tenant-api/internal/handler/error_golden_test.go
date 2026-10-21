@@ -242,7 +242,7 @@ func goldenEntries() []goldenEntry {
 			return fault(writePutDirectError(w, r, d, goldenTenant, err))
 		}},
 		{"writePRPutError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return written(writePRPutError(w, r, d, err))
+			return written(writePRPutError(w, r, d, goldenTenant, err))
 		}},
 		{"writeCustomAlertsWriteError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
 			return fault(writeCustomAlertsWriteError(w, r, d, goldenTenant, err))

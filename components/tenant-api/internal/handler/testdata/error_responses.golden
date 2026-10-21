@@ -405,8 +405,8 @@ fault=false | 503 POLICY_UNAVAILABLE counted=error Retry-After=5 retry_after_s=5
   <- confd.ErrAmbiguousTenantFile
 - | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
-- | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
-  <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
+- | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
+  <- confd.ErrNotRegularFile ≡ %w
 - | 400 BAD_REQUEST counted=uncounted error="validation failed: invalid tenant id"
   <- ErrValidation %w ErrInvalidTenantID
 - | 409 CONFLICT counted=conflict extra={"commit":"c0ffee","committed":true} error=msgBatchCommittedIncomplete
@@ -417,6 +417,8 @@ fault=false | 503 POLICY_UNAVAILABLE counted=error Retry-After=5 retry_after_s=5
 [hidden] - | 500 TENANT_STORE_FAULT counted=error extra={"unreadable_count":2} error=treeUnreadableText(store fault, hidden)
 [visible] - | 500 TENANT_STORE_FAULT counted=error extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(store fault, visible)
   <- TreeUnreadableError{StoreFault: true}, wrapped(TreeUnreadableError{StoreFault: true})
+- | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
+  <- TargetUnreadableError{special_file}
 - | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"unreadable","tenant_id":"tu-a"} error=targetUnreadableText(read_error)
   <- TargetUnreadableError{read_error}
 - | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reason":"tenant_count","tenant_id":"tu-a"} error=GitManagedError(tenant_count).Error()
@@ -485,8 +487,8 @@ written=true | 409 CONFLICT counted=conflict error="confd: more than one config 
   <- confd.ErrAmbiguousTenantFile
 written=true | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
-written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
-  <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
+written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
+  <- confd.ErrNotRegularFile ≡ %w
 written=true | 400 BAD_REQUEST counted=uncounted error="validation failed: invalid tenant id"
   <- ErrValidation %w ErrInvalidTenantID
 written=true | 503 GIT_PUSH_FAILED counted=error Retry-After=5 retry_after_s=5 error=msgGitPushFailed
@@ -497,6 +499,8 @@ written=true | 503 GIT_PUSH_FAILED counted=error Retry-After=5 retry_after_s=5 e
 [hidden] written=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable_count":2} error=treeUnreadableText(store fault, hidden)
 [visible] written=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(store fault, visible)
   <- TreeUnreadableError{StoreFault: true}, wrapped(TreeUnreadableError{StoreFault: true})
+written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
+  <- TargetUnreadableError{special_file}
 written=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"unreadable","tenant_id":"tu-a"} error=targetUnreadableText(read_error)
   <- TargetUnreadableError{read_error}
 written=true | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reason":"tenant_count","tenant_id":"tu-a"} error=GitManagedError(tenant_count).Error()
@@ -560,8 +564,8 @@ handled=true | 409 CONFLICT counted=conflict error="confd: more than one config 
   <- confd.ErrAmbiguousTenantFile
 handled=true | 409 CONFLICT counted=conflict error="op ctx: confd: more than one config file for tenant"
   <- wrapped(confd.ErrAmbiguousTenantFile)
-handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
-  <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
+handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
+  <- confd.ErrNotRegularFile ≡ %w
 handled=true | 400 BAD_REQUEST counted=uncounted error="validation failed: invalid tenant id"
   <- ErrValidation %w ErrInvalidTenantID
 [hidden] handled=true | 409 TENANT_TREE_UNREADABLE counted=conflict extra={"unreadable_count":2} error=treeUnreadableText(symlinks, hidden)
@@ -570,6 +574,8 @@ handled=true | 400 BAD_REQUEST counted=uncounted error="validation failed: inval
 [hidden] handled=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable_count":2} error=treeUnreadableText(store fault, hidden)
 [visible] handled=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(store fault, visible)
   <- TreeUnreadableError{StoreFault: true}, wrapped(TreeUnreadableError{StoreFault: true})
+handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
+  <- TargetUnreadableError{special_file}
 handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"unreadable","tenant_id":"tu-a"} error=targetUnreadableText(read_error)
   <- TargetUnreadableError{read_error}
 handled=true | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reason":"tenant_count","tenant_id":"tu-a"} error=GitManagedError(tenant_count).Error()
@@ -617,14 +623,16 @@ handled=true | 500 INTERNAL_ERROR counted=error error=msgTenantTreeScan
   <- ErrTenantTreeScan %w ErrGitTimeout, ErrTenantTreeScan %w ErrTreeNotOnBase, ErrTenantTreeScan %w ErrWriteOverloaded, gitops.ErrTenantTreeScan ≡ %w
 handled=true | 409 TENANT_FILE_DIRTY counted=conflict error=msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
-handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
-  <- TargetUnreadableError{special_file}, confd.ErrNotRegularFile ≡ %w
+handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file"} error="a tenant's conf.d file is not a regular file (config_error: not_regular_file), so tenant-api neither reads nor replaces it; replace it with a regular file in git"
+  <- confd.ErrNotRegularFile ≡ %w
 [hidden] handled=true | 409 TENANT_TREE_UNREADABLE counted=conflict extra={"unreadable_count":2} error=treeUnreadableText(symlinks, hidden)
 [visible] handled=true | 409 TENANT_TREE_UNREADABLE counted=conflict extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(symlinks, visible)
   <- TreeUnreadableError{StoreFault: false}
 [hidden] handled=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable_count":2} error=treeUnreadableText(store fault, hidden)
 [visible] handled=true | 500 TENANT_STORE_FAULT counted=error extra={"unreadable":[{"path":"tu-b.yaml","reason":"stat_error"},{"path":"sub","reason":"walk_error"}],"unreadable_count":2} error=treeUnreadableText(store fault, visible)
   <- TreeUnreadableError{StoreFault: true}, wrapped(TreeUnreadableError{StoreFault: true})
+handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"not_regular_file","tenant_id":"tu-a"} error=targetUnreadableText(special_file)
+  <- TargetUnreadableError{special_file}
 handled=true | 409 TENANT_CONFIG_NOT_LOADABLE counted=conflict extra={"config_error":"unreadable","tenant_id":"tu-a"} error=targetUnreadableText(read_error)
   <- TargetUnreadableError{read_error}
 handled=true | 409 TENANT_GIT_MANAGED counted=conflict extra={"git_managed_reason":"tenant_count","tenant_id":"tu-a"} error=GitManagedError(tenant_count).Error()
@@ -1146,7 +1154,7 @@ msgWriteOutcomeUnknown
 
 ### dryRunRefusalMessage
 "cannot resolve the tenant's config file in conf.d; see the server log"
-  <- BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, BatchCommittedError, ErrForgeDegraded fetch timeout, ErrGitTimeout %w DeadlineExceeded, ErrMergeFailed %w merge error, ErrNoChanges %w context.Canceled, ErrPushFailed %w ErrNoChanges, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, PreconditionError{Current=""}, PreconditionError{Current=API file hash}, PreconditionError{Current=other hash}, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, confd.ErrNotRegularFile ≡ %w, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}, generator.RejectedError{busy}, generator.RejectedError{deadline}, generator.RejectedError{git_read}, generator.RejectedError{incomplete}, generator.RejectedError{invalid_request}, generator.RejectedError{memory}, generator.RejectedError{mismatch}, generator.RejectedError{no_time}, generator.RejectedError{normalized}, generator.RejectedError{not_a_known_reason}, generator.RejectedError{too_large}, generator.UnavailableError{POLICY_UNAVAILABLE, policy_unusable}, generator.UnavailableError{VALIDATOR_UNAVAILABLE, unreachable}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrConflict ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitConfigUnreadable ≡ %w, gitops.ErrGitTimeout ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeFailed ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantGitManaged ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, gitops.ErrTreeNotOnBase ≡ %w, gitops.ErrWriteOutcomeUnknown ≡ %w, gitops.ErrWriteOverloaded ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, git config unreadable), leavePRBranch(back on base, retry), plain error (server path in text), platform.APIError{403, RateLimited}, platform.APIError{403}, platform.ErrCircuitOpen ≡ %w, platform.ErrForbidden ≡ %w, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError, wrapped(generator.FindingsError)
+  <- BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, BatchCommittedError, ErrForgeDegraded fetch timeout, ErrGitTimeout %w DeadlineExceeded, ErrMergeFailed %w merge error, ErrNoChanges %w context.Canceled, ErrPushFailed %w ErrNoChanges, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, PreconditionError{Current=""}, PreconditionError{Current=API file hash}, PreconditionError{Current=other hash}, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, WriteOutcomeUnknownError{Cause: ErrGitTimeout}, WriteOutcomeUnknownError{Cause: context.Canceled}, confd.ErrNotRegularFile ≡ %w, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, generator.FindingsError{ComparedWithBase: false}, generator.FindingsError{ComparedWithBase: true}, generator.RejectedError{busy}, generator.RejectedError{deadline}, generator.RejectedError{git_read}, generator.RejectedError{incomplete}, generator.RejectedError{invalid_request}, generator.RejectedError{memory}, generator.RejectedError{mismatch}, generator.RejectedError{no_time}, generator.RejectedError{normalized}, generator.RejectedError{not_a_known_reason}, generator.RejectedError{too_large}, generator.UnavailableError{POLICY_UNAVAILABLE, policy_unusable}, generator.UnavailableError{VALIDATOR_UNAVAILABLE, unreachable}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrConflict ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitTimeout ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeFailed ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantGitManaged ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, gitops.ErrTreeNotOnBase ≡ %w, gitops.ErrWriteOutcomeUnknown ≡ %w, gitops.ErrWriteOverloaded ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, retry), plain error (server path in text), platform.APIError{403, RateLimited}, platform.APIError{403}, platform.ErrCircuitOpen ≡ %w, platform.ErrForbidden ≡ %w, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError, wrapped(generator.FindingsError)
 "validation failed"
   <- gitops.ErrValidation
 "op ctx: validation failed"
@@ -1167,6 +1175,8 @@ msgTenantFileDirty
   <- gitops.ErrTenantFileDirty ≡ %w
 msgGitDriverConfigured
   <- GitDriverError, TreeOnBase(ErrTreeNotOnBase %w GitDriverError), gitops.ErrGitDriverConfigured ≡ %w
+"the server could not read its git configuration to check it; nothing was written — please retry shortly"
+  <- gitops.ErrGitConfigUnreadable ≡ %w, leavePRBranch(back on base, git config unreadable)
 "confd: more than one config file for tenant"
   <- confd.ErrAmbiguousTenantFile
 "op ctx: confd: more than one config file for tenant"

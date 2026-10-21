@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,14 +42,24 @@ func TestRecoverer_AnswersAPanicInTheEnvelope(t *testing.T) {
 		t.Errorf("panic: envelope %+v, want %s, msgInternal and a request_id", env, CodeInternal)
 	}
 
-	w = serve(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte("partial"))
-		panic("late")
-	})
-	if w.Code != http.StatusAccepted || w.Body.String() != "partial" {
-		t.Errorf("panic after the answer began: %d %q, want it left as it was", w.Code, w.Body.String())
-	}
+	// A panic after the answer began aborts the connection: the panic that
+	// leaves Recoverer is http.ErrAbortHandler, and nothing is appended.
+	func() {
+		rec := httptest.NewRecorder()
+		defer func() {
+			if rvr := recover(); rvr != http.ErrAbortHandler {
+				t.Errorf("panic after the answer began: recovered %v, want http.ErrAbortHandler", rvr)
+			}
+			if rec.Body.String() != "partial" {
+				t.Errorf("panic after the answer began: body %q, want nothing appended", rec.Body.String())
+			}
+		}()
+		middleware.RequestID(Recoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte("partial"))
+			panic("late")
+		}))).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	}()
 
 	func() {
 		defer func() {
@@ -150,5 +161,26 @@ func TestRefuseEventStream(t *testing.T) {
 	env = exitEnvelope(t, "shutting down", w, http.StatusServiceUnavailable)
 	if env.Code != CodeUpstream || env.RetryAfterS != 1 || w.Header().Get("Retry-After") != "1" {
 		t.Errorf("shutting down: %+v Retry-After %q, want %s with Retry-After 1", env, w.Header().Get("Retry-After"), CodeUpstream)
+	}
+}
+
+// #3226: over a real connection, a panic after a flushed partial answer
+// fails the client's read — the response is chunked and its terminating
+// chunk is never sent — so the truncated body is never read as whole.
+func TestRecoverer_PanicAfterFlushFailsAChunkedRead(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(Recoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		panic("late")
+	})))
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if body, rerr := io.ReadAll(resp.Body); rerr == nil {
+		t.Errorf("client read %q with no error; want the aborted connection to fail the read", body)
 	}
 }

@@ -116,23 +116,23 @@ Two errors keep their text on purpose, so they carry their own code:
 | `CONFIG_DECODE_ERROR` | 500 | conf.d config content failed to decode: `/effective`'s `parse defaults[i]: …`, a tenant file the custom-alerts write cannot merge or parse, an unparseable `_groups.yaml` / `_views.yaml` record in the state store; the text says which entry is wrong, with no path |
 | `BASE_RESTORE_FAILED` | 500 | after a PR-mode write the worktree could not return to base: names the branch and whether it reached origin (do not retry — a retry pushes a second branch); without the underlying git error |
 
-### 2.5 Every error response is the same envelope, decided by one error kind table ([#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226))
+### 2.5 The router's and the middleware's error answers are the JSON envelope too, decided by the error kind table ([#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226))
 
-An error response's status, `code`, `Retry-After` header and `retry_after_s` come from one table, so the same failure is answered alike on every endpoint. These were not the JSON envelope, or had no `code`, and now are (each with its `request_id`):
+For the exits this section lists, the status, `code`, `Retry-After` header and `retry_after_s` now come from the error kind table (the write paths already did); not every endpoint does yet — some handlers still derive the `code` from the status through `WriteJSONError`. These were not the JSON envelope, or had no `code`, and now are (each with its `request_id`):
 
 | Case | Answer now | Before |
 |---|---|---|
 | No route matches | 404 `NOT_FOUND` | plain-text `404 page not found` |
 | The route exists, the method does not | 405 `BAD_REQUEST`, with the `Allow` header listing the methods as before | 405 with an empty body |
-| The per-request deadline (30 s) passed and the handler did not answer | 504 `UPSTREAM_ERROR`, **without** `Retry-After`: the handler did not answer, so whether a write took effect is unknown — read before resending | 504 with an empty body |
-| A handler panicked | 500 `INTERNAL_ERROR` (the fixed text; the `request_id` finds the log line with the stack) | 500 with an empty body |
+| The per-request deadline (30 s by default) passed and the handler did not answer | 504 `UPSTREAM_ERROR`, **without** `Retry-After`: the handler did not answer, so whether a write took effect is unknown — read before resending | 504 with an empty body |
+| A handler panicked | Before any answer: 500 `INTERNAL_ERROR` (the fixed text; the `request_id` finds the log line with the stack); once the answer began: the connection is aborted, so the client's read fails instead of taking a truncated answer for a whole one | 500 with an empty body; an answer under way ended normally |
 | `GET /api/v1/events` while shutting down | 503 `UPSTREAM_ERROR`, `Retry-After: 1` (reconnect to the new pod) | plain-text 503 |
 | `GET /api/v1/events` through a writer that cannot flush | 500 `INTERNAL_ERROR`, text `streaming not supported` | plain-text 500 |
 | Logs federation not configured (`POST /federation/tokens` with the `logs` capability, `POST /federation/accounts/backfill`) | 503 `UPSTREAM_ERROR`, without `Retry-After`: a deployment setting, a retry does not change it | the same (now decided by the table) |
 
 **Per-op batch results** (`results[].code`, an async task's results included): every result whose `status` is `error` carries a `code`, the one the same failure gets as a whole-request answer; before, only a few classes had one and the rest were empty. For example: overload is `WRITE_OVERLOADED`, a conflict `CONFLICT`, a cancelled write or an unknown outcome `UPSTREAM_ERROR`, validation and tenant-id errors `BAD_REQUEST`, missing permission `FORBIDDEN`. Also: a base sync timeout (`FORGE_UNAVAILABLE`) is no longer answered as an internal error; a batch that IS committed but did not finish cleanly says so per op instead of "conflict, retry"; and a multiply wrapped error is judged in the same order as the synchronous answer, so the per-op result and that answer agree.
 
-**A tenant file that is not a regular file** (FIFO, socket, device): every write entry answers 409 `TENANT_CONFIG_NOT_LOADABLE`, as the handler's early refusal of the same file does (`config_error: not_regular_file`); found during the write, a direct write used to answer 400 `BAD_REQUEST`, PR mode and batches 500.
+**A tenant file that is not a regular file** (FIFO, socket, device): every write entry answers 409 `TENANT_CONFIG_NOT_LOADABLE`, as the handler's early refusal of the same file does (`config_error: not_regular_file`; a single-tenant write adds `tenant_id`, a batch's whole-request answer names no tenant and has a fixed text); found during the write, a direct write used to answer 400 `BAD_REQUEST`, PR mode and batches 500.
 
 ---
 

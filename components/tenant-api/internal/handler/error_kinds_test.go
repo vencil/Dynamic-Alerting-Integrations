@@ -1,15 +1,21 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // errkindConstants parses internal/errkind for every constant of type Kind:
@@ -193,5 +199,41 @@ func TestBatchProjections_CodeIsTheTableAnswer(t *testing.T) {
 				t.Errorf("generatorOpResult(%s) has no code", ge.name)
 			}
 		}
+	}
+}
+
+// #3226 review: a batch's whole-request answer for a tenant file that is
+// not a regular file names no tenant — never the route's {id}, which on
+// POST /groups/{id}/batch is a group id — and shows a fixed text, not the
+// error's own ("op ctx: confd: not a regular file: …").
+func TestNotRegularFile_BatchAnswerNamesNoTenant(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("op ctx: %w", fmt.Errorf("%w: t-a.yaml", confd.ErrNotRegularFile))
+	for name, write := range map[string]func(http.ResponseWriter, *http.Request){
+		"writeBatchFailure": func(w http.ResponseWriter, r *http.Request) { writeBatchFailure(w, r, &Deps{}, err) },
+		"writePRBatchError": func(w http.ResponseWriter, r *http.Request) { writePRBatchError(w, r, &Deps{}, err) },
+	} {
+		w := httptest.NewRecorder()
+		write(w, newRequestWithChiParam("POST", "/api/v1/groups/team-payments/batch", "id", "team-payments", nil))
+		if w.Code != http.StatusConflict {
+			t.Fatalf("%s: status %d, want 409; body %s", name, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if jerr := json.Unmarshal(w.Body.Bytes(), &body); jerr != nil {
+			t.Fatal(jerr)
+		}
+		if _, ok := body["tenant_id"]; ok || body["error"] != msgTenantFileNotRegular || body["code"] != CodeTenantConfigNotLoadable {
+			t.Errorf("%s: body %s, want %s with msgTenantFileNotRegular and no tenant_id", name, w.Body.String(), CodeTenantConfigNotLoadable)
+		}
+	}
+}
+
+// #3226 review: a dry-run refused because the git config could not be read
+// says so, with the write's fixed text — not the resolver's catch-all.
+func TestDryRunRefusalMessage_GitConfigUnreadable(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w: exit status 128", gitops.ErrGitConfigUnreadable)
+	if got := dryRunRefusalMessage(err, false); got != msgGitConfigUnreadable {
+		t.Errorf("dryRunRefusalMessage = %q, want msgGitConfigUnreadable", got)
 	}
 }

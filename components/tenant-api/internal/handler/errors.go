@@ -276,6 +276,12 @@ func notRegularText(tenantID string) string {
 		"replace it with a regular file in git"
 }
 
+// msgTenantFileNotRegular is notRegularText for an answer that names no
+// tenant (a batch's whole-request answer, #3226).
+const msgTenantFileNotRegular = "a tenant's conf.d file is not a regular file (config_error: " +
+	string(confd.ProblemNotRegularFile) + "), so tenant-api neither reads nor replaces it; " +
+	"replace it with a regular file in git"
+
 // writeTenantFileNotRegular answers a request about a tenant whose conf.d
 // entry is not a regular file (confd.ErrNotRegularFile, #2477). Same code and
 // envelope fields as writeTenantFileNotLoadable, with config_error set to the

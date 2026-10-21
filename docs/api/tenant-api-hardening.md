@@ -116,23 +116,23 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 | `CONFIG_DECODE_ERROR` | 500 | conf.d 設定內容解碼失敗：`/effective` 的 `parse defaults[i]: …`、custom-alerts 寫入時租戶檔內容無法 merge／解析、state store 的 `_groups.yaml`／`_views.yaml` 紀錄無法解析；文字說明哪個項目出錯，不含路徑 |
 | `BASE_RESTORE_FAILED` | 500 | PR 模式寫入後 worktree 回不到 base：列出分支名與是否已推上 origin（不要重試，否則會再推一條分支）；不含底層 git 錯誤 |
 
-### 2.5 每個錯誤回應都是同一種信封，由同一張錯誤種類表決定（[#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226)）
+### 2.5 路由與中介層的錯誤回應也改為 JSON 信封、由錯誤種類表決定（[#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226)）
 
-錯誤回應的 status、`code`、`Retry-After` 標頭與 `retry_after_s` 由同一張表決定，同一種失敗在每個端點答案一致。以下原本不是 JSON 信封，或沒有 `code`，現在都是（`request_id` 照帶）：
+本節所列的出口，status、`code`、`Retry-After` 標頭與 `retry_after_s` 改由錯誤種類表決定（寫入路徑原本就是）；並非每個端點都已如此——仍有 handler 經 `WriteJSONError` 由 status 推出 `code`。以下原本不是 JSON 信封，或沒有 `code`，現在都是（`request_id` 照帶）：
 
 | 情況 | 現在的回應 | 原本 |
 |---|---|---|
 | 沒有符合的路由 | 404 `NOT_FOUND` | 純文字 `404 page not found` |
 | 路由存在但方法不對 | 405 `BAD_REQUEST`，`Allow` 標頭照舊列出可用方法 | 空 body 的 405 |
-| 超過每個請求的期限（30 秒）而 handler 沒回應 | 504 `UPSTREAM_ERROR`，**不帶** `Retry-After`：handler 沒有回應，寫入是否生效不明，重送前先讀一次 | 空 body 的 504 |
-| handler panic | 500 `INTERNAL_ERROR`（固定文字，`request_id` 對得到帶 stack 的 log） | 空 body 的 500 |
+| 超過每個請求的期限（預設 30 秒）而 handler 沒回應 | 504 `UPSTREAM_ERROR`，**不帶** `Retry-After`：handler 沒有回應，寫入是否生效不明，重送前先讀一次 | 空 body 的 504 |
+| handler panic | 還沒回應時：500 `INTERNAL_ERROR`（固定文字，`request_id` 對得到帶 stack 的 log）；回應已開始寫出時：中斷連線，client 讀取會失敗，不會把截斷的回應當成完整 | 空 body 的 500；已開始寫出的回應照樣正常結束 |
 | `GET /api/v1/events` 在關機中 | 503 `UPSTREAM_ERROR`，`Retry-After: 1`（重連到新的 pod） | 純文字 503 |
 | `GET /api/v1/events` 的 writer 不能 flush | 500 `INTERNAL_ERROR`，文字 `streaming not supported` | 純文字 500 |
 | logs federation 未設定（`POST /federation/tokens` 的 `logs` capability、`POST /federation/accounts/backfill`） | 503 `UPSTREAM_ERROR`，不帶 `Retry-After`：是部署設定，重試不會變 | 同（改由種類表決定） |
 
 **批次的逐筆結果**（`results[].code`，含非同步 task 的結果）：`status` 為 `error` 的每一筆都帶 `code`，與同一失敗作為整個請求回應時的 `code` 相同；原本只有少數類別有，其餘是空字串。例如過載是 `WRITE_OVERLOADED`、conflict 是 `CONFLICT`、取消或結果未知是 `UPSTREAM_ERROR`、驗證與 tenant id 錯誤是 `BAD_REQUEST`、沒有權限是 `FORBIDDEN`。同時：base 同步逾時（`FORGE_UNAVAILABLE`）不再當成內部錯誤；批次已 commit 但沒乾淨收尾時，逐筆文字改為「已 commit」那一句，不再是「conflict, retry」；多重包裝的錯誤依同一個順序判斷，逐筆結果與同步回應一致。
 
-**租戶檔不是一般檔案**（FIFO、socket、device）：所有寫入入口一律 409 `TENANT_CONFIG_NOT_LOADABLE`，與 handler 提早拒絕同一個檔時相同（`config_error: not_regular_file`）；原本寫入途中才發現時，直寫回 400 `BAD_REQUEST`、PR 模式與批次回 500。
+**租戶檔不是一般檔案**（FIFO、socket、device）：所有寫入入口一律 409 `TENANT_CONFIG_NOT_LOADABLE`，與 handler 提早拒絕同一個檔時相同（`config_error: not_regular_file`；單一租戶的寫入另帶 `tenant_id`，批次的整體回應不帶租戶、文字固定）；原本寫入途中才發現時，直寫回 400 `BAD_REQUEST`、PR 模式與批次回 500。
 
 ---
 

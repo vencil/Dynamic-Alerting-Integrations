@@ -268,7 +268,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
-		if writePRPutError(rw, r, d, err) {
+		if writePRPutError(rw, r, d, tenantID, err) {
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no
@@ -325,7 +325,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 // base — so the caller answers it 200 no_changes with the write's notices.
 // The order of the checks is the answer's: the fresh-base scope refusals
 // first (#2857), ErrNoChanges before every failure mapping.
-func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
+func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID string, err error) (written bool) {
 	// #2857: the write scope refuses it on the fresh base, or the base's org
 	// file cannot be read; then ErrNoChanges; then the write-flow refusals,
 	// #1724's push failure (503 GIT_PUSH_FAILED, no PR/MR; the deferred
@@ -345,6 +345,7 @@ func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error
 		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.GitPushFailed, errkind.Validation, errkind.BaseRestoreFailed),
 		fallback: fallbackInternal,
 		prefix:   "PR write failed: ",
+		tenantID: tenantID,
 	})
 	return true
 }
