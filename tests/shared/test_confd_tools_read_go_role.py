@@ -56,7 +56,7 @@ def _entry(path, *, role="config", cls="tenant", problem=None, depth=None, reade
             if cls == "tenant" else None,
             "defaults_document": False,
             # A directory is read by no reader (role dir: readers []).
-            "readers": (([] if role == "dir" else ["exporter", "generator"])
+            "readers": (([] if role in ("dir", "unlistable_dir") else ["exporter", "generator"])
                         if readers is None else readers),
             "not_read": not_read, "role": role,
             "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
@@ -530,7 +530,8 @@ def _entry_change(**kv):
     (_entry_change(problem={"kind": "read_failure"}), "problem is not"),
     # m1: Go always says why a path is no file it reads.
     (_entry_change(role="not_a_file", readers=["generator"]), "role not_a_file with no problem"),
-    (_entry_change(role="unlistable_dir", **{"class": "directory"}, tenant_named=None),
+    (_entry_change(role="unlistable_dir", **{"class": "directory"}, tenant_named=None,
+                   readers=[]),
      "role unlistable_dir with no problem"),
     (lambda d: d.update(mode="other"), "mode 'other'"),
     (lambda d: d.update(entries={}), "'entries' missing or not a list"),

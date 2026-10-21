@@ -220,7 +220,7 @@ def unlistable_dir(monkeypatch):
                 out["entries"].append({
                     "path": rel, "depth": 0 if rel == "." else rel.count("/"),
                     "class": "directory", "tenant_named": None, "defaults_document": False,
-                    "readers": ["exporter", "generator"], "not_read": None,
+                    "readers": [], "not_read": None,
                     "role": "unlistable_dir",
                     "problem": {"kind": "read_failure",
                                 "message": "the directory cannot be listed; nothing under "

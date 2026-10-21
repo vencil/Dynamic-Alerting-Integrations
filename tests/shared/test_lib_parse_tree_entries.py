@@ -210,20 +210,23 @@ def test_a_list_document_is_no_tree_document() -> None:
         lpt.read_document(json.dumps(tree).encode(), check=lpt._check_list("list"))
 
 
-def test_a_dir_entry_names_no_reader() -> None:
-    """Role `dir` is read by no reader and passes nothing over: an entry that
-    gives a directory readers, or a not_read reason, is a document from a
-    da-guard this reader does not understand, refused whole."""
+@pytest.mark.parametrize("role, problem", [
+    ("dir", None), ("unlistable_dir", {"kind": "read_failure", "message": "x"})])
+def test_a_dir_entry_names_no_reader(role, problem) -> None:
+    """Roles `dir` and `unlistable_dir` are read by no reader and pass
+    nothing over: an entry that gives a directory readers, or a not_read
+    reason, is a document from a da-guard this reader does not understand,
+    refused whole."""
     import json
     base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
             "defaults_document": False, "readers": [], "not_read": None,
-            "role": "dir", "problem": None}
+            "role": role, "problem": problem}
     doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
            "defaults_carriers": {}}
     listing = lpt.read_document(json.dumps({**doc, "entries": [base]}).encode(),
                                 check=lpt._check_list("list"))
     assert listing["entries"][0]["readers"] == []
     for bad in ({"readers": ["exporter"]}, {"not_read": "unselected_defaults_carrier"}):
-        with pytest.raises(lpt.ParseTreeError, match="a dir with readers"):
+        with pytest.raises(lpt.ParseTreeError, match=f"a {role} with readers"):
             lpt.read_document(json.dumps({**doc, "entries": [{**base, **bad}]}).encode(),
                               check=lpt._check_list("list"))
