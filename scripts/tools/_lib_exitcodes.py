@@ -53,8 +53,9 @@ escape to the top level:
 3. exits with the crash code: EXIT_CALLER_ERROR (2) unless the tool chose
    another one with ``set_crash_exit_code``.
 
-The hook exits via ``sys.exit`` (not ``os._exit``), so atexit handlers run
-and buffered stdout is flushed. An interactive session (``python -i``,
+The hook settles stdout and stderr through ``_finalize_and_exit`` (see
+"stdout lost or failing") and hands the exit back to the interpreter:
+atexit handlers run. An interactive session (``python -i``,
 the REPL) keeps the default hook's behaviour. ``SystemExit`` never reaches it, and
 ``KeyboardInterrupt`` and any other non-``Exception`` base exception are
 handed to the previous hook untouched (Ctrl-C keeps its own exit status).
@@ -135,53 +136,67 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   the ``__cause__`` chain). An exception merely raised while handling one
   (implicit ``__context__``: a bug in that handler, the tool's next error)
   is its own — crash report or named reason, own code — and ``raise ...
-  from None`` cuts the chain; before that own exit, the failed stream is
-  quietly pointed at the null device, so bytes still buffered for it
-  cannot fail the final flush and override that line and code. The same
-  errno from a socket, another fd, or
+  from None`` cuts the chain. The same errno from a socket, another fd, or
   a stderr that ``redirect_stdout`` made ``sys.stdout`` stays the tool's
   own error too.
 * that failure, reaching ``exit_on_crash`` or a ``die_caller_error`` /
   ``exit_caller_error`` called while handling it (a tool's broad handler),
-  and a failure of the final flush made by an atexit hook registered at
-  import, all end the same way: the failed stream's fd is pointed at the
-  null device, stderr gets one line — ``ERROR: stdout was closed before all
+  ends with one line on stderr — ``ERROR: stdout was closed before all
   output was written`` for EPIPE / EBADF / ECONNRESET, ``ERROR: cannot write
-  to stdout: <reason>`` for anything else (ENOSPC, EIO) — and the process
-  exits with the caller-error code (or the ``code=`` given to
-  ``die_caller_error`` / ``exit_caller_error``).
+  to stdout: <reason>`` for anything else (ENOSPC, EIO) — and the
+  caller-error code (or the ``code=`` given to ``die_caller_error`` /
+  ``exit_caller_error``).
+* the library owns the last flush (#3156): ``run()`` — and the module
+  excepthook, for a tool that does not enter through it — flush the stdout
+  this module owns and stderr themselves, decide the code from that, and
+  hand the exit back to the interpreter as ``SystemExit``. A stream that
+  failed is SEALED (``_seal``): its text wrapper, buffer and raw file all
+  get a ``write`` that drops and a ``flush`` that does nothing, so what it
+  still holds is never written — not into the interpreter's last flush (no
+  120), not into a file the tool opened on the same fd number afterwards,
+  not through a second wrapper on the same buffer — while the object stays
+  open: code still holding it (``sys.__stdout__``, a logging handler, a
+  saved reference, a thread) writes as onto the null device. Nothing is
+  redirected, no fd is opened, duplicated or closed, and the process is
+  not ended with ``os._exit``. Which exit wins: the last flush failing
+  makes the exit the stdout-lost one (one line, the caller-error code),
+  over the tool's own status and over a crash; except where the tool's
+  exit was itself raised while handling a failure of that stream (on the
+  exception's ``__cause__`` or ``__context__`` chain): that
+  stream is sealed then, and the tool's line and code stand. A failure the
+  tool caught and swallowed counts only if the last flush fails as well, so
+  the outcome can depend on buffering, as before. A stderr whose reader
+  left loses its lines and nothing else — also the crash report: a crash
+  still ends at the crash code.
 * the wrapping changes nothing a tool can see: same object, buffer, fileno,
   encoding, ``reconfigure``, return values. Measured cost: about 0.4 µs per
   ``print`` (1M lines: 0.57 s → 0.95 s).
-* a stderr whose reader left loses its lines and nothing else: the atexit
-  hook points it at the null device, so it cannot turn the exit code into
-  120 either.
 
-Scope: the import-time tap and the atexit hook apply to EVERY process that
-imports this module — the tools, but also pytest when a test imports a
-tool in-process, and mkdocs builds that load ``check_doc_links``. For such
-a process the only effect is at exit: if the final flush of fd 1 fails it
-ends at the caller-error code with the one line, where it would have
-ended at 120. Its armed state is per process; tests/conftest.py resets
+Scope: the import-time tap and an atexit fallback apply to EVERY process
+that imports this module — the tools, but also pytest when a test imports a
+tool in-process, and mkdocs builds that load ``check_doc_links``. The
+fallback runs last at exit (after whatever ran once ``run()`` handed the
+exit back, or in a process that reaches neither ``run()`` nor the
+excepthook): it flushes stdout and stderr the same way, and when stdout
+fails only THEN — an atexit hook cannot change the status otherwise — it
+leaves with ``os._exit`` at the caller-error code, where the process would
+have ended at 120. Its armed state is per process; tests/conftest.py resets
 all of it after every test (``reset_exit_state``), and ``disarm`` forgets
 the armed stdout, so a test's fake or capture stream is never flushed at
 exit.
 
 Output fully handed to the pipe before the reader left keeps the tool's own
-exit code. A failure the tool caught and swallowed (and then exited
-normally) counts only if the final flush fails as well — so the outcome of
-the same tool can depend on buffering: unbuffered, nothing is left to fail
-at exit; buffered, the leftover bytes fail again. ops/patch_config.py seals its streams itself and keeps
+exit code. ops/patch_config.py seals its streams itself and keeps
 its own codes (#2505). A stdout the SHELL closed before the tool started
 (``tool >&-``) never reaches this: ``sys.stdout`` is None, Python drops the
 output, the exit code is the tool's own and no envelope is printed.
 
-Limits, stated: the atexit hook leaves with ``os._exit`` on the failure
-path only (an atexit handler cannot change the exit status otherwise), so
-atexit handlers registered BEFORE this module was imported, and files the
-tool left open and unflushed, are skipped there; validate_all's process
-pool is shut down by its ``with`` block before exit, so no worker is left
-behind (measured with ``--parallel``). On Windows a write to a pipe whose
+Limits, stated: the fallback's ``os._exit`` (stdout failing only at
+exit) skips the atexit handlers registered BEFORE this module was imported
+— coverage's, which pyproject's ``patch = ["_exit"]`` covers — and what the
+interpreter does after them. A sealed stream still reports its fd:
+``fileno()`` — a child process given ``stdout=sys.stdout`` — reaches
+whatever that fd is now. On Windows a write to a pipe whose
 reader left raises EINVAL rather than EPIPE, so it is named "cannot write
 to stdout: Invalid argument" — still the caller-error code. Writes that do
 not go through ``sys.stdout.write`` / ``flush`` (``sys.stdout.buffer``,
@@ -253,6 +268,7 @@ from __future__ import annotations
 
 import errno
 import functools
+import os
 import sys
 import traceback
 from typing import Any, Callable, Final, NoReturn, Optional, TypeVar, overload
@@ -323,7 +339,8 @@ class CallerError(Exception):
 
 
 def die_caller_error(message: str, reason: Optional[str] = None, *,
-                     code: Optional[int] = None) -> NoReturn:
+                     code: Optional[int] = None,
+                     _exc: Optional[BaseException] = None) -> NoReturn:
     """Print *message* to stderr and exit with the caller-error code.
 
     Convenience for the common "bad invocation / unusable environment"
@@ -333,14 +350,18 @@ def die_caller_error(message: str, reason: Optional[str] = None, *,
     (default ``"caller_error"``) and whose ``error`` is *message* — unless
     the tool already wrote to stdout. *code* overrides the process
     caller-error code (``set_caller_error_code``) for this one exit.
+    *_exc* (private): the exception being handled, where ``sys.exc_info()``
+    is empty (the module excepthook).
     """
-    _exit_if_stdout_lost(sys.exc_info()[1], code=code)
+    exc = sys.exc_info()[1] if _exc is None else _exc
+    _exit_if_stdout_lost(exc, code=code)
     _to_stderr(message)
-    exit_caller_error(message, reason, code=code)
+    exit_caller_error(message, reason, code=code, _exc=exc)
 
 
 def exit_caller_error(error: str, reason: Optional[str] = None, *,
-                      code: Optional[int] = None) -> NoReturn:
+                      code: Optional[int] = None,
+                      _exc: Optional[BaseException] = None) -> NoReturn:
     """``die_caller_error`` for a caller that already printed its own
     stderr lines: only the armed envelope (``error`` = *error*) and the
     exit. Use it when stderr carries more than the one line the envelope
@@ -350,11 +371,11 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
     from — stdout's own recorded write failure (a tool's broad handler
     around the code that prints its report), it leaves by the lost-stdout
     exit instead (#3124): stdout failed, the tool's reason does not apply.
-    *code* is honoured there too."""
-    _exit_if_stdout_lost(sys.exc_info()[1], code=code)
+    *code* is honoured there too. *_exc*: as in ``die_caller_error``."""
+    exc = sys.exc_info()[1] if _exc is None else _exc
+    _exit_if_stdout_lost(exc, code=code)
     _print_armed_envelope(reason or CallerError.reason, error)
-    _quiet_failed_streams(sys.exc_info()[1])
-    _leave(_caller_error_code if code is None else code)
+    _leave(_caller_error_code if code is None else code, exc)
 
 
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
@@ -406,8 +427,11 @@ def report_crash(exc: BaseException) -> None:
         sys.stdout.flush()
     except Exception:  # noqa: BLE001 — a closed/broken stdout must not mask the crash
         pass
-    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
-    print(crash_message(exc), file=sys.stderr, flush=True)
+    try:
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+        print(crash_message(exc), file=sys.stderr, flush=True)
+    except OSError:  # stderr's reader left: the code still says it
+        _seal(sys.stderr)
 
 
 _DocBuilder = Callable[[], dict[str, Any]]
@@ -565,12 +589,24 @@ def reset_exit_state() -> None:
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope
+    held = bool(_stdout_failures) or _lost_envelope is not None or _armed_stdout is not None
     disarm_crash_envelope()
     _stdout_failures.clear()
     _stdout_closed_reported = False
     _lost_envelope = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
+    if held:
+        # A stream only this state kept alive (a test's fake stdout) is in a
+        # reference cycle with its tapped write / flush, so it dies at some
+        # later collection — inside the next test — and its final flush then
+        # records a stdout failure there. Collect it now and forget what that
+        # dying flush recorded.
+        import gc
+        gc.collect()
+        _stdout_failures.clear()
+        _stdout_closed_reported = False
+        _lost_envelope = None
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
@@ -677,11 +713,40 @@ def _print_armed_envelope(reason: str, error: str) -> None:
 _lost_envelope: Optional[tuple[OSError, Any]] = None
 
 
-def _leave(status: Any) -> NoReturn:
-    """Exit with *status* — through the lost-stdout exit when the envelope
-    could not be written, so that is named (once) and *status* kept."""
+def _failures_in_chain(exc: Optional[BaseException]) -> list[Any]:
+    """The streams whose recorded failure is on *exc*'s chain — both links of
+    every exception (``raise X from <unrelated>`` puts stdout's failure on
+    the context chain only), each exception once."""
+    recorded = {id(failed): stream for failed, stream in _stdout_failures}
+    found: dict[int, Any] = {}
+    seen: set[int] = set()
+    stack = [exc] if exc is not None else []
+    while stack:
+        cur = stack.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        if id(cur) in recorded:
+            found[id(recorded[id(cur)])] = recorded[id(cur)]
+        stack.extend(e for e in (cur.__cause__, cur.__context__) if e is not None)
+    return list(found.values())
+
+
+def _cover(streams: Any) -> None:
+    """The exit being taken answers for *streams* — the failure it was
+    raised while handling, or its own: seal them (``_seal``), so their
+    leftover bytes never fail again and the exit's line and code stand."""
+    for stream in streams:
+        _seal(stream)
+
+
+def _leave(status: Any, handled: Optional[BaseException] = None) -> NoReturn:
+    """Exit with *status*, the exit this module decided while handling
+    *handled* — through the lost-stdout exit when the envelope could not be
+    written, so that is named (once) and *status* kept."""
     if _lost_envelope is not None and isinstance(status, int) and not isinstance(status, bool):
-        _exit_stdout_failed(*_lost_envelope, at_exit=False, code=status)
+        _exit_stdout_failed(*_lost_envelope, code=status, handled=handled)
+    _cover(_failures_in_chain(handled))
     sys.exit(status)
 
 
@@ -702,7 +767,7 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     (``raise ... from``) — the lost / failing stdout exit (#3124).
     """
     if isinstance(exc, CallerError):
-        die_caller_error(exc.error_line, exc.reason)
+        die_caller_error(exc.error_line, exc.reason, _exc=exc)
     _exit_if_stdout_lost(exc)
     report_crash(exc)
     try:
@@ -712,8 +777,7 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
         print(f"ERROR: {what} failed:", file=sys.stderr)
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
-    _quiet_failed_streams(exc)
-    _leave(_crash_exit_code if code is None else code)
+    _leave(_crash_exit_code if code is None else code, exc)
 
 
 @overload
@@ -764,7 +828,12 @@ def _crash_excepthook(exc_type, exc, tb) -> None:
         exc = exc_type()
     if exc.__traceback__ is None:
         exc = exc.with_traceback(tb)
-    exit_on_crash(exc)
+    try:
+        exit_on_crash(exc)
+    except SystemExit as done:
+        # The program has already unwound: this is its end. Settle stdout
+        # here, where its failure can still decide the code (#3156).
+        _finalize_and_exit(done.code)
 
 
 # Install only over the interpreter default: a process (or host such as an
@@ -793,6 +862,11 @@ def run(entry: Callable[[], Any]) -> NoReturn:
       printed when not armed (no ``--json``) or when the tool already
       wrote to stdout itself.
 
+    The exit then goes through ``_finalize_and_exit``: the last flush of
+    stdout and stderr is made there and decides the code; failed streams
+    are sealed, and the exit goes back to the interpreter as
+    ``SystemExit``, with nothing left that could turn it into 120.
+
     Gate: tests/shared/test_single_exit_path.py (every tool that calls
     ``arm_crash_envelope`` enters through here).
     """
@@ -801,11 +875,14 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     except SystemExit as exc:
         status = exc.code
     except Exception as exc:  # noqa: BLE001 — that is the point
-        exit_on_crash(exc)
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            status = done.code
     if (isinstance(status, int) and not isinstance(status, bool)
             and status == _caller_error_code):
         _print_armed_envelope(CallerError.reason, _last_stderr_line())
-    _leave(status)
+    _finalize_and_exit(status)
 
 
 # ── stdout lost or failing (#3124) ─────────────────────────────────────
@@ -813,9 +890,9 @@ def run(entry: Callable[[], Any]) -> NoReturn:
 # The reader closed the pipe (`tool | head -c1`), fd 1 was closed during the
 # run, or stdout cannot be written (a full disk): left alone, a write raised
 # mid-run reads as an "unexpected internal error", and the interpreter's
-# last flush turns any exit code into 120. Both now end here — stdout
-# pointed at the null device, one line on stderr, the caller-error code —
-# and ONLY when stdout itself failed: the stdout tap records the failure,
+# last flush turns any exit code into 120. Both now end here — what is
+# still buffered for the failed stream dropped, one line on stderr, the
+# caller-error code — and ONLY when stdout itself failed: the stdout tap records the failure,
 # so the same errno from a socket, another fd or a redirected stderr is the
 # tool's own error, whatever state stdout is in.
 
@@ -845,85 +922,171 @@ def _recorded_stdout_failure(exc: Optional[BaseException]) -> Optional[tuple[OSE
     return None
 
 
-def _quiet_failed_streams(exc: Optional[BaseException]) -> None:
-    """The tool leaves with its OWN exit (its crash, its caller error) for
-    *exc*, an error raised while handling stdout's failure (that failure is
-    in its implicit ``__context__`` chain): point the failed stream at the
-    null device, so bytes still buffered for it cannot fail the final flush
-    again and replace the tool's line and code with the stdout ones."""
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        for failed, stream in _stdout_failures:
-            if failed is exc:
-                _point_at_null(stream)
-        exc = exc.__cause__ or exc.__context__
-
-
 def _exit_if_stdout_lost(exc: Optional[BaseException], *, code: Optional[int] = None) -> None:
     """Leave by the lost-stdout exit when *exc* is stdout's recorded failure."""
     found = _recorded_stdout_failure(exc)
     if found is not None:
-        _exit_stdout_failed(*found, at_exit=False, code=code)
+        _exit_stdout_failed(*found, code=code, handled=exc)
 
 
-def _point_at_null(stream: Any) -> None:
-    """Point *stream*'s fd at the null device, so what is still buffered for
-    it cannot fail again. A stream without a real fd is left alone."""
-    import os
-    try:
-        fd = stream.fileno()
-        null = os.open(os.devnull, os.O_WRONLY)
-        try:
-            os.dup2(null, fd)
-        finally:
-            os.close(null)
-    except (AttributeError, OSError, ValueError):
-        pass
-
-
-def _exit_stdout_failed(exc: OSError, stream: Any, *, at_exit: bool,
-                        code: Optional[int] = None) -> NoReturn:
+def _report_stdout_failed(exc: OSError) -> None:
+    """The one stderr line naming stdout's failure — once per process."""
     global _stdout_closed_reported, _crash_envelope_armed
     _crash_envelope_armed = None  # no stdout to put it on
-    import os
-    _point_at_null(stream)  # the stream that FAILED — never whatever sys.stdout is now
     if not _stdout_closed_reported:
         _stdout_closed_reported = True
         _to_stderr(STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS
                    else f"ERROR: cannot write to stdout: {exc.strerror or exc}")
-    status = _caller_error_code if code is None else code
-    if at_exit:
-        # atexit cannot change the exit status by raising; this runs last.
-        os._exit(status)
-    sys.exit(status)
 
 
-def _flush_stdout_at_exit() -> None:
-    """The final flush of stdout — the original one (fd 1) and the armed one
-    if that is another object — through the tap, so a failure is recorded
-    and named like a mid-run one."""
-    # The armed stdout only while it is still armed: a stale one (a test's
-    # fake or capture stream, already disarmed) is nobody's stdout.
+def _exit_stdout_failed(exc: OSError, stream: Any, *, code: Optional[int] = None,
+                        handled: Optional[BaseException] = None) -> NoReturn:
+    """The lost-stdout exit: one line, the caller-error code (or *code*)."""
+    _report_stdout_failed(exc)
+    _cover([stream, *_failures_in_chain(handled)])
+    sys.exit(_caller_error_code if code is None else code)
+
+
+def _discard_write(data: Any) -> int:
+    return len(data)
+
+
+def _discard_flush() -> None:
+    return None
+
+
+def _seal(stream: Any) -> None:
+    """Make *stream* — a stdout or stderr that failed — accept writes and
+    drop them, at every layer: the text wrapper, its buffer and the raw
+    file under it get a ``write`` that drops and a ``flush`` that does
+    nothing (instance attributes, which every caller — ``print``, the C
+    code of a second wrapper on the same buffer, ``close``, the
+    interpreter's last flush — reaches by method lookup).
+
+    So what is still buffered for it is never written: not into the
+    interpreter's last flush (no 120), not into a file the tool opened on
+    the same fd number afterwards, not through a second wrapper. And the
+    object stays open and usable: code still holding it (``sys.__stdout__``,
+    a logging handler, a ``redirect_stdout`` restoring it, a saved
+    reference, a thread) writes as onto the null device — without opening
+    one, without touching any fd. A layer that refuses attributes (a C
+    object of another kind) is left as it is.
+    """
+    seen: set[int] = set()
+    obj = stream
+    while obj is not None and id(obj) not in seen:
+        seen.add(id(obj))
+        try:
+            obj.write = _discard_write
+            obj.flush = _discard_flush
+            obj._da_sealed = True
+        except (AttributeError, TypeError):
+            pass
+        try:
+            obj = getattr(obj, "buffer", None) or getattr(obj, "raw", None)
+        except ValueError:  # a detached wrapper
+            break
+
+
+def _exit_status(status: Any) -> int:
+    """*status* as the int ``sys.exit(status)`` would end the process with:
+    None → 0, an int as is, anything else → 1."""
+    if status is None:
+        return 0
+    if isinstance(status, int):
+        return int(status) & 0xFF
+    return 1
+
+
+def _owned_stdouts() -> list[Any]:
+    """The stdout objects this module answers for: the original one (fd 1)
+    and the armed one, while it is armed (a stale one — a test's fake or
+    capture stream, already disarmed — is nobody's stdout)."""
     armed = _armed_stdout if _crash_envelope_armed is not None else None
-    streams = {id(s): s for s in (sys.__stdout__, armed) if s is not None}
-    for out in streams.values():
+    return list({id(s): s for s in (sys.__stdout__, armed) if s is not None}.values())
+
+
+def _flush_owned_stdouts() -> Optional[tuple[OSError, Any]]:
+    """The last flush of the owned stdouts (a sealed one flushes to
+    nothing). Returns this flush's failure (recorded, as any), or None."""
+    lost = None
+    for out in _owned_stdouts():
         if getattr(out, "closed", False):
             continue
         try:
             out.flush()
         except OSError as exc:
-            _exit_stdout_failed(exc, out, at_exit=True)
+            if _recorded_stdout_failure(exc) is None:
+                _record_stdout_failure(exc, out)
+            lost = (exc, out)
         except ValueError:
             pass
-    # A stderr whose reader left loses its lines — nothing else: without
-    # this, the interpreter's own last flush of it would turn the exit code
-    # into 120 (the stdout question is not asked of stderr).
-    for err in {id(s): s for s in (sys.stderr, sys.__stderr__) if s is not None}.values():
+    return lost
+
+
+def _stdout_lost_code(code: int, lost: Optional[tuple[OSError, Any]]) -> int:
+    """The status to leave with, given *lost* — the last flush's failure:
+    the stdout-lost exit's (one line, the caller-error code) when that flush
+    failed, or *code* (kept) when the envelope could not be written; else
+    *code*. A lost exit already taken keeps its own code."""
+    if _stdout_closed_reported:
+        return code
+    if lost is not None:
+        _report_stdout_failed(lost[0])
+        return _caller_error_code
+    if _lost_envelope is not None:
+        _report_stdout_failed(_lost_envelope[0])
+    return code
+
+
+def _flush_stderr() -> None:
+    """Flush stderr; one that fails (its reader left) is sealed: it loses
+    its lines and nothing else — it cannot turn the status into 120."""
+    for err in {id(e): e for e in (sys.stderr, sys.__stderr__) if e is not None}.values():
         try:
             err.flush()
-        except (OSError, ValueError):
-            _point_at_null(err)
+        except OSError:
+            _seal(err)
+        except ValueError:  # closed: nothing left in it to fail
+            pass
+
+
+def _finalize_and_exit(status: Any) -> NoReturn:
+    """End ``run()`` (and the excepthook) with *status*, as ``sys.exit``
+    takes it: the last flush of stdout happens HERE, so its failure is
+    named and decides the code by the rule in the module doc; every failed
+    stream is sealed and stderr flushed, so the interpreter's own shutdown —
+    which the exit is handed back to, as ``SystemExit`` — has nothing left
+    that could fail."""
+    lost = _flush_owned_stdouts()
+    code = _stdout_lost_code(_exit_status(status), lost)
+    if lost is not None:
+        _seal(lost[1])
+    if lost is not None or code != _exit_status(status):
+        if status is not None and not isinstance(status, int):
+            _to_stderr(str(status))  # what `sys.exit("msg")` prints, kept
+        _flush_stderr()
+        raise SystemExit(code)
+    _flush_stderr()
+    raise SystemExit(status)
+
+
+def _flush_stdout_at_exit() -> None:
+    """Fallback, at exit, for whatever ran after ``run()`` handed the exit
+    back (atexit handlers) and for a process that reaches neither ``run()``
+    nor the excepthook: the final flush of the owned stdouts, through the
+    tap, and of stderr. A stdout failing NOW makes the exit the stdout-lost
+    one — and an atexit hook cannot change the status otherwise, so it
+    leaves with ``os._exit``. Anything else goes back to the interpreter
+    with the status the process already has."""
+    lost = _flush_owned_stdouts()
+    _flush_stderr()
+    if lost is None:
+        return
+    code = _stdout_lost_code(_caller_error_code, lost)
+    _seal(lost[1])
+    _flush_stderr()
+    os._exit(code)
 
 
 # Registered at import, before any tool code can register its own, so it
