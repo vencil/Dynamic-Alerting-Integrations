@@ -1,12 +1,6 @@
 # Custom Alerts example — TENANT leaf under finance/ (tenant `pay-a`).
-# The exporter serves pay-a only its own recipe below: finance/_defaults.yaml's
-# ratio is not served (no subtree inheritance, ADR-024 §3).
+# pay-a writes no _custom_alerts, so the exporter serves it the `finance`
+# profile's list (payment_failure_ratio, root _profiles.yaml).
 tenants:
   pay-a:
-    _custom_alerts:
-      - recipe: threshold
-        name: pending_settlements_high
-        metric: pending_settlements
-        op: ">"
-        window: 5m
-        threshold: "500:critical"
+    _profile: finance
