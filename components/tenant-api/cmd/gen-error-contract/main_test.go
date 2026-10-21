@@ -37,10 +37,11 @@ func TestBuild_OneMeaningPerCode(t *testing.T) {
 	}
 }
 
-// TestBuild_Shapes: what one code's entry is built from — "depends" when its
-// kinds disagree, statuses and kinds sorted and unique, retry_after_s only
-// when every kind has the same one, a code no kind answers judged by its
-// remedy, and a kind with an unlisted code refused.
+// TestBuild_Shapes: what one code's entry is built from — retryable read from
+// the remedy, statuses and kinds sorted and unique, retry_after_s only when
+// every kind has the same one, and refused: a kind with an unlisted code, and
+// a kind whose Retryable disagrees with its code's remedy (one code, two
+// meanings — the contract has no "depends").
 func TestBuild_Shapes(t *testing.T) {
 	t.Parallel()
 	codes := []errcode.Spec{
@@ -51,7 +52,7 @@ func TestBuild_Shapes(t *testing.T) {
 	}
 	kinds := []handler.KindSpec{
 		{Kind: "k2", Status: 503, Code: "B_MIXED", Retryable: true, RetryAfterS: 5},
-		{Kind: "k1", Status: 502, Code: "B_MIXED", RetryAfterS: 5},
+		{Kind: "k1", Status: 502, Code: "B_MIXED", Retryable: true, RetryAfterS: 5},
 		{Kind: "k3", Status: 429, Code: "A_SAME", Retryable: true, RetryAfterS: 7},
 		{Kind: "k4", Status: 429, Code: "A_SAME", Retryable: true, RetryAfterS: 7},
 		{Kind: errkind.NoChanges, Status: 200},
@@ -69,7 +70,7 @@ func TestBuild_Shapes(t *testing.T) {
 	if !slices.IsSorted(order) {
 		t.Errorf("codes not sorted: %v", order)
 	}
-	if e := got["B_MIXED"]; e.Retryable != retryDepends || !slices.Equal(e.Statuses, []int{502, 503}) ||
+	if e := got["B_MIXED"]; e.Retryable != retryAlways || !slices.Equal(e.Statuses, []int{502, 503}) ||
 		!slices.Equal(e.Kinds, []string{"k1", "k2"}) || e.RetryAfterS == nil || *e.RetryAfterS != 5 {
 		t.Errorf("B_MIXED = %+v", e)
 	}
@@ -88,6 +89,10 @@ func TestBuild_Shapes(t *testing.T) {
 	}
 	if _, err := build(codes, append(kinds, handler.KindSpec{Kind: "k9", Status: 500, Code: "NOT_LISTED"}), nil); err == nil {
 		t.Error("a kind with a code errcode does not list was accepted")
+	}
+	kinds[1].Retryable = false
+	if _, err := build(codes, kinds, nil); err == nil || !strings.Contains(err.Error(), "kind k1") {
+		t.Errorf("a kind whose retryable contradicts its remedy: err %v, want one naming kind k1", err)
 	}
 }
 

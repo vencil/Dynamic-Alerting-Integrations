@@ -168,7 +168,7 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 | `existing` | 已經有東西擋著（已開的 PR/MR、租戶已持有的 token），處理那一個 |
 | `refresh` | 寫入可能（或已經）生效：先重新讀取確認，不要直接重送 |
 
-**單一來源**：所有 `code` 寫在 tenant-api 的 `internal/errcode`（handler、RBAC 中介層、產生器 client、非同步 task 都從這裡取，不再各自抄字串）。OpenAPI 的 `ErrorResponse.code` 因此成為列舉（`ErrorCode`）。契約檔 `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json`（供 portal 讀取；portal 端尚未接上）由 `make error-contract` 從同一份表、錯誤種類表，以及 handler／中介層直接寫出的回應（掃描原始碼取得；status 或 code 不是字面常數的寫法會讓產生器直接失敗）產生，逐碼列出 `remedy`、`retryable`（`always`／`never`）、會出現的 status、預設的 `retry_after_s` 與對應的錯誤種類；`make error-contract-check`、pre-commit 與 CI 擋漂移。`SIMULATE_NOT_PROVIDED` 不在其中：那是 portal 部署自己的 nginx 501，不是 tenant-api 發出的。
+**單一來源**：所有 `code` 寫在 tenant-api 的 `internal/errcode`（handler、RBAC 中介層、產生器 client、非同步 task 都從這裡取，不再各自抄字串）。OpenAPI 的 `ErrorResponse.code` 因此成為列舉（`ErrorCode`）。契約檔 `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json`（portal 經 `_common/api/classify-error.js` 讀取，依碼的 `remedy` 決定顯示的訊息；缺少或不在契約內的碼當作未知，不套用任何處理方式的文案：有伺服器訊息就顯示它，沒有才顯示通用訊息）由 `make error-contract` 從同一份表、錯誤種類表，以及 handler／中介層直接寫出的回應（掃描原始碼取得；status 或 code 不是字面常數的寫法會讓產生器直接失敗。這道 fail-closed 只涵蓋經 `errcode` 常數、且經已列出的寫入函式寫出的回應：沒有 `code` 的回應（`http.Error`、`WriteHeader` 加 `Write`）與用字串字面量寫的 code 都不在契約內，portal 會把它們當作未知）產生，逐碼列出 `remedy`、`retryable`（`always`／`never`）、會出現的 status、預設的 `retry_after_s` 與對應的錯誤種類；`make error-contract-check`、pre-commit 與 CI 擋漂移。`SIMULATE_NOT_PROVIDED` 不在其中：那是 portal 部署自己的 nginx 501，不是 tenant-api 發出的。
 
 ---
 

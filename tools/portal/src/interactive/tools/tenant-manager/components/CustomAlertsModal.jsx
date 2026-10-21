@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import RecipeBuilder from '../../recipe-builder.jsx';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
+import { ERROR_CODES, classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -31,6 +32,13 @@ const t = window.__t || ((zh, en) => en);
  * (a caller without write permission: custom_alerts masked) lists the
  * recipes read-only — no edit, delete, add or save (a save would only be
  * refused, and there is no base_hash to send).
+ *
+ * #3202: a refused save is read by its code's remedy (the generated
+ * tenant-api contract, _common/api/classify-error.js), not by its status.
+ * Only code CONFLICT WITH a current_source_hash is the
+ * Reef 6 base_hash race; a fix-in-git 409 (TENANT_DECLARED_ELSEWHERE,
+ * TENANT_TREE_UNREADABLE, TENANT_FILE_AMBIGUOUS, ...) says so and offers no
+ * retry, and a missing or unknown code gets a generic message.
  * ─────────────────────────────────────────────────────────────────── */
 
 function defaultFetchTenant(tenantId) {
@@ -43,7 +51,10 @@ function defaultSaveCustomAlerts(tenantId, payload) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }).then((r) => r.json().catch(() => ({})).then((data) => ({ ok: r.ok, status: r.status, data })));
+  }).then((r) => r.json().catch(() => ({})).then((data) => ({
+    ok: r.ok, status: r.status, data,
+    retryAfter: r.headers && r.headers.get ? r.headers.get('Retry-After') : null,
+  })));
 }
 
 function summarizeRecipe(rec) {
@@ -86,6 +97,10 @@ function CustomAlertsModal(props) {
   // #1535: a save answered 409 TENANT_FILE_DIRTY ({ error }) — the tenant
   // file has uncommitted changes in the server's repository.
   const [fileDirtySave, setFileDirtySave] = useState(null);
+  // #3202: any other refused save ({ remedy, message }) — the message is the
+  // remedy's text from the shared table (plus the backend's), never the
+  // Reef 6 "refresh and retry" unless the remedy is refresh_retry.
+  const [saveError, setSaveError] = useState(null);
   // #3064: an API-managed tenant read without source_hash (no write
   // permission): the list is shown, nothing in it can be changed.
   const [readOnlyList, setReadOnlyList] = useState(false);
@@ -198,6 +213,7 @@ function CustomAlertsModal(props) {
     setNotLoadable(null);
     setGitManagedSave(null);
     setFileDirtySave(null);
+    setSaveError(null);
     setWarnings([]);
     saveCustomAlerts(tenantId, { custom_alerts: recipes, base_hash: baseHash })
       .then((res) => {
@@ -212,38 +228,49 @@ function CustomAlertsModal(props) {
           setWarnings(Array.isArray(res.data && res.data.warnings) ? res.data.warnings : []);
           return;
         }
-        if (res.status === 409 && res.data && res.data.code === 'TENANT_GIT_MANAGED') {
+        const data = (res.data && typeof res.data === 'object') ? res.data : {};
+        const classified = classifyApiError(res.status, data, { retryAfter: res.retryAfter });
+        if (classified.code === ERROR_CODES.TENANT_GIT_MANAGED) {
           // #3064: the file became git-managed (e.g. shared with another
           // tenant) — not a concurrent edit: a retry cannot succeed. Keep
           // the user's work, like Reef 6.
-          setGitManagedSave({ error: res.data.error || '', reason: res.data.git_managed_reason || '' });
+          setGitManagedSave({ error: data.error || '', reason: data.git_managed_reason || '' });
           return;
         }
-        if (res.status === 409 && res.data && res.data.code === 'TENANT_FILE_DIRTY') {
+        if (classified.code === ERROR_CODES.TENANT_FILE_DIRTY) {
           // #1535: the tenant file was changed in the repository outside
           // tenant-api and not committed — not a concurrent edit: a refresh
           // and retry fails the same way until someone commits or discards
           // it. Show the backend's text; keep the user's work, like Reef 6.
-          setFileDirtySave({ error: res.data.error || '' });
+          setFileDirtySave({ error: data.error || '' });
           return;
         }
-        if (res.status === 409 && res.data && res.data.code === 'TENANT_CONFIG_NOT_LOADABLE') {
+        if (classified.code === ERROR_CODES.TENANT_CONFIG_NOT_LOADABLE) {
           // #2406: the tenant file itself is broken — not a concurrent edit.
           // Show the backend's reason (it owns the repair wording); keep the
           // user's work, like Reef 6.
-          setNotLoadable({ error: res.data.error || '', configError: res.data.config_error || '' });
+          setNotLoadable({ error: data.error || '', configError: data.config_error || '' });
           return;
         }
-        if (res.status === 409) {
+        if (classified.code === ERROR_CODES.CONFLICT && data.current_source_hash) {
           // Reef 6: NON-DESTRUCTIVE — keep the user's work, don't reload.
-          setConflict({ currentHash: res.data && res.data.current_source_hash });
+          // Only a CONFLICT that names the current hash is the base_hash
+          // race — matched by code, not by remedy, so a future code that
+          // also says refresh_retry does not open this box.
+          setConflict({ currentHash: data.current_source_hash });
           return;
         }
         if (res.status === 400) {
-          setViolations((res.data && res.data.violations) || [{ reason: (res.data && res.data.error) || 'invalid' }]);
+          setViolations(data.violations || [{ reason: data.error || 'invalid' }]);
           return;
         }
-        setNotice(t('儲存失敗：', 'Save failed: ') + ((res.data && res.data.error) || res.status));
+        // #3202: everything else — fix-in-git 409s, unknown codes, 5xx —
+        // gets its remedy's message; the user's work is kept.
+        setSaveError({
+          remedy: classified.remedy,
+          message: apiErrorMessage(classified, data.error),
+          detail: `HTTP ${res.status}` + (classified.code ? ` · ${classified.code}` : ''),
+        });
       })
       .catch((e) => { if (liveRef.current) { setIsSubmitting(false); setNotice(t('網路錯誤', 'network error') + ': ' + e); } });
   }
@@ -368,6 +395,18 @@ function CustomAlertsModal(props) {
                   'Write refused: this tenant\'s config file cannot be loaded as a tenant config, so refreshing and retrying will not help. Your edits are kept.')}
               </p>
               <p className="text-xs mt-1">{notLoadable.error || ('config_error: ' + notLoadable.configError)}</p>
+              <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
+                onClick={() => copy(JSON.stringify(recipes, null, 2))}>
+                {t('複製目前 recipe 備份', 'Copy current recipes')}
+              </button>
+            </div>
+          )}
+
+          {saveError && (
+            <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="save-error" data-remedy={saveError.remedy}>
+              <p className="text-sm">{saveError.message}</p>
+              <p className="text-sm mt-1">{t('你的編輯已保留。', 'Your edits are kept.')}</p>
+              <p className="text-xs mt-1 font-mono">{saveError.detail}</p>
               <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
                 onClick={() => copy(JSON.stringify(recipes, null, 2))}>
                 {t('複製目前 recipe 備份', 'Copy current recipes')}

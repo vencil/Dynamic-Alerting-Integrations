@@ -14,6 +14,12 @@ package main
 // code cannot be missed silently. A function that only forwards its own
 // parameters (forwarders) is listed by name, and a listed name that no
 // longer exists is an error too.
+//
+// ⚠️ The boundary of that guarantee: it covers the answers written with an
+// errcode constant through the writers recognized here. An answer that
+// carries no code at all (http.Error, WriteHeader followed by Write) and a
+// code written as a string literal are outside the contract — nothing here
+// sees them, and the portal classifies them as unknown (a generic message).
 
 import (
 	"errors"

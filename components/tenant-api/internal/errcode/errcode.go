@@ -10,8 +10,8 @@
 // a resend may succeed, and that this agrees with the code's Remedy. A
 // failure that needs another remedy gets another code.
 //
-// The client contract (tools/portal/.../data/tenant-api-errors.json), for the
-// portal to read (wired in #3202 PR-2), is generated from this table, the
+// The client contract (tools/portal/.../data/tenant-api-errors.json), which
+// the portal reads through _common/api/classify-error.js, is generated from this table, the
 // kind table and the answers handlers write directly by cmd/gen-error-contract
 // (`make error-contract`); the OpenAPI ErrorResponse.code enum is this
 // package's constants (swag reads them).
@@ -395,7 +395,7 @@ var codeTable = []Spec{
 	{TenantStoreFault, RemedyOperator},
 	{MaskedPreviewUnavailable, RemedyPermission},
 	{TenantGitManaged, RemedyFixInRepo},
-	{TenantFileDirty, RemedyOperator},
+	{TenantFileDirty, RemedyFixInRepo},
 	{GeneratorFindings, RemedyFixRequest},
 	{GeneratorRejected, RemedyFixRequest},
 	{GeneratorBusy, RemedyRetryAfter},
