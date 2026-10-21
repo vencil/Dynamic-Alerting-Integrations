@@ -381,13 +381,17 @@ class CustomAlertEntry(NamedTuple):
     selectors / selectors_re string maps, group_by strings, min_events an int
     when written as one). `status` is one of `CUSTOM_ALERT_STATUSES`;
     `recipe_id` and `severities` are set for a served or disabled entry,
-    `reason` for a rejected or duplicate one."""
+    `reason` for a rejected or duplicate one. `refused` (#3209) is set only
+    on a rejected entry the exporter rejects for its `threshold:` — one of
+    `SERVED_KEY_REFUSALS`, as Go wrote it; da-guard reports that entry as
+    `value_not_served`."""
     index: int
     spec: dict[str, Any]
     status: str
     reason: str | None = None
     recipe_id: str | None = None
     severities: tuple[str, ...] = ()
+    refused: str | None = None
 
 
 #: The closed set of served-values' `custom_alerts[*].status`.
@@ -936,8 +940,9 @@ def load_served_tree(
 
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
-    """One `custom_alerts` entry, checked: a status from the closed set, and
-    a recipe_id with severities exactly when it is served or disabled."""
+    """One `custom_alerts` entry, checked: a status from the closed set, a
+    recipe_id with severities exactly when it is served or disabled, and a
+    `refused` from the closed set only on a rejected entry."""
     status = e["status"]
     if status not in CUSTOM_ALERT_STATUSES:
         raise ValueError(f"custom_alerts status {status!r}")
@@ -947,7 +952,11 @@ def _custom_alert_entry(e: Any) -> CustomAlertEntry:
     rid, sevs = e.get("recipe_id"), tuple(e.get("severities") or ())
     if (status in ("served", "disabled")) != bool(rid and sevs):
         raise ValueError(f"custom_alerts entry {index} is {status} with recipe_id {rid!r}, severities {sevs!r}")
-    return CustomAlertEntry(index, dict(spec), status, e.get("reason"), rid, tuple(str(s) for s in sevs))
+    refused = e.get("refused")
+    if refused is not None and (refused not in SERVED_KEY_REFUSALS or status != "rejected"):
+        raise ValueError(f"custom_alerts entry {index} is {status} with refused {refused!r}")
+    return CustomAlertEntry(index, dict(spec), status, e.get("reason"), rid, tuple(str(s) for s in sevs),
+                            refused)
 
 
 def _served_key(e: Any) -> ServedKey:

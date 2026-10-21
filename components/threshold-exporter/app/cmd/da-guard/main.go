@@ -565,6 +565,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ScheduleNulls: scoped.ScheduleNulls,
 		// #2065: the effective configs' not_served, in-scope tenants only.
 		ValuesNotServed: notServed,
+		// #3209: custom alerts whose threshold the exporter refuses — the
+		// same value_not_served as a refused threshold row.
+		CustomAlertsRefused: customAlertsRefused(scoped),
 		// #2031: the exporter's own build drops these entries.
 		CustomAlertDuplicates: customAlertDuplicates(scoped),
 		CustomAlertsOverCap:   customAlertsOverCap(scoped),
@@ -622,6 +625,35 @@ func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.Cus
 				out = map[string][]config.CustomAlertDuplicate{}
 			}
 			out[ec.TenantID] = d
+		}
+	}
+	return out
+}
+
+// customAlertsRefused is guard.CheckInput.CustomAlertsRefused: for each
+// in-scope tenant, the `_custom_alerts` entries of the exporter's own build
+// it rejects for their `threshold:` (config.CustomAlertEntries, Refused set;
+// #3209). nil when none. No file is named: ScopeEffective attributes no key
+// to a layer (EffectiveConfig.KeySources is nil there), and a profile or a
+// root platform file may supply the list.
+func customAlertsRefused(scoped *config.ScopedTenants) map[string][]guard.RefusedCustomAlert {
+	if scoped.Config == nil {
+		return nil
+	}
+	var out map[string][]guard.RefusedCustomAlert
+	for _, ec := range scoped.Tenants {
+		entries, _ := config.CustomAlertEntries(ec.TenantID, scoped.Config.Tenants[ec.TenantID])
+		for _, e := range entries {
+			if e.Refused == "" {
+				continue
+			}
+			if out == nil {
+				out = map[string][]guard.RefusedCustomAlert{}
+			}
+			out[ec.TenantID] = append(out[ec.TenantID], guard.RefusedCustomAlert{
+				Index: e.Index, Name: e.Spec.Name, Threshold: e.Spec.Threshold,
+				Refused: e.Refused, Reason: e.Reason,
+			})
 		}
 	}
 	return out

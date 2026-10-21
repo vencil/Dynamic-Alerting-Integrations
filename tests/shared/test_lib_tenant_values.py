@@ -861,10 +861,31 @@ def test_custom_alerts_are_read_entry_by_entry(tmp_path, da_guard):
     assert tree.tenants["tb"].custom_alerts == () and tree.tenants["tb"].custom_alerts_error
 
 
+def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da_guard):
+    """#3209：exporter 因 `threshold:` 拒收的條目帶 Go 寫的 `refused`（non_finite／unparsed）；
+    因其他欄位拒收的、停用的、送出的都沒有。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "a.yaml": "tenants:\n  ta:\n    _custom_alerts:\n"
+                  "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
+                  "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: abc}\n"
+                  "      - {recipe: threshold, name: c, metric: m3, op: '>', window: 5x, threshold: '80'}\n"
+                  "      - {recipe: threshold, name: d, metric: m4, op: '>', window: 5m, threshold: disable}\n"
+                  "      - {recipe: threshold, name: e, metric: m5, op: '>', window: 5m, threshold: '80'}\n",
+    })
+    ta = tv.load_served_tree(conf_d, binary=da_guard).tenants["ta"].custom_alerts
+    assert [(e.status, e.refused) for e in ta] == [
+        ("rejected", "non_finite"), ("rejected", "unparsed"), ("rejected", None),
+        ("disabled", None), ("served", None)]
+
+
 @pytest.mark.parametrize("entry, why", [
     ('{"index": 0, "spec": {}, "status": "bogus"}', "status"),
     ('{"index": 0, "spec": {}, "status": "served"}', "recipe_id"),
-], ids=["unknown-status", "served-without-recipe-id"])
+    ('{"index": 0, "spec": {}, "status": "rejected", "refused": "bogus"}', "refused"),
+    ('{"index": 0, "spec": {}, "status": "disabled", "recipe_id": "r", "severities": ["warning"], '
+     '"refused": "unparsed"}', "refused"),
+], ids=["unknown-status", "served-without-recipe-id", "unknown-refused", "refused-not-rejected"])
 def test_a_custom_alert_entry_not_of_its_shape_is_refused(tmp_path, entry, why):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
                                    '"unreadable": [], "aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '

@@ -220,6 +220,12 @@ type servedCustomAlert struct {
 	// serves (would serve, switched back on), in row order.
 	RecipeID   string   `json:"recipe_id,omitempty"`
 	Severities []string `json:"severities,omitempty"`
+	// Refused (#3209), on a rejected entry only: the exporter rejects it
+	// because it refuses its `threshold:` as a threshold value —
+	// "non_finite" or "unparsed" (config.CustomAlertEntry.Refused), the
+	// classes keys[].refused uses. da-guard reports such an entry as
+	// value_not_served. Absent for any other rejection.
+	Refused string `json:"refused,omitempty"`
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -728,7 +734,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		tv.CustomAlerts, tv.CustomAlertsError = make([]servedCustomAlert, 0, len(entries)), blockErr
 		for _, e := range entries {
 			tv.CustomAlerts = append(tv.CustomAlerts, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
-				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities})
+				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities,
+				Refused: e.Refused})
 		}
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)

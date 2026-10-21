@@ -35,6 +35,23 @@ import (
 // the entry is valid but emits no series (not a parse error → no error gauge).
 var errCustomAlertDisabled = errors.New("custom alert disabled")
 
+// customAlertThresholdRefusal is resolveOneCustomAlert's error for a
+// `threshold:` the threshold rows' grammar refuses (#3209): a `:<severity>`
+// other than warning / critical, or a value half parseThresholdNumber does
+// not read — refused is RefusedNonFinite (NaN, ±Inf) or RefusedUnparsed
+// (`abc`, `70:high`, `1e999`), the classes RefusedValueAt gives a threshold
+// key. The text is the wrapped error's, unchanged. The walk copies refused
+// into CustomAlertEntry.Refused, which da-guard reports as the threshold
+// rows' value_not_served and served-values writes as custom_alerts[].refused.
+// A rejection for any other field (window, name, recipe …) is not one.
+type customAlertThresholdRefusal struct {
+	refused string
+	err     error
+}
+
+func (e *customAlertThresholdRefusal) Error() string { return e.err.Error() }
+func (e *customAlertThresholdRefusal) Unwrap() error { return e.err }
+
 // forecastCurrentBand mirrors _FORECAST_CURRENT_BAND in
 // scripts/tools/dx/custom_alerts/shape.py. The compiler gates a ratio-mode forecast
 // on `custom:fcbase < band` (a current-state sanity floor), so a threshold >= band is
@@ -718,7 +735,7 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	}
 	valueStr, severity, err := parseCustomAlertThreshold(spec.Threshold)
 	if err != nil {
-		return nil, err
+		return nil, &customAlertThresholdRefusal{refused: RefusedUnparsed, err: err}
 	}
 	// Three-state: `threshold: "disable"` (schema-valid thresholdScalar) turns the
 	// custom alert OFF by emitting NO user_threshold series — the vectorized rule
@@ -735,9 +752,11 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	value, ok := parseThresholdNumber(valueStr)
 	if !ok {
 		if _, err := strconv.ParseFloat(valueStr, 64); err != nil {
-			return nil, fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)
+			return nil, &customAlertThresholdRefusal{refused: RefusedUnparsed,
+				err: fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)}
 		}
-		return nil, fmt.Errorf("threshold value %q must be finite", valueStr)
+		return nil, &customAlertThresholdRefusal{refused: RefusedNonFinite,
+			err: fmt.Errorf("threshold value %q must be finite", valueStr)}
 	}
 	// forecast ratio mode: the threshold is a headroom-fraction floor
 	// (avail/capacity), so it must be in (0, forecastCurrentBand) — a floor >= 1 would
@@ -942,6 +961,12 @@ type CustomAlertEntry struct {
 	Reason     string
 	RecipeID   string
 	Severities []string
+	// Refused (#3209), for a rejected entry only: the entry is rejected
+	// because the exporter refuses its `threshold:` as a threshold value —
+	// RefusedNonFinite or RefusedUnparsed, as RefusedValueAt classes a
+	// threshold key's value. Empty for any other rejection, and for an
+	// entry switched off (`threshold: disable`).
+	Refused string
 }
 
 // CustomAlertEntries is CustomAlertEntry for every element of the tenant's
@@ -1021,6 +1046,10 @@ func walkCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, lo
 		if err != nil {
 			logCustomAlertError(logf, tenant, spec.Name, err)
 			w.entry.Status, w.entry.Reason = CustomAlertRejected, err.Error()
+			var refusal *customAlertThresholdRefusal
+			if errors.As(err, &refusal) {
+				w.entry.Refused = refusal.refused
+			}
 			out = append(out, w)
 			continue
 		}
