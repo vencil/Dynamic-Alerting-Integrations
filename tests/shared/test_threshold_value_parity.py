@@ -105,7 +105,15 @@ def test_shared_number_reader_is_the_exporters(row):
             _lib_validation.parse_threshold_number(row["value_part"])
         return
     got = _lib_validation.parse_threshold_number(row["value_part"])
-    assert math.isfinite(got) and got == float(row["value_part"]), row
+    assert math.isfinite(got) and got == _number(row["value_part"]), row
+
+
+def _number(text):
+    """The number of a `value_part` Go's `float_ok` accepts: a hex float by
+    `float.fromhex`, anything else by `float` (both without the `_` Go and
+    Python allow between digits)."""
+    text = text.replace("_", "")
+    return float.fromhex(text) if "x" in text.lower() else float(text)
 
 
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
@@ -114,6 +122,12 @@ def test_unit_sanity_lint_judges_the_number_the_exporter_serves(row):
     non-finite one too, which the exporter refuses but this lint judges
     (±Inf is OUT-OF-DOMAIN)."""
     got = unit_sanity._as_number(row["value"])
+    if row["ok"] and "x" in row["value_part"].lower():
+        # A hex float, which the exporter reads: this lint never judged one
+        # and does not start to without an owner ruling (it would turn
+        # `--ci` from 0 to 1; see `_as_number`).
+        assert got is None, row
+        return
     if row["ok"] and not row["float_ok"] and _non_finite_text(row["value_part"]):
         want = float(row["value_part"])
         assert got is not None and (got == want or (math.isnan(got) and math.isnan(want))), row
@@ -121,7 +135,7 @@ def test_unit_sanity_lint_judges_the_number_the_exporter_serves(row):
     if not (row["ok"] and row["float_ok"]):
         assert got is None, row
         return
-    assert got == float(row["value_part"]), row
+    assert got == _number(row["value_part"]), row
 
 
 def _non_finite_text(text):
@@ -148,6 +162,10 @@ def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
         got = "not read"
     if row["row_disabled"]:
         assert got is None, row
+    elif row["ok"] and row["float_ok"] and bt._SPELLINGS_NOT_BACKTESTED.search(value):
+        # `1_000`, `0x1p4`: read by the exporter, not backtested by
+        # `--tenant` (as before #3140 PR2; `_SPELLINGS_NOT_BACKTESTED`).
+        assert got == "not read", row
     elif row["ok"] and row["float_ok"]:
         assert got == (float(row["value_part"]), row["severity"]), row
     else:
@@ -197,6 +215,17 @@ def test_matrix_carries_the_non_finite_and_row_disable_samples():
     for v in ("disable", " disable ", "OFF", "false", "DİSABLE"):
         assert rows[v]["row_disabled"] is True, v
     assert rows["disable:critical"]["custom_alert_disabled"] is True  # #3042: unchanged
+
+
+def test_matrix_carries_the_go_number_spellings():
+    """#3140: what Go's ParseFloat reads beyond Python's `float` (a hex
+    float) and the `_` both read between digits — so the Python readers
+    are held to Go on them, not to a conservative refusal of their own."""
+    rows = {r["value"]: r for r in _rows()}
+    for v in ("1_000", "-1_0", "1e1_0", "0x1p4", "0x_1p4", "0x1.p1"):
+        assert rows[v]["ok"] and rows[v]["float_ok"] is True, v
+    for v in ("1__0", "_1", "1_", "0x10", "0x1p_4", "0x1p99999", "\u0661\u0660"):
+        assert rows[v]["ok"] and rows[v]["float_ok"] is False, v
 
 
 def test_matrix_carries_the_opt_out_samples():

@@ -218,22 +218,66 @@ class NonFiniteThresholdError(ValueError):
     refuses it, as it refuses `abc`."""
 
 
+# A hex float as Go's strconv.ParseFloat reads one (underscores already
+# removed): one sign, `0x`, hex digits with an optional point (at least one
+# digit), and the `p` exponent Go requires. `float.fromhex` alone also takes
+# `0x10` (no exponent), which Go refuses.
+_GO_HEX_FLOAT = re.compile(r"[+-]?0[xX](?:[0-9a-fA-F]+\.?[0-9a-fA-F]*|\.[0-9a-fA-F]+)[pP][+-]?[0-9]+")
+
+
+def _go_underscores_ok(number: str) -> bool:
+    """Go's strconv.underscoreOK: an `_` only between two digits, or between
+    a base prefix (`0x`) and a digit. Python's `float` keeps the same rule
+    for a decimal (PEP 515), measured against go1.x on the matrix rows."""
+    saw = "^"
+    if number[:1] in "+-":
+        number = number[1:]
+    hexa = False
+    i = 0
+    if len(number) >= 2 and number[0] == "0" and number[1].lower() in "box":
+        i, saw, hexa = 2, "0", number[1].lower() == "x"
+    for c in number[i:]:
+        if c.isdigit() or (hexa and c.lower() in "abcdef"):
+            saw = "0"
+        elif c == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
 def parse_threshold_number(text: Any) -> float:
     """The number a threshold value's (trimmed) number half is, as the
     exporter's parseThresholdNumber reads it (#3140), or ValueError.
 
-    Read with Python's `float` only where it agrees with Go's
-    `strconv.ParseFloat` (measured, go1.x): refused because Go refuses too —
-    a non-ASCII digit, a signed NaN (`+nan`), an overflow (`1e400`, `1e999`:
-    Go returns ErrRange, `float` answers inf); refused although Go accepts —
-    conservative — an underscore (`1_000`), a hex float (`0x1p4`). And the
-    number must be finite: `NaN`, `Inf`, `+Inf`, `-Inf` and `infinity`,
-    which ParseFloat accepts, raise NonFiniteThresholdError — an alert
-    compared against one never fires or always fires. Pinned to Go by
+    Go's `strconv.ParseFloat`, on ASCII text: a decimal as Python's `float`
+    reads it — the two agree there, an `_` between digits included (`1_000`
+    is 1000 to both) — and a hex float (`0x1p4`, the `p` exponent required)
+    with `float.fromhex`. Refused, as Go refuses them: a non-ASCII digit, a
+    misplaced `_` (`1__0`, `_1`), a signed NaN (`+nan`), an overflow (`1e400`,
+    `1e999`: Go returns ErrRange, `float` answers inf). And the number must
+    be finite: `NaN`, `Inf`, `+Inf`, `-Inf` and `infinity`, which ParseFloat
+    accepts, raise NonFiniteThresholdError — an alert compared against one
+    never fires or always fires. Pinned to Go by
     tests/shared/threshold_value_matrix.json's `float_ok` column."""
     number = str(text)
-    if not number.isascii() or "_" in number:
+    if not number.isascii():
         raise ValueError(text)
+    if "_" in number:
+        if not _go_underscores_ok(number):
+            raise ValueError(text)
+        number = number.replace("_", "")
+    if number.lstrip("+-")[:2].lower() == "0x":
+        if not _GO_HEX_FLOAT.fullmatch(number):
+            raise ValueError(text)
+        try:
+            return float.fromhex(number)
+        except OverflowError:
+            raise ValueError(text) from None  # Go's ErrRange
     value = float(number)
     spelled = number.lower().lstrip("+-")
     if math.isnan(value) and number.lower() != "nan":

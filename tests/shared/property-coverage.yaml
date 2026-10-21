@@ -53,6 +53,7 @@ modules:
     excluded:
       _go_lower: "#3141 helper of custom_alert_disabled (Go's strings.ToLower); table-covered by threshold_value_matrix.json's custom_alert_disabled column (written by Go, DİSABLE rows included), which the case-folding mutation is checked against"
       parse_threshold_number: "#3140 table-covered by threshold_value_matrix.json (float_ok, written by Go's parseThresholdNumber)"
+      _go_underscores_ok: "#3140 port of Go's strconv.underscoreOK behind parse_threshold_number; table-covered by threshold_value_matrix.json (`1_000`, `1__0`, `_1`, `0x_1p4`, `0x1p_4` rows, float_ok written by Go)"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"

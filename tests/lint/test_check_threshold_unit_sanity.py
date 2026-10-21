@@ -182,6 +182,24 @@ def test_non_finite_tenant_string_stays_out_of_domain(tmp_path, value):
     assert any("OUT-OF-DOMAIN" in e and "pct = " in e and "inf" in e for e in errs), errs
 
 
+@pytest.mark.parametrize("value, shown", [("1_000", "1000"), ("-1_0", "-10"), ("1_0e2:critical", "1000")])
+def test_an_underscored_number_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
+    """#3140: Go's ParseFloat reads `1_000` as 1000, and so did this lint
+    (Python's `float`) before #3140; a refusal of `_` here let an
+    out-of-domain value through (`--ci` 1 → 0)."""
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
+
+
+def test_a_hex_float_is_not_judged(tmp_path):
+    """#3140: the exporter reads `0x1p10` (1024), but this lint never judged
+    a hex float — judging it is a `--ci` 0 → 1 no ruling names
+    (`_as_number`)."""
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "0x1p10"}}})
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
 def test_non_finite_number_in_platform_data_and_a_rule_pack_stays_out_of_domain(tmp_path):
     """#3140 (owner ruling D): a JSON `-Infinity` in platform-data and a YAML
     `.inf` in a structured artifact are numbers already; they stay judged."""

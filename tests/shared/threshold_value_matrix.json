@@ -82,6 +82,22 @@
     {"value":"+nan","ok":true,"value_part":"+nan","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
     {"value":"off:critical","ok":true,"value_part":"off","severity":"critical","float_ok":false,"custom_alert_disabled":true,"row_disabled":false},
     {"value":"disable\u001c","ok":true,"value_part":"disable\u001c","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
-    {"value":"false","ok":true,"value_part":"false","severity":"warning","float_ok":false,"custom_alert_disabled":true,"row_disabled":true}
+    {"value":"false","ok":true,"value_part":"false","severity":"warning","float_ok":false,"custom_alert_disabled":true,"row_disabled":true},
+    {"value":"1_000","ok":true,"value_part":"1_000","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"-1_0","ok":true,"value_part":"-1_0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1_000.0_1:critical","ok":true,"value_part":"1_000.0_1","severity":"critical","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1e1_0","ok":true,"value_part":"1e1_0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1__0","ok":true,"value_part":"1__0","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"_1","ok":true,"value_part":"_1","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1_","ok":true,"value_part":"1_","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p4","ok":true,"value_part":"0x1p4","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0X1P-2:critical","ok":true,"value_part":"0X1P-2","severity":"critical","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"-0x1.8p1","ok":true,"value_part":"-0x1.8p1","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x_1p4","ok":true,"value_part":"0x_1p4","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1.p1","ok":true,"value_part":"0x1.p1","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x10","ok":true,"value_part":"0x10","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p_4","ok":true,"value_part":"0x1p_4","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p99999","ok":true,"value_part":"0x1p99999","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"١٠","ok":true,"value_part":"١٠","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false}
   ]
 }
