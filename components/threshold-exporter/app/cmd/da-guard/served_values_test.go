@@ -952,6 +952,24 @@ func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 	}
 }
 
+// The root still writes a retired alias (mysql_cpu) as non-finite: the entry
+// is under the canonical key, the one values and every reader use (#3140).
+func TestServedValues_RootNonFiniteAliasIsNamedCanonically(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_cpu: .nan\n",
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
+	}, "")
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["tenant-a"]
+	if got, ok := tv.Keys["mysql_threads_running"]; !ok || got.Reason != keyReasonRootDefaultNonFinite || got.Refused != "non_finite" {
+		t.Errorf("keys[mysql_threads_running] = %+v (present=%v), want root_default_non_finite under the canonical key", got, ok)
+	}
+	if got, ok := tv.Keys["mysql_cpu"]; ok {
+		t.Errorf("keys[mysql_cpu] = %+v: the retired spelling is no key a reader joins on", got)
+	}
+}
+
 // --- unserved -----------------------------------------------------------------
 
 func TestServedValues_AliasSpellingServedIsNotUnserved(t *testing.T) {

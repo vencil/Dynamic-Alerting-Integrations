@@ -1026,11 +1026,13 @@ func addRootNonFinite(tv servedTenantValues, overrides map[string]config.Schedul
 	for k := range rootNonFinite {
 		canon, _ := config.CanonicalKeyFor(k)
 		_, served := tv.Values[canon]
-		_, listed := tv.Keys[k]
+		_, listed := tv.Keys[canon]
 		if written[canon] || served || listed {
 			continue
 		}
-		tv.Keys[k] = servedKey{Reason: keyReasonRootDefaultNonFinite, Refused: config.RefusedNonFinite}
+		// Keyed by the canonical spelling, as tv.Values is: a root that still
+		// writes a retired alias (mysql_cpu) names the key readers know.
+		tv.Keys[canon] = servedKey{Reason: keyReasonRootDefaultNonFinite, Refused: config.RefusedNonFinite}
 	}
 }
 
