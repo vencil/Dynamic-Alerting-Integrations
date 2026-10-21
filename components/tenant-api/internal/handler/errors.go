@@ -964,35 +964,40 @@ func generatorRejectsBatch(err error) bool {
 // stored results, only counted. ok is false when err is not the
 // generator's.
 func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
-	var (
-		found *generator.FindingsError
-		rej   *generator.RejectedError
-		unav  *generator.UnavailableError
-	)
-	switch {
-	case errors.As(err, &found):
+	k, ok := firstKind(err, kindsGenerator)
+	if !ok {
+		return BatchResult{}, false
+	}
+	var msg string
+	switch k {
+	case errkind.GeneratorFindings:
+		var found *generator.FindingsError
+		errors.As(err, &found)
 		var mine []string
 		for _, f := range found.Findings {
 			if f.Tenant != nil && *f.Tenant == tenantID {
 				mine = append(mine, f.Message)
 			}
 		}
-		msg := fmt.Sprintf("the route generator refuses the configuration this batch would produce; nothing was written "+
+		msg = fmt.Sprintf("the route generator refuses the configuration this batch would produce; nothing was written "+
 			"(%d finding(s) in all, %d naming this tenant)", len(found.Findings), len(mine))
 		if len(mine) > 0 {
 			msg += ": " + strings.Join(mine, "; ")
 		}
-		return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: CodeGeneratorFindings}, true
-	case errors.As(err, &rej):
+	case errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected:
+		var rej *generator.RejectedError
+		errors.As(err, &rej)
 		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID, "reason", rej.Reason, "error", err)
-		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorRejectedText(rej), Code: CodeGeneratorRejected}, true
-	case errors.As(err, &unav):
+		msg = generatorRejectedText(rej)
+	default: // ValidatorUnavailable, PolicyUnavailable
+		var unav *generator.UnavailableError
+		errors.As(err, &unav)
 		// The message is the log's only (generatorUnavailableText); an async
 		// task's results have no other path to it.
 		slog.Error("batch op refused: the generator container cannot judge", "tenant", tenantID, "code", unav.Code, "reason", unav.Reason, "error", err)
-		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorUnavailableText(unav), Code: unav.Code}, true
+		msg = generatorUnavailableText(unav)
 	}
-	return BatchResult{}, false
+	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: kindSpecOf(k).Code}, true
 }
 
 // generatorBatchFindings is the batch-level findings of a GENERATOR_FINDINGS

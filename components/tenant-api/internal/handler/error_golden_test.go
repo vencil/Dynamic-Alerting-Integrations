@@ -718,6 +718,10 @@ func kindSample(k errkind.Kind) error {
 		return &gitops.TargetUnreadableError{TenantID: goldenTenant, RelKey: "tu-a.yaml", Reason: cfg.UnreadableReadError}
 	case errkind.TenantGitManaged:
 		return &gitops.GitManagedError{TenantID: goldenTenant, Reason: "tenant_count"}
+	case errkind.TenantConfigNotLoadable:
+		return &tenantFileNotLoadableError{TenantID: goldenTenant, Reason: "malformed_yaml"}
+	case errkind.GitDriverConfigured:
+		return &gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "local", Key: "filter.x.clean"}}}
 	case errkind.PreconditionFailed:
 		return &gitops.PreconditionError{TenantID: goldenTenant}
 	case errkind.BatchCommitted:

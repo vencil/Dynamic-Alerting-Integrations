@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -204,6 +205,18 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.TenantFileDirty:
 		slog.Warn("tenant write refused: tenant file differs from HEAD", "error", err)
 		return msgTenantFileDirty, nil
+	case errkind.TenantFileNotRegular:
+		// The early refusal's text and fields (writeTenantFileNotRegular)
+		// when the request names its tenant; else the error's own text,
+		// which names the base name only.
+		id := ec.tenantID
+		if id == "" && r != nil {
+			id = chi.URLParam(r, "id")
+		}
+		if id == "" {
+			return err.Error(), nil
+		}
+		return notRegularText(id), map[string]any{"tenant_id": id, "config_error": string(confd.ProblemNotRegularFile)}
 
 	case errkind.PreconditionFailed:
 		var pre *gitops.PreconditionError

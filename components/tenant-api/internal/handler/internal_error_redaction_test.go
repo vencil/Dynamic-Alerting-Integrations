@@ -245,8 +245,10 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	if got := byTenant["db-c"]; got.Status != "error" || !strings.Contains(got.Message, "is claimed by") {
 		t.Errorf("db-c (two files claim it) = %+v, want its own ambiguous-tenant text", got)
 	}
-	if got := byTenant["db-d"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-d.yaml") {
-		t.Errorf("db-d (its file is a directory) = %+v, want %s naming db-d.yaml", got, CodeTenantConfigNotLoadable)
+	// #3226: the text PUT's 409 gives the same file (notRegularText), which
+	// names the tenant and the config_error, no path.
+	if got := byTenant["db-d"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || got.Message != notRegularText("db-d") {
+		t.Errorf("db-d (its file is a directory) = %+v, want %s with notRegularText", got, CodeTenantConfigNotLoadable)
 	}
 }
 

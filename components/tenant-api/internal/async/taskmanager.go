@@ -46,7 +46,8 @@ type TaskResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 	// Code mirrors handler.BatchResult.Code (#2078): the machine-readable
-	// failure code (e.g. TENANT_DECLARED_ELSEWHERE), empty when none applies.
+	// failure code (e.g. TENANT_DECLARED_ELSEWHERE) of an "error" result
+	// (always set since #3226), empty for a result that is not one.
 	Code string `json:"code,omitempty"`
 	// Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking
 	// deprecation advisories for an op that succeeded, so the async polling

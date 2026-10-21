@@ -76,7 +76,13 @@ var kindTable = []KindSpec{
 	{Kind: errkind.TenantDeclaredElsewhere, Status: http.StatusConflict, Code: CodeTenantDeclaredElsewhere},
 	{Kind: errkind.TenantTreeScan, Status: http.StatusInternalServerError, Code: CodeInternal},
 	{Kind: errkind.TenantFileDirty, Status: http.StatusConflict, Code: CodeTenantFileDirty},
-	{Kind: errkind.TenantFileNotRegular, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
+	// 409 TENANT_CONFIG_NOT_LOADABLE, as the handler's own early refusal of
+	// the same file (writeTenantFileNotRegular) and the Writer's
+	// (TargetUnreadableError, special_file) answer it: the operator must
+	// replace the entry in git, a resend cannot pass (#2477, #2939). Its text
+	// names the base name only, so it may be shown (ClientError).
+	{Kind: errkind.TenantFileNotRegular, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable, ClientError: true},
+	{Kind: errkind.TenantConfigNotLoadable, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable},
 	{Kind: errkind.AmbiguousTenantFile, Status: http.StatusConflict, Code: CodeConflict, ClientError: true},
 
 	{Kind: errkind.PreconditionFailed, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
@@ -101,6 +107,7 @@ var kindTable = []KindSpec{
 	{Kind: errkind.InvalidTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 	{Kind: errkind.ReservedTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 	{Kind: errkind.MergeFailed, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
+	{Kind: errkind.Forbidden, Status: http.StatusForbidden, Code: CodeForbidden},
 	{Kind: errkind.BadRequest, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 
 	{Kind: errkind.StateConflict, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
@@ -206,6 +213,7 @@ var kindRules = []kindRule{
 	typedKind(errkind.TenantStoreFault),
 	typedKind(errkind.TenantFileUnreadable),
 	typedKind(errkind.TenantGitManaged),
+	typedKind(errkind.TenantConfigNotLoadable),
 	sentinelKind(errkind.TenantDeclaredElsewhere, gitops.ErrTenantDeclaredElsewhere),
 	sentinelKind(errkind.TenantTreeScan, gitops.ErrTenantTreeScan),
 	sentinelKind(errkind.TenantFileDirty, gitops.ErrTenantFileDirty),
@@ -366,7 +374,7 @@ var (
 	// what the tree holds (#2078, #2939, #3064, #1535).
 	kindsPlacement = kindsOf(errkind.TenantTreeUnreadable, errkind.TenantStoreFault,
 		errkind.TenantFileUnreadable, errkind.TenantGitManaged, errkind.TenantDeclaredElsewhere,
-		errkind.TenantTreeScan, errkind.TenantFileDirty)
+		errkind.TenantTreeScan, errkind.TenantFileDirty, errkind.TenantFileNotRegular)
 	// kindsGitConfig: the git config check every write runs first (#3175):
 	// a driver configured, or a config that could not be read (#3226).
 	kindsGitConfig = kindsOf(errkind.GitDriverConfigured, errkind.GitConfigUnreadable)
@@ -381,6 +389,16 @@ var (
 	// adds AmbiguousTenantFile), judged in kindRules' order like every entry.
 	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsGitConfig, kindsOutcome).with(errkind.WriteOverloaded,
 		errkind.TreeNotOnBase, errkind.PreconditionFailed, errkind.Conflict)
+	// kindsBatchFailure: a direct-mode batch that failed as a whole
+	// (writeBatchFailure, and the metric of its async form,
+	// batchFailureResult).
+	kindsBatchFailure = kindsWriteFlow.union(kindsOutcome).with(errkind.BatchCommitted,
+		errkind.TreeNotOnBase, errkind.Conflict)
+	// kindsBatchOp: what a batch op's "error" result is named by
+	// (batchErrorResult): the batch's failure as a whole, and the refusals
+	// of the op itself that the writer returns per op.
+	kindsBatchOp = kindsBatchFailure.with(errkind.Validation, errkind.ReservedTenantID,
+		errkind.MergeFailed, errkind.TenantGitManagedUnnamed, errkind.TenantConfigNotLoadable)
 	// kindsState: tenant-api's state store (#2856).
 	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)
 )

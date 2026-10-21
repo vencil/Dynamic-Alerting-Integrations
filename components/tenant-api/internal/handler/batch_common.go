@@ -14,6 +14,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"gopkg.in/yaml.v3"
@@ -27,12 +28,18 @@ import (
 // and execution should proceed.
 func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, meta ScopeMetaFunc) (BatchResult, bool) {
 	if err := ValidateWritableTenantID(tenantID); err != nil {
-		return BatchResult{TenantID: tenantID, Status: "error", Message: err.Error()}, true
+		return gateRefusal(tenantID, errkind.InvalidTenantID, err.Error()), true
 	}
 	if !OrgAllowed(rbacMgr, tenantOrg, p, tenantID, rbac.PermWrite, meta) {
-		return BatchResult{TenantID: tenantID, Status: "error", Message: "insufficient permissions for tenant " + tenantID}, true
+		return gateRefusal(tenantID, errkind.Forbidden, "insufficient permissions for tenant "+tenantID), true
 	}
 	return BatchResult{}, false
+}
+
+// gateRefusal is a batch op's "error" result for a refusal of its access
+// gate, answered as kind k: kindTable's code (#3226) and msg.
+func gateRefusal(tenantID string, k errkind.Kind, msg string) BatchResult {
+	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: kindSpecOf(k).Code}
 }
 
 // scopeMetadataKeys are the tenant keys a batch op can write that decide the
@@ -63,9 +70,9 @@ func gateBatchOpPostStateAt(post scopePair, op BatchOperation, p *rbac.VerifiedP
 		return BatchResult{}, false
 	}
 	if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(post)) {
-		return BatchResult{TenantID: op.TenantID, Status: "error",
-			Message: "insufficient permissions for the tenant metadata this op proposes — its environment/domain would place tenant " +
-				op.TenantID + " outside your scope (#1597)"}, true
+		return gateRefusal(op.TenantID, errkind.Forbidden,
+			"insufficient permissions for the tenant metadata this op proposes — its environment/domain would place tenant "+
+				op.TenantID+" outside your scope (#1597)"), true
 	}
 	return BatchResult{}, false
 }

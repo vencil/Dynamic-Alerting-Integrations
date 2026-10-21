@@ -101,8 +101,9 @@ func TestKindTable_CoversEveryKindOnce(t *testing.T) {
 			t.Errorf("kindRules row %q matches nothing", rl.Kind)
 		}
 	}
-	// The kinds no error is: an entry's fallback picks them.
-	for _, k := range []errkind.Kind{errkind.BadRequest, errkind.Internal, errkind.ForgeCreateFailed} {
+	// The kinds no error is: an entry's fallback, or the entry itself
+	// (a batch op's permission gate), picks them.
+	for _, k := range []errkind.Kind{errkind.BadRequest, errkind.Internal, errkind.ForgeCreateFailed, errkind.Forbidden} {
 		if ruled[k] {
 			t.Errorf("fallback kind %q has a kindRules row", k)
 		}
@@ -158,5 +159,38 @@ func TestKindSpecs_IsACopy(t *testing.T) {
 	specs[0].Status = 0
 	if kindTable[0].Status == 0 {
 		t.Fatal("KindSpecs returned the table itself")
+	}
+}
+
+// TestBatchProjections_CodeIsTheTableAnswer (#3226): a batch op's "error"
+// result always carries a code, and it is kindTable's code for the kind the
+// result is answered as — the projection reads the table, never a code of
+// its own — for every error of the golden corpus.
+func TestBatchProjections_CodeIsTheTableAnswer(t *testing.T) {
+	t.Parallel()
+	// An error about the request keeps its own answer in a batch: every
+	// ClientError kind an error can be is one a per-op result names, never
+	// the INTERNAL_ERROR fallback.
+	for _, rl := range kindRules {
+		if kindSpecOf(rl.Kind).ClientError && !kindsBatchOp[rl.Kind] {
+			t.Errorf("client-error kind %q is not in kindsBatchOp: a batch op would answer it as INTERNAL_ERROR", rl.Kind)
+		}
+	}
+	for _, ge := range errorGoldenCorpus("0123456789abcdef") {
+		for _, err := range []error{ge.err, ge.wrapped} {
+			if err == nil {
+				continue
+			}
+			want := kindSpecOf(batchOpKind(err)).Code
+			if got := batchErrorResult(goldenTenant, err, false); got.Code == "" || got.Code != want {
+				t.Errorf("batchErrorResult(%s) code = %q, want kindTable's %q", ge.name, got.Code, want)
+			}
+			if got := freshBaseOpResult(goldenTenant, err, false); got.Code == "" {
+				t.Errorf("freshBaseOpResult(%s) has no code", ge.name)
+			}
+			if res, ok := generatorOpResult(goldenTenant, err); ok && res.Code == "" {
+				t.Errorf("generatorOpResult(%s) has no code", ge.name)
+			}
+		}
 	}
 }

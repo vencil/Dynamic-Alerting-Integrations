@@ -71,6 +71,9 @@ const (
 	// TenantFileNotRegular: the tenant's conf.d entry is a FIFO, socket or
 	// device (#2477).
 	TenantFileNotRegular Kind = "tenant_file_not_regular"
+	// TenantConfigNotLoadable: the tenant file a partial write would merge
+	// into cannot be loaded as a tenant config (#2373, #3206).
+	TenantConfigNotLoadable Kind = "tenant_config_not_loadable"
 	// AmbiguousTenantFile: more than one conf.d file claims the tenant (#1673).
 	AmbiguousTenantFile Kind = "ambiguous_tenant_file"
 
@@ -121,6 +124,9 @@ const (
 	ReservedTenantID Kind = "reserved_tenant_id"
 	// MergeFailed: the patch cannot be merged into the tenant file.
 	MergeFailed Kind = "merge_failed"
+	// Forbidden: the caller's permissions do not admit the write of this
+	// tenant (ADR-027) — a batch op's per-op gate.
+	Forbidden Kind = "forbidden"
 	// BadRequest: a refusal about the request that the entry answering it has
 	// no more specific answer for.
 	BadRequest Kind = "bad_request"
