@@ -98,14 +98,20 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			keys[k] = true
 		}
 		// #3140: why a segment serves no row, read off the key's written
-		// value at the segment's start (nullReason).
-		canonOf := map[string]string{}
-		for ck := range cfg.Tenants[tenant] {
-			canonOf[name(tenant, ck)] = ck
+		// value at the segment's start (nullReason). k is the served,
+		// canonical name, so a retired spelling is found under it; when the
+		// tenant writes both, the canonical one is read (keys' shadowed).
+		writtenOf := map[string]string{}
+		for wk := range cfg.Tenants[tenant] {
+			canon, isAlias := config.CanonicalKeyFor(wk)
+			if _, canonWritten := cfg.Tenants[tenant][canon]; isAlias && canonWritten {
+				continue
+			}
+			writtenOf[name(tenant, canon)] = wk
 		}
 		recorded := recordedRefusals(cfg, tenant, at)
 		for k := range keys {
-			why := func(minute int) string { return nullReason(cfg, tenant, canonOf[k], at, minute, recorded) }
+			why := func(minute int) string { return nullReason(cfg, tenant, writtenOf[k], at, minute, recorded) }
 			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
 			if te, ok := expiryOf[tenant][k]; ok {
 				sv, written := cfg.Tenants[tenant][te.MetricKey]
@@ -263,19 +269,20 @@ func hhmm(m int) string {
 	return fmt.Sprintf("%02d:%02d", m/60, m%60)
 }
 
-// nullReason is why threshold key canon (cfg's spelling; "" for a key the
+// nullReason is why threshold key written (cfg's spelling; "" for a key the
 // tenant's map does not write) serves no row from minute of the UTC day of
 // at (#3140): keyReasonDisabled for a disable written for that part of the
 // day, keyReasonValueNonFinite / keyReasonValueUnparsed for a value the
 // resolver refuses (and recorded refusing), else "" (nothing to serve: a
 // lapsed or absent value).
-func nullReason(cfg *config.ThresholdConfig, tenant, canon string, at time.Time, minute int,
+func nullReason(cfg *config.ThresholdConfig, tenant, written string, at time.Time, minute int,
 	recorded func(canon string) bool,
 ) string {
-	sv, written := cfg.Tenants[tenant][canon]
-	if !written {
+	sv, ok := cfg.Tenants[tenant][written]
+	if !ok {
 		return ""
 	}
+	canon, _ := config.CanonicalKeyFor(written)
 	utc := at.UTC()
 	t := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, minute, 0, 0, time.UTC)
 	if config.DisabledAt(sv, t) {

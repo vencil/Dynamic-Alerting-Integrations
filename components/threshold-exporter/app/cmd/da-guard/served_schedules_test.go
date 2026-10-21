@@ -517,3 +517,61 @@ func TestServedValues_SchedulesAreOptIn(t *testing.T) {
 		t.Errorf("top level differs: %v vs %v", without, with)
 	}
 }
+
+// TestServedSchedules_NullReasonUnderARetiredSpelling: a key the tenant
+// writes under a retired spelling is keyed by its canonical name in
+// schedules; its null segments still say why (#3140) — the written key is
+// found from the canonical one, not from the name the exporter served.
+func TestServedSchedules_NullReasonUnderARetiredSpelling(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_cpu:\n      default: \"40\"\n      overrides:\n" +
+			"        - window: \"01:00-02:00\"\n          value: disable\n" +
+			"    mysql_cpu_critical:\n      default: \"90\"\n      overrides:\n" +
+			"        - window: \"05:00-06:00\"\n          value: \"NaN\"\n",
+	}
+	// Both spellings: the canonical one is read, the retired one shadowed.
+	// Many tenants, so a pick left to map order shows (a mutant measured
+	// failing 40 of 40 runs).
+	both := []string{}
+	for i := 0; i < 32; i++ {
+		tn := fmt.Sprintf("tenant-b%d", i)
+		both = append(both, tn)
+		files[tn+".yaml"] = "tenants:\n  " + tn + ":\n    mysql_cpu:\n      default: \"40\"\n      overrides:\n" +
+			"        - window: \"01:00-02:00\"\n          value: disable\n" +
+			"    mysql_threads_running:\n      default: \"50\"\n      overrides:\n" +
+			"        - window: \"03:00-04:00\"\n          value: disable\n"
+	}
+	code, doc, _, stderr := servedS(t, files, scheduleAt)
+	mustOK(t, code, stderr)
+	checkNullReason(t, doc, "tenant-a", "mysql_threads_running", map[string]string{"01:00": keyReasonDisabled})
+	checkNullReason(t, doc, "tenant-a", "mysql_threads_running_critical", map[string]string{"05:00": "value_non_finite"})
+	for _, tn := range both {
+		checkNullReason(t, doc, tn, "mysql_threads_running", map[string]string{"03:00": keyReasonDisabled})
+	}
+}
+
+// checkNullReason: the tenant's schedules[key] has a null segment starting at
+// each of want's times with its reason, and no other segment has a reason.
+
+func checkNullReason(t *testing.T, doc servedOut, tenant, key string, want map[string]string) {
+	t.Helper()
+	sch, ok := doc.Tenants[tenant].Schedules[key]
+	if !ok {
+		t.Fatalf("%s: schedules has no %s: %v", tenant, key, keysOf(doc.Tenants[tenant].Schedules))
+	}
+	for _, s := range sch.Segments {
+		if r, null := want[s.From]; null {
+			if s.Value != nil || s.Reason != r {
+				t.Errorf("%s %s-%s: value %v reason %q, want null with reason %q", key, s.From, s.To, s.Value, s.Reason, r)
+			}
+			delete(want, s.From)
+		} else if s.Reason != "" {
+			t.Errorf("%s %s-%s carries reason %q", key, s.From, s.To, s.Reason)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("%s: no null segment starts at %v; segments=%+v", key, want, sch.Segments)
+	}
+}
