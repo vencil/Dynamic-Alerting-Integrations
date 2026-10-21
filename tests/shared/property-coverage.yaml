@@ -175,6 +175,7 @@ modules:
       GoBinaryDispatcher.binary_missing_message: "Error-message templating; asserted by the missing-binary tests of the shims and _lib_tenant_values"
       GoBinaryDispatcher.resolve_binary: "The resolution step of _resolve_binary (covered), split out so _lib_tenant_values resolves da-guard the same way"
       GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
+      _may_be_file: "Filesystem probe (Path.is_file under OSError); its EACCES case is pinned in tests/shared/test_lib_godispatch.py (#3214)"
 
   # ── DX tools (doc/changelog/scaffold) ─────────────────────────────
 
