@@ -74,9 +74,7 @@ __all__ = [
     "iter_config_files",
     "ConfigTreeListing",
     "list_config_tree",
-    "multi_carrier_warning",
     "readable_carriers",
-    "warn_multi_carrier",
     "warn_dir_symlink_once",
     "is_dir_symlink",
     "dir_link_target_is_walked",
@@ -133,15 +131,15 @@ def _is_config(name: str) -> bool:
     Note this predicate answers TWO of the three name properties: extension
     (here) and hidden (`_is_hidden`). It deliberately does NOT filter the
     `_` prefix — reserved control files ARE part of "what is in a conf.d
-    directory"; callers that want tenant carriers only (`_lib_io`,
-    tenant-api) apply that third property themselves.
+    directory"; callers that want tenant carriers only (tenant-api, or a
+    tool composing `is_reserved_name`) apply that third property themselves.
 
     ⛔ Nothing here greps the Go source. This repo measured (#1448 blind
     review) that a Python guard asserting things about Go source text goes
     red on legitimate Go refactors and states the opposite of the truth
     when it does. What keeps this honest instead is the shared name
     classification matrix under `tests/shared/` — the exporter's scanner,
-    tenant-api's filename→id mapping, `_lib_io.iter_yaml_files` and this
+    tenant-api's filename→id mapping, `iter_config_files` and this
     predicate each assert THAT table, so their agreement is transitive
     rather than claimed, and a rule change turns the owning side red first.
     """
@@ -170,7 +168,7 @@ def _is_config(name: str) -> bool:
 # `tests/shared/confd_name_classification_matrix.json`
 # (`yaml_extension` / `reserved_prefix` / `hidden` / `defaults_file`, plus
 # `stem`). Because the exporter's production scanner, tenant-api's
-# filename→id mapping and `_lib_io.iter_yaml_files` all assert that same
+# filename→id mapping and `iter_config_files` all assert that same
 # table, a caller composing these predicates agrees with the exporter
 # TRANSITIVELY — nothing here claims agreement, and no guard greps anyone
 # else's source (#1448).
@@ -292,8 +290,10 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
     it. Order is the name's code-point order, which for UTF-8 names is
     Go's byte order — the one `filepath.WalkDir` visits a directory in.
 
-    ⛔ Two carriers in one directory is a misconfiguration: callers WARN
-    (see `multi_carrier_warning`) instead of choosing silently.
+    ⛔ Two carriers in one directory is a misconfiguration: it is WARNed
+    (the exporter's `DefaultsCarriers.AmbiguityWarnings`; a conf.d reader
+    here names the carrier parse-tree marks `not_read`) instead of being
+    chosen silently.
     """
     ordered = sorted(carriers, key=lambda p: Path(p).name)
     yaml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yaml"]
@@ -328,48 +328,6 @@ def readable_carriers(carriers: "Iterable[Path]"
     return readable, unreadable
 
 
-def multi_carrier_warning(directory: "str | os.PathLike[str]",
-                          carriers: "Iterable[Path]") -> "str | None":
-    """The operator-facing WARN for a directory with more than one carrier.
-
-    None when there is at most one. The wording matches the exporter's log
-    line so an operator grepping for one finds the other.
-    """
-    paths = sorted((Path(p) for p in carriers), key=lambda p: p.name)
-    if len(paths) < 2:
-        return None
-    chosen = select_defaults_carrier(paths)
-    # ⛔ Compared by PATH, not by basename: grouped the wrong way, two
-    # entries can share a name, and the basename comparison printed
-    # "…only _defaults.yaml is read,  is ignored" (blind review of #1674).
-    ignored = [p.name for p in paths if p != chosen]
-    names = [p.name for p in paths]
-    return (f"WARN: conf.d directory {directory} has {len(names)} defaults "
-            f"carriers ({', '.join(names)}); only {chosen.name} is read, "
-            f"{', '.join(ignored)} is ignored on every plane (#1674) — "
-            f"merge them into one file")
-
-
-# Directories whose multi-carrier WARN this process has already printed.
-_MULTI_CARRIER_WARNED: set[str] = set()
-
-
-def warn_multi_carrier(directory: "str | os.PathLike[str]",
-                       carriers: "Iterable[Path]") -> None:
-    """Print `multi_carrier_warning` to stderr at most ONCE per directory per
-    process. describe_tenant reads the chain AND calls the custom-alerts
-    loader over the same tree, so each printing its own copy named every
-    misconfigured directory twice (blind review of #1674)."""
-    msg = multi_carrier_warning(directory, carriers)
-    if msg is None:
-        return
-    key = os.path.realpath(directory)
-    if key in _MULTI_CARRIER_WARNED:
-        return
-    _MULTI_CARRIER_WARNED.add(key)
-    print(msg, file=sys.stderr)
-
-
 # Directory symlinks whose skip WARNING this process has already printed.
 _DIR_LINK_WARNED: set[str] = set()
 
@@ -379,7 +337,7 @@ def warn_dir_symlink_once(link: Path) -> None:
     process (#1972). describe_tenant names it from its own listing AND calls
     the custom-alerts loader over the same tree (and compile_custom_alerts
     runs the loader more than once): each printing its own copy named every
-    link two times — the #1674 shape `warn_multi_carrier` already fixed.
+    link two times — the #1674 once-per-directory shape.
     Keyed by the LINK's own absolute path (not its target, which is what
     two different links may share)."""
     key = os.path.abspath(link)
@@ -1063,7 +1021,7 @@ def _running_tool() -> str:
     """Best guess at the command the operator actually typed.
 
     Derived from `sys.argv[0]`, not hard-coded: a SHARED helper such as
-    `_lib_io.iter_yaml_files` is reached from several entry points, and
+    `warn_nested` is reached from several entry points, and
     labelling its warning with the helper's own name tells the operator
     nothing about which command produced it. Falls back to a neutral
     label when argv is unavailable (embedded / REPL use).
@@ -1143,7 +1101,6 @@ def reset_warned_for_test() -> None:
     "last cleanup wins" and would undo a parallel test's writes.
     """
     _WARNED.clear()
-    _MULTI_CARRIER_WARNED.clear()
     _DIR_LINK_WARNED.clear()
 
 

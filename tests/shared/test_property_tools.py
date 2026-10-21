@@ -806,65 +806,6 @@ class TestLoadYamlFileProperties:
         assert lio.load_yaml_file(str(f), default=[]) == []
 
 
-class TestIterYamlFilesProperties:
-
-    @given(st.one_of(
-        st.none(),
-        st.just(""),
-        st.text(alphabet=string.ascii_letters, min_size=1, max_size=10).map(
-            lambda s: f"/nonexistent/{s}"
-        ),
-    ))
-    @PILOT_SETTINGS
-    def test_missing_dir_returns_empty(self, path):
-        # Property: None / empty / nonexistent dir → empty list.
-        assert lio.iter_yaml_files(path) == []
-
-    @given(st.lists(
-        st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=8),
-        min_size=1, max_size=10, unique=True,
-    ))
-    @PILOT_SETTINGS_IO
-    def test_output_sorted_by_filename(self, tmp_path_factory, names):
-        # Property: returned list is sorted by filename ascending.
-        d = tmp_path_factory.mktemp("yaml")
-        for n in names:
-            (d / f"{n}.yaml").write_text("k: v\n", encoding="utf-8")
-        result = lio.iter_yaml_files(str(d))
-        filenames = [fn for fn, _ in result]
-        assert filenames == sorted(filenames)
-
-    def test_filters_non_yaml_extensions(self, tmp_path):
-        for fn in ["a.yaml", "b.yml", "c.txt", "d.md", "e.json"]:
-            (tmp_path / fn).write_text("x", encoding="utf-8")
-        result = lio.iter_yaml_files(str(tmp_path))
-        names = {fn for fn, _ in result}
-        assert names == {"a.yaml", "b.yml"}
-
-    def test_skip_reserved_default_excludes_underscore(self, tmp_path):
-        for fn in ["tenant.yaml", "_defaults.yaml", ".hidden.yaml"]:
-            (tmp_path / fn).write_text("x", encoding="utf-8")
-        result = lio.iter_yaml_files(str(tmp_path))
-        names = {fn for fn, _ in result}
-        assert names == {"tenant.yaml"}
-
-    def test_skip_reserved_false_includes_all(self, tmp_path):
-        for fn in ["tenant.yaml", "_defaults.yaml", ".hidden.yaml"]:
-            (tmp_path / fn).write_text("x", encoding="utf-8")
-        result = lio.iter_yaml_files(str(tmp_path), skip_reserved=False)
-        names = {fn for fn, _ in result}
-        assert names == {"tenant.yaml", "_defaults.yaml", ".hidden.yaml"}
-
-    def test_filters_directories(self, tmp_path):
-        # Property: directories with .yaml-like names don't sneak through
-        # (the os.path.isfile check matters).
-        (tmp_path / "tenant.yaml").write_text("x", encoding="utf-8")
-        (tmp_path / "subdir.yaml").mkdir()  # a DIRECTORY ending in .yaml
-        result = lio.iter_yaml_files(str(tmp_path))
-        names = {fn for fn, _ in result}
-        assert names == {"tenant.yaml"}
-
-
 # The exact class safe_label promises to neutralise: C0, DEL and C1. Spelled out
 # here from codepoints rather than reusing the module's own regex, so the test
 # cannot agree with a broken implementation by sharing its bug.

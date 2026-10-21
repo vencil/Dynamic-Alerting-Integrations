@@ -23,8 +23,9 @@ the probe trees hold no rule naming the probed key, so for it the second
 check only shows that it reads no key on its own (ADR-038 decision 3).
 
 Not measured, and declared in the registry instead: the `annotation` reader
-(`_namespaces`; nothing on the alert path reads it), and a read that changes
-no output (the route generator reads `_metadata` and discards it, #3043).
+(`_namespaces`; nothing on the alert path reads it). The route generator
+does not read `_metadata` at all (#3043), so the second check covers it as
+a key the generator must not react to.
 Only the outputs are compared, never how a reader loads its input, so a
 reader rewritten to load differently needs no change here.
 """

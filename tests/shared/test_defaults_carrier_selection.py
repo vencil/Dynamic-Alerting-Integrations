@@ -20,7 +20,6 @@ import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 from _lib_confd import (
-    multi_carrier_warning,
     resolve_defaults_file,
     select_defaults_carrier,
 )
@@ -52,26 +51,6 @@ def test_selection_matches_the_go_table(names: list[str], want: str) -> None:
 
 def test_no_carrier_selects_nothing() -> None:
     assert select_defaults_carrier([]) is None
-
-
-def test_warning_names_the_chosen_and_the_ignored_file() -> None:
-    msg = multi_carrier_warning("/conf.d", [Path("/conf.d/_defaults.yml"),
-                                            Path("/conf.d/_defaults.yaml")])
-    assert msg is not None
-    for frag in ("WARN:", "/conf.d", "2 defaults carriers",
-                 "_defaults.yaml, _defaults.yml", "only _defaults.yaml is read",
-                 "_defaults.yml is ignored"):
-        assert frag in msg, (frag, msg)
-    assert multi_carrier_warning("/conf.d", [Path("/conf.d/_defaults.yaml")]) is None
-
-
-def test_warning_compares_carriers_by_path_not_basename() -> None:
-    """Blind review of #1674 round 2: with two entries sharing a basename the
-    basename comparison printed "only _defaults.yaml is read,  is ignored"."""
-    msg = multi_carrier_warning("/conf.d", [Path("/conf.d/a/_defaults.yaml"),
-                                            Path("/conf.d/b/_defaults.yaml")])
-    assert msg is not None and ",  is ignored" not in msg, msg
-    assert "_defaults.yaml is ignored" in msg, msg
 
 
 def test_resolve_defaults_file_returns_the_carrier_the_exporter_reads(

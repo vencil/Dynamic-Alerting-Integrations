@@ -33,7 +33,7 @@
     "_metadata": {
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
       "description": "Tenant metadata (owner, tier, runbook_url, ...) served as tenant_metadata_info.",
-      "note": "The route generator also reads it and discards it (#3043); a read that changes no output is not measured."
+      "note": "The route generator does not read it (#3043): nothing it renders uses the tenant metadata."
     },
     "_profile": {
       "read_by": {"exporter": ["tenant", "platform_tenants"]},

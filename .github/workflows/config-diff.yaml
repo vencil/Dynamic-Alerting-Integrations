@@ -69,10 +69,8 @@ jobs:
 
           # ⛔ Everything below builds the BASELINE — the "before" side the
           # next step measures the PR against. An empty baseline is not a
-          # neutral value here: `_lib_io.load_tenant_configs` turns a
-          # zero-byte `db-a.yaml` into a tenant with no thresholds (its
-          # docstring says so, and it is measured), so every threshold in the
-          # PR then reads as newly added. A report that is confidently wrong
+          # neutral value here: against it every threshold in the PR reads
+          # as newly added. A report that is confidently wrong
           # is worse than no report, so each failure below is classified and
           # fatal instead of swallowed (#1419).
 
@@ -123,9 +121,9 @@ jobs:
 
           # 3. Blobs only. `git show <ref>:<dir>` succeeds on a directory and
           #    writes its *tree listing* out as a file. ⚠️ That file is inert
-          #    today — both loaders read conf.d/ FLAT and only accept
-          #    `.yaml`/`.yml` (`_lib_io.iter_yaml_files`), so an extensionless
-          #    `examples` is skipped, and an earlier draft of this comment
+          #    today — `da-guard parse-tree`, which config-diff reads both
+          #    sides through, only reads `.yaml`/`.yml` names, so an
+          #    extensionless `examples` is skipped, and an earlier draft of this comment
           #    overstated it as "looking like a tenant config". It is excluded
           #    because a baseline should contain configs and nothing else, not
           #    because it is currently doing harm.

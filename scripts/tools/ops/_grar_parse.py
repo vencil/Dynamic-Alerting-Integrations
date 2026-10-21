@@ -1178,9 +1178,8 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             skipped_by_dir.setdefault(p.parent, [])
         for p, _why in not_read:
             skipped_by_dir[p.parent].append(p)
-        # #2906: each carrier not selected is a finding — this replaces
-        # `warn_multi_carrier`'s stderr line on this path, so the one fact
-        # is printed once, by the stream.
+        # #2906: each carrier not selected is a finding, the only report of
+        # it on this path, so the one fact is printed once, by the stream.
         for d, skipped_here in skipped_by_dir.items():
             if not skipped_here:
                 continue
@@ -1778,9 +1777,8 @@ def print_reader_warnings(source: "TenantTree | dict") -> None:
     generator's warning stream must still show its user (#2906).
 
     *source* is a ``load_tenant_tree`` result or a ``_parse_config_files``
-    dict. Today: each `unselected_defaults_carrier` line — before #2906 the
-    reader printed `warn_multi_carrier`'s line itself, so every caller of
-    the reader showed it; it is a Finding in the stream now, and a caller
+    dict. Today: each `unselected_defaults_carrier` line — it is a Finding
+    in the stream, and the reader prints nothing of its own, so a caller
     that prints neither the stream nor this would hide it. ⛔ Not for
     generate-routes / validate-config (they print the stream: twice), and
     not for a caller whose other reader already names it (policy_engine:

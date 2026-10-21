@@ -1,7 +1,7 @@
 """`maintenance_scheduler` 讀到的排程要與 Go 的 `da-guard effective` 一致（#2751）。
 
 #2115 裁決 (c)：保留鍵依「寫法＋繼承」判定，值以 Go 為準。scheduler 原本經 Python 的
-`load_tenant_configs` 讀 conf.d，只看得到根目錄租戶檔裡的 `_state_maintenance.recurring`。
+共用讀取函式（已刪除）讀 conf.d，只看得到根目錄租戶檔裡的 `_state_maintenance.recurring`。
 修正前（main d3bed81f）實測：
 
 - 租戶檔 `tx.yaml`（對照組）：兩邊都有 tx 的排程。

@@ -8,7 +8,7 @@
 值永遠寫在自己的租戶檔（7），四個位置下答案都不變。
 
 `mysql_connections` 只有根 defaults 有（80），租戶都沒寫：已監控（mariadb）只能來自
-繼承。舊讀取端（`_lib_io.load_tenant_configs`）只讀根目錄租戶檔本身，所以除了
+繼承。舊讀取端（已刪除的 Python 共用讀取函式）只讀根目錄租戶檔本身，所以除了
 「租戶檔」那一格，tenant-a 的答案都錯（子樹那格整個租戶消失）。
 
 另有幾格：平面格式檔（Go 列進 `skipped`）、Go 丟掉的檔（`parse_failed`，fail-closed
