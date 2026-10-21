@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
@@ -136,7 +137,17 @@ func MarshalConfig(cfg *ViewsConfig) ([]byte, error) {
 }
 
 // ParseConfig parses a _views.yaml document.
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge): the
+// record came from conf.d/_views.yaml (statemigrate imports it verbatim) or
+// from MarshalConfig, and a document parse-tree refuses — a second document,
+// even an empty one, a `!!binary` or `!` tag, a null key — is a parse error
+// here (the watcher keeps its last good snapshot; a write refuses to rebuild
+// the record from it), never the empty config.
 func ParseConfig(data []byte) (*ViewsConfig, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var cfg ViewsConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err

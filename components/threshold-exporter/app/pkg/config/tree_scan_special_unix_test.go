@@ -106,7 +106,8 @@ func TestScanDirTree_SpecialFilesAreNotRead(t *testing.T) {
 	root := specialTree(t)
 	full := scanWithin(t, "ScanDirTree", func() (*TreeScan, error) { return ScanDirTree(root, nil, nil, discardLogger) })
 	list := scanWithin(t, "ScanDirTreeFiles", func() (*TreeScan, error) { return ScanDirTreeFiles(root, discardLogger) })
-	for name, s := range map[string]*TreeScan{"ScanDirTree": full, "ScanDirTreeFiles": list} {
+	names := scanWithin(t, "ScanDirTreeNames", func() (*TreeScan, error) { return ScanDirTreeNames(root, discardLogger) })
+	for name, s := range map[string]*TreeScan{"ScanDirTree": full, "ScanDirTreeFiles": list, "ScanDirTreeNames": names} {
 		if !reflect.DeepEqual(s.Unreadable, wantSpecialUnreadable) {
 			t.Errorf("%s: Unreadable = %+v, want %+v", name, s.Unreadable, wantSpecialUnreadable)
 		}

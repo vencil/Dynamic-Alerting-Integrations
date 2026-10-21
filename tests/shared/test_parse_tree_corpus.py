@@ -1,7 +1,7 @@
 """Python half of tests/shared/parse_tree_corpus.json (#2897, ADR-036 §2).
 
 `da-guard parse-tree` refuses a CLOSED LIST of shapes — the ones whose
-meaning is ambiguous between YAML readers (the kinds of internal/parsetree;
+meaning is ambiguous between YAML readers (the kinds of pkg/parsetree;
 owner decision on ADR-036 §2, option B). Everything else it reads as yaml.v3
 reads it, including files today's route generator refuses only because
 PyYAML does (a TAB separator, a duplicate anchor, deep nesting, …); the
@@ -38,7 +38,7 @@ Rows:
   here against the generator verdict.
 
 The Go half
-(components/threshold-exporter/app/internal/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
+(components/threshold-exporter/app/pkg/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
 
 Regenerate (never edit by hand):
 
@@ -75,7 +75,7 @@ MERGE_KEY_CATEGORIES_PATH = Path(__file__).parent / "parse_tree_merge_key_catego
 STRICTER = "stricter than today"
 
 # The closed list: every kind parse-tree refuses a file for
-# (internal/parsetree Kinds; the Go test asserts the two are one set), and
+# (pkg/parsetree Kinds; the Go test asserts the two are one set), and
 # the subset it can give a text (the other two are about the path, covered
 # by da-guard's own tests).
 CLOSED_LIST = ("read_failure", "not_regular_file", "invalid_utf8", "bom_not_at_start",
@@ -217,18 +217,18 @@ _ROWS: tuple[tuple, ...] = (
      None, None),
     # ── non_specific_tag ──
     ("nonspecific-plain", "t.yaml", "tenants:\n  t1:\n    a: ! 123\n", None, "unreadable:non_specific_tag",
-     "stricter than today: PyYAML reads `! 123` as a string, yaml.v3 as an int", "ADR-036 §8"),
+     "stricter than today: PyYAML and yaml.v3 both read the int 123", "ADR-036 §8"),
     ("nonspecific-quoted", "t.yaml", "tenants:\n  t1:\n    a: ! \"x\"\n", None,
      "unreadable:non_specific_tag",
-     "stricter than today: the vendored patch keeps `!`, upstream yaml.v3 drops it", "ADR-036 §8"),
+     "stricter than today: PyYAML and yaml.v3 both read the string \"x\"", "ADR-036 §8"),
     ("nonspecific-merge-key-alias", "t.yaml",
      "x-b: &b {cpu: 1}\ntenants:\n  t1: {! \"<<\": *b}\n", None, "unreadable:non_specific_tag",
-     "stricter than today: PyYAML and the vendored yaml.v3 merge, upstream yaml.v3 reads a key \"<<\"",
+     "stricter than today: PyYAML merges, yaml.v3 reads a key \"<<\"",
      "ADR-036 §8"),
     ("nonspecific-slo-objective", "t.yaml",
      "tenants:\n  t1:\n    _custom_alerts:\n    - name: x\n      slo:\n        objective: ! \"99.9\"\n",
      None, "unreadable:non_specific_tag",
-     "stricter than today: the exporter refuses the objective today, upstream yaml.v3 would accept it", "ADR-036 §8"),
+     "stricter than today: PyYAML reads the float 99.9, yaml.v3 the string \"99.9\"", "ADR-036 §8"),
     ("nonspecific-mapping", "t.yaml", "tenants: !\n  t1: {a: 1}\n", None, "unreadable:non_specific_tag",
      "stricter than today: `!` on a mapping", None),
     ("nonspecific-verbatim", "t.yaml", "tenants:\n  t1:\n    a: !<!> x\n", None,
@@ -393,7 +393,7 @@ def _render() -> str:
         "file is that corpus's `doc`, as `_domain_policy.yaml`); their categories",
         "are in parse_tree_merge_key_categories.json. `id`: the first 16 hex",
         "digits of the sha256 of the file. Go half:",
-        "components/threshold-exporter/app/internal/parsetree/corpus_test.go.",
+        "components/threshold-exporter/app/pkg/parsetree/corpus_test.go.",
     ]
     doc = {"_comment": comment, "pyyaml": yaml.__version__, "closed_list": list(CLOSED_LIST),
            "text_kinds": list(TEXT_KINDS)}

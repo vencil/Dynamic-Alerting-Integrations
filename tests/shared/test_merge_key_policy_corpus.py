@@ -45,8 +45,8 @@ as the line break, and `encoding` rows — a policy written as UTF-16 with its
 byte order mark, or as Latin-1, which the generator (UTF-8 only) cannot
 read and yaml.v3 can. Their verdicts are `_verdict()`'s
 like any other row's, and Go skips none of them (`nonspecific_tag` marks
-the rows that carry the non-specific tag `!` on a quoted scalar, which Go
-reads through the vendored yaml.v3's patch — #2730 §6). The shapes also
+the rows that carry the non-specific tag `!` on a quoted scalar, which PyYAML
+reads as if plain and yaml.v3 drops — #2730 §6). The shapes also
 hold the divergences #2759 lists as Go-looser that no row measured before (ADR-036
 step 2): a nesting depth of 600 (A), `!!set` at domain_policies / a domain
 / constraints (F), a merge value holding a mapping with a collection key, in
@@ -65,7 +65,7 @@ No Go reader's verdict on these rows is recorded any more (ADR-036 step 3
 deleted that half with the reader-divergence catalog). The rows are still
 read by parse-tree's fixed corpus: tests/shared/parse_tree_corpus.json lists
 every row by `id` under `merge_key_rows`, and
-components/threshold-exporter/app/internal/parsetree/corpus_test.go
+components/threshold-exporter/app/pkg/parsetree/corpus_test.go
 categorises each one.
 
 The rows are generated from a fixed seed, never hand-edited:
@@ -179,19 +179,19 @@ LT_SPELLINGS = ("<<", "<<", "!!merge <<", "!<tag:yaml.org,2002:merge> <<", "! <<
                 "!y!merge <<", '"<<"', "'<<'", "!!str <<")
 # These only the generator reads as a merge — half the documents ("full")
 # use them: a tagged `!!merge q`, an alias key, an anchored `<<` as a value,
-# and the non-specific `! "<<"` (NONSPECIFIC: a yaml.Node tells it from a
-# quoted "<<" only through the vendored yaml.v3's patch).
+# and the non-specific `! "<<"` (NONSPECIFIC: yaml.v3 drops the tag, so its
+# node is a quoted "<<"; parse-tree finds the `!` in the source text).
 Q_SPELLINGS = ("!!merge {q}", "!<tag:yaml.org,2002:merge> {q}", "!y!merge {q}")
 NONSPECIFIC_SPELLING = '! "<<"'
 # Anchored key spellings an alias key may name (x-keys).
 KEY_ANCHOR_SPELLINGS = ("<<", "<<", "!!merge <<", "!!merge qk", '"<<"', "! <<", "!!str <<")
 
 NONSPECIFIC = ("the non-specific tag `!` on a quoted scalar: PyYAML resolves it as if plain; "
-               "upstream yaml.v3 drops the tag, the vendored copy keeps it (#2730 §6)")
+               "yaml.v3 drops the tag; parse-tree refuses it from the source text (#2730 §6)")
 # A non-specific tag `!` on a quoted scalar, key or value, an anchor on
 # either side of it (`! "<<"`, `&a ! '<<'`, `! &a "true"`): PyYAML resolves
 # the scalar as if it were plain (`! "true"` is True, `! "<<"` a merge);
-# the vendored yaml.v3 keeps Tag "!" on the node so Go can too.
+# yaml.v3 reads the quoted scalar (`"true"`, a key "<<").
 _NONSPECIFIC_RE = re.compile(r"""(?:^|[\s\[{,?\ufeff\u2028\x85])(?:&\w+ )?! (?:&\w+ )?["']""")
 
 
@@ -1323,8 +1323,8 @@ def _render(rows: list[dict]) -> str:
         "read, but the generator run as in production (--validate --strict)",
         "blocks on it — its own blocking findings (kind, policy, field).",
         "`nonspecific_tag`: the row",
-        "carries the non-specific tag `!` on a quoted scalar, which Go reads",
-        "through the vendored yaml.v3's patch (#2730 §6). `encoding`: the",
+        "carries the non-specific tag `!` on a quoted scalar, which PyYAML reads",
+        "as if plain and yaml.v3 drops (#2730 §6). `encoding`: the",
         "file is `doc` written in that encoding (utf-16-le-bom, utf-16-be-bom:",
         "the byte order mark, then UTF-16; latin-1), not UTF-8. `shape`: a",
         "deterministic row pinning one ticket's shape",

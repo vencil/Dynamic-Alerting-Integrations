@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,10 +95,10 @@ type nullMatrixObs struct {
 	redundant      bool   // da-guard calls the tenant's key redundant
 }
 
-func nullMatrixObserve(t *testing.T, files map[string]string, tenantKey string) nullMatrixObs {
+// nullMatrixObserve reads the tree at dir as it stands; the caller has
+// written the cell's tenant file into it.
+func nullMatrixObserve(t *testing.T, dir, tenantKey string) nullMatrixObs {
 	t.Helper()
-	dir := t.TempDir()
-	testutil.WriteTree(t, dir, files)
 	var o nullMatrixObs
 
 	cfg, rep, err := config.LoadDirReport(dir, log.New(io.Discard, "", 0))
@@ -208,10 +209,23 @@ func TestGuard_NullOverrideIsNoWriteOnEveryLayer(t *testing.T) {
 						if plat.key != "" {
 							files["_platform.yaml"] = "tenants:\n  tx:\n" + plat.line("    ")
 						}
+						// One tree per (root, sub, prof, plat): only the tenant
+						// file varies below this point, and it is always written
+						// (a non-empty body), truncating the previous cell's.
+						// Nothing else is written into dir, and every reader in
+						// nullMatrixObserve is a cold scan (no prior, no mtime
+						// fast-path), so a cell reads the tree a fresh TempDir
+						// would have given it (#3180). Cost of the full run: 8125
+						// cells over 625 trees (13 tenant states each; `-short`
+						// 7), each cell one LoadDirReport + one EffectiveTree +
+						// one guard run.
+						dir := t.TempDir()
+						testutil.WriteTree(t, dir, files)
+						tenantPath := filepath.Join(dir, "sub", "tx.yaml")
 						var without string // served with no tenant key
 						for _, ten := range tenants {
-							files["sub/tx.yaml"] = "tenants:\n  tx:\n    _profile: std\n    pg_connections: 100\n" + ten.line("    ")
-							o := nullMatrixObserve(t, files, ten.key)
+							testutil.WriteFile(t, tenantPath, "tenants:\n  tx:\n    _profile: std\n    pg_connections: 100\n"+ten.line("    "))
+							o := nullMatrixObserve(t, dir, ten.key)
 							if ten.key == "" {
 								without = o.served
 							}

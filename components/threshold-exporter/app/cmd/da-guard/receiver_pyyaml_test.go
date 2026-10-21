@@ -9,6 +9,7 @@ package main
 // now be undetermined (exit 4), with no finding at all.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -95,7 +96,6 @@ func TestRun_ReceiverReadBesideNonStringKeys(t *testing.T) {
 	}{
 		{"routing on: key", "receiver", func(tok string) string { return rsTenant + "    _routing:\n      on: x" + recv(6, tok) }},
 		{"routing 1: key", "receiver", func(tok string) string { return rsTenant + "    _routing:\n      1: x" + recv(6, tok) }},
-		{"routing ~: key", "receiver", func(tok string) string { return rsTenant + "    _routing:\n      ~: x" + recv(6, tok) }},
 		{"routing alias key", "receiver", func(tok string) string {
 			return "k: &k on\n" + rsTenant + "    _routing:\n      *k : x" + recv(6, tok)
 		}},
@@ -119,6 +119,15 @@ func TestRun_ReceiverReadBesideNonStringKeys(t *testing.T) {
 		}{{"on", true}, {`"on"`, false}} {
 			assertReceiverTreeNotJudged(t, s.name+" token "+tc.token,
 				map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": s.tenant(tc.token)})
+		}
+	}
+	// A `~:` key beside the receiver was a shape here too. Since ADR-036
+	// step 6 (#3206) parse-tree refuses a null key (null_key), so the
+	// exporter drops tx.yaml: exit 3 naming it, whatever the token.
+	for _, tok := range []string{"on", `"on"`} {
+		r := runDupTree(t, map[string]string{"tx.yaml": rsTenant + "    _routing:\n      ~: x" + recv(6, tok)})
+		if r.code != exitParseFailed || !reflect.DeepEqual(r.parseFailed, []string{"tx.yaml"}) {
+			t.Errorf("routing ~: key token %s: exit %d, parse_failed %v; want 3 naming tx.yaml", tok, r.code, r.parseFailed)
 		}
 	}
 }

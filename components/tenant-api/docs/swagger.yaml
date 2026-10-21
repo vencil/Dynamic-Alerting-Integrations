@@ -2057,11 +2057,15 @@ paths:
             In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
             batch branch to the config repository failed, a timeout included: the
             whole batch fails, no PR/MR opened, Retry-After (the branch may be left
-            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the
-            request was cancelled or reached its deadline before a synchronous batch
-            finished: unlike the cases above it may already be committed (a git command
-            that hits its own deadline may already have moved the ref), so refresh
-            to see whether it was before retrying'
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when
+            a synchronous batch was stopped before anything of it was committed: the
+            request was cancelled or reached its deadline, or a git command hit its
+            own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back
+            unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with
+            another message when updating the branch failed and the server could not
+            read the branch back: unlike the cases above the batch may already be
+            committed, so refresh to see whether it was before retrying (an async
+            task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2265,12 +2269,18 @@ paths:
             is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
             a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
             with a letter or digit (ADR-035; the route generator refuses a tree that
-            declares any other id; nothing written). Also 400 when the body is not
-            API-shaped (#3064): it declares a tenant besides {id}, several documents,
-            or an anchor, alias, merge key or tagged key at the top level or directly
-            under tenants: (nothing written). Also 400 when the current tenant file''s
-            tenants: block cannot be decoded for the end-of-life check and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            declares any other id; nothing written). Also 400 when parse-tree refuses
+            the body, the error naming its kind (#3206, ADR-036): more than one YAML
+            document (an empty trailing --- included), a tag outside !!str !!int !!float
+            !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific
+            ! tags included), a null or non-scalar key, a repeated key, a byte order
+            mark past the start, or a syntax or decode error (nothing written). Also
+            400 when the body is not API-shaped (#3064): it declares a tenant besides
+            {id}, several documents, or an anchor, alias, merge key or tagged key
+            at the top level or directly under tenants: (nothing written). Also 400
+            when the current tenant file''s tenants: block cannot be decoded for the
+            end-of-life check and the caller lacks write permission on all tenants
+            (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2371,11 +2381,14 @@ paths:
             In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
             feature branch to the config repository failed, a timeout included: no
             PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
-            or reached its deadline before the write finished: unlike the cases above
-            it may already be committed (a git command that hits its own deadline
-            may already have moved the ref), so refresh to see whether it was before
-            retrying'
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped
+            before anything of it was committed: the request was cancelled or reached
+            its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2428,9 +2441,11 @@ paths:
         base_hash (409 on drift). Empty array deletes the key.
         409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
         409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
-        tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-        whole-file PUT /api/v1/tenants/{id}, which replaces it (an API-shaped file only: one that is not YAML, or
-        is shared with other tenants, is git-managed and repaired in git). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+        tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A
+        whole-file PUT /api/v1/tenants/{id} replaces it (an API-shaped file only: one that is not YAML, or
+        is shared with other tenants, is git-managed and repaired in git); when parse-tree refuses the file (its kind
+        is in parse_tree_kind, #3206) or that PUT's end-of-life check cannot read it, the PUT needs write permission on
+        all tenants, and any other caller asks one who has it or repairs the file in git. Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
         not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
         whole-file PUT refuses it too, so replace it with a regular file in git.
         409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
@@ -2555,10 +2570,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before
+            anything of it was committed: the request was cancelled or reached its
+            deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
@@ -3032,11 +3051,14 @@ paths:
             mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
             config repository failed, a timeout included: the whole batch fails, no
             PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
-            or reached its deadline before a synchronous batch finished: unlike the
-            cases above it may already be committed (a git command that hits its own
-            deadline may already have moved the ref), so refresh to see whether it
-            was before retrying'
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch
+            was stopped before anything of it was committed: the request was cancelled
+            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above the batch may already be committed, so refresh to see whether
+            it was before retrying (an async task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations

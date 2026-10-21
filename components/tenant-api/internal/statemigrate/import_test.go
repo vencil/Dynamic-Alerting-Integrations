@@ -254,3 +254,31 @@ func TestImportRefusesTwoSubsetFilesForOneTenant(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// The legacy conf.d registry is parse-tree's to judge first (ADR-036 §7 step
+// 7, #3206; account.Parse): each text below decodes with yaml.v3 alone (the
+// first document; a `!!binary` or `!` value — account's
+// TestParse_ParseTreeRefusal holds that), and each is refused as one that
+// does not parse — the boot fails, nothing reaches the store.
+func TestImportRegistryParseTreeRefusal(t *testing.T) {
+	const reg = "schema_version: v1\nnext_account_id: 1010\nallocations:\n  t1: 1005\n"
+	for _, c := range []struct{ name, text, kind string }{
+		{"second document", reg + "---\nnext_account_id: 1000\n", "multiple_documents"},
+		{"trailing empty document", reg + "---\n", "multiple_documents"},
+		{"!!binary value", "schema_version: !!binary djE=\nnext_account_id: 1010\nallocations:\n  t1: 1005\n", "tag_not_allowed"},
+		{"non-specific tag", "schema_version: ! \"v1\"\nnext_account_id: 1010\nallocations:\n  t1: 1005\n", "non_specific_tag"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, account.RegistryFileName, c.text)
+			st := newStore(t)
+			_, err := Import(context.Background(), st, dir, &fakeHistory{}, nil)
+			if err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+				t.Fatalf("Import = %v, want a refusal of kind %s", err, c.kind)
+			}
+			if got := get(t, st, account.RegistryFileName); got != "<absent>" {
+				t.Errorf("store holds %q after a refused import", got)
+			}
+		})
+	}
+}

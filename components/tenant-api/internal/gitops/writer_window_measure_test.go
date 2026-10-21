@@ -15,8 +15,9 @@ package gitops
 //     .gitattributes normalisation and symlinks included.
 //
 // FIXED(#1535-6) marks a scenario whose behaviour before the fix was a defect,
-// now asserted fixed. BUG(#3173) marks one still open: it asserts the
-// CURRENT behaviour, so the fix turns it red on purpose. None is skipped.
+// now asserted fixed. None is skipped. (The publishBatch ref-update scenario
+// found here — update-ref fails and HEAD cannot be read — was fixed in #3173
+// and lives in write_outcome_test.go.)
 //
 // Tenant ids are fixture names (CLAUDE.md #9).
 
@@ -881,94 +882,5 @@ func TestDirty_GitignoredTenantFile(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != body {
 		t.Fatalf("ignored file changed: %q", got)
-	}
-}
-
-// --- publishBatch: update-ref fails and HEAD is then unreadable ----------
-
-// refAndHeadFailingGit: the batch's `update-ref` exits 1 (after running it
-// when ranFirst), and every `rev-parse HEAD` after it exits 1.
-func refAndHeadFailingGit(t *testing.T, ranFirst bool) string {
-	t.Helper()
-	d := t.TempDir()
-	flag := filepath.Join(d, "ref-failed")
-	onUpdateRef := "touch '" + flag + "'; exit 1"
-	if ranFirst {
-		onUpdateRef = "git \"$@\"; touch '" + flag + "'; exit 1"
-	}
-	stub := filepath.Join(d, "git")
-	script := "#!/bin/sh\n" +
-		"case \"$*\" in\n" +
-		"  *update-ref*'tenant-api: batch'*) " + onUpdateRef + " ;;\n" +
-		"  *rev-parse\\ HEAD) [ -e '" + flag + "' ] && exit 1 ;;\n" +
-		"esac\n" +
-		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return stub
-}
-
-// P1/P2: whether the ref moved is unknown to the writer (HEAD unreadable);
-// it returns a plain error — not ErrConflict, not *BatchCommittedError —
-// and drops the publish marker.
-//
-// BUG(#3173) in P2 (ref moved; found in #1535 item 6, its fix tracked
-// in #3173): the batch IS on the branch, yet the error is the "not
-// committed" kind (the handler says "nothing was written", see handler
-// TestAsyncBatch_RefStateUnknown…), and with the marker gone nothing
-// brings the serving file up to the branch: the worktree stays at the old
-// bytes behind a HEAD that has the new ones. The assertions pin that
-// behaviour as it is today, NOT as it should be: the #3173 fix turns this
-// test red on purpose and updates it.
-func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
-	t.Parallel()
-	for _, ranFirst := range []bool{false, true} {
-		name := "P1 ref unmoved"
-		if ranFirst {
-			name = "P2 ref moved"
-		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			dir := winRepo(t)
-			w := newTestWriter(dir, dir)
-			w.gitBinary = refAndHeadFailingGit(t, ranFirst)
-			base := gitRevParse(t, dir, "HEAD")
-			body := winBody(winTenant, "90", "")
-			out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant,
-				Merge: func([]byte) (string, error) { return body, nil }}}, "alice@example.com")
-			var committed *BatchCommittedError
-			if err == nil || errors.Is(err, ErrConflict) || errors.As(err, &committed) || out != nil {
-				t.Fatalf("out=%v err=%v; current (#3173): nil outcomes, a plain error", out, err)
-			}
-			if !strings.Contains(err.Error(), "advance the serving branch") {
-				t.Fatalf("err = %v", err)
-			}
-			marker, merr := w.publishMarkerPath()
-			if merr != nil {
-				t.Fatal(merr)
-			}
-			if _, serr := os.Stat(marker); !os.IsNotExist(serr) {
-				t.Fatalf("publish marker still present (%v)", serr)
-			}
-			head := gitRevParse(t, dir, "HEAD")
-			serving := winServing(t, dir, winTenant)
-			if ranFirst {
-				// BUG(#3173): published, reported as not written, worktree behind.
-				if head == base || gitT(t, dir, "show", "HEAD:"+winTenant+".yaml") != body {
-					t.Fatal("the ref did not move")
-				}
-				if serving != winBody(winTenant, "60", "") {
-					t.Fatalf("serving file = %q; current (#3173): still the old bytes", serving)
-				}
-				if st := gitT(t, dir, "status", "--porcelain", "--", winTenant+".yaml"); strings.TrimSpace(st) == "" {
-					t.Fatal("git status clean; current (#3173): the path shows as changed (worktree behind HEAD)")
-				}
-			} else if head != base || serving != winBody(winTenant, "60", "") {
-				t.Fatalf("HEAD moved or serving file changed")
-			}
-			t.Logf("current behaviour (#3173) %s: err=%q, marker removed, HEAD moved=%v, serving file old=%v",
-				name, err, head != base, serving == winBody(winTenant, "60", ""))
-		})
 	}
 }

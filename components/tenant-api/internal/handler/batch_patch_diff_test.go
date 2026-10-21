@@ -86,8 +86,13 @@ var patchDiffCases = []patchDiffCase{
 	{name: "sibling-scalar-shapes", tenant: "t1", patch: map[string]string{"redis_memory": "1"}, want: "merged",
 		base: "tenants:\n  t1: {}\n  t2:\n    b_yes: yes\n    b_on: On\n    b_octal: 0o17\n    b_old_octal: 017\n" +
 			"    b_under: 1_000\n    b_date: 2001-12-14\n    b_ts: 2001-12-14t21:59:43.10-05:00\n    b_inf: .inf\n" +
-			"    b_sexa: 1:20\n    b_str: !!str 12\n    b_bin: !!binary aGk=\n    b_float: 1e3\n    b_null: ~\n" +
+			"    b_sexa: 1:20\n    b_str: !!str 12\n    b_float: 1e3\n    b_null: ~\n" +
 			"    b_empty:\n    b_hex: 0x1F\n    b_folded: >\n      a\n      b\n    b_literal: |\n      a\n      b\n"},
+	// A `!!binary` sibling was in the row above. Since ADR-036 step 6 (#3206)
+	// the exporter's decode (cfg.ParseTenantFile, which the merge loads the
+	// base with) refuses the file on parse-tree's tag_not_allowed first.
+	{name: "sibling-binary", tenant: "t1", patch: map[string]string{"redis_memory": "1"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\n  t2:\n    b_bin: !!binary aGk=\n"},
 	// Anchors and a `<<` in another tenant's block: not where the edit looks.
 	{name: "anchors-and-merge-keys", tenant: "t1", patch: map[string]string{"redis_memory": "1"}, want: "merged",
 		base: "x_shared: &s\n  redis_memory: \"5\"\ntenants:\n  t1:\n    mysql_mem: \"2\"\n  t2:\n    <<: *s\n    redis_memory: \"9\"\n"},
@@ -102,7 +107,8 @@ var patchDiffCases = []patchDiffCase{
 	{name: "long-string", tenant: "t1", want: "merged",
 		patch: map[string]string{"_metadata_note": strings.Repeat("word ", 60) + "end"},
 		base:  "tenants:\n  t1:\n    redis_memory: \"1\"\n  t2:\n    note: " + strings.Repeat("long ", 60) + "end\n"},
-	{name: "routes-match-null-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
+	// A null key: parse-tree's null_key since ADR-036 step 6 (#3206).
+	{name: "routes-match-null-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\n  t2:\n    _routing:\n      receiver: {type: webhook, url: \"https://a.example/x\"}\n" +
 			"      routes:\n        - match: {~: x}\n          receiver: {type: webhook, url: \"https://b.example/x\"}\n"},
 	{name: "other-top-level-keys", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
@@ -241,15 +247,18 @@ var patchDiffCases = []patchDiffCase{
 	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: &a\n  b: *a\n"},
 
-	// --- unreadable, and the re-encode keeps it so ----------------------
-	// Written back as they came: the generator refuses the merged file too.
-	{name: "duplicate-via-alias-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	// --- unreadable to the generator: was "unreadable_kept" -------------
+	// Written back as they came, the generator refused the merged file too.
+	// Since ADR-036 step 6 (#3206) the exporter's decode the base is loaded
+	// with refuses each first (parse-tree: duplicate_key, tag_not_allowed),
+	// so no row of this table is "unreadable_kept" any more.
+	{name: "duplicate-via-alias-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "k: &k a\ntenants:\n  t1: {}\nextra:\n  a: 1\n  *k : 2\n"},
-	{name: "unknown-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "unknown-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: !foo bar\n"},
-	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: !!map [1]\n"},
-	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: !!python/name:os.system ''\n"},
 }
 

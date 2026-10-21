@@ -13,7 +13,7 @@ import (
 // "does this NAME count as a tenant config file"; this file answers "WHICH
 // FILE in this directory is tenant X's". Splitting the two across packages
 // was considered and rejected: the divergence this file exists to close is
-// exactly that the enumerating plane (TenantIDFromFile, which accepts
+// exactly that the enumerating plane (confdname.TenantNamedBy, which accepts
 // .yaml/.yml in any case) and the per-tenant addressing plane (a hardcoded
 // `filepath.Join(dir, id+".yaml")`, repeated ~10 times) answered that
 // question differently, so a tenant stored as `<id>.yml` was listed by
@@ -127,7 +127,7 @@ func matchTenantFiles(configDir, tenantID string) ([]string, error) {
 // ResolveTenantFile returns the path of the single file in configDir holding
 // tenantID's config.
 //
-// The id comparison is EXACT, not case-folded: TenantIDFromFile keeps the
+// The id comparison is EXACT, not case-folded: confdname.TenantNamedBy keeps the
 // stem's original case (`Upper.YAML` → `Upper`), and the write-accepted id
 // namespace has always been case-sensitive, so folding here would let
 // GET /tenants/{upper} reach a tenant that no writer could ever address.

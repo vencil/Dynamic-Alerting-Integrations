@@ -476,9 +476,8 @@
     {
       "name": "dup-in-unknown-section",
       "doc": "defaults:\n  k: 80\nfoo:\n  a: 1\n  a: 2\n",
-      "exporter": "accepted",
-      "key": "k",
-      "value": 80
+      "exporter": "dropped",
+      "key": null
     },
     {
       "name": "dup-unknown-top-level",
@@ -550,9 +549,8 @@
     {
       "name": "multi-document",
       "doc": "defaults:\n  k: 80\n---\ndefaults:\n  k: disable\n",
-      "exporter": "accepted",
-      "key": "k",
-      "value": 80
+      "exporter": "dropped",
+      "key": null
     },
     {
       "name": "utf8-bom",
@@ -600,17 +598,14 @@
     {
       "name": "dup-under-unknown-nested-field",
       "doc": "defaults:\n  k: 80\nstate_filters:\n  x:\n    foo:\n      a: 1\n      a: 2\n",
-      "exporter": "accepted",
-      "key": "k",
-      "value": 80,
-      "python": "unparseable"
+      "exporter": "dropped",
+      "key": null
     },
     {
       "name": "dup-in-custom-alerts-recipe",
       "doc": "defaults:\n  k: 80\n_custom_alerts:\n- recipe: a\n  recipe: b\n",
-      "exporter": "accepted",
-      "key": "k",
-      "value": 80
+      "exporter": "dropped",
+      "key": null
     },
     {
       "name": "trailing-tab",

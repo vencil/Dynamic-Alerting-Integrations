@@ -567,10 +567,12 @@ assert len(_ORACLE_BY_NAME) == len(_ORACLE), "duplicate case name in the oracle"
 #: ADR-036 §2 (#2906): the verdict reads parse-tree's nodes. These rows are
 #: outside its closed list (a duplicate key anywhere, a second document, a tag
 #: it does not read, a tag yaml.v3's decode refuses, a plain `<<` value):
-#: parse-tree cannot read the file, so the tool refuses the carrier WHOLE —
-#: fail-closed, also where the exporter loads it or drops only the file (the
-#: same verdict with the key unnamed). Pinned as a set, so a row that leaves
-#: or joins it is a decision, not drift.
+#: parse-tree cannot read the file, so the tool refuses the carrier WHOLE, with
+#: the key unnamed. Since ADR-036 step 6 (#3206) the exporter drops each of
+#: these files whole too (the oracle's `dropped`); the rows where the oracle
+#: still names a key are the ones the exporter's own decode refuses at that
+#: key. Pinned as a set, so a row that leaves or joins it is a decision, not
+#: drift.
 _CLOSED_LIST_ROWS = {
     "dup-in-custom-alerts-recipe", "dup-in-unknown-section", "merge-token-as-value",
     "multi-document", "tagged-binary", "tagged-custom", "tagged-float-on-word",

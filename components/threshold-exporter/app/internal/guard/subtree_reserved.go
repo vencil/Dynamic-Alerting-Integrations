@@ -42,7 +42,11 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		}
 	}
 	sort.Strings(tenants)
-	unwrapped := unwrappedDefaultsFiles(input)
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	unwrapped := unwrappedDefaultsFiles(input, failed)
 	applied := indexAppliedBySource(input.SubtreeRefusedVerdicts)
 	var out []Finding
 	for _, id := range tenants {
@@ -53,7 +57,13 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			files := byKey[k]
+			// A file the exporter drops (ParseFailed — since ADR-036 step 6,
+			// #3206, every file parse-tree refuses) applies nothing, so it
+			// writes no reserved key: skipped, as checkDefaultsWrapper does.
+			files := withoutFailed(byKey[k], failed)
+			if len(files) == 0 {
+				continue
+			}
 			if readElsewhere[k] {
 				files = writtenInsideDefaults(files, unwrapped)
 				if len(files) == 0 {
@@ -75,12 +85,30 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 // unwrappedDefaultsFiles is the set of input.DefaultsFiles (root-relative
 // names) with no `defaults:` mapping: the defaults merge reads the whole
 // document, so a key in pkg/config's chain view of such a file sits at its
-// TOP level.
-func unwrappedDefaultsFiles(input CheckInput) map[string]bool {
+// TOP level. A file in failed (ParseFailed) is skipped, as checkDefaultsWrapper
+// skips it: the exporter reads none of it.
+func unwrappedDefaultsFiles(input CheckInput, failed map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] {
+			continue
+		}
 		if doc := decodeDefaultsDoc(f.Data); doc != nil && !wrappedInMapping(doc) {
 			out[f.Name] = true
+		}
+	}
+	return out
+}
+
+// withoutFailed is files minus the ones in failed; files itself when none is.
+func withoutFailed(files []string, failed map[string]bool) []string {
+	if len(failed) == 0 {
+		return files
+	}
+	var out []string
+	for _, f := range files {
+		if !failed[f] {
+			out = append(out, f)
 		}
 	}
 	return out

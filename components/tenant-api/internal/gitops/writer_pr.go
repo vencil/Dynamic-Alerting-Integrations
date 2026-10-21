@@ -43,6 +43,10 @@ type PRWriteResult struct {
 // The ordering is load-bearing (branch -D refuses to delete the branch we
 // are still on / with dirty state). Errors are intentionally ignored —
 // callers are already returning the primary failure. Callers hold w.mu.
+//
+// #3175: if base's git config names a driver, checkoutBaseClean refuses
+// after its move (HEAD is on base); the branch -D that follows only
+// deletes a ref and runs no driver.
 func (w *Writer) abortFeatureBranch(base, branchName string) {
 	_ = w.checkoutBaseClean(base)
 	_ = w.gitExec("branch", "-D", branchName)
@@ -73,6 +77,20 @@ func (w *Writer) restoreBase(base, branch string, pushed bool) error {
 			w.beforeBaseRestore(attempt)
 		}
 		if err = w.checkoutBaseClean(base); err == nil {
+			return nil
+		}
+		if errors.Is(err, ErrGitDriverConfigured) {
+			// #3175: the tree IS on base; base's git config names a driver
+			// (checkoutBaseClean's check after the move). Base was checked
+			// when this write anchored on it (Step 3), so the key appeared
+			// mid-write. No retry — its reset would run under base's config
+			// — and no failure: the branch is committed (and pushed, if
+			// pushed), the tree is on base, and what is left (Step 8's
+			// branch -D) touches no file. Failing here would make a client
+			// retry a pushed write (see ErrBaseRestore). The next write's
+			// check under the lock refuses.
+			slog.Error("gitops: back on base, whose git config now names a driver; the next write will be refused (#3175)",
+				"base", base, "branch", branch, "pushed", pushed, "error", err)
 			return nil
 		}
 		if attempt < baseRestoreAttempts {
@@ -128,7 +146,7 @@ var ErrPushFailed = errors.New("push of the PR-mode feature branch to origin fai
 // PushError is the error a PR-mode write returns when its push failed. It
 // unwraps to ErrPushFailed ONLY — like BaseRestoreError, the git error is
 // kept in Cause and rendered with %v, never wrapped: a push that timed out
-// wraps context.DeadlineExceeded and one that met index.lock contention wraps
+// wraps ErrGitTimeout (#3173) and one that met index.lock contention wraps
 // ErrWriteOverloaded, and either would make a handler answer the generic
 // cancelled / overloaded 503 instead of the push-failed one. Its text carries
 // the remote's output, so it goes to the log, not the client.
@@ -234,7 +252,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	defer w.releaseWrite()
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
@@ -251,6 +269,9 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// a prior write left the tree on some feature branch, this re-establishes the
 	// base every time (#638). Abort if the base is unreachable — branching from an
 	// unknown ref is exactly the bug we're preventing.
+	// checkoutBaseClean re-checks the git config on base (#3175): the check
+	// under the lock ran on whatever branch HEAD was on then, and the
+	// `checkout -b` below runs under base's config.
 	base := w.base()
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
@@ -266,6 +287,25 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
+	}
+	// #3175: on the feature branch an `includeIf "onbranch:…"` the check on
+	// base (checkoutBaseClean, just above) could not see may apply. Checked
+	// before anything is written, staged or committed on it. The way back
+	// must not run git on files under the branch's config: HEAD is pointed
+	// at base first (no file touched), and only then is the tree checked out
+	// — under base's config, which checkoutBaseClean checked after its move.
+	if err := w.checkGitDriversIn(w.gitDir); err != nil {
+		// If HEAD cannot be pointed back at base, the abort's reset and
+		// checkout would run under the branch's config — skip it. HEAD stays
+		// on the feature branch, so the next write's check under the lock
+		// sees the same driver and refuses before any git runs on files.
+		if serr := w.gitExec("symbolic-ref", "HEAD", "refs/heads/"+base); serr != nil {
+			slog.Error("PR-mode write: driver found on the feature branch and HEAD could not be pointed back at base; leaving the branch for the operator",
+				"branch", branchName, "base", base, "error", serr)
+			return nil, err
+		}
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
 	}
 
 	// Step 3b–3c: resolve the tenant's file, run the caller's check and the
@@ -627,7 +667,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
@@ -639,7 +679,9 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 
 	// Anchor the serving tree on a clean base (#638 — see WritePR Step 3):
 	// the PR-mode invariant between writes. The batch itself never touches
-	// the serving tree (#2900).
+	// the serving tree (#2900). checkoutBaseClean re-checks the git config
+	// on base (#3175); a driver there refuses the batch, as it refuses every
+	// write once the tree is on base.
 	base := w.base()
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err

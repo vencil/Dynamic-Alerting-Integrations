@@ -19,8 +19,8 @@ RUN go mod download
 
 # main package files live at app root; pkg/ holds the config library the
 # main package imports (extracted as a proper library in PR-7/PR-8 during
-# v2.8.0), and internal/ holds packages pkg/config imports — since #1674
-# the defaults-carrier predicate internal/confdname. All three must be
+# v2.8.0) and the conf.d name rule pkg/confdname, and internal/ holds
+# packages the main package and cmd/ import. All three must be
 # COPY'd or `go build` fails with "no required module provides package
 # github.com/vencil/threshold-exporter/<pkg|internal/...>".
 COPY *.go ./

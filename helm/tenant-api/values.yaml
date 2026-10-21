@@ -175,6 +175,11 @@ confDir:
 # container (use hostPath or a pre-populated PVC instead). Do not put
 # credentials in this URL: it is stored in a ConfigMap. Credentials for a
 # private repo come from writeBack.token, offered only to this URL's host.
+# tenant-api refuses to start (and to write) while the repository's git config
+# — or a global / system one, or GIT_CONFIG_* in its env — names a filter,
+# diff or merge driver (filter.*.clean/smudge/process, diff.*.textconv/command,
+# merge.*.driver): a repository that needs git-lfs or git-crypt cannot be
+# served (#3175; docs/api/tenant-api-hardening.md §3.11).
 gitRepoUrl: ""
 
 # Where writes go (#2855). ⛔ REQUIRED — the chart refuses to render until

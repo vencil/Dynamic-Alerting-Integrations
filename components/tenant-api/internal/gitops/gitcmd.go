@@ -88,6 +88,17 @@ func fetchTimeoutFromEnv() time.Duration {
 	return d
 }
 
+// SetGitTimeout overrides, for this Writer only, the per-command git
+// deadline NewWriter read from TENANT_API_GIT_TIMEOUT; a non-positive d is
+// ignored. Set it before the Writer serves. Tests outside this package use
+// it to make a git command time out (#3173) without changing the
+// process-wide environment.
+func (w *Writer) SetGitTimeout(d time.Duration) {
+	if d > 0 {
+		w.gitTimeout = d
+	}
+}
+
 // gitCmd builds a git *exec.Cmd bounded by the writer's per-command timeout
 // (#630). The caller MUST defer the returned cancel — it stops the deadline
 // timer and kills the child if it's still running. The context is returned so
@@ -109,8 +120,8 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 		bin = "git"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = gitEnv(literalPathspecs(args))
+	cmd := exec.CommandContext(ctx, bin, append(append([]string{}, gitFixedConfig...), args...)...)
+	cmd.Env = append(gitEnv(literalPathspecs(args)), w.gitTestEnv...)
 	// Bound how long Wait blocks for pipe I/O after the deadline kill, so a
 	// surviving remote-helper grandchild holding stdout can't keep the writer
 	// mutex pinned past the deadline (see defaultGitKillGrace).
@@ -120,6 +131,18 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 	}
 	return cmd, ctx, cancel
 }
+
+// gitFixedConfig goes in front of every git command tenant-api runs
+// (#3175). core.fsmonitor names a program — or, set to true, git's own
+// daemon — that git asks which files changed whenever it looks at the
+// worktree (status, add, diff, checkout, …); set in the conf repo's or a
+// global config, it would run on every read as well as every write.
+// tenant-api has git compare the files itself. Being a `-c` setting it
+// also reaches the hooks those commands run (git passes it on in
+// GIT_CONFIG_PARAMETERS), so a hook's own git commands do not run it
+// either. Unlike the filter and diff drivers (git_drivers.go), turning it
+// off changes no result: fsmonitor only makes git's scan faster.
+var gitFixedConfig = []string{"-c", "core.fsmonitor=false"}
 
 // pathspecEnv are git's global pathspec settings. gitEnv drops every one
 // of them that tenant-api inherited before it decides what git gets.
@@ -200,9 +223,12 @@ func isPathspecEnv(kv string) bool {
 // take no pathspec (rev-parse, cat-file, show, commit-tree, write-tree,
 // merge-base, status, …) gain nothing from the setting and are left out too.
 //
-// What the setting still reaches inside an allowed command is a program the
-// conf repo configures for it — a clean filter on `add`, a textconv driver on
-// `log -p`, a core.fsmonitor hook — none of which tenant-api's repos use.
+// What the setting would still reach inside an allowed command is a program
+// the git config names for it — a clean filter on `add`, a textconv driver on
+// `log -p`, a core.fsmonitor hook. tenant-api runs none of them (#3175): it
+// refuses to run against a config that names a filter, diff or merge driver
+// (CheckGitDrivers, git_drivers.go), and passes core.fsmonitor=false to
+// every command (gitFixedConfig).
 func literalPathspecs(args []string) bool {
 	sub, rest := gitSubcommand(args)
 	switch sub {
@@ -280,6 +306,9 @@ func literalPathspec(p string) string {
 // gitErr renders a git failure. A deadline kill is reported LOUDLY and flags that
 // the write lock is released as the caller returns (the whole point of #630), so
 // a stuck push surfaces as a clear timeout instead of a silent global write freeze.
+// It wraps ErrGitTimeout, not context.DeadlineExceeded (#3173): the deadline is
+// the command's own, and whether the write it was part of reached the branch is
+// the writer's to decide (write_outcome.go), not the caller's to guess.
 func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		// #638: a SIGKILL'd git leaves its write-locks behind (no signal cleanup).
@@ -291,7 +320,7 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 			timeout = defaultGitTimeout
 		}
 		return fmt.Errorf("git %s timed out after %s — write lock released: %w — %s",
-			op, timeout, context.DeadlineExceeded, string(out))
+			op, timeout, ErrGitTimeout, string(out))
 	}
 	// Lock CONTENTION (a live competitor holds index.lock right now), NOT the
 	// stale lock the timeout branch above sweeps: map to ErrWriteOverloaded so
@@ -311,7 +340,8 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 // --no-optional-locks takes no lock, so a lock present when it times out was
 // taken by someone else — a concurrent write, an operator's shell — and is
 // not this reader's to delete. Nor does a reader hold the write lock, so the
-// message does not claim to release one.
+// message does not claim to release one. A timeout wraps ErrGitTimeout, as
+// gitErr's does.
 func (w *Writer) gitReadErr(ctx context.Context, op string, err error, out []byte) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		timeout := w.gitTimeout
@@ -319,7 +349,7 @@ func (w *Writer) gitReadErr(ctx context.Context, op string, err error, out []byt
 			timeout = defaultGitTimeout
 		}
 		return fmt.Errorf("git %s (read-only) timed out after %s: %w — %s",
-			op, timeout, context.DeadlineExceeded, string(out))
+			op, timeout, ErrGitTimeout, string(out))
 	}
 	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
 }

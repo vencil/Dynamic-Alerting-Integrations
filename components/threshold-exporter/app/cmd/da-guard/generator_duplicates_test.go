@@ -16,19 +16,19 @@ import (
 //
 // Until ADR-036 step 3 (#2905) da-guard copied the generator's rule
 // (withGeneratorDuplicates over pkg/pyyamlcompat) and named such a file in
-// parse_failed, exit 3. That copy is deleted (ADR-036 §9: exit 3 covers only
-// what the exporter drops or cannot read). The file is still reported:
-// parse-tree names it unreadable, so it is undetermined evidence —
-// {file, parse-tree kind, generator_unreadable} — and the run is exit 4,
-// never the vacuous 0, with parse_failed empty and its tenants judged as the
-// exporter reads them.
+// parse_failed, exit 3. That copy is deleted; from step 3 to step 6 the file
+// was undetermined evidence (`generator_unreadable`, exit 4). Since ADR-036
+// step 6 (#3206) the exporter itself refuses every file parse-tree names
+// unreadable (pkg/config parse_verdict.go), so the file is one the exporter
+// drops: exit 3, named in parse_failed, its tenants not served — the same
+// verdict as the generator's, from the same package.
 
 // dupRun is one run over a tree of generator_duplicates_test.go.
 type dupRun struct {
 	code        int
 	parseFailed []string
 	findings    []string // "kind field"
-	unreadable  []string // "file kind" of every generator_unreadable item
+	evidence    []string // "file reason" of every undetermined item naming a file
 	stdout      string
 }
 
@@ -61,33 +61,34 @@ func runDupTree(t *testing.T, files map[string]string) dupRun {
 		}
 	}
 	for _, it := range doc.Undetermined {
-		if it.Reason == undeterminedGeneratorUnreadable {
-			r.unreadable = append(r.unreadable, it.File+" "+it.Field)
-		}
+		r.evidence = append(r.evidence, it.File+" "+it.Reason)
 	}
 	return r
 }
 
-// assertGeneratorRefusedIsUndetermined: the run over a tree whose only file
-// the generator refuses is file (parse-tree kind kind) is exit 4, nothing in
-// parse_failed, and exactly that file named generator_unreadable.
-func assertGeneratorRefusedIsUndetermined(t *testing.T, name string, r dupRun, file, kind string) {
+// assertGeneratorRefusedIsDropped checks a run over a tree whose one bad
+// file is file, which parse-tree refuses as kind: the run ends in exit 3,
+// parse_failed is exactly [file], and no undetermined item names file (the
+// run already names it under exit 3, so it is not unreadable_outside_run,
+// #3206). kind only labels the failure message; the kind itself reaches the
+// operator through the exporter's log, not this report.
+func assertGeneratorRefusedIsDropped(t *testing.T, name string, r dupRun, file, kind string) {
 	t.Helper()
-	want := []string{file + " " + kind}
-	if r.code != exitUndetermined || len(r.parseFailed) != 0 || !reflect.DeepEqual(r.unreadable, want) {
-		t.Errorf("%s: exit %d, parse_failed %v, generator_unreadable %v; want exit 4, none, %v\nstdout=%s",
-			name, r.code, r.parseFailed, r.unreadable, want, r.stdout)
+	if r.code != exitParseFailed || !reflect.DeepEqual(r.parseFailed, []string{file}) ||
+		containsPrefix(r.evidence, file+" unreadable_outside_run") {
+		t.Errorf("%s: exit %d, parse_failed %v, evidence %v; want exit 3 naming %s (parse-tree %s) and no evidence for it\nstdout=%s",
+			name, r.code, r.parseFailed, r.evidence, file, kind, r.stdout)
 	}
 }
 
-// TestRun_GeneratorRefusedFileIsUndetermined (#2295, #2905): a key the route
+// TestRun_GeneratorRefusedFileIsDropped (#2295, #2905, #3206): a key the route
 // generator's StrictLoader counts as written twice — here an alias key beside
 // its anchor, which yaml.v3 does not count — makes the generator refuse the
 // WHOLE file, wherever the repeat sits and whichever copy is the bad one.
-// da-guard no longer copies that rule (exit 3 until #2905): parse-tree names
-// the file duplicate_key, and the run is undetermined (exit 4). Positions:
+// parse-tree names the file duplicate_key; since ADR-036 step 6 the exporter
+// refuses it on that verdict too, so the run is exit 3 naming it. Positions:
 // every place revS10 measured da-guard letting one through.
-func TestRun_GeneratorRefusedFileIsUndetermined(t *testing.T) {
+func TestRun_GeneratorRefusedFileIsDropped(t *testing.T) {
 	t.Parallel()
 	const (
 		bad  = "{type: webhook}"
@@ -100,10 +101,6 @@ func TestRun_GeneratorRefusedFileIsUndetermined(t *testing.T) {
 		file string                              // the file holding the repeat
 		tree func(x, y string) map[string]string // x written first, y second
 	}
-	// dropped: positions where the exporter's own load drops the file too (a
-	// repeated `tenants` key, measured), so exit 3 names it, as before #2905;
-	// the evidence still names it, as the generator refuses it.
-	dropped := map[string]bool{"tenants key": true, "platform tenants key": true}
 	tenant := func(routing string) map[string]string {
 		return map[string]string{"tx.yaml": rsTenant + routing}
 	}
@@ -183,26 +180,19 @@ func TestRun_GeneratorRefusedFileIsUndetermined(t *testing.T) {
 	for _, p := range positions {
 		for order, xy := range map[string][2]string{"bad first": {bad, good}, "good first": {good, bad}} {
 			name := p.name + ", " + order
-			r := runDupTree(t, p.tree(xy[0], xy[1]))
-			if !dropped[p.name] {
-				assertGeneratorRefusedIsUndetermined(t, name, r, p.file, "duplicate_key")
-			} else if want := []string{p.file + " duplicate_key"}; r.code != exitParseFailed ||
-				!reflect.DeepEqual(r.parseFailed, []string{p.file}) || !reflect.DeepEqual(r.unreadable, want) {
-				t.Errorf("%s: exit %d, parse_failed %v, generator_unreadable %v; want exit 3 naming %s, and %v",
-					name, r.code, r.parseFailed, r.unreadable, p.file, want)
-			}
+			assertGeneratorRefusedIsDropped(t, name, runDupTree(t, p.tree(xy[0], xy[1])), p.file, "duplicate_key")
 		}
 	}
 }
 
-// TestRun_DomainPolicyRepeatedKeyIsUndetermined (#2295, revS10 e2eC, #2905):
-// an alias key beside its anchor anywhere in `_domain_policy.yaml`, or a
-// plain repeated key there, makes the generator (--strict) refuse the file.
-// The exporter does not read a policy file, so it is no file the exporter
-// drops: undetermined, the file named duplicate_key (exit 4) — never a policy
-// silently read as yaml.v3 reads it (2e89719c: exit 0). Before #2904 it was
-// the routing loader's domain_policy_unusable (exit 1), until #2905 exit 3.
-func TestRun_DomainPolicyRepeatedKeyIsUndetermined(t *testing.T) {
+// TestRun_DomainPolicyRepeatedKeyIsDropped (#2295, revS10 e2eC, #2905,
+// #3206): an alias key beside its anchor anywhere in `_domain_policy.yaml`, or
+// a plain repeated key there, makes the generator (--strict) refuse the file —
+// never a policy silently read as yaml.v3 reads it (2e89719c: exit 0). Before
+// #2904 it was the routing loader's domain_policy_unusable (exit 1), until
+// #2905 exit 3, until step 6 undetermined (exit 4); since step 6 the root
+// platform file parse-tree refuses is one the exporter drops: exit 3.
+func TestRun_DomainPolicyRepeatedKeyIsDropped(t *testing.T) {
 	t.Parallel()
 	tenant := map[string]string{"tx.yaml": rsTenant + "    _routing:\n      receiver: {type: webhook, url: 'https://t.example/g'}\n"}
 	const c = "      forbidden_receiver_types: [webhook]\n"
@@ -219,15 +209,15 @@ func TestRun_DomainPolicyRepeatedKeyIsUndetermined(t *testing.T) {
 		for k, v := range tenant {
 			files[k] = v
 		}
-		assertGeneratorRefusedIsUndetermined(t, name, runDupTree(t, files), "_domain_policy.yaml", "duplicate_key")
+		assertGeneratorRefusedIsDropped(t, name, runDupTree(t, files), "_domain_policy.yaml", "duplicate_key")
 	}
 }
 
 // TestRun_GeneratorAcceptsTheseRepeats: what the generator accepts stays
 // accepted — a merge key overridden by an explicit key, one name in two
 // mappings, an alias used as a value, a merge list: not exit 3, no finding,
-// and no file named generator_unreadable. The routing in them is
-// undetermined since #2904 (exit 4).
+// and nothing in parse_failed. The routing in them is undetermined since
+// #2904 (exit 4).
 func TestRun_GeneratorAcceptsTheseRepeats(t *testing.T) {
 	t.Parallel()
 	const g = "{type: webhook, url: 'https://t.example/g'}"
@@ -241,9 +231,10 @@ func TestRun_GeneratorAcceptsTheseRepeats(t *testing.T) {
 			"\n  tx:\n    <<: [*ba, *bb]\n"},
 		"platform merge": {"tx.yaml": rsTenant, "_platform.yaml": "base: &b\n  _routing:\n    receiver: " + g + "\ntenants:\n  tx:\n    <<: *b\n"},
 	} {
-		if r := runDupTree(t, files); r.code != exitUndetermined || len(r.parseFailed) != 0 || len(r.findings) != 0 || len(r.unreadable) != 0 {
-			t.Errorf("%s: exit %d, parse_failed %v, findings %v, generator_unreadable %v; want exit 4 and nothing else",
-				name, r.code, r.parseFailed, r.findings, r.unreadable)
+		if r := runDupTree(t, files); r.code != exitUndetermined || len(r.parseFailed) != 0 || len(r.findings) != 0 ||
+			containsPrefix(r.evidence, "tx.yaml unreadable_outside_run") {
+			t.Errorf("%s: exit %d, parse_failed %v, findings %v, evidence %v; want exit 4 and nothing else",
+				name, r.code, r.parseFailed, r.findings, r.evidence)
 		}
 	}
 }
@@ -257,16 +248,15 @@ func containsPrefix(list []string, prefix string) bool {
 	return false
 }
 
-// TestRun_UnmergeableMergeValueIsUndetermined (#2677 R2, #2905): a merge
+// TestRun_UnmergeableMergeValueIsDropped (#2677 R2, #2905, #3206): a merge
 // value the route generator will not merge (not a mapping, nor a list of
-// mappings — `!!merge q: ~`, which the exporter's decode reads as a plain key)
-// makes it refuse the whole file, as for a repeated key. Until #2905 da-guard
-// named the file in parse_failed (exit 3) and dropped its tenants; now
+// mappings — `!!merge q: ~`, which the exporter's decode used to read as a
+// plain key) makes it refuse the whole file, as for a repeated key.
 // parse-tree names it (an explicit `!!merge` tag is outside its tag
-// whitelist) and the run is undetermined (exit 4) — never the exit 0 a
-// defaults carrier so refused once left (its `_routing_defaults` silently
-// unread).
-func TestRun_UnmergeableMergeValueIsUndetermined(t *testing.T) {
+// whitelist); since ADR-036 step 6 the exporter drops the file on that
+// verdict, so the run is exit 3 naming it — never the exit 0 a defaults
+// carrier so refused once left (its `_routing_defaults` silently unread).
+func TestRun_UnmergeableMergeValueIsDropped(t *testing.T) {
 	t.Parallel()
 	const slack = "{type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}"
 	for _, tc := range []struct {
@@ -286,7 +276,7 @@ func TestRun_UnmergeableMergeValueIsUndetermined(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assertGeneratorRefusedIsUndetermined(t, tc.name, runDupTree(t, tc.files), tc.file, "tag_not_allowed")
+			assertGeneratorRefusedIsDropped(t, tc.name, runDupTree(t, tc.files), tc.file, "tag_not_allowed")
 		})
 	}
 }

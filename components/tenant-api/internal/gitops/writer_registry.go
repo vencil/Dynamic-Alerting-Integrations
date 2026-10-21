@@ -38,7 +38,9 @@ func (w *Writer) HistoricalMaxUint(ctx context.Context, filename, field string) 
 	// additions; each later change shows the new value). Scanning those additions
 	// for `field: <n>` and taking the max yields the all-time high — immune to a
 	// later decrease, which only adds a lower value, never removes the higher one.
-	cmd, cctx, cancel := w.gitCmdWithTimeout(w.gitTimeout, "-C", w.gitDir, "log", "-p", "--format=", "--", base)
+	// --no-ext-diff / --no-textconv (#3175): the scan reads the blobs' own
+	// lines, and no program from config or the environment runs for it.
+	cmd, cctx, cancel := w.gitCmdWithTimeout(w.gitTimeout, "-C", w.gitDir, "log", "-p", "--no-ext-diff", "--no-textconv", "--format=", "--", base)
 	defer cancel()
 	out, err := cmd.CombinedOutput()
 	if err != nil {

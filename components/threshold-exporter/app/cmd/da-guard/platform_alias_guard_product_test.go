@@ -146,6 +146,17 @@ func TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings(t *testing.T
 						if b.kv != nil {
 							files["_b.yaml"] = "tenants:\n  tx:\n" + b.lines("    ")
 						}
+						// One tree per (chain, profile, a, b): `files` depends on
+						// nothing below this point, and every cell's tree is
+						// these files plus tx.yaml, which aliasServed truncates
+						// and rewrites before each LoadDir. Nothing else is
+						// written into dir, and every reader here is a cold scan
+						// (no prior, no mtime fast-path), so a cell reads the tree
+						// a fresh TempDir would have given it (#3180). Cost of the
+						// full run: 21504 cells over 672 trees (32 cells each;
+						// `-short` 8 each), each cell two LoadDir + one guard run.
+						dir := t.TempDir()
+						testutil.WriteTree(t, dir, files)
 						head := "tenants:\n  tx:\n    pg_connections: 100\n"
 						if p.kv != nil {
 							head += "    _profile: std\n"
@@ -161,8 +172,6 @@ func TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings(t *testing.T
 									other = "    " + o + ": 99\n"
 								}
 								for _, v := range values {
-									dir := t.TempDir()
-									testutil.WriteTree(t, dir, files)
 									without := aliasServed(t, dir, head+other)
 									with := aliasServed(t, dir, head+other+"    "+field+": "+v+"\n")
 									red := aliasRedundant(t, dir)

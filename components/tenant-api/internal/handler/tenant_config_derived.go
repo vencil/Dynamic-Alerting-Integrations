@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -236,7 +236,7 @@ func (s *tenantSnapshot) configDerivedMeta(d *Deps, p *rbac.VerifiedPrincipal, n
 			continue
 		}
 		base := path.Base(key)
-		id, ok := confd.TenantIDFromFile(base)
+		id, ok := confdname.TenantNamedBy(base)
 		if ok {
 			orgs, _ := d.TenantOrg.OrgsForTenant(id)
 			ok = d.RBAC.ScopeAllowedUnknownMetadata(p, id, orgs)
