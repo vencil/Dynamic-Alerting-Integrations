@@ -79,17 +79,29 @@ func (w *Writer) restoreBase(base, branch string, pushed bool) error {
 		if err = w.checkoutBaseClean(base); err == nil {
 			return nil
 		}
+		// #3175: a refusal of checkoutBaseClean's LAST step, the driver
+		// check after the move — the reset and checkout failures are never
+		// either sentinel — so the tree IS on base, with base's files.
+		// Base was checked when this write anchored on it (Step 3), so what
+		// the check meets appeared mid-write. No retry — its reset would
+		// run under base's config, which is not shown clean — and no
+		// failure: the branch is committed (and pushed, if pushed), the
+		// tree is on base, and what is left (Step 8's branch -D) touches no
+		// file. Failing here would make a client retry a pushed write (see
+		// ErrBaseRestore). Every later git command on files is checked
+		// again first: the next write's check under the lock
+		// (lockTreeRecovered), a preview's (PreviewPut), a reader's
+		// (TreeOnBase).
 		if errors.Is(err, ErrGitDriverConfigured) {
-			// #3175: the tree IS on base; base's git config names a driver
-			// (checkoutBaseClean's check after the move). Base was checked
-			// when this write anchored on it (Step 3), so the key appeared
-			// mid-write. No retry — its reset would run under base's config
-			// — and no failure: the branch is committed (and pushed, if
-			// pushed), the tree is on base, and what is left (Step 8's
-			// branch -D) touches no file. Failing here would make a client
-			// retry a pushed write (see ErrBaseRestore). The next write's
-			// check under the lock refuses.
 			slog.Error("gitops: back on base, whose git config now names a driver; the next write will be refused (#3175)",
+				"base", base, "branch", branch, "pushed", pushed, "error", err)
+			return nil
+		}
+		if errors.Is(err, ErrGitConfigUnreadable) {
+			// #3226: the same place, but the config could not be read —
+			// nothing says a driver is configured. The next write's check
+			// reads it again and refuses only if it still cannot.
+			slog.Error("gitops: back on base, but its git config could not be read to check it for drivers; the next write checks again (#3175)",
 				"base", base, "branch", branch, "pushed", pushed, "error", err)
 			return nil
 		}

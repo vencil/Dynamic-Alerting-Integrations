@@ -255,6 +255,15 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		return msgWriteOutcomeUnknown, nil
 	case errkind.WriteCancelled:
 		return msgWriteCancelled, nil
+	case errkind.GitDriverConfigured:
+		// #3175: the server's git config, not the request: fixed text, the
+		// scope and key in the log.
+		slog.Error("write refused: git config names a driver program (#3175)", "request_id", requestIDOf(r), "error", err)
+		return msgGitDriverConfigured, nil
+	case errkind.GitConfigUnreadable:
+		slog.Error("write refused: the git config could not be read to check it for driver programs (#3175)",
+			"request_id", requestIDOf(r), "error", err)
+		return msgGitConfigUnreadable, nil
 
 	case errkind.StateConflict:
 		// The state texts are fixed: err names the ConfigMap and its byte

@@ -101,6 +101,14 @@ const (
 	// WriteCancelled: the write was stopped before anything of it was
 	// committed — its context, or a git command's own deadline (#1535, #3173).
 	WriteCancelled Kind = "write_cancelled"
+	// GitDriverConfigured: the git config tenant-api runs under names a
+	// program git would run on file contents — a filter, diff or merge
+	// driver (#3175). Refused until an operator removes the key.
+	GitDriverConfigured Kind = "git_driver_configured"
+	// GitConfigUnreadable: the git config could not be read to check it for
+	// such a program (#3175, #3226): what cannot be read cannot be shown to
+	// be clean, so nothing runs — but the failure itself may pass.
+	GitConfigUnreadable Kind = "git_config_unreadable"
 	// NoChanges: the write changes nothing. Not a failure: the write entries
 	// answer it as a success with no PR/MR.
 	NoChanges Kind = "no_changes"

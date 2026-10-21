@@ -394,6 +394,11 @@ func main() {
 	// checkout below would run a smudge filter). Every write and preview
 	// checks again.
 	if err := writer.CheckGitDrivers(); err != nil {
+		if errors.Is(err, gitops.ErrGitConfigUnreadable) {
+			// #3226: not "a driver is configured" — the config could not
+			// be read to check it; fix what git reports and start again.
+			log.Fatalf("FATAL: cannot start: the git config could not be read to check it for filter, diff or merge drivers (#3175): %v", err)
+		}
 		log.Fatalf("FATAL: %v", err)
 	}
 	// #2903 (ADR-036 §4): every content-changing write asks the generator

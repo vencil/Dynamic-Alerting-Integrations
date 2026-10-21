@@ -259,6 +259,12 @@ const (
 	// generator's deployment policy file is unusable (generator's own
 	// POLICY_UNAVAILABLE, passed through).
 	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
+	// CodeGitDriverConfigured marks the 500 of a write or preview refused
+	// because the git config tenant-api runs under names a filter, diff or
+	// merge driver program (#3175, #3226). Retrying does not help: an
+	// operator must remove the key. The text is fixed (msgGitDriverConfigured);
+	// the scope and key are in the server log only.
+	CodeGitDriverConfigured = "GIT_DRIVER_CONFIGURED"
 )
 
 // notRegularText is the text of a TENANT_CONFIG_NOT_LOADABLE refusal of a

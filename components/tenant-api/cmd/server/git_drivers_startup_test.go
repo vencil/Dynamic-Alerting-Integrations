@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +51,49 @@ func TestServerRefusesGitDriverConfigAtStartup(t *testing.T) {
 	}
 	if strings.Contains(string(out), secret) {
 		t.Errorf("startup failure prints the value. Got:\n%s", out)
+	}
+}
+
+// #3226: a git config that cannot be read refuses the start too, but says
+// so — not that a driver is configured (the operator has no key to remove).
+// The unreadable file comes in through GIT_CONFIG_COUNT's include.path, in
+// the child's environment only.
+func TestServerRefusesUnreadableGitConfigAtStartup(t *testing.T) {
+	if os.Getenv("GITCONFIG_UNREADABLE_CRASHER") == "1" {
+		os.Args = []string{"tenant-api"}
+		main()
+		return
+	}
+	bad := filepath.Join(t.TempDir(), "bad.gitconfig")
+	if err := os.WriteFile(bad, []byte("[[[ not a config line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestServerRefusesUnreadableGitConfigAtStartup$")
+	env := []string{"GITCONFIG_UNREADABLE_CRASHER=1"}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "TA_") && !strings.HasPrefix(kv, "GIT_CONFIG_COUNT=") &&
+			!strings.HasPrefix(kv, "GIT_CONFIG_KEY_") && !strings.HasPrefix(kv, "GIT_CONFIG_VALUE_") {
+			env = append(env, kv)
+		}
+	}
+	cmd.Env = append(env,
+		"TA_CONFIG_DIR="+t.TempDir(),
+		"TA_GENERATOR_SOCKET=/nonexistent/generator.sock",
+		"TA_ADDR=127.0.0.1:0",
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=include.path", "GIT_CONFIG_VALUE_0="+bad)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("main() was still running after 30s: it started instead of refusing. Output:\n%s", out)
+	}
+	if err == nil {
+		t.Fatalf("main() exited 0; an unreadable git config must refuse the start. Output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "could not be read to check it") {
+		t.Errorf("startup failure does not say the config could not be read. Got:\n%s", out)
+	}
+	if strings.Contains(string(out), "names programs git would run") {
+		t.Errorf("startup failure says a driver is configured. Got:\n%s", out)
 	}
 }

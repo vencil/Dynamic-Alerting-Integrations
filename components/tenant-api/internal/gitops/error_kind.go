@@ -41,3 +41,7 @@ func (e *WriteOutcomeUnknownError) ErrorKind() errkind.Kind { return errkind.Wri
 // ErrorKind is errkind.Validation: a placeholder in the body is a validation
 // refusal (it unwraps to ErrValidation).
 func (e *PlaceholderError) ErrorKind() errkind.Kind { return errkind.Validation }
+
+// ErrorKind: GIT_DRIVER_CONFIGURED (#3175, #3226). ErrGitConfigUnreadable, a
+// sentinel, is named by the handler's table.
+func (e *GitDriverError) ErrorKind() errkind.Kind { return errkind.GitDriverConfigured }

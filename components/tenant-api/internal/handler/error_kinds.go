@@ -89,6 +89,9 @@ var kindTable = []KindSpec{
 	{Kind: errkind.ForgeDegraded, Status: http.StatusServiceUnavailable, Code: CodeForgeUnavailable, Retryable: true, RetryAfterS: 5},
 	{Kind: errkind.WriteOutcomeUnknown, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
 	{Kind: errkind.WriteCancelled, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true},
+	{Kind: errkind.GitDriverConfigured, Status: http.StatusInternalServerError, Code: CodeGitDriverConfigured, Fault: true},
+	// UPSTREAM_ERROR for now: #3202 rearranges the codes.
+	{Kind: errkind.GitConfigUnreadable, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
 	// NoChanges is not a failure: every entry that meets it answers a 2xx
 	// of its own and never renders this row. It is here so the table lists
 	// every Kind.
@@ -206,6 +209,8 @@ var kindRules = []kindRule{
 	sentinelKind(errkind.TenantDeclaredElsewhere, gitops.ErrTenantDeclaredElsewhere),
 	sentinelKind(errkind.TenantTreeScan, gitops.ErrTenantTreeScan),
 	sentinelKind(errkind.TenantFileDirty, gitops.ErrTenantFileDirty),
+	typedKind(errkind.GitDriverConfigured, gitops.ErrGitDriverConfigured),
+	sentinelKind(errkind.GitConfigUnreadable, gitops.ErrGitConfigUnreadable),
 	sentinelKind(errkind.InvalidTenantID, gitops.ErrInvalidTenantID),
 	sentinelKind(errkind.WriteOverloaded, gitops.ErrWriteOverloaded),
 	sentinelKind(errkind.ForgeDegraded, gitops.ErrForgeDegraded),
@@ -362,16 +367,19 @@ var (
 	kindsPlacement = kindsOf(errkind.TenantTreeUnreadable, errkind.TenantStoreFault,
 		errkind.TenantFileUnreadable, errkind.TenantGitManaged, errkind.TenantDeclaredElsewhere,
 		errkind.TenantTreeScan, errkind.TenantFileDirty)
+	// kindsGitConfig: the git config check every write runs first (#3175):
+	// a driver configured, or a config that could not be read (#3226).
+	kindsGitConfig = kindsOf(errkind.GitDriverConfigured, errkind.GitConfigUnreadable)
 	// kindsOutcome: a write stopped before it committed, or whose outcome is
 	// unknown (#1535, #3173).
 	kindsOutcome = kindsOf(errkind.WriteOutcomeUnknown, errkind.WriteCancelled)
 	// kindsWriteFlow: what every write path through Writer.WritePR /
 	// WritePRBatch / WriteBatch answers alike.
-	kindsWriteFlow = kindsGenerator.union(kindsPlacement).with(errkind.InvalidTenantID,
+	kindsWriteFlow = kindsGenerator.union(kindsPlacement, kindsGitConfig).with(errkind.InvalidTenantID,
 		errkind.WriteOverloaded, errkind.ForgeDegraded, errkind.AmbiguousTenantFile)
 	// kindsDirectWrite: a direct-mode single-tenant write (custom alerts; PUT
 	// adds AmbiguousTenantFile), judged in kindRules' order like every entry.
-	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsOutcome).with(errkind.WriteOverloaded,
+	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsGitConfig, kindsOutcome).with(errkind.WriteOverloaded,
 		errkind.TreeNotOnBase, errkind.PreconditionFailed, errkind.Conflict)
 	// kindsState: tenant-api's state store (#2856).
 	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)

@@ -57,8 +57,8 @@ func (w *Writer) base() string {
 // context (git reads its config when it starts, while HEAD still names the
 // old branch), which the caller's earlier check covered.
 //
-// A refusal here (errors.Is ErrGitDriverConfigured — the reset and checkout
-// failures never are) means HEAD IS ON BASE, with base's files: the move
+// A refusal here (errors.Is ErrGitDriverConfigured or ErrGitConfigUnreadable
+// — the reset and checkout failures never are) means HEAD IS ON BASE, with base's files: the move
 // completed. The caller must run no further git on files. The tree is left
 // there on purpose, not pointed back at the old branch: on base, the next
 // write's check under the lock sees the driver and refuses before any git
@@ -109,10 +109,13 @@ func (w *Writer) checkoutBaseClean(base string) error {
 //   - The return succeeds but base's git config names a driver (#3175,
 //     checkoutBaseClean's check on base) → that refusal alone
 //     (ErrGitDriverConfigured, not ErrTreeNotOnBase: the tree is on base).
+//   - The return succeeds but base's git config could not be read to check
+//     it (#3226) → that refusal alone (ErrGitConfigUnreadable): the tree is
+//     on base, and the retry's check under the lock reads it again.
 //
-// The first two mean "retry": no commit and no push happened, unlike
-// ErrBaseRestore, whose push already did. The third is not retryable until
-// the operator removes the key.
+// The first two and the fourth mean "retry": no commit and no push
+// happened, unlike ErrBaseRestore, whose push already did. The third is not
+// retryable until the operator removes the key.
 //
 // Everything else keeps the behaviour this guard predates. Direct mode commits
 // on whatever branch the operator checked out, so a non-PR branch is left
@@ -138,6 +141,15 @@ func (w *Writer) leavePRBranch() error {
 			// driver (checkoutBaseClean). Answered as that refusal, not as
 			// "retry": a retry would meet the same driver under the lock.
 			slog.Error("gitops: worktree was on a PR branch — returned to base, whose git config names a driver; nothing written (#1723, #3175)",
+				"branch", branch, "base", base, "error", err)
+			return err
+		}
+		if errors.Is(err, ErrGitConfigUnreadable) {
+			// #3226: back on base, but its config could not be read to
+			// check it. Not "a driver is configured" (the operator has
+			// nothing to remove) and not ErrTreeNotOnBase (the tree is on
+			// base): the retry checks the config again under the lock.
+			slog.Error("gitops: worktree was on a PR branch — returned to base, but its git config could not be read to check it for drivers; nothing written, retry (#1723, #3175)",
 				"branch", branch, "base", base, "error", err)
 			return err
 		}

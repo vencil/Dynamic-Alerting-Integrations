@@ -2,9 +2,11 @@ package handler
 
 // #3175: a git config naming a filter / diff / merge driver refuses every
 // write and preview. The answer is the server's: a fixed text (500
-// INTERNAL_ERROR for the write and /diff, valid: false for /validate), the
-// scope and key only in the log. Which keys and scopes count is pinned in
-// gitops.
+// GIT_DRIVER_CONFIGURED for the write and /diff since #3226 — a generic
+// INTERNAL_ERROR before — valid: false for /validate), the scope and key
+// only in the log. Which keys and scopes count is pinned in gitops. A
+// config that cannot be read to check it is not that refusal (#3226): 503,
+// retry.
 
 import (
 	"bytes"
@@ -50,8 +52,11 @@ func TestGitDriverConfig_WriteAndPreviewAnswers(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 			t.Fatal(err)
 		}
-		if env.Code != CodeInternal || env.Error != msgWriteFailed {
-			t.Errorf("%s envelope = %+v, want %s with msgWriteFailed", name, env, CodeInternal)
+		if env.Code != CodeGitDriverConfigured || env.Error != msgGitDriverConfigured {
+			t.Errorf("%s envelope = %+v, want %s with msgGitDriverConfigured", name, env, CodeGitDriverConfigured)
+		}
+		if ra := w.Header().Get("Retry-After"); ra != "" {
+			t.Errorf("%s Retry-After = %q: an operator must remove the key, a retry cannot pass", name, ra)
 		}
 		noKey(name, w)
 	}
@@ -67,11 +72,71 @@ func TestGitDriverConfig_WriteAndPreviewAnswers(t *testing.T) {
 	noKey("/validate", vw)
 
 	bw := wmBatch(d, "")
-	if bw.Code != http.StatusInternalServerError || !strings.Contains(bw.Body.String(), CodeInternal) {
-		t.Errorf("batch = %d %s, want 500 %s", bw.Code, bw.Body.String(), CodeInternal)
+	if bw.Code != http.StatusInternalServerError || !strings.Contains(bw.Body.String(), CodeGitDriverConfigured) {
+		t.Errorf("batch = %d %s, want 500 %s", bw.Code, bw.Body.String(), CodeGitDriverConfigured)
 	}
 	noKey("batch", bw)
 
+	if gitHead(t, dir) != head {
+		t.Error("HEAD moved")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "t-a.yaml")); string(got) != string(before) {
+		t.Errorf("t-a.yaml changed: %q", got)
+	}
+}
+
+// #3226: a git config git cannot read is refused like a driver — nothing
+// can be shown clean — but answered as what it is: 503 with Retry-After,
+// a fixed text, never GIT_DRIVER_CONFIGURED (an operator has no key to
+// remove, and the next check may read it). The direct write and the batch
+// both; nothing is written.
+func TestGitConfigUnreadable_WriteAnswers(t *testing.T) {
+	t.Parallel()
+	dir := seedGitTree(t, wmTree())
+	head := gitHead(t, dir)
+	before, err := os.ReadFile(filepath.Join(dir, "t-a.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An include git cannot parse: every `git config` read of the repository
+	// fails (exit 128), the commands the write would run included.
+	bad := filepath.Join(t.TempDir(), "bad.gitconfig")
+	if err := os.WriteFile(bad, []byte("[[[ not a config line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "include.path", bad).CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v\n%s", err, out)
+	}
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect, WriteResults: &WriteResults{}}
+	const body = "tenants:\n  t-a:\n    mysql_connections: \"60\"\n"
+
+	pw := wmPut(d, body, "")
+	if pw.Code != http.StatusServiceUnavailable {
+		t.Fatalf("PUT status = %d, want 503; body: %s", pw.Code, pw.Body.String())
+	}
+	var env ErrorResponse
+	if err := json.Unmarshal(pw.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Code != CodeUpstream || env.Error != msgGitConfigUnreadable || env.RetryAfterS != 5 {
+		t.Errorf("PUT envelope = %+v, want %s, msgGitConfigUnreadable, retry_after_s 5", env, CodeUpstream)
+	}
+	if ra := pw.Header().Get("Retry-After"); ra != "5" {
+		t.Errorf("PUT Retry-After = %q, want 5", ra)
+	}
+	if strings.Contains(pw.Body.String(), bad) {
+		t.Errorf("PUT body names the config file: %s", pw.Body.String())
+	}
+
+	bw := wmBatch(d, "")
+	if bw.Code != http.StatusServiceUnavailable || strings.Contains(bw.Body.String(), CodeGitDriverConfigured) {
+		t.Errorf("batch = %d %s, want 503, not %s", bw.Code, bw.Body.String(), CodeGitDriverConfigured)
+	}
+
+	// Readable again, so the checks below can run git.
+	if err := os.WriteFile(bad, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if gitHead(t, dir) != head {
 		t.Error("HEAD moved")
 	}
