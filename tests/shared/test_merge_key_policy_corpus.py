@@ -65,7 +65,7 @@ No Go reader's verdict on these rows is recorded any more (ADR-036 step 3
 deleted that half with the reader-divergence catalog). The rows are still
 read by parse-tree's fixed corpus: tests/shared/parse_tree_corpus.json lists
 every row by `id` under `merge_key_rows`, and
-components/threshold-exporter/app/internal/parsetree/corpus_test.go
+components/threshold-exporter/app/pkg/parsetree/corpus_test.go
 categorises each one.
 
 The rows are generated from a fixed seed, never hand-edited:

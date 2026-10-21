@@ -100,7 +100,7 @@ _POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
 ROUTING_READ = _lib_parse_cache.TENANT_LISTS_AS_TEXT
 
 # What to do about a file parse-tree cannot read, by its kind
-# (internal/parsetree Kinds); any other kind gets the generic remedy.
+# (pkg/parsetree Kinds); any other kind gets the generic remedy.
 _UNREADABLE_REMEDY = {
     "syntax_error": "repair the YAML syntax in {f}",
     "invalid_utf8": "re-save {f} as UTF-8",

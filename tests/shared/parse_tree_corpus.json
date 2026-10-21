@@ -13,7 +13,7 @@
     "file is that corpus's `doc`, as `_domain_policy.yaml`); their categories",
     "are in parse_tree_merge_key_categories.json. `id`: the first 16 hex",
     "digits of the sha256 of the file. Go half:",
-    "components/threshold-exporter/app/internal/parsetree/corpus_test.go."
+    "components/threshold-exporter/app/pkg/parsetree/corpus_test.go."
   ],
   "pyyaml": "6.0.3",
   "closed_list": [

@@ -202,7 +202,7 @@ func TestMergeKeyCorpusCategories(t *testing.T) {
 	if os.Getenv("UPDATE_PARSE_TREE_CATEGORIES") != "" {
 		b, err := json.MarshalIndent(map[string]any{
 			"_comment": "parse-tree's category for each merge_key_policy_corpus.json row (by id). " +
-				"Written by internal/parsetree's TestMergeKeyCorpusCategories with " +
+				"Written by pkg/parsetree's TestMergeKeyCorpusCategories with " +
 				"UPDATE_PARSE_TREE_CATEGORIES=1; checked against the generator verdict by " +
 				"tests/shared/test_parse_tree_corpus.py. Never edit by hand.",
 			"categories": got,

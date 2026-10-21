@@ -9,7 +9,7 @@ package main
 // (config.ScanDirTree: hidden names, extensions in any case, directories
 // below the root, the one defaults carrier per directory); which of them
 // the route generator reads besides is stated once, in readersFor, from
-// `_grar_parse._parse_config_files`; what a file holds is internal/parsetree.
+// `_grar_parse._parse_config_files`; what a file holds is pkg/parsetree.
 // The one table of its own is rendered_by (rendered_by.go): which render a
 // platform carrier reaches where it is written, held to the renders by
 // tests/shared/test_parse_tree_rendered_by.py.
@@ -29,8 +29,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
-	"github.com/vencil/threshold-exporter/internal/parsetree"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // parseTreeCmd is the subcommand name: `da-guard parse-tree ...`.
