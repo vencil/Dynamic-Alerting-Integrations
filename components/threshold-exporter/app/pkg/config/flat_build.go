@@ -30,7 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // FlatBuildInput is what BuildFlatConfig reads besides the scan: the previous

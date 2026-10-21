@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
@@ -42,14 +43,14 @@ import (
 
 // TenantFile is one conf.d entry that classifies as a tenant config file.
 type TenantFile struct {
-	// ID is the tenant id, TenantIDFromFile's answer for Name.
+	// ID is the tenant id, confdname.TenantNamedBy's answer for Name.
 	ID string
 	// Name is the directory entry's base name, as os.ReadDir returned it.
 	Name string
 }
 
 // ListTenantFiles is THE conf.d enumeration loop: every entry of dir that is
-// not a directory and whose name satisfies TenantIDFromFile, in os.ReadDir
+// not a directory and whose name satisfies confdname.TenantNamedBy, in os.ReadDir
 // order (sorted by filename). It never reads file content.
 //
 // The IsDir test is the DirEntry's own type bit, i.e. lstat semantics: a
@@ -75,7 +76,7 @@ func ListTenantFiles(dir string) ([]TenantFile, error) {
 		if e.IsDir() {
 			continue
 		}
-		id, ok := TenantIDFromFile(e.Name())
+		id, ok := confdname.TenantNamedBy(e.Name())
 		if !ok {
 			continue
 		}

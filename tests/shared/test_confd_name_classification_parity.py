@@ -211,7 +211,7 @@ def test_public_predicates_match_the_matrix(row: dict) -> None:
     exporter about `upper.YAML`. The remedy was to give them something to
     call (`_lib_confd.has_yaml_extension` and friends). That only helps if
     the shared answer is itself pinned to the same table the exporter's
-    scanner, tenant-api's `TenantIDFromFile` and `iter_config_files`
+    scanner, Go's `confdname.TenantNamedBy` and `iter_config_files`
     assert — otherwise the tools would agree with each other and, together,
     be wrong.
 

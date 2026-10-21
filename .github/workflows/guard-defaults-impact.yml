@@ -116,7 +116,7 @@ on:
       # sees (aliases.go carries the profile fill-in's spelling rule). A PR
       # changing only one of them changes the guard's input without running
       # the guard.
-      - "components/threshold-exporter/app/internal/confdname/**"
+      - "components/threshold-exporter/app/pkg/confdname/**"
       - "components/threshold-exporter/app/pkg/config/tree_scan.go"
       - "components/threshold-exporter/app/pkg/config/platform_overlay.go"
       - "components/threshold-exporter/app/pkg/config/profile_overlay.go"

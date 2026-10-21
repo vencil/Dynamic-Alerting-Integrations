@@ -14,6 +14,8 @@ package config
 import (
 	"strconv"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 func TestRelToRootRequiresADirectoryBoundary(t *testing.T) {
@@ -104,7 +106,7 @@ func TestOffRootInputIsNotClassifiedAsVisible(t *testing.T) {
 	}
 	for _, p := range offRoot {
 		rel, inside := relToRoot(p, "/sim")
-		if inside && !hasHiddenSegment(rel) {
+		if inside && !confdname.HasHiddenSegment(rel) {
 			t.Errorf("%q would be ADMITTED against root /sim (rel=%q) — the walker "+
 				"never visits anything outside its root, so neither may this scanner", p, rel)
 		}
@@ -153,8 +155,8 @@ func TestScanRejectsOffRootPathsFromASourceThatDoesNotFilter(t *testing.T) {
 	}
 }
 
-// TestDotPrefixedRootYieldsItsWholeTree pins what `hasHiddenSegment`'s doc
-// promises in words and nothing was checking: the root is never tested, so a
+// TestDotPrefixedRootYieldsItsWholeTree pins what the call site of
+// `confdname.HasHiddenSegment` promises in words and nothing was checking: the root is never tested, so a
 // source rooted at `.config/conf.d` gets its whole tree.
 //
 // ⛔ The promise is load-bearing on the CALL SITE passing `rel`, not `p` — two
@@ -337,28 +339,4 @@ func keysOfBytes(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-// TestHasHiddenSegmentChecksEverySegment pins the depth half: the walker prunes
-// a hidden directory's ENTIRE subtree with fs.SkipDir, so a plain file under a
-// plain directory under a hidden directory is still invisible to it.
-func TestHasHiddenSegmentChecksEverySegment(t *testing.T) {
-	t.Parallel()
-
-	// `..odd` is hidden: the walker's rule is a bare `HasPrefix(name, ".")`, so a
-	// name that merely STARTS with two dots is pruned like any other dot-name.
-	// `sub.` is visible: the dot is at the end, and the rule is a prefix test.
-	hidden := []string{".git/a.yaml", ".cache/deep/x.yaml", "a/.b/c/d.yaml", ".hidden.yaml", "a/b/.c.yaml", "..odd/x.yaml"}
-	visible := []string{"", "a.yaml", "a/b.yaml", "a/b/c.yaml", "sub./x.yaml", "a/sub./b.yaml"}
-
-	for _, rel := range hidden {
-		if !hasHiddenSegment(rel) {
-			t.Errorf("hasHiddenSegment(%q) = false, want true", rel)
-		}
-	}
-	for _, rel := range visible {
-		if hasHiddenSegment(rel) {
-			t.Errorf("hasHiddenSegment(%q) = true, want false", rel)
-		}
-	}
 }

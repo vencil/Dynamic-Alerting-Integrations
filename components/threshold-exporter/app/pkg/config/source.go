@@ -45,7 +45,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // ConfigSource enumerates YAML files for hierarchical merge. See file
@@ -117,50 +117,12 @@ func (s *InMemoryConfigSource) YAMLFiles(rootPath string) (map[string][]byte, er
 		if _, inside := relToRoot(clean, root); !inside {
 			continue
 		}
-		lower := strings.ToLower(path.Base(clean))
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+		if _, ok := confdname.SplitCarrier(path.Base(clean)); !ok {
 			continue
 		}
 		out[clean] = b
 	}
 	return out, nil
-}
-
-// hasHiddenSegment reports whether any segment of the ALREADY-ROOT-RELATIVE
-// path `rel` is dot-prefixed. It is half of the flat-map equivalent of the disk
-// walker's `fs.SkipDir` pruning: that walker never descends into a hidden
-// directory, so every file beneath one is invisible to it no matter what the
-// file itself is called.
-//
-// ⛔ IT TAKES `rel`, NOT A FULL PATH. The walker never prunes its own starting
-// point, so a source rooted at `.config/conf.d` must get its whole tree; hand
-// this function the full path and the root's own dot segment prunes
-// everything. Pinned by TestDotPrefixedRootYieldsItsWholeTree — nothing else
-// in the suite sees it, because every other root in the corpus is `/sim`.
-//
-// ⛔ EVERY segment, not just the file's immediate parent: the walker prunes
-// the whole subtree, so `<root>/.cache/deep/x.yaml` goes by `.cache`.
-//
-// ⛔ Byte-prefix on `.`, no folding — what the walker does. `confdname.IsHidden`
-// is byte-identical and importable here (measured: `pkg/config` compiles
-// against `internal/confdname`; `internal/batchpr` already imports it), so this
-// IS an unresolved duplicate. ⚠️ The trade this used to cite ("`pkg/` has no
-// `internal/` dependency today") was made by #1674, which imports
-// `confdname.IsDefaults` into this package; this duplicate was left alone only
-// to keep that change's scope to the defaults carrier. It is an open one.
-func hasHiddenSegment(rel string) bool {
-	// `rel == ""` (the root itself, which the walker never prunes) needs no
-	// branch: `strings.Split("", "/")` is `[]string{""}`, and `""` is not
-	// dot-prefixed, so it falls through to false. An explicit early return
-	// here was measured to be an equivalent mutant — inert code that reads
-	// like a guard is the defect class this file exists to fix, so it is gone
-	// rather than annotated.
-	for _, seg := range strings.Split(rel, "/") {
-		if strings.HasPrefix(seg, ".") {
-			return true
-		}
-	}
-	return false
 }
 
 // relToRoot returns `p` expressed relative to `root`, and whether `p` is inside
@@ -277,8 +239,13 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// (then the exporter's hierarchical scanner, now ScanDirTree)
 		// while doing the opposite. That sentence is why the divergence
 		// survived: every reader who checked took the claim for the check.
+		//
+		// ⛔ HasHiddenSegment gets `rel`, NOT the full path: the walker never
+		// prunes its own starting point, so a source rooted at
+		// `.config/conf.d` must get its whole tree
+		// (TestDotPrefixedRootYieldsItsWholeTree).
 		rel, inRoot := relToRoot(p, absRoot)
-		if !inRoot || hasHiddenSegment(rel) {
+		if !inRoot || confdname.HasHiddenSegment(rel) {
 			continue
 		}
 		// path.Base (POSIX) not filepath.Base — the loop variable was
@@ -300,9 +267,9 @@ func ScanFromConfigSource(src ConfigSource, rootPath string) (
 		// EqualFold was measured to turn that test red).
 		//
 		// The carrier test is `confdname.IsDefaults` — the walker's own
-		// predicate (tree_scan.go) — no longer a private copy of it: #1674
-		// gave `pkg/config` its first `internal/confdname` edge.
-		if strings.HasPrefix(name, "_") {
+		// predicate (tree_scan.go) — no longer a private copy of it (#1674;
+		// the reserved test beside it is confdname too since #3206).
+		if confdname.IsReserved(name) {
 			if confdname.IsDefaults(name) {
 				defaults[p] = true
 			}

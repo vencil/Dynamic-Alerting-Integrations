@@ -691,7 +691,8 @@ Where the code is, for implementers; can be skipped when reading the decision. C
 | The Python pre-write check (moves into Go) | `scripts/tools/_lib_write_check.py` |
 | Where the edit primitives come from (become a shared package) | tenant-api's `internal/customalerts/merge.go` (`setMapValue`, `deleteMapKey` and others) and the batch patch's `mergePatchYAML` |
 | `parse-tree`'s judgement | `pkg/parsetree` |
-| The 4 Go file-name rules (merged into one) | `internal/confdname`; `pkg/config/source.go`; `pkg/config/tree_scan.go`; `TenantIDFromFile` in tenant-api's `internal/confd` |
+| The Go file-name rules (merged into one) | `pkg/confdname`. The other copies are deleted and their sites call it: the extension check and `hasHiddenSegment` in `pkg/config/source.go`; `IsScannedFileName`, `IsScannedPath` and the walk's inline prefix checks in `pkg/config/tree_scan.go`; `TenantIDFromFile` and `isReservedName` in tenant-api's `internal/confd`; the hand-written extension check in `findingReadable` (tenant-api `handler/errors.go`); `hiddenPath` in da-guard's `parse_tree.go` |
+| `parse-tree`'s mode that lists files without parsing them | `da-guard parse-tree --list-only` (`cmd/da-guard/parse_tree_list.go`); the walk is `ScanDirTreeNames` in `pkg/config` |
 | The Python name predicate and the name-rule comparison table (retire) | the name checks in `scripts/tools/_lib_confd.py` (for example `is_reserved_name`, `config_stem`); `tests/shared/confd_name_classification_matrix.json` and the tests comparing against it |
 | The precedent of decoding with sigs.k8s.io/yaml (made general-purpose) | `cmd/da-crdecode` (refuses a file with more than one document today) |
 | The migration audit command (retires) | `scripts/tools/ops/migration_audit.py` |

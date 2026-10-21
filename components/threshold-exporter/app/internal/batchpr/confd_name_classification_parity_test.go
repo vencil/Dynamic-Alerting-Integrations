@@ -3,12 +3,12 @@ package batchpr
 // confd_name_classification_parity_test.go — the WRITE-PLANE half of the
 // cross-language conf.d name-classification pin (#1605, the #1911 family).
 //
-// The two halves that already exist (threshold-exporter's
-// confd_name_classification_parity_test.go and tenant-api's
-// name_classification_parity_test.go) both pin READERS of an existing conf.d
-// tree. This half pins the one component that DECIDES WHAT GETS WRITTEN INTO
-// that tree: AllocateFiles buckets each emitted carrier into the pull request
-// that will commit it.
+// The other halves (threshold-exporter's
+// confd_name_classification_parity_test.go, which pins the walker, and
+// pkg/confdname's own matrix test, which tenant-api now delegates to since
+// #3206) pin READERS of an existing conf.d tree. This half pins the one
+// component that DECIDES WHAT GETS WRITTEN INTO that tree: AllocateFiles
+// buckets each emitted carrier into the pull request that will commit it.
 //
 // ⛔ Neither side asserts the other, and no side reads the other's source.
 // This repo measured (#1448 blind review) that a guard asserting things about

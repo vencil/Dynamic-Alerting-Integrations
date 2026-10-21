@@ -28,7 +28,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
@@ -107,6 +107,8 @@ type parseTreeFlags struct {
 	configDir string
 	path      string
 	input     string
+	listOnly  bool
+	names     string
 }
 
 func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, error) {
@@ -120,9 +122,17 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"Its readers are judged in the tree as it is once that file is written.")
 	fs.StringVar(&f.input, "input", "",
 		"File mode: the file whose text to read ('-' = stdin). Required with --path.")
+	fs.BoolVar(&f.listOnly, "list-only", false,
+		"List mode: list the files and who reads each one, reading no file's content\n"+
+			"(schema "+parseTreeListSchema+"). With --config-dir, or with --names.")
+	fs.StringVar(&f.names, "names", "",
+		"Names mode (with --list-only, without --config-dir): classify the base names in\n"+
+			"this file ('-' = stdin), a JSON array of strings, by name alone.")
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --path <rel> --input <file|->\n", programName, parseTreeCmd)
+		fmt.Fprintf(errOut, "       %s %s --list-only --config-dir <dir>\n", programName, parseTreeCmd)
+		fmt.Fprintf(errOut, "       %s %s --list-only --names <file|->\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, which conf.d files each reader reads and what each one holds, as\n"+
 			"yaml.v3 decodes it (ADR-036 §2). The document's \"schema\" is "+parseTreeSchema+";\n"+
 			"a reader refuses any other value.\n\n"+
@@ -168,13 +178,33 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"that exists but is not a real directory (a symlink, a file) is parent_not_walked (no\n"+
 			"reader, in \"not_read\"); an existing --path that is not a regular file (or a link to\n"+
 			"one) is in \"unreadable\" exactly as tree mode gives it (not_regular_file, or\n"+
-			"read_failure for a dangling link), and the text is not read.\n\n",
+			"read_failure for a dangling link), and the text is not read.\n\n"+
+			"--list-only reads no file's content. Document (one line on stdout):\n"+
+			"  {\"schema\": \""+parseTreeListSchema+"\", \"da_guard_version\", \"mode\": \"list\"|\"names\",\n"+
+			"   \"defaults_carriers\": {<dir>: <path>},  as above (list mode; {} in names mode)\n"+
+			"   \"entries\": [{\"path\", \"depth\", \"class\", \"tenant_named\", \"readers\",\n"+
+			"                \"not_read\", \"unreadable\": {\"kind\", \"message\"}}]}\n"+
+			"List mode (--config-dir): the same walk, the same \"selected\" readers, \"not_read\" and\n"+
+			"\"defaults_carriers\" as tree mode, one entry per path, sorted; each file is opened and\n"+
+			"closed, never read, so \"unreadable\" holds only read_failure (cannot be statted or\n"+
+			"opened, a directory that cannot be listed — \".\" for the root) and not_regular_file\n"+
+			"(a FIFO, socket or device, a config-named directory, a directory symlink), and a file\n"+
+			"that opens but fails mid-read is listed as readable. \"depth\": directories between\n"+
+			"the root and the path. \"class\": tenant, defaults, platform (another `_` name) or\n"+
+			"directory. \"tenant_named\" (class tenant only): the id the name carries (the name\n"+
+			"minus .yaml / .yml, case kept) — not who is served: the exporter takes tenant ids\n"+
+			"from the file's `tenants:` keys. Hidden and non-config names are not walked, so not\n"+
+			"listed. \"not_read\": unselected_defaults_carrier, with \"readers\": [].\n"+
+			"Names mode (--names): each given base name in the order given, \"depth\" 0,\n"+
+			"\"readers\" null, \"class\" also hidden or not_config_name — for names that are not on a\n"+
+			"disk (e.g. the keys of a ConfigMap built from a conf.d).\n\n",
 			parsetree.MaxContentBytes, kindList())
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok — an unreadable file is data in the document, not a verdict\n"+
 			"  2  caller error: bad flags, --config-dir missing or not a directory, a --path that is\n"+
-			"     absolute or leaves --config-dir, --input not readable, a file name that is not\n"+
-			"     valid UTF-8 (JSON cannot carry it), or stdout not writable\n")
+			"     absolute or leaves --config-dir, --input or --names not readable, --names not a\n"+
+			"     JSON array of base names, a file name that is not valid UTF-8 (JSON cannot carry\n"+
+			"     it), or stdout not writable\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -208,6 +238,20 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	fail := func(format string, a ...any) int {
 		fmt.Fprintf(errOut, "%s %s: "+format+"\n", append([]any{programName, parseTreeCmd}, a...)...)
 		return exitCallerErr
+	}
+	if f.listOnly {
+		switch {
+		case f.path != "" || f.input != "":
+			return fail("--list-only reads no file: --path and --input do not go with it")
+		case f.names != "" && f.configDir != "":
+			return fail("--names classifies names, not a tree: give --config-dir or --names, not both")
+		case f.names == "" && f.configDir == "":
+			return fail("--list-only needs --config-dir or --names")
+		}
+		return runParseTreeList(f, stdin, stdout, fail)
+	}
+	if f.names != "" {
+		return fail("--names goes with --list-only")
 	}
 	if f.configDir == "" {
 		return fail("--config-dir is required")
@@ -329,9 +373,9 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 	doc := newParseTreeDoc("file")
 	readers, reason := []string{}, ""
 	switch {
-	case !config.IsScannedPath(rel) && hiddenPath(rel):
+	case confdname.HasHiddenSegment(rel):
 		reason = notReadHidden
-	case !config.IsScannedPath(rel):
+	case !confdname.IsScannedPath(rel):
 		reason = notReadNotConfigName
 	default:
 		reason = parentsOnDisk(scan.AbsRoot, rel)
@@ -533,15 +577,6 @@ func cleanRelPath(p string) (string, error) {
 		return "", errors.New("is not valid UTF-8; JSON cannot carry it")
 	}
 	return clean, nil
-}
-
-func hiddenPath(rel string) bool {
-	for _, seg := range strings.Split(rel, "/") {
-		if confdname.IsHidden(seg) {
-			return true
-		}
-	}
-	return false
 }
 
 func relTo(root, p string) (string, error) {

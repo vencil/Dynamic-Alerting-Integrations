@@ -223,7 +223,7 @@ def is_reserved_name(name: str) -> bool:
 
     ⚠️ ASCII `_` only, and that is not laziness: the reserved prefix is a
     single ASCII byte with no case, so unlike the extension there is
-    nothing here to fold. tenant-api's `isReservedName` makes the same
+    nothing here to fold. Go's `confdname.IsReserved` makes the same
     call and the shared matrix pins both.
     """
     return name.startswith("_")

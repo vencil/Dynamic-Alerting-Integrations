@@ -52,6 +52,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
@@ -1258,15 +1259,29 @@ func disclosedFindings(d *Deps, r *http.Request, all []generator.Finding) ([]gen
 }
 
 // findingReadable reports whether f names nothing names withholds: its
-// tenant, and the tenant its file is named after (<id>.yaml / <id>.yml —
-// a file-only finding names its tenant that way).
+// tenant, and the tenant its file is named after (a file-only finding names
+// its tenant that way). It is asked only for a caller who may not see the
+// whole tree (disclosedFindings shows everything to the rest).
+//
+// The file's tenant is confdname.TenantNamedBy, the one name rule the
+// exporter and da-guard use (#3206): `<id>.YAML` names `<id>`, and
+// `a.yml.yaml` names `a.yml` (only the last extension is stripped).
+//
+// ⛔ A file that names NO tenant by that rule — a `_` platform file, a hidden
+// or empty-stem name (`.yaml`, `.x.yaml`), anything without a YAML
+// extension — is withheld. Such a file can hold any tenant's settings, so
+// nothing here can say the caller may read what the finding quotes from it;
+// only a caller who sees the whole tree gets it. (The hand-written rule this
+// replaced passed some of these, `_defaults.yaml` among them, and withheld
+// others by deriving a tenant like `.x` from them — fail-safe now means
+// never passing what it could not attribute.)
 func findingReadable(names gitops.TenantNames, f generator.Finding) bool {
 	if f.Tenant != nil && *f.Tenant != "" && !names.Shown(*f.Tenant) {
 		return false
 	}
 	if f.File != nil {
 		base := path.Base(filepath.ToSlash(*f.File))
-		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !names.Shown(id) {
+		if id, ok := confdname.TenantNamedBy(base); !ok || !names.Shown(id) {
 			return false
 		}
 	}

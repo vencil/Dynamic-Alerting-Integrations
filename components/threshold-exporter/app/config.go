@@ -12,7 +12,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
