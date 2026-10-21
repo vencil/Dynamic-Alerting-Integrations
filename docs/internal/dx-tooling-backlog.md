@@ -172,14 +172,14 @@ status: in-progress
 domain: exporter
 target_version: v3.0.0
 created_at: 2026-10-18
-updated_at: 2026-10-20
+updated_at: 2026-10-21
 ```
 
 **來源**：[#3180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3180)（[#2977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2977) 的方案 B）。`cmd/da-guard` 的兩支窮舉矩陣（`TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings`、`TestGuard_NullOverrideIsNoWriteOnEveryLayer`）讓該 package 在 `-race -count=1` 下要 138 s（本機 4 核；加 `-short` 為 53–58 s），nightly `-count=10` 兩度撞上 30m 上限。
 
 方案 A（nightly 帶 `-short`）已止血 nightly，但 PR CI（`-race -count=1`，不帶 `-short`）每支碰到 exporter 的 PR 仍付完整矩陣成本，且會隨新矩陣繼續成長。本項是在不降覆蓋的前提下讓矩陣本身變便宜；驗收條件（含前後量測與反事實）見 #3180。
 
-**拆分**（2026-10-20 owner 裁決）：PR-1（測試修復線）只做機械加速，把兩支矩陣的 `t.TempDir()`／`WriteTree` 提到平台檔不再變化的那一層，每格只覆寫租戶檔，格子與斷言不動；PR-2（conf.d／routing 線）做等價格合併、重用解析結果這類需要懂語意的改動。PR-1 量測（同一台 4 核機器，`-race -count=1`）：package 142.4 s → 118.2 s，`-short` 58.8 s → 47.1 s，兩支單跑 102.6 s → 74.2 s、42.9 s → 29.4 s；格數不變（21504、8125），未達「快一半」，差距交給 PR-2。
+**拆分**（2026-10-20 owner 裁決）：PR-1（測試修復線）只做機械加速，把兩支矩陣的 `t.TempDir()`／`WriteTree` 提到平台檔不再變化的那一層，每格只覆寫租戶檔，格子與斷言不動；PR-2（conf.d／routing 線）做等價格合併、重用解析結果這類需要懂語意的改動。PR-1 量測（同一台 4 核機器，`-race -count=1`）：package 142.4 s → 118.2 s，`-short` 58.8 s → 47.1 s，兩支單跑 102.6 s → 74.2 s、42.9 s → 29.4 s；格數不變（21504、8125），未達「快一半」，差距交給 PR-2。PR-2a 把 `TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings` 與值無關的「刪掉 key 後」觀測上提出值迴圈（每格少一次 LoadDir）；null 矩陣的基準觀測本來就每棵樹只算一次，沒有可上提的。PR-2a 量測（同一台 4 核機器，`-race -count=1`）：package 122.4 s → 111.1 s，`-short` 51.9 s → 49.5 s，alias 矩陣單跑 82.1 s → 64.9 s；格數不變。
 
 ### Snapshot test 擴展
 

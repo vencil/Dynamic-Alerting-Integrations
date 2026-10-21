@@ -154,7 +154,8 @@ func TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings(t *testing.T
 						// (no prior, no mtime fast-path), so a cell reads the tree
 						// a fresh TempDir would have given it (#3180). Cost of the
 						// full run: 21504 cells over 672 trees (32 cells each;
-						// `-short` 8 each), each cell two LoadDir + one guard run.
+						// `-short` 8 each), each cell one LoadDir + one guard run,
+						// plus one LoadDir per (both, field) for `without`.
 						dir := t.TempDir()
 						testutil.WriteTree(t, dir, files)
 						head := "tenants:\n  tx:\n    pg_connections: 100\n"
@@ -171,8 +172,14 @@ func TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings(t *testing.T
 									}
 									other = "    " + o + ": 99\n"
 								}
+								// `without` is the tree with no `field` line: its
+								// tx.yaml body is head+other, which does not depend
+								// on v, so every v reads the same tree — one LoadDir
+								// for the (both, field) instead of one per cell
+								// (#3180). aliasRedundant must still read the `with`
+								// body, so inside the loop `with` is written first.
+								without := aliasServed(t, dir, head+other)
 								for _, v := range values {
-									without := aliasServed(t, dir, head+other)
 									with := aliasServed(t, dir, head+other+"    "+field+": "+v+"\n")
 									red := aliasRedundant(t, dir)
 									cells.Add(1)
