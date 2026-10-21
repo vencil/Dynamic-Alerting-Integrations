@@ -119,6 +119,21 @@ func NonFiniteDefaultKeys(block map[string]any) []string {
 	return out
 }
 
+// NonFiniteRootDefaults is the root `defaults:` keys of c (c.Defaults, as
+// the resolver reads them) whose value is a non-finite number: the keys
+// NonFiniteDefaultKeys names, which no tenant gets a default row for
+// (#3140). da-guard served-values names each, for a tenant that does not
+// write it, with keys[].reason root_default_non_finite.
+func (c *ThresholdConfig) NonFiniteRootDefaults() map[string]bool {
+	out := map[string]bool{}
+	for k, v := range c.Defaults {
+		if !finiteThreshold(v) && !baseRowsSkipKey(k) {
+			out[k] = true
+		}
+	}
+	return out
+}
+
 // NonFiniteThresholdWrites is, sorted, one message per threshold key of a
 // tenant's map (not `_`-prefixed) whose value — its `default` or a window's
 // value — reads as a number parseThresholdNumber refuses for being

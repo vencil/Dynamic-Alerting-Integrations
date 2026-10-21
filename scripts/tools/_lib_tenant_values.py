@@ -105,7 +105,9 @@ is what keeps either of them off column 0.
   not, why (`SERVED_KEY_REASONS`; #3140: `value_non_finite` /
   `value_unparsed` is a value the row resolver refused and served no row
   for, not a switch-off, and `refused` names such a refusal also when the
-  platform default is served instead). A no-row schedule segment's `reason`
+  platform default is served instead; `root_default_non_finite` is a key
+  the tenant does not write whose root `defaults:` value is non-finite, so
+  it gets no default row — `refused` "non_finite"). A no-row schedule segment's `reason`
   says the same per part of the day (`SEGMENT_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
@@ -417,8 +419,9 @@ class ServedKey(NamedTuple):
     # #3140: why the exporter's row resolver refused the key's value at
     # `at` — one of `SERVED_KEY_REFUSALS` ("non_finite", "unparsed") — both
     # when it then served the platform default (`exporter` True) and when it
-    # served no row (`reason` "value_non_finite" / "value_unparsed"). None
-    # when the value is read (a number, or a disable).
+    # served no row (`reason` "value_non_finite" / "value_unparsed", or
+    # "root_default_non_finite": the refused value is the root default's).
+    # None when the value is read (a number, or a disable).
     refused: str | None = None
 
 
@@ -436,8 +439,12 @@ DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
 SERVED_KEY_REASONS = frozenset({
     "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
     "state_filter_undeclared", "unregistered", "retired",
-    "value_non_finite", "value_unparsed",
+    "value_non_finite", "value_unparsed", "root_default_non_finite",
 })
+
+#: The `keys[*].reason` values of a refused value that leaves no row: the
+#: ones `refused` comes with when `exporter` is False.
+SERVED_KEY_REFUSED_REASONS = frozenset({"value_non_finite", "value_unparsed", "root_default_non_finite"})
 
 
 class SkippedFile(NamedTuple):
@@ -982,7 +989,7 @@ def _served_key(e: Any) -> ServedKey:
     refused = e.get("refused")
     if refused is not None and refused not in SERVED_KEY_REFUSALS:
         raise ValueError(f"refused {refused!r}")
-    if (reason in ("value_non_finite", "value_unparsed")) != (refused is not None and not exporter):
+    if (reason in SERVED_KEY_REFUSED_REASONS) != (refused is not None and not exporter):
         raise ValueError(f"reason {reason!r} with refused {refused!r}")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
                      disable, family, refused)

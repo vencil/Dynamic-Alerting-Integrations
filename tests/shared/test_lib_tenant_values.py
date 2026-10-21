@@ -765,9 +765,11 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": true, "refused": "nan"}}',
     '{"k": {"exporter": false, "reason": "value_non_finite"}}',
     '{"k": {"exporter": false, "reason": "no_row", "refused": "non_finite"}}',
+    '{"k": {"exporter": false, "reason": "root_default_non_finite"}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
         "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial",
-        "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason"])
+        "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason",
+        "root-reason-without-refusal"])
 def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
     doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"keys": {}', f'"keys": {keys}')
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -792,6 +794,20 @@ def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_g
     reasons = [(s.start, s.reason) for s in got.schedules["mysql_connections_critical"].segments
                if s.value is None]
     assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]
+
+
+def test_real_da_guard_names_a_root_non_finite_default_the_tenant_does_not_write(tmp_path, da_guard):
+    """#3140: a root `defaults:` value that is non-finite leaves a tenant
+    that does not write the key no row; `keys[]` names it
+    (`root_default_non_finite`, refused `non_finite`) instead of leaving the
+    key out, so a reader does not take the lost row for a removal."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: .nan\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connections: \"70\"\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["t"]
+    assert got.keys["redis_memory"] == tv.ServedKey(False, "root_default_non_finite", refused="non_finite")
+    assert "redis_memory" not in got.values and "redis_memory" not in (got.unserved or {})
 
 
 @pytest.mark.parametrize("reason", ["typo", None])
