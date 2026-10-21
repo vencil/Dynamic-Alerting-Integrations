@@ -24,6 +24,7 @@ lang: en
 - **Revised 2026-10-20**: the generator now reads `parse-tree`'s result, so §2 and §9 drop the sentences describing its earlier PyYAML read; the decisions are unchanged.
 - **Further revision 2026-10-20**: the Go side also keeps one judgement and one writer, YAML outside conf.d follows its consumer, and the migration audit command is deleted; details in §2, §3, §8, §9, §11, §12 and the order in §7.
 - **Revised 2026-10-21**: tenant-api's writes and the admin config it reads itself go through the shared judgement (§7, step 7); §2 is rewritten to describe what is now in place, and says that the RBAC config is judged wherever it sits; the decisions are unchanged.
+- **Further revision 2026-10-21**: the vendored yaml.v3 "non-specific tag" patch is deleted (§7, step 8; §11); the §7 paragraph on why it waits for step 8 is rewritten to describe what is in place; the decisions are unchanged.
 
 ## Summary
 
@@ -414,7 +415,7 @@ Neither case lets a violating config through; the cost is that the two sides can
 
 **The steps merge into main in order.** There is no side-by-side period, no switch, and no divergence catalog (a list recording each config file Go and the generator judge differently). Why not do it all in one release: see "Considered and rejected".
 
-Steps 0 to 7 are done, and each could be released once merged; the "non-specific tag" patch was not deleted in step 4 and is scheduled for step 8 (why: see below).
+Steps 0 to 8 are done, and each could be released once merged; the "non-specific tag" patch was not deleted in step 4 and is scheduled for step 8 (why: see below).
 
 - **Step 0: ship first, no behaviour change.** `parse-tree` (single-file mode included) and its fixed corpus (§2); the migration audit command (§8); move the small utilities unrelated to parsing (for example the tenant id check, finding which directory level a file sits at, recognising policy file names) out of the packages to be deleted.
 - **Step 1: tenant-api's writes ask the generator container.** The same step deletes all of tenant-api's Go-side routing and policy judging (§11), including the imitation that decides whether `_routing` is a string that turns routing off. Checks that are not routing judging stay: the guard against writing back masked-credential placeholders, the yaml.v3 check that the exporter can read the written content, and the value checks on reserved keys such as thresholds. The last two keep tenant-api from letting through files PyYAML reads but yaml.v3 does not (for example `"x\/y"`); duplicate keys the Go imitation package used to block are now blocked by the generator's own duplicate-key refusal. The same step also removes `--policy-unavailable-open` and deletes the flat key `_routing_receiver_type` (the old single-level way to set the receiver type); writing it now returns 400.
@@ -441,12 +442,7 @@ Steps 0 to 7 are done, and each could be released once merged; the "non-specific
 
 Why this order: steps 6 and 7 use the shared package, so step 5 comes first; step 6 is the breaking change users see, so it goes first to be released and guarded on its own; the "non-specific tag" patch is deleted only once every Go reader goes through the shared judgement (step 8); before step 11 deletes the rewrite layer, every tool that writes conf.d must already send intent (step 10).
 
-**Why the "non-specific tag" patch waits until step 8**: until the exporter passes conf.d through `parse-tree`'s judgement, it relies on the patch to keep reading as before.
-
-- `! "<<"`, marked with `!`: the exporter's merge-key check also counts a `"<<"` tagged `!`; PyYAML merges it too.
-- A custom-alert SLO `objective: ! "99.9"`: the exporter refuses it because its tag is `!`; PyYAML reads it as a float, and the Python side refuses it as well because the objective is not a string.
-
-Deleting it before then would make the exporter accept `objective: ! "99.9"`, looser than the generator and CI (`parse-tree` treats any file with `!` as unreadable). From step 6 the exporter, and from step 7 tenant-api, decode only files `parse-tree` judges readable, so a file with `!` never reaches their decoding. Deleting the patch only once both have switched (step 8) means no component ever reads `!` with a yaml.v3 lacking it.
+**Why the "non-specific tag" patch waits until step 8**: the patch makes yaml.v3 keep the `!` marker on the node of a quoted string, and the exporter's merge-key check relies on it to take `! "<<"` as a merge key, as PyYAML does. Without it yaml.v3 drops the marker, and `! "<<"` is the literal key `<<`, merging nothing. Deleting it before the exporter goes through `parse-tree`'s judgement would silently change files the exporter reads. From step 6 the exporter, and from step 7 tenant-api, decode only files `parse-tree` judges readable, so a file with `!` never reaches their decoding; deleting the patch only once both have switched (step 8) means no commit on main has a component read `!` with a yaml.v3 lacking it.
 
 **What must be done before step 1**:
 
@@ -513,7 +509,7 @@ Decided by "is anyone still using it". CI already has a check: it lists the user
 | Python loaders, imitating yaml.v3, used to read conf.d; the Python copy of the file-selection rules | the generator and the Python tools reading the JSON | delete |
 | da-guard's "not judged" evidence `generator_unreadable` | the exporter and da-guard going through the shared judgement | folded into exit 3; paths this run cannot name become `unreadable_outside_run` (§9) |
 | tenant-api's own conf.d write shape rules | tenant-api using the shared judgement | replaced by `parse-tree`'s judgement |
-| The vendored yaml.v3 "non-specific tag" patch (YAML's `!` marker, making a quoted string typed by the unquoted rules) | once the exporter and tenant-api both go through the shared judgement | delete; by then files with `!` never reach their decoding and the patch has no effect (§7, §8) |
+| The vendored yaml.v3 "non-specific tag" patch (keeping YAML's `!` marker on the node of a quoted string, so `! "<<"` is a merge key) | once the exporter and tenant-api both go through the shared judgement | deleted (step 8): files with `!` never reach their decoding, and the patch has no effect (§7, §8) |
 | The vendored yaml.v3 duplicate-key change (duplicate-key checking of large mappings via a hash table instead of O(n²) pairwise comparison) | — | keep: it guards against a denial of service that stalls decoding with very many keys; it does not imitate another parser |
 | The vendored yaml.v3 unhashable merge key fix (a non-scalar key beside a merge key becomes a decode error instead of a runtime panic) | in parallel with the rest | no longer maintained as a patch: the vendored base moves to upstream `go.yaml.in/yaml/v3` v3.0.5, which carries the same fix; the duplicate-key change is laid on top of the new base. Before moving, the readings of the old and new bases are compared with the fixed corpus (`parse_tree_corpus.json` and the yaml.v3 reading tests); on any difference the current vendored base stays and only this fix is ported |
 | The 4 Go file-name rules; the Python name predicate and the table comparing Go and Python name rules | the file-name rules converging | Go: merged into one; Python: deleted, using the list-only mode instead |
@@ -672,7 +668,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 - Done, step 5: `parse-tree`'s judgement moves to a shared package under `pkg/`.
 - Done, step 6: the exporter, da-guard and tenant-api's read side pass conf.d through it when loading; the exporter does not serve unreadable files and adds a metric and a log; `generator_unreadable` folds into exit 3, and paths this run cannot name become `unreadable_outside_run`.
 - Done, step 7: tenant-api's write shape rules use it; so do its reads of `_tenant_orgs.yaml`, the RBAC config, groups, views, the federation whitelist and subsets, and the AccountID registry.
-- Step 8: delete the "non-specific tag" patch.
+- Done, step 8: deleted the "non-specific tag" patch; the exporter's merge-key check no longer accepts the `!` marker.
 - Step 9: the Go file-name rules converge into one; `parse-tree`'s list-only mode; the Python name predicate and the name-rule comparison table retire.
 - Step 10: the edit primitives and da-guard's `edit` / `emit`; the tools that write conf.d switch in batches.
 - Step 11: delete the Python layer that rewrites conf.d with PyYAML and the imitation loader it depends on.
@@ -705,8 +701,8 @@ Where the code is, for implementers; can be skipped when reading the decision. C
 | Code that blocks duplicate keys and multiple documents | Python's `RejectDuplicateKeys`; on the Go side `parse-tree` (`pkg/parsetree`), which da-guard reads for its undetermined evidence. The Go copies (`pyyamlcompat.FindDuplicateKey`, `firstDocument` / `errMoreDocuments` in `routingpolicy`, da-guard's `pyyaml_duplicates.go`) are deleted |
 | Go code that imitates PyYAML's reading (deleted) | `pkg/pyyamlcompat`; `pyResolve` and the policy decoder that turned on `SpacesOnly` in `pkg/routingpolicy` |
 | Go code that imitates the generator's semantics (deleted) | `shapeWork`, `ParseDomainPolicies`, `UnmarshalPolicy`, `IsDisabled` in `pkg/routingpolicy`; da-guard's routing checks `internal/guard/routing.go` and their finding kinds |
-| Changes in the vendored yaml.v3 | `third_party/yaml.v3`: spaces only (deleted), non-specific tag (deleted once the exporter and tenant-api go through the shared judgement), duplicate-key checking of large mappings (keep), the unhashable merge key fix (provided by upstream once the base moves to v3.0.5); the pinning test `tests/ops/test_vendored_yaml_v3.py` is updated in the same PR |
-| Exporter readings affected by the non-specific tag | `isMergeKey` in `pkg/config/config_file.go`; `validateSloObjective` in `custom_alert.go` |
+| Changes in the vendored yaml.v3 | `third_party/yaml.v3`: spaces only (deleted), non-specific tag (deleted), duplicate-key checking of large mappings (keep), the unhashable merge key fix (provided by upstream once the base moves to v3.0.5); the pinning test `tests/ops/test_vendored_yaml_v3.py` is updated in the same PR |
+| A file with `!` never reaches the exporter's decoding | `pkg/config/nonspecific_tag_test.go`; the merge-key check `isMergeKey` in `pkg/config/config_file.go` |
 | The Go copy of the receiver contract | `pkg/receiverspec`: `Known` (used by the exporter's routing resolution; kept); `Check` (deleted) |
 | tenant-api's current write judging | the generator container's caller `internal/generator` (`Gate`); on the Go side only the shape and reserved-key checks remain (next two rows) |
 | tenant-api's entry to the shared judgement | `Judge` in `internal/confd/verdict.go` (returns `pkg/config`'s `UnreadableFileError`); callers: `validateShape`, `eolGuardErrs`, the parse functions of `tenantorg`, `rbac`, `groups`, `views`, `fedpolicy` and `account`, and the batch's `tenantAbsentIn` and `scopeBlockOnDisk` |

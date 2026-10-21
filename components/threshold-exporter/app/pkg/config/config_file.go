@@ -563,17 +563,14 @@ func hasMergeKey(m *yaml.Node) bool {
 }
 
 // isMergeKey reports whether k is a YAML merge key: yaml.v3's isMerge
-// (decode.go), restated because it is unexported.
-//
-// ⚠️ The `k.Tag == "!"` arm (the vendored yaml.v3 non-specific-tag patch keeps
-// `!` on `! "<<"`): since ADR-036 step 6 (#3206) no file reaches it through
-// ParseConfigFile / ParseTenantFile — parse-tree refuses any `!` first
-// (non_specific_tag). It is still reached through TenantWritesStringMetadata,
-// which tenant-api's write path calls on bytes no verdict has judged (step 7).
-// Kept until the patch is deleted (step 8), with it.
+// (decode.go), restated because it is unexported — without its Tag "!" arm,
+// which no parsed node reaches: yaml.v3 drops the non-specific tag when it
+// builds the node, so `! "<<"` is the literal key "<<" (Tag !!str) here as in
+// the typed decode. A file that writes `!` is refused by parse-tree before
+// any decode anyway (non_specific_tag; ADR-036 step 8, #3206).
 func isMergeKey(k *yaml.Node) bool {
 	return k.Kind == yaml.ScalarNode && k.Value == "<<" &&
-		(k.Tag == "" || k.Tag == "!" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
+		(k.Tag == "" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
 }
 
 func derefAlias(n *yaml.Node) *yaml.Node {

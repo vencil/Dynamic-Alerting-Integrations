@@ -1,4 +1,4 @@
-"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus THREE pinned patches.
+"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus TWO pinned patches.
 
 Both Go modules replace ``gopkg.in/yaml.v3`` with
 ``components/threshold-exporter/app/third_party/yaml.v3``: upstream v3.0.1
@@ -8,11 +8,6 @@ with
   costs O(n²)). Nothing else from that fork may come along — its block-scalar
   encode, ``Node.DecodeWithOptions``, ``0`` as a ``time.Duration`` and the
   upstream v3.0.2+ backports all change behaviour;
-- this repo's own ``decode.go`` change (#2730 §6): a quoted or block scalar
-  written with the non-specific tag ``!`` keeps ``Tag == "!"`` on its node,
-  so the Go readers can read ``! "true"`` / ``! "<<"`` as PyYAML does
-  (the exporter's merge-key and SLO-objective reads rely on it until ADR-036
-  step 4 deletes it);
 - upstream's own fix for a merge beside a non-scalar key (#2913,
   ``go.yaml.in/yaml/v3`` v3.0.2+, unchanged through v3.0.5): the decoder's
   merged-field set is read and written through
@@ -59,7 +54,6 @@ from _tree import repo_files
 _THIRD_PARTY = ROOT / "components" / "threshold-exporter" / "app" / "third_party"
 _VENDORED = _THIRD_PARTY / "yaml.v3"
 _PATCH = _THIRD_PARTY / "yaml.v3-uniquekeys.patch"
-_NONSPECIFIC_PATCH = _THIRD_PARTY / "yaml.v3-nonspecific-tag.patch"
 _UNHASHABLE_PATCH = _THIRD_PARTY / "yaml.v3-unhashable-merge-key.patch"
 
 _MODULE = "gopkg.in/yaml.v3"
@@ -69,11 +63,12 @@ _UPSTREAM_H1 = "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA="
 # grafana/go-yaml a1d5f0f's decode.go hunk; its +/- lines are byte-identical
 # to that commit, only the @@ line numbers moved by -3 to land on v3.0.1.
 _PATCH_SHA256 = "32fd9b238124d4eb520292c97119b2eaed76b983b9d1bc2f16e6d0f429451b9a"
-# #2730 §6: (*parser).scalar keeps the tag "!" on a non-plain scalar.
-_NONSPECIFIC_PATCH_SHA256 = "e28069e759fe29c3645e48b0aee3af4d49062b6dd4ada440cc0256866a936964"
-# The scanner switch Decoder.SpacesOnly (hub #2486 PR-7c round 6) was a
-# fourth patch; ADR-036 step 3 (#2905) deleted it with its only caller, the
-# domain-policy reader of pkg/routingpolicy.
+# Two more were deleted: the scanner switch Decoder.SpacesOnly (hub #2486
+# PR-7c round 6) with its only caller, the domain-policy reader of
+# pkg/routingpolicy (ADR-036 step 3, #2905); and the non-specific-tag patch
+# (#2730 §6: (*parser).scalar kept the tag "!" on a non-plain scalar) once
+# every Go reader asks parse-tree first, which refuses `!` from the source
+# text (ADR-036 step 8, #3206).
 # #2913: go.yaml.in/yaml/v3 v3.0.2's decode.go change (the only semantic change
 # to that file through v3.0.5); +/- lines byte-identical to upstream's.
 _UNHASHABLE_PATCH_SHA256 = "84f5baa69149d841265e93cebdd316edff527ab0c9e0cc16cbbb550b0cb7f56e"
@@ -81,7 +76,6 @@ _UNHASHABLE_PATCH_SHA256 = "84f5baa69149d841265e93cebdd316edff527ab0c9e0cc16cbbb
 # sha256, and the hunks it may hold per file.
 _PATCHES = {
     _PATCH: (_PATCH_SHA256, {"decode.go": 1}),
-    _NONSPECIFIC_PATCH: (_NONSPECIFIC_PATCH_SHA256, {"decode.go": 1}),
     _UNHASHABLE_PATCH: (_UNHASHABLE_PATCH_SHA256, {"decode.go": 3}),
 }
 
@@ -191,15 +185,13 @@ def test_the_allowed_changes_are_the_pinned_hunks() -> None:
         assert digest == want, (
             f"{patch.name} changed (sha256 {digest}). It defines what may differ "
             "from upstream v3.0.1; widening it is a decision for the owner "
-            "(#2681, #2730, #2913), made by editing its pinned sha256 here in the same diff.")
+            "(#2681, #2913), made by editing its pinned sha256 here in the same diff.")
         counts: dict[str, int] = {}
         for name, _, _ in _hunks(patch):
             counts[name] = counts.get(name, 0) + 1
         assert counts == files, f"{patch.name} touches {counts}, pinned {files}"
     old, new = _hunk()
     assert "func (d *decoder) mapping(" in old and "checkUniqueKeysMap" in new
-    old, new = _hunk(_NONSPECIFIC_PATCH)
-    assert 'n.Tag = "!"' in new and 'n.Tag = "!"' not in old
     # Upstream's fix only routes the merged-field set through the two
     # recovering helpers (and adds them): every changed line names one.
     for name, old, new in _hunks(_UNHASHABLE_PATCH):
@@ -426,14 +418,6 @@ def test_a_byte_inside_the_hunk_is_caught(scratch: Path) -> None:
     f.write_bytes(f.read_bytes().replace(
         b"const uniqueKeysScanLimit = 48", b"const uniqueKeysScanLimit = 49"))
     with pytest.raises(AssertionError, match="uniquekeys.patch 0 time"):
-        _reverted_h1(_tree(scratch))
-
-
-def test_a_byte_inside_the_nonspecific_hunk_is_caught(scratch: Path) -> None:
-    f = scratch / "decode.go"
-    f.write_bytes(f.read_bytes().replace(
-        b'if nodeTag == "!" && nodeStyle != 0 {', b'if nodeTag == "!" {'))
-    with pytest.raises(AssertionError, match="nonspecific-tag.patch 0 time"):
         _reverted_h1(_tree(scratch))
 
 

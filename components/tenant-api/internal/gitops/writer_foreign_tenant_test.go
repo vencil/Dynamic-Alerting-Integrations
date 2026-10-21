@@ -274,6 +274,13 @@ func TestValidateShape_ParseTreeVerdict(t *testing.T) {
 		{"!!set value", "tenants:\n  db-a:\n    _metadata: !!set {a: null}\n", "tag_not_allowed"},
 		{"local tag", "tenants:\n  db-a:\n    _silent_mode: !foo warning\n", "tag_not_allowed"},
 		{"non-specific tag", "tenants:\n  db-a:\n    _silent_mode: ! \"warning\"\n", "non_specific_tag"},
+		// ADR-036 step 8: with the vendored yaml.v3 patch gone, `! "<<"` is a
+		// literal key to every decode below (TenantWritesStringMetadata's merge
+		// walk included); the verdict refuses it before any of them runs.
+		{"non-specific merge key bringing a string _metadata",
+			"tenants:\n  db-a:\n    ! \"<<\": {_metadata: \"owner: x\"}\n", "non_specific_tag"},
+		{"non-specific tag on an SLO objective",
+			"tenants:\n  db-a:\n    _custom_alerts:\n    - name: x\n      slo: {objective: ! \"99.9\"}\n", "non_specific_tag"},
 		{"byte order mark past the start", "tenants:\n  db-a:\n    _silent_mode: \"warn\ufeffing\"\n", "bom_not_at_start"},
 		{"repeated key", "tenants:\n  db-a:\n    _silent_mode: warning\n    _silent_mode: critical\n", "duplicate_key"},
 		{"top level not a mapping", "- tenants\n", "top_level_not_mapping"},
