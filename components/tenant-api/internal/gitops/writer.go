@@ -456,6 +456,7 @@ type Writer struct {
 	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
+	gitTestEnv     []string      // TEST-ONLY (#3175): added to every git command's environment, after the process's; nil in prod
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
@@ -663,12 +664,25 @@ func (w *Writer) lockTreeOnBase() error {
 	return nil
 }
 
-// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900): a
-// batch publish interrupted between the branch update and the worktree
-// update is finished before this write reads anything. On error the lock is
-// already released.
+// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900,
+// #3173): a publish the marker records as unfinished — a batch interrupted
+// between the branch update and the worktree update, or a write whose
+// outcome was unknown — is settled before this write reads anything. On
+// error the lock is already released.
+//
+// #3175: before the recovery, the git config is checked again for a filter, diff
+// or merge driver (CheckGitDrivers) — the first thing every write does
+// under the lock, before any git command of it can run one. Startup
+// checked it already; this catches a driver added since (an init container
+// or a sidecar editing .git/config, a replaced global config). It checks
+// the context HEAD is in now; a write that then moves HEAD to base checks
+// again there (checkoutBaseClean).
 func (w *Writer) lockTreeRecovered() error {
 	w.lockTree()
+	if err := w.CheckGitDrivers(); err != nil {
+		w.unlockTree()
+		return err
+	}
 	if err := w.RecoverBatchPublish(); err != nil {
 		w.unlockTree()
 		return err
@@ -729,6 +743,10 @@ var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
 // a reader, it took no lock, and a lock present in .git belongs to someone
 // else. #638's stale-lock sweep is for the writer's own killed commands only.
 func (w *Writer) TreeOnBase() error {
+	// #3175: the status below would run a clean filter the config names.
+	if err := w.CheckGitDrivers(); err != nil {
+		return fmt.Errorf("%w: %w", ErrTreeNotOnBase, err)
+	}
 	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil { // detached HEAD exits non-zero, as does a timeout
 		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
@@ -1667,7 +1685,11 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 		}
 	}
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", diffCurrentFile, diffProposedFile)
+	// #3175: --no-ext-diff keeps diff.external / GIT_EXTERNAL_DIFF (a
+	// program named only by config or the environment, which the driver
+	// check does not cover) from running for a preview; --no-textconv is a
+	// second layer behind that check's refusal of diff.*.textconv.
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--no-ext-diff", "--no-textconv", "--", diffCurrentFile, diffProposedFile)
 	defer cancel()
 	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error
@@ -1783,7 +1805,13 @@ func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) erro
 // exactly content (checkStagedAsValidated); when git attributes rewrote
 // it, the write is refused. Whatever stops a write after its file was
 // written, the serving file is put back as HEAD has it (restoreFromHEAD);
-// the real index is gitCommitOnto's to keep (see there).
+// the real index is gitCommitOnto's to keep (see there). The publish
+// marker (#3173) is written before the file and lives until the file is
+// back in a known state: gitCommitOnto removes it once published, this
+// function when nothing changed or once that restore succeeded — never on
+// an unknown outcome (*WriteOutcomeUnknownError: HEAD may hold the
+// commit). A marker left behind settles the file and its index entry on
+// the next write or at startup (RecoverBatchPublish).
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, judgedBase string, trailer ...string) error {
 	if judgedBase == "" {
 		return fmt.Errorf("%w: no judged base for %s", ErrNoValidator, commitTag)
@@ -1810,7 +1838,22 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return ErrConflict
 	}
 
+	// #3173: the publish marker, before the serving file is written: from
+	// here until the file is seen back in a known state (published, equal
+	// to HEAD, or put back by restoreFromHEAD) it is the record that lets
+	// RecoverBatchPublish put it back on the next write or at startup. It
+	// has no commit yet; gitCommitOnto replaces it with one. Not recorded:
+	// nothing is written.
+	idxPath, err := w.indexPath(filePath)
+	if err != nil {
+		return err
+	}
+	if err := w.writePublishMarker("", []string{idxPath}, true); err != nil {
+		return fmt.Errorf("record the write: %w", err)
+	}
 	if err := writeFileAtomic(filePath, content, 0644); err != nil {
+		// writeFileAtomic renames into place last: the file is untouched.
+		w.removePublishMarker()
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -1819,9 +1862,15 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		// A judged write that did not commit leaves nothing behind (ADR-036
 		// §4: only a pass is written) — whatever stopped it: the refusals
 		// below, or git failing (index.lock, a timeout, update-ref).
+		var unknown *WriteOutcomeUnknownError
 		if rerr := w.restoreFromHEAD(filePath); rerr != nil {
-			slog.Error("gitops: could not put back a write that did not commit",
+			slog.Error("gitops: could not put back a write that did not commit; the publish marker (if any) is kept for the next write",
 				"commit_tag", commitTag, "error", rerr)
+		} else if !errors.As(err, &unknown) {
+			// The serving file is HEAD's again: nothing left to recover —
+			// unless the real index still holds the unpublished blob
+			// (removeRestoredMarker keeps the marker then).
+			w.removeRestoredMarker(filePath)
 		}
 		if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
 			return err
@@ -1834,6 +1883,8 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	// repository holds, so the caller's desired state is committed and no
 	// commit was created: an idempotent re-write, a success.
 	if !committed {
+		// git found the file equal to judgedBase (HEAD): nothing pending.
+		w.removePublishMarker()
 		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
 		return nil
 	}

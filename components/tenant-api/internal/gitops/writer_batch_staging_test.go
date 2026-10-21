@@ -497,7 +497,7 @@ func TestRecoverBatchPublish_AncestryCheckFailureKeepsMarker(t *testing.T) {
 	}
 	w := newTestWriter(dir, dir)
 	missing := strings.Repeat("ab", 20) // well-formed, absent from the object store
-	if err := w.writePublishMarker(missing, []string{"s-a.yaml"}); err != nil {
+	if err := w.writePublishMarker(missing, []string{"s-a.yaml"}, false); err != nil {
 		t.Fatal(err)
 	}
 	marker, _ := w.publishMarkerPath()
@@ -515,8 +515,11 @@ func TestRecoverBatchPublish_AncestryCheckFailureKeepsMarker(t *testing.T) {
 
 	// A commit that exists but is not on the branch (merge-base exit 1): the
 	// publish never landed, so the marker is dropped and nothing is synced.
+	// The marker is written in the format from before #3173 (the commit
+	// alone on the first line): it still reads as a batch's, so the
+	// operator's edit is not put back.
 	unrelated := gitOut(t, dir, "commit-tree", gitOut(t, dir, "rev-parse", "HEAD^{tree}"), "-m", "off-branch")
-	if err := w.writePublishMarker(unrelated, []string{"s-a.yaml"}); err != nil {
+	if err := os.WriteFile(marker, []byte(unrelated+"\ns-a.yaml\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.RecoverBatchPublish(); err != nil {
