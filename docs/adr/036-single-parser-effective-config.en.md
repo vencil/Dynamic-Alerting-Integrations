@@ -25,6 +25,7 @@ lang: en
 - **Further revision 2026-10-20**: the Go side also keeps one judgement and one writer, YAML outside conf.d follows its consumer, and the migration audit command is deleted; details in §2, §3, §8, §9, §11, §12 and the order in §7.
 - **Revised 2026-10-21**: tenant-api's writes and the admin config it reads itself go through the shared judgement (§7, step 7); §2 is rewritten to describe what is now in place, and says that the RBAC config is judged wherever it sits; the decisions are unchanged.
 - **Further revision 2026-10-21**: the vendored yaml.v3 "non-specific tag" patch is deleted (§7, step 8; §11); the §7 paragraph on why it waits for step 8 is rewritten to describe what is in place; the decisions are unchanged.
+- **Third revision 2026-10-21**: every `parse-tree` mode writes the same per-path index, with Go judging whether each path is a config file; the format becomes `da-guard.parse-tree/v2` (§2). §7 step 9 is rewritten; §3 "Whether the cache stays" states that what is measured is one complete judgement, served-values included.
 
 ## Summary
 
@@ -132,16 +133,37 @@ The "thresholds" row is the existing precedent: thresholds already follow "one i
 
 ### 2. The parse-result JSON
 
-da-guard gains a `parse-tree` subcommand. It takes a conf.d directory and outputs one JSON document. It also has a single-file mode, used to read a write back before it goes ahead (see "Writing conf.d files" in this section).
+da-guard gains a `parse-tree` subcommand. It takes a conf.d directory and outputs one JSON document. It also has a single-file mode, used to read a write back before it goes ahead (see "Writing conf.d files" in this section); a list-only mode (`--list-only`), which reads no file's content; and a names mode (`--list-only --names`), which classifies file names that are not on a disk (for example the keys of a ConfigMap) by name alone. All four modes write the same kind of document.
 
-**Which files were selected**: every file some reader actually reads, marked with who reads it.
+**One entry per path**: the document's `entries` hold one entry for every path the walk records. The whole-tree mode and the list-only mode build them with the same code, so for the same tree the two agree field for field; they differ only in the problems that reading the content finds. Every entry carries every field, `null` where it has no value:
+
+- `path`, `depth` (directories between the root and it), `class` (what the name makes it: `tenant`, `defaults`, `platform`, or `directory`), `tenant_named` (the tenant id the file name carries; the tenants the exporter serves still come from the `tenants:` keys in the file), `defaults_document` (a platform-defaults document, its name starting with `_defaults`, validated by the platform-defaults schema).
+- `readers`: who reads it (`exporter`, `generator`); an empty list when no reader does, with the reason in `not_read`.
+- `role`: what the path is, judged by Go; readers read it and never compose it themselves:
+  - `config`: a config file, readable or not. When it cannot be read, `problem` says why, and a reader reading it fails loudly.
+  - `not_a_file`: the exporter's walk cannot reach a regular file there: a directory with a config-file name, a symlink to a directory, a special file such as a FIFO, or a stat that finds nothing (a dangling link, a looping link, a chain of more than 40 links).
+  - `unlistable_dir`: a directory whose contents cannot be listed (`.` for the root). Nothing under it was seen, so the document is incomplete.
+  - The judgement is a whitelist: only the cases above are `not_a_file`; every other failure (permission denied, EIO, a name too long, a reason added later) is `config`. The default the other way would let a tenant file whose stat a permission refuses vanish from the list behind one WARN line.
+- `problem`: why a read of it fails, `{kind, message}` (see "Unreadable files" below).
+
+Example: a tree holds `t1.yaml`, `_defaults.yaml` and `_defaults.yml`, `team/t2.yaml` with a syntax error, and `gone.yaml`, a link to a file that does not exist. `da-guard parse-tree --list-only --config-dir conf.d` writes (three entries shown, one per line):
+
+```json
+{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null}
+{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}}
+{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null}
+```
+
+The whole-tree mode gives the same three entries for the same tree, except that `team/t2.yaml` also has `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`; it adds `files` and `rendered_by`. `gone.yaml` has the same `problem` as a file whose stat a permission refuses; only `role` tells that it is not a file.
+
+**Which files were selected**: `readers` marks every file some reader actually reads.
 
 - The exporter's file-selection rules (extension, case, hidden files, subdirectories), including which `_defaults` file each directory finally uses.
 - Files the generator reads and the exporter does not: policy and routing-profile files (`_domain_policy.yaml`, `_routing_profiles.yaml`, `_profiles.yaml`, including those in subdirectories and the `.yml` spelling). When both spellings of one file exist, the generator's current handling applies.
 
 The Python side no longer has its own copy of these rules. Differences between the two sides' selection go into the fixed corpus.
 
-**The file-name rules live in one place, in Go**: which file names count as tenant files, and how a file name maps to a tenant id, has a single implementation on the Go side, shared by the exporter, tenant-api and da-guard. Tools that need only the list of files, not their content, use a `parse-tree` mode that lists files without parsing them; the Python name predicate and the table comparing the Go and Python name rules retire with it.
+**The file-name rules live in one place, in Go**: which file names count as tenant files, and how a file name maps to a tenant id, has a single implementation on the Go side, shared by the exporter, tenant-api and da-guard. Tools that need only the list of files, not their content, use a `parse-tree` mode that lists files without parsing them; a tool that already holds the whole-tree document reads its `entries` instead of listing the files a second time. The Python name predicate and the table comparing the Go and Python name rules retire with it.
 
 **The content of each file**: the output is yaml.v3's structure **after decoding**, not the raw nodes.
 
@@ -156,7 +178,7 @@ The Python side no longer has its own copy of these rules. Differences between t
 - Semantic layers decide only by type and converted value, never by "yaml.v3's lenient conversion when decoding into a typed Go field" (for example the string `yes` decoded into a bool field becomes `true`).
 - The output must be valid UTF-8.
 
-**Unreadable files**: listed in `unreadable`, each entry `{file, kind, message}`; no content. `kind` is a fixed code, one for each case below (13 in all, given in parentheses), which readers classify by; `message` is the explanation for people. Each of these counts as unreadable, rather than taking what yaml.v3 read:
+**Unreadable files**: the path's entry has a `problem` of `{kind, message}`, and `files` holds no content for it. `kind` is a fixed code, one for each case below (13 in all, given in parentheses), which readers classify by; `message` is the explanation for people. Each of these counts as unreadable, rather than taking what yaml.v3 read:
 
 - A read failure (`read_failure`), not a regular file (`not_regular_file`), not valid UTF-8 (`invalid_utf8`), a syntax error (`syntax_error`).
 - A top level that is not a mapping (`top_level_not_mapping`). An empty file counts as an empty mapping and is not included.
@@ -168,7 +190,7 @@ The Python side no longer has its own copy of these rules. Differences between t
 - YAML's non-specific tag `!` (`non_specific_tag`, for example `! "x"`, `! "<<"`). It is outside the allow-list and unreadable at every step: reading `! "<<"` as a merge key or as a literal key could each silently add or drop policy. `parse-tree` detects `!` from the source text at each node's position, not from the node's tag, so it does not depend on the vendored yaml.v3 "non-specific tag" patch; after the patch is deleted, `! "x"`, `! "<<"`, `! |`, `! 1`, `! {…}` and `!<!>` are still unreadable. The fixed corpus covers these spellings.
 - A BOM (`bom_not_at_start`; U+FEFF, an invisible character that marks the encoding) anywhere but the start of the file. When the BOM straddles byte 512, yaml.v3 swallows the next character (measured: `domain_policies` read as `omain_policies`, silently disabling the whole policy); anywhere else it can leave an invisible character in a key or value. Rather than tell the cases apart, any BOM past the start of the file makes it unreadable.
 
-**The envelope**: `schema` is `"da-guard.parse-tree/v1"`, alongside `da_guard_version`. A reader that meets any other `schema` value treats the whole document as unusable. Adding a field does not change the `schema` value; only a change to the shape a reader relies on does, the same convention as `served-values` / `effective`.
+**The envelope**: `schema` is `"da-guard.parse-tree/v2"`, alongside `da_guard_version`, `mode` (`tree`, `file`, `list`, `names`), `defaults_carriers` (the one `_defaults` file each directory uses) and `entries`; the whole-tree and single-file modes also carry `files` and `rendered_by`. A reader that meets any other `schema` value, or an entry missing a field, treats the whole document as unusable and says that the da-guard is older than the tool. Adding a field does not change the `schema` value; only a change to the shape a reader relies on does, the same convention as `served-values` / `effective`.
 
 **The Go readers follow this judgement too**: the code that decides which files can be read is one Go package, placed where the exporter, tenant-api and da-guard can all use it. All three pass conf.d through it when loading, then each decodes the readable files into the structures it needs. The YAML tenant-api decodes itself goes through it too: the body of a write, the file a whole-file write replaces, and the admin config it reads itself (`_tenant_orgs.yaml`, the RBAC config, groups, views, the federation whitelist and per-tenant subsets, the AccountID registry).
 
@@ -303,7 +325,9 @@ The structure inside the container, conclusion first: a long-running process (a 
 - **Whether the cache stays**: the cache holds Go's (`parse-tree`'s) output; it is not a second reader, so whether it stays is a performance decision with no bearing on "one parser". Two measurements (samples from 2026-10-20) pull against each other:
   - Today's per-file cache has an O(N²) cold start, its time growing with the square of the number of files (the first fill at startup or after a new base commit): each file that misses runs `parse-tree`'s single-file mode once, and the single-file mode scans the whole tree each time to decide file selection. About 43 s for 1000 tenants; the whole-tree mode reads the same tree once in about 0.4 s.
   - Without the cache, running the whole-tree mode on every judgement leaves less than 8% headroom at 5000 tenants within the child's 192 MiB budget, partly because `parse-tree` buffers its whole JSON output in memory.
-  - How it is decided: first make `parse-tree` stream its output (write as it produces, without assembling the whole document in memory), then measure one complete judgement (`parse-tree` in whole-tree mode, the generator, amtool) on a realistically shaped 5000-tenant tree with amtool, with the child's `RLIMIT_DATA` at 192 MiB and the container at 1 CPU.
+  - How it is decided: first make `parse-tree` stream its output (write as it produces, without assembling the whole document in memory), then measure one complete judgement on a realistically shaped 5000-tenant tree with amtool, with the child's `RLIMIT_DATA` at 192 MiB and the container at 1 CPU.
+  - "One complete judgement" is every program the generator container runs for one write: `parse-tree` in whole-tree mode, the generator, amtool, and the served-values that item 3 of [ADR-038](./038-unread-keys-judged-by-readers.md)'s rollout order runs there once it wires the shared verdict into the generator container (in subset mode, only for the tenants the write affects). Measuring only part of it overstates the headroom.
+  - The measurement script reads the memory limits and the judgement deadline from the Helm chart and the code, with no copy of the numbers of its own; when a limit or the deadline changes, the measurement follows.
   - The cache goes when both hold: the child and each program it starts peak at no more than 144 MiB each (75% of 192 MiB); the judgement takes no more than 10 s (half the 20 s judging deadline, the other half left for queuing and tenant growth). Then the container and the CLI take the same whole-tree path, and this section's cache, its eviction rules and the cache-size metric are removed.
   - Otherwise the cache stays, and only the cause of the O(N²) cold start is fixed (the single-file mode stops scanning the whole tree each time).
 - **Deadlines**: a request has a single overall deadline, 30 s from when tenant-api receives it, which is the HTTP server's write timeout (`--write-timeout`, 30 s by default; there is also a fixed 30 s request-timeout middleware). Waiting for the write lock, calling the generator container, revalidating and committing all fit inside those 30 s.
@@ -433,7 +457,7 @@ Steps 0 to 8 are done, and each could be released once merged; the "non-specific
 - **Step 6: the exporter and da-guard pass conf.d through this judgement when loading** (§2), and tenant-api's read side through `pkg/config` (`/effective`, the tenant list and so on) switches in the same step. The exporter does not serve unreadable files and reports them with a metric and a log; da-guard reports them with exit 3 instead of listing them under exit 4 as evidence only the generator judges (§9). This is a breaking change; how to guard an upgrade is in §8.
 - **Step 7: tenant-api's writes use this judgement**, replacing its own shape rules; in the same step the admin config tenant-api reads itself (`_tenant_orgs.yaml`, the RBAC config, groups, views, the federation whitelist and subsets, the AccountID registry) passes through it before it is decoded. Most of these are inputs to the authorization boundary: a file judged unreadable gets each reader's existing parse-failure handling, never read as empty (§2).
 - **Step 8: delete the "non-specific tag" patch.** By now the exporter, da-guard and tenant-api all go through the shared judgement (why: see below).
-- **Step 9: the file-name rules converge.** The 4 Go implementations become one; `parse-tree` gains a mode that lists files without parsing them; the Python name predicate and the table comparing Go and Python name rules retire, and tools that need a file list use the list-only mode.
+- **Step 9: the file-name rules and the file list converge.** The 4 Go implementations of the file-name rules become one. Every `parse-tree` mode writes the same per-path index (`entries`), with Go judging whether each path is a config file (`role`); the list-only mode is the same document without the content. The Python side has one place that reads the document; it reads `role` and no longer judges on its own whether a path is a config file; the name predicate and the table comparing Go and Python name rules retire. Tools that need a file list use the list-only mode, a tool that already holds the whole-tree document reads its `entries`, and the six tools that still walk conf.d themselves (`batch_diagnose`, `config_history`, `drift_detect`, `migrate_to_operator`, `operator_generate`, `run_chaos_soak`) go through da-guard as well.
 - **Step 10: the edit primitives and da-guard's `edit` / `emit`** (§2). The Python tools that write conf.d switch, in batches, to sending "what to change", and reading the write back moves into Go.
 - **Step 11: delete the Python layer that rewrites conf.d with PyYAML**, together with the loader imitating yaml.v3 it depends on (§11).
 - **Step 12: YAML outside conf.d follows its consumer, and a lint guards the boundary** (§12); the mechanism for getting tenant-api's admin config is decided here.
@@ -669,7 +693,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 - Done, step 6: the exporter, da-guard and tenant-api's read side pass conf.d through it when loading; the exporter does not serve unreadable files and adds a metric and a log; `generator_unreadable` folds into exit 3, and paths this run cannot name become `unreadable_outside_run`.
 - Done, step 7: tenant-api's write shape rules use it; so do its reads of `_tenant_orgs.yaml`, the RBAC config, groups, views, the federation whitelist and subsets, and the AccountID registry.
 - Done, step 8: deleted the "non-specific tag" patch; the exporter's merge-key check no longer accepts the `!` marker.
-- Step 9: the Go file-name rules converge into one; `parse-tree`'s list-only mode; the Python name predicate and the name-rule comparison table retire.
+- In progress, step 9: done — the Go file-name rules converged into one, `parse-tree`'s list-only mode, one per-path index in every mode with Go's `role` verdict (`da-guard.parse-tree/v2`); not yet done — Python tools reading `role`, the six tools that walk conf.d themselves going through da-guard, the Python name predicate and the name-rule comparison table retiring.
 - Step 10: the edit primitives and da-guard's `edit` / `emit`; the tools that write conf.d switch in batches.
 - Step 11: delete the Python layer that rewrites conf.d with PyYAML and the imitation loader it depends on.
 - Step 12: YAML outside conf.d follows its consumer; `da-crdecode` made general-purpose with multi-document support; the AST lint and its allow-list.
@@ -693,6 +717,7 @@ Where the code is, for implementers; can be skipped when reading the decision. C
 | `parse-tree`'s judgement | `pkg/parsetree` |
 | The Go file-name rules (merged into one) | `pkg/confdname`. The other copies are deleted and their sites call it: the extension check and `hasHiddenSegment` in `pkg/config/source.go`; `IsScannedFileName`, `IsScannedPath` and the walk's inline prefix checks in `pkg/config/tree_scan.go`; `TenantIDFromFile` and `isReservedName` in tenant-api's `internal/confd`; the hand-written extension check in `findingReadable` (tenant-api `handler/errors.go`); `hiddenPath` in da-guard's `parse_tree.go` |
 | `parse-tree`'s mode that lists files without parsing them | `da-guard parse-tree --list-only` (`cmd/da-guard/parse_tree_list.go`); the walk is `ScanDirTreeNames` in `pkg/config` |
+| The per-path index and the `role` verdict | `entries` are built by `walkEntries` in `cmd/da-guard/parse_tree_list.go` (shared by the whole-tree and list-only modes); the verdict is `pkg/config/role.go` (`UnreadableFile.Role`, `NotFile.Role`); the Python reader is `scripts/tools/_lib_parse_tree.py` (`Entry`, `entries_of`, `list_tree`, `classify_names`) |
 | The Python name predicate and the name-rule comparison table (retire) | the name checks in `scripts/tools/_lib_confd.py` (for example `is_reserved_name`, `config_stem`); `tests/shared/confd_name_classification_matrix.json` and the tests comparing against it |
 | The precedent of decoding with sigs.k8s.io/yaml (made general-purpose) | `cmd/da-crdecode` (refuses a file with more than one document today) |
 | The migration audit command (retires) | `scripts/tools/ops/migration_audit.py` |

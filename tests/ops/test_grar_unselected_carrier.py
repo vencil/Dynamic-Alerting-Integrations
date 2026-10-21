@@ -137,7 +137,7 @@ def _guard_parse_tree(binary: str, d: Path) -> dict:
 
 
 def _guard_unselected(doc: dict) -> list[str]:
-    return sorted(n["file"] for n in doc["not_read"] if n["reason"] == KIND)
+    return sorted(e["path"] for e in doc["entries"] if e["not_read"] == KIND)
 
 
 @pytest.mark.parametrize("where", ["root", "sub"])

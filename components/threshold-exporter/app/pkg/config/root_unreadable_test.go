@@ -183,7 +183,7 @@ func TestScopeStatDenied_Unreadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v, want a result", err)
 	}
-	want := []UnreadableFile{{"locked", UnreadableWalkError}, {"locked/inner", UnreadableStatError}}
+	want := []UnreadableFile{{RelKey: "locked", Reason: UnreadableWalkError}, {RelKey: "locked/inner", Reason: UnreadableStatError}}
 	if !reflect.DeepEqual(st.Unreadable, want) || len(st.Tenants) != 0 {
 		t.Errorf("unreadable = %v tenants = %d, want %v and none", st.Unreadable, len(st.Tenants), want)
 	}
@@ -215,8 +215,8 @@ func TestScopeThroughSymlink_OutsideStaysOutside(t *testing.T) {
 		}
 	}
 	for scope, want := range map[string][]UnreadableFile{
-		"in":   {{"locked", UnreadableWalkError}},
-		"in/b": {{"locked", UnreadableWalkError}, {"locked/b", UnreadableStatError}},
+		"in":   {{RelKey: "locked", Reason: UnreadableWalkError}},
+		"in/b": {{RelKey: "locked", Reason: UnreadableWalkError}, {RelKey: "locked/b", Reason: UnreadableStatError}},
 	} {
 		st, err := ScopeEffective(dir, scope)
 		if err != nil {

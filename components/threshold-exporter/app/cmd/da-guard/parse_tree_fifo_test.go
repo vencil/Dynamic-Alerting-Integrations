@@ -56,14 +56,14 @@ func TestParseTreeList_SpecialFileIsNotOpened(t *testing.T) {
 		t.Skipf("mkfifo: %v", err)
 	}
 	_, list, _ := runPTList(t, "", "--config-dir", root)
-	got := map[string]*parseTreeListProblem{}
+	got := map[string]wireEntry{}
 	for _, e := range list.Entries {
-		got[e.Path] = e.Unreadable
+		got[e.Path] = e
 	}
-	if p, ok := got["t1.yaml"]; !ok || p != nil {
-		t.Errorf("t1.yaml: listed %v, unreadable %v; want listed and readable", ok, p)
+	if e, ok := got["t1.yaml"]; !ok || e.Problem != nil || e.Role == nil || *e.Role != "config" {
+		t.Errorf("t1.yaml: listed %v, %+v; want a readable config file", ok, e)
 	}
-	if p := got["pipe.yaml"]; p == nil || p.Kind != "not_regular_file" {
-		t.Errorf("pipe.yaml: unreadable %v, want not_regular_file", p)
+	if e := got["pipe.yaml"]; e.Problem == nil || e.Problem.Kind != "not_regular_file" || e.Role == nil || *e.Role != "not_a_file" {
+		t.Errorf("pipe.yaml: %+v, want not_regular_file, role not_a_file", e)
 	}
 }

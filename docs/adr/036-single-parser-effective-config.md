@@ -31,6 +31,7 @@ updated_at: 2026-10-21
 - **2026-10-20 再修訂**：Go 端也只留一個判定與一個寫者，conf.d 以外的 YAML 以它的消費者為準，刪除遷移稽核指令；細節見 §2、§3、§8、§9、§11、§12 與 §7 的順序。
 - **2026-10-21 修訂**：tenant-api 的寫入與它自己讀的管理設定改經共用判定（§7 步驟 7），§2 改寫為現況，並寫明 RBAC 設定不論放在哪裡都經判定；決策不變。
 - **2026-10-21 再修訂**：刪除 vendored yaml.v3 的「非特定 tag」patch（§7 步驟 8、§11）；§7 說明它排在步驟 8 的段落改寫為現況；決策不變。
+- **2026-10-21 第三次修訂**：`parse-tree` 的每一種模式都輸出同一份逐路徑索引，每個路徑是不是設定檔由 Go 判定，格式改為 `da-guard.parse-tree/v2`（§2）；§7 步驟 9 改寫；§3「快取的去留」寫明量測的是一次完整判定，包含 served-values。
 
 ## 摘要
 
@@ -138,16 +139,37 @@ policy 檔的完整清單見 [#2759](https://github.com/vencil/Dynamic-Alerting-
 
 ### 2. 解析結果 JSON
 
-da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一份 JSON。另有單檔模式，用於寫入前的讀回確認（見本節「寫 conf.d 檔」）。
+da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一份 JSON。另有單檔模式，用於寫入前的讀回確認（見本節「寫 conf.d 檔」）；只列檔模式（`--list-only`），不讀任何檔的內容；名稱模式（`--list-only --names`），只依名稱分類不在磁碟上的檔名（例如 ConfigMap 的鍵）。四種模式輸出同一種文件。
 
-**選了哪些檔**：輸出每個讀取端實際會讀的檔，並標出誰讀它。
+**每個路徑一筆**：文件的 `entries` 對走訪記下的每個路徑各有一筆，整棵樹模式與只列檔模式由同一段程式產生，所以兩者對同一棵樹的每一筆逐欄相同，差別只在讀內容才發現得到的問題。每一筆寫出全部欄位，沒有值的是 `null`：
+
+- `path`、`depth`（根目錄到它之間的目錄層數）、`class`（名稱決定的分類：`tenant`、`defaults`、`platform`，或 `directory`）、`tenant_named`（檔名帶的租戶 id；exporter 服務的租戶仍取自檔內 `tenants:` 的鍵）、`defaults_document`（檔名以 `_defaults` 開頭的平台預設文件，以 platform-defaults schema 驗證）。
+- `readers`：誰讀它（`exporter`、`generator`）；沒有讀取端讀時是空清單，`not_read` 寫原因。
+- `role`：這個路徑是什麼，由 Go 判定，讀取端照讀、不自己組合：
+  - `config`：設定檔。讀得了或讀不了都算；讀不了時 `problem` 寫原因，讀取端讀它時明確失敗。
+  - `not_a_file`：exporter 的走訪在這裡碰不到一般檔：檔名像設定檔的目錄、指向目錄的 symlink、FIFO 等特殊檔，以及 stat 找不到東西（懸空連結、迴圈連結、超過 40 層的連結鏈）。
+  - `unlistable_dir`：列不出內容的目錄（根目錄為 `.`），它底下的檔都沒看到，所以這份文件不完整。
+  - 判定是白名單：只有上面列的情況是 `not_a_file`，其餘任何失敗（權限不足、EIO、名稱過長、之後新增的原因）一律是 `config`。反方向的預設會讓一份 stat 被權限擋下的租戶檔只留一行 WARN 就從清單上消失。
+- `problem`：讀它會失敗的原因，`{kind, message}`（見下方「讀不了的檔」）。
+
+範例：一棵樹有 `t1.yaml`、`_defaults.yaml` 與 `_defaults.yml`、語法錯的 `team/t2.yaml`，以及指向不存在檔案的 `gone.yaml`。`da-guard parse-tree --list-only --config-dir conf.d` 輸出（節錄三筆，各佔一行）：
+
+```json
+{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null}
+{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}}
+{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null}
+```
+
+整棵樹模式對同一棵樹給出同樣的三筆，只有 `team/t2.yaml` 多了 `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`，另外帶 `files` 與 `rendered_by`。`gone.yaml` 與一份權限不足、stat 失敗的檔 `problem` 相同，只有 `role` 分得出前者不是檔。
+
+**選了哪些檔**：`readers` 標出每個讀取端實際會讀的檔。
 
 - exporter 的檔案選擇規則（副檔名、大小寫、隱藏檔、子目錄），包含每個目錄最後採用哪一份 `_defaults` 檔。
 - 產生器另外讀、exporter 不讀的檔：policy 檔與 routing profile 檔（`_domain_policy.yaml`、`_routing_profiles.yaml`、`_profiles.yaml`，包括子目錄裡的與 `.yml` 拼法）。同一份檔兩種拼法並存時，沿用產生器現行的處理。
 
 Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語料。
 
-**檔名規則只在 Go 一處**：哪些檔名算租戶檔、檔名怎麼對應租戶 id，Go 端只留一份實作，exporter、tenant-api、da-guard 共用。只需要檔案清單、不需要內容的工具，用 `parse-tree` 只列檔、不解析內容的模式；Python 端的名稱述詞與比對 Go、Python 兩邊名稱規則的對照表一併退場。
+**檔名規則只在 Go 一處**：哪些檔名算租戶檔、檔名怎麼對應租戶 id，Go 端只留一份實作，exporter、tenant-api、da-guard 共用。只需要檔案清單、不需要內容的工具，用 `parse-tree` 只列檔、不解析內容的模式；已經拿到整棵樹文件的工具直接讀它的 `entries`，不再另外列一次檔。Python 端的名稱述詞與比對 Go、Python 兩邊名稱規則的對照表一併退場。
 
 **每份檔的內容**：輸出的是 yaml.v3 **解碼後**的結構，不是節點原樣。
 
@@ -162,7 +184,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 - 語意層只依型別與換算後的值判斷，不得採用「yaml.v3 解碼進 Go 有型別欄位時的寬鬆轉換」（例如字串 `yes` 解碼進布林欄位會得到 `true`）。
 - 輸出必須是合法的 UTF-8。
 
-**讀不了的檔**：列在 `unreadable`，每筆是 `{file, kind, message}`，不輸出內容。`kind` 是固定代號，下列每一種情況各有一個（共 13 個，標在括號裡），讀取端依它分類；`message` 是給人看的說明。下列都算讀不了，而不是照 yaml.v3 讀出的結果：
+**讀不了的檔**：該路徑那一筆的 `problem` 是 `{kind, message}`，`files` 裡沒有它的內容。`kind` 是固定代號，下列每一種情況各有一個（共 13 個，標在括號裡），讀取端依它分類；`message` 是給人看的說明。下列都算讀不了，而不是照 yaml.v3 讀出的結果：
 
 - 讀取失敗（`read_failure`）、不是一般檔（`not_regular_file`）、不是合法的 UTF-8（`invalid_utf8`）、語法錯誤（`syntax_error`）。
 - 頂層不是 mapping（`top_level_not_mapping`）。空檔視為空 mapping，不在此列。
@@ -174,7 +196,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 - YAML 的非特定標記 `!`（`non_specific_tag`，例如 `! "x"`、`! "<<"`）。它不在白名單內，任何時期都算讀不了：把 `! "<<"` 當成合併鍵或當成字面上的鍵，都可能靜默地多出或少掉 policy。`parse-tree` 從每個節點位置的原文判斷有沒有 `!`，不看節點上的標記，所以不依賴 vendored yaml.v3 的「非特定 tag」patch；patch 刪除之後，`! "x"`、`! "<<"`、`! |`、`! 1`、`! {…}`、`!<!>` 仍判為讀不了。固定語料涵蓋這些寫法。
 - 檔案開頭以外的位置出現 BOM（`bom_not_at_start`；U+FEFF，一種標示編碼的不可見字元）。BOM 跨過第 512 byte 時，yaml.v3 會吃掉下一個字元（實測 `domain_policies` 讀成 `omain_policies`，整份 policy 靜默失效）；在其他位置時，可能讓鍵或值帶上看不見的字元。為了不必逐一分辨，檔案開頭以外出現一律判為讀不了。
 
-**外層**：`schema` 為 `"da-guard.parse-tree/v1"`，另帶 `da_guard_version`。讀取端遇到其他 `schema` 值，整份當成不可用。新增欄位不換 `schema` 值，改變讀取端依賴的形狀才換，與 `served-values`／`effective` 的慣例相同。
+**外層**：`schema` 為 `"da-guard.parse-tree/v2"`，另帶 `da_guard_version`、`mode`（`tree`、`file`、`list`、`names`）、`defaults_carriers`（每個目錄採用的那一份 `_defaults` 檔）與 `entries`；整棵樹模式與單檔模式另帶 `files` 與 `rendered_by`。讀取端遇到其他 `schema` 值、或一筆少了欄位，整份當成不可用，並提示 da-guard 比工具舊。新增欄位不換 `schema` 值，改變讀取端依賴的形狀才換，與 `served-values`／`effective` 的慣例相同。
 
 **Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構。tenant-api 自己解碼的 YAML 也先經它：寫入的本文、整檔寫入要取代的原檔，以及它自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與各租戶子集合、AccountID 帳本）。
 
@@ -307,7 +329,9 @@ tenant-api pod
 - **快取的去留**：快取存的是 Go（`parse-tree`）的輸出，不是第二個讀者，所以它的去留是效能決定，與「只有一個解析器」無關。兩個方向的量測（2026-10-20 的樣本）互相拉扯：
   - 現在的逐檔快取冷啟動（啟動時或遇到新的 base commit 後第一次填滿快取）是 O(N²)，也就是時間隨檔案數的平方成長：每個沒命中的檔各跑一次 `parse-tree` 的單檔模式，而單檔模式每次都掃整棵樹來判定選檔。1000 個租戶約 43 秒；整棵樹模式讀同一棵樹一次約 0.4 秒。
   - 撤掉快取、每次判定都跑整棵樹模式時，5000 個租戶在子程序 192 MiB 的預算下只剩不到 8% 的餘裕，主因之一是 `parse-tree` 把整份 JSON 輸出先緩衝在記憶體裡。
-  - 決定方式：先讓 `parse-tree` 串流輸出（邊產生邊寫出，不先在記憶體裡組完整份），再在含 amtool、形狀接近真實的 5000 個租戶的樹上，以子程序 `RLIMIT_DATA` 192 MiB、容器 1 CPU 量測一次完整判定（整棵樹模式的 `parse-tree`、產生器、amtool）。
+  - 決定方式：先讓 `parse-tree` 串流輸出（邊產生邊寫出，不先在記憶體裡組完整份），再在含 amtool、形狀接近真實的 5000 個租戶的樹上，以子程序 `RLIMIT_DATA` 192 MiB、容器 1 CPU 量測一次完整判定。
+  - 「一次完整判定」是產生器容器處理一筆寫入時實際跑的全部程式：整棵樹模式的 `parse-tree`、產生器、amtool，以及 [ADR-038](./038-unread-keys-judged-by-readers.md) 推進順序第 3 項把共用判決接上產生器容器之後要跑的 served-values（只算這次寫入影響到的租戶的子集模式）。只量其中一部分，餘裕會被高估。
+  - 量測腳本直接從 Helm chart 與程式讀出記憶體上限與判定期限，不另寫一份數字；上限或期限改了，量測跟著改。
   - 撤快取的條件，兩者都要成立：子程序與它啟動的每一支程式，峰值記憶體各自不超過 144 MiB（192 MiB 的 75%）；判定時間不超過 10 秒（20 秒判定期限的一半，另一半留給排隊與租戶成長）。成立就撤快取：容器與 CLI 走同一條整棵樹模式的路徑，本節的快取、淘汰規則與快取大小的 metric 一併移除。
   - 不成立就保留快取，只修冷啟動 O(N²) 的成因（單檔模式不再每次掃整棵樹）。
 - **期限**：一個請求只有一個總期限，從 tenant-api 收到請求起算 30 秒，也就是 HTTP server 的寫入逾時（`--write-timeout`，預設 30 秒；另有固定 30 秒的請求逾時 middleware）。等寫入鎖、呼叫產生器容器、重驗、commit 都在這 30 秒之內。
@@ -437,7 +461,7 @@ tenant-api pod
 - **步驟 6：exporter 與 da-guard 載入 conf.d 先經這份判定**（§2），tenant-api 經 `pkg/config` 的讀取面（`/effective`、租戶列表等）同一步跟著改。exporter 不服務讀不了的檔並以 metric 與 log 回報；da-guard 對這些檔回 exit 3，不再以 exit 4 列為產生器才判的證據（§9）。這是 breaking change，升級前的把關見 §8。
 - **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定；tenant-api 自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本）同一步改經這份判定再解碼。這些多半是授權邊界的輸入，判為讀不了時照各自現有的「解析失敗」處置，不當成空檔（§2）。
 - **步驟 8：刪除「非特定 tag」patch。** 這時 exporter、da-guard、tenant-api 都已經經共用的判定（理由見下方）。
-- **步驟 9：檔名規則收斂。** Go 端 4 份檔名規則合併為一份；`parse-tree` 加上只列檔、不解析內容的模式；Python 端的名稱述詞與 Go／Python 名稱規則的對照表退場，需要檔案清單的工具改用只列檔模式。
+- **步驟 9：檔名規則與檔案清單收斂。** Go 端 4 份檔名規則合併為一份。`parse-tree` 的每一種模式輸出同一份逐路徑索引（`entries`），每個路徑是不是設定檔由 Go 判定（`role`），只列檔模式是同一份文件少了內容。Python 端只有一個讀這份文件的地方，讀 `role`，不再自己判斷路徑是不是設定檔；名稱述詞與 Go／Python 名稱規則的對照表退場。需要檔案清單的工具改用只列檔模式，已有整棵樹文件的工具讀它的 `entries`；仍自己走訪 conf.d 的六支工具（`batch_diagnose`、`config_history`、`drift_detect`、`migrate_to_operator`、`operator_generate`、`run_chaos_soak`）一併改經 da-guard。
 - **步驟 10：編輯原語與 da-guard 的 `edit`／`emit`**（§2）。寫 conf.d 的 Python 工具分批改為送「要改什麼」，寫入後的讀回確認移進 Go。
 - **步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層**，連同它依賴的、模仿 yaml.v3 的 loader（§11）。
 - **步驟 12：conf.d 以外的 YAML 改以消費者為準，加上守住邊界的 lint**（§12），並決定 tenant-api 管理設定的取得機制。
@@ -673,7 +697,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
 - 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
 - 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
-- 步驟 9：Go 端檔名規則收斂為一份；`parse-tree` 只列檔模式；Python 名稱述詞與名稱規則對照表退場。
+- 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）；尚未完成 Python 工具改讀 `role`、六支自己走訪 conf.d 的工具改經 da-guard、Python 名稱述詞與名稱規則對照表退場。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準；`da-crdecode` 通用化並支援多份文件；AST lint 與白名單。
@@ -697,6 +721,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | `parse-tree` 的判定 | `pkg/parsetree` |
 | Go 端的檔名規則（已合併為一份） | `pkg/confdname`。其他各份已刪除，原處改呼叫它：`pkg/config/source.go` 的副檔名判斷與 `hasHiddenSegment`；`pkg/config/tree_scan.go` 的 `IsScannedFileName`、`IsScannedPath` 與走訪內嵌的前綴判斷；tenant-api `internal/confd` 的 `TenantIDFromFile`、`isReservedName`；tenant-api `handler/errors.go` 的 `findingReadable` 自己寫的副檔名判斷；da-guard `parse_tree.go` 的 `hiddenPath` |
 | `parse-tree` 只列檔、不解析內容的模式 | `da-guard parse-tree --list-only`（`cmd/da-guard/parse_tree_list.go`）；走訪是 `pkg/config` 的 `ScanDirTreeNames` |
+| 逐路徑索引與 `role` 判定 | `entries` 由 `cmd/da-guard/parse_tree_list.go` 的 `walkEntries` 產生（整棵樹模式與只列檔模式共用）；判定是 `pkg/config/role.go`（`UnreadableFile.Role`、`NotFile.Role`）；Python 讀取端是 `scripts/tools/_lib_parse_tree.py`（`Entry`、`entries_of`、`list_tree`、`classify_names`） |
 | Python 端的名稱述詞與名稱規則對照表（退場） | `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）；`tests/shared/confd_name_classification_matrix.json` 與比對它的測試 |
 | 以 sigs.k8s.io/yaml 解碼的先例（通用化） | `cmd/da-crdecode`（目前一個檔多份文件時拒收） |
 | 遷移稽核指令（退場） | `scripts/tools/ops/migration_audit.py` |

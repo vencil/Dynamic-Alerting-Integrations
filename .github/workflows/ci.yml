@@ -1345,6 +1345,10 @@ jobs:
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.
       VIBE_REQUIRE_HELM: "1"
+      # And for the role verdict's permission cases
+      # (tests/shared/test_lib_parse_tree_entries.py): run as root without
+      # setpriv they would skip, leaving EACCES unmeasured.
+      VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
       # Same fail-closed pattern for the #1347 generated-CI-artifact gate
       # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
       # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
@@ -1731,6 +1735,10 @@ jobs:
       # netpol consumer set, egress allowlist, the VRL render tests) skips
       # silently without it. setup-helm failing open would hide all of them.
       VIBE_REQUIRE_HELM: "1"
+      # And for the role verdict's permission cases
+      # (tests/shared/test_lib_parse_tree_entries.py): run as root without
+      # setpriv they would skip, leaving EACCES unmeasured.
+      VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
       # Same fail-closed pattern for the #1347 generated-CI-artifact gate
       # (tests/ops/test_generated_ci_artifacts.py): `da-tools init` ships a
       # GitHub Actions workflow to CUSTOMER repos, and actionlint is the only
@@ -2226,6 +2234,11 @@ jobs:
 
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app
+        # pkg/config TestRoleUnderRealModes measures the role verdict where a
+        # mode bit really denies (as uid 65534 via setpriv when run as root).
+        # Set here, a setup that cannot do that fails instead of skipping.
+        env:
+          VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
         # Wrapped with ci_flake_retry.py (TRK-010, PR #325): consults
         # `flaky-tests.yaml` registry to retry only the listed tests; any
         # unlisted failure fails immediately (regression doesn't get

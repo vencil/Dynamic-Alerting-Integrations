@@ -237,6 +237,22 @@ const (
 type UnreadableFile struct {
 	RelKey string // root-relative slash path of the file (or, for walk_error, the directory)
 	Reason string // UnreadableStatError, UnreadableReadError, UnreadableWalkError or UnreadableSpecialFile
+	// Missing (UnreadableStatError only): the stat failed because the
+	// exporter's walk cannot reach a file there — StatErrIsWrongPath, the one
+	// split this package already makes for a path a caller names: ENOENT,
+	// ENOTDIR, ELOOP and their Windows codes. A dangling link, a looping
+	// link, and a chain of more than 40 links (the kernel's limit, ELOOP even
+	// when the chain ends at a regular file: the exporter's own os.Stat fails
+	// on it the same way, so no reader reaches that file through this path).
+	// Any other stat failure (EACCES from an unsearchable directory on the
+	// way, EIO, ENAMETOOLONG, …) says nothing about what is there and leaves
+	// this false. Set by statErrorFile; read through Role, never on its own.
+	Missing bool
+}
+
+// statErrorFile is the walk's record of an entry whose stat failed with err.
+func statErrorFile(relKey string, err error) UnreadableFile {
+	return UnreadableFile{RelKey: relKey, Reason: UnreadableStatError, Missing: StatErrIsWrongPath(err)}
 }
 
 // Closed set of NotFile.Reason values.
@@ -678,6 +694,9 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	dropUnreadable := func(path, reason string) {
 		unreadable = append(unreadable, UnreadableFile{RelKey: relKey(path), Reason: reason})
 	}
+	dropStatError := func(path string, err error) {
+		unreadable = append(unreadable, statErrorFile(relKey(path), err))
+	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			logger.Printf("WARN: walk error at %s: %v", path, werr)
@@ -796,13 +815,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			linkInfo, lerr := d.Info()
 			if lerr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, lerr)
-				dropUnreadable(path, UnreadableStatError)
+				dropStatError(path, lerr)
 				return nil
 			}
 			targetInfo, terr := os.Stat(path)
 			if terr != nil {
 				logger.Printf("WARN: cannot stat symlink target of %s (dropped): %v", path, terr)
-				dropUnreadable(path, UnreadableStatError)
+				dropStatError(path, terr)
 				return nil
 			}
 			// ⛔ #2939: never opened, in any mode — see IsSpecialFile.
@@ -824,7 +843,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			entryInfo, ierr := d.Info()
 			if ierr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, ierr)
-				dropUnreadable(path, UnreadableStatError)
+				dropStatError(path, ierr)
 				return nil
 			}
 			st = FileStat{ModTime: entryInfo.ModTime().UnixNano(), Size: entryInfo.Size()}

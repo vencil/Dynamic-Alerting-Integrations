@@ -83,6 +83,21 @@ def _edit(conf_d, old, new, rel="_defaults.yaml"):
 _OK = rd.ViewResult("computed", "")
 
 
+def _v2_doc(files):
+    """A tree-mode parse-tree document holding *files* (rel → content), each a
+    config file both readers read."""
+    def entry(rel):
+        name = rel.rsplit("/", 1)[-1]
+        cls = ("defaults" if name.lower() in ("_defaults.yaml", "_defaults.yml")
+               else "platform" if name.startswith("_") else "tenant")
+        return {"path": rel, "depth": rel.count("/"), "class": cls,
+                "tenant_named": name.rsplit(".", 1)[0] if cls == "tenant" else None,
+                "defaults_document": cls == "defaults", "readers": ["exporter", "generator"],
+                "not_read": None, "role": "config", "problem": None}
+    return {"schema": "da-guard.parse-tree/v2", "mode": "tree", "defaults_carriers": {},
+            "entries": [entry(r) for r in sorted(files)], "files": files, "rendered_by": {}}
+
+
 def _row(file, key, status=None, note="not a setting either render reads", change="modified"):
     """A platform-settings row as `platform_settings` returns it."""
     return {"file": file, "key": key, "change": change,
@@ -1182,7 +1197,7 @@ class TestPlatformSettings:
 
     def test_rows_are_sorted_and_cover_both_sides(self):
         def doc(files):
-            return {"files": files, "unreadable": [], "defaults_carriers": {}}
+            return _v2_doc(files)
         x = {"text": "1", "tag": "!!int", "value": "1"}
         old = doc({"_z.yaml": {"k": x}, "a/_q.yaml": {"k": x}, "_a.yaml": {"k": x}, "b/t.yaml": {"k": x}})
         rows = cd.platform_settings(old, doc({}), set(), {}, "old", "new")
@@ -1231,8 +1246,7 @@ class TestPlatformSettings:
     def test_a_rendered_key_whose_view_was_not_computed_is_not_compared(self):
         """渲染讀的鍵，但那個面向沒有結果：不能說成 rendered 或「沒有差異」。"""
         x = {"text": "1", "tag": "!!int", "value": "1"}
-        doc = {"files": {"_defaults.yaml": {"defaults": x}}, "unreadable": [], "not_read": [],
-               "selected": {"_defaults.yaml": ["exporter", "generator"]}, "defaults_carriers": {}}
+        doc = _v2_doc({"_defaults.yaml": {"defaults": x}})
         rows = cd.platform_settings({**doc, "files": {"_defaults.yaml": {}}}, doc, set(),
                                     {rd.VIEW_SERVED: "not_computed", rd.VIEW_ROUTES: "computed"},
                                     "old", "new")
