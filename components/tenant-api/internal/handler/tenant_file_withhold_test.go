@@ -278,8 +278,6 @@ func TestGetTenantEffective_SourceHashOnlyForAPIManaged(t *testing.T) {
 	}{
 		{"api-shaped", own, true},
 		{"anchor at the top level", "x: &a {y: 1}\n" + own, false},
-		// "several documents" was a row: since ADR-036 step 6 (#3206) the
-		// exporter refuses such a file whole (404 here, see the tenant list).
 		{"anchor on tenants", strings.Replace(own, "tenants:\n", "tenants: &t\n", 1), false},
 		{"!!str tenants key", "!!str " + own, false},
 	} {
@@ -297,6 +295,20 @@ func TestGetTenantEffective_SourceHashOnlyForAPIManaged(t *testing.T) {
 			if resp.SourceHash != want || resp.SourceHashWithheld == c.apiManaged {
 				t.Errorf("%s/%s: source_hash %q withheld %v, want %q withheld %v",
 					c.name, role, resp.SourceHash, resp.SourceHashWithheld, want, !c.apiManaged)
+			}
+		}
+	}
+	// Several documents (git-managed, several_documents) was a row of the
+	// table above until ADR-036 step 6 (#3206): the exporter now refuses the
+	// file whole (parse-tree's multiple_documents), so /effective has no
+	// tenant to answer for — 404, carrying nothing of the file, no hash.
+	for _, second := range []string{"---\nx: 1\n", "---\n", "---\n~\n", "---\n# note\n"} {
+		for _, role := range []string{"writer", "unrestricted"} {
+			f := wFixture(t, role, own+second)
+			w := wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
+			if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "source_hash") ||
+				strings.Contains(w.Body.String(), "critical") {
+				t.Errorf("several documents %q/%s: %d %s; want 404 with nothing of the file", second, role, w.Code, w.Body.String())
 			}
 		}
 	}

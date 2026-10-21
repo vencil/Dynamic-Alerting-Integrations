@@ -1,8 +1,10 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
@@ -45,13 +47,49 @@ func (e *UnreadableFileError) Error() string {
 }
 
 // judgeConfFile is the verdict: nil for bytes parsetree.Parse reads, an
-// *UnreadableFileError otherwise.
+// *UnreadableFileError otherwise. parsetree.Judge gives that verdict without
+// building the content no reader here uses.
+//
+// ⚠️ CACHED BY CONTENT. One load asks it more than once for the same bytes
+// (the walker, then the chain merge for every defaults carrier and the tenant
+// merge; every reload re-reads the unchanged carriers), and the verdict is a
+// pure function of the bytes, so it is kept by their SHA-256 — measured
+// cheaper than a second judgement by two orders of magnitude on a conf.d
+// file. The set is bounded (verdictCacheMax): when full it is dropped whole,
+// which costs a re-judgement, never a different answer.
 func judgeConfFile(data []byte) error {
-	if _, bad := parsetree.Parse(data); bad != nil {
-		return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+	key := sha256.Sum256(data)
+	verdictCache.mu.Lock()
+	v, hit := verdictCache.m[key]
+	verdictCache.mu.Unlock()
+	if !hit {
+		if bad := parsetree.Judge(data); bad != nil {
+			v = &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+		}
+		verdictCache.mu.Lock()
+		if len(verdictCache.m) >= verdictCacheMax {
+			verdictCache.m = make(map[[sha256.Size]byte]*UnreadableFileError)
+		}
+		verdictCache.m[key] = v
+		verdictCache.mu.Unlock()
 	}
-	return nil
+	if v == nil {
+		return nil // not a typed nil in the error interface
+	}
+	return v
 }
+
+// verdictCacheMax bounds verdictCache: past it the set is dropped whole.
+// Above the largest tree measured (5,000 files, ScanDirTree_Hierarchical_5000)
+// so one load keeps every verdict; each entry is a key and a pointer.
+const verdictCacheMax = 8192
+
+// verdictCache is judgeConfFile's verdicts by content SHA-256 (nil = the file
+// can be read). The *UnreadableFileError values are shared and never written.
+var verdictCache = struct {
+	mu sync.Mutex
+	m  map[[sha256.Size]byte]*UnreadableFileError
+}{m: make(map[[sha256.Size]byte]*UnreadableFileError)}
 
 // UnreadableKindOf is the parsetree.Kind of err when a decode entry failed
 // because parsetree.Parse refuses the file (anywhere in err's chain), and

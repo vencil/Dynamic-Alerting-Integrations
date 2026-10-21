@@ -168,7 +168,7 @@ The Python side no longer has its own copy of these rules. Differences between t
 
 **The envelope**: `schema` is `"da-guard.parse-tree/v1"`, alongside `da_guard_version`. A reader that meets any other `schema` value treats the whole document as unusable. Adding a field does not change the `schema` value; only a change to the shape a reader relies on does, the same convention as `served-values` / `effective`.
 
-**The Go readers follow this judgement too**: the code that decides which files can be read is one Go package, placed where the exporter, tenant-api and da-guard can all use it. All three pass conf.d through it when loading, then each decodes the readable files into the structures it needs; no Go reader decodes conf.d without it.
+**The Go readers follow this judgement too**: the code that decides which files can be read is one Go package, placed where the exporter, tenant-api and da-guard can all use it. All three pass conf.d through it when loading, then each decodes the readable files into the structures it needs; once the step where tenant-api adopts it is done (§7, step 7), no Go reader decodes conf.d without it. Until then, the conf.d management files tenant-api reads itself (`_tenant_orgs.yaml`, groups, views and the RBAC config when it sits in conf.d) are still decoded by yaml.v3 directly, first document only.
 
 - For a file judged unreadable, the exporter does what it does today for a syntax error in the same kind of file, with the log and the metric also carrying the `kind`:
   - A tenant file: the tenants it declares are not served, and the other tenants of the tree are unaffected; one WARN log line, and `da_config_parse_failure_total` goes up by one.
@@ -424,7 +424,7 @@ Steps 0 to 4 are done, and each could be released once merged; the "non-specific
 
 - **Step 5: `parse-tree`'s judgement moves to a shared place.** From inside da-guard into a Go package (under `pkg/`) the exporter, tenant-api and da-guard can all use; behaviour unchanged.
 - **Step 6: the exporter and da-guard pass conf.d through this judgement when loading** (§2), and tenant-api's read side through `pkg/config` (`/effective`, the tenant list and so on) switches in the same step. The exporter does not serve unreadable files and reports them with a metric and a log; da-guard reports them with exit 3 instead of listing them under exit 4 as evidence only the generator judges (§9). This is a breaking change; how to guard an upgrade is in §8.
-- **Step 7: tenant-api's writes use this judgement**, replacing its own shape rules.
+- **Step 7: tenant-api's writes use this judgement**, replacing its own shape rules; in the same step the conf.d management files tenant-api reads itself (`_tenant_orgs.yaml`, groups, views, and the RBAC config when it sits in conf.d) pass through it before they are decoded. They are inputs to the authorization boundary: a file judged unreadable gets each reader's existing parse-failure handling, never read as empty.
 - **Step 8: delete the "non-specific tag" patch.** By now the exporter, da-guard and tenant-api all go through the shared judgement (why: see below).
 - **Step 9: the file-name rules converge.** The 4 Go implementations become one; `parse-tree` gains a mode that lists files without parsing them; the Python name predicate and the table comparing Go and Python name rules retire, and tools that need a file list use the list-only mode.
 - **Step 10: the edit primitives and da-guard's `edit` / `emit`** (§2). The Python tools that write conf.d switch, in batches, to sending "what to change", and reading the write back moves into Go.
@@ -662,7 +662,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 - Done, step 4: the generator and the Python tools read the parse-result JSON; deleted the Python imitation loaders used to read conf.d; the tools that write conf.d added the pre-write check. The "non-specific tag" patch moves to step 8.
 - Step 5: `parse-tree`'s judgement moves to a shared package under `pkg/`.
 - Step 6: the exporter, da-guard and tenant-api's read side pass conf.d through it when loading; the exporter does not serve unreadable files and adds a metric and a log; `generator_unreadable` folds into exit 3, and paths this run cannot name become `unreadable_outside_run`.
-- Step 7: tenant-api's write shape rules use it.
+- Step 7: tenant-api's write shape rules use it; so do its reads of `_tenant_orgs.yaml`, groups, views and an RBAC config in conf.d.
 - Step 8: delete the "non-specific tag" patch.
 - Step 9: the Go file-name rules converge into one; `parse-tree`'s list-only mode; the Python name predicate and the name-rule comparison table retire.
 - Step 10: the edit primitives and da-guard's `edit` / `emit`; the tools that write conf.d switch in batches.

@@ -142,6 +142,21 @@ var allowedScalarTags = map[string]bool{
 
 // Parse reads one file's bytes. Exactly one of the results is non-nil.
 func Parse(data []byte) (Content, *Unreadable) {
+	return parse(data, false)
+}
+
+// Judge is Parse's verdict alone — nil exactly when Parse reads data, else
+// the same Kind — without building the content: the readers that only need
+// to know whether a file can be read (pkg/config's decode entries, ADR-036
+// step 6) pay for the checks and the content's byte bound, not for the
+// content. TestJudgeIsParsesVerdict holds the two together over the corpora.
+func Judge(data []byte) *Unreadable {
+	_, bad := parse(data, true)
+	return bad
+}
+
+// parse is Parse; verdictOnly is Judge (the returned Content is then nil).
+func parse(data []byte, verdictOnly bool) (Content, *Unreadable) {
 	if !utf8.Valid(data) {
 		return nil, fail(KindInvalidUTF8, "not valid UTF-8 at byte %d", firstInvalidUTF8(data))
 	}
@@ -160,7 +175,7 @@ func Parse(data []byte) (Content, *Unreadable) {
 	if doc == nil {
 		return Content{}, nil // empty, or comments only
 	}
-	return judge(data, doc)
+	return judge(data, doc, verdictOnly)
 }
 
 // parseDocument parses the one document of data (nil, nil: there is none).
@@ -187,11 +202,17 @@ func parseDocument(data []byte) (*yaml.Node, *Unreadable) {
 }
 
 // judge applies the refusals to a parsed document and expands it.
-func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
+func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable) {
 	root := doc.Content[0]
 
-	c := &checker{src: newSource(data), values: map[*yaml.Node]json.RawMessage{}}
-	c.src.index(root)
+	c := &checker{values: map[*yaml.Node]json.RawMessage{}, verdictOnly: verdictOnly}
+	// A `!` tag token is a `!` byte in the text: without one no node can
+	// carry it, and the source map (a rune copy of every line, and every
+	// node's position) is not built.
+	if bytes.IndexByte(data, '!') >= 0 {
+		c.src = newSource(data)
+		c.src.index(root)
+	}
 	if bad := c.checkNode(root, false); bad != nil {
 		return nil, bad
 	}
@@ -200,10 +221,13 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	}
 	// The whole-document decode: what yaml.v3 refuses only when it decodes
 	// the tree as a whole — an alias that contains itself, more alias
-	// expansion than its limit allows.
-	var whole any
-	if err := decode(doc, &whole); err != nil {
-		return nil, fail(KindDecodeError, "%s", oneLine(err))
+	// expansion than its limit allows. Judge skips it on a tree with no
+	// alias, where neither can happen and every node's own decode has run.
+	if !verdictOnly || hasAlias(root) {
+		var whole any
+		if err := decode(doc, &whole); err != nil {
+			return nil, fail(KindDecodeError, "%s", oneLine(err))
+		}
 	}
 
 	switch {
@@ -213,19 +237,61 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	default:
 		return nil, fail(KindTopLevelNotMapping, "the top level is a %s, not a mapping", kindName(root))
 	}
-	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2} // the content's {}
+	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2, verdictOnly: verdictOnly} // the content's {}
 	out := Content{}
 	if err := conv.fill(out, root); err != nil {
 		return nil, err
 	}
+	if verdictOnly {
+		return nil, nil
+	}
 	return out, nil
+}
+
+// hasAlias reports whether the tree under n holds an alias node.
+func hasAlias(n *yaml.Node) bool {
+	if n.Kind == yaml.AliasNode {
+		return true
+	}
+	for _, child := range n.Content {
+		if hasAlias(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------- checks
 
 type checker struct {
-	src    *source
+	src    *source                        // nil: the text holds no `!`
 	values map[*yaml.Node]json.RawMessage // every decoded scalar, by node
+	// verdictOnly (Judge): a plain string scalar is not decoded or stored
+	// (plainString); everything else is as for Parse.
+	verdictOnly bool
+}
+
+// plainString reports whether n is a scalar written with no tag that yaml.v3
+// resolves to !!str: its decode is its text and cannot fail.
+func plainString(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && n.ShortTag() == "!!str"
+}
+
+// marshalLen is len(json.Marshal(s)) for a valid UTF-8 s, counted without
+// building it (TestMarshalLenIsJSONMarshal holds the two together).
+func marshalLen(s string) int {
+	n := 2
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t' || r == '\b' || r == '\f':
+			n += 2
+		case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029':
+			n += 6
+		default:
+			n += utf8.RuneLen(r)
+		}
+	}
+	return n
 }
 
 // checkNode refuses the first shape the package does not read, in document
@@ -245,6 +311,12 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 	switch n.Kind {
 	case yaml.ScalarNode:
 		if isMergeKey {
+			return nil
+		}
+		if c.verdictOnly && plainString(n) {
+			// Judge: an untagged scalar yaml.v3 resolves to !!str decodes to
+			// its text, always; its value is that text as JSON, whose length
+			// the converter counts from the text (marshalLen). Nothing stored.
 			return nil
 		}
 		raw, err := scalarValue(n)
@@ -303,7 +375,7 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 func (c *checker) checkTag(n *yaml.Node, isMergeKey bool) *Unreadable {
 	tag := n.Tag
 	explicit := n.Style&yaml.TaggedStyle != 0
-	if !explicit && c.src.nonSpecificTag(n) {
+	if !explicit && c.src != nil && c.src.nonSpecificTag(n) {
 		return fail(KindNonSpecificTag, "line %d: the non-specific tag `!` is not read (its meaning differs between YAML readers); remove it, or write the value quoted", n.Line)
 	}
 	if !explicit {
@@ -465,6 +537,10 @@ type converter struct {
 	values map[*yaml.Node]json.RawMessage
 	active map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
 	bytes  int                 // JSON bytes of the content emitted so far (MaxContentBytes)
+	// verdictOnly (Judge): the same walk, the same charges and refusals, but
+	// no value is built — a scalar, a sequence and a mapping's values are nil;
+	// a mapping's keys are still kept, for the merge's "already set" test.
+	verdictOnly bool
 }
 
 // MaxContentBytes bounds the JSON one file's content encodes to — the
@@ -546,8 +622,19 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		if !utf8.ValidString(s.Text) {
 			return nil, fail(KindInvalidUTF8, "line %d: a scalar is not valid UTF-8", n.Line)
 		}
-		if bad := c.charge(scalarLen(s.Text, s.Tag, s.Value), n); bad != nil {
+		size := 0
+		if c.verdictOnly && plainString(n) {
+			// The value checker did not store: the text, as JSON.
+			size = len(`{"text":`) + jsonStringLen(s.Text) + len(`,"tag":`) + jsonStringLen(s.Tag) +
+				len(`,"value":`) + marshalLen(s.Text) + len(`}`)
+		} else {
+			size = scalarLen(s.Text, s.Tag, s.Value)
+		}
+		if bad := c.charge(size, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			return nil, nil
 		}
 		return s, nil
 	case yaml.SequenceNode:
@@ -558,6 +645,14 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		}
 		if bad := c.charge(2+sep, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			for _, child := range n.Content {
+				if _, bad := c.node(child); bad != nil {
+					return nil, bad
+				}
+			}
+			return nil, nil
 		}
 		out := make([]any, 0, len(n.Content))
 		for _, child := range n.Content {
@@ -575,6 +670,9 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		out := map[string]any{}
 		if bad := c.fill(out, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			return nil, nil
 		}
 		return out, nil
 	}

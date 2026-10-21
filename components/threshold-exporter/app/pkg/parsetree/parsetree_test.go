@@ -180,8 +180,10 @@ func TestNonSpecificTagWithoutThePatch(t *testing.T) {
 		if n := upstreamTags(doc); (n > 0) != tc.patched {
 			t.Fatalf("%q: the rewrite changed %d nodes, want patched=%v", tc.in, n, tc.patched)
 		}
-		if _, bad := judge(data, doc); bad == nil || bad.Kind != KindNonSpecificTag {
-			t.Errorf("%q without the patch: got %v, want %s", tc.in, bad, KindNonSpecificTag)
+		for _, verdictOnly := range []bool{false, true} { // Parse's walk, and Judge's
+			if _, bad := judge(data, doc, verdictOnly); bad == nil || bad.Kind != KindNonSpecificTag {
+				t.Errorf("%q without the patch (verdictOnly %v): got %v, want %s", tc.in, verdictOnly, bad, KindNonSpecificTag)
+			}
 		}
 		if _, bad := Parse(data); bad == nil || bad.Kind != KindNonSpecificTag {
 			t.Errorf("%q with the patch: got %v, want %s", tc.in, bad, KindNonSpecificTag)

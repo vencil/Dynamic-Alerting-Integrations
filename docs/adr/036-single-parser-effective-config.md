@@ -174,7 +174,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 
 **外層**：`schema` 為 `"da-guard.parse-tree/v1"`，另帶 `da_guard_version`。讀取端遇到其他 `schema` 值，整份當成不可用。新增欄位不換 `schema` 值，改變讀取端依賴的形狀才換，與 `served-values`／`effective` 的慣例相同。
 
-**Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構；沒有任何 Go 讀取端略過它直接解碼 conf.d。
+**Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構；完成 tenant-api 改用這份判定的那一步（§7 步驟 7）之後，沒有任何 Go 讀取端略過它直接解碼 conf.d。在那之前，tenant-api 自己讀的 conf.d 管理檔（`_tenant_orgs.yaml`、群組、視圖與 RBAC 設定，位於 conf.d 內時）仍以 yaml.v3 直接解碼、只讀第一份文件。
 
 - 被判為讀不了的檔，exporter 沿用今天同類檔語法錯誤時的處置，log 與 metric 另外帶上 `kind`：
   - 租戶檔：這份檔宣告的租戶不服務，同一棵樹的其他租戶不受影響；記一行 WARN log，`da_config_parse_failure_total` 加一。
@@ -428,7 +428,7 @@ tenant-api pod
 
 - **步驟 5：`parse-tree` 的判定移到共用位置。** 從 da-guard 內部移到 exporter、tenant-api、da-guard 都能引用的 Go 套件（`pkg/` 下），行為不變。
 - **步驟 6：exporter 與 da-guard 載入 conf.d 先經這份判定**（§2），tenant-api 經 `pkg/config` 的讀取面（`/effective`、租戶列表等）同一步跟著改。exporter 不服務讀不了的檔並以 metric 與 log 回報；da-guard 對這些檔回 exit 3，不再以 exit 4 列為產生器才判的證據（§9）。這是 breaking change，升級前的把關見 §8。
-- **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定。
+- **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定；tenant-api 自己讀的 conf.d 管理檔（`_tenant_orgs.yaml`、群組、視圖，以及位於 conf.d 內的 RBAC 設定）同一步改經這份判定再解碼。這些檔是授權邊界的輸入，判為讀不了時照各自現有的「解析失敗」處置，不當成空檔。
 - **步驟 8：刪除「非特定 tag」patch。** 這時 exporter、da-guard、tenant-api 都已經經共用的判定（理由見下方）。
 - **步驟 9：檔名規則收斂。** Go 端 4 份檔名規則合併為一份；`parse-tree` 加上只列檔、不解析內容的模式；Python 端的名稱述詞與 Go／Python 名稱規則的對照表退場，需要檔案清單的工具改用只列檔模式。
 - **步驟 10：編輯原語與 da-guard 的 `edit`／`emit`**（§2）。寫 conf.d 的 Python 工具分批改為送「要改什麼」，寫入後的讀回確認移進 Go。
@@ -666,7 +666,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 4：產生器與 Python 工具改讀解析結果 JSON；刪除 Python 端讀 conf.d 用的模仿 loader；寫 conf.d 的工具加上寫入前確認。「非特定 tag」patch 改到步驟 8 刪除。
 - 步驟 5：`parse-tree` 的判定移到 `pkg/` 下的共用套件。
 - 步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
-- 步驟 7：tenant-api 的寫入形狀判定改用它。
+- 步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、群組、視圖與 conf.d 內的 RBAC 設定的讀取也改經它。
 - 步驟 8：刪除「非特定 tag」patch。
 - 步驟 9：Go 端檔名規則收斂為一份；`parse-tree` 只列檔模式；Python 名稱述詞與名稱規則對照表退場。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
