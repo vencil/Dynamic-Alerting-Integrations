@@ -738,25 +738,38 @@ class TestProfileLookupSharesTheChainRead:
         # /metrics serves no row without a platform default, so there is no
         # value to compare here — only that the file is not dropped.
         "defaults-null": ("_defaults.yaml", "defaults: ~\n", None),
-        # `!!set` in a mapping position: to the exporter a mapping (here
-        # with every value null), so it loads.
+    }
+
+    # `!!set` was read here as a mapping (the exporter decoded it by its
+    # kind). Since ADR-036 step 6 (#3206) `da-guard parse-tree` refuses the
+    # tag (tag_not_allowed) and the exporter drops the file whole, so neither
+    # reader answers. (file, body)
+    _SET_IS_REFUSED = {
         "defaults-a-set": (
-            "_defaults.yaml",
-            "defaults: !!set {mysql_connections, mysql_slow_queries}\n", {
-                # every root default null: no row is served, so the values
-                # are /effective's
-                "mysql_connections": 70, "mysql_slow_queries": 60}),
-        "profiles-a-set": (
-            "_profiles.yaml", "profiles: !!set {gold}\n", {
-                "mysql_connections": 70, "mysql_slow_queries": 90}),
+            "_defaults.yaml", "defaults: !!set {mysql_connections, mysql_slow_queries}\n"),
+        "profiles-a-set": ("_profiles.yaml", "profiles: !!set {gold}\n"),
         "profile-body-a-set": (
-            "_profiles.yaml", "profiles:\n  gold: !!set {mysql_slow_queries}\n", {
-                "mysql_connections": 70, "mysql_slow_queries": 90}),
+            "_profiles.yaml", "profiles:\n  gold: !!set {mysql_slow_queries}\n"),
         "sibling-profile-body-a-set": (
             "_profiles.yaml",
-            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: !!set {k}\n", {
-                "mysql_connections": 70, "mysql_slow_queries": 60}),
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: !!set {k}\n"),
     }
+
+    @pytest.mark.parametrize("case", sorted(_SET_IS_REFUSED))
+    def test_a_set_fails_closed(self, tmp_path, case):
+        fname, body = self._SET_IS_REFUSED[case]
+        files = {
+            "_defaults.yaml":
+                "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n",
+            "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"
+                       "    mysql_connections: 70\n",
+            "_profiles.yaml": "profiles:\n  gold:\n    mysql_slow_queries: 60\n",
+        }
+        files[fname] = body
+        for name, text in files.items():
+            (tmp_path / name).write_text(text, encoding="utf-8")
+        with pytest.raises(ParseFailedError, match=fname):
+            diagnose.lookup_tenant_profile("tx", str(tmp_path))
 
     @pytest.mark.parametrize("case", sorted(_NULL_IS_FINE))
     def test_a_null_value_is_not_a_wrong_type(self, tmp_path, capsys, case):
@@ -877,28 +890,34 @@ class TestSetTagReadAsTheExporterReadsIt:
                                              encoding="utf-8")
         return str(tmp_path)
 
-    @pytest.mark.parametrize("tag", ["!!set ", ""], ids=["set", "plain"])
     @pytest.mark.parametrize("case", sorted(_CASES))
-    def test_a_set_in_a_mapping_position_keeps_its_values(
-            self, tmp_path, capsys, case, tag):
+    def test_a_plain_mapping_resolves_as_metrics_serves(self, tmp_path, capsys, case):
         overrides, profile, served = self._CASES[case]
-        d = self._tree(tmp_path, overrides, tag)
+        d = self._tree(tmp_path, overrides, "")
         chain = diagnose.resolve_inheritance_chain("tx", d)
         assert "skipped_unusable_files" not in chain
         assert chain["profile_name"] == profile
         assert chain["resolved"] == served
         assert diagnose.lookup_tenant_profile("tx", d) == profile
-        _assert_only_unread_declared_warns(
-            capsys.readouterr().err, case == "defaults" and bool(tag))
+        _assert_only_unread_declared_warns(capsys.readouterr().err, False)
 
-    def test_a_tenants_set_names_tenants_with_no_keys(self, tmp_path, capsys):
-        """`tenants: !!set {tx}` is `tenants: {tx: ~}` on /metrics: the
-        tenant exists with nothing of its own (80/90 = the defaults)."""
+    @pytest.mark.parametrize("case", sorted(_CASES))
+    def test_a_set_in_a_mapping_position_fails_closed(self, tmp_path, case):
+        """Since ADR-036 step 6 (#3206) `da-guard parse-tree` refuses `!!set`
+        (tag_not_allowed) and the exporter drops the file holding it; it
+        used to read the set as its mapping, values kept (#1522)."""
+        overrides, _profile, _served = self._CASES[case]
+        d = self._tree(tmp_path, overrides, "!!set ")
+        fname = next(n for n, t in overrides.items() if t is not None and "{TAG}" in t)
+        with pytest.raises(ParseFailedError, match=fname):
+            diagnose.resolve_inheritance_chain("tx", d)
+
+    def test_a_tenants_set_fails_closed(self, tmp_path):
+        """`tenants: !!set {tx}` was `tenants: {tx: ~}` on /metrics; since
+        ADR-036 step 6 (#3206) the exporter drops the file."""
         d = self._tree(tmp_path, {"tx.yaml": "tenants: !!set {tx}\n"}, "")
-        chain = diagnose.resolve_inheritance_chain("tx", d)
-        assert "skipped_unusable_files" not in chain
-        assert chain["resolved"] == {"mysql_connections": 80,
-                                     "mysql_slow_queries": 90}
+        with pytest.raises(ParseFailedError, match="tx.yaml"):
+            diagnose.resolve_inheritance_chain("tx", d)
 
     def test_a_repeated_key_in_a_set_fails_closed(self, tmp_path):
         d = self._tree(tmp_path, {
@@ -909,8 +928,7 @@ class TestSetTagReadAsTheExporterReadsIt:
             diagnose.resolve_inheritance_chain("tx", d)
 
     @pytest.mark.parametrize("body", [
-        "defaults: !!set {1, mysql_connections}\n",
-        "defaults: {1: 5, mysql_connections: 80}\n"], ids=["set", "plain"])
+        "defaults: {1: 5, mysql_connections: 80}\n"], ids=["plain"])
     def test_a_non_string_defaults_key_does_not_end_the_run(
             self, tmp_path, capsys, body):
         """/effective keys it by its text, `"1"` (#2547); must not raise."""
@@ -919,7 +937,7 @@ class TestSetTagReadAsTheExporterReadsIt:
             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
             "_profiles.yaml": None}, "")
         chain = diagnose.resolve_inheritance_chain("tx", d)
-        # with `!!set` /metrics serves no row: /effective's value, also 70
+        # (`!!set` was a row here; refused since ADR-036 step 6, #3206)
         assert chain["resolved"]["mysql_connections"] == 70
         assert 1 not in chain["resolved"]
         with mock.patch.object(diagnose, "tenant_db_type",

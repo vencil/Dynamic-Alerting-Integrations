@@ -59,11 +59,14 @@ func TestSimulate_RejectsWhatTheExporterSkips(t *testing.T) {
 		},
 		{
 			// Pins ParseTenantFile, not bare ParseConfigFile: the latter
-			// admits a non-UTF-8 tenant id, the walker (#2266) does not.
+			// admitted a non-UTF-8 tenant id, the walker (#2266) did not.
+			// Since ADR-036 step 6 (#3206) the `!!binary` that spells one
+			// is refused before either decode (parse-tree's tag_not_allowed),
+			// by the walker and by simulate alike.
 			name:       "tenant file declares a non-UTF-8 tenant id",
 			l0:         validL0,
 			tenant:     "tenants:\n  !!binary /w==: {}\n  tx: {}\n",
-			wantErr:    []string{"tenant_yaml", "exporter would skip", "not valid UTF-8"},
+			wantErr:    []string{"tenant_yaml", "exporter would skip", "tag_not_allowed"},
 			wantFailed: "tx.yaml",
 		},
 		{

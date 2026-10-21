@@ -2832,19 +2832,12 @@ _CARRIER_ORACLE = json.loads(pathlib.Path(
     "defaults-carrier-oracle.json").read_text(encoding="utf-8"))["cases"]
 
 #: Oracle rows where this row's verdict differs from the exporter's, each for
-#: a reason that is not the value rule (#1414) and predates it. The rows FAIL
-#: here while the exporter accepts: conf.d is read through `da-guard
-#: parse-tree` (ADR-036 step 4, #2906), whose closed list refuses what the
-#: exporter's yaml.v3 decode lets by (a duplicate key anywhere, several
-#: documents), and the file fails before the value rule runs — through
-#: `_run_check`'s input-error row. (Before step 4 the PyYAML read also failed
-#: a TAB that yaml.v3 takes, and passed a top level that is not a mapping.)
-_ORACLE_ROW_DEVIATIONS = {
-    "multi-document": vc.FAIL,
-    "dup-in-unknown-section": vc.FAIL,
-    "dup-under-unknown-nested-field": vc.FAIL,
-    "dup-in-custom-alerts-recipe": vc.FAIL,
-}
+#: a reason that is not the value rule (#1414) and predates it. None since
+#: ADR-036 step 6 (#3206): the rows that FAILed here while the exporter
+#: accepted (a duplicate key anywhere, several documents — refused by `da-guard
+#: parse-tree`, through which conf.d is read since step 4, #2906) are refused
+#: by the exporter too, so the oracle says `dropped` for them.
+_ORACLE_ROW_DEVIATIONS: dict = {}
 
 
 class TestRootDefaultsValues:

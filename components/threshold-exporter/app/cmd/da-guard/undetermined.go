@@ -51,12 +51,23 @@ const (
 	// undeterminedRoutingProfilesFile: a `_routing_profiles.yaml` / `.yml`
 	// file, any level. Field is "".
 	undeterminedRoutingProfilesFile = "routing_profiles_file"
-	// undeterminedGeneratorUnreadable: a file parse-tree names unreadable,
-	// whether or not the exporter reads it. Before ADR-036 step 4 the
-	// generator (PyYAML) does not necessarily refuse such a file; from
-	// step 4 it reads parse-tree's JSON and refuses it. Field is the
-	// parse-tree kind.
-	undeterminedGeneratorUnreadable = "generator_unreadable"
+	// undeterminedUnreadableOutsideRun: a path parse-tree names unreadable
+	// (the route generator refuses the whole tree on it) that this run's
+	// exit 3 does not name. Field is the parse-tree kind; a tree the walk
+	// cannot scan at all is one item for "." with read_failure.
+	//
+	// ⚠️ NARROWER THAN `generator_unreadable`, which it replaces (ADR-036 §9,
+	// step 6, #3206). That one named every such path, whether or not the
+	// exporter read it. Since step 6 the exporter refuses every file whose
+	// content parse-tree refuses (pkg/config parse_verdict.go), so such a file
+	// is in ParseFailed and one the walk cannot read in Unreadable — exit 3 on
+	// every run it bears on, and not evidence too. What is left is what exit 3
+	// cannot cover: such a path outside --scope (exit 3 is the scope's; the
+	// generator's verdict is the tree's), and a config-named directory or
+	// directory symlink (parse-tree's not_regular_file; the walk skips it
+	// without reading). Without it those runs ended in the vacuous 0 while the
+	// generator refused the tree (FAIL TOWARD UNDETERMINED, above).
+	undeterminedUnreadableOutsideRun = "unreadable_outside_run"
 	// undeterminedTenantID: a tenant id under `tenants:` that the tenant-id
 	// rule refuses (tenantid.Valid); the generator refuses the whole tree
 	// on it while the exporter serves the tenant. Field is `tenants.<id>`.
@@ -87,12 +98,15 @@ type undeterminedItem struct {
 
 // undeterminedEvidence lists, for the conf.d tree at configDir, every item
 // only the route generator can judge, sorted (file, field, reason); never
-// nil, so the JSON field encodes as [] when there is none. A tree the walk
-// cannot scan at all is one generator_unreadable item for "." (fail toward
-// undetermined), its reason on errOut unless rootReported: the exporter's own
-// walk already named the root as unreadable and printed that same reason, and
-// stderr names the root and its reason once (exit 3, #2627).
-func undeterminedEvidence(configDir string, rootReported bool, errOut io.Writer) []undeterminedItem {
+// nil, so the JSON field encodes as [] when there is none. reported is the
+// paths this run names under exit 3 (ParseFailed and Unreadable, relative to
+// configDir): a path parse-tree names unreadable is evidence only when it is
+// not one of them. A tree the walk cannot scan at all is one
+// unreadable_outside_run item for "." (fail toward undetermined) unless
+// reported holds "."; its reason goes to errOut unless rootReported: the
+// exporter's own walk already named the root as unreadable and printed that
+// same reason, and stderr names the root and its reason once (exit 3, #2627).
+func undeterminedEvidence(configDir string, rootReported bool, reported map[string]bool, errOut io.Writer) []undeterminedItem {
 	out := []undeterminedItem{}
 	scan, err := config.ScanDirTreeFiles(configDir, log.New(io.Discard, "", 0))
 	var doc *parseTreeDoc
@@ -103,18 +117,23 @@ func undeterminedEvidence(configDir string, rootReported bool, errOut io.Writer)
 		if !rootReported {
 			fmt.Fprintf(errOut, "%s: cannot read the tree as the route generator does: %v\n", programName, err)
 		}
-		return append(out, undeterminedItem{File: ".", Field: string(parsetree.KindReadFailure), Reason: undeterminedGeneratorUnreadable})
+		if reported["."] {
+			return out
+		}
+		return append(out, undeterminedItem{File: ".", Field: string(parsetree.KindReadFailure), Reason: undeterminedUnreadableOutsideRun})
 	}
-	return append(out, undeterminedFromParseTree(doc)...)
+	return append(out, undeterminedFromParseTree(doc, reported)...)
 }
 
 // undeterminedFromParseTree is undeterminedEvidence over one parse-tree
 // document.
-func undeterminedFromParseTree(doc *parseTreeDoc) []undeterminedItem {
+func undeterminedFromParseTree(doc *parseTreeDoc, reported map[string]bool) []undeterminedItem {
 	out := []undeterminedItem{}
 	declared := map[string][]string{} // tenant id → tenant files, in name order
 	for _, u := range doc.Unreadable {
-		out = append(out, undeterminedItem{File: u.File, Field: string(u.Kind), Reason: undeterminedGeneratorUnreadable})
+		if !reported[u.File] {
+			out = append(out, undeterminedItem{File: u.File, Field: string(u.Kind), Reason: undeterminedUnreadableOutsideRun})
+		}
 	}
 	for rel, content := range doc.Files {
 		if !readByGenerator(doc.Selected[rel]) {

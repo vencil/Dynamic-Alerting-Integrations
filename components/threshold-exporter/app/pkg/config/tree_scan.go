@@ -161,6 +161,10 @@ type ScanObserver interface {
 	// IncParseFailure counts one tenant-declaration parse failure, labelled
 	// by file basename.
 	IncParseFailure(fileBasename string)
+	// IncParseRefused counts one parse failure that is parse-tree's refusal
+	// (ADR-036 step 6, #3206), by file basename and parsetree.Kind; it is
+	// always called right after IncParseFailure for the same file.
+	IncParseRefused(fileBasename, kind string)
 }
 
 // IsScannedFileName reports whether the conf.d walker reads a file with this
@@ -1097,10 +1101,8 @@ func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log
 	cfg, perr := ParseTenantFile(data)
 	if perr != nil {
 		logger.Printf("WARN: skip unparseable file %q: %v", absPath, perr)
-		if obs != nil {
-			// Basename, not full path, to cap label cardinality (A-8d).
-			obs.IncParseFailure(filepath.Base(absPath))
-		}
+		// Basename, not full path, to cap label cardinality (A-8d).
+		observeParseFailure(obs, filepath.Base(absPath), perr)
 		return nil, ThresholdConfig{}, true
 	}
 	if len(cfg.Tenants) == 0 {

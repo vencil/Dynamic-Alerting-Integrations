@@ -11,6 +11,9 @@ conf.d，於是 PyYAML 與 yaml.v3 讀法不同的地方都分歧。修正前（
 - `tenants: !!set {tx}` 加平台檔 `_profile: gold`：diagnose 說「沒有租戶檔宣告 tx」、profile
   None；Go 認得 tx、綁 gold。帶值的 `!!set {tx: {...}}` 同樣。
 - `_defaults.yaml` 的鍵 `~: 5`：diagnose 印 `null`，Go 是 `<nil>`；`1: 5`、`true: 5` 同類。
+
+ADR-036 步驟 6（#3206）起，`!foo`、`!!str [5]`、`!!set`、`~:` 這幾格的檔 exporter 整份不服務
+（`parse-tree` 判為讀不了），移到 REFUSED：diagnose 不描述它們，回 rc 2。
 - 對照組（合法值、`tenants: {tx: {}}`、一般字串鍵）兩邊本來就一致。
 
 每格比對：結束碼為 0、`resolved`（served-values 對每個 key 送出的值）、`profile_name`
@@ -51,15 +54,9 @@ SHAPES = [
     ("value-invalid-date", {"_defaults.yaml": _DEFAULTS,
                             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 2024-02-30\n"
                                        "    mysql_slow: 60\n"}),
-    ("value-unknown-tag", {"_defaults.yaml": _DEFAULTS,
-                           "tx.yaml": "tenants:\n  tx:\n    mysql_connections: !foo 70\n"
-                                      "    mysql_slow: 60\n"}),
     ("value-tab-timestamp", {"_defaults.yaml": _DEFAULTS,
                              "tx.yaml": "tenants:\n  tx:\n    mysql_connections: "
                                         "2001-12-14\t01:02:03\n    mysql_slow: 60\n"}),
-    ("value-str-tag-on-sequence", {"_defaults.yaml": _DEFAULTS,
-                                   "tx.yaml": "tenants:\n  tx:\n    mysql_connections: !!str [5]\n"
-                                              "    mysql_slow: 60\n"}),
     # expires: in the past — /metrics falls back to the default (#656), /effective
     # still shows the mapping as written
     ("value-expired", {"_defaults.yaml": _DEFAULTS,
@@ -77,20 +74,35 @@ SHAPES = [
     # #2547 item 1 — which tenant exists, and the profile it is bound to
     ("tenants-dict-CONTROL", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
                               "_profiles.yaml": _GOLD, "tx.yaml": "tenants:\n  tx: {}\n"}),
-    ("tenants-set", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
-                     "_profiles.yaml": _GOLD, "tx.yaml": "tenants: !!set {tx}\n"}),
-    ("tenants-set-with-values", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
-                                 "_profiles.yaml": _GOLD,
-                                 "tx.yaml": "tenants: !!set {tx: {mysql_connections: 71}}\n"}),
     # #2547 item 2 — non-string keys of `defaults:`
     ("defaults-key-CONTROL", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  k1: 5\n",
                               "tx.yaml": "tenants:\n  tx:\n    k1: 7\n"}),
     ("defaults-key-int", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  1: 5\n",
                           "tx.yaml": "tenants:\n  tx:\n    1: 7\n"}),
-    ("defaults-key-null", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  ~: 5\n",
-                           "tx.yaml": "tenants:\n  tx: {}\n"}),
     ("defaults-key-bool", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  true: 5\n",
                            "tx.yaml": "tenants:\n  tx: {}\n"}),
+]
+
+
+# Shapes the exporter read until ADR-036 step 6 (#3206) and drops whole since:
+# `da-guard parse-tree` refuses each (a local tag, `!!str` on a sequence,
+# `!!set`, a null key), so served-values names the file in parse_failed and
+# diagnose refuses to answer (rc 2, served_values_unavailable) rather than
+# describe a tenant /metrics does not serve. (name, files, the dropped file)
+REFUSED = [
+    ("value-unknown-tag", {"_defaults.yaml": _DEFAULTS,
+                           "tx.yaml": "tenants:\n  tx:\n    mysql_connections: !foo 70\n"
+                                      "    mysql_slow: 60\n"}, "tx.yaml"),
+    ("value-str-tag-on-sequence", {"_defaults.yaml": _DEFAULTS,
+                                   "tx.yaml": "tenants:\n  tx:\n    mysql_connections: !!str [5]\n"
+                                              "    mysql_slow: 60\n"}, "tx.yaml"),
+    ("tenants-set", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
+                     "_profiles.yaml": _GOLD, "tx.yaml": "tenants: !!set {tx}\n"}, "tx.yaml"),
+    ("tenants-set-with-values", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
+                                 "_profiles.yaml": _GOLD,
+                                 "tx.yaml": "tenants: !!set {tx: {mysql_connections: 71}}\n"}, "tx.yaml"),
+    ("defaults-key-null", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  ~: 5\n",
+                           "tx.yaml": "tenants:\n  tx: {}\n"}, "_defaults.yaml"),
 ]
 
 
@@ -160,11 +172,22 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
     # written by the tenant, served as the default: the two answers differ
     assert got["value-invalid-date"]["layers"]["mysql_connections"] == "tenant"
     assert got["value-invalid-date"]["resolved"]["mysql_connections"] == 80
-    assert got["tenants-set"]["resolved"] == {"mysql_connections": 80, "mysql_slow": 60}
-    # `~:` is a key /effective shows and /metrics does not serve.
-    assert "<nil>" not in got["defaults-key-null"]["resolved"]
-    assert "<nil>" in tv.load_effective(_tree(tmp_path / "nil-again", dict(SHAPES)[
-        "defaults-key-null"]))["tx"].effective_config
+    assert not {n for n, _, _ in REFUSED} & set(names)
+
+
+@pytest.mark.parametrize("name,files,dropped", REFUSED, ids=[n for n, _, _ in REFUSED])
+def test_a_file_parse_tree_refuses_is_not_described(tmp_path: Path, name: str,
+                                                    files: dict[str, str], dropped: str) -> None:
+    conf_d = _tree(tmp_path, files)
+    with pytest.raises(tv.ParseFailedError) as exc:
+        tv.load_served_tree(conf_d)
+    assert dropped in str(exc.value), name
+    p = subprocess.run([sys.executable, str(DIAGNOSE), "tx", "--config-dir", str(conf_d),
+                        "--show-inheritance"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert p.returncode == 2 and "served_values_unavailable" in p.stdout, (name, p.stdout, p.stderr)
+    assert "parse-tree refuses the file (kind " in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("name,files", SHAPES, ids=[n for n, _ in SHAPES])
@@ -175,8 +198,8 @@ def test_diagnose_agrees_with_the_exporter(tmp_path: Path, name: str,
 
 
 @pytest.mark.parametrize("name,want", [
-    ("value-date-CONTROL", 70), ("value-invalid-date", 80), ("value-unknown-tag", 70),
-    ("value-tab-timestamp", 80), ("value-str-tag-on-sequence", 80), ("value-expired", 80),
+    ("value-date-CONTROL", 70), ("value-invalid-date", 80),
+    ("value-tab-timestamp", 80), ("value-expired", 80),
     ("value-severity-suffix", 60), ("value-not-yet-expired", 70),
 ])
 def test_resolved_is_what_metrics_serves(tmp_path: Path, name: str, want: int) -> None:

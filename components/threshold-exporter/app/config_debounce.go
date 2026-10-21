@@ -1120,6 +1120,7 @@ func emitParseFailureSignal(metrics *configMetrics, logger *log.Logger, tenantID
 		needle := fmt.Sprintf("parse defaults[%d]:", i)
 		if strings.Contains(msg, needle) {
 			metrics.IncParseFailure(filepath.Base(dp))
+			incParseRefused(metrics, filepath.Base(dp), mergeErr)
 			logger.Printf(
 				"ERROR: skip unparseable defaults/profiles file %q (chain index %d) for tenant=%s: %v (entire block dropped — fix file or remove)",
 				dp, i, tenantID, mergeErr,
@@ -1132,5 +1133,15 @@ func emitParseFailureSignal(metrics *configMetrics, logger *log.Logger, tenantID
 	// can detect persistently broken tenant files.
 	if strings.Contains(msg, "parse tenant:") {
 		metrics.IncParseFailure(filepath.Base(tenantFile))
+		incParseRefused(metrics, filepath.Base(tenantFile), mergeErr)
+	}
+}
+
+// incParseRefused adds the parse-tree kind of a merge error that is
+// parse-tree's refusal (config.UnreadableKindOf, ADR-036 step 6) to
+// da_config_parse_refused_total; any other error adds nothing.
+func incParseRefused(metrics *configMetrics, fileBasename string, mergeErr error) {
+	if kind, ok := config.UnreadableKindOf(mergeErr); ok {
+		metrics.IncParseRefused(fileBasename, string(kind))
 	}
 }

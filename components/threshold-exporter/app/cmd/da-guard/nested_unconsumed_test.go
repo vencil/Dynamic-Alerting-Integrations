@@ -1,22 +1,21 @@
 package main
 
-// nested_unconsumed_test.go — #2439: a `!!null x` (a tag yaml.v3's decode
-// into `any` refuses; PyYAML and the route generator read it) in a nested
-// `_` file the exporter never reads is not exit 3. Since #2904 every such
-// file is undetermined (exit 4): parse-tree refuses the tag, so the route
-// generator's verdict is the one that counts (before, the routing loader
-// judged a subtree domain policy or routing-profiles file as the root one,
-// and a file no reader consumed was not reported).
-// The subtree defaults carrier, which the exporter does read, stays exit 3;
-// syntax damage stays exit 3 whatever the file. served-values takes the
-// same parse_failed list.
+// nested_unconsumed_test.go — #2439, revised by ADR-036 step 6 (#3206): a
+// `!!null x` (a tag yaml.v3's decode into `any` refuses) or a repeated key in
+// a nested `_` file the exporter never reads. #2439 kept it out of exit 3,
+// and from #2904 to step 6 it was undetermined evidence (exit 4,
+// `generator_unreadable`): parse-tree refuses it, and the route generator
+// reads every nested `_` file through parse-tree. Since step 6 the exporter's
+// nested probe asks parse-tree too, so such a file is a parse failure
+// exactly like syntax damage: exit 3, in parse_failed — for da-guard and for
+// served-values, which take the same list.
 
 import (
 	"reflect"
 	"testing"
 )
 
-func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
+func TestRun_NestedFileParseTreeRefusesIsExitThree(t *testing.T) {
 	t.Parallel()
 	const tag = "    note: !!null x\n"
 	policy := "domain_policies:\n  d1:\n    tenants: [tx]\n" + tag
@@ -27,16 +26,18 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 		failed           []string
 		finding          string // a "kind field" prefix that must be present; "" = no finding at all
 	}{
-		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitUndetermined, nil, ""},
-		{"subtree routing profiles", "team/_routing_profiles.yaml", profiles, exitUndetermined, nil, ""},
-		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n" + tag, exitUndetermined, nil, ""},
-		{"subtree notes", "team/_notes.yaml", "note: !!null x\n", exitUndetermined, nil, ""},
+		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitParseFailed, []string{"team/_domain_policy.yaml"}, ""},
+		{"subtree routing profiles", "team/_routing_profiles.yaml", profiles, exitParseFailed, []string{"team/_routing_profiles.yaml"}, ""},
+		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n" + tag, exitParseFailed, []string{"team/_profiles.yaml"}, ""},
+		{"subtree notes", "team/_notes.yaml", "note: !!null x\n", exitParseFailed, []string{"team/_notes.yaml"}, ""},
 		{"subtree defaults carrier", "team/_defaults.yaml", "defaults:\n  mysql_connections: 60\nnote: !!null x\n", exitParseFailed, []string{"team/_defaults.yaml"}, ""},
 		{"subtree notes, syntax", "team/_notes.yaml", "note: [1,\n", exitParseFailed, []string{"team/_notes.yaml"}, ""},
 		{"subtree domain policy, syntax", "team/_domain_policy.yaml", "domain_policies: [1,\n", exitParseFailed, []string{"team/_domain_policy.yaml"}, ""},
 		// The root controls this file's behaviour is measured against.
-		{"root domain policy", "_domain_policy.yaml", policy, exitUndetermined, nil, ""},
-		{"root routing profiles", "_routing_profiles.yaml", profiles, exitUndetermined, nil, ""},
+		{"root domain policy", "_domain_policy.yaml", policy, exitParseFailed, []string{"_domain_policy.yaml"}, ""},
+		{"root routing profiles", "_routing_profiles.yaml", profiles, exitParseFailed, []string{"_routing_profiles.yaml"}, ""},
+		// What parse-tree reads is not a parse failure, nested or not.
+		{"subtree notes, readable", "team/_notes.yaml", "note: 1\n", exitOK, nil, ""},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -83,15 +84,14 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 	}
 }
 
-// TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined (#2439
-// review F1, #2905): the route generator refuses a repeated key in any file
-// of the tree, the nested `_` files the exporter never reads included. The
-// exporter does not reject those, so they are not exit 3; until #2905
-// withGeneratorDuplicates named them there, now parse-tree does: each is
-// undetermined evidence (duplicate_key, exit 4). served-values follows the
-// exporter's load, which does not read them, so it lists none — except the
-// root control, which the exporter does read and drops (exit 3 for both).
-func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined(t *testing.T) {
+// TestRun_NestedFileWithARepeatedKeyIsExitThree (#2439 review F1, #2905,
+// #3206): the route generator refuses a repeated key in any file of the tree,
+// the nested `_` files the exporter never reads included. Until #2905
+// withGeneratorDuplicates named them in exit 3, then parse-tree as
+// undetermined evidence (exit 4); since ADR-036 step 6 the exporter's nested
+// probe refuses them on parse-tree's duplicate_key, so each is exit 3 and in
+// served-values' parse_failed, like the root control.
+func TestRun_NestedFileWithARepeatedKeyIsExitThree(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name, file, body string
@@ -100,14 +100,15 @@ func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined(t *testi
 		servedFailed     []string
 		finding          string
 	}{
-		{"subtree notes", "team/_notes.yaml", "note: 1\nnote: 2\n", exitUndetermined, nil, nil, ""},
-		{"subtree notes, alias key", "team/_notes.yaml", "&q n : 1\n*q : 2\n", exitUndetermined, nil, nil, ""},
-		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n    cpu: \"1\"\n    cpu: \"2\"\n", exitUndetermined, nil, nil, ""},
+		{"subtree notes", "team/_notes.yaml", "note: 1\nnote: 2\n", exitParseFailed, []string{"team/_notes.yaml"}, []string{"team/_notes.yaml"}, ""},
+		{"subtree notes, alias key", "team/_notes.yaml", "&q n : 1\n*q : 2\n", exitParseFailed, []string{"team/_notes.yaml"}, []string{"team/_notes.yaml"}, ""},
+		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n    cpu: \"1\"\n    cpu: \"2\"\n",
+			exitParseFailed, []string{"team/_profiles.yaml"}, []string{"team/_profiles.yaml"}, ""},
 		{"subtree routing profiles", "team/_routing_profiles.yaml",
 			"routing_profiles:\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/p'}\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/q'}\n",
-			exitUndetermined, nil, nil, ""},
+			exitParseFailed, []string{"team/_routing_profiles.yaml"}, []string{"team/_routing_profiles.yaml"}, ""},
 		{"subtree domain policy", "team/_domain_policy.yaml", "domain_policies:\n  d1:\n    tenants: [ty]\n    tenants: [ty]\n",
-			exitUndetermined, nil, nil, ""},
+			exitParseFailed, []string{"team/_domain_policy.yaml"}, []string{"team/_domain_policy.yaml"}, ""},
 		{"root notes control", "_notes.yaml", "note: 1\nnote: 2\n", exitParseFailed, []string{"_notes.yaml"}, []string{"_notes.yaml"}, ""},
 	}
 	for _, tc := range cases {
@@ -125,8 +126,8 @@ func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined(t *testi
 				t.Errorf("exit %d, parse_failed %v; want exit %d, parse_failed %v (findings %v)",
 					code, failed, tc.code, tc.failed, findings)
 			}
-			if want := []string{tc.file + " duplicate_key"}; tc.code == exitUndetermined && !reflect.DeepEqual(r.unreadable, want) {
-				t.Errorf("generator_unreadable %v, want %v", r.unreadable, want)
+			if containsPrefix(r.evidence, tc.file+" unreadable_outside_run") {
+				t.Errorf("evidence %v names %s unreadable_outside_run though exit 3 names it (#3206)", r.evidence, tc.file)
 			}
 			if tc.finding != "" && !containsPrefix(findings, tc.finding) {
 				t.Errorf("findings %v, want one starting %q", findings, tc.finding)
