@@ -1394,6 +1394,18 @@ repos:
         # Edit the rule but forget to regenerate → this fails before CI. Fix:
         # `make am-duration-json`.
 
+      - id: error-contract-check
+        name: "#3202: portal tenant-api-errors.json must match tenant-api's errcode + kind table"
+        entry: bash -c 'cd components/tenant-api && go run ./cmd/gen-error-contract --check'
+        language: system
+        pass_filenames: false
+        files: ^(components/tenant-api/internal/errcode/.*\.go|components/tenant-api/internal/handler/error_kinds\.go|components/tenant-api/cmd/gen-error-contract/.*\.go|tools/portal/src/interactive/tools/_common/data/tenant-api-errors\.json)$
+        # tenant-api-errors.json is DERIVED from internal/errcode (the codes
+        # and their remedies) and the handler's kind table (the statuses and
+        # kinds each code answers), and imported by the portal. Add a code or
+        # change a kind's answer but forget to regenerate → this fails before
+        # CI. Fix: `make error-contract`.
+
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'

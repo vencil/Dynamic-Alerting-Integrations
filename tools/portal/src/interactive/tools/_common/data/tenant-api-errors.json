@@ -1,0 +1,503 @@
+{
+  "_generated": "GENERATED from components/tenant-api internal/errcode and the handler's kind table by cmd/gen-error-contract — DO NOT EDIT. Run `make error-contract`.",
+  "codes": [
+    {
+      "code": "BAD_REQUEST",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [
+        400
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "bad_request",
+        "invalid_tenant_id",
+        "merge_failed",
+        "reserved_tenant_id",
+        "tenant_git_managed_unnamed",
+        "validation"
+      ]
+    },
+    {
+      "code": "BASE_RESTORE_FAILED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        500
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "base_restore_failed"
+      ]
+    },
+    {
+      "code": "BATCH_COMMITTED",
+      "remedy": "refresh",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "batch_committed"
+      ]
+    },
+    {
+      "code": "CANDIDATE_INVALID",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "CONFIG_DECODE_ERROR",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        500
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "config_file_parse",
+        "fresh_base_orgs"
+      ]
+    },
+    {
+      "code": "CONFLICT",
+      "remedy": "refresh_retry",
+      "retryable": "always",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "conflict",
+        "precondition_failed",
+        "state_conflict"
+      ]
+    },
+    {
+      "code": "FEDERATION_NOT_CONFIGURED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "federation_not_configured"
+      ]
+    },
+    {
+      "code": "FORBIDDEN",
+      "remedy": "permission",
+      "retryable": "never",
+      "statuses": [
+        403
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "forbidden",
+        "fresh_base_scope"
+      ]
+    },
+    {
+      "code": "FORGE_FORBIDDEN",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        403
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "forge_forbidden"
+      ]
+    },
+    {
+      "code": "FORGE_UNAVAILABLE",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "forge_circuit_open",
+        "forge_degraded"
+      ]
+    },
+    {
+      "code": "GENERATOR_BUSY",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        429
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "generator_rejected_retryable"
+      ]
+    },
+    {
+      "code": "GENERATOR_FINDINGS",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [
+        422
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "generator_findings"
+      ]
+    },
+    {
+      "code": "GENERATOR_REJECTED",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [
+        422
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "generator_rejected"
+      ]
+    },
+    {
+      "code": "GIT_DRIVER_CONFIGURED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        500
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "git_driver_configured"
+      ]
+    },
+    {
+      "code": "GIT_PUSH_FAILED",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "git_push_failed"
+      ]
+    },
+    {
+      "code": "GROUP_ID_UNAVAILABLE",
+      "remedy": "choose_other",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "INTERNAL_ERROR",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        500
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "internal",
+        "stream_unsupported",
+        "tenant_tree_scan"
+      ]
+    },
+    {
+      "code": "INVALID_BODY",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "MASKED_PREVIEW_UNAVAILABLE",
+      "remedy": "permission",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "METHOD_NOT_ALLOWED",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [
+        405
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "method_not_allowed"
+      ]
+    },
+    {
+      "code": "NOT_FOUND",
+      "remedy": "not_found",
+      "retryable": "never",
+      "statuses": [
+        404
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "route_not_found"
+      ]
+    },
+    {
+      "code": "NOT_IMPLEMENTED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "PAYLOAD_TOO_LARGE",
+      "remedy": "fix_request",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "PENDING_PR_EXISTS",
+      "remedy": "existing",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "POLICY_UNAVAILABLE",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "policy_unavailable"
+      ]
+    },
+    {
+      "code": "RATE_LIMITED",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        429
+      ],
+      "retry_after_s": 60,
+      "kinds": [
+        "federation_mint_rate_limited"
+      ]
+    },
+    {
+      "code": "REQUEST_TIMEOUT",
+      "remedy": "refresh",
+      "retryable": "never",
+      "statuses": [
+        504
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "request_timeout"
+      ]
+    },
+    {
+      "code": "STATE_FULL",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        507
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "state_full"
+      ]
+    },
+    {
+      "code": "TASK_NOT_FOUND",
+      "remedy": "not_found",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "TENANT_CONFIG_NOT_LOADABLE",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_config_not_loadable",
+        "tenant_file_not_regular",
+        "tenant_file_unreadable"
+      ]
+    },
+    {
+      "code": "TENANT_DECLARED_ELSEWHERE",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_declared_elsewhere"
+      ]
+    },
+    {
+      "code": "TENANT_FILE_AMBIGUOUS",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "ambiguous_tenant_file"
+      ]
+    },
+    {
+      "code": "TENANT_FILE_DIRTY",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_file_dirty"
+      ]
+    },
+    {
+      "code": "TENANT_GIT_MANAGED",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_git_managed"
+      ]
+    },
+    {
+      "code": "TENANT_STORE_FAULT",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        500
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_store_fault"
+      ]
+    },
+    {
+      "code": "TENANT_TREE_UNREADABLE",
+      "remedy": "fix_in_repo",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "tenant_tree_unreadable"
+      ]
+    },
+    {
+      "code": "TOKEN_LIMIT_REACHED",
+      "remedy": "existing",
+      "retryable": "never",
+      "statuses": [
+        409
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "federation_token_limit"
+      ]
+    },
+    {
+      "code": "TREE_NOT_ON_BASE",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 1,
+      "kinds": [
+        "tree_not_on_base"
+      ]
+    },
+    {
+      "code": "UNAUTHORIZED",
+      "remedy": "permission",
+      "retryable": "never",
+      "statuses": [],
+      "retry_after_s": null,
+      "kinds": []
+    },
+    {
+      "code": "UPSTREAM_ERROR",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "forge_create_failed",
+        "git_config_unreadable",
+        "server_shutting_down",
+        "state_unavailable",
+        "write_cancelled"
+      ]
+    },
+    {
+      "code": "VALIDATOR_UNAVAILABLE",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "validator_unavailable"
+      ]
+    },
+    {
+      "code": "WRITE_OUTCOME_UNKNOWN",
+      "remedy": "refresh",
+      "retryable": "never",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "write_outcome_unknown"
+      ]
+    },
+    {
+      "code": "WRITE_OVERLOADED",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 1,
+      "kinds": [
+        "write_overloaded"
+      ]
+    }
+  ]
+}
