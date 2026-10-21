@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-10-17
+updated_at: 2026-10-21
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -28,6 +28,8 @@ updated_at: 2026-10-17
 📝 **修訂（2026-10-16）**：自訂告警的宣告位置以 exporter 實際送出的為準，不做 `_defaults.yaml` 子樹繼承；一組租戶共用的政策改寫在 profile（見 §3「宣告位置」）。決策與實測見 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。
 
 📝 **修訂（2026-10-17）**：自訂告警編譯器改照 exporter 送出的編譯（見 §3「宣告位置」）；每租戶上限改由 tenant-api 寫入檢查、da-guard 與 validate-config 擋（見 §4）。
+
+📝 **修訂（2026-10-21）**：自訂告警的逐條判定、recipe_id 與規則產生只有一份 Go 實作，recipe 的列舉、格式與數值界限寫在一份契約檔，其他各處由它產生（見 §3、§5、§9）；`describe_tenant` 只顯示 exporter 送出的清單，「這次變更影響什麼」只由 config-diff 回答（見「後果」）。實作依 [#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229) 分步進行。完成前編譯器仍是 Python 實作（`scripts/tools/dx/custom_alerts/`），已知與 Go 判定不一致之處列在該票；這段期間由兩道檢查補位：exporter 送出的條目，編譯器若算出不同的 recipe_id 或不收它，編譯就拒絕（exit 2）；在 repo 內執行 `da-tools validate-config` 時，`custom_alert_sources` 一列會列出這種條目，只警告。
 
 📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
@@ -111,7 +113,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 「永不寫 PromQL」這條鐵則擋的三個風險中最難的「**跨租戶隔離**」已被既有架構結構性解掉（scrape job 從 namespace 烙 `tenant` label、租戶偽造不了）。故真正的設計問題不是「能不能做」，而是「**表達力 + 規則數成本**」。
 
-- **MVP = 參數化 recipe**：平台 authored 的 recipe 庫（**6 個**：threshold / rate / ratio / absence / p99_latency / forecast），平台或租戶填表（metric / window / op / 閾值 / severity / `mode`）→ 存成 declarative YAML。Level 2 bounded-DSL / Level 3 raw-PromQL 逃生門列 Future。*Trade-off*：表達力被 recipe 庫框住，換來安全是**結構性的**（valid spec → valid PromQL，不靠運氣）。
+- **MVP = 參數化 recipe**：平台 authored 的 recipe 庫（**7 個**：threshold / rate / ratio / absence / p99_latency / forecast / slo_burn_rate；最後一個見 [ADR-031](031-slo-burn-rate-recipe.md)），平台或租戶填表（metric / window / op / 閾值 / severity / `mode`）→ 存成 declarative YAML。Level 2 bounded-DSL / Level 3 raw-PromQL 逃生門列 Future。*Trade-off*：表達力被 recipe 庫框住，換來安全是**結構性的**（valid spec → valid PromQL，不靠運氣）。
 - **宣告位置 = 每個租戶一個來源**：exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`、根 `_defaults.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile；取到第一處就停，**不合併**。任何一層 `_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 都不會送出——**不做子樹繼承**；根目錄平台檔頂層的也不送。子目錄 `_defaults.yaml` 裡的（頂層或 `defaults:` 底下），`da-guard effective` 對沒有其他來源的租戶標 `not_served`（`value_rejected`）；根目錄 `_defaults.yaml` 與平台檔頂層的不列出；寫在根 `_defaults.yaml` 的 `defaults:` 底下則整份檔解碼失敗（da-guard exit 3），檔裡其他預設值也一併不送出。要讓一組租戶共用同一條政策，就寫在 profile、讓這些租戶綁定它。這是**預設，不是不可覆寫的政策**：租戶寫了自己的 `_custom_alerts` 就整個取代 profile 的清單，也能改綁或解除綁定。
 
   範例（`finance/` 底下兩個租戶綁定同一個 profile，`pay-b` 另寫了自己的 recipe）：
@@ -141,7 +143,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
   `da-guard served-values` 送出的自訂告警：`pay-a` 是 `payment_failure_ratio`，`pay-b` 是 `pending_settlements_high`；`refund_ratio` 兩個租戶都沒有。
 
-  自訂告警編譯器編的就是這份讀法：它讀 `da-guard served-values` 逐租戶列出的 `custom_alerts`，為 exporter 送出的與停用的條目產生規則，不自己走 conf.d。上面的範例編出 `payment_failure_ratio` 與 `pending_settlements_high` 兩條規則，`refund_ratio` 沒有規則。條目是否有效、是否與前面某條同 shape 同 severity，也都以 exporter 的判定為準。exporter 送出的條目，編譯器若算出不同的 recipe_id 或不收它，編譯就拒絕（exit 2）：那條門檻沒有規則讀它、永遠不會告警。在 repo 內（裝有編譯器的地方）執行 `da-tools validate-config`，`custom_alert_sources` 一列會列出這種條目，只警告；da-tools 映像不帶編譯器，沒有這一列。
+  自訂告警編譯器編的就是這份讀法：編譯改由 `da-guard compile-custom-alerts` 進行，它取 exporter 為每個租戶取得的 `custom_alerts`（與 `da-guard served-values` 是同一段 Go 程式），為送出的與停用的條目產生規則，不另外走 conf.d。上面的範例編出 `payment_failure_ratio` 與 `pending_settlements_high` 兩條規則，`refund_ratio` 沒有規則。條目是否有效、是否與前面某條同 shape 同 severity、它的 recipe_id 與 PromQL，都由這同一份 Go 程式決定（§9），不會有「exporter 送出了門檻、編譯器卻算出別的 recipe_id 或不收」這種門檻沒有規則讀、永遠不告警的條目。`compile_custom_alerts.py` 只負責讀寫檔案、限制 `--out` 寫在指定目錄內、`--check` 比對與輸出序列化。
 - **Metric discovery = 唯讀的無狀態 Prometheus proxy**：tenant-api 向 Prometheus 查**該租戶**自身的 app-metric 名稱（`{tenant="<authID>"}` 篩），給 portal 當 recipe 的 metric 自動完成來源——不自建會與 Prometheus 漂移的 catalog 狀態。查詢字串強制鎖定（租戶輸入觸不到 matcher 結構、`tenant` label scrape 端 branded、前綴搜尋 escaped），並用既有 per-caller rate limiter 防代理驚群。租戶為「將來會出現」的 metric 預建 recipe 是合法的（GitOps 真空期），故後端**不**硬擋「metric 當下不存在」，改由 portal 軟警告。
 - **Recipe authoring UX = 智慧表單、後端擁有寫入**：portal 的 recipe builder 是純 `(Context) => RecipeObject` 元件、**不擁有寫入**；寫入經 tenant-api 的 `PUT .../custom-alerts`，**後端獨佔 YAML round-trip**（client 只送 / 收 JSON）。寫入用 yaml.Node AST surgery 保留註解 / 縮排，並以整檔 hash 做樂觀並發控制（base_hash 不符 → 409）。
 
@@ -153,12 +155,12 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 **部署源 = live conf.d**：編譯源必須是 exporter 實際服務的同一份 conf.d，否則生成規則的 shape 對不上 exporter emit 的 `user_threshold` series → 規則永不 fire（靜默失效）。custom-alert pack 是**租戶自訂、非平台覆蓋**，故從平台的 rule-pack / alert count 統計排除（badge 不變）。
 
-### 5. 驗證雙層：Go in-process preflight + CI 權威（prod image 不打包 promtool）
+### 5. 驗證雙層：同一份 Go 程式，寫入時看單一租戶、CI 看整棵樹（prod image 不打包 promtool）
 
 - **Layer 1 — tenant-api 的 Go preflight**（in-process、快、stateless per-tenant 輸入閘）：`PUT` 當下就驗租戶 recipe spec、無效回 HTTP 400 + `Violations[]`，**壞輸入不進 repo**。複用與 exporter **共用同一份** Go 驗證器（metric regex / reserved label / recipe·op·severity·mode·for·horizon enum / ratio-floor ∈(0, 0.5)（< 現狀 band）/ NaN·Inf）。
-- **Layer 2 — CI Python compiler**（全域權威，stateful + promtool）：跨樹 / 向量化 / 模板 promtool——唯一握有全域 SOT 的權威 gate。
+- **Layer 2 — CI 的編譯**（全域權威，stateful + promtool）：`da-guard compile-custom-alerts` 對整棵樹做向量化並產生規則，再以 promtool 檢查模板——唯一握有全域 SOT 的權威 gate。它判定條目用的是 Layer 1 那同一份 Go 程式，兩層的差別只在看到的範圍：單一租戶的寫入，或整棵樹。
 
-*Trade-off*：**prod image 不打包 promtool / Python**。租戶從不寫 PromQL、recipe 模板平台 authored，故 valid spec → valid PromQL；promtool 只多抓「模板 regression」= 平台問題，留 **CI golden** 守，不放進請求路徑（避免 Go 服務背 Python runtime + 熱路徑 subprocess 的 image 膨脹與 dev-prod 邊界模糊）。「整棵樹的 shape 數與規則數」這類需要全域樹的檢查 defer 至 CI——tenant-api 本地磁碟在 GitOps 真空期不是全域 SOT，熱路徑 tree-walk 會用過期樹 false-pass。
+*Trade-off*：**prod image 不打包 promtool**。租戶從不寫 PromQL、recipe 模板平台 authored，故 valid spec → valid PromQL；promtool 只多抓「模板 regression」= 平台問題，留 **CI golden** 守，不放進請求路徑（避免熱路徑 subprocess 與 image 膨脹）。「整棵樹的 shape 數與規則數」這類需要全域樹的檢查 defer 至 CI——tenant-api 本地磁碟在 GitOps 真空期不是全域 SOT，熱路徑 tree-walk 會用過期樹 false-pass。
 
 ### 6. Silent 與 routing 隔離：複用既有 sentinel + inhibit
 
@@ -169,12 +171,12 @@ custom-alert 的 `mode`（page / silent）label 經 `group_left` 一路帶到 al
 
 ### 7. Forecast recipe：趨勢 / 耗盡預測（雙模式）
 
-`forecast` 是第 6 個 recipe，回應「磁碟 / 記憶體照趨勢未來 N 小時內會耗盡」這類真實需求。raw `predict_linear` 是公認的 false-positive 製造機（瞬時尖峰被線性外推），故由平台把 FP 來源堵死、封裝成參數化 recipe——這正是 recipe 模式相對「租戶自寫 PromQL」的核心價值。
+`forecast` 回應「磁碟 / 記憶體照趨勢未來 N 小時內會耗盡」這類真實需求。raw `predict_linear` 是公認的 false-positive 製造機（瞬時尖峰被線性外推），故由平台把 FP 來源堵死、封裝成參數化 recipe——這正是 recipe 模式相對「租戶自寫 PromQL」的核心價值。
 
 - **單一 recipe、雙模式**：有 `capacity_metric` → 比例 mode（預測比例掉破 floor ∈(0, 0.5)；≥0.5 被現狀 band 削弱故拒）；無 → 原始值 mode（預測 gauge 穿越絕對門檻）。
 - **lookback 不給租戶填**，平台推導 `lookback = max(2·horizon, 1h)`（整數秒）；租戶只填 `horizon`（enum，cardinality 鎖定）。理由：lookback 是專家旋鈕、暴露即最大 foot-gun，且 `horizon ≤ lookback` 結構恆成立、免額外驗證。
 - **cold-start 資料量 gate**（`count_over_time(base[lookback]) > N`）擋剛部署時樣本太少的亂跳；**gauge-only**（counter 須先 rate）。
-- **現狀 band（僅比例 mode）**：比例型 forecast 額外閘 `現狀餘量比例 < 0.5`（`_FORECAST_CURRENT_BAND`），把純斜率告警收成「預測會低 **且** 現在已偏低」，擋掉高 headroom 磁碟的暫態寫入突波 / cold-start 陡坡誤報；並以 `clamp_min(…, 0)` 把外推到負的比例值夾回 0（負餘量無意義、避免 on-call 看到亂值）。租戶閾值不受影響（在 core 比對）。**強制**：比例型 forecast 閾值須 `< 0.5`——≥ band 會被 band 靜默削弱，兩側判準相同（跨語言 lockstep），但反應不同：Go preflight（`forecastCurrentBand`，tenant-api 寫入）拒絕；編譯端（`shape.validate_forecast_ratio_threshold`）把該 recipe 隔離、不部署並印警告，其餘照常編譯、rc 0。
+- **現狀 band（僅比例 mode）**：比例型 forecast 額外閘 `現狀餘量比例 < 0.5`（契約檔裡的現狀 band，§9），把純斜率告警收成「預測會低 **且** 現在已偏低」，擋掉高 headroom 磁碟的暫態寫入突波 / cold-start 陡坡誤報；並以 `clamp_min(…, 0)` 把外推到負的比例值夾回 0（負餘量無意義、避免 on-call 看到亂值）。租戶閾值不受影響（在 core 比對）。**強制**：比例型 forecast 閾值須 `< 0.5`——≥ band 會被 band 靜默削弱。band 的值只寫在契約檔（§9），兩個入口的反應不同：tenant-api 寫入時拒絕；CI 編譯時把該條目隔離、不部署並印警告，其餘照常編譯、rc 0。
 
 具體例（租戶宣告，不碰 PromQL）：
 
@@ -192,7 +194,7 @@ custom-alert 的 `mode`（page / silent）label 經 `group_left` 一路帶到 al
 
 ### 8. Recipe 生命週期治理：active / deprecated / eol
 
-Recipe 是平台 authored 的；其 `status` 治理租戶能否續用，是 **RECIPE 版本控管**（有別於能力 A 的 APP `version` label）。狀態 SSOT 在編譯器 `shape.py::RECIPE_STATUS`，向下衍生（人類治理契約 `recipes/*.yaml` 鏡射、Go 端生成 `recipe-status.json` 經 `go:embed` 消費、portal、info-metric），**不手寫多份**（drift guard 鎖同步）。
+Recipe 是平台 authored 的；其 `status` 治理租戶能否續用，是 **RECIPE 版本控管**（有別於能力 A 的 APP `version` label）。狀態寫在 recipe 契約檔（§9）：tenant-api 的寫入閘、portal 的標示、治理文件 `rule-packs/recipes/*.yaml` 與 info-metric 都由它產生，**不手寫多份**。
 
 - **active**：正常。
 - **deprecated**：照常編譯 + 編譯器非致命警告 + portal 黃標；仍可新增。「可遷移、仍可用」。
@@ -212,6 +214,31 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 （內層 `count by(recipe_id, tenant)` 先去重租戶——`recipe_id` 不含 severity，直接 `count` 會把同一租戶的 warning + critical 算成兩個。）退役本身仍是 **SRE 手動**：metric 給視圖、不自動下架。
 
 **eol ≠ 緊急下線**：若一個 recipe **有害、須立即移除**，工具不是 eol（它讓既有 rule 續活），而是**從 recipe library 刪掉定義**——既有實例編譯直接 fail，硬性強制移除。
+
+### 9. Recipe 規則只有一份：Go 實作與 recipe 契約檔
+
+一條自訂告警從寫入到產生規則，會經過 tenant-api 的寫入檢查、exporter 送出門檻、CI 編譯規則與 recipe-preview 的預覽。這幾處判斷「這條合不合法、算哪個 shape、產生什麼 PromQL」改用**同一份 Go 程式**（`components/threshold-exporter/app/pkg/config/`）：
+
+- tenant-api 與 exporter 直接呼叫它；
+- CI 編譯呼叫 `da-guard compile-custom-alerts --format json`，Python 端 `compile_custom_alerts.py` 只負責讀寫檔案、限制 `--out` 寫在指定目錄內、`--check` 比對與輸出序列化；
+- recipe-preview（以近期資料試算一條 recipe 會不會觸發的服務）的映像帶 da-guard，預覽與部署用同一份判定，不會預覽一條 exporter 會拒收的 recipe。
+
+portal 的 recipe 表單在瀏覽器裡執行，不跑 Go：它只做即時提示，界限讀下面的產生物，合不合法以 tenant-api 的寫入檢查為準。
+
+規則裡的**資料**——各 recipe 的必填欄位與預設值、各欄位的列舉（recipe、op、mode、for、horizon、group_by、slo_period …）、metric、label、window、name 的格式、租戶不可當 selector 的保留標籤、p99_latency 的 quantile 範圍、forecast 的現狀 band 與比例下限、slo_burn_rate 的 `min_events` 預設與上限、生命週期狀態、SLO 每個嚴重度的偵測窗口、每個預算期間（28d、30d）的快慢兩級燒錯倍數、每租戶自訂告警上限——寫在一份 **recipe 契約檔**，放在同一個 Go package，以 `go:embed`（Go 在編譯時把檔案內容嵌進執行檔的機制）嵌入。其他需要這些資料的地方都由它產生，CI 重新產生後比對，有差異就紅：
+
+| 產生物 | 用途 |
+|---|---|
+| `tenant-config.schema.json` 的 `_custom_alerts` 條目定義 | 編輯器提示、validate-config 的 schema 檢查 |
+| portal 的 `recipe-enums.json`、`recipe-status.json` | recipe builder 的選項與狀態標示 |
+| tenant-api 的 `recipe-status.json` | eol 只擋擴張的寫入閘（§8） |
+| `rule-packs/recipes/*.yaml` 的參數列舉與預設值 | 給人讀的治理文件 |
+| 自訂規則 lint 的查詢範圍上限（由 horizon 最大值推得） | `lint_custom_rules.py` |
+| recipe-preview 的 `for` 分鐘數對照 | 預覽試算 |
+
+portal 表單裡手寫的檢查改讀產生物，不再自己寫界限。tenant-api 寫回 YAML 時用的欄位順序與「哪些欄位以字串寫出」也改讀契約檔。
+
+為什麼不用多份實作加比對測試：同一條規則寫成多種語言，比對測試只能抽樣，抽不到的地方會各自演變。Go 與 Python 兩份實作就曾這樣分歧：Go 不准租戶以 `mode` 當 selector，Python 的保留標籤清單沒有它；SLO 的偵測窗口寫在 Python、配對的燒錯倍數寫在 Go，一個語意拆在兩種語言。只留一份實作，這類差異就沒有地方發生。業界的 [Sloth](https://github.com/slok/sloth)、[Pyrra](https://github.com/pyrra-dev/pyrra)（兩者都從 SLO 宣告產生 Prometheus 規則）也是單一 Go 程式，驗證與產生規則共用同一份程式碼。
 
 ## 資料流：Ingest → Define → Compile
 
@@ -248,7 +275,9 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 - **cardinality 截斷必須確定性**——per-tenant guard 截斷前須對 dimensional keys 確定性排序（無版號 / `default` 優先保護），否則 Go map 隨機序會讓被截的版號隨 scrape 忽隱忽現 → **alert flapping + 重複 page**。
 - **共享 `user_threshold` 跨 pack 洩漏**——非 pilot pack 的 normalize matcher 加 `version=~"|default"`（只收無版號 / default），CI guard 失效時仍保既有告警安全（防 double-count）。
 - **Dashboards / Portal query 假設無 version label**——租戶開始寫 version key 後，未聚合 query 會多出帶 version 的 series → 須審 Grafana / portal panel。
-- **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定：編譯器讀 exporter 送出的（`da-guard served-values`）；診斷工具（describe_tenant / blast_radius）改讀它，仍在 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。
+- **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定，編譯器讀的就是 exporter 取得的清單（§3）。診斷工具也只看這一份：`describe_tenant`（列出一個租戶最終設定的 CLI）顯示 exporter 為每個租戶送出的 `custom_alerts` 與每條的狀態，不顯示把子目錄 `_defaults.yaml` 與租戶自己的清單合起來的視圖（exporter 從不送出那種合併結果）；「這次 conf.d 變更影響什麼」只由 config-diff 回答（[ADR-037](037-config-diff-compares-rendered-output.md)），回答同一問題、讀 `describe_tenant` 輸出的 blast_radius 退役。
+- **遷移時規則檔的位元組可能改變**——編譯器改到 Go 時，驗收標準是產生的規則檔以 YAML 解析後內容相同、alert 與 recording rule 名稱及 recipe_id 集合相同、promtool golden 測試通過，不要求逐位元組相同；committed 的規則檔在那次一併重新產生。
+- **recipe-preview 映像多帶一支 da-guard**——預覽要用與部署相同的判定，映像因此變大（da-guard 是單一靜態 Go 執行檔）。
 
 **關鍵不變式**（驗收契約，非 tracking checklist）：(1) 既有未寫 version 的租戶升級後行為 100% 等價（無 series 數變動）；(2) over-cap 截斷跨多次 scrape 截掉的是固定版號（無 flapping）；(3) `mode: silent` recipe 觸發時不進 PagerDuty / Slack、只留 Grafana 痕跡；(4) rolling update 結束、舊版 metric 消失後，正在燒的告警能正常收到 Resolve（不留殭屍告警）；(5) version-aware metric 上的 recipe 自動 graceful-join、label 缺時落 default、不產 NaN / 空集。
 
@@ -262,6 +291,8 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 - **Silent 走 route-to-null receiver** — 與 [ADR-003](003-sentinel-alert-pattern.md) 既有 inhibit 典範不一致、AM UI 看不出抑制狀態；改複用 sentinel + inhibit。
 - **讓 exporter 實作 `_defaults.yaml` 子樹的聯集繼承** — 能保住「domain 寫一次、套整棵子樹」，但今天寫在 `_defaults.yaml` 的 recipe 會一次對整棵子樹生效（例如 absence recipe 對所有沒送該 metric 的租戶同時觸發），而租戶要怎麼選擇不套用沒有定義。
 - **編譯器另外實作一份與 exporter 相同的來源規則** — 改動最小、不需要在編譯環境放 da-guard，但兩份實作仍會各自演變而分歧。
+- **保留 Python 編譯器，以 Go／Python 比對測試對齊** — 改動最小，但比對只能抽樣，抽不到的差異照樣漂移（§9 裡 `mode` 的例子就不在抽樣範圍內）；每加一條規則就要在兩種語言各寫一次。
+- **契約檔用 JSON Schema 表達，Go 讀 schema** — schema 本來就要給編輯器與 validate-config 用，但 Go module 沒有 JSON Schema 函式庫，要嘛新增依賴、要嘛手抄一份；schema 也是今天被程式碼釘住的一方，改由它驅動程式會把方向倒過來（與 [ADR-038](038-unread-keys-judged-by-readers.md) 否決「讓 schema 當登錄表」同理）。
 - **把 `_custom_alerts` 從 list 改 dict（以名為 key）** — list 形態貫穿整個引擎（Go exporter / tenant-api / portal / 編譯器），改形態的 blast radius 不成比例；每個租戶只取一個來源，也不需要以名稱合併。
 
 ## 與排程式閾值（§2.6）的界線
@@ -310,7 +341,6 @@ v2.9.0 曾隨範例附過一條磁碟預測告警，引用的正是當時沒人�
 
 > 本節記錄 accepted 之後由後續 ADR／PR 帶入、尚未併進上文的變化。
 
-- **Recipe 庫 6 → 7（由 ADR-031 增補）**——ADR-031 新增第 7 個 recipe `slo_burn_rate`（多窗 SLO 錯誤預算 burn-rate；[#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)），現行清單為 threshold / rate / ratio / absence / p99_latency / forecast / **slo_burn_rate**。§3 的「6 個」與 §7 的「第 6 個 recipe」是 accepted 當時的快照；現況以編譯器 `scripts/tools/dx/custom_alerts/recipes.py`（檔頭自述 "The 7 core recipe PromQL emitters"）與治理契約 `rule-packs/recipes/slo_burn_rate.yaml` 為準。
 - **Version pilot 第三族 `cpu_throttle` 機械已鋪、exact branch 依 pilot allowlist 暫 inert**——§2 的 pilot 範圍（`container_cpu` + `container_memory`）不變，但 [#944](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/944) 已為 `cpu_throttle` 鋪好同款 version 機械（`rule-packs/rule-pack-kubernetes.yaml` 的 normalize pair + Route-2 exact-or-fallback per-severity cores）。`cpu_throttle` 尚不在 version pilot allowlist（`resolve.go` 的 `pilotVersionMetrics` 僅 container/cpu + container/memory），租戶無法宣告 per-version throttle 閾值，exact-match branch **依設計暫 inert**、一律走 `version="default"` fallback；未來納入 pilot 是一行 allowlist 變更、非規則重寫。
 
 ## Cross-Reference
@@ -320,6 +350,8 @@ v2.9.0 曾隨範例附過一條磁碟預測告警，引用的正是當時沒人�
 - [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) — declarative-only 鐵則。
 - [ADR-017: `_defaults.yaml` 繼承](017-defaults-yaml-inheritance-dual-hash.md) — 閾值的目錄樹繼承（`_custom_alerts` 不走這條，見 §3）。
 - [ADR-020: Tenant Federation](020-tenant-federation.md) — 跨租戶讀路徑隔離（prom-label-proxy）。
+- [ADR-031: SLO burn-rate recipe](031-slo-burn-rate-recipe.md) — 第 7 個 recipe 與燒錯倍數。
+- [ADR-037: config-diff 比較渲染結果](037-config-diff-compares-rendered-output.md) — conf.d 變更的影響範圍報告。
 - [Version-Aware Thresholds 使用攻略](../scenarios/version-aware-thresholds.md) — 租戶宣告 + 平台 KSM 設定的操作面。
 - [config-driven.md §2.x](../design/config-driven.md) — dimensional 閾值與 recipe 的活體規格。
 - [Recipe would-fire 預覽設計](../design/recipe-would-fire-preview.md) — capability B 的 confidence last-mile（#657 P1 設計就緒）。
