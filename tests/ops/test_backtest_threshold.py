@@ -2153,6 +2153,21 @@ class TestRefusedRowsFromTwoTrees:
                 for r in json.loads(out.out)["changes"]]
         assert (rc, rows) == (1, [("mysql_connections", "80", None, "HIGH")]), out.out
 
+    def test_a_non_finite_root_default_under_a_retired_alias_is_high(
+            self, tmp_path, cli_argv, capsys, fake_prom):
+        """根檔仍寫退役別名（`mysql_cpu`，正名 `mysql_threads_running`）：served-values
+        以正名標 `root_default_non_finite`，所以照樣判 HIGH（審查 Finding A）。"""
+        p = fake_prom(values=(60, 80, 90, 100))
+        tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
+        cur, base = _dirs(tmp_path,
+                          {"_defaults.yaml": _CRIT_DEFAULTS + "  mysql_cpu: 80\n", **tenant},
+                          {"_defaults.yaml": _CRIT_DEFAULTS + "  mysql_cpu: .nan\n", **tenant})
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+                for r in json.loads(out.out)["changes"]]
+        assert (rc, rows) == (1, [("mysql_threads_running", "80", None, "HIGH")]), out.out
+
     def test_a_refusal_in_part_of_the_day_is_high_in_that_window(
             self, tmp_path, cli_argv, capsys, fake_prom):
         """排程裡只有夜間時段寫 NaN：那段的 segment 帶 `value_non_finite`，只有那段判 HIGH。"""
