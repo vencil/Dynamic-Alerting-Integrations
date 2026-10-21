@@ -117,6 +117,7 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 		{"gitops.ErrBatchRejected", gitops.ErrBatchRejected},
 		{"gitops.ErrPushFailed", gitops.ErrPushFailed},
 		{"gitops.ErrGitDriverConfigured", gitops.ErrGitDriverConfigured},
+		{"gitops.ErrGitConfigUnreadable", gitops.ErrGitConfigUnreadable},
 		// confd / statestore / platform / context.
 		{"confd.ErrAmbiguousTenantFile", confd.ErrAmbiguousTenantFile},
 		{"confd.ErrNotRegularFile", confd.ErrNotRegularFile},
@@ -143,6 +144,10 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("leavePRBranch(back on base, retry)", fmt.Errorf(
 		"%w: HEAD was PR branch %q; the tree is back on base %q, but this write was prepared on the branch, so nothing was written — retry",
 		gitops.ErrTreeNotOnBase, "da-tenant/tu-b-1", "main"))
+	add("leavePRBranch(back on base, git config unreadable)", fmt.Errorf("on base %q: %w", "main",
+		fmt.Errorf("%w: %v", gitops.ErrGitConfigUnreadable, errors.New("exit status 128"))))
+	add("TreeOnBase(ErrTreeNotOnBase %w GitDriverError)", fmt.Errorf("%w: %w", gitops.ErrTreeNotOnBase,
+		&gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "local", Key: "diff.x.textconv"}}}))
 	add("ErrForgeDegraded fetch timeout", fmt.Errorf("git fetch origin %s timed out after %s: %w", "main", "5s", gitops.ErrForgeDegraded))
 	add("ErrGitTimeout %w DeadlineExceeded", fmt.Errorf("%w: %w", gitops.ErrGitTimeout, context.DeadlineExceeded))
 	add("ErrValidation %w ErrInvalidTenantID", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrInvalidTenantID))
@@ -237,7 +242,7 @@ func goldenEntries() []goldenEntry {
 			return fault(writePutDirectError(w, r, d, goldenTenant, err))
 		}},
 		{"writePRPutError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return written(writePRPutError(w, r, d, err))
+			return written(writePRPutError(w, r, d, goldenTenant, err))
 		}},
 		{"writeCustomAlertsWriteError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
 			return fault(writeCustomAlertsWriteError(w, r, d, goldenTenant, err))
@@ -713,6 +718,10 @@ func kindSample(k errkind.Kind) error {
 		return &gitops.TargetUnreadableError{TenantID: goldenTenant, RelKey: "tu-a.yaml", Reason: cfg.UnreadableReadError}
 	case errkind.TenantGitManaged:
 		return &gitops.GitManagedError{TenantID: goldenTenant, Reason: "tenant_count"}
+	case errkind.TenantConfigNotLoadable:
+		return &tenantFileNotLoadableError{TenantID: goldenTenant, Reason: "malformed_yaml"}
+	case errkind.GitDriverConfigured:
+		return &gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "local", Key: "filter.x.clean"}}}
 	case errkind.PreconditionFailed:
 		return &gitops.PreconditionError{TenantID: goldenTenant}
 	case errkind.BatchCommitted:

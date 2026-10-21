@@ -71,6 +71,9 @@ const (
 	// TenantFileNotRegular: the tenant's conf.d entry is a FIFO, socket or
 	// device (#2477).
 	TenantFileNotRegular Kind = "tenant_file_not_regular"
+	// TenantConfigNotLoadable: the tenant file a partial write would merge
+	// into cannot be loaded as a tenant config (#2373, #3206).
+	TenantConfigNotLoadable Kind = "tenant_config_not_loadable"
 	// AmbiguousTenantFile: more than one conf.d file claims the tenant (#1673).
 	AmbiguousTenantFile Kind = "ambiguous_tenant_file"
 
@@ -101,6 +104,14 @@ const (
 	// WriteCancelled: the write was stopped before anything of it was
 	// committed — its context, or a git command's own deadline (#1535, #3173).
 	WriteCancelled Kind = "write_cancelled"
+	// GitDriverConfigured: the git config tenant-api runs under names a
+	// program git would run on file contents — a filter, diff or merge
+	// driver (#3175). Refused until an operator removes the key.
+	GitDriverConfigured Kind = "git_driver_configured"
+	// GitConfigUnreadable: the git config could not be read to check it for
+	// such a program (#3175, #3226): what cannot be read cannot be shown to
+	// be clean, so nothing runs — but the failure itself may pass.
+	GitConfigUnreadable Kind = "git_config_unreadable"
 	// NoChanges: the write changes nothing. Not a failure: the write entries
 	// answer it as a success with no PR/MR.
 	NoChanges Kind = "no_changes"
@@ -113,6 +124,9 @@ const (
 	ReservedTenantID Kind = "reserved_tenant_id"
 	// MergeFailed: the patch cannot be merged into the tenant file.
 	MergeFailed Kind = "merge_failed"
+	// Forbidden: the caller's permissions do not admit the write of this
+	// tenant (ADR-027) — a batch op's per-op gate.
+	Forbidden Kind = "forbidden"
 	// BadRequest: a refusal about the request that the entry answering it has
 	// no more specific answer for.
 	BadRequest Kind = "bad_request"
@@ -142,6 +156,24 @@ const (
 	// FederationMintRateLimited: the tenant mints federation tokens faster
 	// than the mint rate limit allows.
 	FederationMintRateLimited Kind = "federation_mint_rate_limited"
+
+	// FederationNotConfigured: logs federation (the account registry) is not
+	// configured on this server — a deployment setting, not a passing state.
+	FederationNotConfigured Kind = "federation_not_configured"
+
+	// RouteNotFound: no route matches the request's path (#3226).
+	RouteNotFound Kind = "route_not_found"
+	// MethodNotAllowed: a route matches the path, but not the method.
+	MethodNotAllowed Kind = "method_not_allowed"
+	// RequestTimeout: the request reached the server's per-request deadline
+	// before its handler answered.
+	RequestTimeout Kind = "request_timeout"
+	// StreamUnsupported: the event stream cannot be served — the response
+	// writer cannot flush.
+	StreamUnsupported Kind = "stream_unsupported"
+	// ServerShuttingDown: the server is shutting down and admits no new
+	// event stream.
+	ServerShuttingDown Kind = "server_shutting_down"
 
 	// Internal: a failure that is the server's and that no other kind names.
 	Internal Kind = "internal"

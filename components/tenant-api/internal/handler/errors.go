@@ -32,7 +32,6 @@ package handler
 // sites.
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -259,6 +258,12 @@ const (
 	// generator's deployment policy file is unusable (generator's own
 	// POLICY_UNAVAILABLE, passed through).
 	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
+	// CodeGitDriverConfigured marks the 500 of a write or preview refused
+	// because the git config tenant-api runs under names a filter, diff or
+	// merge driver program (#3175, #3226). Retrying does not help: an
+	// operator must remove the key. The text is fixed (msgGitDriverConfigured);
+	// the scope and key are in the server log only.
+	CodeGitDriverConfigured = "GIT_DRIVER_CONFIGURED"
 )
 
 // notRegularText is the text of a TENANT_CONFIG_NOT_LOADABLE refusal of a
@@ -269,6 +274,12 @@ func notRegularText(tenantID string) string {
 		string(confd.ProblemNotRegularFile) + "), so tenant-api neither reads nor replaces it; " +
 		"replace it with a regular file in git"
 }
+
+// msgTenantFileNotRegular is notRegularText for an answer that names no
+// tenant (a batch's whole-request answer, #3226).
+const msgTenantFileNotRegular = "a tenant's conf.d file is not a regular file (config_error: " +
+	string(confd.ProblemNotRegularFile) + "), so tenant-api neither reads nor replaces it; " +
+	"replace it with a regular file in git"
 
 // writeTenantFileNotRegular answers a request about a tenant whose conf.d
 // entry is not a regular file (confd.ErrNotRegularFile, #2477). Same code and
@@ -449,24 +460,32 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 // /effective this way; that handler now sends it as text via
 // config.NonFiniteAsText) produced `200` with an empty body: a success a
 // client cannot parse, and nothing in the logs. Now such a value is a 500 error
-// envelope naming the encode error. The bytes of every value that encodes are
-// unchanged (same Encoder, same trailing newline).
+// envelope naming the encode error.
+//
+// The body is json.Marshal's output plus the newline json.Encoder.Encode
+// ends with: the same bytes Encode wrote (Marshal escapes HTML as an Encoder
+// does by default; TestWriteJSON_BytesAsEncoderWrote pins it). Marshal, not
+// an Encoder (#3226): its output is a JSON document by construction, which
+// CodeQL's go/reflected-xss model knows (a JSON marshaler is a sanitizer),
+// while it cannot follow an Encoder writing into a buffer — so request text
+// in an envelope reached every ResponseWriter wrapper's Write (the
+// middleware's in http_exits.go) as if it were unescaped markup.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+	body, err := json.Marshal(v)
+	if err != nil {
 		slog.Error("response encode failed", "status", status, "error", err)
-		buf.Reset()
 		// Only the two string fields are set, so this encode cannot fail;
 		// the discard keeps writeJSON free of recursion.
-		_ = json.NewEncoder(&buf).Encode(ErrorResponse{
+		body, _ = json.Marshal(ErrorResponse{
 			Error: "response encode failed: " + err.Error(),
 			Code:  CodeInternal,
 		})
 		status = http.StatusInternalServerError
 	}
+	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(body)
 }
 
 // WriteErrorEnvelope is the canonical error response writer. All
@@ -511,12 +530,18 @@ const msgInternal = "internal error; the server log has the details under this r
 // Adding one here is a decision that the text can never carry server state.
 var publicInternalMessages = map[string]bool{
 	msgInternal:                true,
+	msgStreamingUnsupported:    true,
 	msgTenantTreeScan:          true,
 	msgRootPlatformRead:        true,
 	msgEffectiveUnresolved:     true,
 	msgCustomAlertsUnparseable: true,
 	msgWriteFailed:             true,
 }
+
+// msgStreamingUnsupported is ws.ErrStreamingUnsupported's text, the 500 of
+// an event stream the response writer cannot flush (#3226): it names the
+// failed operation and nothing of the server.
+const msgStreamingUnsupported = "streaming not supported"
 
 // msgWriteFailed is the client-facing text of a tenant write that failed for a
 // reason that is not the client's (#1700); the request_id finds the full text.
@@ -958,35 +983,40 @@ func generatorRejectsBatch(err error) bool {
 // stored results, only counted. ok is false when err is not the
 // generator's.
 func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
-	var (
-		found *generator.FindingsError
-		rej   *generator.RejectedError
-		unav  *generator.UnavailableError
-	)
-	switch {
-	case errors.As(err, &found):
+	k, ok := firstKind(err, kindsGenerator)
+	if !ok {
+		return BatchResult{}, false
+	}
+	var msg string
+	switch k {
+	case errkind.GeneratorFindings:
+		var found *generator.FindingsError
+		errors.As(err, &found)
 		var mine []string
 		for _, f := range found.Findings {
 			if f.Tenant != nil && *f.Tenant == tenantID {
 				mine = append(mine, f.Message)
 			}
 		}
-		msg := fmt.Sprintf("the route generator refuses the configuration this batch would produce; nothing was written "+
+		msg = fmt.Sprintf("the route generator refuses the configuration this batch would produce; nothing was written "+
 			"(%d finding(s) in all, %d naming this tenant)", len(found.Findings), len(mine))
 		if len(mine) > 0 {
 			msg += ": " + strings.Join(mine, "; ")
 		}
-		return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: CodeGeneratorFindings}, true
-	case errors.As(err, &rej):
+	case errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected:
+		var rej *generator.RejectedError
+		errors.As(err, &rej)
 		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID, "reason", rej.Reason, "error", err)
-		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorRejectedText(rej), Code: CodeGeneratorRejected}, true
-	case errors.As(err, &unav):
+		msg = generatorRejectedText(rej)
+	default: // ValidatorUnavailable, PolicyUnavailable
+		var unav *generator.UnavailableError
+		errors.As(err, &unav)
 		// The message is the log's only (generatorUnavailableText); an async
 		// task's results have no other path to it.
 		slog.Error("batch op refused: the generator container cannot judge", "tenant", tenantID, "code", unav.Code, "reason", unav.Reason, "error", err)
-		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorUnavailableText(unav), Code: unav.Code}, true
+		msg = generatorUnavailableText(unav)
 	}
-	return BatchResult{}, false
+	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: kindSpecOf(k).Code}, true
 }
 
 // generatorBatchFindings is the batch-level findings of a GENERATOR_FINDINGS

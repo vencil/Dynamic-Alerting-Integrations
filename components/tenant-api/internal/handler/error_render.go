@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -100,16 +100,32 @@ func writeErr(w http.ResponseWriter, r *http.Request, d *Deps, err error, ec err
 	}
 	spec := kindSpecOf(k)
 	text, extra := renderKind(k, r, d, err, ec)
-	env := ErrorResponse{Error: text, Code: spec.Code, Extra: extra}
-	if s := retryAfterS(spec, err); s > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(s))
-		env.RetryAfterS = s
+	writeKindAnswer(w, r, spec, retryAfterS(spec, err), ErrorResponse{Error: text, Extra: extra})
+	return true, spec.Fault
+}
+
+// writeKindAnswer writes spec's answer: env with spec's code, retryAfter
+// (> 0) as both the Retry-After header and retry_after_s, spec's status.
+// A Fault kind marks the write attempt (markWriteFault).
+func writeKindAnswer(w http.ResponseWriter, r *http.Request, spec KindSpec, retryAfter int, env ErrorResponse) {
+	env.Code = spec.Code
+	if retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		env.RetryAfterS = retryAfter
 	}
 	if spec.Fault {
 		markWriteFault(w)
 	}
 	WriteErrorEnvelope(w, r, spec.Status, env)
-	return true, spec.Fault
+}
+
+// WriteKind answers kind k with text: kindTable's status, code and
+// Retry-After (#3226). For an answer that has no error to render — a
+// deployment setting (errkind.FederationNotConfigured), the router's own
+// refusals — where WriteKindError renders one.
+func WriteKind(w http.ResponseWriter, r *http.Request, k errkind.Kind, text string) {
+	spec := kindSpecOf(k)
+	writeKindAnswer(w, r, spec, spec.RetryAfterS, ErrorResponse{Error: text})
 }
 
 // retryAfterS is spec's Retry-After in seconds, or err's own wait when it
@@ -171,11 +187,9 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:
 		var te *gitops.TreeUnreadableError
 		errors.As(err, &te)
-		var id string
-		if r != nil {
-			id = chi.URLParam(r, "id")
-		}
-		logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", id, err)
+		// The request's own tenant (errCtx.tenantID) only: a route's {id} is
+		// not always a tenant (POST /groups/{id}/batch names a group).
+		logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", ec.tenantID, err)
 		visible := d != nil && r != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
 		extra := map[string]any{"unreadable_count": len(te.Entries)}
 		if visible {
@@ -204,6 +218,19 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.TenantFileDirty:
 		slog.Warn("tenant write refused: tenant file differs from HEAD", "error", err)
 		return msgTenantFileDirty, nil
+	case errkind.TenantFileNotRegular:
+		// The early refusal's text and fields (writeTenantFileNotRegular)
+		// when the entry writes one tenant it names (errCtx.tenantID). Never
+		// the route's {id}: on POST /groups/{id}/batch that is a group id.
+		// Without one — a batch — a fixed text naming no tenant, not the
+		// error's own ("op ctx: confd: not a regular file: …").
+		slog.Warn("tenant write refused: a tenant file is not a regular file", "tenant", ec.tenantID, "error", err)
+		extra := map[string]any{"config_error": string(confd.ProblemNotRegularFile)}
+		if ec.tenantID == "" {
+			return msgTenantFileNotRegular, extra
+		}
+		extra["tenant_id"] = ec.tenantID
+		return notRegularText(ec.tenantID), extra
 
 	case errkind.PreconditionFailed:
 		var pre *gitops.PreconditionError
@@ -255,6 +282,15 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		return msgWriteOutcomeUnknown, nil
 	case errkind.WriteCancelled:
 		return msgWriteCancelled, nil
+	case errkind.GitDriverConfigured:
+		// #3175: the server's git config, not the request: fixed text, the
+		// scope and key in the log.
+		slog.Error("write refused: git config names a driver program (#3175)", "request_id", requestIDOf(r), "error", err)
+		return msgGitDriverConfigured, nil
+	case errkind.GitConfigUnreadable:
+		slog.Error("write refused: the git config could not be read to check it for driver programs (#3175)",
+			"request_id", requestIDOf(r), "error", err)
+		return msgGitConfigUnreadable, nil
 
 	case errkind.StateConflict:
 		// The state texts are fixed: err names the ConfigMap and its byte

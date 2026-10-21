@@ -116,6 +116,24 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 | `CONFIG_DECODE_ERROR` | 500 | conf.d 設定內容解碼失敗：`/effective` 的 `parse defaults[i]: …`、custom-alerts 寫入時租戶檔內容無法 merge／解析、state store 的 `_groups.yaml`／`_views.yaml` 紀錄無法解析；文字說明哪個項目出錯，不含路徑 |
 | `BASE_RESTORE_FAILED` | 500 | PR 模式寫入後 worktree 回不到 base：列出分支名與是否已推上 origin（不要重試，否則會再推一條分支）；不含底層 git 錯誤 |
 
+### 2.5 路由與中介層的錯誤回應也改為 JSON 信封、由錯誤種類表決定（[#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226)）
+
+本節所列的出口，status、`code`、`Retry-After` 標頭與 `retry_after_s` 改由錯誤種類表決定（寫入路徑原本就是）；並非每個端點都已如此——仍有 handler 經 `WriteJSONError` 由 status 推出 `code`。以下原本不是 JSON 信封，或沒有 `code`，現在都是（`request_id` 照帶）：
+
+| 情況 | 現在的回應 | 原本 |
+|---|---|---|
+| 沒有符合的路由 | 404 `NOT_FOUND` | 純文字 `404 page not found` |
+| 路由存在但方法不對 | 405 `BAD_REQUEST`，`Allow` 標頭照舊列出可用方法 | 空 body 的 405 |
+| 超過每個請求的期限（預設 30 秒）而 handler 沒回應 | 504 `UPSTREAM_ERROR`，**不帶** `Retry-After`：handler 沒有回應，寫入是否生效不明，重送前先讀一次 | 空 body 的 504 |
+| handler panic | 還沒回應時：500 `INTERNAL_ERROR`（固定文字，`request_id` 對得到帶 stack 的 log）；回應已開始寫出時：中斷連線，client 讀取會失敗，不會把截斷的回應當成完整 | 空 body 的 500；已開始寫出的回應照樣正常結束 |
+| `GET /api/v1/events` 在關機中 | 503 `UPSTREAM_ERROR`，`Retry-After: 1`（重連到新的 pod） | 純文字 503 |
+| `GET /api/v1/events` 的 writer 不能 flush | 500 `INTERNAL_ERROR`，文字 `streaming not supported` | 純文字 500 |
+| logs federation 未設定（`POST /federation/tokens` 的 `logs` capability、`POST /federation/accounts/backfill`） | 503 `UPSTREAM_ERROR`，不帶 `Retry-After`：是部署設定，重試不會變 | 同（改由種類表決定） |
+
+**批次的逐筆結果**（`results[].code`，含非同步 task 的結果）：`status` 為 `error` 的每一筆都帶 `code`，與同一失敗作為整個請求回應時的 `code` 相同；原本只有少數類別有，其餘是空字串。例如過載是 `WRITE_OVERLOADED`、conflict 是 `CONFLICT`、取消或結果未知是 `UPSTREAM_ERROR`、驗證與 tenant id 錯誤是 `BAD_REQUEST`、沒有權限是 `FORBIDDEN`。同時：base 同步逾時（`FORGE_UNAVAILABLE`）不再當成內部錯誤；批次已 commit 但沒乾淨收尾時，逐筆文字改為「已 commit」那一句，不再是「conflict, retry」；多重包裝的錯誤依同一個順序判斷，逐筆結果與同步回應一致。
+
+**租戶檔不是一般檔案**（FIFO、socket、device）：所有寫入入口一律 409 `TENANT_CONFIG_NOT_LOADABLE`，與 handler 提早拒絕同一個檔時相同（`config_error: not_regular_file`；單一租戶的寫入另帶 `tenant_id`，批次的整體回應不帶租戶、文字固定）；原本寫入途中才發現時，直寫回 400 `BAD_REQUEST`、PR 模式與批次回 500。
+
 ---
 
 ## 3. Tenant-Scoped Authorization
@@ -322,7 +340,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **hooks 照常支援**：conf repo 的 client-side hooks（`pre-commit`、`commit-msg`、`post-commit`、`pre-push`、`reference-transaction`、`post-checkout`、`post-index-change`）照舊在 tenant-api 自己的 git 指令中執行。信任模型不同：hook 放在 `.git/hooks`（或 `core.hooksPath` 指的目錄），只有能改 tenant-api 那份 repo 的檔案系統或 git 設定的人才放得進去，commit 內容選不了要跑哪個 hook，也不會因預覽而執行。代價也一樣要知道：hook 以 tenant-api 的身分、在寫入鎖之下執行，受 `TENANT_API_GIT_TIMEOUT` 約束；直寫單檔以 `commit-tree` 建 commit，不跑 `pre-commit`／`commit-msg`（§3.9）。
 - **條件式 include**：`includeIf "onbranch:…"` 依 HEAD 指的分支、`includeIf "gitdir:…"` 依 repo 目錄決定是否生效，所以結果取決於檢查時的情境。寫入鎖下的那次檢查，查的是拿鎖當下 HEAD 所在的分支——不一定是 base（上一筆 PR 寫入回不了 base 而留下的分支、operator 自己 checkout 的分支）。因此每次切換分支之後、git 在新情境下碰檔之前，都在新情境再查一次：切回 base 之後（PR 寫入與批次錨定 base、PR 寫入結束或中止時回 base、直寫從殘留的 PR 分支回 base）；PR 寫入切到 feature 分支後、寫檔與 `git add` 之前；批次在 staging worktree 以 `worktree add --no-checkout` 建好之後、填 index 與 checkout 之前（linked worktree 有自己的 git 目錄，PR 批次還有自己的分支）。在 feature 分支被拒時，HEAD 先指回 base 再還原工作樹，不在 feature 分支的設定下碰檔，分支與 worktree 都清掉；在 base 被拒時，工作樹留在 base（切過去的那次 checkout 跑在原分支、已查過的設定下），不再跑任何碰檔的 git，下一筆寫入在寫入鎖下就會被拒（PR 寫入在 commit 之後回 base 才查到的，該筆照常完成：分支已 commit、可能已 push，剩下的步驟不碰檔）。
 - **偵測本身不執行任何程式**：以 `git config --show-scope --get-regexp` 讀設定（與 tenant-api 平常跑 git 同一個環境、同一個 repo），這個指令只讀設定檔，不跑 driver 也不跑 fsmonitor。
-- **回應**：啟動時直接結束，`FATAL:` 訊息列出每個鍵的 scope 與鍵名（例如 `local filter.lfs.clean, command diff.x.textconv`），**不印值**——值是一段指令，可能含路徑或憑證。執行中被拒的寫入（`PUT`、custom-alerts、批次、PR 模式）回 500 `INTERNAL_ERROR`，訊息固定、帶 `request_id`，scope 與鍵名只進 server log；async 批次的 task 每一筆都是 `INTERNAL_ERROR`；`/diff` 同樣回 500；`/validate` 回 `valid: false` 與固定訊息（PR 模式的 `/validate` 只做不讀樹的 body 檢查、不跑 git，不會因此被拒）；PR 模式的租戶列表不推算依設定的狀態（`config_derived` 帶原因，只有不受範圍限制的讀者看得到 scope 與鍵名，與其他載入錯誤相同）。啟動與寫入時，設定讀不出來（設定檔格式錯、repo 目錄不存在）也一樣拒絕：讀不到就無從證明沒有；預覽遇到這種情況則與 git 失敗時相同，略過與 HEAD 的一致性檢查、不跑 `git status`。重試不會成功。
+- **回應**：啟動時直接結束，`FATAL:` 訊息列出每個鍵的 scope 與鍵名（例如 `local filter.lfs.clean, command diff.x.textconv`），**不印值**——值是一段指令，可能含路徑或憑證。執行中被拒的寫入（`PUT`、custom-alerts、批次、PR 模式）回 500 `GIT_DRIVER_CONFIGURED`（[#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226) 起；原本是 `INTERNAL_ERROR`），訊息固定、帶 `request_id`、不帶 `Retry-After`，scope 與鍵名只進 server log；async 批次的 task 每一筆都是 `GIT_DRIVER_CONFIGURED`；`/diff` 同樣回 500；`/validate` 回 `valid: false` 與固定訊息（PR 模式的 `/validate` 只做不讀樹的 body 檢查、不跑 git，不會因此被拒）；PR 模式的租戶列表不推算依設定的狀態（`config_derived` 帶原因，只有不受範圍限制的讀者看得到 scope 與鍵名，與其他載入錯誤相同）。設定有 driver 時重試不會成功。設定讀不出來（git 失敗或逾時、設定檔或其 include 格式錯、repo 目錄不存在）也一樣拒絕——讀不到就無從證明沒有——但那不代表有 driver，答案分開（#3226）：啟動時 `FATAL:` 訊息說的是「讀不到設定」；寫入回 503 `UPSTREAM_ERROR`、`Retry-After: 5`，訊息固定，下一次寫入會在寫入鎖下重讀（問題持續就持續 503）；PR 寫入 commit 之後回到 base 才讀不到的，該筆照常完成（tree 已在 base，之後每個會碰檔的 git 前都會再查）。預覽遇到這種情況則與 git 失敗時相同，略過與 HEAD 的一致性檢查、不跑 `git status`。
 - **怎麼修**：在 tenant-api 的容器裡（同一個使用者與環境）跑 `git -C <conf repo> config --show-scope --show-origin --get-regexp '^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|merge\..+\.driver)$'`，依 scope 與來源檔把那些鍵刪掉（`git config --unset`，或改 global／system 設定檔、移除注入的 `GIT_CONFIG_*` 環境變數），再重啟 tenant-api。
 
 ---

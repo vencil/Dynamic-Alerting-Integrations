@@ -130,8 +130,14 @@ func TestCheckGitDrivers_RefusesUnreadableConfig(t *testing.T) {
 	}
 	_, _ = f.WriteString("[[[ not a config line\n")
 	_ = f.Close()
-	if err := newTestWriter(repo, repo).CheckGitDrivers(); !errors.Is(err, ErrGitDriverConfigured) {
-		t.Fatalf("CheckGitDrivers() = %v, want ErrGitDriverConfigured", err)
+	err = newTestWriter(repo, repo).CheckGitDrivers()
+	if !errors.Is(err, ErrGitConfigUnreadable) {
+		t.Fatalf("CheckGitDrivers() = %v, want ErrGitConfigUnreadable", err)
+	}
+	// #3226: not the driver refusal — nothing says a driver is configured.
+	var de *GitDriverError
+	if errors.Is(err, ErrGitDriverConfigured) || errors.As(err, &de) {
+		t.Errorf("CheckGitDrivers() = %v, which says a driver is configured", err)
 	}
 }
 
@@ -610,5 +616,107 @@ func TestWritePR_DriverOnBaseFoundOnReturnIsNotRetried(t *testing.T) {
 	}
 	if ran := ranPrograms(t, mark); len(ran) > 0 {
 		t.Errorf("the driver programs ran: %v", ran)
+	}
+}
+
+// unreadableOnMain makes the git config git reads on base (onbranch:main)
+// unreadable — an include it cannot parse — while every other branch's
+// stays readable: the check on base fails to read it (exit 128), while the
+// commands that move HEAD there, which read their config before the move,
+// run. It returns the include, to make readable again.
+func unreadableOnMain(t *testing.T, repo string) string {
+	t.Helper()
+	bad := filepath.Join(t.TempDir(), "bad.gitconfig")
+	if err := os.WriteFile(bad, []byte("[[[ not a config line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "config", "includeIf.onbranch:main.path", bad)
+	return bad
+}
+
+// #3226: the return to base (restoreBase) whose check after the move cannot
+// read base's config. The check is checkoutBaseClean's last step, so the
+// tree IS on base, and the branch is committed and pushed: the write
+// completes, as for a driver found there (failing it would make a client
+// retry a pushed write), the return is not retried (its reset would run
+// under a config not shown clean), and the next write checks again under
+// the lock — refused as unreadable, never as a configured driver.
+func TestWritePR_UnreadableConfigOnBaseFoundOnReturnIsNotRetried(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	repo := seedTreeRepo(t, map[string]string{"t1.yaml": tenantBody("t1")})
+	w := newTestWriter(repo, repo)
+	attempts := 0
+	var bad string
+	w.beforeBaseRestore = func(int) {
+		attempts++
+		bad = unreadableOnMain(t, repo)
+	}
+
+	res, err := w.WritePR(context.Background(), "t1", "op@example.com", silentBody("t1", "critical"))
+	if err != nil {
+		t.Fatalf("WritePR = %v, want success", err)
+	}
+	if attempts != 1 {
+		t.Errorf("the return to base ran %d times, want 1", attempts)
+	}
+	err = writeVia(t, "WritePR", w, "t1")
+	if !errors.Is(err, ErrGitConfigUnreadable) {
+		t.Errorf("next WritePR = %v, want ErrGitConfigUnreadable", err)
+	}
+	if errors.Is(err, ErrGitDriverConfigured) {
+		t.Errorf("next WritePR = %v, which says a driver is configured", err)
+	}
+
+	// Readable again, for the checks below.
+	if err := os.WriteFile(bad, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOut(t, repo, "symbolic-ref", "--short", "HEAD"); got != "main" {
+		t.Errorf("HEAD is %q, want main", got)
+	}
+	// Step 8's `branch -D` runs under the same unreadable config and fails
+	// (logged): the pushed branch stays as a local ref, which no reader
+	// looks at and the next write's branch does not reuse.
+	if got := gitOut(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"); got != "main\n"+res.BranchName {
+		t.Errorf("branches = %q, want main and the pushed %s", got, res.BranchName)
+	}
+}
+
+// #3226: a direct write that finds the tree on a stranded PR branch returns
+// it to base (leavePRBranch) and meets a config it cannot read there. The
+// answer is that refusal — retryable, the retry's check under the lock
+// reads the config again — not ErrTreeNotOnBase (the tree is on base) and
+// not the configured-driver refusal (nothing says one is). Nothing is
+// written.
+func TestWrite_StrandedPRBranchReturnMeetsUnreadableConfig(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	repo := seedTreeRepo(t, map[string]string{"t1.yaml": tenantBody("t1")})
+	mainHead := gitOut(t, repo, "rev-parse", "main")
+	stranded := "tenant-api/t1/20260101-000000-0000"
+	gitRun(t, repo, "checkout", "-q", "-b", stranded)
+	bad := unreadableOnMain(t, repo)
+	w := newTestWriter(repo, repo)
+	if err := w.CheckGitDrivers(); err != nil {
+		t.Fatalf("fixture: the check on %s already fails: %v", stranded, err)
+	}
+
+	err := writeVia(t, "Write", w, "t1")
+	if !errors.Is(err, ErrGitConfigUnreadable) {
+		t.Fatalf("Write = %v, want ErrGitConfigUnreadable", err)
+	}
+	if errors.Is(err, ErrTreeNotOnBase) || errors.Is(err, ErrGitDriverConfigured) {
+		t.Errorf("Write = %v, want the unreadable refusal alone", err)
+	}
+
+	if err := os.WriteFile(bad, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOut(t, repo, "symbolic-ref", "--short", "HEAD"); got != "main" {
+		t.Errorf("HEAD is %q, want main", got)
+	}
+	if got := gitOut(t, repo, "rev-parse", "main"); got != mainHead {
+		t.Errorf("main moved from %s to %s", mainHead, got)
 	}
 }

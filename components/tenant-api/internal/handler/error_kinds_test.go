@@ -1,15 +1,21 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // errkindConstants parses internal/errkind for every constant of type Kind:
@@ -101,8 +107,10 @@ func TestKindTable_CoversEveryKindOnce(t *testing.T) {
 			t.Errorf("kindRules row %q matches nothing", rl.Kind)
 		}
 	}
-	// The kinds no error is: an entry's fallback picks them.
-	for _, k := range []errkind.Kind{errkind.BadRequest, errkind.Internal, errkind.ForgeCreateFailed} {
+	// The kinds no error is: an entry's fallback, or the entry itself
+	// (a batch op's permission gate), picks them.
+	for _, k := range []errkind.Kind{errkind.BadRequest, errkind.Internal, errkind.ForgeCreateFailed, errkind.Forbidden,
+		errkind.FederationNotConfigured, errkind.RouteNotFound, errkind.MethodNotAllowed, errkind.RequestTimeout} {
 		if ruled[k] {
 			t.Errorf("fallback kind %q has a kindRules row", k)
 		}
@@ -158,5 +166,74 @@ func TestKindSpecs_IsACopy(t *testing.T) {
 	specs[0].Status = 0
 	if kindTable[0].Status == 0 {
 		t.Fatal("KindSpecs returned the table itself")
+	}
+}
+
+// TestBatchProjections_CodeIsTheTableAnswer (#3226): a batch op's "error"
+// result always carries a code, and it is kindTable's code for the kind the
+// result is answered as — the projection reads the table, never a code of
+// its own — for every error of the golden corpus.
+func TestBatchProjections_CodeIsTheTableAnswer(t *testing.T) {
+	t.Parallel()
+	// An error about the request keeps its own answer in a batch: every
+	// ClientError kind an error can be is one a per-op result names, never
+	// the INTERNAL_ERROR fallback.
+	for _, rl := range kindRules {
+		if kindSpecOf(rl.Kind).ClientError && !kindsBatchOp[rl.Kind] {
+			t.Errorf("client-error kind %q is not in kindsBatchOp: a batch op would answer it as INTERNAL_ERROR", rl.Kind)
+		}
+	}
+	for _, ge := range errorGoldenCorpus("0123456789abcdef") {
+		for _, err := range []error{ge.err, ge.wrapped} {
+			if err == nil {
+				continue
+			}
+			want := kindSpecOf(batchOpKind(err)).Code
+			if got := batchErrorResult(goldenTenant, err, false); got.Code == "" || got.Code != want {
+				t.Errorf("batchErrorResult(%s) code = %q, want kindTable's %q", ge.name, got.Code, want)
+			}
+			if got := freshBaseOpResult(goldenTenant, err, false); got.Code == "" {
+				t.Errorf("freshBaseOpResult(%s) has no code", ge.name)
+			}
+			if res, ok := generatorOpResult(goldenTenant, err); ok && res.Code == "" {
+				t.Errorf("generatorOpResult(%s) has no code", ge.name)
+			}
+		}
+	}
+}
+
+// #3226 review: a batch's whole-request answer for a tenant file that is
+// not a regular file names no tenant — never the route's {id}, which on
+// POST /groups/{id}/batch is a group id — and shows a fixed text, not the
+// error's own ("op ctx: confd: not a regular file: …").
+func TestNotRegularFile_BatchAnswerNamesNoTenant(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("op ctx: %w", fmt.Errorf("%w: t-a.yaml", confd.ErrNotRegularFile))
+	for name, write := range map[string]func(http.ResponseWriter, *http.Request){
+		"writeBatchFailure": func(w http.ResponseWriter, r *http.Request) { writeBatchFailure(w, r, &Deps{}, err) },
+		"writePRBatchError": func(w http.ResponseWriter, r *http.Request) { writePRBatchError(w, r, &Deps{}, err) },
+	} {
+		w := httptest.NewRecorder()
+		write(w, newRequestWithChiParam("POST", "/api/v1/groups/team-payments/batch", "id", "team-payments", nil))
+		if w.Code != http.StatusConflict {
+			t.Fatalf("%s: status %d, want 409; body %s", name, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if jerr := json.Unmarshal(w.Body.Bytes(), &body); jerr != nil {
+			t.Fatal(jerr)
+		}
+		if _, ok := body["tenant_id"]; ok || body["error"] != msgTenantFileNotRegular || body["code"] != CodeTenantConfigNotLoadable {
+			t.Errorf("%s: body %s, want %s with msgTenantFileNotRegular and no tenant_id", name, w.Body.String(), CodeTenantConfigNotLoadable)
+		}
+	}
+}
+
+// #3226 review: a dry-run refused because the git config could not be read
+// says so, with the write's fixed text — not the resolver's catch-all.
+func TestDryRunRefusalMessage_GitConfigUnreadable(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w: exit status 128", gitops.ErrGitConfigUnreadable)
+	if got := dryRunRefusalMessage(err, false); got != msgGitConfigUnreadable {
+		t.Errorf("dryRunRefusalMessage = %q, want msgGitConfigUnreadable", got)
 	}
 }

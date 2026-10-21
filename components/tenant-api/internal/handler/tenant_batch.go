@@ -66,18 +66,24 @@ type BatchResult struct {
 	// not exist"); nothing is written for it, and it does not fail the batch.
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
-	// Code is a machine-readable error code for a FAILED op, set only for the
-	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,
-	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-	// config, #2373), TENANT_GIT_MANAGED (the op's tenant is git-managed, #3064:
-	// nothing written, change it in git), INTERNAL_ERROR (the conf.d walk behind
-	// that check could not
-	// run, or another server-side failure), the route generator's codes
-	// (GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,
-	// POLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —
-	// FORBIDDEN (write scope) and CONFIG_DECODE_ERROR (the base's
-	// _tenant_orgs.yaml cannot be read). Empty for every other failure and for an
-	// op that was not refused.
+	// Code is the machine-readable error code of a FAILED op ("error"), set on
+	// every one (#3226) and empty for every other status. It is the code the
+	// same failure gets as a whole-request error envelope (the error kind
+	// table): the op's own refusals — BAD_REQUEST (invalid or reserved
+	// tenant id, validation, merge), FORBIDDEN (write permission or metadata
+	// scope, ADR-027), TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE
+	// (the tenant file cannot be loaded as a tenant config or is not a
+	// regular file, #2373), TENANT_GIT_MANAGED (#3064), TENANT_FILE_DIRTY,
+	// TENANT_TREE_UNREADABLE, CONFLICT (two files claim the tenant) — and
+	// the failures of the batch as a whole, which every op reports:
+	// CONFLICT (the serving branch moved, or the batch IS committed but did
+	// not finish cleanly), WRITE_OVERLOADED, TREE_NOT_ON_BASE,
+	// FORGE_UNAVAILABLE, UPSTREAM_ERROR (cancelled, outcome unknown, the git
+	// config unreadable), GIT_DRIVER_CONFIGURED (#3175), TENANT_STORE_FAULT,
+	// INTERNAL_ERROR, the route generator's codes (GENERATOR_FINDINGS,
+	// GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE, POLICY_UNAVAILABLE; #2903),
+	// and — PR mode, judged on the latest base branch — FORBIDDEN and
+	// CONFIG_DECODE_ERROR (the base's _tenant_orgs.yaml cannot be read).
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// (#1231 deprecated-key alias notices from the direct write path).
@@ -292,12 +298,12 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	var skipped []skippedOp
 	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
-			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
+			batchResults = append(batchResults, gateRefusal(op.TenantID, errkind.InvalidTenantID, err.Error()))
 			continue
 		}
 		gatePre := writeGate{scopePairOf(metaOf, op.TenantID), gateOrgs(d, op.TenantID)}
 		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(gatePre.pair)) {
-			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
+			batchResults = append(batchResults, gateRefusal(op.TenantID, errkind.Forbidden, "insufficient permissions"))
 			continue
 		}
 		gatePost := writeGate{scopePairOf(postStateScopeMeta(d.ConfigDir, included[op.TenantID], op), op.TenantID), gatePre.orgs}
@@ -676,33 +682,17 @@ func batchRunResult(run directBatchRun) (writeResult, bool) {
 }
 
 // batchFailureResult is the result of the status writeBatchFailure answers
-// err with; TestBatchFailureResult_MatchesTheSyncAnswer holds the two
-// together. 409 — the serving branch moved (gitops.ErrConflict), two files
-// claim the tenant, another file declares it, an unresolvable link in the
-// tree, the tenant's own file unreadable — is conflict; an invalid tenant id
-// (400) is not counted; everything else (busy, cancelled, store fault, git) is
-// error.
+// err with — kindTable's status for the same kind (kindsBatchFailure, else
+// errkind.Internal) — counted as writeResultOfStatus counts it: 409 is
+// conflict, 429 and 5xx error, and another 4xx (an invalid tenant id, a
+// generator refusal the caller answers as a rejected batch) is not counted.
+// TestBatchFailureResult_MatchesTheSyncAnswer holds the two together.
 func batchFailureResult(err error) (writeResult, bool) {
-	var (
-		tree   *gitops.TreeUnreadableError
-		target *gitops.TargetUnreadableError
-	)
-	switch {
-	case errors.As(err, &tree):
-		if _, _, status := treeRefusal(tree); status == http.StatusConflict {
-			return writeResultConflict, true
-		}
-		return writeResultError, true
-	case errors.As(err, &target),
-		errors.Is(err, gitops.ErrTenantDeclaredElsewhere),
-		errors.Is(err, gitops.ErrTenantFileDirty),
-		errors.Is(err, confd.ErrAmbiguousTenantFile),
-		errors.Is(err, gitops.ErrConflict):
-		return writeResultConflict, true
-	case errors.Is(err, gitops.ErrInvalidTenantID):
-		return 0, false
+	k, ok := firstKind(err, kindsBatchFailure)
+	if !ok {
+		k = errkind.Internal
 	}
-	return writeResultError, true
+	return writeResultOfStatus(kindSpecOf(k).Status)
 }
 
 // batchResultsUse says who reads a direct-mode batch's results (see
@@ -838,116 +828,148 @@ func applyPatch(ctx context.Context, w *gitops.Writer, _ string, op BatchOperati
 
 // batchErrorResult renders a write error as the "error" result of op
 // tenantID: a refusal of that op (gitops.BatchRejectedError's outcomes), or a
-// failure of the whole batch, which every op of it then reports. treeVisible
-// (treePathsVisible) decides whether a TENANT_TREE_UNREADABLE result names
-// the entries; the log always does.
+// failure of the whole batch, which every op of it then reports. Its code is
+// kindTable's for the first kind of kindRules err is among kindsBatchOp —
+// the order and the codes the sync answers use (#3226) — else INTERNAL_ERROR
+// with msgBatchOpFailed. It is never empty. treeVisible (treePathsVisible) decides whether a
+// TENANT_TREE_UNREADABLE result names the entries; the log always does.
 func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult {
-	// #2903: the generator refused the batch as a whole.
-	if res, ok := generatorOpResult(tenantID, err); ok {
-		return res
+	k := batchOpKind(err)
+	return BatchResult{TenantID: tenantID, Status: "error", Message: batchOpText(k, tenantID, err, treeVisible), Code: kindSpecOf(k).Code}
+}
+
+// batchOpKind is the kind a batch op's "error" result answers err as: the
+// first of kindsBatchOp, else errkind.Internal. kindsBatchOp holds every
+// kind that is about the request (KindSpec.ClientError;
+// TestBatchProjections_CodeIsTheTableAnswer), so the request's own error is
+// never answered as the server's.
+func batchOpKind(err error) errkind.Kind {
+	if k, ok := firstKind(err, kindsBatchOp); ok {
+		return k
 	}
-	msg := err.Error()
-	code := ""
-	var notLoadable *tenantFileNotLoadableError
-	var treeUnreadable *gitops.TreeUnreadableError
-	var targetUnreadable *gitops.TargetUnreadableError
-	var gitManaged *gitops.GitManagedError
-	switch {
-	case errors.As(err, &gitManaged):
+	return errkind.Internal
+}
+
+// batchOpText is the message of op tenantID's result for err answered as k.
+// It logs what the message does not show. A batch may run async, after the
+// request is gone, so the log lines are keyed by tenant, not request_id.
+func batchOpText(k errkind.Kind, tenantID string, err error, treeVisible bool) string {
+	switch k {
+	case errkind.GeneratorFindings, errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected,
+		errkind.ValidatorUnavailable, errkind.PolicyUnavailable:
+		// #2903: the generator refused the batch as a whole.
+		res, _ := generatorOpResult(tenantID, err)
+		return res.Message
+	case errkind.TenantGitManaged:
 		// #3064: the op's tenant is git-managed; the text names it and a
 		// fixed reason code, nothing else of the file. Nothing written.
-		msg, code = gitManaged.Error(), CodeTenantGitManaged
-	case errors.As(err, &treeUnreadable):
+		var gm *gitops.GitManagedError
+		errors.As(err, &gm)
+		return gm.Error()
+	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:
 		// #2939: the tree after the batch holds entries the route generator
-		// cannot read, and no op of the batch replaces them — unresolvable links
-		// (per op, TENANT_TREE_UNREADABLE) or a store fault (the whole
+		// cannot read, and no op of the batch replaces them — unresolvable
+		// links (per op, TENANT_TREE_UNREADABLE) or a store fault (the whole
 		// batch, TENANT_STORE_FAULT; every op reports it).
+		var te *gitops.TreeUnreadableError
+		errors.As(err, &te)
 		logTreeUnreadable("batch refused: conf.d holds unreadable entries", tenantID, err)
-		_, treeCode, _ := treeRefusal(treeUnreadable)
-		msg, code = treeUnreadableText(treeUnreadable, treeVisible), treeCode
-	case errors.As(err, &targetUnreadable):
+		return treeUnreadableText(te, treeVisible)
+	case errkind.TenantFileUnreadable:
 		// #2939 D3c: the op's own tenant file has content nobody can read;
 		// it is not replaced (as PUT's 409).
+		var tu *gitops.TargetUnreadableError
+		errors.As(err, &tu)
 		slog.Warn("batch op refused: the tenant file cannot be read", "tenant", tenantID, "error", err)
-		msg, code = targetUnreadableText(targetUnreadable), CodeTenantConfigNotLoadable
-	case errors.Is(err, confd.ErrNotRegularFile):
-		// #2939: the op's own tenant file is a FIFO, socket or device —
-		// tenant-api neither reads nor replaces it (as PUT's 409). The text
-		// names only the file's base name.
-		code = CodeTenantConfigNotLoadable
-	case errors.Is(err, gitops.ErrConflict):
-		// #2900: a batch publishes with a compare-and-swap, so a conflict
-		// means the serving branch moved and nothing was written. (The
-		// committed case, gitops.BatchCommittedError, never reaches here.)
-		msg = "conflict: retry after refresh"
-	case errors.Is(err, gitops.ErrWriteOverloaded):
-		msg = "write plane busy: retry shortly"
-	case isWriteOutcomeUnknown(err):
-		// #3173: the ref update failed and the branch could not be read
-		// back — the batch may be on it. Never "nothing written".
-		slog.Error("batch write outcome unknown; detail withheld from the client",
-			"tenant", tenantID, "error", err)
-		msg = msgWriteOutcomeUnknown
-	case isWriteCancelled(err):
-		msg = msgWriteCancelled
-	case errors.Is(err, gitops.ErrTreeNotOnBase):
-		// #1723: fixed text — err names the stranded PR branch, and with
-		// it another tenant's id, which only the server log may see.
-		slog.Warn("batch refused: worktree not on the base branch",
-			"tenant", tenantID, "error", err)
-		msg, code = "config worktree was not on the base branch; nothing written: retry shortly", CodeTreeNotOnBase
-	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
-		// #2078: fixed text — err names the other file, which only the
-		// server log may see.
-		slog.Warn("batch op refused: tenant declared by another conf.d file",
-			"tenant", tenantID, "error", err)
-		msg, code = msgTenantDeclaredElsewhere, CodeTenantDeclaredElsewhere
-	case errors.Is(err, gitops.ErrTenantTreeScan):
-		slog.Error("batch op refused: conf.d scan failed", "tenant", tenantID, "error", err)
-		msg, code = msgTenantTreeScan, CodeInternal
-	case errors.Is(err, gitops.ErrTenantFileDirty):
-		// #1535 item 6: fixed text — err names the path.
-		slog.Warn("batch op refused: tenant file differs from HEAD", "tenant", tenantID, "error", err)
-		msg, code = msgTenantFileDirty, CodeTenantFileDirty
-	case errors.As(err, &notLoadable):
+		return targetUnreadableText(tu)
+	case errkind.TenantFileNotRegular:
+		// #2477 / #2939: the op's own tenant file is a FIFO, socket or
+		// device — tenant-api neither reads nor replaces it (as PUT's 409).
+		return notRegularText(tenantID)
+	case errkind.TenantConfigNotLoadable:
 		// #2373 review F1: nothing written; the tenant file must be
 		// repaired first.
-		msg, code = notLoadable.Error(), CodeTenantConfigNotLoadable
-	case !writeErrorIsForClient(err):
+		var nl *tenantFileNotLoadableError
+		errors.As(err, &nl)
+		return nl.Error()
+	case errkind.TenantDeclaredElsewhere:
+		// #2078: fixed text — err names the other file, which only the
+		// server log may see.
+		slog.Warn("batch op refused: tenant declared by another conf.d file", "tenant", tenantID, "error", err)
+		return msgTenantDeclaredElsewhere
+	case errkind.TenantTreeScan:
+		slog.Error("batch op refused: conf.d scan failed", "tenant", tenantID, "error", err)
+		return msgTenantTreeScan
+	case errkind.TenantFileDirty:
+		// #1535 item 6: fixed text — err names the path.
+		slog.Warn("batch op refused: tenant file differs from HEAD", "tenant", tenantID, "error", err)
+		return msgTenantFileDirty
+	case errkind.GitDriverConfigured:
+		// #3175: fixed text — err names the config keys.
+		slog.Error("batch refused: git config names a driver program", "tenant", tenantID, "error", err)
+		return msgGitDriverConfigured
+	case errkind.GitConfigUnreadable:
+		slog.Error("batch refused: the git config could not be read to check it for driver programs", "tenant", tenantID, "error", err)
+		return msgGitConfigUnreadable
+	case errkind.WriteOverloaded:
+		return "write plane busy: retry shortly"
+	case errkind.ForgeDegraded:
+		// Generic: never the internal git error or the stale-base detail.
+		return "forge is currently unavailable (base sync timed out): retry shortly"
+	case errkind.BatchCommitted:
+		// #2900 F3: the batch IS committed — never "conflict, retry".
+		return msgBatchCommittedIncomplete
+	case errkind.TreeNotOnBase:
+		// #1723: fixed text — err names the stranded PR branch, and with
+		// it another tenant's id, which only the server log may see.
+		slog.Warn("batch refused: worktree not on the base branch", "tenant", tenantID, "error", err)
+		return "config worktree was not on the base branch; nothing written: retry shortly"
+	case errkind.Conflict:
+		// #2900: a batch publishes with a compare-and-swap, so a conflict
+		// means the serving branch moved and nothing was written.
+		return "conflict: retry after refresh"
+	case errkind.WriteOutcomeUnknown:
+		// #3173: the ref update failed and the branch could not be read
+		// back — the batch may be on it. Never "nothing written".
+		slog.Error("batch write outcome unknown; detail withheld from the client", "tenant", tenantID, "error", err)
+		return msgWriteOutcomeUnknown
+	case errkind.WriteCancelled:
+		return msgWriteCancelled
+	case errkind.Internal:
 		// #1700: a file / git failure — its text carries server paths.
-		// The batch may run async, after the request is gone, so the log
-		// line is keyed by tenant rather than request_id.
-		slog.Error("batch write failed; detail withheld from the client",
-			"tenant", tenantID, "error", err)
-		// #1535: the server's failure, so its code says so — as the sync
-		// answer's 500 INTERNAL_ERROR does (writeBatchFailure).
-		msg, code = msgBatchOpFailed, CodeInternal
+		slog.Error("batch write failed; detail withheld from the client", "tenant", tenantID, "error", err)
+		return msgBatchOpFailed
 	}
-	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: code}
+	// The request's own errors (KindSpec.ClientError: validation, tenant id,
+	// merge, ambiguous file, the bare git-managed refusal): their own text.
+	return err.Error()
 }
 
 // freshBaseOpResult renders the refusal of a PR-mode op judged on the fresh
-// base (#2900 F4) as its per-op result. The messages name no op index: in a
-// group batch it would count the hidden members before this one (#2857).
+// base (#2900 F4) as its per-op result, with kindTable's code. The messages
+// name no op index: in a group batch it would count the hidden members
+// before this one (#2857).
 func freshBaseOpResult(tenantID string, err error, treeVisible bool) BatchResult {
+	k, ok := firstKind(err, kindsFreshBase)
+	if !ok {
+		return batchErrorResult(tenantID, err, treeVisible)
+	}
+	res := BatchResult{TenantID: tenantID, Status: "error", Code: kindSpecOf(k).Code}
 	var (
 		scope *freshBaseScopeError
 		orgs  *freshBaseOrgsError
 	)
 	switch {
 	case errors.As(err, &scope) && scope.PreState:
-		return BatchResult{TenantID: tenantID, Status: "error", Code: CodeForbidden,
-			Message: "insufficient permissions for tenant " + tenantID + " on the latest base branch (permission and organization-scope checks, ADR-027)"}
+		res.Message = "insufficient permissions for tenant " + tenantID + " on the latest base branch (permission and organization-scope checks, ADR-027)"
 	case errors.As(err, &scope):
-		return BatchResult{TenantID: tenantID, Status: "error", Code: CodeForbidden,
-			Message: "insufficient permissions for the tenant metadata this op proposes on the latest base branch: its environment/domain would place tenant " +
-				tenantID + " outside your scope (#1597)"}
+		res.Message = "insufficient permissions for the tenant metadata this op proposes on the latest base branch: its environment/domain would place tenant " +
+			tenantID + " outside your scope (#1597)"
 	case errors.As(err, &orgs):
 		slog.Error("PR batch op refused: _tenant_orgs.yaml on the fresh base cannot be read", "tenant", tenantID, "error", orgs.Err)
-		return BatchResult{TenantID: tenantID, Status: "error", Code: CodeConfigDecode,
-			Message: "the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, so this op's organization scope cannot be judged; repair it on the base branch"}
+		res.Message = "the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, so this op's organization scope cannot be judged; repair it on the base branch"
 	}
-	return batchErrorResult(tenantID, err, treeVisible)
+	return res
 }
 
 // writeBatchFailure answers a sync direct-mode batch that failed as a whole
@@ -959,7 +981,7 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 	// (refresh first), but says what is true; a conflict says nothing was
 	// written (errCtx.batch).
 	writeErr(rw, r, d, err, errCtx{
-		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.BatchCommitted, errkind.TreeNotOnBase, errkind.Conflict),
+		accept:   kindsBatchFailure,
 		fallback: fallbackInternal,
 		batch:    true,
 	})
@@ -1009,15 +1031,22 @@ func batchTaskError(run directBatchRun) error {
 		return errBatchRejectedTask
 	case run.Committed != "":
 		return errors.New(msgBatchCommittedIncomplete + " (commit " + run.Committed + ")")
-	case isWriteOutcomeUnknown(run.Err):
-		return errors.New(msgWriteOutcomeUnknown)
-	case isWriteCancelled(run.Err):
-		return errors.New(msgWriteCancelled)
-	case run.Err != nil:
-		// The fixed per-op text, not err: err may carry server paths.
-		return errors.New("batch failed, nothing was written: " + run.Results[0].Message)
+	case run.Err == nil:
+		return nil
 	}
-	return nil
+	// The kind the per-op results name (batchOpKind): one answer, one text.
+	switch batchOpKind(run.Err) {
+	case errkind.BatchCommitted:
+		var committed *gitops.BatchCommittedError
+		errors.As(run.Err, &committed)
+		return errors.New(msgBatchCommittedIncomplete + " (commit " + committed.Commit + ")")
+	case errkind.WriteOutcomeUnknown:
+		return errors.New(msgWriteOutcomeUnknown)
+	case errkind.WriteCancelled:
+		return errors.New(msgWriteCancelled)
+	}
+	// The fixed per-op text, not err: err may carry server paths.
+	return errors.New("batch failed, nothing was written: " + run.Results[0].Message)
 }
 
 // rejectedBatchResponse is the body of the 422 a rejected batch gets (#2900).

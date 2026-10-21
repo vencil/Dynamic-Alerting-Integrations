@@ -38,7 +38,7 @@
 
 ## 架構速覽
 
-- **chi router** + 標準 middleware 鏈(RequestID / Logger / Recoverer / Timeout);**不用 `RealIP`**——它會用 client 送的 `X-Forwarded-For`/`X-Real-IP` 覆寫 `RemoteAddr`(可偽造),故保留真 TCP peer(ADR-027)
+- **chi router** + middleware 鏈(RequestID / Logger / Recoverer / Timeout);沒有路由的 404、方法不對的 405,以及回應尚未寫出時的 handler panic(500)與逾時(504)都回 JSON 錯誤信封(code、`request_id`;[#3226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3226),見 [hardening §2.5](../../docs/api/tenant-api-hardening.md)),不是 chi 預設的純文字或空 body;WebSocket Upgrade 請求的 panic 不寫信封,回應已開始寫出後的 panic 中斷連線,逾時則保留已寫出的回應;**不用 `RealIP`**——它會用 client 送的 `X-Forwarded-For`/`X-Real-IP` 覆寫 `RemoteAddr`(可偽造),故保留真 TCP peer(ADR-027)
 - **`X-Request-ID` 回拋**:把 request id 寫回 response header,方便對應後端 log
 - **逐呼叫者限流**:sliding-window,預設 100 req/min/caller,可關閉
 - **RBAC**:`_rbac.yaml` 定義 group → tenant → permission,熱重載(預設 30s)。**未設 `--rbac`** 進入 open-read 模式(啟動 WARN);**設了 `--rbac` 但檔案零 group**(打錯字/空檔)→ **fail-closed 拒絕存取**(ADR-027 MED-8),`--rbac-empty-open` 為 rollback 逃生

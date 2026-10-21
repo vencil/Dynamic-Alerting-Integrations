@@ -12,6 +12,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/statestore"
+	"github.com/vencil/tenant-api/internal/ws"
 )
 
 // #3226: the error → response mapping of the write and state entries is two
@@ -76,7 +77,13 @@ var kindTable = []KindSpec{
 	{Kind: errkind.TenantDeclaredElsewhere, Status: http.StatusConflict, Code: CodeTenantDeclaredElsewhere},
 	{Kind: errkind.TenantTreeScan, Status: http.StatusInternalServerError, Code: CodeInternal},
 	{Kind: errkind.TenantFileDirty, Status: http.StatusConflict, Code: CodeTenantFileDirty},
-	{Kind: errkind.TenantFileNotRegular, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
+	// 409 TENANT_CONFIG_NOT_LOADABLE, as the handler's own early refusal of
+	// the same file (writeTenantFileNotRegular) and the Writer's
+	// (TargetUnreadableError, special_file) answer it: the operator must
+	// replace the entry in git, a resend cannot pass (#2477, #2939). Its text
+	// names the base name only, so it may be shown (ClientError).
+	{Kind: errkind.TenantFileNotRegular, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable, ClientError: true},
+	{Kind: errkind.TenantConfigNotLoadable, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable},
 	{Kind: errkind.AmbiguousTenantFile, Status: http.StatusConflict, Code: CodeConflict, ClientError: true},
 
 	{Kind: errkind.PreconditionFailed, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
@@ -89,6 +96,9 @@ var kindTable = []KindSpec{
 	{Kind: errkind.ForgeDegraded, Status: http.StatusServiceUnavailable, Code: CodeForgeUnavailable, Retryable: true, RetryAfterS: 5},
 	{Kind: errkind.WriteOutcomeUnknown, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
 	{Kind: errkind.WriteCancelled, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true},
+	{Kind: errkind.GitDriverConfigured, Status: http.StatusInternalServerError, Code: CodeGitDriverConfigured, Fault: true},
+	// UPSTREAM_ERROR for now: #3202 rearranges the codes.
+	{Kind: errkind.GitConfigUnreadable, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
 	// NoChanges is not a failure: every entry that meets it answers a 2xx
 	// of its own and never renders this row. It is here so the table lists
 	// every Kind.
@@ -98,6 +108,7 @@ var kindTable = []KindSpec{
 	{Kind: errkind.InvalidTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 	{Kind: errkind.ReservedTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 	{Kind: errkind.MergeFailed, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
+	{Kind: errkind.Forbidden, Status: http.StatusForbidden, Code: CodeForbidden},
 	{Kind: errkind.BadRequest, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
 
 	{Kind: errkind.StateConflict, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
@@ -113,6 +124,19 @@ var kindTable = []KindSpec{
 	// 60: the mint window (token.mintWindow), for the bare sentinel; the
 	// typed refusal says when the next mint is admitted.
 	{Kind: errkind.FederationMintRateLimited, Status: http.StatusTooManyRequests, Code: CodeRateLimited, Retryable: true, RetryAfterS: 60},
+
+	// A deployment setting: no retry finds it configured, so no Retry-After.
+	{Kind: errkind.FederationNotConfigured, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
+
+	// The router's and the middleware chain's own answers (#3226). The codes
+	// are the existing ones for the status (#3202 rearranges the codes).
+	{Kind: errkind.RouteNotFound, Status: http.StatusNotFound, Code: CodeNotFound, ClientError: true},
+	{Kind: errkind.MethodNotAllowed, Status: http.StatusMethodNotAllowed, Code: CodeBadRequest, ClientError: true},
+	// Not retryable: the handler did not answer, so whether a write it ran
+	// took effect is not known here.
+	{Kind: errkind.RequestTimeout, Status: http.StatusGatewayTimeout, Code: CodeUpstream},
+	{Kind: errkind.StreamUnsupported, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
+	{Kind: errkind.ServerShuttingDown, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 1},
 
 	{Kind: errkind.Internal, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
 }
@@ -203,9 +227,12 @@ var kindRules = []kindRule{
 	typedKind(errkind.TenantStoreFault),
 	typedKind(errkind.TenantFileUnreadable),
 	typedKind(errkind.TenantGitManaged),
+	typedKind(errkind.TenantConfigNotLoadable),
 	sentinelKind(errkind.TenantDeclaredElsewhere, gitops.ErrTenantDeclaredElsewhere),
 	sentinelKind(errkind.TenantTreeScan, gitops.ErrTenantTreeScan),
 	sentinelKind(errkind.TenantFileDirty, gitops.ErrTenantFileDirty),
+	typedKind(errkind.GitDriverConfigured, gitops.ErrGitDriverConfigured),
+	sentinelKind(errkind.GitConfigUnreadable, gitops.ErrGitConfigUnreadable),
 	sentinelKind(errkind.InvalidTenantID, gitops.ErrInvalidTenantID),
 	sentinelKind(errkind.WriteOverloaded, gitops.ErrWriteOverloaded),
 	sentinelKind(errkind.ForgeDegraded, gitops.ErrForgeDegraded),
@@ -232,6 +259,8 @@ var kindRules = []kindRule{
 	{Kind: errkind.WriteOutcomeUnknown, match: isWriteOutcomeUnknown},
 	{Kind: errkind.WriteCancelled, match: isWriteCancelled},
 	sentinelKind(errkind.NoChanges, gitops.ErrNoChanges),
+	sentinelKind(errkind.StreamUnsupported, ws.ErrStreamingUnsupported),
+	sentinelKind(errkind.ServerShuttingDown, ws.ErrShuttingDown),
 }
 
 // carriesKind reports whether err's tree (Unwrap, both forms) holds an
@@ -361,18 +390,31 @@ var (
 	// what the tree holds (#2078, #2939, #3064, #1535).
 	kindsPlacement = kindsOf(errkind.TenantTreeUnreadable, errkind.TenantStoreFault,
 		errkind.TenantFileUnreadable, errkind.TenantGitManaged, errkind.TenantDeclaredElsewhere,
-		errkind.TenantTreeScan, errkind.TenantFileDirty)
+		errkind.TenantTreeScan, errkind.TenantFileDirty, errkind.TenantFileNotRegular)
+	// kindsGitConfig: the git config check every write runs first (#3175):
+	// a driver configured, or a config that could not be read (#3226).
+	kindsGitConfig = kindsOf(errkind.GitDriverConfigured, errkind.GitConfigUnreadable)
 	// kindsOutcome: a write stopped before it committed, or whose outcome is
 	// unknown (#1535, #3173).
 	kindsOutcome = kindsOf(errkind.WriteOutcomeUnknown, errkind.WriteCancelled)
 	// kindsWriteFlow: what every write path through Writer.WritePR /
 	// WritePRBatch / WriteBatch answers alike.
-	kindsWriteFlow = kindsGenerator.union(kindsPlacement).with(errkind.InvalidTenantID,
+	kindsWriteFlow = kindsGenerator.union(kindsPlacement, kindsGitConfig).with(errkind.InvalidTenantID,
 		errkind.WriteOverloaded, errkind.ForgeDegraded, errkind.AmbiguousTenantFile)
 	// kindsDirectWrite: a direct-mode single-tenant write (custom alerts; PUT
 	// adds AmbiguousTenantFile), judged in kindRules' order like every entry.
-	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsOutcome).with(errkind.WriteOverloaded,
+	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsGitConfig, kindsOutcome).with(errkind.WriteOverloaded,
 		errkind.TreeNotOnBase, errkind.PreconditionFailed, errkind.Conflict)
+	// kindsBatchFailure: a direct-mode batch that failed as a whole
+	// (writeBatchFailure, and the metric of its async form,
+	// batchFailureResult).
+	kindsBatchFailure = kindsWriteFlow.union(kindsOutcome).with(errkind.BatchCommitted,
+		errkind.TreeNotOnBase, errkind.Conflict)
+	// kindsBatchOp: what a batch op's "error" result is named by
+	// (batchErrorResult): the batch's failure as a whole, and the refusals
+	// of the op itself that the writer returns per op.
+	kindsBatchOp = kindsBatchFailure.with(errkind.Validation, errkind.ReservedTenantID,
+		errkind.MergeFailed, errkind.TenantGitManagedUnnamed, errkind.TenantConfigNotLoadable)
 	// kindsState: tenant-api's state store (#2856).
 	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)
 )

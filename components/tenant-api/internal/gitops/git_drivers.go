@@ -55,8 +55,18 @@ const gitDriverKeyPattern = `^(filter\..+\.(clean|smudge|process)|diff\..+\.(tex
 
 // ErrGitDriverConfigured marks (errors.Is) a refusal because the git config
 // tenant-api runs under names a program git would run on file contents
-// (GitDriverError), or because that could not be checked.
+// (GitDriverError). It stays until an operator removes the key: retrying
+// does not help.
 var ErrGitDriverConfigured = errors.New("git config names a program git runs on file contents")
+
+// ErrGitConfigUnreadable marks (errors.Is) a refusal because the git config
+// could not be read to check it — git failed or timed out, a config file
+// (or one it includes) is unreadable or malformed — or printed a match the
+// check cannot parse. What cannot be read cannot be shown to be clean, so
+// it refuses like a driver; but it is NOT ErrGitDriverConfigured (#3226):
+// nothing says a driver is configured, and a read that failed once may
+// succeed on the next check, which every write repeats under the lock.
+var ErrGitConfigUnreadable = errors.New("cannot read the git config to check it for driver programs")
 
 // GitConfigEntry is one git config key found, with the scope git read it
 // from (system, global, local, worktree, command).
@@ -68,8 +78,8 @@ type GitConfigEntry struct {
 // GitDriverError is the refusal: the keys found and their scopes. It
 // carries no value — a value is a command line, which can hold a path or a
 // credential — so its text can go to the log and to stderr at startup.
-// The text is never shown to an API client (the handlers answer a fixed
-// INTERNAL_ERROR).
+// The text is never shown to an API client (the handlers answer
+// GIT_DRIVER_CONFIGURED with a fixed text).
 type GitDriverError struct {
 	Found []GitConfigEntry
 }
@@ -87,12 +97,13 @@ func (e *GitDriverError) Error() string {
 // Is makes a GitDriverError ErrGitDriverConfigured.
 func (e *GitDriverError) Is(target error) bool { return target == ErrGitDriverConfigured }
 
-// CheckGitDrivers refuses (ErrGitDriverConfigured) when the git config that
-// tenant-api's git commands in the conf repository read names a filter,
-// diff or merge driver program (see the file comment). It runs git as every
-// other tenant-api git command does — same binary, same environment, from
-// the repository — so it sees what they would. Failing to read the config
-// at all refuses too: what cannot be read cannot be shown to be clean.
+// CheckGitDrivers refuses (*GitDriverError, ErrGitDriverConfigured) when the
+// git config that tenant-api's git commands in the conf repository read
+// names a filter, diff or merge driver program (see the file comment). It
+// runs git as every other tenant-api git command does — same binary, same
+// environment, from the repository — so it sees what they would. Failing to
+// read the config at all refuses too (ErrGitConfigUnreadable): what cannot
+// be read cannot be shown to be clean.
 func (w *Writer) CheckGitDrivers() error {
 	return w.checkGitDriversIn(w.gitDir)
 }
@@ -121,12 +132,13 @@ func (w *Writer) checkGitDriversIn(dir string) error {
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return nil
 		}
-		return fmt.Errorf("%w: cannot read the git config to check it: %v", ErrGitDriverConfigured, err)
+		return fmt.Errorf("%w: %v", ErrGitConfigUnreadable, err)
 	}
 	found := parseGitConfigScopes(out)
 	if len(found) == 0 {
-		// Exit 0 with nothing parseable is not a "no match".
-		return fmt.Errorf("%w: git config matched but printed no key", ErrGitDriverConfigured)
+		// Exit 0 with nothing parseable is not a "no match" — nor a key
+		// the refusal could name.
+		return fmt.Errorf("%w: git config matched but printed no key", ErrGitConfigUnreadable)
 	}
 	return &GitDriverError{Found: found}
 }

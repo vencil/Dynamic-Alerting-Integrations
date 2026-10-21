@@ -520,8 +520,8 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 					t.Errorf("async task has no results")
 				}
 				for _, r := range results {
-					if r.Status != "error" || r.Code != CodeInternal {
-						t.Errorf("async result %+v, want INTERNAL_ERROR", r)
+					if r.Status != "error" || r.Code != CodeGitDriverConfigured {
+						t.Errorf("async result %+v, want %s", r, CodeGitDriverConfigured)
 					}
 				}
 			} else if code != http.StatusInternalServerError {

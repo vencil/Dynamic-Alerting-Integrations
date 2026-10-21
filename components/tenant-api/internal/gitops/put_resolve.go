@@ -139,10 +139,10 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 	// #3175: the check below runs `git status`, which runs a clean filter
 	// the git config names — here for a caller with read permission only.
 	// A driver found refuses the preview as it refuses the write, before
-	// git touches a file. A config git cannot read at all is, for the
-	// preview, one more way git fails: the HEAD check is skipped (git
-	// status would fail on the same config, running nothing) and the write
-	// refuses it under the lock.
+	// git touches a file. A config git cannot read at all
+	// (ErrGitConfigUnreadable) is, for the preview, one more way git
+	// fails: the HEAD check is skipped (git status would fail on the same
+	// config, running nothing) and the write refuses it under the lock.
 	gateErr := w.CheckGitDrivers()
 	var driverErr *GitDriverError
 	if errors.As(gateErr, &driverErr) {

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -70,7 +71,7 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 		if d.Accounts == nil {
-			handler.WriteJSONError(w, r, http.StatusServiceUnavailable,
+			handler.WriteKind(w, r, errkind.FederationNotConfigured,
 				"logs federation is not configured on this server")
 			return
 		}
