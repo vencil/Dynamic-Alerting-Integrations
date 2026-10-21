@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -131,6 +133,9 @@ func TestMethodNotAllowedEnvelope(t *testing.T) {
 		_, _ = w.Write(nil)
 	})
 	env := exitEnvelope(t, "bare 405", w, http.StatusMethodNotAllowed)
+	if env.Error != msgMethodNotAllowed {
+		t.Errorf("bare 405: text %q, want msgMethodNotAllowed (the request's method is not echoed)", env.Error)
+	}
 	if env.Code != errcode.MethodNotAllowed || env.RequestID == "" || len(w.Header().Values("Allow")) != 2 {
 		t.Errorf("bare 405: envelope %+v Allow %q, want %s and both Allow values", env, w.Header().Values("Allow"), errcode.MethodNotAllowed)
 	}
@@ -183,5 +188,35 @@ func TestRecoverer_PanicAfterFlushFailsAChunkedRead(t *testing.T) {
 	defer resp.Body.Close()
 	if body, rerr := io.ReadAll(resp.Body); rerr == nil {
 		t.Errorf("client read %q with no error; want the aborted connection to fail the read", body)
+	}
+}
+
+// #3226: writeJSON's body is byte for byte what json.Encoder.Encode wrote
+// before it moved to json.Marshal — HTML escaping, the error envelope's Extra
+// fields, the trailing newline — and a value that does not encode is still
+// the 500 envelope.
+func TestWriteJSON_BytesAsEncoderWrote(t *testing.T) {
+	t.Parallel()
+	for _, v := range []any{
+		ErrorResponse{Error: `<script>alert("x")</script> & 'q'`, Code: errcode.NotFound, RequestID: "r1",
+			Extra: map[string]any{"group_id": "<img src=x onerror=1>", "n": 2}},
+		map[string]any{"html": "</b> ", "list": []int{1, 2}},
+		[]string{},
+		nil,
+	} {
+		var want bytes.Buffer
+		if err := json.NewEncoder(&want).Encode(v); err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		writeJSON(w, http.StatusTeapot, v)
+		if w.Body.String() != want.String() || w.Code != http.StatusTeapot || w.Header().Get("Content-Type") != "application/json" {
+			t.Errorf("writeJSON(%v) = %d %q %q, want %q", v, w.Code, w.Header().Get("Content-Type"), w.Body.String(), want.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusOK, math.Inf(1))
+	if env := exitEnvelope(t, "unencodable", w, http.StatusInternalServerError); env.Code != errcode.Internal {
+		t.Errorf("unencodable: %+v", env)
 	}
 }

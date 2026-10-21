@@ -21,8 +21,11 @@ import (
 // msgRouteNotFound / msgRequestTimeout are the fixed texts of the router's
 // 404 and the deadline's 504. Neither echoes the request's path.
 const (
-	msgRouteNotFound  = "no such route"
-	msgRequestTimeout = "the request reached the server's per-request deadline before it was answered; " +
+	msgRouteNotFound = "no such route"
+	// msgMethodNotAllowed names no method: the request's method is the
+	// client's text, and the Allow header lists the ones the route serves.
+	msgMethodNotAllowed = "method not allowed on this route; the Allow header lists the methods it serves"
+	msgRequestTimeout   = "the request reached the server's per-request deadline before it was answered; " +
 		"a write it made may or may not have taken effect — read before resending"
 )
 
@@ -59,7 +62,7 @@ type methodWriter struct {
 func (w *methodWriter) WriteHeader(code int) {
 	if code == http.StatusMethodNotAllowed && !w.wrote && w.Header().Get("Content-Type") == "" {
 		w.wrote, w.replaced = true, true
-		WriteKind(w.ResponseWriter, w.r, errkind.MethodNotAllowed, "method "+w.r.Method+" is not allowed on this route")
+		WriteKind(w.ResponseWriter, w.r, errkind.MethodNotAllowed, msgMethodNotAllowed)
 		return
 	}
 	w.answerWriter.WriteHeader(code)
