@@ -455,6 +455,18 @@ def test_a_change_on_a_key_served_on_neither_side_is_marked_on_both(tmp_path, da
     assert cd._format_side(got, "old") == "85 (not served)"
 
 
+@pytest.mark.parametrize("root", [".nan", ".inf", "-.inf"])
+def test_a_row_lost_to_a_non_finite_root_default_is_marked_not_served(tmp_path, da_guard, root):
+    """#3140：根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列。
+    served-values 標 `root_default_non_finite`，所以標 not served，不是單純的移除。"""
+    tenants = {"t": {"container_memory": "70"}}
+    b, p = _served(tmp_path, da_guard, tenants, tenants,
+                   pr_defaults=_DEFAULTS.replace("mysql_connections: 80", f"mysql_connections: {root}"))
+    got = _by_key(_served_metric(b, p)["t"])["mysql_connections"]
+    assert (got["change"], got.get("not_served")) == ("removed", ["new"]), got
+    assert cd._format_side(got, "new").endswith("(not served)")
+
+
 def test_a_disabled_key_still_reads_as_written(tmp_path, da_guard):
     """值為 disable 的維度鍵不標 not served，toggled 的判斷不變。"""
     b, p = _served(tmp_path, da_guard,

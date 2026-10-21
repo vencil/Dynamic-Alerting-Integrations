@@ -2136,6 +2136,23 @@ class TestRefusedRowsFromTwoTrees:
                         f"    mysql_connections_critical: {new}\n")
         assert got == (rc, [("mysql_connections_critical", "95", None, risk, None)])
 
+    @pytest.mark.parametrize("root", [".nan", ".inf", "-.inf"])
+    def test_a_row_lost_to_a_non_finite_root_default_is_high(
+            self, tmp_path, cli_argv, capsys, fake_prom, root):
+        """根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列，served-values
+        標 `root_default_non_finite`，判 HIGH（不是「Metric disabled」MEDIUM）。"""
+        p = fake_prom(values=(60, 80, 90, 100))
+        tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
+        cur, base = _dirs(tmp_path, {**_D, **tenant},
+                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mysql_connections: 80",
+                                                                    f"mysql_connections: {root}"),
+                           **tenant})
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+                for r in json.loads(out.out)["changes"]]
+        assert (rc, rows) == (1, [("mysql_connections", "80", None, "HIGH")]), out.out
+
     def test_a_refusal_in_part_of_the_day_is_high_in_that_window(
             self, tmp_path, cli_argv, capsys, fake_prom):
         """排程裡只有夜間時段寫 NaN：那段的 segment 帶 `value_non_finite`，只有那段判 HIGH。"""

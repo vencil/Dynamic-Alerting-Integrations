@@ -705,8 +705,18 @@ def served_disabled_keys(tenants):
 def _not_served(tv, key):
     """True when `key` is a threshold key `tv` writes but /metrics does not
     serve: in `unserved` and not switched off (a "disable" is an intended
-    no-row, and reads as written; `_switched_off`)."""
-    return key in (tv.unserved or {}) and not _switched_off(tv, key)
+    no-row, and reads as written; `_switched_off`) — or (#3140) a key it
+    does not write whose root `defaults:` value the exporter refuses as
+    non-finite (`_root_refused`)."""
+    return (key in (tv.unserved or {}) and not _switched_off(tv, key)) or _root_refused(tv, key)
+
+
+def _root_refused(tv, key):
+    """served-values' `keys[].reason` "root_default_non_finite" (#3140): the
+    root `defaults:` writes `key` as a non-finite number and the tenant does
+    not write it, so no row is served — not a removal of the key."""
+    entry = (tv.keys or {}).get(key)
+    return entry is not None and entry.reason == "root_default_non_finite"
 
 
 def served_metric_diff(old_tenants, new_tenants):
