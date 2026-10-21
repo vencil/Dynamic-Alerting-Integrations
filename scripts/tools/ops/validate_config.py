@@ -2410,7 +2410,7 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
     try:
         served = load_served_tree(config_dir).tenants
         unchecked = None
-    except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, YamlFileError) as exc:
         served, unchecked = {}, (f"custom alerts not checked: `da-guard served-values` did not read the tree "
                                  f"({type(exc).__name__}: {' '.join(str(exc).split())})")
     details: list[str] = []
