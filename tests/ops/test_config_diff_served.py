@@ -62,10 +62,28 @@ def _by_key(entries):
 ])
 def test_tenant_own_threshold_change_is_classified_as_before(tmp_path, da_guard, old, new, change):
     b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": old}}, {"t": {"mysql_connections": new}})
-    got = _by_key(_metric(b, p)["t"])["mysql_connections"]
+    got = _by_key(_served_metric(b, p)["t"])["mysql_connections"]
     assert got["change"] == change
-    # 與 YAML 讀法同一個分類（對照：舊路徑對同一組原文值給同一個答案）
-    assert cd.classify_change(old, new) == change
+
+
+@pytest.mark.parametrize("word", ["OFF", "dİsable", "false"])
+def test_a_switched_off_side_is_served_values_answer(tmp_path, da_guard, word):
+    """#3140 PR2：停用與否讀 served-values 的 `keys[].reason` "disabled"，不讀值：exporter
+    停用的任何寫法都是 toggled，顯示 "disabled"、不標 not served。"""
+    b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": "100"}}, {"t": {"mysql_connections": word}})
+    got = _by_key(_served_metric(b, p)["t"])["mysql_connections"]
+    assert (got["new"], got["change"], got["disabled"]) == (word, "toggled", ["new"])
+    assert "not_served" not in got
+    assert cd._format_side(got, "new") == "disabled"
+
+
+@pytest.mark.parametrize("word", ["disable:critical", "disable\x1c"])
+def test_a_value_the_exporter_does_not_switch_off_is_not_toggled(tmp_path, da_guard, word):
+    """#3141：閾值列的 `disable:<sev>`、帶 Go 不修剪的空白的 `disable` 不是停用——exporter
+    改送預設值 80，served 視圖是 100 → 80（looser），不是 toggled。"""
+    b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": "100"}}, {"t": {"mysql_connections": word}})
+    got = _by_key(_served_metric(b, p)["t"])["mysql_connections"]
+    assert (got["new"], got["change"], got.get("disabled")) == (80, "tighter", None)
 
 
 def test_severity_only_change_reads_as_written(tmp_path, da_guard):
@@ -303,13 +321,21 @@ def test_custom_alert_op_window_for_change_shows_as_recipe_id(tmp_path, da_guard
     assert fields == {"recipe_id"}
 
 
-@pytest.mark.parametrize("new", [[], [_recipe(threshold="disable")], [_recipe(**{"for": "2m"})]],
-                         ids=["deleted", "disabled", "rejected"])
-def test_custom_alert_no_longer_served_is_removed_with_the_note(tmp_path, da_guard, new):
-    """刻意的改變：刪掉與 disable 都讓 served row 消失，報成移除並寫明兩種可能。"""
+@pytest.mark.parametrize("new,note", [
+    ([], cd.SERVED_DELETED_NOTE),
+    ([_recipe(threshold="disable")], cd.SERVED_DISABLED_NOTE),
+    ([_recipe(threshold="disable:critical")], cd.SERVED_DISABLED_NOTE),
+    ([_recipe(threshold="NaN")], cd.SERVED_REFUSED_NOTE.format(refused="non_finite")),
+    ([_recipe(threshold="abc")], cd.SERVED_REFUSED_NOTE.format(refused="unparsed")),
+    ([_recipe(**{"for": "2m"})], cd.SERVED_REMOVED_NOTE),
+], ids=["deleted", "disabled", "disabled-critical", "refused-non-finite", "refused-unparsed", "rejected"])
+def test_custom_alert_no_longer_served_is_removed_with_the_note(tmp_path, da_guard, new, note):
+    """served row 消失時報成移除；為什麼消失讀 served-values 的 `custom_alerts[].status`／
+    `refused`（#3140 PR2）：沒有條目是刪除、`disabled` 是消音、因門檻被拒收另有一句；
+    其他拒收（如 `for`）仍是不分辨的那句。"""
     diff = _ca(tmp_path, da_guard, [_recipe()], new)
     (entry,) = diff["t"]
-    assert entry["change"] == "removed" and entry["note"] == cd.SERVED_REMOVED_NOTE
+    assert entry["change"] == "removed" and entry["note"] == note
 
 
 def _two_rows(tmp_path, da_guard, old, new):

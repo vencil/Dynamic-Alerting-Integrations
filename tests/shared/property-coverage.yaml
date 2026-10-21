@@ -47,13 +47,11 @@ modules:
     covered:
       - parse_duration_seconds
       - format_duration
-      - is_disabled
       - validate_and_clamp
       - detect_cli_lang
       - i18n_text
     excluded:
-      _go_lower: "#3141 helper of is_disabled / custom_alert_disabled; exercised by is_disabled's property laws (the case-folding mutation targets it) and table-covered by threshold_value_matrix.json"
-      _disable_word: "#3141 helper of is_disabled / custom_alert_disabled; table-covered by threshold_value_matrix.json (row_disabled, custom_alert_disabled, written by Go)"
+      _go_lower: "#3141 helper of custom_alert_disabled (Go's strings.ToLower); table-covered by threshold_value_matrix.json's custom_alert_disabled column (written by Go, DİSABLE rows included), which the case-folding mutation is checked against"
       parse_threshold_number: "#3140 table-covered by threshold_value_matrix.json (float_ok, written by Go's parseThresholdNumber)"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"

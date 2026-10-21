@@ -460,55 +460,6 @@ class TestFormatDurationProperties:
 
 
 # ---------------------------------------------------------------------------
-# is_disabled — three-state disabled detection
-# ---------------------------------------------------------------------------
-class TestIsDisabledProperties:
-
-    @given(st.sampled_from(["disable", "disabled", "off", "false"]))
-    @PILOT_SETTINGS
-    def test_canonical_values_disabled(self, val):
-        assert lv.is_disabled(val) is True
-
-    @given(st.sampled_from(["disable", "disabled", "off", "false"]))
-    @PILOT_SETTINGS
-    def test_case_insensitive(self, val):
-        # Property: case doesn't matter.
-        assert lv.is_disabled(val.upper()) is True
-        assert lv.is_disabled(val.title()) is True
-
-    @given(
-        st.sampled_from(["disable", "disabled", "off", "false"]),
-        st.text(alphabet=" \t", min_size=0, max_size=5),
-        st.text(alphabet=" \t", min_size=0, max_size=5),
-    )
-    @PILOT_SETTINGS
-    def test_whitespace_stripped(self, val, lpad, rpad):
-        # Property: leading/trailing whitespace is stripped.
-        assert lv.is_disabled(lpad + val + rpad) is True
-
-    @given(st.one_of(
-        st.none(),
-        st.integers(),
-        st.lists(st.text()),
-        st.dictionaries(st.text(), st.text()),
-    ))
-    @PILOT_SETTINGS
-    def test_non_string_returns_false(self, junk):
-        # Property: non-string input always returns False.
-        assert lv.is_disabled(junk) is False
-
-    @given(st.text(alphabet=string.ascii_letters,
-                   min_size=1, max_size=15).filter(
-                       lambda s: s.strip().lower()
-                                  not in {"disable", "disabled", "off", "false"}))
-    @PILOT_SETTINGS
-    def test_arbitrary_strings_not_disabled(self, s):
-        # Property: any string that ISN'T one of the canonical disable
-        # values returns False.
-        assert lv.is_disabled(s) is False
-
-
-# ---------------------------------------------------------------------------
 # validate_and_clamp — guardrail enforcement on timing parameters
 # ---------------------------------------------------------------------------
 class TestValidateAndClampProperties:

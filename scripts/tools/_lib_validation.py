@@ -157,33 +157,15 @@ def format_duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
-def is_disabled(value: Any) -> bool:
-    """Whether *value* switches a threshold row (or another `disable`-able
-    key) off, exactly as the exporter's thresholdRowDisabled reads it
-    (#3141): the value read by `split_threshold_severity`'s grammar is a
-    disabled word (``disable``, ``disabled``, ``off``, ``false``, lower-cased
-    as Go does) and no ``:<severity>`` is written. ``disable:critical`` is
-    not a disable: the exporter reads it as a value it cannot read, and
-    names ``disable`` / ``<key>_critical: disable`` as the fix. Trimmed with
-    Go's white space (``GO_SPACE``), so ``disable\x1c`` is not a disable
-    either. Pinned against Go by tests/shared/threshold_value_matrix.json's
-    `row_disabled` column. A custom alert's opt-out is
-    `custom_alert_disabled`.
-    """
-    if not value or not isinstance(value, str):
-        return False
-    word, suffixed = _disable_word(value)
-    return word and not suffixed
-
-
 def routing_disabled(value: Any) -> bool:
     """Whether a tenant's `_routing` string switches its routing off, as the
     route generator — routing's one judge (ADR-036 section 9) — reads it:
     Python ``str.strip()`` (U+001C–U+001F are white space here) then
     ``lower()``, so ``"\x1coff"`` disables and ``"d\u0130sable"`` does not.
     Pinned by tests/shared/routing_policy_parity_matrix.json. ⛔ Not a
-    threshold row's reading, which is the exporter's (`is_disabled`, #3141);
-    kept apart so that ruling does not move a routing verdict.
+    threshold row's reading, which is the exporter's alone (#3141; Python
+    tools read it from served-values' `keys[].reason`, #3140 PR2); kept
+    apart so that ruling does not move a routing verdict.
     """
     if not value or not isinstance(value, str):
         return False
@@ -209,7 +191,9 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     empty `70:`) raises ValueError: the exporter cannot read the value
     either. The value half is returned as written (trimmed); whether it is a
     number is the caller's question. The Python readers of the grammar
-    (backtest_threshold, check_threshold_unit_sanity) call this one;
+    (check_threshold_unit_sanity, `custom_alert_disabled`) call this one —
+    backtest_threshold and config_diff read the exporter's own answer from
+    served-values instead (#3140 PR2);
     custom_alerts/shape.py keeps its own stdlib-only copy. All are held to
     Go by tests/shared/test_threshold_value_parity.py."""
     text = str(raw).strip(GO_SPACE)
@@ -227,21 +211,6 @@ def _go_lower(text: str) -> str:
     """`text` lower-cased per character as Go's strings.ToLower does (U+0130
     → `i`, which Python's full mapping turns into two characters)."""
     return "".join("i" if c == "\u0130" else c.lower() for c in text)
-
-
-def _disable_word(raw: Any) -> tuple[bool, bool]:
-    """`(word, suffixed)`: whether the value half of `split_threshold_severity`
-    is a disabled word, and whether a `:<severity>` is written beside it —
-    the one reading `is_disabled` (a threshold row: no suffix) and
-    `custom_alert_disabled` (any suffix) share. A suffix the grammar refuses
-    (`disable:bogus`) is no disabled word."""
-    try:
-        value, _severity = split_threshold_severity(raw)
-    except ValueError:
-        return False, False
-    if _go_lower(value) not in _DISABLED_VALUES:
-        return False, False
-    return True, ":" in str(raw).strip(GO_SPACE)
 
 
 class NonFiniteThresholdError(ValueError):
@@ -280,13 +249,22 @@ def custom_alert_disabled(threshold: Any) -> bool:
     """Whether a custom alert with this `threshold` is the three-state
     opt-out, exactly as resolveOneCustomAlert decides it (#3071): the value
     half of `split_threshold_severity` is a disabled word (`disable`,
-    `disable:critical`, `OFF`; `_disable_word`, shared with `is_disabled`).
+    `disable:critical`, `OFF`), lower-cased as Go does.
     A suffix the grammar refuses (`disable:bogus`, `disable:`) is a parse
     error in Go, not an opt-out. Unlike a threshold row (#3141), a custom
     alert's `disable:<severity>` IS its opt-out (#3042). Pinned
     against Go by tests/shared/threshold_value_matrix.json's
-    `custom_alert_disabled` column."""
-    return _disable_word(threshold)[0]
+    `custom_alert_disabled` column.
+
+    ⚠️ A mirror of Go's verdict, kept for its one remaining reader,
+    blast_radius, whose input (describe-tenant's ADR-024 union of
+    recipes) carries no served-values `custom_alerts[].status` (#3140
+    PR2); config_diff reads that status instead."""
+    try:
+        value, _severity = split_threshold_severity(threshold)
+    except ValueError:
+        return False
+    return _go_lower(value) in _DISABLED_VALUES
 
 
 def is_valid_tenant_id(tenant: Any) -> bool:

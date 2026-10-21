@@ -31,7 +31,8 @@ Usage:
 
 需求:
   - Prometheus Query API reachable (or --skip-if-unavailable)
-  - da-guard (DA_GUARD_BINARY, or on PATH) for --config-dir / --baseline
+  - da-guard (DA_GUARD_BINARY, or on PATH): --config-dir / --baseline read
+    both trees with it, and --tenant reads its values with it (#3140)
 """
 import argparse
 import errno
@@ -55,7 +56,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import is_disabled, http_get_json, prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import http_get_json, prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -65,8 +66,7 @@ from _lib_exitcodes import (  # noqa: E402
     arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
-from _lib_validation import GO_SPACE, THRESHOLD_SEVERITIES, split_threshold_severity  # noqa: E402  (#3071)
-from _lib_validation import NonFiniteThresholdError, parse_threshold_number  # noqa: E402  (#3140)
+from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
 # not here.
 from _lib_tenant_values import (  # noqa: E402
@@ -84,7 +84,7 @@ from _lib_tenant_values import (  # noqa: E402
 # spelling goes through the alias table first.
 import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
-import _registry_lib as registry_lib  # noqa: E402  (#3140: platform defaults)
+import _registry_lib as registry_lib  # noqa: E402  (#3140: the shipped platform defaults `--tenant` is served over)
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -302,6 +302,27 @@ def _served_rows(tenant_values, side):
     return out
 
 
+def _refused_parts(tenant_values):
+    """`{key: [(start_minute, end_minute)]}`: the parts of the UTC day in
+    which the exporter serves a threshold key no row because it refuses the
+    key's non-finite value (#3140) — served-values' answer, not a reading of
+    the value here: a schedule segment's `reason` "value_non_finite", and
+    for a key with no schedule (no row in any part of the day) its
+    `keys[].reason` "value_non_finite", the whole day."""
+    out = {}
+    if tenant_values is None:
+        return out
+    schedules = tenant_values.schedules or {}
+    for key, schedule in schedules.items():
+        for seg in schedule.segments:
+            if seg.value is None and seg.reason == "value_non_finite":
+                out.setdefault(key, []).append((_minute(seg.start), _minute(seg.end)))
+    for key, entry in (tenant_values.keys or {}).items():
+        if key not in schedules and entry.reason == "value_non_finite":
+            out[key] = [(0, _DAY_MINUTES)]
+    return out
+
+
 def _row_day(parts):
     """One row's whole UTC day from its served parts: `[(start, end, value,
     key)]` in day order, a part it is not served in as `(…, None, None)`."""
@@ -413,6 +434,10 @@ def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
     * A row served on one side only (switched off, dropped, moved to another
       severity, or the tenant added / removed) has None on the other side —
       the shape `backtest_change` reads as "enabled" / "disabled".
+    * `new_refused` (only when set, #3140): the row is not served on the
+      current side because a key serving it on the baseline side is refused
+      there as non-finite in those parts of the day (`_refused_parts`);
+      `backtest_change` judges that HIGH, not a "disabled" MEDIUM.
     * Values are compared over the whole UTC day (`schedules`, both trees
       read at the same instant). One change per (old, new) pair a row takes:
       `window` lists every part of the day the pair holds in, and is absent
@@ -435,6 +460,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
         sides = (_served_rows(old_tree.get(tenant), "baseline"),
                  _served_rows(new_tree.get(tenant), "current"))
         dimensioned = _dimensioned_rows(sides)
+        refused = _refused_parts(new_tree.get(tenant))
         tenant_changes = []
         for identity in set(sides[0]) | set(sides[1]):
             series = (sides[1].get(identity) or sides[0][identity])[0]
@@ -452,6 +478,10 @@ def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
                           "old_value": old_v, "new_value": new_v, "keys": keys}
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
+                if new_v is None and any(rs < end and start < re_
+                                         for k in keys for rs, re_ in refused.get(k, ())
+                                         for start, end in spans):
+                    change["new_refused"] = "non_finite"
                 change["series"] = [series]
                 if not dimensioned_row:
                     siblings = sorted(dimensioned.get(_row_identity(series), ()))
@@ -573,37 +603,33 @@ def _observed_map():
 _COMPARED_SEVERITIES = THRESHOLD_SEVERITIES
 
 
-def parse_threshold_value(key, raw):
-    """`(value, severity)` as the exporter reads one threshold value written
-    for `key`, or None when it is switched off; raises ValueError for a value
-    this backtest cannot read the way the exporter does (#3017).
+# How the `--tenant` side of a value the exporter refuses as non-finite and
+# serves no row for is marked on a change (#3140): the exporter's own
+# `keys[].refused`, so `backtest_change` judges it HIGH — an alert that loses
+# its threshold to a refused value is a config error, not an intended
+# `disable`. A refusal it answers with the platform default is not marked:
+# that default is what is backtested.
+_REFUSED_NO_ROW = "non_finite"
 
-    Mirrors `pkg/config/resolve.go`: a disabled value (`is_disabled`) serves
-    nothing; a `<base>_critical` key's whole value is the number and its row
-    is critical (`resolveCriticalRows`); any other key's value is
-    `splitThresholdSeverity`'s grammar (#3071): split at the LAST `:` into
-    number and severity, each trimmed, an ASCII severity lower-cased
-    (`"70:Critical"` is critical; no `:` is `warning`), and a severity other
-    than `_COMPARED_SEVERITIES` (`70:high`, the empty `70:`) makes the value
-    unreadable (`_lib_validation.split_threshold_severity`). The number is
-    `_lib_validation.parse_threshold_number`'s (#3140): what Go's
-    `ParseFloat` reads, conservatively (a hex float or an underscore is
-    refused although Go accepts it — it only costs a backtest), and finite —
-    `NaN` / `Inf` / `-inf` / `infinity` raise NonFiniteThresholdError, a
-    ValueError: the exporter refuses them as it refuses `abc`.
+# A `--tenant` value spelled with `_` or as a hex float (`1_000`, `0x1p4`):
+# the exporter reads it (Go's ParseFloat), but `--tenant` does not backtest
+# it, as before served-values answered for `--tenant` (#3140 PR2 keeps every
+# exit code that the owner's rulings do not name). Not a reading of the
+# value — the exporter's reading is served-values' — only a refusal to
+# backtest a spelling; a value the exporter refuses is refused there first.
+_SPELLINGS_NOT_BACKTESTED = re.compile(r"_|0[xX]")
 
-    A value the exporter itself cannot read is replaced with the default or
-    dropped, which this tool cannot see from the value alone; for a
-    non-finite one `--tenant` reads what the exporter serves instead
-    (`_written_side`)."""
-    if raw is None or is_disabled(str(raw)):
-        return None
-    if key.endswith("_critical"):
-        number, severity = str(raw).strip(GO_SPACE), "critical"
-    else:
-        # #3071: raises for a severity the exporter cannot read either.
-        number, severity = split_threshold_severity(raw)
-    return parse_threshold_number(number), severity
+# The tenant ids of the tree `_served_written` builds: one per side.
+_WRITTEN_TENANTS = ("backtest-old", "backtest-new")
+
+
+class _NotRead(ValueError):
+    """A `--tenant` value this backtest does not replay; `str()` is the
+    reason `not_backtestable` reports."""
+
+
+def _not_read(raw):
+    return _NotRead(f"value {str(raw)!r}: this backtest cannot read it the way the exporter does")
 
 
 @functools.lru_cache(maxsize=1)
@@ -617,33 +643,80 @@ def _registry_tiers():
             {k: e.get("value") for k, e in keys.items() if e.get("tier") == "defaults"})
 
 
-def _written_side(key, dims, raw):
-    """One side of a `--tenant` change as the row the exporter serves for it
-    (`parse_threshold_value`), with a non-finite number read as the exporter
-    reads it (#3140): it refuses the value, so a base key serves its platform
-    default (`_registry_tiers`, at severity warning — the `:severity` goes
-    with the refused value, #2377), and a `_critical`, dimensioned or
-    `optional_overrides:` key serves no row (None). A key whose default this
-    tool cannot know raises, as any value it cannot read does.
+def _written_tree(conf_d, key, raws):
+    """Write the conf.d `_served_written` hands to da-guard: a root
+    `_defaults.yaml` with the shipped platform defaults (`_registry_tiers`:
+    the `defaults:` tier with its values, the `optional_overrides:` tier
+    declared without one) and one tenant per side writing `key` as given.
+    A key the registry does not know is declared without a default (and,
+    for `<base>_critical`, its base too), so the exporter reads the value
+    rather than dropping an undeclared key."""
+    import yaml  # lazy: only `--tenant` writes a tree
+    tiers, defaults = _registry_tiers()
+    optional = [k for k, t in tiers.items() if t == "optional_overrides"]
+    bare = key.partition("{")[0]
+    for k in ([bare[:-len("_critical")]] if bare.endswith("_critical") else []) + [bare]:
+        if k not in tiers and k not in optional:
+            optional.append(k)
+    root = {"defaults": dict(defaults), "optional_overrides": optional}
+    tenants = {tid: {key: str(raw)} for tid, raw in zip(_WRITTEN_TENANTS, raws) if raw is not None}
+    for name, doc in (("_defaults.yaml", root), ("backtest.yaml", {"tenants": tenants})):
+        path = os.path.join(conf_d, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+        os.chmod(path, 0o600)
 
-    ⚠️ The platform default is the shipped one; a deployment whose root
-    `_defaults.yaml` writes another serves that. `--config-dir` reads the
-    exporter's own answer."""
-    try:
-        return parse_threshold_value(key, raw)
-    except NonFiniteThresholdError:
-        tiers, defaults = _registry_tiers()
-        if dims or key.endswith("_critical") or tiers.get(key) == "optional_overrides":
-            served = None
-        elif defaults.get(key) is not None:
-            served = (float(defaults[key]), "warning")
-        else:
-            raise  # a key the registry does not know: its default is not known here
-        print(f"NOTE: {raw!r} for {key}{dims} is not a finite number; the exporter refuses it and "
-              + ("serves no row for it" if served is None
-                 else f"serves the platform default {_render_served(served[0])} instead")
-              + ", which is what is backtested", file=sys.stderr)
-        return served
+
+def _served_side(tenant_values, key, raw):
+    """One `--tenant` side as served-values reads it (#3140 PR2): `None`
+    when the exporter switches the key off (`keys[].reason` "disabled"),
+    `(number, severity)` of the row it serves — the platform default when
+    it refuses a non-finite value and falls back (`keys[].refused`) — or
+    `_REFUSED_NO_ROW` when it refuses a non-finite value and serves no row.
+    Raises `_NotRead` for any other answer: a value it refuses as
+    unreadable, a non-finite one on a key whose platform default this tool
+    does not know (the registry's), or a key it does not serve as a
+    threshold."""
+    entry = tenant_values.keys.get(key)
+    if entry is None:
+        raise _not_read(raw)
+    if entry.reason == "disabled":
+        return None
+    known = key.partition("{")[0] in _registry_tiers()[0]
+    if entry.refused is not None and (entry.refused != "non_finite" or not known):
+        raise _not_read(raw)
+    if not entry.exporter:
+        if entry.refused is None:
+            raise _not_read(raw)
+        print(f"NOTE: {raw!r} for {key} is not a finite number; the exporter refuses it and "
+              "serves no row for it, which is what is backtested", file=sys.stderr)
+        return _REFUSED_NO_ROW
+    if key not in tenant_values.severities:
+        raise _not_read(raw)
+    served = (tenant_values.values[key], tenant_values.severities[key])
+    if entry.refused is not None:
+        print(f"NOTE: {raw!r} for {key} is not a finite number; the exporter refuses it and "
+              f"serves the platform default {_render_served(served[0])} instead, which is what "
+              "is backtested", file=sys.stderr)
+    return served
+
+
+def _served_written(key, raws):
+    """`[side, ...]` for `raws` (`_served_side`; a side not given is None),
+    read by ONE da-guard served-values run over the tree `_written_tree`
+    writes. Raises `_NotRead` for a spelling `_SPELLINGS_NOT_BACKTESTED`
+    names, and what `load_served_tree` raises."""
+    import tempfile
+    for raw in raws:
+        if raw is not None and _SPELLINGS_NOT_BACKTESTED.search(str(raw)):
+            raise _not_read(raw)
+    if all(raw is None for raw in raws):
+        return [None for _ in raws]
+    with tempfile.TemporaryDirectory(prefix="backtest-tenant-") as conf_d:
+        _written_tree(conf_d, key, raws)
+        tenants = load_served_tree(conf_d).tenants
+    return [None if raw is None else _served_side(tenants[tid], key, raw)
+            for tid, raw in zip(_WRITTEN_TENANTS, raws)]
 
 
 def _no_alert(key):
@@ -658,40 +731,45 @@ def _written_key(change):
     return canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
 
 
-def _written_alert(key, parsed):
+def _written_alert(key, served):
     """The threshold key whose alert compares one side of a change written as
-    `--tenant` gives it, read as `parsed` (`parse_threshold_value`): `N:critical`
-    on a base key is a critical row, compared by the `<key>_critical` alert."""
-    return key + "_critical" if parsed[1] == "critical" and not key.endswith("_critical") else key
+    `--tenant` gives it, served as `served` (`_served_side`): a critical row
+    of a base key is compared by the `<key>_critical` alert."""
+    return key + "_critical" if served[1] == "critical" and not key.endswith("_critical") else key
 
 
 def written_changes(tenant, metric, old_value, new_value):
     """`--tenant`'s one edit as the /metrics rows it changes (#3111), by the
-    rule `extract_changes_from_dirs` applies to two trees, without da-guard:
-    each side's value is read as the exporter reads it
-    (`parse_threshold_value`), and a side is the row of its severity — the
-    base key's warning row, or the critical row its `<key>_critical` alert
-    compares (`_written_alert`). So `70` -> `70:critical` is two rows, the
-    warning one switched off and the critical one switched on, and `70` ->
-    `70` is none. `metric` is the row's alert key (a dimension part kept),
-    its values the numbers alone, `keys` the key as given.
+    rule `extract_changes_from_dirs` applies to two trees: each side is the
+    row the exporter serves for the value (`_served_written`: da-guard
+    served-values over the shipped platform defaults, #3140 PR2), and a side
+    is the row of its severity — the base key's warning row, or the critical
+    row its `<key>_critical` alert compares (`_written_alert`). So `70` ->
+    `70:critical` is two rows, the warning one switched off and the critical
+    one switched on, and `70` -> `70` is none. `metric` is the row's alert
+    key (a dimension part kept), its values the numbers alone, `keys` the
+    key as given. A row the new value loses because the exporter refuses it
+    and serves no row carries `new_refused` (`_REFUSED_NO_ROW`).
 
-    A value this backtest cannot read the way the exporter does is one row
-    of the values as written; `not_backtestable` names why."""
+    A value this backtest does not replay (`_NotRead`) is one row of the
+    values as written, with the reason in `unread`; `not_backtestable`
+    names it. Raises what `load_served_tree` raises."""
     key = canonical_key(metric, DEPRECATED_KEY_ALIASES)
     base, brace, dims = key.partition("{")
     try:
-        sides = [_written_side(base, brace + dims, raw) for raw in (old_value, new_value)]
-    except ValueError:
+        sides = _served_written(key, (old_value, new_value))
+    except _NotRead as exc:
         return [{"tenant": tenant, "metric": metric, "old_value": old_value,
-                 "new_value": new_value}]
+                 "new_value": new_value, "unread": str(exc)}]
     rows = {}
-    for side, parsed in zip(("old_value", "new_value"), sides):
-        if parsed is not None:
-            name = _written_alert(base, parsed) + brace + dims
+    for side, served in zip(("old_value", "new_value"), sides):
+        if served is not None and served is not _REFUSED_NO_ROW:
+            name = _written_alert(base, served) + brace + dims
             rows.setdefault(name, {"old_value": None, "new_value": None})[side] = (
-                _render_served(parsed[0]))
-    return [{"tenant": tenant, "metric": name, **values, "keys": [metric]}
+                _render_served(served[0]))
+    refused = {"new_refused": _REFUSED_NO_ROW} if sides[1] is _REFUSED_NO_ROW else {}
+    return [{"tenant": tenant, "metric": name, **values, "keys": [metric],
+             **(refused if values["new_value"] is None else {})}
             for name, values in sorted(rows.items())
             if values["old_value"] != values["new_value"]]
 
@@ -700,40 +778,19 @@ def _written_alert_keys(change):
     """`(keys, None)`: the threshold keys whose alerts compare a change
     written as `--tenant` gives it — or `(None, reason)`.
 
-    The key as written: a retired spelling goes through the alias table
-    (the exporter's own), and `N:critical` on a base key is a critical row,
-    compared by the `<key>_critical` alert. #3060: each side is compared by
-    the alert of its own severity, so `70` -> `50:critical` is compared by
-    both. A value that is not read as written is a reason — since #3071 that
-    includes a severity no threshold rule selects (`70:high`, `70:`), which
-    makes the exporter's whole value unreadable (`parse_threshold_value`
-    raises).
-
-    #3111: `written_changes` makes every `--tenant` change one /metrics row,
-    so both sides name one alert. (e): an alert key no shipped alert
-    compares (`_no_alert`: mongodb's `_critical`, its pack has no such
-    alert) compares nothing; with no key left the change is not
-    backtested, the reason naming that key."""
+    `written_changes` makes every `--tenant` change one /metrics row named
+    by the alert key that compares it (#3111), so that key is the answer —
+    unless the change is one `written_changes` could not read (`unread`), or
+    no shipped alert compares it ((e): `_no_alert`, mongodb's `_critical`,
+    whose pack has no such alert), which is the reason."""
+    if "unread" in change:
+        return None, change["unread"]
     key = _written_key(change)
-    keys, no_alert = [], []
-    for raw in (change["old_value"], change["new_value"]):
-        try:
-            parsed = parse_threshold_value(key, raw)
-        except ValueError:
-            return None, f"value {str(raw)!r}: this backtest cannot read it the way the exporter does"
-        if parsed is None:
-            continue
-        alert = _written_alert(key, parsed)
-        if _no_alert(alert):
-            no_alert.append(alert)
-        elif alert not in keys:
-            keys.append(alert)
-    if not keys:
-        if not no_alert:
-            return None, "no threshold on either side"
-        reason = observed_map_lib.lookup_reason(observed_map_lib.LookupKind.NO_ALERT, no_alert[0])
-        return None, reason if no_alert[0] == key else f"{no_alert[0]}: {reason}"
-    return keys, None
+    if change["old_value"] is None and change["new_value"] is None:
+        return None, "no threshold on either side"
+    if _no_alert(key):
+        return None, observed_map_lib.lookup_reason(observed_map_lib.LookupKind.NO_ALERT, key)
+    return [key], None
 
 
 def _alert_keys(change):
@@ -961,13 +1018,32 @@ def backtest_change(prom_url, change, lookback_seconds):
     # ±Inf stays too: it is a real sample that does fire.
     total_points = len(values)
 
-    # #3017: the numbers as the exporter reads them (`70:critical` is 70 on
-    # the critical row); `not_backtestable` already refused a value it cannot
-    # read. None is a switched-off side: the disable / enable transitions.
-    key = _written_key(change)
-    old_t, new_t = (parse_threshold_value(key, v) for v in (old_value, new_value))
-    old_t, new_t = (t and t[0] for t in (old_t, new_t))
+    # #3017: the numbers the exporter serves (both sources carry them as
+    # served-values renders them, `_render_served`); None is a side with no
+    # row: the disable / enable transitions.
+    old_t, new_t = (None if v is None else float(v) for v in (old_value, new_value))
     old_disabled, new_disabled = old_t is None, new_t is None
+
+    # #3140 PR2: the new side has no row because the exporter refuses its
+    # non-finite value (served-values' `keys[].refused` for `--tenant`, a
+    # `value_non_finite` segment for two trees) — a config error that
+    # silences the alert, not an intended `disable`.
+    if new_disabled and not old_disabled and change.get("new_refused"):
+        return {
+            "tenant": tenant,
+            "metric": metric,
+            "old_value": old_value,
+            "new_value": new_value,
+            "status": "analyzed",
+            "query": query,
+            "risk": "HIGH",
+            "data_points": total_points,
+            "old_breach_count": count_threshold_breaches(values, old_t, direction),
+            "new_breach_count": 0,
+            "impact_pct": -100.0,
+            "message": (f"Value refused by the exporter ({change['new_refused']}): no row "
+                        "is served — all alerts silenced"),
+        }
 
     if new_disabled and not old_disabled:
         return {
@@ -1529,7 +1605,12 @@ def main():
     if args.config_dir:
         changes = dir_changes
     else:  # `--tenant`: the no-source case already exited above
-        changes = written_changes(args.tenant, args.metric, args.old_value, args.new_value)
+        # #3140 PR2: each value is read by the exporter (served-values over
+        # the shipped platform defaults), so da-guard is needed here too.
+        try:
+            changes = written_changes(args.tenant, args.metric, args.old_value, args.new_value)
+        except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
+            _exit_served_values_error(exc, args)
 
     if not changes:
         print("No threshold changes found.", file=sys.stderr)

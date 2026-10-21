@@ -122,22 +122,28 @@ def _report(**kw):
 class TestClassifyChange:
 
     @pytest.mark.parametrize(
-        "old, new, expected",
+        "old, new, off, expected",
         [
-            (None, 50, "added"),
-            (50, None, "removed"),
-            (80, 50, "tighter"),
-            (50, 80, "looser"),
-            (50, "disable", "toggled"),
-            ("disable", 50, "toggled"),
-            ({"default": 50, "schedule": []}, {"default": 70, "schedule": []}, "modified"),
-            (50, 50, "unchanged"),
+            (None, 50, (False, False), "added"),
+            (50, None, (False, False), "removed"),
+            (80, 50, (False, False), "tighter"),
+            (50, 80, (False, False), "looser"),
+            (50, "disable", (False, True), "toggled"),
+            ("disable", 50, (True, False), "toggled"),
+            ({"default": 50, "schedule": []}, {"default": 70, "schedule": []}, (False, False), "modified"),
+            (50, 50, (False, False), "unchanged"),
         ],
         ids=["added", "removed", "tighter", "looser", "toggled_disable", "toggled_enable",
              "modified_dict", "same_value_unchanged"],
     )
-    def test_classify_change(self, old, new, expected):
-        assert cd.classify_change(old, new) == expected
+    def test_classify_change(self, old, new, off, expected):
+        assert cd.classify_change(old, new, *off) == expected
+
+    def test_switched_off_is_the_callers_answer_not_the_values(self):
+        """#3140 PR2：停用與否是 served-values 的 `keys[].reason` "disabled"（由呼叫端
+        傳入），不是這裡讀值：同樣寫 `disable`、沒說停用就不是 toggled。"""
+        assert cd.classify_change(50, "disable") == "modified"
+        assert cd.classify_change(50, "OFF", False, True) == "toggled"
 
 
 class TestComputeDiff:
@@ -173,7 +179,9 @@ class TestEstimateAffectedAlerts:
 
 
 def test_format_value():
-    assert cd._format_value("disable") == "disabled"
+    """#3140 PR2：顯示 "disabled" 依 exporter 的答案（`disabled` 參數），不讀值。"""
+    assert cd._format_value("OFF", True) == "disabled"
+    assert cd._format_value("disable") == "disable"
     assert cd._format_value(None) == "—"
     assert cd._format_value(50) == "50"
     assert cd._format_value({"schedule": []}) == "(scheduled)"
@@ -210,12 +218,19 @@ class TestCustomAlertDiff:
         same = {"db-b": {"x": _recipe("x")}}
         assert cd.compute_custom_alert_diff(same, same) == {}
 
-    def test_disable_threshold_is_semantically_highlighted(self):
-        """Reef 1: threshold → a disabled value is a silencing, not a param tweak."""
-        for disabled_val in ("disable", "off", "disabled", "false", "disable:warning"):
-            md = cd.render_markdown(_report(custom_alert=_ca_modified("threshold", "100:critical",
-                                                                        disabled_val)))
-            assert "DISABLED (alert silenced)" in md, disabled_val
+    def test_a_switched_off_recipe_is_highlighted_by_its_note(self):
+        """Reef 1：停用的 recipe 是消音，不是參數微調。exporter 停用的 recipe 不送 row，
+        所以是一筆 removed，由 served-values 的 `custom_alerts[].status` 寫出的 note
+        標出（#3140 PR2；`_removed_note`）。"""
+        removed = {"t": [{"name": "pager", "change": "removed", "old": {"metric": "m"},
+                          "new": None, "field_changes": [], "note": cd.SERVED_DISABLED_NOTE}]}
+        md = cd.render_markdown(_report(custom_alert=removed))
+        assert "DISABLED (alert silenced)" in md
+
+    def test_a_threshold_field_change_is_not_read_for_a_disable(self):
+        """served 視圖的 threshold 是 exporter 送的 `<value>:<severity>`，不會是停用字；
+        欄位變更不再自己判停用（#3140 PR2 拿掉 `_threshold_disabled`）。"""
+        assert cd._field_change_annotation("threshold", "100:critical", "disable") == ""
 
     def test_disable_to_enable_not_flagged_as_silencing(self):
         md = cd.render_markdown(_report(custom_alert=_ca_modified("threshold", "disable", "100:critical")))
@@ -224,12 +239,6 @@ class TestCustomAlertDiff:
     def test_mode_page_to_silent_is_highlighted(self):
         md = cd.render_markdown(_report(custom_alert=_ca_modified("mode", "page", "silent")))
         assert "paging suppressed" in md
-
-    def test_threshold_disabled_helper_parity(self):
-        assert cd._threshold_disabled("disable")
-        assert cd._threshold_disabled("off:warning")
-        assert not cd._threshold_disabled("150:critical")
-        assert not cd._threshold_disabled("150")
 
     def test_format_recipe_value_neutralizes_backticks_and_newlines(self):
         """F5 / Reef 4: a backtick is the only code-span break-out; a newline shatters the list."""
@@ -247,7 +256,8 @@ class TestCustomAlertDiff:
             assert line.count("`") % 2 == 0, line
 
     def test_removed_recipe_carries_the_served_note(self):
-        """#1517：served row 消失時分不出刪除、disable、被拒收：報告要說出這點，而不是判定消音。"""
+        """#1517：served row 消失時，note 說明能不能分辨刪除、disable、被拒收；分不出時
+        （SERVED_REMOVED_NOTE）不判定消音。#3140 PR2：分得出時由 served-values 說。"""
         removed = {"t": [{"name": "pager", "change": "removed", "old": {"metric": "m", "threshold": "1:critical"},
                           "new": None, "field_changes": [], "note": cd.SERVED_REMOVED_NOTE}]}
         lines = cd.render_markdown(_report(custom_alert=removed)).splitlines()
@@ -257,7 +267,7 @@ class TestCustomAlertDiff:
         assert section < limits < item
         assert lines[item + 1] == f"  - {cd.SERVED_REMOVED_NOTE}"
         for claim in ("an `op` / `window` / `for` change shows as a `recipe_id` change",
-                      "which of them is not told apart here"):
+                      "the note under it says which when the exporter's reading"):
             assert claim in lines[limits], (claim, lines[limits])
         assert lines[limits].startswith("> ") and lines[limits - 1] == ">"
 

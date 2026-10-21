@@ -15,10 +15,10 @@
     "Go half: pkg/config/threshold_value_parity_test.go (the file says what Go says; the",
     "row resolvers, custom alerts and the subtree overlay agree). Python half:",
     "tests/shared/test_threshold_value_parity.py (_lib_validation.split_threshold_severity,",
-    "parse_threshold_number, is_disabled and custom_alert_disabled,",
-    "backtest_threshold.parse_threshold_value, the unit-sanity",
-    "lint, config_diff / blast_radius _threshold_disabled, custom_alerts/shape.py",
-    "parse_threshold, the severity sets and the schema's thresholdScalar pattern agree)."
+    "parse_threshold_number and custom_alert_disabled, backtest --tenant's reading of",
+    "served-values, the unit-sanity lint, blast_radius _threshold_disabled,",
+    "custom_alerts/shape.py parse_threshold, the severity sets and the schema's",
+    "thresholdScalar pattern agree)."
   ],
   "severities": [
     "warning",

@@ -507,11 +507,14 @@ def _recipe_names(lst: Any) -> list[str]:
 def _threshold_disabled(recipe: dict) -> bool:
     """A custom-alert recipe whose threshold is a three-state opt-out.
 
-    The exporter's reading (custom_alert.go), shared with config_diff:
+    The exporter's reading (custom_alert.go), mirrored:
     `_lib_validation.custom_alert_disabled` splits the optional `:severity`
     with the one grammar (#3071) and tests the value part against the full
     disabled set — so `off` / `disabled` / `false` and `disable:critical`
     are caught, while `disable:bogus` (a parse error in Go) is not.
+    ⚠️ Still a mirror (#3140 PR2): this tool's input is describe-tenant's
+    ADR-024 union of recipes, which carries no served-values
+    `custom_alerts[].status` — config_diff reads that status instead.
     """
     return custom_alert_disabled(recipe.get("threshold", ""))
 
