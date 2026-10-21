@@ -249,7 +249,9 @@ def test_generator_refusal_names_the_file_it_could_not_read(tmp_path, da_guard):
         (c / "db-a.yaml").mkdir()
     d = _diff(tmp_path, da_guard, to_dir)
     assert d.routes.status == "not_computed", d.routes
-    assert "db-a.yaml: is a directory" in d.routes.reason
+    # #3206 R7: the reason is da-guard's (kind + message), not a Python wording.
+    assert "db-a.yaml: cannot be read as a config file (not_regular_file): a directory" \
+        in d.routes.reason, d.routes.reason
     assert d.exit_code == 2
 
 

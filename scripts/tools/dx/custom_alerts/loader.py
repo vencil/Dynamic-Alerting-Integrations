@@ -24,11 +24,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    is_defaults_name,
-    is_hidden_name,
+from _lib_confd import (  # noqa: E402
     is_dir_symlink,
-    defaults_files_in,
     list_config_tree,
     unusable_reason,
     warn_dir_symlink_once,
@@ -42,18 +39,6 @@ class CustomAlertConfigError(ValueError):
 
 #: Carriers `_dir_defaults_alerts` has named as not read in this process.
 _NOT_READ_WARNED: set = set()
-
-
-def _is_dir(p: Path) -> bool:
-    """`Path.is_dir()` that answers False instead of raising.
-
-    Mirrors `os.walk`'s dirs/files split, which is what the caller is asking
-    about. An entry that cannot even be stat'ed is not in `dirs`, so False is
-    the answer that keeps this pass and `_dir_defaults_alerts` disjoint."""
-    try:
-        return p.is_dir()
-    except OSError:
-        return False
 
 
 def _file_record(origin: str, reason: str) -> dict:
@@ -86,33 +71,28 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
     a selection of this module's own could hand `read` a file parse-tree
     does not select (#2906 review)."""
     out: Dict[Path, List[dict]] = {}
-    for root, dirs, files in os.walk(config_dir):
-        # #2086: prune `.`-prefixed directories the way the exporter's walker
-        # (and `list_config_tree`, which `collect_instances` reads through)
-        # does. Without it a `_defaults.yaml` under `.snap/` or a ConfigMap
-        # `..<timestamp>/` payload was loaded here — a broken one landed in
-        # `file_errors` for a file no other plane reads. Same predicate as
-        # the tenant pass, not a second local `startswith(".")`.
-        dirs[:] = [d for d in dirs if not is_hidden_name(d)]
-        # #1588: the carrier is matched by the shared predicate, not by a
-        # literal name. `_DEFAULTS.YAML` used to be invisible here, so a
-        # platform-level `_custom_alerts` list declared in it vanished for
-        # EVERY tenant below it — silently, at rc=0, on the shipped tenant
-        # self-service path.
-        #
-        # #1674 (B8): and ONE carrier per directory — the one the exporter's
-        # chain and describe_tenant read (`select_defaults_carrier`). This
-        # used to EXTEND across every spelling in a directory; a second
-        # spelling is now a misconfiguration every plane names and none
-        # reads, so a `_custom_alerts` list in it is ignored here too.
-        #
-        # ⛔ Which carrier that is, is parse-tree's `not_read` (#2906): a
-        # carrier whose read fails (a dangling symlink, a permission error)
-        # is not in it — its read raises below and it lands in `file_errors`,
-        # and a readable `_defaults.yml` beside it is still read (blind
-        # review of #1674).
+    # #3206 (ADR-036 step 9): the carriers are the config files (Go's `role`)
+    # of class `defaults` in the reader's listing — the entries of the
+    # document it reads the content from, no second walk — whatever their
+    # case (#1588: `_DEFAULTS.YAML` used to be invisible here, so a
+    # platform-level `_custom_alerts` list vanished for every tenant below
+    # it), never under a `.`-prefixed directory (#2086: the walk prunes
+    # those). What is no config file — a directory named like a carrier, a
+    # dangling link — is `collect_instances`'s to name.
+    #
+    # #1674 (B8): ONE carrier per directory — the one the exporter's chain
+    # and describe_tenant read. ⛔ Which one is parse-tree's `not_read`
+    # (#2906): a carrier whose read fails is not in it — its read raises
+    # below and it lands in `file_errors`, and a readable `_defaults.yml`
+    # beside it is still read (blind review of #1674).
+    by_dir: Dict[str, List[Path]] = {}
+    for e in reader.listing().config_files():
+        if e.cls == "defaults":
+            by_dir.setdefault(e.path.rpartition("/")[0], []).append(config_dir / e.path)
+    for d in sorted(by_dir):
+        root = config_dir / d if d else config_dir
         chosen_list = []
-        for p in defaults_files_in(root, files):
+        for p in sorted(by_dir[d]):
             why = reader.not_read(p)
             if why is None:
                 chosen_list.append(p)
@@ -234,27 +214,14 @@ def collect_instances(config_dir: Path, reader=None,
     # Triple order decides the first-fit cap survivor below, so taking the
     # listing's order would flip which recipe a tenant over the cap keeps
     # and change the compiled pack (measured: `from_dir` → `from_dash`).
-    listing = list_config_tree(config_dir)
+    # #3206: the listing is the reader's own (`reader=`): the entries of the
+    # tree-mode document every file below is read from — one snapshot for
+    # this pass and `_dir_defaults_alerts`, split by Go's `role`. So a
+    # defaults carrier is either a config file (`_dir_defaults_alerts` reads
+    # it) or not (named here) — never both, never neither.
+    listing = list_config_tree(config_dir, reader=reader)
     entries = sorted(listing.files)
     for bad in listing.unusable:
-        # ⛔ Defaults carriers are skipped ONLY when `_dir_defaults_alerts`
-        # can see them, and the dividing line is exactly `os.walk`'s: it
-        # classifies by `is_dir()`, putting a directory in `dirs` and
-        # everything else — a broken symlink included — in `files`.
-        #
-        # So a broken symlink named `_defaults.yaml` IS quarantined there and
-        # must be skipped here, or one path yields two `file_errors` records
-        # and the caveat line says "2" for one file — the exact double-count
-        # `unusable_config_paths` was narrowed twice to avoid. A DIRECTORY
-        # named `_defaults.yaml/` is NOT in `files`, so nobody else names it
-        # and this pass must.
-        #
-        # ⚠️ The first version skipped both and left the directory case
-        # silent, arguing the silence predated #1588. Blind review measured
-        # it: true, and irrelevant — the commit claimed every reader names
-        # what it drops, and this was the one path where that was false.
-        if is_defaults_name(bad.name) and not _is_dir(bad):
-            continue
         # ⛔ A DIRECTORY SYMLINK is not a quarantined recipe (#1972 blind
         # review F2). It is a subtree neither this walk nor the exporter
         # enters — kubelet's `team-a -> ..data/team-a` — so there is no
@@ -263,15 +230,18 @@ def collect_instances(config_dir: Path, reader=None,
         # refused to write (rc 0 → 1) over a tree the exporter serves fine.
         # Named on stderr, in `describe_tenant`'s wording, once per process
         # (describe_tenant names it too), and not counted.
+        reason = unusable_reason(bad, listing.listing)
         if is_dir_symlink(bad):
-            warn_dir_symlink_once(bad)
+            warn_dir_symlink_once(bad, reason)
             continue
-        file_errors.append(_file_record(
-            bad.relative_to(config_dir).as_posix(), unusable_reason(bad)))
-    # `entries` are regular, non-hidden files with either YAML spelling
-    # (#1603) — `list_config_tree` already applied all three filters.
+        rel = bad.relative_to(config_dir).as_posix() if bad != config_dir else "."
+        file_errors.append(_file_record(rel, reason))
+    # `entries` are the config files the exporter's walk lists — non-hidden,
+    # either YAML spelling (#1603) — every filter is da-guard's.
+    carriers = {listing.listing.root / e.path for e in listing.listing.config_files()
+                if e.cls == "defaults"} if listing.listing is not None else set()
     for path in entries:
-        if is_defaults_name(path.name):
+        if path in carriers:
             continue
         try:
             # Tenant ids are the keys' source text, as the exporter reads

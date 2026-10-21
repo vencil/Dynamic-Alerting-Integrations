@@ -344,3 +344,25 @@ func TestParseTreeList_CallerErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestWalkEntries_RefusesAPathRecordedTwice: one entry per path is the
+// document's contract. A walk that records a path twice (as one once did for
+// a config-named directory it could not list) fails here, naming the path,
+// in every mode — instead of writing a document every reader refuses whole.
+func TestWalkEntries_RefusesAPathRecordedTwice(t *testing.T) {
+	scan := &config.TreeScan{
+		AbsRoot:  t.TempDir(),
+		Keys:     []string{"a.yaml"},
+		NotFiles: []config.NotFile{{RelKey: "a.yaml", Reason: config.NotFileDirectory}},
+	}
+	if _, err := parseTreeListOf(scan); err == nil || !strings.Contains(err.Error(), `"a.yaml" twice`) {
+		t.Fatalf("list mode: err = %v, want the path named as recorded twice", err)
+	}
+	if _, err := parseTreeOf(scan); err == nil || !strings.Contains(err.Error(), `"a.yaml" twice`) {
+		t.Fatalf("tree mode: err = %v, want the path named as recorded twice", err)
+	}
+	scan.NotFiles = nil
+	if _, err := parseTreeListOf(scan); err != nil {
+		t.Fatalf("control, one record per path: %v", err)
+	}
+}

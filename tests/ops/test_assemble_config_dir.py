@@ -665,7 +665,17 @@ class TestDuplicateTenantRefusal:
             stdout = "not json at all"
             stderr = ""
 
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+        real_run = subprocess.run
+
+        def run(*a, **k):
+            # #3206: the conf.d listing is a da-guard subprocess too
+            # (`parse-tree --list-only`); only the validator is faked.
+            cmd = a[0] if a else k.get("args")
+            if isinstance(cmd, (list, tuple)) and "--list-only" in cmd:
+                return real_run(*a, **k)
+            return _R()
+
+        monkeypatch.setattr(subprocess, "run", run)
         cli_argv("assemble", "--sources", str(s), "--output", str(out))
         assert main() == 2
         assert not out.exists()

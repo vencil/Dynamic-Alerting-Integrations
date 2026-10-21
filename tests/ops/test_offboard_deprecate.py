@@ -537,7 +537,7 @@ def test_main_names_unusable_entries_once_per_invocation(
         assert text.count(name) == 1, (
             f"{name} named {text.count(name)} time(s) for three metrics; "
             f"expected once per invocation.\n{text}")
-    assert "is a directory, not a config file" in text
+    assert "(not_regular_file): a directory with a config file name" in text  # #3206 R7
     # ⛔ warn-and-CONTINUE: the tool must still have processed every metric.
     assert text.count("Processing:") == 3, (
         f"warned but stopped serving; got:\n{text}")

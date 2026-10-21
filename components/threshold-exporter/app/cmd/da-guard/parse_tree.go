@@ -214,7 +214,11 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"file's content. With --config-dir, or with --names.")
 	fs.StringVar(&f.names, "names", "",
 		"Names mode (with --list-only, without --config-dir): classify the base names in\n"+
-			"this file ('-' = stdin), a JSON array of strings, by name alone.")
+			"this file ('-' = stdin), a JSON array of strings, by name alone. Known limit: a\n"+
+			"lone UTF-16 surrogate escape in a string (\"\\ud800\") is read as U+FFFD, as\n"+
+			"encoding/json reads it, so the entry answers for that other name (exit 0); a\n"+
+			"caller that may hold such a name refuses it before asking (no ConfigMap key or\n"+
+			"file name can hold one).")
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --path <rel> --input <file|->\n", programName, parseTreeCmd)

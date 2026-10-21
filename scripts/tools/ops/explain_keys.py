@@ -64,6 +64,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_io import YamlFileError, safe_label  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
@@ -90,6 +91,16 @@ def _entry(v: kv.KeyVerdict) -> dict[str, Any]:
 
 def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
             timeout: float) -> dict[str, Any]:
+    """The explain-keys document. *binary* / *timeout* (the CLI's
+    `--da-guard-binary` / `--timeout`) are this run's da-guard for every
+    read — the conf.d listing `_lib_confd` takes on its behalf as well as
+    the tree and served-values reads (`_lib_parse_tree.use_da_guard`, #3206)."""
+    with _lib_parse_tree.use_da_guard(binary, timeout):
+        return _explain(conf_d, tenants, at, binary, timeout)
+
+
+def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
+             timeout: float) -> dict[str, Any]:
     if not conf_d.is_dir():
         raise ExplainError(f"--config-dir is not a directory: {conf_d}")
     # The verdict takes `_policies` from the root `_defaults.yaml` only, as

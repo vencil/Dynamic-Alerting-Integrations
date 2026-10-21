@@ -33,6 +33,39 @@ def conf_d(tmp_path):
     return d
 
 
+def _run_env(env_binary, *args):
+    """`_run` with `$DA_GUARD_BINARY` set to *env_binary* (unset for None)
+    and no da-guard on `$PATH`."""
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "DA_GUARD_BINARY"}
+    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                  if not (Path(p) / "da-guard").exists())
+    if env_binary is not None:
+        env["DA_GUARD_BINARY"] = env_binary
+    return subprocess.run([sys.executable, "-X", "utf8", ek.__file__, *map(str, args)],
+                          capture_output=True, encoding="utf-8", errors="replace",
+                          timeout=300, env=env)
+
+
+@pytest.mark.parametrize("env", ["none", "decoy"])
+def test_the_flag_binary_reads_and_lists(conf_d, tmp_path, da_guard_binary, env):
+    """#3206 round 2 (M2): `--da-guard-binary` / `--timeout` are THE da-guard
+    of the run — the conf.d listing `_lib_confd` takes on its behalf (the
+    root `_policies` note, the root platform files) as well as the tree and
+    served-values reads. Flag only: rc 0. Flag plus a `$DA_GUARD_BINARY`
+    that records and fails: no stage runs it."""
+    from _platform_fs import require_shebang_scripts
+    require_shebang_scripts()
+    log = tmp_path / "decoy-calls"
+    decoy = tmp_path / "decoy-da-guard"
+    decoy.write_text(f"#!/bin/sh\necho \"$*\" >> '{log}'\nexit 9\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    p = _run_env(str(decoy) if env == "decoy" else None, "--config-dir", conf_d,
+                 "--tenant", "db-a", "--da-guard-binary", da_guard_binary, "--timeout", "120")
+    assert p.returncode == 0, p.stderr
+    assert not log.exists(), log.read_text(encoding="utf-8")
+
+
 def _json(p):
     doc = json.loads(p.stdout)
     assert doc["schema"] == ek.SCHEMA

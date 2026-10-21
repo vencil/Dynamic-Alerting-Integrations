@@ -36,7 +36,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from _platform_fs import require_case_sensitive_names, require_tool, symlink_or_skip  # noqa: E402
+from _platform_fs import (  # noqa: E402
+    require_case_sensitive_names, require_posix_modes, require_tool, symlink_or_skip)
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ops" / "configmap_assemble.py"
@@ -158,6 +159,24 @@ def _run(config_dir, output, *, shim: Path | None = None,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         env=env, timeout=300,
     )
+
+
+_REAL_RUN = subprocess.run
+
+
+def _listing_passes(fake):
+    """*fake* for every subprocess but `da-guard parse-tree --list-only`.
+
+    #3206: the script lists the conf.d through da-guard (a subprocess)
+    before it shells out to the validator or kubectl; a blanket patch of
+    `subprocess.run` would hand that call the validator's stub. The arms
+    here fake the validator / kubectl only, so the listing runs for real."""
+    def run(*a, **k):
+        cmd = a[0] if a else k.get("args")
+        if isinstance(cmd, (list, tuple)) and "--list-only" in cmd:
+            return _REAL_RUN(*a, **k)
+        return fake(*a, **k)
+    return run
 
 
 def _import_script(probe: str):
@@ -669,7 +688,7 @@ class TestNeverTreatsCannotMeasureAsClean:
             stdout = "not json at all"
             stderr = ""
 
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", _listing_passes(lambda *a, **k: _R()))
         rc = mod.main(["--config-dir", str(d), "--output", str(_out(tmp_path))])
         assert rc == 2
 
@@ -701,7 +720,7 @@ class TestNeverTreatsCannotMeasureAsClean:
             }])
             stderr = ""
 
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", _listing_passes(lambda *a, **k: _R()))
         assert mod.main(["--config-dir", str(d),
                          "--output", str(_out(tmp_path))]) == 2
 
@@ -731,7 +750,7 @@ class TestNeverTreatsCannotMeasureAsClean:
                 "the call must pass its own bound, not rely on a default")
             raise subprocess.TimeoutExpired(cmd="validate_config", timeout=k["timeout"])
 
-        monkeypatch.setattr(subprocess, "run", _hang)
+        monkeypatch.setattr(subprocess, "run", _listing_passes(_hang))
         assert mod.main(["--config-dir", str(d),
                          "--output", str(_out(tmp_path))]) == 2
 
@@ -746,7 +765,7 @@ class TestNeverTreatsCannotMeasureAsClean:
             stdout = json.dumps([{"check": "yaml_syntax", "status": "pass"}])
             stderr = ""
 
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(subprocess, "run", _listing_passes(lambda *a, **k: _R()))
         rc = mod.main(["--config-dir", str(d), "--output", str(_out(tmp_path))])
         assert rc == 2
 
@@ -784,7 +803,7 @@ class TestNeverTreatsCannotMeasureAsClean:
             # validator's JSON to the kubectl call as well.
             return _Kubectl() if cmd[0] == "kubectl" else _Validator()
 
-        monkeypatch.setattr(subprocess, "run", _fake_run)
+        monkeypatch.setattr(subprocess, "run", _listing_passes(_fake_run))
         assert mod.main(["--config-dir", str(d),
                          "--output", str(_out(tmp_path))]) == 0  # … not our axis
 
@@ -1027,7 +1046,12 @@ class TestFileNamesThatCannotBeConfigMapKeys:
         valid UTF-8 — ordinary on POSIX, where a name is bytes — ended the
         run in a `UnicodeEncodeError` traceback instead of the by-name
         refusal this whole class is about. `os.fsencode` counts the same
-        bytes without raising."""
+        bytes without raising.
+
+        #3206 R3: the conf.d is listed by `da-guard parse-tree --list-only`,
+        whose JSON cannot carry a name that is not UTF-8 — so the WHOLE tree
+        is refused (rc 2, naming the file), not that one key (rc 1). Still no
+        traceback, still the name, still nothing written."""
         d = _tree(tmp_path, ["db-a.yaml"])
         try:
             with open(os.path.join(os.fsencode(str(d)), b"db-\xff.yaml"),
@@ -1036,10 +1060,10 @@ class TestFileNamesThatCannotBeConfigMapKeys:
         except (OSError, ValueError):  # pragma: no cover - exotic filesystem
             pytest.skip("this filesystem will not hold a non-UTF-8 name")
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
-        assert r.returncode == 1, r.stdout + r.stderr
+        assert r.returncode == 2, r.stdout + r.stderr
         assert "Traceback" not in r.stderr, r.stderr
         assert "UnicodeEncodeError" not in r.stderr, r.stderr
-        assert "udcff" in r.stderr, r.stderr
+        assert "not valid UTF-8" in r.stderr and "db-" in r.stderr, r.stderr
         assert not _out(tmp_path).exists()
 
 
@@ -1146,10 +1170,57 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
         assert r.returncode == 0, r.stdout + r.stderr
         assert "db-gone.yaml" in r.stderr, r.stderr
         assert "db-dir.yaml" in r.stderr, r.stderr
-        assert "broken symlink" in r.stderr, r.stderr
+        # #3206 R7: da-guard's words — a dangling link cannot be statted.
+        assert "(read_failure): the path cannot be statted" in r.stderr, r.stderr
+        assert "(not_regular_file): a directory with a config file name" in r.stderr, r.stderr
         # …and they really are absent from the artifact, which is why being
         # silent about them was the defect.
         assert _keys(_argv_of(dump)) == {"_defaults.yaml", "db-a.yaml"}
+
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="uid 0 reads a chmod-000 file, so it is not unreadable here")
+    def test_an_unreadable_regular_file_is_refused_not_dropped(
+            self, tmp_path, kubectl_shim):
+        """#3206 round 2 (M1): a REGULAR file that cannot be read is a
+        carrier, not an unusable entry — the uniqueness check cannot read it
+        and the run refuses (rc 2). Round 1 listed it as unusable: a WARN,
+        a ConfigMap one tenant short, rc 0 — a deployment gate letting a
+        tenant disappear with a green light. In-process twin at any uid:
+        `test_an_unopenable_regular_file_is_a_carrier`."""
+        require_posix_modes()
+        d = _tree(tmp_path, ["db-a.yaml", "db-locked.yaml"])
+        (d / "db-locked.yaml").chmod(0o000)
+        try:
+            r = _run(d, _out(tmp_path), shim=kubectl_shim)
+        finally:
+            (d / "db-locked.yaml").chmod(0o644)
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert not _out(tmp_path).exists()
+        assert "absent from the ConfigMap" not in r.stderr, r.stderr
+
+    def test_an_unopenable_regular_file_is_a_carrier(self, tmp_path, monkeypatch):
+        """The same at any uid, at the enumeration: da-guard's listing says the
+        file cannot be opened, and its role is `config` (Go's verdict: nothing
+        proves it is not a file), so it is a carrier the rest of the run must
+        read — not a WARNed drop. The role alone decides (#3206)."""
+        import _lib_parse_tree as pt
+        mod = _import_script("cma_probe_m1")
+        d = _tree(tmp_path, ["db-a.yaml", "db-locked.yaml"])
+        real = pt.run_list
+
+        def run_list(r, binary=None, timeout=None):
+            doc = real(r, binary, timeout)
+            for e in doc["entries"]:
+                if e["path"] == "db-locked.yaml":
+                    e["problem"] = {"kind": "read_failure",
+                                    "message": "the file cannot be read (read_error)"}
+            return doc
+
+        monkeypatch.setattr(pt, "run_list", run_list)
+        carriers, unusable, _listing = mod._carriers(d)
+        assert d / "db-locked.yaml" in carriers
+        assert unusable == []
 
     def test_a_long_list_is_capped_and_says_that_it_is(self, tmp_path,
                                                        kubectl_shim):
@@ -1388,7 +1459,7 @@ class TestKubectlIsAHardPrerequisite:
                 "default that does not exist")
             raise subprocess.TimeoutExpired(cmd="kubectl", timeout=k["timeout"])
 
-        monkeypatch.setattr(subprocess, "run", _dispatch)
+        monkeypatch.setattr(subprocess, "run", _listing_passes(_dispatch))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             rc = mod.main(["--config-dir", str(d), "--output", str(out)])

@@ -130,19 +130,21 @@ def _read_today(path: Path) -> tuple[Optional[Any], Optional[str]]:
     return data, None
 
 
-def read_tree_today(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
+def read_tree_today(root: Path, listing: Any = None) -> tuple[dict[str, Any], dict[str, str]]:
     """({rel: data} read, {rel: reason} refused) — the files the route
     generator reads, by its selection (`_grar_parse._parse_config_files`):
     the shared walk (`list_config_tree`), one defaults carrier per directory
     (`select_defaults_carrier` over the readable ones), every unusable entry
-    booked as refused."""
-    listing = list_config_tree(root)
+    booked as refused. *listing*: the snapshot the caller holds (#3206: the
+    audit's own parse-tree document — no second walk)."""
+    listing = list_config_tree(root, listing=listing)
     if any(p == root for p in listing.unusable):
-        raise AuditError(f"config directory could not be read: {root} — {unusable_reason(root)}")
+        raise AuditError(f"config directory could not be read: {root} — "
+                         f"{unusable_reason(root, listing.listing)}")
     read: dict[str, Any] = {}
     refused: dict[str, str] = {}
     for bad in listing.unusable:
-        refused[bad.relative_to(root).as_posix()] = unusable_reason(bad)
+        refused[bad.relative_to(root).as_posix()] = unusable_reason(bad, listing.listing)
     carriers: dict[Path, list[Path]] = {}
     for p in listing.files:
         if is_defaults_name(p.name):
@@ -503,11 +505,24 @@ def empty_report() -> dict:
 
 
 def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIMEOUT) -> dict:
-    """The report for the conf.d at `root`. Raises AuditError (exit 2)."""
+    """The report for the conf.d at `root`. Raises AuditError (exit 2).
+    *binary* / *timeout* (the CLI's `--da-guard-binary` / `--timeout`) are
+    this run's da-guard for every read (`_lib_parse_tree.use_da_guard`,
+    #3206)."""
+    with _lib_parse_tree.use_da_guard(binary, timeout):
+        return _audit(root, binary, timeout)
+
+
+def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
     if not root.is_dir():
         raise AuditError(f"config directory not found: {root}")
     doc = run_parse_tree(root, binary, timeout)
-    today_read, today_refused = read_tree_today(root)
+    try:
+        listing = _lib_parse_tree.listing_of(_lib_parse_tree.tree_of(doc), root)
+    except _lib_parse_tree.ParseTreeError as e:
+        raise AuditError(str(e)) from e
+    # #3206: today's selection is asked of the same snapshot parse-tree read.
+    today_read, today_refused = read_tree_today(root, listing)
     report = empty_report()
     report["config_dir"] = str(root)
     report["da_guard_version"] = doc.get("da_guard_version")

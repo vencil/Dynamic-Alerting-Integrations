@@ -2092,10 +2092,10 @@ class TestKustomizeBaseEnumeratesConfd:
             err = capsys.readouterr().err
             files = _kust_files(tmp)
             assert 't-dir.yaml' not in files
-            assert "'t-dir.yaml'" in err and 'is a directory' in err
+            assert "'t-dir.yaml'" in err and '(not_regular_file): a directory' in err  # #3206 R7
             if broken:
                 assert 't-gone.yaml' not in files
-                assert "'t-gone.yaml'" in err and 'broken symlink' in err
+                assert "'t-gone.yaml'" in err and '(read_failure): the path cannot be statted' in err  # #3206 R7
 
     def test_a_second_defaults_spelling_is_listed_not_collapsed(self):
         """Two defaults spellings side by side are two keys, never collapsed.

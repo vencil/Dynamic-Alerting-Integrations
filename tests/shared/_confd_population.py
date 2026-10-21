@@ -12,7 +12,9 @@ never parametrized.
 Membership here is the UNION of three structurally different keys, each
 derived from the file rather than from a list of tools:
 
-  K1  the file binds `_lib_confd` (an `Import` / `ImportFrom` node, not a
+  K1  the file binds a conf.d reader library — `_lib_confd`, or since
+      #3206 `_lib_parse_tree` / `_lib_parse_cache`, which list and read a
+      conf.d through da-guard (an `Import` / `ImportFrom` node, not a
       substring — a comment saying "see _lib_confd" is not a reader);
   K2  the file declares one of `CONFD_FLAGS` literally in `add_argument`;
   K3  the source mentions one of `CONFD_TEXT_HINTS` (the historical net,
@@ -42,7 +44,10 @@ CONFD_FLAGS = ("--config-dir", "--conf-d", "--confd", "--config-base",
 # else about it matched.
 CONFD_TEXT_HINTS = ("config_dir", "conf-d", "conf_d", "conf.d")
 
-_LIB = "_lib_confd"
+#: #3206: a tool that lists a conf.d through `_lib_parse_tree.list_tree` /
+#: a `_lib_parse_cache.ConfdReader`'s `listing()` need not import `_lib_confd` at all; with
+#: K1 keyed on `_lib_confd` alone it would leave the population silently.
+_LIBS = ("_lib_confd", "_lib_parse_tree", "_lib_parse_cache")
 
 
 def parse(path: pathlib.Path) -> ast.AST | None:
@@ -59,15 +64,19 @@ def parse(path: pathlib.Path) -> ast.AST | None:
         return None
 
 
+def _is_lib(name: str) -> bool:
+    return any(name == lib or name.endswith("." + lib) for lib in _LIBS)
+
+
 def imports_lib_confd(tree: ast.AST) -> bool:
-    """K1 — does this module bind `_lib_confd` through an import node?"""
+    """K1 — does this module bind a conf.d reader library (`_LIBS`) through
+    an import node?"""
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            if node.module == _LIB or (node.module or "").endswith("." + _LIB):
+            if _is_lib(node.module or ""):
                 return True
         elif isinstance(node, ast.Import):
-            if any(a.name == _LIB or a.name.endswith("." + _LIB)
-                   for a in node.names):
+            if any(_is_lib(a.name) for a in node.names):
                 return True
     return False
 

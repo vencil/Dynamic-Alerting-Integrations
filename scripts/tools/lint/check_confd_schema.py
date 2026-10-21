@@ -72,12 +72,6 @@ from _lib_io import misread_scalar_nodes  # noqa: E402  (#2695)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the conf.d reader)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
-from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    has_yaml_extension,
-    is_defaults_document_name,
-    is_defaults_name,
-    is_hidden_name,
-)
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
 _DEFAULT_SCHEMA = os.path.normpath(
@@ -100,23 +94,11 @@ _DEFAULT_PROFILES_SCHEMA = os.path.normpath(
 ROUTING_PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
 
 
-def _is_defaults_file(basename: str) -> bool:
-    """`_defaults.yaml` / `_defaults-multidb.yaml` … — the platform default files
-    (top-level keys guarded by platform-defaults.schema.json). Other `_*` files
-    (`_routing_profiles`, `_domain_policy`, `_instance_mapping`, `_rbac` …) have
-    their own shapes/validators and remain skipped.
-
-    ⛔ PREFIX, and deliberately NOT `_lib_confd.is_defaults_name`. That
-    predicate answers a different question — "is this the chain carrier the
-    exporter merges", an EXACT match — while `_defaults-multidb.yaml` is a
-    platform-defaults document this gate must validate and the exporter
-    never merges. #1588 briefly collapsed the two and blind review measured
-    the damage on the read AND write planes. The fix here is the CASE fold
-    this function was missing (`_DEFAULTS.YAML` returned False, so a broken
-    platform-defaults file skipped the schema gate entirely at rc=0), not a
-    change of shape.
-    """
-    return is_defaults_document_name(basename)  # #2164: one rule, in _lib_confd
+def _unreadable_line(rel: str, kind: str, message: str) -> str:
+    """One line for an entry the gate cannot read, by its kind."""
+    what = {"not_regular_file": "not a regular file",
+            "read_failure": "cannot be read"}.get(kind, "cannot read/parse YAML")
+    return f"{rel}: {what} ({kind}): {' '.join(message.split())}"
 
 
 class _CallerError(Exception):
@@ -302,20 +284,22 @@ def _explain(exc, validator) -> str:
     return err.message
 
 
-def _iter_yaml_files(config_dir: str) -> list[str]:
-    """Every YAML carrier the exporter would read under *config_dir*.
+def _iter_yaml_files(config_dir: str, reader=None) -> list:
+    """Every path the exporter's walk lists under *config_dir*, as
+    `_lib_parse_tree.Entry` objects sorted by path: the config files (Go's
+    `role` `config`) and what is no config file — a config-named directory,
+    a dangling link, a directory that cannot be listed ("." for the root) —
+    which `validate_dir` refuses (exit 2) instead of passing a tree it did
+    not read.
 
-    #2360: `.`-prefixed names are skipped like the exporter's walker does —
-    hidden FILES and hidden DIRECTORIES (pruned in place, so nothing under
-    `.snap/` is opened: a broken file there must not make this exit 2).
-    """
-    out: list[str] = []
-    for root, dirs, files in os.walk(config_dir):
-        dirs[:] = [d for d in dirs if not is_hidden_name(d)]
-        for fn in files:
-            if has_yaml_extension(fn) and not is_hidden_name(fn):
-                out.append(os.path.join(root, fn))
-    return sorted(out)
+    #3206 (ADR-036 step 9): the entries of the tree-mode document
+    `validate_dir` reads the content from (*reader*, the run's by default) —
+    not a second walk that may see another tree — and every name question
+    (hidden, `_`, the `_defaults` document prefix) is da-guard's; until then
+    this was an `os.walk` with its own copy of the hidden / extension rules
+    (#2360). Raises ParseTreeError."""
+    reader = reader or _lib_parse_cache.reader_for(config_dir)
+    return list(reader.listing().entries)
 
 
 def misread_scalar_violations(rel: str, root: object, schema: dict,
@@ -378,8 +362,17 @@ def validate_dir(config_dir: str, schema: dict, validator,
                  warnings: list[str] | None = None, *,
                  quoting_reported_for: frozenset[str] | None = None,
                  not_read: list[str] | None = None,
+                 unreadable: list[str] | None = None,
                  ) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
+
+    `unreadable`, when given, collects one line per entry the gate cannot
+    read — what Go's `role` says is no config file (a config-named
+    directory, a directory symlink, a directory it cannot list, a dangling
+    link) and a config file parse-tree cannot open or parse — and the walk
+    goes on, so every violation of the rest of the tree is still reported;
+    the caller exits 2 for them. Without the list the first such entry
+    raises `_CallerError`.
 
     `not_read`, when given, collects `<rel> (<reason>)` for each file
     parse-tree says no reader reads (its `not_read` list: the `_defaults`
@@ -420,13 +413,38 @@ def validate_dir(config_dir: str, schema: dict, validator,
     extra = [s for s in (platform_schema, profiles_schema) if s is not None]
     registry = schema_registry(schema, *extra) if extra else None
     reader = _lib_parse_cache.reader_for(config_dir)
-    for path in _iter_yaml_files(config_dir):
-        rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
-        basename = os.path.basename(path)
-        is_defaults = platform_schema is not None and _is_defaults_file(basename)
+
+    def _cannot_read(line: str) -> None:
+        if unreadable is None:
+            raise _CallerError(line)
+        unreadable.append(line)
+
+    try:
+        listed = _iter_yaml_files(config_dir, reader)
+    except ParseTreeError as exc:
+        raise _CallerError(f"{config_dir}: cannot read the conf.d through "
+                           f"`da-guard parse-tree` (ADR-036): {' '.join(str(exc).split())}")
+    for entry in listed:
+        rel = entry.path
+        path = os.path.join(config_dir, rel)
+        basename = entry.name
+        if not entry.config_file:
+            # Go's verdict: no config file here (#3206) — named, never skipped.
+            kind, message = entry.problem or ("not_regular_file", "not a config file")
+            _cannot_read(_unreadable_line(rel, kind, message))
+            continue
+        # `_defaults.yaml` / `_defaults-multidb.yaml` … — the platform
+        # default DOCUMENTS (top-level keys guarded by
+        # platform-defaults.schema.json): a `_defaults` PREFIX, any case,
+        # deliberately not the exact chain carrier — #1588 collapsed the two
+        # once and blind review measured the damage. da-guard's answer
+        # (`defaults_document`, #3206). Other `_*` files (`_routing_profiles`,
+        # `_domain_policy`, `_rbac` …) have their own validators and stay
+        # skipped.
+        is_defaults = platform_schema is not None and entry.defaults_document
         is_profiles = (profiles_schema is not None
                        and basename in ROUTING_PROFILES_NAMES)
-        if basename.startswith("_") and not is_defaults and not is_profiles:
+        if entry.reserved and not is_defaults and not is_profiles:
             skipped.append(rel)
             continue
         if is_profiles:
@@ -465,9 +483,10 @@ def validate_dir(config_dir: str, schema: dict, validator,
             # Unreadable file or malformed YAML is an environment/caller
             # error, not a schema violation — exit 2, with parse-tree's kind
             # (a repeated key, several documents, a tag yaml.v3 does not
-            # take: the exporter does not read that file either).
-            raise _CallerError(f"{rel}: cannot read/parse YAML ({exc.kind}): "
-                               f"{' '.join(exc.message.split())}")
+            # take: the exporter does not read that file either), after the
+            # rest of the tree is checked (#3206: every finding, not the first).
+            _cannot_read(_unreadable_line(rel, exc.kind, exc.message))
+            continue
         except ParseTreeError as exc:
             raise _CallerError(f"{rel}: cannot read the conf.d through "
                                f"`da-guard parse-tree` (ADR-036): {' '.join(str(exc).split())}")
@@ -630,6 +649,7 @@ def main() -> int:
     warnings: list[str] = []
     skipped: list[str] = []
     not_read_all: list[str] = []
+    unreadable_all: list[str] = []
     multi = len(args.config_dir) > 1
     for config_dir in args.config_dir:
         # ADR-036 step 4: no usable da-guard is rc 2 on every tree, an empty
@@ -643,14 +663,16 @@ def main() -> int:
             return EXIT_CALLER_ERROR
         d_warnings: list[str] = []
         d_not_read: list[str] = []
+        d_unreadable: list[str] = []
         try:
             d_checked, d_violations, d_skipped = validate_dir(
                 config_dir, schema, jsonschema, platform_schema, profiles_schema,
-                warnings=d_warnings, not_read=d_not_read)
+                warnings=d_warnings, not_read=d_not_read, unreadable=d_unreadable)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         prefix = f"{config_dir.replace(os.sep, '/')}/" if multi else ""
+        unreadable_all.extend(f"{prefix}{u}" for u in d_unreadable)
         checked += d_checked
         violations.extend(v.replace("ERROR: ", f"ERROR: {prefix}", 1) for v in d_violations)
         warnings.extend(w.replace("WARN: ", f"WARN: {prefix}", 1) for w in d_warnings)
@@ -675,6 +697,16 @@ def main() -> int:
               f"Fix the conf.d YAML, or the schema (docs/schemas/tenant-config.schema.json "
               f"/ platform-defaults.schema.json / routing-profiles.schema.json) if the "
               f"schema is wrong.", file=sys.stderr)
+    if unreadable_all:
+        # #3206: every entry the gate cannot read, all of them, after the
+        # violations of the rest of the tree — exit 2: the gate cannot vouch
+        # for a tree it could not read whole.
+        for msg in unreadable_all:
+            print(f"ERROR: {safe_label(msg)}", file=sys.stderr)
+        print(f"\n{len(unreadable_all)} conf.d entr(y/ies) could not be read; the tree "
+              f"was not checked whole.", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    if violations:
         return EXIT_VIOLATION
 
     tail = f" ({len(warnings)} warning(s) above)" if warnings else ""

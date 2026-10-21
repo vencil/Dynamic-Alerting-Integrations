@@ -2082,37 +2082,33 @@ def test_a_broken_defaults_in_a_hidden_dir_is_not_a_file_error(tmp_path):
     assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
 
 
-def test_an_unlistable_subdirectory_is_named_not_dropped(tmp_path, monkeypatch):
+def test_an_unlistable_subdirectory_is_named_not_dropped(tmp_path, unlistable_dir):
     """A sub-directory the walk cannot enumerate is a whole subtree NOT read,
-    and it must land in `file_errors` (via `listing.unusable`, which carries
-    `list_config_tree`'s `unscannable`). `rglob` dropped such a subtree with
-    no record at all; this pins that #2086 now names it.
+    and it must land in `file_errors` (da-guard's role `unlistable_dir`,
+    `read_failure`). `rglob` dropped such a subtree with no record at all;
+    this pins that #2086 now names it.
 
-    ⛔ Fault injected at `os.scandir` — the call `os.walk` (inside
-    `list_config_tree`) makes per directory — NOT by `chmod 000`: under uid 0
-    the mode bits are ignored, the directory stays readable, and the test
-    would pass without ever exercising the failure."""
+    ⛔ #3206: the walk is da-guard's (the reader's tree-mode document), so the
+    fault is injected into that document (`unlistable_dir`: the entry
+    parse-tree writes for a directory it cannot list) — NOT by `chmod 000`
+    (ignored under uid 0) nor by patching `os.scandir` (no Python walk is
+    left to reach). What the Go walk does with such a directory is pinned in
+    Go and run as uid 65534 in `test_lib_parse_tree_entries`."""
+    import _lib_parse_cache
     _write_tree(tmp_path, {"ok.yaml": _ca_tenant("acme", _ca("a1")),
                            "locked/inner.yaml": _ca_tenant("inner", _ca("i1"))})
 
     # ⛔ Control: readable, the subtree is read and nothing is reported.
-    triples, file_errors = ld.collect_instances(tmp_path)
+    triples, file_errors = ld.collect_instances(tmp_path, _lib_parse_cache.ConfdReader(tmp_path))
     assert sorted(t for t, *_ in triples) == ["acme", "inner"]
     assert file_errors == [], file_errors
 
-    locked = os.fspath(tmp_path / "locked")
-    real_scandir = os.scandir
-
-    def scandir(path="."):
-        if os.fspath(path) == locked:
-            raise PermissionError(13, "Permission denied", locked)
-        return real_scandir(path)
-
-    monkeypatch.setattr(os, "scandir", scandir)
-    triples, file_errors = ld.collect_instances(tmp_path)
+    unlistable_dir(tmp_path, tmp_path / "locked")
+    reader = _lib_parse_cache.ConfdReader(tmp_path)
+    triples, file_errors = ld.collect_instances(tmp_path, reader)
     assert [t for t, *_ in triples] == ["acme"]
     assert [e["origin"] for e in file_errors] == ["locked"], file_errors
-    assert "NOT scanned" in file_errors[0]["reason"], file_errors
+    assert "(read_failure): the directory cannot be listed" in file_errors[0]["reason"], file_errors
 
 
 # --- #2852: no tree root (the recipe-preview image layout) ------------------

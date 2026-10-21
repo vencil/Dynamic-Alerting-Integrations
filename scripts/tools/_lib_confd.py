@@ -19,7 +19,11 @@ tenants at all. The worst case was `validate_config.py`, which reported
 green light for a directory it never read.
 
 This module exists so that question has ONE answer, and so a flat reader
-has to say so out loud instead of silently reporting nothing.
+has to say so out loud instead of silently reporting nothing. Since #3206
+(ADR-036 §7 step 9) that answer is not computed here: which paths a conf.d
+holds and what each one is (Go's `role`) are `da-guard parse-tree`'s
+entries — the reader's tree-mode document, or a `--list-only` run — and
+this module only projects them (see "the walk" below).
 
 Two things a caller can do — pick deliberately, never by accident:
 
@@ -41,7 +45,7 @@ quietly join the silent-zero class.
 Alongside those, `unusable_config_paths(dir)` (#1469) answers the question
 `iter_config_files` deliberately does not: what did it DROP that the
 operator will still call configuration — a directory named `beta.yaml`, a
-broken symlink, a file it cannot read. Every reader should name those; the
+broken symlink, a directory it cannot list. Every reader should name those; the
 selection being shared is what stops two readers reaching two verdicts,
 and this is what stops "shared" from meaning "equally silent".
 """
@@ -66,7 +70,6 @@ __all__ = [
     "declared_tenant_ids",
     "duplicate_declarations",
     "overlay_platform_tenants",
-    "defaults_files_in",
     "has_yaml_extension",
     "is_defaults_name",
     "is_hidden_name",
@@ -77,7 +80,10 @@ __all__ = [
     "readable_carriers",
     "warn_dir_symlink_once",
     "is_dir_symlink",
-    "dir_link_target_is_walked",
+    "config_listing",
+    "not_config_files",
+    "unusable_entry",
+    "unusable_text",
     "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
@@ -332,20 +338,21 @@ def readable_carriers(carriers: "Iterable[Path]"
 _DIR_LINK_WARNED: set[str] = set()
 
 
-def warn_dir_symlink_once(link: Path) -> None:
+def warn_dir_symlink_once(link: Path, reason: str) -> None:
     """Name a directory symlink the walk skipped, at most ONCE per link per
     process (#1972). describe_tenant names it from its own listing AND calls
     the custom-alerts loader over the same tree (and compile_custom_alerts
     runs the loader more than once): each printing its own copy named every
     link two times — the #1674 once-per-directory shape.
     Keyed by the LINK's own absolute path (not its target, which is what
-    two different links may share)."""
+    two different links may share). *reason* is the caller's wording of it
+    from the snapshot it listed the link in (`unusable_reason(link,
+    listing)` / `unusable_text(kind, message, link)`)."""
     key = os.path.abspath(link)
     if key in _DIR_LINK_WARNED:
         return
     _DIR_LINK_WARNED.add(key)
-    print(f"WARNING: skipped {link} — {unusable_reason(link)}",
-          file=sys.stderr)
+    print(f"WARNING: skipped {link} — {reason}", file=sys.stderr)
 
 
 def config_stem(name: str) -> str:
@@ -373,256 +380,199 @@ def config_stem(name: str) -> str:
     return ""
 
 
-def defaults_files_in(root: str | os.PathLike[str],
-                      names: "Iterable[str]") -> list[Path]:
-    """The defaults carriers among ALREADY-LISTED `names`, sorted.
+# ── the walk: da-guard's per-path index (ADR-036 §7 step 9, #3206) ─────
+#
+# ⛔ NO WALK OF ITS OWN, AND NO VERDICT OF ITS OWN. Which entries a conf.d
+# holds and what each one IS — a config file (role `config`: read, and a
+# read that fails fails loudly), provably not a file (`not_a_file`: a
+# directory, a directory symlink the walk does not follow, a FIFO, a dangling
+# link), a directory that cannot be listed (`unlistable_dir`) — is Go's
+# verdict, `pkg/config`'s, read from `da-guard parse-tree`'s entries through
+# `_lib_parse_tree`. Nothing here composes a verdict from the other fields
+# (`class`, `problem`) or from a stat: twice a Python default leaning toward
+# "not a file" (a refused open, then a refused stat) let a tenant vanish with
+# one WARN line.
+#
+# Where the listing comes from:
+# * a caller that holds a `_lib_parse_cache.ConfdReader` passes `reader=` (or
+#   the `reader.listing()` itself): the entries of the tree-mode document it
+#   reads the content from — one snapshot, never a second walk;
+# * otherwise `config_listing(dir)` runs `parse-tree --list-only`, a fresh
+#   walk on every call: a caller that asks several questions keeps the
+#   `Listing` and passes it down (`listing=`).
+#
+# ⛔ `_lib_parse_tree` is imported INSIDE the functions, never at module
+# level: it imports `guard_dispatch`, which the recipe-preview image does not
+# ship, and every tool that imports this module (or `_lib_io`) only for a
+# predicate must not need da-guard to start.
+#
+# A tree with no usable da-guard raises `_lib_parse_tree.ParseTreeError`
+# (`BinaryMissing` for no binary) — never an empty listing. A directory that
+# does not exist (or is not a directory) is still the empty answer: that is
+# the caller's "no such conf.d", not a da-guard failure.
 
-    ⛔ Takes the names instead of listing the directory, and that is not a
-    style choice. The first version called `root.iterdir()` and
-    `test_confd_enumeration_contract` correctly reddened `_lib_confd.py`
-    itself: a sentinel flat scan with nothing said about nested content.
-    Its docstring argued the callers were already recursive — which was
-    true, and which is exactly why listing again was wrong. Both callers
-    (`loader._dir_defaults_alerts` walking with `os.walk`,
-    `describe_tenant._scan` with `rglob`) already hold the names.
 
-    ⚠️ Ordering is `sorted(names)`, so a directory carrying both
-    spellings contributes deterministically. Two spellings is already a
-    misconfiguration; resolving it by directory order would make it an
-    intermittent one.
-    """
-    base = Path(root)
-    return [base / n for n in sorted(names) if is_defaults_name(n)]
+def config_listing(config_dir: "str | os.PathLike[str]", *, reader: Any = None) -> Any:
+    """The `_lib_parse_tree.Listing` every function below answers from, or
+    None when *config_dir* is not a directory: *reader*'s (`ConfdReader.
+    listing`, the snapshot it reads the content from) when given, else a
+    fresh `parse-tree --list-only` run. Raises `_lib_parse_tree.ParseTreeError`."""
+    root = Path(config_dir)
+    if not root.is_dir():
+        return None
+    if reader is not None:
+        return reader.listing()
+    from _lib_parse_tree import list_tree  # lazy: see the section comment
+    return list_tree(root)
 
+
+def _listing(config_dir: "str | os.PathLike[str]", listing: Any, reader: Any) -> Any:
+    return listing if listing is not None else config_listing(config_dir, reader=reader)
 
 
 def resolve_defaults_file(
     base: str | os.PathLike[str], *, tool: str | None = None,
     skipped_note: str | None = None, observed: bool = True,
+    listing: Any = None, reader: Any = None,
 ) -> Path:
-    """The platform-defaults carrier directly in `base`, in ANY casing.
+    """The platform-defaults carrier directly in `base`, as da-guard names
+    it (`defaults_carriers["."]`: the one spelling the root's chain reads,
+    #1674) — from *listing* / *reader* when given (see the section comment).
 
-    Returns the canonical `_defaults.yaml` path when nothing matches, so a
-    caller's "this file does not exist" branch still names something an
-    operator can create.
-
-    ⛔ ONE implementation, deliberately. Three tools grew a private copy of
-    this while #1588 was being fixed, which is the same "one rule, many
-    hand-copies" shape #1911 is made of — reproduced inside the fix for it.
+    Returns the canonical `_defaults.yaml` path when the root has none (or
+    `base` is not a directory), so a caller's "this file does not exist"
+    branch still names something an operator can create.
 
     ⚠️ This read is FLAT: on a hierarchical conf.d the exporter also merges
     `sub/_defaults.yaml`, which this function does not return. It prints
     the same stderr warning `warn_nested` would (through the shared
     `_print_nested_once`: at most once per directory per process, NOTHING
     for a flat tree), but records for `observe_flat_reads` only the nested
-    `_defaults.yaml` carriers it skipped — not every nested file, which is
-    what `warn_nested` records (#1652, see the comment in the body). `tool`
-    is left to `nested_yaml_warning`'s own default so the message names the
-    command the operator ran rather than this helper.
+    defaults carriers it skipped — not every nested file, which is what
+    `warn_nested` records (#1652). `tool` is left to `nested_yaml_warning`'s
+    own default so the message names the command the operator ran.
 
     `skipped_note` replaces that warning with one naming only what THIS
-    lookup skips — the nested `_defaults.yaml` carriers — introduced by the
-    note (the `observe_flat_reads` record is unchanged): for a caller that
-    reads every other file of the tree some other way. policy_engine
-    (#2115 0-B) takes its tenants from the exporter's own load and would
-    otherwise be told its subdirectory tenants were SKIPPED while it
-    evaluates them. Nothing is printed when there is no nested carrier.
+    lookup skips — the nested defaults carriers — introduced by the note
+    (the `observe_flat_reads` record is unchanged): for a caller that reads
+    every other file of the tree some other way (policy_engine, #2115 0-B).
+    Nothing is printed when there is no nested carrier.
 
     `observed=False` neither records nor prints: for a caller whose verdict
-    does not rest on the nested carriers this lookup skips — it reads the
-    tree through da-guard and takes only the root's `_policies`, exactly as
-    Policy-as-Code does, whose own row reports that gap (`_lib_key_verdict`,
+    does not rest on the nested carriers this lookup skips (`_lib_key_verdict`,
     ADR-038). A caller that judges files with what it finds here keeps the
     default.
 
-    A directory carrying two spellings resolves to the one the exporter
-    reads (`select_defaults_carrier`, #1674) — before that it was the first
-    in sort order, which picked `_DEFAULTS.YML` over the `_defaults.yaml`
-    the exporter merges, so a writer could edit a file nothing reads.
+    Raises `_lib_parse_tree.ParseTreeError` (no usable da-guard).
     """
     root = Path(base)
+    held = _listing(root, listing, reader)
+    if held is None:
+        return root / "_defaults.yaml"
     # #1652: what `observe_flat_reads` records here is what THIS lookup
-    # skipped, not the whole nested set `warn_nested` would record. It looks
-    # for one carrier at the root, so what it misses is a `sub/_defaults.yaml`
-    # — the exporter merges those (ADR-017), and a caller that takes
-    # `_policies` from the root carrier silently has none when they live
-    # only in `prod/_defaults.yaml` (measured: validate_config's
-    # `policy_dsl` FAIL on the flat twin, PASS on the hierarchical one).
-    # ⛔ Not the whole nested set: recording every nested file here turned
-    # `profiles` (whose tenants are read recursively) and `policy_dsl` with
-    # no policies into WARN on a tree whose only nested file was a TENANT —
-    # a file this lookup was never going to read. The judge is what was
-    # skipped, not who is calling.
-    # The walk is only paid when an observer is installed, as in
-    # `warn_nested`; `_print_nested_once` does its own.
+    # skipped — the nested carriers (the exporter merges those, ADR-017) —
+    # not the whole nested set `warn_nested` would record.
     if observed and _FLAT_READ_SINKS.get():
-        _record_flat_read(root, [p for p in nested_yaml_files(root)
-                                 if is_defaults_name(p.name)])
+        _record_flat_read(root, _nested_carriers(held))
     if not observed:
         pass  # the caller reports what this lookup skips (see `observed`)
     elif skipped_note is None:
-        _print_nested_once(root, tool=tool)
+        _print_nested_once(root, tool=tool, missed=_nested_files(held))
     else:
-        _print_skipped_carriers(root, tool=tool, note=skipped_note)
-    try:
-        readable, _unreadable = readable_carriers(
-            entry for entry in root.iterdir()
-            if entry.is_file() and is_defaults_name(entry.name))
-        chosen = select_defaults_carrier(readable)
-        if chosen is not None:
-            return chosen
-    except OSError:
-        pass
-    return root / "_defaults.yaml"
+        _print_skipped_carriers(root, held, tool=tool, note=skipped_note)
+    chosen = held.defaults_carriers.get(".")
+    return root / chosen if chosen is not None else root / "_defaults.yaml"
 
 
-def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True):
-    """Yield config files under `config_dir`, sorted by POSIX relative path.
+def _nested_files(listing: Any) -> list[Path]:
+    """The config files (role `config`) of *listing* below its root."""
+    return [listing.root / e.path for e in listing.config_files() if e.depth > 0]
+
+
+def _nested_carriers(listing: Any) -> list[Path]:
+    """The defaults carriers (class `defaults`) of *listing* below its root."""
+    return [listing.root / e.path for e in listing.config_files()
+            if e.depth > 0 and e.cls == "defaults"]
+
+
+def iter_config_files(config_dir: str | os.PathLike[str], *, recursive: bool = True,
+                      listing: Any = None, reader: Any = None):
+    """Yield the config files under `config_dir` — the entries whose role is
+    `config` — sorted by POSIX relative path.
 
     That ordering is the whole promise — it is NOT depth-first, and
     shallow files do not come first: `a/tenant.yaml` sorts before a
-    root-level `z.yaml`. (An earlier docstring here claimed "deepest path
-    last", which lexicographic order never guaranteed; the current fixture
-    set happened not to expose the difference.)
+    root-level `z.yaml` (da-guard sorts by path, byte order, which is the
+    code-point order of a UTF-8 name).
 
-    Sorting on the POSIX-style relative path gives a stable order on every
-    platform — a plain `Path.rglob` yields OS-dependent order, and `os.sep`
-    differences leak into any output that echoes the path, the trap that
-    turned the Go/Python golden parity red in #1341.
+    `recursive=False` keeps only the top level (depth 0); it exists so a
+    caller can be explicit rather than accidentally flat.
 
-    `recursive=False` reproduces the historical flat behaviour; it exists
-    so a caller can be explicit rather than accidentally flat.
+    ⛔ A file whose stat or open is refused (permission denied) IS yielded:
+    it is a config file, and being unreadable is a read-time matter — the
+    reader that opens it fails, loudly. Only what Go proves is no config
+    file goes to `unusable_config_paths` instead.
+    Raises `_lib_parse_tree.ParseTreeError`.
     """
-    root = Path(config_dir)
-    if not root.is_dir():
+    held = _listing(config_dir, listing, reader)
+    if held is None:
         return
-    if not recursive:
-        try:
-            entries = sorted(root.iterdir(), key=lambda q: q.name)
-        except OSError:
-            # ⛔ Do NOT let this escape. Both flat callers (`_grar_parse`,
-            # `diagnose`) iterate this generator without a try, so an
-            # unlistable conf.d root would kill the tool with a traceback
-            # instead of naming the path — the death this module exists to
-            # replace with a sentence. `unusable_config_paths` carries the
-            # signal for exactly this case; see its `_walk_error` note.
-            return
-        for p in entries:
-            if _is_regular_file(p) and _is_config(p.name):
-                yield p
-        return
-    yield from list_config_tree(root).files
+    for e in held.config_files():
+        if recursive or e.depth == 0:
+            yield held.root / e.path
 
 
 class ConfigTreeListing(NamedTuple):
-    """Both halves of ONE recursive walk of a conf.d (#2054).
+    """Both halves of ONE listing of a conf.d (#2054).
 
     `files` is exactly what `iter_config_files(root)` yields, `unusable`
-    exactly what `unusable_config_paths(root)` returns — for
-    `recursive=True`, those two are projections of this, so they cannot
-    drift from it (their flat branches are separate).
+    exactly what `unusable_config_paths(root)` returns — projections of the
+    same listing, split by the entry's role, so they cannot drift.
 
-    `unscannable` is the subset of `unusable` that is a directory the walk
-    could not enumerate. Kept apart because it is a different loss — a
-    whole subtree, not one entry — so a caller that filters `unusable` by
-    NAME (e.g. drops `_`-prefixed entries it never reads) must not filter
-    these: the exporter's walker descends `_`-prefixed directories.
+    `unscannable` is the subset of `unusable` whose role is
+    `unlistable_dir` (the root itself when it cannot be listed). Kept apart
+    because it is a different loss — a whole subtree, not one entry — so a
+    caller that filters `unusable` by NAME must not filter these: the
+    exporter's walker descends `_`-prefixed directories.
     """
     files: list[Path]
     unusable: list[Path]
     unscannable: list[Path]
+    listing: Any = None
+    """The `_lib_parse_tree.Listing` the three lists are projections of —
+    pass it to `unusable_reason(p, listing)` so a reason comes from the same
+    snapshot as the path (None for a directory that does not exist)."""
 
 
-def list_config_tree(config_dir: str | os.PathLike[str]) -> ConfigTreeListing:
-    """Walk `config_dir` ONCE; return what to read AND what was dropped.
+def list_config_tree(config_dir: str | os.PathLike[str], *, listing: Any = None,
+                     reader: Any = None) -> ConfigTreeListing:
+    """ONE listing of `config_dir`: what to read AND what was dropped.
 
-    For a reader that needs both lists: calling `iter_config_files` and
-    `unusable_config_paths` separately walks the tree twice, and two walks
-    can describe two DIFFERENT trees if anything changes under conf.d
-    mid-run — a file created between them is in neither list, one replaced
-    by a directory is in both. `describe_tenant` is such a reader
-    (`test_reader_walks_the_tree_once`).
-
-    The walk mirrors the exporter's (`pkg/config.ScanDirTree`): recursive,
-    `.`-prefixed directories pruned, `.`-prefixed files dropped (`_is_config`),
-    directory symlinks never descended (`os.walk` default) and, unless
-    hidden or pointing where the walk goes anyway
-    (`dir_link_target_is_walked`), named in `unusable` whatever their
-    name (#1972).
-    See `iter_config_files` for the ordering promise and
-    `unusable_config_paths` for what `unusable` carries and why the two
-    lists are disjoint (one `_is_regular_file` call per entry, whose
-    answer alone picks the list).
+    For a reader that needs both lists from one snapshot of the tree
+    (`describe_tenant`, `test_reader_walks_the_tree_once`). The listing is
+    da-guard's: recursive, `.`-prefixed entries pruned, directory symlinks
+    never descended and — unless the walk reaches their target by itself —
+    listed as `not_a_file` whatever their name (#1972).
+    Raises `_lib_parse_tree.ParseTreeError`.
     """
-    root = Path(config_dir)
-    if not root.is_dir():
+    held = _listing(config_dir, listing, reader)
+    if held is None:
         return ConfigTreeListing([], [], [])
-
-    files: list[Path] = []
-    found: list[Path] = []
-    unscannable: list[Path] = []
-
-    def _walk_error(err: OSError) -> None:
-        # ⛔ `os.walk` defaults to onerror=None, which SWALLOWS a scandir
-        # failure: an unreadable sub-directory drops out of the walk with
-        # its whole subtree and no signal at all. Measured before this
-        # callback existed — a conf.d with one chmod-000 sub-directory
-        # holding a tenant file made `check_yaml_syntax` report
-        # `status: pass` / `1 files parsed successfully` /
-        # `unusable_files: []`. That is the #1911 shape ("a green light for
-        # a directory it never read") one level further down, inside the
-        # very list that exists to make such things audible.
-        if err.filename is not None:
-            unscannable.append(Path(err.filename))
-
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error):
-        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
-        # Directories too: a config-named DIRECTORY is the case that made
-        # `unusable_config_paths` necessary, and `os.walk` never puts it in
-        # filenames. ⛔ ONE `_is_regular_file` per entry decides which list
-        # it joins: asking twice (once per list) doubled the stat cost of
-        # every `iter_config_files` caller, and an entry swapped between the
-        # two asks could land in BOTH lists or in NEITHER — breaking the
-        # disjointness promised below.
-        n_dirs = len(dirnames)
-        for i, name in enumerate(list(dirnames) + list(filenames)):
-            p = Path(dirpath) / name
-            if not _is_config(name):
-                # ⛔ A DIRECTORY SYMLINK, config-named or not (#1972).
-                # `os.walk` (followlinks=False) leaves it in `dirnames` and
-                # never descends, exactly as the exporter's walker does not.
-                # kubelet projects a ConfigMap `items[].path` with a
-                # sub-directory as ONE such link (`team-a -> ..data/team-a`),
-                # so every tenant under it is lost; it used to be lost with
-                # no signal here either. Hidden names were pruned above, so
-                # the `..data` link of every ConfigMap volume never gets here.
-                # Only `dirnames` entries pay the lstat: a file link in the
-                # kubelet flat layout is in `filenames` and costs nothing more.
-                # A link whose target this same walk reaches by itself
-                # (`current -> team-b` beside a real `team-b/`) loses
-                # nothing and is NOT listed — `dir_link_target_is_walked`.
-                if (i < n_dirs and p.is_symlink()
-                        and not dir_link_target_is_walked(root, p)):
-                    found.append(p)
-                continue
-            (files if _is_regular_file(p) else found).append(p)
-    files.sort(key=lambda q: q.relative_to(root).as_posix())
-    # An unscannable directory is reported even when it is NOT config-named:
-    # what it costs the caller is not one file but everything underneath it.
-    found.extend(d for d in unscannable if d not in found)
-    found.sort(key=lambda q: q.relative_to(root).as_posix()
-               if q != root else "")
-    return ConfigTreeListing(files, found, unscannable)
+    root = held.root
+    bad = [e for e in held.entries if not e.config_file]
+    return ConfigTreeListing(
+        [root / e.path for e in held.config_files()],
+        [root / e.path for e in bad],
+        [root / e.path for e in bad if e.unlistable_dir],
+        held)
 
 
 def is_dir_symlink(p: Path) -> bool:
     """A symlink whose target is a directory; False instead of raising.
 
-    The shape `list_config_tree` names in `unusable` for #1972. A reader
-    that filters `unusable` by NAME (`_`-prefixed entries it never reads)
-    must not filter these, for the same reason it keeps `unscannable`: what
-    is lost is a whole subtree, and the exporter descends `_`-prefixed
-    directories (`_custom_alerts -> ..data/_custom_alerts`).
+    For the WORDING of an entry the listing already put in `unusable`
+    (#1972: what is lost is a whole subtree) — never to decide whether an
+    entry is a config file: that is the entry's role.
     """
     try:
         return p.is_symlink() and p.is_dir()
@@ -630,272 +580,120 @@ def is_dir_symlink(p: Path) -> bool:
         return False
 
 
-def dir_link_target_is_walked(root: Path, link: Path) -> bool:
-    """Does the walk from `root` reach `link`'s final target by itself?
+def unusable_entry(p: "str | os.PathLike[str]", listing: Any) -> Any:
+    """The `_lib_parse_tree.Entry` *listing* (one the caller holds, *p*
+    under its root) gives *p*, or None when it does not list it. ⛔
+    *listing* is required (#3206): the entry comes from the one snapshot *p*
+    was listed in — never from a second walk, which could disagree with it,
+    or fail where the first did not (a sibling whose name is not UTF-8 makes
+    a listing of the parent refuse)."""
+    if listing is None:
+        return None
+    rel = os.path.relpath(os.path.abspath(p), os.path.abspath(listing.root))
+    return listing.entry(Path(rel).as_posix())
 
-    True when the fully resolved target is `root` or lies inside it with no
-    `.`-prefixed segment on the way (those directories are pruned). Then
-    the files under the link are loaded through their real path and nothing
-    is lost, so naming the link as unusable would be a false alarm (#1972
-    blind review F1: `alias/current -> team-b` made `validate_config` FAIL
-    for a tenant that WAS loaded).
 
-    Anything else — outside the root, through a hidden segment (kubelet's
-    `team-a -> ..data/team-a` resolves into `..<ts>/`), unresolvable — is
-    not walked.
+def unusable_reason(p: Path, listing: Any) -> str:
+    """Why `p` is not usable as a config file — one clause, after the path.
 
-    ⛔ Go twin: `pkg/config.dirLinkTargetIsWalked`. Same rule, or one plane
-    names a loss the other calls clean.
+    da-guard's words for `p`'s entry in *listing* (required: the snapshot
+    `p` came from, `unusable_entry`), never a second wording here: a reader
+    that invented its own would put a second answer to "what happened to
+    beta.yaml" in front of the operator. A caller that needs to tell the
+    causes apart reads the entry's role (`unusable_entry`), never this text.
     """
-    try:
-        real = Path(os.path.realpath(link))
-        rel = real.relative_to(Path(os.path.realpath(root)))
-    except (OSError, ValueError):
-        return False
-    return not any(part.startswith(".") for part in rel.parts)
+    e = unusable_entry(p, listing)
+    if e is None or e.problem is None:
+        return "is not a config file the exporter's walk reads"
+    return unusable_text(*e.problem, path=p)
 
 
-def _is_regular_file(p: Path) -> bool:
-    """`Path.is_file()` that answers False instead of raising.
-
-    ⛔ THE single predicate BOTH enumerations consult, and that is the
-    point: whatever this returns True for `iter_config_files` hands to the
-    reader, whatever it returns False for `unusable_config_paths` names.
-    One predicate cannot disagree with itself, so the two lists cannot
-    overlap.
-
-    Measured before it was shared (#1469 follow-up): the RECURSIVE branch
-    of `iter_config_files` applied no file check at all while the flat
-    branch did, so a broken symlink came back from BOTH lists under
-    `recursive=True` — `validate-config` reported it twice, once as
-    `OSError: [Errno 40] Too many levels of symbolic links` and once as
-    `is a broken symlink`, and the parametrised disjointness test could not
-    see it because its fixture used an unreadable REGULAR file, for which
-    `is_file()` is True in both branches.
-    """
-    try:
-        return p.is_file()
-    except OSError:
-        return False
+def unusable_text(kind: str, message: str, path: "str | os.PathLike[str] | None" = None) -> str:
+    """`unusable_reason`'s clause for da-guard's problem *kind* and
+    *message* — also for a reader that holds them from a tree-mode document,
+    so both word it alike. For a DIRECTORY SYMLINK the walk does not follow
+    (#1972; *path* given, kind `not_regular_file`) the clause adds what that
+    costs — the files under it are not loaded — because "a symlink to a
+    directory" alone reads as harmless."""
+    text = f"cannot be read as a config file ({kind}): {' '.join(message.split())}"
+    if kind == "not_regular_file" and path is not None and is_dir_symlink(Path(path)):
+        text += " — the config files under it are NOT loaded"
+    return text
 
 
-def unusable_reason(p: Path) -> str:
-    """Why `p` is not usable as a config file — one short clause.
-
-    Split out so the two readers phrase the same finding the same way; a
-    reader that invented its own wording would put a second answer to
-    "what happened to beta.yaml" in front of the operator.
-    """
-    try:
-        if p.is_symlink() and p.is_dir():
-            # Asked BEFORE the directory branch (#1972): `is_dir()` follows
-            # the link, so that branch would call a directory link "a
-            # directory, not a config file" — true, and silent about the
-            # part that matters: the exporter never looks inside it.
-            return ("is a symlink to a directory — threshold-exporter does "
-                    "not follow it, so the config files under it are NOT "
-                    "loaded")
-        if p.is_dir():
-            # A different fact from "you named a directory like a config
-            # file": this one means a whole subtree was NOT scanned, so the
-            # report that follows is INCOMPLETE.
-            #
-            # ⛔ Decided by ATTEMPTING THE SAME OPERATION that failed, not
-            # by asking `os.access`. The first version asked, and it was
-            # wrong twice over: `os.access` ignores the mode bits for uid 0,
-            # so under root this clause was unreachable — and a walk can
-            # fail for reasons permission bits do not model at all (EIO,
-            # ELOOP, a directory deleted mid-scan, a FUSE mount going away).
-            # The two answers could therefore disagree, and the one derived
-            # from the weaker probe is the one the operator would read.
-            # `os.walk` with an `onerror` recorder is the exact mechanism
-            # that put this path in `unusable_config_paths`, stopped after
-            # the first step, so the reason cannot drift from the finding.
-            probe_failed: list[bool] = []
-            for _ in os.walk(p, onerror=lambda _e: probe_failed.append(True)):
-                break
-            if probe_failed:
-                return ("is a directory that could not be read — the config "
-                        "files inside it were NOT scanned")
-            return "is a directory, not a config file"
-        if p.is_symlink() and not p.exists():
-            return "is a broken symlink"
-        if p.exists() and not os.access(p, os.R_OK):
-            return "is not readable (permission denied)"
-    except OSError as e:  # noqa: BLE001 — surfacing the errno IS the answer
-        return f"could not be stat'ed — {e.__class__.__name__}: {e.strerror}"
-    return "is not a readable file"
+def not_config_files(listing: Any) -> "frozenset[str]":
+    """The root-relative paths *listing* says are no config file (role
+    `not_a_file` or `unlistable_dir`) — for a reader that walks a selection
+    of its own (a tree-mode document's `selected`) and must skip exactly
+    those. ⛔ Only those (#3206): a path whose stat or open a permission
+    refuses is a config file, read and failing loudly."""
+    return frozenset() if listing is None else frozenset(
+        e.path for e in listing.entries if not e.config_file)
 
 
 def unusable_config_entries(
     entries: "Iterable[Path]", *, suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
+    listing: Any = None,
 ) -> list[Path]:
-    """The config-named entries among ALREADY-LISTED `entries` that a reader
-    named them for cannot read, sorted by POSIX path.
+    """The entries among ALREADY-LISTED `entries` (a caller's own `iterdir`
+    of a level) that *listing* — the caller's snapshot of their directory —
+    says are no config file (role other than `config`), sorted by POSIX
+    path, so the caller still names what it cannot read. Without *listing*,
+    one listing per parent directory (a caller that holds a snapshot passes
+    it: the reason it then words comes from the same one). Hidden and
+    non-config names are never in a listing, so never here.
 
-    Sorted by the whole path, not the basename, so a RECURSIVE caller's two
-    `beta.yaml` under different parents keep a stable, distinguishable order
-    — the same promise `unusable_config_paths` makes for the tree it lists.
+    ⛔ `suffixes` mirrors what the CALLER reads: an entry whose name carries
+    none of them is left out, so a reader of `(".yaml",)` is not told about a
+    `db-b.yml/` directory it was never going to read (#1603).
 
-    Sibling of `unusable_config_paths` for callers that already hold the
-    listing — the readers that walk a conf.d with their own `iterdir()` /
-    `os.walk()` rather than through `iter_config_files`. Same question,
-    same predicate, no second listing.
-
-    ⛔ Takes the entries instead of listing, for the reason `defaults_files_in`
-    does: a helper that lists is a flat scan with nothing said about nested
-    content, and `test_confd_enumeration_contract` reddens `_lib_confd.py`
-    itself for it. The caller has already listed and has already called
-    `warn_nested`; doing either again here would either duplicate the
-    warning or hide a scan from the gate that exists to find them.
-
-    ⛔ `suffixes` mirrors what the CALLER reads, and defaults to both
-    spellings only because that is `iter_config_files`'s answer. A reader
-    that takes `(".yaml",)` must pass it, or this would name a `db-b.yml/`
-    directory the caller was never going to read — a finding the operator
-    cannot act on from that tool. (That the narrow readers exist at all is
-    the separate `.yml` blind spot, #1603; this parameter keeps THIS report
-    honest about the tool printing it rather than quietly widening it.)
-
-    ⛔ Hidden entries are skipped, by the SAME `_is_hidden` the exporter's
-    skip rule is mirrored from. Without it this function and
-    `unusable_config_paths` returned two different answers for one tree — a
-    directory named `.hidden.yaml/` was in this list and not in that one —
-    which is the "one question, two answers" shape #1911 is made of,
-    reproduced between two functions written for the same question. Blind
-    review measured it. Downstream it was a false finding too: every reader
-    skips `.`-prefixed entries whatever their shape, so naming one reports a
-    loss that did not happen.
-
-    ⚠️ DISJOINT from what the caller then reads, by SHARING
-    `_is_regular_file` rather than by two conditions agreeing — the same
-    reason `unusable_config_paths` gives at length. So an unreadable
-    REGULAR file is deliberately NOT here: it is a file, the caller will
-    `open()` it, and that failure carries the real errno.
-
-    Measured (#1607): `operator_generate` on a tree with a directory
-    `notes.yaml/` and a broken symlink `broken.yaml` emitted 20 CRDs before
-    the `is_file()` filter existed — two of them AlertmanagerConfigs for
-    tenants `notes` and `broken` invented from a directory and a dangling
-    link — 18 after, with nothing said. Neither number is right on its own:
-    the filter is the correctness half, this function is the half that
-    keeps the signal.
+    ⚠️ DISJOINT from the config files: a file whose open is refused is a
+    config file (not here); its reader's own read names the failure.
     """
-    return sorted(
-        (p for p in entries
-         if has_yaml_extension(p.name, suffixes)
-         and not _is_hidden(p.name)
-         and not _is_regular_file(p)),
-        key=lambda q: q.as_posix(),
-    )
+    out = []
+    held: dict[str, Any] = {}
+    for p in entries:
+        p = Path(p)
+        if not has_yaml_extension(p.name, suffixes):
+            continue
+        if listing is not None:
+            e = unusable_entry(p, listing)
+        else:
+            parent = os.path.dirname(os.path.abspath(p))
+            if parent not in held:
+                held[parent] = config_listing(parent)
+            e = unusable_entry(p, held[parent])
+        if e is not None and not e.config_file:
+            out.append(p)
+    return sorted(out, key=lambda q: q.as_posix())
 
 
 def unusable_config_paths(
     config_dir: str | os.PathLike[str], *, recursive: bool = True,
+    listing: Any = None, reader: Any = None,
 ) -> list[Path]:
-    """Paths NAMED like a config file that are not a readable config file.
+    """Paths the exporter's walk lists that are not config files — every
+    entry whose role is not `config`: a config-named directory, a directory
+    symlink the walk does not follow (#1972), a dangling link, a FIFO, a
+    directory that cannot be listed (whatever its name: what it costs is a
+    whole subtree; the root itself when it cannot be listed).
 
-    (Plus any directory whose contents could not be enumerated — see the
-    ⛔ note below; that one is NOT necessarily config-named, because what
-    it costs the caller is a whole subtree rather than one file. The
-    recursive branch likewise names every non-hidden DIRECTORY SYMLINK,
-    whose subtree neither walker enters — #1972.)
+    Sibling of `iter_config_files`: that one answers "what should I read",
+    this one "what did it drop that the operator will still call
+    configuration" (#1469). Disjoint from it — both are projections of one
+    listing, split by the role — and sorted the same way.
 
-    Sibling of `iter_config_files`, and the reason it can stay simple.
-    `iter_config_files` answers "what should I read"; anything it drops
-    disappears without a trace, which is fine for `notes.txt` and wrong
-    for a *directory* called `beta.yaml` (an interrupted `mkdir`, a bad
-    merge, a ConfigMap projected as a dir), a broken symlink, or a file
-    with no read permission. Those look like configuration to the operator
-    who put them there, so silence reads as "your config is fine".
+    `recursive=False` keeps the top level only (depth 0, the root included).
 
-    Measured before this existed (#1469): `_grar_parse._parse_config_files`
-    listed the directory, tried to `open()` it and reported
-    `WARN: skip beta.yaml`, while `check_yaml_syntax` — walking the same
-    tree through `iter_config_files` — never saw it at all. Two readers,
-    two answers. Unifying the *selection* alone would have settled that by
-    making BOTH silent, i.e. one signal fewer than before; this function is
-    the half that keeps the signal, so both readers can name the path.
-
-    `recursive` mirrors `iter_config_files` exactly, so a caller gets the
-    unusable set for the same tree it just read — recursive for
-    `validate-config`, flat for the routing parser (ADR-016 hierarchy is
-    reported separately by `warn_nested`).
-
-    Sorted by POSIX relative path, the same promise `iter_config_files`
-    makes, so a report can interleave the two lists deterministically.
-
-    ⛔ DISJOINT from `iter_config_files`, and enforced by SHARING the
-    predicate rather than by two definitions agreeing: both call
-    `_is_regular_file`, this one on the complement. The two lists are
-    consumed together, so any overlap is reported twice.
-
-    That is not hypothetical, and it was live twice. First an unreadable
-    REGULAR `.yaml` appeared in both, because it is still a file so
-    `iter_config_files` yields it: measured, both lists returned
-    `locked.yaml`. Then — after that was fixed by narrowing THIS function —
-    a broken symlink appeared in both, because the fix was written against
-    `iter_config_files`'s FLAT branch while its RECURSIVE branch had no
-    file check at all: measured, `check_yaml_syntax` reported `ghost.yaml`
-    once as `OSError: [Errno 40] Too many levels of symbolic links` and
-    again as `is a broken symlink`, and `unusable_files` carried it twice
-    so the caveat line said "2 file(s)" for one path. Hence the single
-    shared predicate: two branches cannot drift from one function.
-
-    The complement is the honest division of labour. A path this function
-    is *for* — a config-named directory, a broken symlink, a FIFO — can
-    never be `open()`ed as config, so nothing else will ever speak for it.
-    A regular file that exists but cannot be read WILL be spoken for, by
-    the reader's own `open()` failure, with the real errno attached, which
-    is strictly more informative than a one-clause summary here.
-
-    ⚠️ So an unreadable REGULAR file is deliberately NOT in this list, and
-    an earlier version of this note claimed the opposite ("the permission
-    case is only observable when the process is NOT root"). That was left
-    behind by the narrowing and was simply false afterwards: the permission
-    clause of `unusable_reason` is unreachable from here for regular files
-    at ANY uid, because they never get past `_is_regular_file`. The clause
-    is still live for what this list DOES carry — an unreadable directory.
-
-    ⛔ ALSO RETURNS A DIRECTORY THAT COULD NOT BE TRAVERSED, config-named
-    or not. `os.walk` swallows a scandir failure by default and drops the
-    whole subtree, which cost more than a single file: measured, one
-    chmod-000 sub-directory holding a tenant file made `check_yaml_syntax`
-    answer `pass` / `1 files parsed successfully` / `unusable_files: []`.
-    The flat branch had the mirror-image bug — `root.iterdir()` raised
-    `PermissionError` straight through two callers that do not wrap it.
-
-    ⚠️ Cost: this walks the tree a second time (measured on 1000 tenants /
-    20 sub-dirs: 12.5 ms for `iter_config_files`, 11.7 ms for this — both
-    negligible beside the YAML parsing that follows). An earlier revision
-    of this docstring rejected an alternative design for adding "an
-    `os.access` syscall on every file", which did not square with paying
-    for a whole extra walk here; the real reason to keep the two separate
-    is that they answer different questions, not syscall count. A reader
-    that needs both answers from ONE walk calls `list_config_tree` (#2054);
-    the recursive branch here is its `unusable` half.
+    ⚠️ A file whose stat or open is refused is NOT here: it is a config
+    file, yielded by `iter_config_files`, and its reader fails on it with
+    the real reason. Raises `_lib_parse_tree.ParseTreeError`.
     """
-    root = Path(config_dir)
-    if not root.is_dir():
+    held = _listing(config_dir, listing, reader)
+    if held is None:
         return []
-
-    found: list[Path] = []
-    if not recursive:
-        try:
-            entries = sorted(root.iterdir(), key=lambda q: q.name)
-        except OSError:
-            # The root itself cannot be listed (`chmod 111`: traversable,
-            # not readable). ⛔ Two wrong answers were both live here:
-            # raising killed `_grar_parse` / `diagnose`, which call this
-            # OUTSIDE any try, and returning [] was a green light for a
-            # directory nothing ever read. Name the root instead.
-            return [root]
-        for p in entries:
-            if _is_config(p.name) and not _is_regular_file(p):
-                found.append(p)
-        return found
-
-    return list_config_tree(root).unusable
+    return [held.root / e.path for e in held.entries
+            if not e.config_file and (recursive or e.depth == 0)]
 
 
 # ── ConfigMap key legality (#1796; shared since #1791) ────────────────
@@ -976,15 +774,39 @@ def configmap_key_problem(name: str) -> str | None:
     return None
 
 
-def nested_yaml_files(config_dir: str | os.PathLike[str]) -> list[Path]:
-    """Config files a FLAT reader would miss (i.e. below the top level)."""
+def nested_yaml_files(config_dir: str | os.PathLike[str], *, listing: Any = None,
+                      reader: Any = None) -> list[Path]:
+    """Config files a FLAT reader would miss: the config files (role
+    `config`) the listing holds below the top level. Raises ParseTreeError."""
+    held = _listing(config_dir, listing, reader)
+    return [] if held is None else _nested_files(held)
+
+
+def _python_nested_files(config_dir: str | os.PathLike[str]) -> list[Path]:
+    """⛔ TRANSITIONAL (#3206 step 9, until the tools below go through
+    da-guard): the config files below the top level as a Python walk with
+    this module's own name predicates finds them — for `warn_nested` called
+    WITHOUT a listing, which only the tools that do not need da-guard yet
+    do (`config_history`, `drift_detect`, `migrate_to_operator`;
+    `test_confd_enumeration_contract` pins that set). Every other reader
+    passes its listing."""
     root = Path(config_dir)
     if not root.is_dir():
         return []
-    return [
-        p for p in iter_config_files(root)
-        if len(p.relative_to(root).parts) > 1
-    ]
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
+        if Path(dirpath) == root:
+            continue
+        for name in filenames:
+            p = Path(dirpath) / name
+            try:
+                regular = p.is_file()
+            except OSError:
+                regular = True  # not proven no file: counted, its reader fails on it
+            if _is_config(name) and regular:
+                out.append(p)
+    return sorted(out, key=lambda q: q.relative_to(root).as_posix())
 
 
 def printable_name(name: str) -> str:
@@ -1044,6 +866,7 @@ def nested_yaml_warning(
     *,
     tool: str | None = None,
     limit: int = WARN_LIMIT,
+    missed: "list[Path] | None" = None,
 ) -> str | None:
     """Return a message when a flat read of `config_dir` would mislead.
 
@@ -1057,7 +880,8 @@ def nested_yaml_warning(
     """
     if tool is None:
         tool = _running_tool()
-    missed = nested_yaml_files(config_dir)
+    if missed is None:
+        missed = nested_yaml_files(config_dir)
     if not missed:
         return None
     root = Path(config_dir)
@@ -1171,7 +995,8 @@ def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
         _FLAT_READ_SINKS.reset(token)
 
 
-def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) -> bool:
+def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
+                listing: Any = None, reader: Any = None) -> bool:
     """Print the nested-config warning to stderr, at most once per directory.
 
     Returns whether anything was printed.
@@ -1186,20 +1011,33 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) 
 
     Callers should use this instead of hand-rolling the print, so the
     dedup and the stderr choice live in one place.
+
+    The nested files are the caller's snapshot: *listing* (a listing it
+    holds) or *reader* (its `ConfdReader`, whose tree-mode document it reads
+    the content from) — no second walk (#3206). ⛔ With neither, a Python
+    walk (`_python_nested_files`), kept only for the tools that do not need
+    da-guard yet; `test_confd_enumeration_contract` pins who may call it so.
     """
+    if listing is None and reader is not None:
+        listing = config_listing(config_dir, reader=reader)  # None: not a directory
+        missed = [] if listing is None else _nested_files(listing)
+    elif listing is not None:
+        missed = _nested_files(listing)
+    else:
+        missed = _python_nested_files(config_dir)
     # Recorded BEFORE the flat-tree early return and the memo: an observer
     # asks "did this code path read `config_dir` flat?", and the answer is
-    # yes on the second call too, when nothing is printed. The walk is only
-    # paid when an observer is installed.
+    # yes on the second call too, when nothing is printed.
     if _FLAT_READ_SINKS.get():
-        _record_flat_read(config_dir, nested_yaml_files(config_dir))
-    return _print_nested_once(config_dir, tool=tool)
+        _record_flat_read(config_dir, missed)
+    return _print_nested_once(config_dir, tool=tool, missed=missed)
 
 
-def _print_skipped_carriers(root: Path, *, tool: str | None, note: str) -> None:
+def _print_skipped_carriers(root: Path, listing: Any, *, tool: str | None,
+                            note: str) -> None:
     """`resolve_defaults_file(skipped_note=...)`'s stderr line: the nested
     defaults carriers the root lookup does not read, behind `note`."""
-    missed = [p for p in nested_yaml_files(root) if is_defaults_name(p.name)]
+    missed = _nested_carriers(listing)
     if not missed:
         return
     shown = ", ".join(printable_name(p.relative_to(root).as_posix())
@@ -1210,18 +1048,20 @@ def _print_skipped_carriers(root: Path, *, tool: str | None, note: str) -> None:
 
 
 def _print_nested_once(config_dir: str | os.PathLike[str], *,
-                       tool: str | None = None) -> bool:
+                       tool: str | None = None,
+                       missed: "list[Path]") -> bool:
     """The stderr half of `warn_nested`, with no `observe_flat_reads` record.
+    *missed* is the caller's nested files (its snapshot's).
 
     ⛔ Private on purpose: the only caller outside `warn_nested` is
     `resolve_defaults_file`, which records a narrower skipped set itself.
     `test_flat_read_observation_pin` keeps it from being called elsewhere.
     """
-    msg = nested_yaml_warning(config_dir, tool=tool)
-    if msg is None:
-        return False
     key = os.path.abspath(os.fspath(config_dir))
     if key in _WARNED:
+        return False
+    msg = nested_yaml_warning(config_dir, tool=tool, missed=missed)
+    if msg is None:
         return False
     _WARNED.add(key)
     print(f"WARN: {msg}", file=sys.stderr)
@@ -1325,7 +1165,8 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]", reader: Any = None
 
     The ENUMERATION is the exporter walker's (`pkg/config/tree_scan.go`):
     recurse, skip dot-prefixed entries, never read a `_`-prefixed file for
-    tenants — `iter_config_files` + `is_reserved_name`. So a flat reader can
+    tenants — the reader's listing (Go's `role`, class `defaults` /
+    `platform` left out), the snapshot it reads the content from. So a flat reader can
     ask "does this tenant exist" with the tree the exporter sees: a tenant
     declared only in `team-a/tx.yaml` exists even for a reader that routes
     only the root.
@@ -1348,9 +1189,11 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]", reader: Any = None
     from _lib_parse_tree import FileUnreadable
     reader = _reader_of(config_dir, reader)
     ids: set[str] = set()
-    for path in iter_config_files(config_dir, recursive=True):
-        if is_reserved_name(path.name):
+    listing = config_listing(config_dir, reader=reader)
+    for e in ([] if listing is None else listing.config_files()):
+        if e.reserved:
             continue
+        path = listing.root / e.path
         try:
             data = reader.read(path)
         except FileUnreadable:
@@ -1371,8 +1214,8 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     generator's duplicate refusal reuses (#2315), so the two cannot disagree
     about a duplicate. Feed the first element to ``duplicate_declarations``.
 
-    Selection mirrors the exporter's walker: ``iter_config_files`` (recursive,
-    case-insensitive, both spellings) and ``is_reserved_name`` (a ``_`` file
+    Selection is the exporter's walker: the reader's listing (recursive,
+    case-insensitive, both spellings; Go's `role`) and its class (a ``_`` file
     is never read for tenants). A declaration is a key of a mapping-shaped
     ``tenants:`` in a file `da-guard parse-tree` reads (*reader*, as for
     ``declared_tenant_ids``), keyed by its source text. A label is the
@@ -1387,13 +1230,11 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     root = Path(config_dir)
     declared: dict[str, set[str]] = {}
     unreadable: list[str] = []
-    for path in iter_config_files(root):
-        if is_reserved_name(path.name):
+    listing = config_listing(root, reader=reader)
+    for e in ([] if listing is None else listing.config_files()):
+        if e.reserved:
             continue
-        try:
-            label = path.relative_to(root).as_posix()
-        except ValueError:
-            label = path.name
+        path, label = root / e.path, e.path
         try:
             data = reader.read(path)
         except FileUnreadable as e:  # `yaml_syntax` owns naming the reason

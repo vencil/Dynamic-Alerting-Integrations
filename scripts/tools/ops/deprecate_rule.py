@@ -111,6 +111,17 @@ def _reader(config_dir):
     return _lib_parse_cache.reader_for(config_dir)
 
 
+def _top(reader):
+    """*reader* 那份文件裡這一層（不含子目錄）的逐路徑索引 `{名字: Entry}`。
+
+    #3206：一輪只有一份索引——取自 `reader` 讀內容的那份 parse-tree 文件
+    （`ConfdReader.listing`），不另列一次；是不是設定檔看 Go 的 `role`，本工具
+    不自己判（不以 `is_file()` 預設排除：它對 stat 被拒的檔答 False）。平面讀取，
+    `warn_nested` 具名子目錄（每個目錄只印一次）。"""
+    warn_nested(reader.root, tool="deprecate_rule", reader=reader)
+    return {e.path: e for e in reader.listing().entries if e.depth == 0}
+
+
 def _unreadable_text(exc):
     return f"da-guard parse-tree：{exc.kind}：{exc.message}"
 
@@ -468,11 +479,12 @@ def _declared_texts(declared):
 
 
 def _top_files(config_dir, reader):
-    """parse-tree 選到的這一層（不含子目錄）的檔名，排序；名字像設定檔、卻不是一般
-    檔的項目（目錄、懸空連結）不在其中——`main` 以 `unusable_reason` 具名略過。"""
-    base = Path(config_dir)
-    return sorted(rel for rel in reader.tree().selected
-                  if "/" not in rel and (base / rel).is_file())
+    """parse-tree 選到的這一層（不含子目錄）的設定檔名，排序。Go 判定不是設定檔的
+    項目（目錄、目錄 symlink、FIFO、懸空連結）不在其中——`main` 以
+    `unusable_reason` 具名略過；stat／開檔被拒的照列，讀的時候以 unreadable 具名
+    （#3206）。"""
+    selected = reader.tree().selected
+    return sorted(n for n, e in _top(reader).items() if e.config_file and n in selected)
 
 
 def scan_for_metric(metric_key, config_dir, spellings=(), *, reader=None):
@@ -484,8 +496,8 @@ def scan_for_metric(metric_key, config_dir, spellings=(), *, reader=None):
     """
     findings = []
     config_base = Path(config_dir)
-    warn_nested(config_base, tool="deprecate_rule")
     reader = reader or _reader(config_dir)
+    warn_nested(config_base, tool="deprecate_rule", reader=reader)
     for filename in _top_files(config_dir, reader):
         data, err = _tree_read(reader, filename)
         if err is not None:
@@ -510,9 +522,10 @@ def nested_residue(metric_key, config_dir, spellings=(), *, reader=None):
     base = Path(config_dir)
     reader = reader or _reader(config_dir)
     out = []
-    for rel in sorted(r for r in reader.tree().selected if "/" in r):
-        if not (base / rel).is_file():
-            continue
+    selected = reader.tree().selected
+    # #3206：同一份索引，是不是設定檔看 Go 的 `role`。
+    for rel in sorted(e.path for e in reader.listing().config_files()
+                      if e.depth > 0 and e.path in selected):
         data, err = _tree_read(reader, rel)
         occurrences = ([("unreadable", "", err)] if err is not None
                        else _occurrences_in(data, metric_key, spellings))
@@ -526,23 +539,28 @@ def out_of_reach(entries, plane="root", *, config_dir=None):
     """這一層本工具不寫的載體 `[(名字, 理由), ...]`: 子目錄、`_` 前綴檔的
     `tenants:`／`profiles:` 區塊（含 `_defaults.yaml` 自己的）、沒有讀取端的
     defaults 拼法（parse-tree 的 `not_read`）。"""
-    bad = {b.name for b in unusable_config_entries(entries)}
     reader = _reader(config_dir if config_dir is not None
                      else (entries[0].parent if entries else "."))
     tree = reader.tree()
+    top = _top(reader)
+    # #3206：子目錄是走訪在其下列出檔的那些（同一份索引；隱藏目錄走訪不進、不在其中）
+    # ——不以 `is_dir()` 判，它對指進 000 目錄的連結拋 PermissionError。
+    subdirs = {e.path.split("/", 1)[0] for e in reader.listing().entries if e.depth > 0}
     out = []
     for e in entries:
-        if e.name in bad or e.name.startswith("."):
-            continue
-        if e.is_dir():
+        listed = top.get(e.name)
+        if listed is not None and not listed.config_file:
+            continue                           # `main` 已以 `unusable_reason` 具名
+        if listed is None and e.name in subdirs:
             out.append((f"{e.name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
                                       "`--config-dir <子樹> --plane subtree`"))
-        elif e.name in tree.not_read and is_defaults_name(e.name):
+        elif listed is None:
+            continue                           # 走訪不列（隱藏、非設定檔名、空目錄）
+        elif e.name in tree.not_read and listed.cls == "defaults":
             out.append((e.name, f"沒有讀取端讀這個 defaults 拼法（parse-tree："
                                 f"{tree.not_read[e.name]}），本工具不寫它；"
                                 f"殘留需手動移除或刪掉此檔"))
-        elif (e.name in tree.selected and e.name.startswith("_")
-              and plane == "root"):
+        elif e.name in tree.selected and listed.reserved and plane == "root":
             data, err = _tree_read(reader, e.name)
             if err is not None:
                 continue                       # 載體體檢會具名
@@ -563,10 +581,13 @@ def defaults_carriers(config_dir):
     變成載體，埋一個會復活的閾值。平面讀取，`warn_nested` 具名子目錄。
     """
     base = Path(config_dir)
-    warn_nested(base, tool="deprecate_rule")
-    tree = _reader(config_dir).tree()
-    names = {n for n in (*tree.selected, *tree.not_read)
-             if "/" not in n and is_defaults_name(n) and (base / n).is_file()}
+    reader = _reader(config_dir)
+    warn_nested(base, tool="deprecate_rule", reader=reader)
+    tree = reader.tree()
+    # #3206：同一份索引；載體是 class `defaults` 的設定檔（Go 的 `role`）。
+    names = {n for n, e in _top(reader).items()
+             if e.config_file and e.cls == "defaults"
+             and (n in tree.selected or n in tree.not_read)}
     return [base / n for n in sorted(names)]
 
 
@@ -776,8 +797,8 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
     """
     removed = []
     config_base = Path(config_dir)
-    warn_nested(config_base, tool="deprecate_rule")
     reader = _reader(config_dir)
+    warn_nested(config_base, tool="deprecate_rule", reader=reader)
     writes = []
     for filename in _top_files(config_dir, reader):
         if filename.startswith('_') or filename in skip:
@@ -884,15 +905,18 @@ def root_platform_files(config_dir):
     """
     # Flat on purpose: only the root `_` files bear on the verdict (see
     # `exporter_after_writes`); the nested-tree WARN is the tool's, printed once.
-    warn_nested(Path(config_dir), tool="deprecate_rule")
-    tree = _reader(config_dir).tree()
+    reader = _reader(config_dir)
+    warn_nested(Path(config_dir), tool="deprecate_rule", reader=reader)
+    tree = reader.tree()
     out = []
-    for name in sorted({*tree.selected, *tree.not_read}):
-        if "/" in name or not name.startswith("_"):
+    # #3206：同一份索引；是不是設定檔看 Go 的 `role`——不是 `os.path.isfile`，
+    # 它對指進 000 目錄的連結答 False，平台檔就被靜默排除。讀不到的由呼叫端略過、
+    # 由現況那次的 `unreadable` 擋下。
+    for name, e in sorted(_top(reader).items()):
+        if not (e.config_file and e.reserved) or (
+                name not in tree.selected and name not in tree.not_read):
             continue
-        real = os.path.realpath(str(Path(config_dir) / name))
-        if os.path.isfile(real):
-            out.append((name, real))
+        out.append((name, os.path.realpath(str(Path(config_dir) / name))))
     return out
 
 
@@ -1000,12 +1024,15 @@ def _main():
     # 目錄的性質印一次、印在 per-metric 迴圈之前（#1607）。`warn_nested` 與這次
     # 平面列舉同一個 scope；列舉失敗就讓它失敗，`scan_for_metric` 會用同一個目錄。
     base = Path(args.config_dir)
-    warn_nested(base, tool="deprecate_rule")
-    entries = sorted(base.iterdir())
-    for bad in unusable_config_entries(entries):
-        print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
-              file=sys.stderr)
     reader = _reader(args.config_dir)
+    # #3206：這一輪只有一份索引——`reader` 讀內容的那份文件——警告、略過與原因
+    # 都取自它。
+    listing = reader.listing()
+    warn_nested(base, tool="deprecate_rule", listing=listing)
+    entries = sorted(base.iterdir())
+    for bad in unusable_config_entries(entries, listing=listing):
+        print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad, listing)}",
+              file=sys.stderr)
     unreachable = out_of_reach(entries, args.plane, config_dir=base)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")

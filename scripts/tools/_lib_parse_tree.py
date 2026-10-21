@@ -51,6 +51,21 @@ are computed from the entries, for the readers written against them.
 A document of another schema (v1 included: a da-guard older than this tool),
 or of this one with a field missing or of the wrong shape, is unusable whole.
 
+A reader that holds a tree-mode document takes its listing from it
+(`listing_of`): one snapshot for "which files" and "what is in them", never
+a second walk that may see another tree. `list_tree` lists afresh on every
+call (no memo); a reader that needs one snapshot for several questions keeps
+the `Listing` and passes it down.
+
+Which da-guard (#3206)
+----------------------
+Every run here — tree, file, list and names mode — resolves its binary and
+timeout in one place, `_run`: an explicit *binary* / *timeout* argument,
+else the one a tool selected for its run (`use_da_guard`, set once from its
+`--da-guard-binary` / `--timeout` flags), else `$DA_GUARD_BINARY`, then
+`$PATH`, and `DEFAULT_TIMEOUT`. So a tool's flags reach a listing a library
+takes on its behalf as they reach its tree read.
+
 ⛔ KEY ORDER IS NOT THE FILE'S. parse-tree writes each mapping from a Go map,
 and encoding/json writes a map's keys sorted (byte order). Measured on a file
 written `zeta, alpha{mike, bravo, "10", "9"}, Mid, _b`: the document holds
@@ -60,6 +75,8 @@ cannot get it from this document.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import math
 import os
@@ -70,7 +87,7 @@ import sys
 from dataclasses import dataclass, field as _field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 
 _HERE = Path(__file__).resolve().parent
 # guard_dispatch lives in ops/ in the repo; the image ships it flat beside
@@ -87,8 +104,51 @@ SCHEMA = "da-guard.parse-tree/v2"
 _OLDER_SCHEMAS = frozenset({"da-guard.parse-tree/v1", "da-guard.parse-tree-list/v1"})
 _OLDER = "this da-guard is older than this tool; upgrade or rebuild it"
 
-#: The timeout of a list or names run that names none (seconds).
+#: The timeout of a da-guard run nobody named one for (seconds).
 DEFAULT_TIMEOUT = 600
+
+#: (binary, timeout) a tool selected for its run (`use_da_guard`); None for
+#: either means "not selected". A ContextVar, so a selection ends with the
+#: block that made it and no test or nested caller inherits a stale one.
+_SELECTED: "contextvars.ContextVar[tuple[Optional[str], Optional[float]]]" = (
+    contextvars.ContextVar("_lib_parse_tree._SELECTED", default=(None, None)))
+
+
+@contextlib.contextmanager
+def use_da_guard(binary: Optional[str] = None,
+                 timeout: Optional[float] = None) -> Iterator[None]:
+    """For the length of the block, every da-guard run that names no binary
+    or timeout of its own uses *binary* / *timeout* — what a tool's
+    `--da-guard-binary` / `--timeout` flags said. Set once, where the tool
+    parses its arguments.
+
+    A None INHERITS: the selection of an enclosing block if there is one,
+    else the default resolution ($DA_GUARD_BINARY, then $PATH;
+    `DEFAULT_TIMEOUT`) — a library entry point that passes its own None
+    through never undoes its caller's choice.
+
+    ⚠️ A ContextVar: a thread started inside the block does NOT inherit the
+    selection (a new thread begins with an empty context unless it is run
+    with `contextvars.copy_context().run`); such a thread resolves as if no
+    block were open."""
+    outer_binary, outer_timeout = _SELECTED.get()
+    token = _SELECTED.set((binary if binary is not None else outer_binary,
+                           timeout if timeout is not None else outer_timeout))
+    try:
+        yield
+    finally:
+        _SELECTED.reset(token)
+
+
+def _resolve(binary: Optional[str], timeout: Optional[float]
+             ) -> "tuple[Optional[str], float]":
+    """(*binary*, *timeout*), each None replaced by the selection
+    (`use_da_guard`), the timeout's last by `DEFAULT_TIMEOUT`."""
+    sel_binary, sel_timeout = _SELECTED.get()
+    binary = binary if binary is not None else sel_binary
+    if timeout is None:
+        timeout = sel_timeout if sel_timeout is not None else DEFAULT_TIMEOUT
+    return binary, timeout
 
 #: Set by :func:`run_under_memory_limit` in a process that limited its own
 #: memory (the generator container's judgement, ADR-036 §3).
@@ -128,7 +188,8 @@ class FileUnreadable(ParseTreeError):
         self.message = message
 
 
-def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
+def run(root: Path | str, binary: Optional[str] = None,
+        timeout: Optional[float] = None) -> dict:
     """`da-guard parse-tree --config-dir <root>`'s document. Raises
     `BinaryMissing` when there is no binary, `ParseTreeError` when it fails or
     its output is not a parse-tree document this reader reads."""
@@ -136,7 +197,7 @@ def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
 
 
 def run_file(root: Path | str, rel: str, text: bytes,
-             binary: Optional[str], timeout: float) -> dict:
+             binary: Optional[str] = None, timeout: Optional[float] = None) -> dict:
     """File mode: `da-guard parse-tree --config-dir <root> --path <rel>
     --input -` with *text* on stdin — *text* read as the file at *rel*
     (root-relative, '/'), in the tree as it is once that file is written.
@@ -157,7 +218,7 @@ def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
         env["DA_GUARD_BINARY"] = os.path.abspath(value)
 
 
-def _run(args: list[str], binary: Optional[str], timeout: float,
+def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
          stdin: Optional[bytes] = None, *,
          check: "Callable[[dict], None] | None" = None,
          what: str = SUBCOMMAND) -> dict:
@@ -167,6 +228,7 @@ def _run(args: list[str], binary: Optional[str], timeout: float,
     binary that knows `parse-tree` but not `--list-only` is named as lacking
     `parse-tree --list-only`)."""
     check = check_shape if check is None else check
+    binary, timeout = _resolve(binary, timeout)  # ⛔ the one place (#3206)
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is not None:
@@ -600,13 +662,14 @@ def tree_of(doc: dict) -> Tree:
     )
 
 
-def load(root: Path | str, binary: Optional[str], timeout: float) -> Tree:
+def load(root: Path | str, binary: Optional[str] = None,
+         timeout: Optional[float] = None) -> Tree:
     """`run`'s document as a `Tree`. Raises as `run` does, and as `tree_of`."""
     return tree_of(run(root, binary, timeout))
 
 
 def load_file(root: Path | str, rel: str, text: bytes,
-              binary: Optional[str], timeout: float) -> Tree:
+              binary: Optional[str] = None, timeout: Optional[float] = None) -> Tree:
     """`run_file`'s document as a `Tree` (it holds the one file *rel*).
     Raises as `run_file` does, and as `tree_of`."""
     return tree_of(run_file(root, rel, text, binary, timeout))
@@ -667,8 +730,7 @@ def run_list(root: Path | str, binary: Optional[str] = None,
     `ParseTreeError` when it fails, is older than `--list-only`, or writes
     another document — a file name that is not valid UTF-8 anywhere in the
     tree included (JSON cannot carry it, so da-guard refuses the listing)."""
-    return _run([SUBCOMMAND, "--list-only", "--config-dir", str(root)], binary,
-                DEFAULT_TIMEOUT if timeout is None else timeout,
+    return _run([SUBCOMMAND, "--list-only", "--config-dir", str(root)], binary, timeout,
                 check=_check_list("list"), what=f"{SUBCOMMAND} --list-only")
 
 
@@ -681,13 +743,55 @@ def list_tree(root: Path | str, binary: Optional[str] = None,
     return Listing(Path(root), entries_of(doc), MappingProxyType(dict(doc["defaults_carriers"])))
 
 
+def listing_of(tree: Tree, root: Path | str) -> Listing:
+    """The `Listing` a tree-mode document already holds (its `entries` and
+    `defaults_carriers`), *root* being the directory it was run on. ⛔ For a
+    reader that holds the document (#3206): its file list is the snapshot
+    it reads the content from, never a second walk that may see another
+    tree. The roles are the same in both modes (pkg/config's verdict); a
+    tree-mode entry's `problem` may also be a content kind (a syntax error)."""
+    return Listing(Path(root), tree.entries,
+                   MappingProxyType(dict(tree.defaults_carriers or {})))
+
+
+#: One names-mode answer per (name, da-guard): a name's class is a pure
+#: function of the name and the binary that answers, so this memo cannot go
+#: stale while a tree changes (listings are never memoised). The da-guard
+#: part of the key is `_names_key`.
+_NAMES: "dict[tuple[str, tuple[Optional[str], str]], Entry]" = {}
+
+
+def _names_key(binary: Optional[str]) -> "tuple[Optional[str], str]":
+    """The binary a names run would execute — resolved now, to an absolute
+    path, exactly as `_run` resolves it (None: none found) — and the current
+    `$DA_GUARD_BINARY`: a memo keyed on what the caller passed (often None)
+    would answer from one binary after `$DA_GUARD_BINARY` or the selection
+    moved to another."""
+    binary = _resolve(binary, None)[0]
+    exe = guard_dispatch.DISPATCHER.resolve_binary(binary)
+    return (os.path.abspath(exe) if exe is not None else None,
+            os.environ.get("DA_GUARD_BINARY", ""))
+
+
 def classify_names(names: "Iterable[str]", binary: Optional[str] = None,
                    timeout: Optional[float] = None) -> "dict[str, Entry]":
     """Each of *names* (base names, not on a disk: e.g. a ConfigMap's keys)
-    → what the name alone makes it (`parse-tree --list-only --names -`).
-    Raises as `run_list`; a name that is empty, holds a separator or is not
-    valid UTF-8 refuses all."""
+    → what the name alone makes it, memoised per name and da-guard for the
+    process: one `parse-tree --list-only --names -` run for every name not
+    yet asked. Raises as `run_list`; a name that is empty, holds a separator
+    or is not valid UTF-8 refuses all."""
     names = list(dict.fromkeys(names))
+    key = _names_key(binary)
+    missing = [n for n in names if (n, key) not in _NAMES]
+    if missing:
+        for n, e in _run_names(missing, binary, timeout).items():
+            _NAMES[(n, key)] = e
+    return {n: _NAMES[(n, key)] for n in names}
+
+
+def _run_names(names: "list[str]", binary: Optional[str],
+               timeout: Optional[float]) -> "dict[str, Entry]":
+    """One names-mode run over *names* (distinct), checked whole."""
     for n in names:
         try:
             n.encode("utf-8")
@@ -697,8 +801,7 @@ def classify_names(names: "Iterable[str]", binary: Optional[str] = None,
             raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: the name "
                                  f"{n!r} is not valid UTF-8; JSON cannot carry it") from None
     raw = json.dumps(names, ensure_ascii=False).encode("utf-8")
-    doc = _run([SUBCOMMAND, "--list-only", "--names", "-"], binary,
-               DEFAULT_TIMEOUT if timeout is None else timeout, stdin=raw,
+    doc = _run([SUBCOMMAND, "--list-only", "--names", "-"], binary, timeout, stdin=raw,
                check=_check_list("names"), what=f"{SUBCOMMAND} --list-only --names")
     entries = entries_of(doc)
     if [e.path for e in entries] != names:

@@ -3014,15 +3014,23 @@ def _kustomize_carrier_files(
     if write_defaults:
         names.add('_defaults.yaml')
     if conf_dir is not None:
-        warn_nested(conf_dir, tool='init_project')
+        # #3206: ONE snapshot for the nested warning, the split and every
+        # reason — the entries of the document `_ConfdTree` reads. A config
+        # file is what Go's `role` says is one — never `is_file()`, which
+        # answers False for a file it may not stat and so dropped a tenant
+        # from the base with no word; one that cannot be read fails where
+        # it is read.
         confd = _ConfdTree(Path(conf_dir))
+        listing = confd.listing()
+        warn_nested(conf_dir, tool='init_project', listing=listing)
         top = [n for n in {*confd.files(), *confd.root_defaults()} if "/" not in n]
-        names |= {n for n in top if (Path(conf_dir) / n).is_file()}
+        entry = (lambda n: None) if listing is None else listing.entry
+        names |= {n for n in top if entry(n) is not None and entry(n).config_file}
         unusable = sorted(Path(conf_dir) / n for n in top
-                          if not (Path(conf_dir) / n).is_file())
+                          if entry(n) is not None and not entry(n).config_file)
         for p in unusable[:WARN_LIMIT]:
             print(f"WARN: init_project: {printable_name(p.name)!r} in "
-                  f"{conf_dir} {unusable_reason(p)} — it carries a config "
+                  f"{conf_dir} {unusable_reason(p, listing)} — it carries a config "
                   f"name but nothing can be read from it, so it is left out "
                   f"of kustomize/base (files: and README) and its tenants are "
                   f"absent from the ConfigMap.", file=sys.stderr)
@@ -3574,6 +3582,13 @@ class _ConfdTree:
         self.conf_dir = conf_dir
         self.tree = (_lib_parse_tree.load(conf_dir, None, _PARSE_TREE_TIMEOUT_S)
                      if conf_dir.is_dir() else None)
+
+    def listing(self) -> "Optional[_lib_parse_tree.Listing]":
+        """This document's per-path index (Go's `role`), None for an absent
+        conf.d — the snapshot every question about which files there are is
+        asked of (#3206: no second walk)."""
+        return (None if self.tree is None
+                else _lib_parse_tree.listing_of(self.tree, self.conf_dir))
 
     def files(self) -> list[str]:
         """Every file parse-tree selects, conf.d-relative, sorted."""

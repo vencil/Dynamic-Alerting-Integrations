@@ -14,7 +14,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 
 from _lib_confd import (  # noqa: E402
+    config_listing,
     iter_config_files,
+    list_config_tree,
     nested_yaml_files,
     nested_yaml_warning,
     printable_name,
@@ -427,8 +429,13 @@ def test_unusable_paths_on_missing_dir_is_empty(tmp_path: pathlib.Path):
 
 
 def test_unusable_reason_distinguishes_the_causes(with_unusable):
-    assert "directory" in unusable_reason(with_unusable / "beta.yaml")
-    assert "symlink" in unusable_reason(with_unusable / "gamma.yaml")
+    """#3206 R7: the cause is da-guard's kind (and its words): a config-named
+    directory is `not_regular_file`, a dangling link `read_failure`."""
+    listing = config_listing(with_unusable)  # #3206: the reason's one snapshot
+    assert "(not_regular_file): a directory" in unusable_reason(
+        with_unusable / "beta.yaml", listing)
+    assert "(read_failure): the path cannot be statted" in unusable_reason(
+        with_unusable / "gamma.yaml", listing)
 
 
 # ── `unusable_reason`'s remaining answers ────────────────────────────────
@@ -451,87 +458,11 @@ def test_unusable_reason_fallback_for_a_non_regular_file(tmp_path: pathlib.Path)
     except (AttributeError, NotImplementedError, OSError) as e:
         pytest.skip(f"platform cannot create a FIFO here: {e}")
 
-    assert unusable_reason(fifo) == "is not a readable file"
+    assert unusable_reason(fifo, config_listing(tmp_path)) == (  # #3206 R7: da-guard's words
+        "cannot be read as a config file (not_regular_file): not a regular file "
+        "(a FIFO, a socket or a device, or a symlink to one); not read")
     # And it must be REPORTED, not silently skipped — the whole point.
     assert fifo in unusable_config_paths(tmp_path, recursive=False)
-
-
-def test_unusable_reason_reports_a_stat_failure_instead_of_raising(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
-):
-    """If the stat itself fails, the reason must carry the errno text.
-
-    ⛔ The alternative — letting OSError escape — is exactly the shape
-    #1469's sibling defect had: a reader that dies instead of naming the
-    file it could not read.
-    """
-    target = tmp_path / "weird.yaml"
-    target.write_text("a: 1\n", encoding="utf-8")
-
-    def boom(self):  # noqa: ANN001
-        raise OSError(5, "Input/output error")
-
-    monkeypatch.setattr(pathlib.Path, "is_dir", boom)
-
-    reason = unusable_reason(target)
-    assert "could not be stat" in reason
-    assert "OSError" in reason
-    assert "Input/output error" in reason
-
-
-def test_is_readable_file_survives_a_stat_failure(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
-):
-    """The selection helper must answer False, not raise, when stat fails —
-    otherwise one bad inode takes down the whole enumeration."""
-    target = tmp_path / "weird.yaml"
-    target.write_text("a: 1\n", encoding="utf-8")
-
-    def boom(self):  # noqa: ANN001
-        raise OSError(5, "Input/output error")
-
-    monkeypatch.setattr(pathlib.Path, "is_file", boom)
-
-    # Reached through the public entry point, not by importing the private
-    # helper: what matters is that enumeration does not explode.
-    assert unusable_config_paths(tmp_path, recursive=False) == [target]
-
-
-def _deny_read(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
-    """Make one path unreadable without needing non-root.
-
-    `chmod 000` is invisible to uid 0, and the container this suite is
-    usually developed in runs as root — so the overlap this guards against
-    would be untestable here. Patching `os.access` reproduces the exact
-    condition `_is_readable_file` consults.
-    """
-    real = os.access
-
-    def fake(path, mode, **kw):  # noqa: ANN001
-        if os.fspath(path) == os.fspath(target) and mode == os.R_OK:
-            return False
-        return real(path, mode, **kw)
-
-    monkeypatch.setattr(os, "access", fake)
-
-
-def test_unusable_reason_names_permission_denied(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
-):
-    """The permission clause, exercised on EVERY runner including root.
-
-    ⛔ This test used to exist only in the `chmod 000` form below, which is
-    skipped under uid 0 — and that skip hid a contradiction between two
-    tests in this file for two commits: one asserted an unreadable regular
-    file IS in `unusable_config_paths`, the other (correctly) that it is
-    not. Only the non-root CI runner ran both, so CI found it and the
-    development container never could. A skip makes "untestable here"
-    visible; it does not make it tested. Hence this monkeypatched twin.
-    """
-    locked = tmp_path / "locked.yaml"
-    locked.write_text("a: 1\n", encoding="utf-8")
-    _deny_read(monkeypatch, locked)
-    assert unusable_reason(locked) == "is not readable (permission denied)"
 
 
 @pytest.mark.skipif(
@@ -539,8 +470,11 @@ def test_unusable_reason_names_permission_denied(
     reason="root bypasses the read permission bit, so os.access always returns True",
 )
 def test_unusable_reason_names_permission_denied_for_real(tmp_path: pathlib.Path):
-    """Same clause via a real `chmod 000`, so the monkeypatched twin above
-    is pinned against the genuine syscall on runners that can observe it.
+    """A real `chmod 000` regular file (#3206 R6, round 2): da-guard cannot
+    open it and nothing proves it is not a file (`not_a_file`), so it is a config
+    file — yielded by `iter_config_files`, its reader's `open()` names the
+    errno — and NOT in `unusable_config_paths`; its reason is da-guard's.
+    In-process twin, at any uid: `test_lib_parse_tree_list`.
 
     ⚠️ Skipped when running as root — and this test exists partly to make
     that skip VISIBLE. The container this suite is usually developed in runs
@@ -552,13 +486,8 @@ def test_unusable_reason_names_permission_denied_for_real(tmp_path: pathlib.Path
     locked.write_text("a: 1\n", encoding="utf-8")
     locked.chmod(0o000)
     try:
-        assert unusable_reason(locked) == "is not readable (permission denied)"
-        # ⛔ NOT in `unusable_config_paths`, and that is the contract rather
-        # than an omission: an unreadable REGULAR file is still a file, so
-        # `iter_config_files` hands it to the reader and the reader's own
-        # `open()` names it — with the real errno. Listing it here as well
-        # would report it twice; see `test_the_two_enumerations_are_disjoint`,
-        # which pins the same partition through the monkeypatched route.
+        assert unusable_reason(locked, config_listing(tmp_path)).startswith(
+            "cannot be read as a config file (read_failure): ")
         names = {q.name for q in unusable_config_paths(tmp_path, recursive=False)}
         assert "locked.yaml" not in names
         assert "locked.yaml" in {
@@ -572,9 +501,9 @@ def test_unusable_reason_names_permission_denied_for_real(tmp_path: pathlib.Path
 
 @pytest.mark.parametrize("recursive", [False, True])
 def test_the_two_enumerations_are_disjoint(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, recursive: bool,
+    tmp_path: pathlib.Path, recursive: bool,
 ):
-    """An unreadable REGULAR file must not appear in both lists.
+    """Nothing may appear in both lists.
 
     ⛔ Callers consume the two together, so anything in both is reported
     twice: `validate-config` put it in `unusable_files` twice, and the
@@ -582,9 +511,9 @@ def test_the_two_enumerations_are_disjoint(
     the `PermissionError`. Measured before the fix — both lists returned
     `locked.yaml`.
 
-    The unreadable file is NOT lost by narrowing this: `iter_config_files`
-    still yields it, and the reader's own `open()` names it, with the real
-    errno rather than a one-clause summary.
+    #3206: both are projections of one da-guard listing, split by
+    `Entry.config_file` (Go's `role`) — an unreadable regular file stays on the
+    readable side (R6, `test_lib_parse_tree_list`).
     """
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -593,14 +522,11 @@ def test_the_two_enumerations_are_disjoint(
     locked.write_text("tenants: {}\n", encoding="utf-8")
     (root / "beta.yaml").mkdir()  # the case unusable_config_paths is FOR
 
-    _deny_read(monkeypatch, locked)
-
     usable = {p.name for p in iter_config_files(root, recursive=recursive)}
     unusable = {p.name for p in unusable_config_paths(root, recursive=recursive)}
 
     assert usable & unusable == set(), (
         f"overlap would be double-reported: {sorted(usable & unusable)}")
-    # Still enumerated, so the reader's open() will speak for it.
     assert "locked.yaml" in usable
     # And the directory — which no open() can ever speak for — is still named.
     assert "beta.yaml" in unusable
@@ -656,25 +582,8 @@ def test_a_broken_symlink_is_on_exactly_one_side(
 # ── a directory the scan could not enter is not "no findings" ────────────
 
 
-def _deny_scandir(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
-    """Make one directory unlistable at any uid.
-
-    `chmod 000` is invisible to root and this suite is usually developed in
-    a uid-0 container, so the real syscall cannot be provoked here.
-    Patching `os.scandir` reproduces exactly what `os.walk` reacts to.
-    """
-    real = os.scandir
-
-    def fake(path=".", *a, **kw):  # noqa: ANN001
-        if os.fspath(path) == os.fspath(target):
-            raise PermissionError(13, "Permission denied", os.fspath(target))
-        return real(path, *a, **kw)
-
-    monkeypatch.setattr(os, "scandir", fake)
-
-
 def test_an_untraversable_subdir_is_named_not_silently_dropped(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path, unlistable_dir,
 ):
     """⛔ `os.walk` defaults to `onerror=None`, which SWALLOWS the failure.
 
@@ -695,22 +604,23 @@ def test_an_untraversable_subdir_is_named_not_silently_dropped(
     (locked / "tenant.yaml").write_text("tenants: {}\n", encoding="utf-8")
     (root / "top.yaml").write_text("tenants: {}\n", encoding="utf-8")
 
-    _deny_scandir(monkeypatch, locked)
+    unlistable_dir(root, locked)  # da-guard's walk-error entry (#3206)
 
     unusable = unusable_config_paths(root)
     assert locked in unusable, (
         "a subtree that was never scanned must not read as 'nothing found'")
     # ⚠️ And it must NOT be described as "you named a directory like a
     # config file" — the operator's problem is the subtree, not the name.
-    assert "could not be read" in unusable_reason(locked)
-    assert "NOT scanned" in unusable_reason(locked)
+    assert "(read_failure): the directory cannot be listed" in unusable_reason(
+        locked, config_listing(root))
+    assert list_config_tree(root).unscannable == [locked]
     # The rest of the scan still works; this is a signal, not a refusal.
     assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
 
 
 @pytest.mark.parametrize("recursive", [False, True])
 def test_an_unlistable_root_names_itself_instead_of_raising(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, recursive: bool,
+    tmp_path: pathlib.Path, unlistable_dir, recursive: bool,
 ):
     """⛔ Both wrong answers were live at once, one per branch.
 
@@ -724,19 +634,14 @@ def test_an_unlistable_root_names_itself_instead_of_raising(
     root = tmp_path / "conf.d"
     root.mkdir()
     (root / "x.yaml").write_text("tenants: {}\n", encoding="utf-8")
-    _deny_scandir(monkeypatch, root)
-    monkeypatch.setattr(
-        pathlib.Path, "iterdir",
-        lambda self: (_ for _ in ()).throw(
-            PermissionError(13, "Permission denied", str(self)))
-        if os.fspath(self) == os.fspath(root) else iter([]))
+    unlistable_dir(root, root)  # da-guard's "." entry (#3206)
 
     assert unusable_config_paths(root, recursive=recursive) == [root]
     assert list(iter_config_files(root, recursive=recursive)) == []
 
 
 def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path, unlistable_dir,
 ):
     """One path, one entry — even when it qualifies twice over.
 
@@ -764,7 +669,7 @@ def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
     both.mkdir(parents=True)
     (root / "top.yaml").write_text("tenants: {}\n", encoding="utf-8")
 
-    _deny_scandir(monkeypatch, both)
+    unlistable_dir(root, both)  # da-guard's walk-error entry (#3206)
 
     unusable = unusable_config_paths(root)
     assert unusable.count(both) == 1, (
@@ -773,11 +678,11 @@ def test_a_config_named_directory_that_is_also_unscannable_is_listed_once(
         "one problem as two", [str(p) for p in unusable])
     assert unusable == [both], (
         "nothing else in this tree is unusable", [str(p) for p in unusable])
-    # ⚠️ NOT a control for the de-duplication — `iter_config_files` is
-    # untouched by that filter, so this line can neither hide nor reveal a
-    # duplicate. What it does prove is that the injected `os.scandir`
-    # failure is scoped to `beta.yaml`: the other reader still sees the
-    # tree, so a red above is the overlap and not a broken fixture.
+    # ⚠️ NOT a control for the de-duplication. What it does prove is that
+    # the injected walk error is scoped to `beta.yaml`: the other reader
+    # still sees the tree, so a red above is the overlap and not a broken
+    # fixture. (#3206: a listing that names a path twice is refused whole —
+    # `test_lib_parse_tree_list`.)
     assert [p.name for p in iter_config_files(root)] == ["top.yaml"]
 
 
@@ -845,26 +750,24 @@ def test_entries_is_case_insensitive_like_every_other_predicate(tmp_path):
 
 
 def test_entries_does_not_list_the_directory_itself(tmp_path, capsys):
-    """⛔ It must make NO filesystem listing of its own.
+    """⛔ It makes NO walk of its own: what it says about the given entries
+    is da-guard's listing of their directory at call time (#3206, no memo).
 
-    `defaults_files_in` takes names for this reason and
     `test_confd_enumeration_contract` reddens `_lib_confd.py` for a sentinel
-    flat scan. Passing entries from a DIFFERENT directory than the one the
-    paths live in would still work if the function only inspects what it is
-    given — and would silently re-scan if it did not.
+    flat scan. An entry gone by then is not named (nothing is there to be
+    unusable); one still there is, in da-guard's terms.
     """
     root = tmp_path / "conf.d"
     root.mkdir()
     (root / "ghost.yaml").mkdir()
     (root / "real.yaml").write_text("tenants: {}\n", encoding="utf-8")
     entries = sorted(root.iterdir())
+    assert [p.name for p in unusable_config_entries(entries)] == ["ghost.yaml"]
+    assert config_listing(root).entry("ghost.yaml").not_a_file
     for p in root.iterdir():
         if p.is_dir():
             p.rmdir()
-    # `ghost.yaml` no longer exists; a function that re-listed would return
-    # nothing, one that inspects the given entries still calls it unusable.
-    got = [p.name for p in unusable_config_entries(entries)]
-    assert got == ["ghost.yaml"]
+    assert unusable_config_entries(entries) == []
 
 
 def test_entries_returns_posix_path_order_not_basename_order(tmp_path):

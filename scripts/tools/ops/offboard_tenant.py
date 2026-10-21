@@ -73,9 +73,15 @@ def _reader(config_dir):
 
 
 def _top_level(config_dir):
-    """The top-level files parse-tree selects (root-relative names), sorted:
-    this tool reads conf.d FLAT (`warn_nested` names what that leaves out)."""
-    return sorted(rel for rel in _reader(config_dir).tree().selected if "/" not in rel)
+    """The top-level paths parse-tree selects (root-relative names), sorted,
+    each with its entry (Go's `role`): this tool reads conf.d FLAT
+    (`warn_nested` names what that leaves out). #3206: the entries of the
+    document the content is read from — one snapshot, no second walk."""
+    reader = _reader(config_dir)
+    warn_nested(Path(config_dir), reader=reader)  # deduplicated per directory
+    selected = reader.tree().selected
+    return sorted((e.path, e) for e in reader.listing().entries
+                  if e.depth == 0 and e.path in selected)
 
 
 def find_config_file(tenant, config_dir):
@@ -87,16 +93,18 @@ def find_config_file(tenant, config_dir):
     are is parse-tree's answer (a directory named `<tenant>.yaml/` is in its
     `unreadable`, named by `load_all_configs`)."""
     base = Path(config_dir)
+    if not base.is_dir():
+        return None
     # ⚠️ FLAT, and this says so (`warn_nested`): a tenant whose carrier lives
     # in a subdirectory is not found here — the OFFBOARD pre-check, where
     # "no config found" must not read as "safe to remove".
-    warn_nested(base)
-    if not base.is_dir():
-        return None
-    for rel in _top_level(config_dir):
+    warn_nested(base, reader=_reader(config_dir))
+    for rel, e in _top_level(config_dir):
         # A file parse-tree cannot read is still the tenant's file (named
-        # unreadable by `load_all_configs`, which blocks --execute).
-        if config_stem(rel) == tenant and (base / rel).is_file():
+        # unreadable by `load_all_configs`, which blocks --execute) — and so
+        # is one whose stat a permission refuses (#3206: Go's `role`, not
+        # `is_file()`, which said False for it).
+        if config_stem(rel) == tenant and e.config_file:
             return str(base / rel)
     return None
 
@@ -125,10 +133,11 @@ def load_all_configs(config_dir, unreadable=None):
     base = Path(config_dir)
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
-    warn_nested(base, tool="offboard_tenant")
     reader = _reader(config_dir)
     tree = reader.tree()
-    for filename in _top_level(config_dir):
+    listing = reader.listing()  # #3206: one snapshot for the warning, the skip, the reasons
+    warn_nested(base, tool="offboard_tenant", listing=listing)
+    for filename, entry in _top_level(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
             # #2856; it imports this copy at startup only while the store has
@@ -136,12 +145,15 @@ def load_all_configs(config_dir, unreadable=None):
             print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
                   "於開機匯入它（引用改由 --state 判定）")
             continue
-        if not (base / filename).is_file():
-            # #1607: an entry with a config name that is not a file (a
-            # directory, a dangling link) — parse-tree lists it as
-            # not_regular_file / read_failure; named in the shared wording,
-            # and skipped as before (warn-and-continue, not a blocker).
-            print(f"  ⚠️  略過 {safe_label(filename)}: {unusable_reason(base / filename)}")
+        if not entry.config_file:
+            # #1607: an entry with a config name that Go says is no config
+            # file (a directory, a directory symlink, a FIFO, a dangling
+            # link); named in the shared wording from that same listing, and
+            # skipped as before (warn-and-continue). Anything else it cannot
+            # read — a file it may not stat or open — is read below and
+            # counted unreadable (#3206).
+            print(f"  ⚠️  略過 {safe_label(filename)}: "
+                  f"{unusable_reason(base / filename, listing)}")
             continue
         try:
             nodes = reader.node(filename)

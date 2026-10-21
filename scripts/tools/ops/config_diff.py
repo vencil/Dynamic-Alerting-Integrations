@@ -173,7 +173,12 @@ SETTING_NOT_COMPARED = "not_compared"
 SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
                                 SETTING_NOT_COMPARED})
 
-_EMPTY_TREE = {"da_guard_version": None, "mode": "tree", "entries": [], "files": {},
+#: The document of a side with no config (a first import): a tree-mode
+#: document of the shape `_lib_parse_tree.check_shape` accepts — its version
+#: says what it is, as no da-guard wrote it (#3206).
+_EMPTY_TREE = {"schema": _lib_parse_tree.SCHEMA,
+               "da_guard_version": "none (empty-tree placeholder: no da-guard ran)",
+               "mode": "tree", "entries": [], "files": {},
                "defaults_carriers": {}, "rendered_by": {}}
 
 
@@ -214,10 +219,16 @@ class _Token(NamedTuple):
 
 def _read_tree(conf_d, timeout):
     """parse-tree's document for `conf_d`; an empty one for a side with no
-    config (a first import). Raises `_lib_parse_tree.ParseTreeError`."""
-    if not rd.has_config(conf_d):
+    config (a first import: no directory, or no entry whose role is
+    `config`). Raises `_lib_parse_tree.ParseTreeError`.
+
+    #3206: "is there any config" is asked of this same document's entries,
+    not of a listing run before it — one walk, one snapshot."""
+    if not os.path.isdir(conf_d):
         return _EMPTY_TREE
     doc = _lib_parse_tree.run(conf_d, None, timeout)
+    if not any(e.config_file for e in _lib_parse_tree.entries_of(doc)):
+        return _EMPTY_TREE
     # #2962: which reader reads a key WHERE it is written. A da-guard without
     # it is older than this tool; falling back to the file-level `selected`
     # would call a key covered that no reader reads there.

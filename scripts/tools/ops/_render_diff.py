@@ -165,7 +165,9 @@ class RenderDiff(NamedTuple):
 
 
 def has_config(conf_d: str | os.PathLike[str]) -> bool:
-    """Whether `conf_d` is a directory holding any config file."""
+    """Whether `conf_d` is a directory holding any config file — an entry
+    whose role is `config` in `da-guard parse-tree --list-only`'s listing
+    (#3206). Raises `_lib_parse_tree.ParseTreeError` (no usable da-guard)."""
     return next(iter(_lib_confd.iter_config_files(conf_d)), None) is not None
 
 
@@ -275,11 +277,19 @@ def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at
     tenants when that view is computed, and its result kept as the view's
     `report` — for a report that reads the renders itself without rendering
     them again. It must mask what it keeps: the renders are not masked."""
-    if not has_config(pr_dir):
+    from _lib_parse_tree import ParseTreeError, use_da_guard  # lazy: runs da-guard
+    try:
+        with use_da_guard(binary, timeout):
+            pr_has, base_has = has_config(pr_dir), has_config(base_dir)
+    except ParseTreeError as e:
+        miss = ViewResult("not_computed", f"cannot list the conf.d through `da-guard "
+                                          f"parse-tree --list-only`: {' '.join(str(e).split())}")
+        return RenderDiff(at, miss, miss)
+    if not pr_has:
         reason = f"PR side: {pr_dir} has no config file"
         miss = ViewResult("not_computed", reason)
         return RenderDiff(at, miss, miss)
-    first_import = not has_config(base_dir)
+    first_import = not base_has
     secrets: set[str] = set()
 
     def view(render_side, empty, diff, report=None) -> ViewResult:

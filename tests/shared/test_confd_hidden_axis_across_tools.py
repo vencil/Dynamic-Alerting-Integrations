@@ -252,8 +252,8 @@ def _deprecate_rule(root):
 
 def _check_confd_schema(root):
     import check_confd_schema
-    return [pathlib.Path(p).relative_to(root).as_posix()
-            for p in check_confd_schema._iter_yaml_files(str(root))]
+    # #3206: (root-relative path, what the name makes it), from parse-tree.
+    return [e.path for e in check_confd_schema._iter_yaml_files(str(root))]
 
 
 def _check_retire_drift(root):
