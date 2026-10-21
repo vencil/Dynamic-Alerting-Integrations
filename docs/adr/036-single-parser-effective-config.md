@@ -178,8 +178,9 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 **Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構；沒有任何 Go 讀取端略過它直接解碼 conf.d。
 
 - 被判為讀不了的檔，exporter 沿用今天同類檔語法錯誤時的處置，log 與 metric 另外帶上 `kind`：
-  - 租戶檔：這份檔宣告的租戶不服務；記一行 WARN log，`da_config_parse_failure_total` 加一。
-  - `_defaults` 鏈裡的檔與其他 `_` 開頭的平台檔：整份略過，記一行 ERROR log，`da_config_parse_failure_total` 加一；合併 defaults 鏈時把它當成空檔（`da-guard effective` 在 `chain_parse_failed` 列出它），依賴它的租戶照常服務，只是少了這份檔提供的預設值。
+  - 租戶檔：這份檔宣告的租戶不服務，同一棵樹的其他租戶不受影響；記一行 WARN log，`da_config_parse_failure_total` 加一。
+  - `_defaults` 鏈裡的檔與其他 `_` 開頭的平台檔：整份略過，記一行 ERROR log（「entire block dropped」），`da_config_parse_failure_total` 加一；合併 defaults 鏈時把它當成空檔，`da-guard effective` 在 `chain_parse_failed` 列出它。依賴它的租戶仍照常載入，只是少了這份檔提供的預設值：只靠這份檔的預設值才送出的閾值不再送出。
+  - 實測（2026-10-21，head 上的 da-guard）：根目錄 `_defaults.yaml` 語法錯時，`served-values` 的 `parse_failed` 列出它，租戶 `t1` 仍在，但原本由它提供預設值的 `mysql_connections` 不再送出，`effective` 的 `chain_parse_failed` 是 `["_defaults.yaml"]`；租戶檔 `t2.yaml` 語法錯時，`t2` 不在 `tenants` 裡，`t1` 照常。兩種情況 da-guard 都回 exit 3。
 - tenant-api 的讀取面（`/effective`、租戶列表等經 `pkg/config` 讀 conf.d 的端點）與 exporter 同一步改經這份判定；tenant-api 自己的寫入形狀判定隨後改用同一份判定，不再有自己的形狀規則。
 - da-guard 對這些檔回 exit 3（§9）。
 - 所以同一份檔不會出現「exporter 照讀、產生器拒收」：產生器、exporter、da-guard、tenant-api 拒收的是同一批檔。
@@ -568,7 +569,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 
 - **exporter 改為拒收的升級風險**：exporter 改經共用判定之後，今天照讀的檔可能整份不服務，檔內租戶的告警停止。客戶沒在升級前以新版 da-guard 驗過 conf.d 時，第一次發現是在升級之後。緩解只有 §8 的升級前把關與 metric、log；不設「照舊讀」的開關。
 - **yaml.v3 的輸出格式改變**：寫 conf.d 的工具改由 Go 寫出後，空行、行尾註解對齊與引號樣式會變，客戶的 diff 會出現與這次修改無關的格式差異（§2）。
-- **快取的去留未定**：要等 `parse-tree` 串流輸出並量測後才決定（§3）。在那之前，逐檔快取的冷啟動在大型樹上仍是 O(N²)。
+- **快取的去留未定**：產生器容器要不要繼續跨請求快取解析結果，要等 `parse-tree` 串流輸出並量測後才決定（§3）。產生器以 PyYAML 讀檔時，每次從頭解析會超過 20 秒的判定期限（「成本」），這是當初採用快取的理由；在決定之前，逐檔快取的冷啟動在大型樹上仍是 O(N²)。
 - **`da-crdecode` 還不支援一個檔多份文件**：§12 的 Kubernetes manifest 常一檔多份，支援之前這類檔沒有權威讀法可問。
 - **升級到上游 v3.0.5 會帶進其他行為改變**：vendored yaml.v3 目前只取上游 v3.0.1 加上幾段修改，正是因為 v3.0.2 之後的上游版本另有改變行為的修改；升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對讀法，有差異就維持現有的 vendored 基底、只移植這段修正；重複鍵檢查的修改疊在新基底上（§11）。
 - **渲染結果比對無法歸因**：§8 的比對指出結果哪裡變了，不指出是哪一項讀法造成的。
@@ -644,7 +645,6 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 產生器拒收別名、合併鍵與顯式型別標記 | 理由是縮小兩個解析器的落差；只留一個解析器後已沒有落差可縮，卻會要求客戶改寫既有的設定檔 |
 | `parse-tree` 拒收過去產生器拒收的一切 | 要在 Go 裡重寫 PyYAML 的每一項檢查，等於又讓 Go 模仿另一個解析器；兩邊比對一再找到新的「只有 PyYAML 拒收」的類別。改為封閉清單，其餘照 yaml.v3 讀（§2） |
 | 分兩階段切換（新舊並行、比對差異、條件達成才刪 Go 端） | 產品採用者少，可以接受 breaking change；並行期要維護兩份判定與差異清單，而 Go 端判定已知較寬鬆，留著它沒有好處 |
-| 產生器容器每個請求從頭解析整棵樹，不跨請求快取 | 未定：保留與否取決於 §3「快取的去留」的量測。產生器以 PyYAML 讀檔時，每次從頭解析會超過 20 秒的判定期限（「成本」） |
 | 在常駐程序本身判定，不 fork 子程序 | 一筆過大或惡意的寫入會拖垮常駐程序，讓之後所有寫入都回 503；子程序可以各自設記憶體上限與逾時，只拒收那一筆 |
 | 所有步驟在同一個版本發布 | 只能用一支涵蓋全部步驟的巨大 PR，難以審查；或改用整合分支（下一列） |
 | 在整合分支上做完，再一次合併進 main | CI 只在對 main 的 PR 上執行（`ci.yml` 的觸發條件），整合分支上的每一步都沒有 CI 把關；要這樣做得先改 CI 的觸發條件 |
