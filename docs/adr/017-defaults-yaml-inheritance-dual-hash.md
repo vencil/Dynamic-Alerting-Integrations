@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-10-17
+updated_at: 2026-10-21
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -30,6 +30,7 @@ updated_at: 2026-10-17
 | 2026-10-08 | 最終設定逐字顯示寫下的值，`/metrics` 不送的值逐鍵標出 | 決策 10 |
 | 2026-10-10 | `describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 改讀 da-guard 的值；爆炸半徑報告另比對自訂告警 | 決策 2 |
 | 2026-10-17 | 自訂告警編譯器改照 exporter 送出的編譯，`_defaults.yaml` 裡的 `_custom_alerts` 不再產生規則 | 決策 5、6 |
+| 2026-10-21 | `describe_tenant` 改為只顯示 exporter 送出的自訂告警清單，爆炸半徑報告退役 | 決策 2 |
 
 ## 名詞
 
@@ -78,7 +79,7 @@ conf.d/
 兩個例外：
 
 - **`_metadata` 不繼承**：上層寫的 `_metadata` 不會出現在租戶的最終設定裡。根目錄平台檔的 `tenants.<id>._metadata` 不屬於這條鏈，它與租戶檔的 `_metadata` 逐鍵合併（[#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370)，規則見 [config-driven](../design/config-driven.md)）。
-- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 顯示的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單，另附每一條的名稱、宣告所在的檔與是否為租戶自己的；tenant-api 與 da-guard 只取一處：租戶自己的，否則根目錄平台檔的 `tenants:` 條目，否則綁定的 profile，否則子目錄 `_defaults.yaml` 的那份（標 `not_served`，不送出）。`merged_hash` 不受這個差異影響：`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 印出的是 da-guard 算的值，與 tenant-api 相同，也不隨檔名改變。爆炸半徑報告以 `merged_hash` 判斷設定值有沒有變，自訂告警另外比對聯集裡每一條的內容、名稱與是否為租戶自己的，不比宣告所在的檔：只搬檔不算變更，平台改一條 recipe 的門檻，繼承它的租戶都會列出（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。這個聯集不是 exporter 送出的：exporter 不送 `_defaults.yaml` 裡的 `_custom_alerts`，每個租戶只取一處來源（見 ADR-024 §3「宣告位置」）；兩支工具改讀 exporter 送出的，在 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。
+- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 顯示的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單，另附每一條的名稱、宣告所在的檔與是否為租戶自己的；tenant-api 與 da-guard 只取一處：租戶自己的，否則根目錄平台檔的 `tenants:` 條目，否則綁定的 profile，否則子目錄 `_defaults.yaml` 的那份（標 `not_served`，不送出）。`merged_hash` 不受這個差異影響：`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 印出的是 da-guard 算的值，與 tenant-api 相同，也不隨檔名改變。爆炸半徑報告以 `merged_hash` 判斷設定值有沒有變，自訂告警另外比對聯集裡每一條的內容、名稱與是否為租戶自己的，不比宣告所在的檔：只搬檔不算變更，平台改一條 recipe 的門檻，繼承它的租戶都會列出（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。這個聯集不是 exporter 送出的：exporter 不送 `_defaults.yaml` 裡的 `_custom_alerts`，每個租戶只取一處來源（見 ADR-024 §3「宣告位置」）。依 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)「後果」，`describe_tenant` 改為只顯示 exporter 送出的清單，爆炸半徑報告退役、由 config-diff 取代（[#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)）。
 
 ### 3. 範例
 
