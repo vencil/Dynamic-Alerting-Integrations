@@ -1566,7 +1566,6 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 | `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一） |
 | `becomes_readable` | 今天整份拒收、`parse-tree` 讀得到的檔，附今天的錯誤與 yaml.v3 讀成的內容 |
 | `selection` | 只有一邊會讀的檔 |
-| `exporter_changes` | 刪除 vendored yaml.v3「非特定 tag」patch 後 exporter 讀法改變的兩處：`! "<<"` 不再是合併鍵、SLO `objective: ! "99.9"` 由拒收變接受。這兩種檔 `parse-tree` 也判為 `non_specific_tag`，所以同時列在 `becomes_unreadable` |
 | `still_unreadable` | 兩邊都讀不了的檔（不是變化，不影響結束碼） |
 | `files_compared` | 兩邊都讀得到、逐值比對過的檔（文字輸出在第二行列出），讓「沒有差異」與「什麼都沒比」分得開 |
 

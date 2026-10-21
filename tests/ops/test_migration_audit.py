@@ -267,39 +267,6 @@ def test_audit_lists_key_differences(tmp_path, da_guard_binary, monkeypatch) -> 
     assert report["summary"]["keys"] == 2 and ma.has_differences(report)
 
 
-# ── the exporter's two changes ───────────────────────────────────────────
-
-def check_exporter_changes(report: dict) -> None:
-    got = {(e["file"], e["change"]): e for e in report["exporter_changes"]}
-    e = got[("rows/nonspecific-merge-key-alias/t.yaml", "merge_key")]
-    assert e["line"] == 3 and e["path"] == ["tenants", "t1"]
-    e = got[("rows/nonspecific-slo-objective/t.yaml", "slo_objective")]
-    assert e["line"] == 6 and e["path"] == ["tenants", "t1", "_custom_alerts", 0, "slo"]
-    assert '"99.9"' in e["after"]
-    # `! "x"` (not a key `<<`, not an objective) and `! 123` (plain: the
-    # patch does not touch it) change nothing in the exporter.
-    files = {f for f, _ in got}
-    assert "rows/nonspecific-quoted/t.yaml" not in files
-    assert "rows/nonspecific-plain/t.yaml" not in files
-    # A nested `_` file is the generator's only: the exporter never reads it.
-    assert not any(f.startswith("mk/") for f in files)
-    # parse-tree refuses both files: they are in becomes_unreadable too.
-    bu = {x["file"]: x["kind"] for x in report["becomes_unreadable"]}
-    assert bu["rows/nonspecific-merge-key-alias/t.yaml"] == "non_specific_tag"
-    assert bu["rows/nonspecific-slo-objective/t.yaml"] == "non_specific_tag"
-
-
-def test_exporter_changes(corpus_report) -> None:
-    check_exporter_changes(corpus_report)
-
-
-def test_exporter_changes_block_and_single_quoted() -> None:
-    text = ("a: &a {cpu: 1}\nt: {! '<<': *a}\nalerts:\n- slo:\n    objective: ! |\n      99.9\n"
-            "- slo: {objective: ! 99.9}\n")
-    got = [(e["change"], e["line"]) for e in ma.exporter_changes("t.yaml", text)]
-    assert got == [("merge_key", 2), ("slo_objective", 5)]
-
-
 # ── selection ────────────────────────────────────────────────────────────
 
 def test_selection_lists_a_file_only_one_side_reads(tmp_path, da_guard_binary, monkeypatch) -> None:
@@ -370,8 +337,7 @@ def test_cli_exit_1_and_text_report(tmp_path, da_guard_binary) -> None:
     assert proc.returncode == EXIT_VIOLATION, proc.stderr
     out = proc.stdout
     for title in ("Values read differently", "Files read today that parse-tree refuses",
-                  "Files refused today that parse-tree reads", "Exporter readings that change",
-                  "Files both refuse (no change)"):
+                  "Files refused today that parse-tree reads", "Files both refuse (no change)"):
         assert title in out, title
     assert "bool-words-are-strings/t.yaml:4  tenants.t1._routing.receiver.send_resolved" in out
     assert "cpu: !!int 80 (written \"80\")" in out
@@ -444,15 +410,6 @@ def test_mutation_comparison_off_turns_the_values_check_red(tmp_path, da_guard_b
     assert report["values"] == []
     with pytest.raises(KeyError):
         check_values(report)
-
-
-def test_mutation_exporter_changes_off_turns_its_check_red(tmp_path, da_guard_binary,
-                                                           monkeypatch) -> None:
-    monkeypatch.setattr(ma, "exporter_changes", lambda rel, text: [])
-    report = _one_row(tmp_path, da_guard_binary, "nonspecific-slo-objective")
-    assert report["exporter_changes"] == []
-    with pytest.raises(KeyError):
-        check_exporter_changes(report)
 
 
 def test_mutation_today_reads_everything_turns_the_category_check_red(corpus_report) -> None:
@@ -546,12 +503,6 @@ def test_lines_of_aliased_and_merged_values(tmp_path, da_guard_binary) -> None:
     got = {tuple(e["path"]): e["line"] for e in ma.audit(root, da_guard_binary)["values"]}
     assert got == {("x",): 1, ("m", "k"): 2, ("t", "a"): 1, ("t", "c", "k"): 2,
                    ("t", "l", 0): 1, ("t", "v"): 9}
-
-
-def test_objective_outside_slo_is_not_an_exporter_change() -> None:
-    text = ('a:\n  objective: ! "99.9"\nslo:\n  x: ! "1"\n  objective: "99.9"\n'
-            'b: [{objective: ! "1"}]\n')
-    assert ma.exporter_changes("t.yaml", text) == []
 
 
 @pytest.mark.parametrize("doc,needle", [

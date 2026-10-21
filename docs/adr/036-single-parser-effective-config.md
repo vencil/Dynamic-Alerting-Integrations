@@ -30,6 +30,7 @@ updated_at: 2026-10-21
 - **2026-10-20 修訂**：產生器已改讀 `parse-tree` 的結果，§2、§9 刪去描述它先前以 PyYAML 讀取的句子；決策不變。
 - **2026-10-20 再修訂**：Go 端也只留一個判定與一個寫者，conf.d 以外的 YAML 以它的消費者為準，刪除遷移稽核指令；細節見 §2、§3、§8、§9、§11、§12 與 §7 的順序。
 - **2026-10-21 修訂**：tenant-api 的寫入與它自己讀的管理設定改經共用判定（§7 步驟 7），§2 改寫為現況，並寫明 RBAC 設定不論放在哪裡都經判定；決策不變。
+- **2026-10-21 再修訂**：刪除 vendored yaml.v3 的「非特定 tag」patch（§7 步驟 8、§11）；§7 說明它排在步驟 8 的段落改寫為現況；決策不變。
 
 ## 摘要
 
@@ -418,7 +419,7 @@ tenant-api pod
 
 **各步依序合併進 main。** 不設新舊並行期，不設切換開關，也不維護差異清單（逐筆記錄 Go 與產生器判定不同的設定檔）。為什麼不在同一個版本一次做完，見「考慮過但否決」。
 
-步驟 0 到 7 已完成，每一步合併後都可以發布；「非特定 tag」patch 不在步驟 4 刪，排在步驟 8（理由見下方）。
+步驟 0 到 8 已完成，每一步合併後都可以發布；「非特定 tag」patch 不在步驟 4 刪，排在步驟 8（理由見下方）。
 
 - **步驟 0：先發布，行為不變。** `parse-tree`（含單檔模式）與它的固定語料（§2）；遷移稽核指令（§8）；把與解析無關的小工具（例如租戶 id 檢查、判斷檔案所在的目錄層級、policy 檔名判斷）搬出要刪除的套件。
 - **步驟 1：tenant-api 寫入改問產生器容器。** 同一步刪除 tenant-api 裡所有 Go 端的路由與 policy 判定（§11），包括判斷 `_routing` 是否為「關閉路由」字串的模仿程式。不是路由判定的檢查保留：遮罩憑證的佔位字串回寫防護、以 yaml.v3 確認 exporter 讀得了寫入內容的檢查、閾值等保留鍵的值檢查。後兩者讓 tenant-api 不會因此放行 PyYAML 讀得了、yaml.v3 讀不了的檔（例如 `"x\/y"`）；過去由 Go 端模仿套件擋下的重複鍵，改由產生器自己的重複鍵拒收擋下。同一步也移除 `--policy-unavailable-open`，並刪除扁平鍵 `_routing_receiver_type`（舊版指定 receiver 種類的單層寫法），寫入它改為回 400。
@@ -445,12 +446,7 @@ tenant-api pod
 
 順序的理由：步驟 6、7 要引用共用的套件，所以步驟 5 先做；步驟 6 是使用者看得到的 breaking change，先做讓它單獨發布、單獨把關；「非特定 tag」patch 要等每個 Go 讀取端都經共用的判定之後才刪（步驟 8）；步驟 11 刪除改寫層之前，所有寫 conf.d 的工具都要已經改送意圖（步驟 10）。
 
-**為什麼「非特定 tag」patch 留到步驟 8**：在 exporter 經 `parse-tree` 的判定之前，exporter 靠它維持與舊讀法相同的結果。
-
-- 以 `!` 標記的 `! "<<"`：exporter 判斷合併鍵時把帶 `!` 標記的 `"<<"` 也算進去；PyYAML 同樣把它當成合併。
-- 自訂告警 SLO 的 `objective: ! "99.9"`：exporter 因型別標記是 `!` 而拒收；PyYAML 把它讀成浮點數，Python 端因 objective 不是字串同樣拒收。
-
-在那之前刪掉它，exporter 會開始接受 `objective: ! "99.9"`，比產生器與 CI 寬鬆（`parse-tree` 對帶 `!` 的檔一律判為讀不了）。步驟 6 起 exporter、步驟 7 起 tenant-api 都只解碼 `parse-tree` 判為讀得了的檔，帶 `!` 的檔到不了它們的解碼。兩者都改完之後（步驟 8）才刪，中間就沒有任何元件以沒有這個 patch 的 yaml.v3 讀 `!`。
+**為什麼「非特定 tag」patch 留到步驟 8**：這個 patch 讓 yaml.v3 把 `!` 標記保留在引號字串的節點上，exporter 判斷合併鍵時靠它把 `! "<<"` 當成合併鍵，與 PyYAML 相同。沒有它，yaml.v3 丟掉標記，`! "<<"` 是字面上的鍵 `<<`，什麼都不合併。在 exporter 經 `parse-tree` 的判定之前刪掉它，等於靜默改變 exporter 照讀的檔。步驟 6 起 exporter、步驟 7 起 tenant-api 都只解碼 `parse-tree` 判為讀得了的檔，帶 `!` 的檔到不了它們的解碼；兩者都改完之後（步驟 8）才刪，main 上就沒有任何一個 commit 讓元件以沒有這個 patch 的 yaml.v3 讀到 `!`。
 
 **步驟 1 之前要先完成的事**：
 
@@ -517,7 +513,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | Python 端讀 conf.d 用的、模仿 yaml.v3 讀法的 loader，Python 端的檔案選擇規則 | 產生器與 Python 工具改讀 JSON 時 | 刪除 |
 | da-guard 的未判定證據 `generator_unreadable` | exporter 與 da-guard 改經共用判定時 | 併入 exit 3；本次執行點不到的路徑改列 `unreadable_outside_run`（§9） |
 | tenant-api 自己的 conf.d 寫入形狀判定 | tenant-api 改用共用判定時 | 改用 `parse-tree` 的判定 |
-| vendored yaml.v3 的「非特定 tag」patch（YAML 的 `!` 標記，讓引號字串照未加引號的規則判型別） | exporter 與 tenant-api 都改經共用判定之後 | 刪除；那時帶 `!` 的檔到不了它們的解碼，patch 沒有作用（§7、§8） |
+| vendored yaml.v3 的「非特定 tag」patch（把 YAML 的 `!` 標記保留在引號字串的節點上，讓 `! "<<"` 成為合併鍵） | exporter 與 tenant-api 都改經共用判定之後 | 已刪除（步驟 8）：帶 `!` 的檔到不了它們的解碼，patch 沒有作用（§7、§8） |
 | vendored yaml.v3 的重複鍵檢查修改（大型 mapping 的重複鍵檢查從逐對比較的 O(n²) 改用 hash 表） | — | 保留：它防的是以大量鍵拖垮解碼的阻斷服務攻擊，不是在模仿另一個解析器 |
 | vendored yaml.v3 的 unhashable merge key 修正（合併鍵旁邊有非純量的鍵時，把執行期 panic 改成解碼錯誤） | 與其他各項平行 | 不再自己維護 patch：vendored 的基底升級為上游 `go.yaml.in/yaml/v3` v3.0.5，上游已內建同一修正；重複鍵檢查的修改改疊在新基底上。升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對新舊基底的讀法，有任何差異就維持現有的 vendored 基底，只移植這段修正 |
 | Go 端 4 份檔名規則；Python 端的名稱述詞與 Go／Python 名稱規則的對照表 | 檔名規則收斂時 | Go 合併為一份；Python 端刪除，改用只列檔模式 |
@@ -676,7 +672,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 5：`parse-tree` 的判定移到 `pkg/` 下的共用套件。
 - 已完成，步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
 - 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
-- 步驟 8：刪除「非特定 tag」patch。
+- 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
 - 步驟 9：Go 端檔名規則收斂為一份；`parse-tree` 只列檔模式；Python 名稱述詞與名稱規則對照表退場。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
@@ -709,8 +705,8 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`pkg/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已刪除 |
 | Go 端模仿 PyYAML 讀法的程式（已刪除） | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
 | Go 端模仿產生器語意的程式（已刪除） | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`、`IsDisabled`；da-guard 的路由檢查 `internal/guard/routing.go` 與它們的 finding kind |
-| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（exporter 與 tenant-api 改經共用判定之後刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（基底升級到上游 v3.0.5 後由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
-| 非特定 tag 影響的 exporter 讀法 | `pkg/config/config_file.go` 的 `isMergeKey`；`custom_alert.go` 的 `validateSloObjective` |
+| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（已刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（基底升級到上游 v3.0.5 後由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
+| 帶 `!` 的檔到不了 exporter 的解碼 | `pkg/config/nonspecific_tag_test.go`；合併鍵的判斷 `pkg/config/config_file.go` 的 `isMergeKey` |
 | Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（已刪除） |
 | tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |
 | tenant-api 經共用判定的入口 | `internal/confd/verdict.go` 的 `Judge`（回 `pkg/config` 的 `UnreadableFileError`）；呼叫端：`validateShape`、`eolGuardErrs`、`tenantorg`、`rbac`、`groups`、`views`、`fedpolicy`、`account` 的解析函式，以及批次的 `tenantAbsentIn` 與 `scopeBlockOnDisk` |
