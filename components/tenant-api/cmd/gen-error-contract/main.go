@@ -17,11 +17,10 @@
 // statuses from the answers the handlers and middleware write directly,
 // which scan.go reads from the source — fail-closed: a writer call whose
 // status or code is not a literal stops the command (exit 2) with its place.
-// Every (status, code) must fit the code's remedy (remedyAllows). retryable is "always"
-// or "never" when every such kind agrees (and, for a code no kind answers —
-// a code only a handler or middleware writes directly — from the remedy);
-// "depends" would mean one code with two meanings, which the handler's
-// TestKindTable_OneCodeOneMeaning and this command's tests refuse.
+// Every (status, code) must fit the code's remedy (remedyAllows). retryable is
+// "always" or "never", read from the remedy: a kind whose Retryable disagrees
+// with its code's remedy (one code, two meanings) stops the command, so the
+// contract has no third value.
 // retry_after_s is the kind table's Retry-After when every kind of the code
 // has the same one, else null; an answer's own Retry-After header /
 // retry_after_s always wins over it.
@@ -51,9 +50,8 @@ const generatedNote = "GENERATED from components/tenant-api internal/errcode, th
 
 // The values of entry.Retryable.
 const (
-	retryAlways  = "always"
-	retryNever   = "never"
-	retryDepends = "depends"
+	retryAlways = "always"
+	retryNever  = "never"
 )
 
 type contract struct {
@@ -136,22 +134,25 @@ func build(codes []errcode.Spec, kinds []handler.KindSpec, direct []directUse) (
 	if len(bad) > 0 {
 		return contract{}, fmt.Errorf("answers whose status contradicts their code's remedy:\n  %s", strings.Join(bad, "\n  "))
 	}
+	for _, k := range kinds {
+		if k.Code != "" && k.Retryable != remedy[k.Code].Retryable() {
+			bad = append(bad, fmt.Sprintf("kind %s: retryable %t, but code %s (remedy %s) says %t",
+				k.Kind, k.Retryable, k.Code, remedy[k.Code], remedy[k.Code].Retryable()))
+		}
+	}
+	if len(bad) > 0 {
+		return contract{}, fmt.Errorf("kinds whose retryable contradicts their code's remedy (one code, two meanings):\n  %s", strings.Join(bad, "\n  "))
+	}
 	out := contract{Generated: generatedNote, Codes: make([]entry, 0, len(codes))}
 	for _, c := range codes {
 		e := entry{Code: c.Code, Remedy: c.Remedy, Statuses: []int{}, Kinds: []string{}}
 		ks := byCode[c.Code]
-		retryable, notRetryable := 0, 0
 		var retryAfter []int
 		for _, k := range ks {
 			if !slices.Contains(e.Statuses, k.Status) {
 				e.Statuses = append(e.Statuses, k.Status)
 			}
 			e.Kinds = append(e.Kinds, string(k.Kind))
-			if k.Retryable {
-				retryable++
-			} else {
-				notRetryable++
-			}
 			retryAfter = append(retryAfter, k.RetryAfterS)
 		}
 		for _, st := range directStatuses[c.Code] {
@@ -161,13 +162,9 @@ func build(codes []errcode.Spec, kinds []handler.KindSpec, direct []directUse) (
 		}
 		slices.Sort(e.Statuses)
 		slices.Sort(e.Kinds)
-		switch {
-		case len(ks) == 0 && c.Remedy.Retryable(), retryable > 0 && notRetryable == 0:
+		e.Retryable = retryNever
+		if c.Remedy.Retryable() {
 			e.Retryable = retryAlways
-		case len(ks) == 0, notRetryable > 0 && retryable == 0:
-			e.Retryable = retryNever
-		default:
-			e.Retryable = retryDepends
 		}
 		if len(retryAfter) > 0 && retryAfter[0] > 0 && !slices.ContainsFunc(retryAfter, func(s int) bool { return s != retryAfter[0] }) {
 			e.RetryAfterS = &retryAfter[0]
