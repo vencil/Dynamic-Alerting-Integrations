@@ -663,10 +663,11 @@ func (w *Writer) lockTreeOnBase() error {
 	return nil
 }
 
-// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900): a
-// batch publish interrupted between the branch update and the worktree
-// update is finished before this write reads anything. On error the lock is
-// already released.
+// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900,
+// #3173): a publish the marker records as unfinished — a batch interrupted
+// between the branch update and the worktree update, or a write whose
+// outcome was unknown — is settled before this write reads anything. On
+// error the lock is already released.
 func (w *Writer) lockTreeRecovered() error {
 	w.lockTree()
 	if err := w.RecoverBatchPublish(); err != nil {
@@ -1783,7 +1784,13 @@ func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) erro
 // exactly content (checkStagedAsValidated); when git attributes rewrote
 // it, the write is refused. Whatever stops a write after its file was
 // written, the serving file is put back as HEAD has it (restoreFromHEAD);
-// the real index is gitCommitOnto's to keep (see there).
+// the real index is gitCommitOnto's to keep (see there). The publish
+// marker (#3173) is written before the file and lives until the file is
+// back in a known state: gitCommitOnto removes it once published, this
+// function when nothing changed or once that restore succeeded — never on
+// an unknown outcome (*WriteOutcomeUnknownError: HEAD may hold the
+// commit). A marker left behind settles the file and its index entry on
+// the next write or at startup (RecoverBatchPublish).
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, judgedBase string, trailer ...string) error {
 	if judgedBase == "" {
 		return fmt.Errorf("%w: no judged base for %s", ErrNoValidator, commitTag)
@@ -1810,7 +1817,22 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return ErrConflict
 	}
 
+	// #3173: the publish marker, before the serving file is written: from
+	// here until the file is seen back in a known state (published, equal
+	// to HEAD, or put back by restoreFromHEAD) it is the record that lets
+	// RecoverBatchPublish put it back on the next write or at startup. It
+	// has no commit yet; gitCommitOnto replaces it with one. Not recorded:
+	// nothing is written.
+	idxPath, err := w.indexPath(filePath)
+	if err != nil {
+		return err
+	}
+	if err := w.writePublishMarker("", []string{idxPath}, true); err != nil {
+		return fmt.Errorf("record the write: %w", err)
+	}
 	if err := writeFileAtomic(filePath, content, 0644); err != nil {
+		// writeFileAtomic renames into place last: the file is untouched.
+		w.removePublishMarker()
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -1819,9 +1841,15 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		// A judged write that did not commit leaves nothing behind (ADR-036
 		// §4: only a pass is written) — whatever stopped it: the refusals
 		// below, or git failing (index.lock, a timeout, update-ref).
+		var unknown *WriteOutcomeUnknownError
 		if rerr := w.restoreFromHEAD(filePath); rerr != nil {
-			slog.Error("gitops: could not put back a write that did not commit",
+			slog.Error("gitops: could not put back a write that did not commit; the publish marker (if any) is kept for the next write",
 				"commit_tag", commitTag, "error", rerr)
+		} else if !errors.As(err, &unknown) {
+			// The serving file is HEAD's again: nothing left to recover —
+			// unless the real index still holds the unpublished blob
+			// (removeRestoredMarker keeps the marker then).
+			w.removeRestoredMarker(filePath)
 		}
 		if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
 			return err
@@ -1834,6 +1862,8 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	// repository holds, so the caller's desired state is committed and no
 	// commit was created: an idempotent re-write, a success.
 	if !committed {
+		// git found the file equal to judgedBase (HEAD): nothing pending.
+		w.removePublishMarker()
 		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
 		return nil
 	}

@@ -128,7 +128,7 @@ var ErrPushFailed = errors.New("push of the PR-mode feature branch to origin fai
 // PushError is the error a PR-mode write returns when its push failed. It
 // unwraps to ErrPushFailed ONLY — like BaseRestoreError, the git error is
 // kept in Cause and rendered with %v, never wrapped: a push that timed out
-// wraps context.DeadlineExceeded and one that met index.lock contention wraps
+// wraps ErrGitTimeout (#3173) and one that met index.lock contention wraps
 // ErrWriteOverloaded, and either would make a handler answer the generic
 // cancelled / overloaded 503 instead of the push-failed one. Its text carries
 // the remote's output, so it goes to the log, not the client.
@@ -234,7 +234,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	defer w.releaseWrite()
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
@@ -627,7 +627,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()

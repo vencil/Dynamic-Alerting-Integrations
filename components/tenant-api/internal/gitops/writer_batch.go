@@ -24,6 +24,7 @@ package gitops
 // tree keeps "judged" and "written" the same bytes by construction.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -622,7 +623,12 @@ func (w *Writer) commitStaging(st *stagingTree, before, authorEmail string) (str
 //     the batch ran. Nothing was written; refresh and retry.
 //   - outcomes, *BatchCommittedError: the batch IS committed, but the write
 //     did not finish cleanly (see the type).
-//   - nil, other err: the batch could not run or commit. Nothing was written.
+//   - nil, *WriteOutcomeUnknownError: the ref update failed and the branch
+//     could not be read back (#3173). The batch may be on the branch; the
+//     publish marker is kept for RecoverBatchPublish.
+//   - nil, other err: the batch could not run or commit. Nothing was
+//     written — a git command past its own deadline (ErrGitTimeout)
+//     included (publishBatch reads the branch back to know).
 func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail string) ([]BatchOpOutcome, error) {
 	if len(ops) == 0 {
 		return nil, fmt.Errorf("empty batch operations")
@@ -699,24 +705,40 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 // them committed content. A process killed between the ref update and the
 // file sync leaves the worktree behind the branch; the marker makes the next
 // writer (or startup, RecoverBatchPublish) reset those paths to the branch.
+//
+// A ref update that reports an error is decided by where the branch is
+// afterwards (#3173; refAfterFailedUpdate reads the branch ref itself when
+// HEAD cannot be read): at commit, published; at headBefore, nothing
+// written (the marker goes; a timeout wraps ErrGitTimeout); elsewhere,
+// ErrConflict. When neither can be read, *WriteOutcomeUnknownError and the
+// marker STAYS: if the branch did move, the marker is the only record of
+// which serving paths are behind it, and RecoverBatchPublish (the next
+// write, or startup) decides once the branch can be read.
 func (w *Writer) publishBatch(st *stagingTree, headBefore, commit string) error {
-	if err := w.writePublishMarker(commit, st.order); err != nil {
+	branchRef := w.headBranchRef()
+	if err := w.writePublishMarker(commit, st.order, false); err != nil {
 		return fmt.Errorf("record the batch publish: %w", err)
 	}
 	if err := w.gitExec("update-ref", "-m", "tenant-api: batch", "HEAD", commit, headBefore); err != nil {
-		now, herr := w.currentHEAD()
+		now, herr := w.refAfterFailedUpdate(branchRef)
 		switch {
 		case herr == nil && now == commit:
 			// The ref moved although git reported an error: it is published.
 			slog.Warn("gitops: batch ref update reported an error after it took effect", "commit", commit, "error", err)
-		case herr == nil && now != headBefore:
+		case herr == nil && now == headBefore:
+			// The ref did not move: nothing written.
+			w.removePublishMarker()
+			return fmt.Errorf("advance the serving branch: %w", err)
+		case herr == nil:
 			w.removePublishMarker()
 			slog.Warn("gitops: serving branch moved outside tenant-api during a batch — nothing written",
 				"expected", headBefore, "actual", now)
 			return ErrConflict
 		default:
-			w.removePublishMarker()
-			return fmt.Errorf("advance the serving branch: %w", err)
+			slog.Error("gitops: the serving branch cannot be read after a failed batch ref update; whether the batch was published is unknown — the publish marker is kept",
+				"commit", commit, "error", err, "read_error", herr)
+			return &WriteOutcomeUnknownError{Commit: commit,
+				Cause: fmt.Errorf("advance the serving branch: %w; read the branch back: %w", err, herr)}
 		}
 	}
 	// From here on the batch IS committed; a failure leaves the marker, so the
@@ -734,9 +756,25 @@ func (w *Writer) publishBatch(st *stagingTree, headBefore, commit string) error 
 }
 
 // publishMarkerName is the publish marker, in the common git dir: the commit
-// a batch is publishing and its paths (relative to the top level), one per
-// line after the commit.
+// a write is publishing and its paths (relative to the top level), one per
+// line after the commit. The name predates the single-tenant write's use of
+// it (#3173) and stays, so a marker an older process left is still found.
 const publishMarkerName = "tenant-api-batch-publish"
+
+// markerServingWritten follows the commit on the marker's first line for a
+// single-tenant direct write (#3173): the marker then records that
+// tenant-api has written the serving file and not yet seen it back in a
+// known state. commitFileChange writes it before the file, with
+// markerNoCommit in the commit's place; gitCommitOnto replaces it with the
+// commit once there is one. A batch's marker (and every marker from before
+// #3173) has the commit alone: its serving worktree is not touched until
+// the branch has moved.
+const markerServingWritten = "serving-written"
+
+// markerNoCommit stands for the commit on a single-tenant marker written
+// before the commit exists. Never a commit id, and only valid with
+// markerServingWritten.
+const markerNoCommit = "-"
 
 func (w *Writer) publishMarkerPath() (string, error) {
 	dir, err := w.batchWorktreesDir()
@@ -746,18 +784,112 @@ func (w *Writer) publishMarkerPath() (string, error) {
 	return filepath.Join(filepath.Dir(dir), publishMarkerName), nil
 }
 
-func (w *Writer) writePublishMarker(commit string, rels []string) error {
+func (w *Writer) writePublishMarker(commit string, rels []string, servingWritten bool) error {
 	p, err := w.publishMarkerPath()
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(p, []byte(commit+"\n"+strings.Join(rels, "\n")+"\n"), 0o644)
+	head := commit
+	if head == "" {
+		head = markerNoCommit
+	}
+	if servingWritten {
+		head += " " + markerServingWritten
+	}
+	return writeFileAtomic(p, []byte(head+"\n"+strings.Join(rels, "\n")+"\n"), 0o644)
+}
+
+// removeRestoredMarker removes the publish marker after a single-tenant
+// write that did not publish put filePath back as HEAD has it
+// (commitFileChange) — only a marker that write can have left: one with
+// markerServingWritten naming filePath alone, with or without its commit.
+// A batch's marker, or one it cannot read, is left for RecoverBatchPublish.
+// With a commit, the marker is also kept while the path's index entry
+// still names the blob that commit holds for it (and HEAD does not):
+// gitCommitOnto synced the real index and unsyncIndexEntry could not put
+// it back, so the file is clean but the index is not — recovery resets it
+// (restoreUnpublishedPaths). Any git failure in that check keeps the
+// marker. Caller holds w.mu.
+func (w *Writer) removeRestoredMarker(filePath string) {
+	p, err := w.publishMarkerPath()
+	if err != nil {
+		return
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return // none (the write failed before writing it), or unreadable
+	}
+	commit, rels, servingWritten, err := parsePublishMarker(raw)
+	if err != nil || !servingWritten || len(rels) != 1 {
+		return
+	}
+	idxPath, err := w.indexPath(filePath)
+	if err != nil || idxPath != rels[0] {
+		return
+	}
+	if commit != "" {
+		pending, err := w.indexHoldsUnpublished(commit, idxPath, filePath)
+		if err != nil || pending {
+			return
+		}
+	}
+	w.removePublishMarker()
+}
+
+// indexHoldsUnpublished reports whether the real index's entry for rel
+// (top-level-relative; serving its absolute name) is still the blob commit
+// holds for rel while HEAD holds something else — gitCommitOnto's index
+// sync for a commit that was not published, left in place.
+func (w *Writer) indexHoldsUnpublished(commit, rel, serving string) (bool, error) {
+	ours, err := w.gitOutput(w.gitDir, "ls-tree", "-z", "--full-tree", commit, "--", rel)
+	if err != nil {
+		return false, fmt.Errorf("look up %s in %s: %w", rel, commit, err)
+	}
+	oid := treeEntryOID(ours)
+	if oid == "" {
+		return false, nil
+	}
+	entry, err := w.indexEntries(nil, serving)
+	if err != nil {
+		return false, fmt.Errorf("read the index entry of %s: %w", rel, err)
+	}
+	if indexEntryOID(entry) != oid {
+		return false, nil
+	}
+	head, err := w.gitOutput(w.gitDir, "ls-tree", "-z", "--full-tree", "HEAD", "--", rel)
+	if err != nil {
+		return false, fmt.Errorf("look up %s in HEAD: %w", rel, err)
+	}
+	return treeEntryOID(head) != oid, nil
+}
+
+// parsePublishMarker reads a marker writePublishMarker wrote; commit is ""
+// for a single-tenant marker written before its commit existed
+// (markerNoCommit). An unknown word after the commit is an error, not a
+// batch: reading a marker from a newer format as a batch's would drop it
+// without putting anything back. So is markerNoCommit without
+// markerServingWritten.
+func parsePublishMarker(raw []byte) (commit string, rels []string, servingWritten bool, err error) {
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	fields := strings.Fields(lines[0])
+	switch {
+	case len(fields) == 1 && fields[0] != markerNoCommit:
+	case len(fields) == 2 && fields[1] == markerServingWritten:
+		servingWritten = true
+	default:
+		return "", nil, false, fmt.Errorf("unrecognised publish marker first line %q", lines[0])
+	}
+	commit = fields[0]
+	if commit == markerNoCommit {
+		commit = ""
+	}
+	return commit, lines[1:], servingWritten, nil
 }
 
 func (w *Writer) removePublishMarker() {
 	if p, err := w.publishMarkerPath(); err == nil {
 		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("gitops: could not remove the batch publish marker", "path", p, "error", err)
+			slog.Warn("gitops: could not remove the publish marker", "path", p, "error", err)
 		}
 	}
 }
@@ -809,16 +941,33 @@ func (w *Writer) syncServingPaths(commit string, rels []string) error {
 	return nil
 }
 
-// RecoverBatchPublish brings the serving worktree up to its branch after a
-// batch publish that a crash (or a failed file sync) interrupted between the
-// branch update and the worktree update: the paths the publish marker names
-// are reset to HEAD. If the branch never moved, the worktree was never
-// touched and only the marker is dropped — but only when git positively
-// says so; a failed ancestry check is an error and keeps the marker for the
-// next try. It only touches the batch's own
-// conf.d paths — never an uncommitted edit of any other file. Called at
-// startup and, under the writer lock, before every write's first read of the
-// tree (lockTreeRecovered); a no-op when there is no marker.
+// RecoverBatchPublish settles a publish the publish marker records as
+// unfinished — a batch's, or a single-tenant direct write's (#3173) —
+// once HEAD can be read:
+//
+//   - PUBLISHED (HEAD is the marker's commit or descends from it): the
+//     paths it names are reset to HEAD, worktree and index — a batch that a
+//     crash (or a failed file sync) interrupted between the branch update
+//     and the worktree update, or a single-tenant write whose ref update
+//     took effect although neither HEAD nor the branch could be read back.
+//   - NOT PUBLISHED, batch: the worktree was never touched; only the
+//     marker is dropped.
+//   - NOT PUBLISHED, single-tenant (markerServingWritten): the serving file
+//     can still hold the write that never landed — the outcome was unknown,
+//     or the write's own restoreFromHEAD failed, or the process died before
+//     it ran — so it is put back as HEAD has it (restoreUnpublishedPaths);
+//     otherwise the tenant stays TENANT_FILE_DIRTY for every later write.
+//     A marker with no commit (markerNoCommit: the write stopped before
+//     commit-tree) is this case without the index: never synced, never
+//     touched.
+//
+// ⛔ Only a POSITIVE answer decides, and any failure — HEAD still
+// unreadable, a failed ancestry check, a sync that fails — keeps the marker
+// and blocks writes (markerBlocksWrites) for the next try. It only touches
+// the marker's own conf.d paths — never an uncommitted edit of any other
+// file. Called at startup and, under the writer lock, before every write's
+// first read of the tree (lockTreeRecovered); a no-op when there is no
+// marker.
 func (w *Writer) RecoverBatchPublish() error {
 	p, err := w.publishMarkerPath()
 	if err != nil {
@@ -829,13 +978,27 @@ func (w *Writer) RecoverBatchPublish() error {
 		return nil
 	}
 	if err != nil {
-		return markerBlocksWrites(p, fmt.Errorf("read the batch publish marker: %w", err))
+		return markerBlocksWrites(p, fmt.Errorf("read the publish marker: %w", err))
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	commit, rels := lines[0], lines[1:]
+	commit, rels, servingWritten, err := parsePublishMarker(raw)
+	if err != nil {
+		return markerBlocksWrites(p, err)
+	}
+	if commit == "" {
+		// A single-tenant write stopped before it had a commit: nothing was
+		// published and the real index was never synced. Only the serving
+		// file is put back.
+		if err := w.restoreUnpublishedPaths("", rels); err != nil {
+			return markerBlocksWrites(p, fmt.Errorf("put back a write that was not committed: %w", err))
+		}
+		slog.Warn("gitops: put the serving worktree back to the branch after a write that stopped before its commit",
+			"paths", len(rels))
+		w.removePublishMarker()
+		return nil
+	}
 	head, err := w.currentHEAD()
 	if err != nil {
-		return markerBlocksWrites(p, fmt.Errorf("read HEAD to recover a batch publish: %w", err))
+		return markerBlocksWrites(p, fmt.Errorf("read HEAD to recover an interrupted publish: %w", err))
 	}
 	published := head == commit
 	if !published {
@@ -843,25 +1006,109 @@ func (w *Writer) RecoverBatchPublish() error {
 		// sync on a failed check (a timeout, a lock, a missing object) would
 		// lose the only record of which paths are behind the branch.
 		if published, err = w.isAncestor(commit, head); err != nil {
-			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted batch publish: %w", err))
+			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted publish: %w", err))
 		}
 	}
-	if published {
+	switch {
+	case published:
 		if err := w.syncServingPaths("HEAD", rels); err != nil {
-			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted batch publish: %w", err))
+			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted publish: %w", err))
 		}
-		slog.Warn("gitops: brought the serving worktree up to the branch after an interrupted batch publish",
+		slog.Warn("gitops: brought the serving worktree up to the branch after an interrupted publish",
+			"commit", commit, "paths", len(rels))
+	case servingWritten:
+		if err := w.restoreUnpublishedPaths(commit, rels); err != nil {
+			return markerBlocksWrites(p, fmt.Errorf("put back a write that was not published: %w", err))
+		}
+		slog.Warn("gitops: put the serving worktree back to the branch after a write that was not published",
 			"commit", commit, "paths", len(rels))
 	}
 	w.removePublishMarker()
 	return nil
 }
 
+// restoreUnpublishedPaths undoes, for a single-tenant write whose commit
+// never reached the branch, what the write left in the serving repository:
+// each path's serving file is put back as HEAD has it through
+// restoreFromHEAD (a checkout's bytes: smudge, eol; removed when HEAD has
+// no such file), and its index entry is reset to HEAD's ONLY while it
+// still names the blob commit holds for the path while HEAD does not
+// (indexHoldsUnpublished) — gitCommitOnto's sync, which unsyncIndexEntry
+// could not undo; with no commit (markerNoCommit) the index was never
+// synced and is not touched. Any other entry is an operator's
+// and left as it is (restoreFromHEAD's rule: the worktree is ours, the
+// index is not). Every git failure is an error — restoreFromHEAD's own
+// included, even when its raw-blob fallback wrote the file.
+func (w *Writer) restoreUnpublishedPaths(commit string, rels []string) error {
+	top, err := w.gitOutput(w.gitDir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("locate the serving worktree: %w", err)
+	}
+	serving := make([]string, len(rels))
+	for i, rel := range rels {
+		serving[i] = filepath.Join(strings.TrimSpace(string(top)), filepath.FromSlash(rel))
+		if err := w.restoreFromHEAD(serving[i]); err != nil {
+			return fmt.Errorf("put %s back as HEAD has it: %w", rel, err)
+		}
+	}
+	if commit == "" {
+		// Written before its commit existed: the real index was never
+		// synced, so it is not touched.
+		return nil
+	}
+	var reset []string
+	for i, rel := range rels {
+		pending, err := w.indexHoldsUnpublished(commit, rel, serving[i])
+		if err != nil {
+			return err
+		}
+		if pending {
+			reset = append(reset, serving[i])
+		}
+	}
+	if len(reset) == 0 {
+		return nil
+	}
+	if err := w.gitExec(append([]string{"reset", "-q", "--"}, reset...)...); err != nil {
+		return fmt.Errorf("reset the serving index: %w", err)
+	}
+	return nil
+}
+
+// treeEntryOID is the object id of the one entry `ls-tree -z` printed
+// ("<mode> <type> <oid>\t<path>\x00"), "" when there is not exactly one.
+func treeEntryOID(out []byte) string {
+	entries := bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0})
+	if len(out) == 0 || len(entries) != 1 {
+		return ""
+	}
+	meta, _, _ := bytes.Cut(entries[0], []byte("\t"))
+	if f := strings.Fields(string(meta)); len(f) == 3 {
+		return f[2]
+	}
+	return ""
+}
+
+// indexEntryOID is the object id of the one stage-0 entry `ls-files -s -z`
+// printed ("<mode> <oid> <stage>\t<path>\x00"), "" when there is not
+// exactly one (absent, or a conflict's stages).
+func indexEntryOID(out []byte) string {
+	entries := bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0})
+	if len(out) == 0 || len(entries) != 1 {
+		return ""
+	}
+	meta, _, _ := bytes.Cut(entries[0], []byte("\t"))
+	if f := strings.Fields(string(meta)); len(f) == 3 && f[2] == "0" {
+		return f[1]
+	}
+	return ""
+}
+
 // markerBlocksWrites makes a recovery failure actionable: while it fails,
 // every write fails with it (lockTreeRecovered), so the error names the
 // marker and the way out.
 func markerBlocksWrites(marker string, err error) error {
-	return fmt.Errorf("%w (writes are blocked until the batch publish marker %s is resolved; "+
+	return fmt.Errorf("%w (writes are blocked until the publish marker %s is resolved; "+
 		"if its commit is gone, remove the marker after checking the serving worktree against the branch)", err, marker)
 }
 
