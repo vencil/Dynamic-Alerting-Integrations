@@ -90,7 +90,7 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
+// @Failure     403   {object} ErrorResponse "PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api's own forge token lacks write scope to open the PR/MR — an operator must fix the token. (A member refused by the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. Code BATCH_COMMITTED (#3202), with committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413   {object} ErrorResponse

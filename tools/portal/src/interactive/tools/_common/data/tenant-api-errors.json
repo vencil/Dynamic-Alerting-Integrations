@@ -1,5 +1,5 @@
 {
-  "_generated": "GENERATED from components/tenant-api internal/errcode and the handler's kind table by cmd/gen-error-contract — DO NOT EDIT. Run `make error-contract`.",
+  "_generated": "GENERATED from components/tenant-api internal/errcode, the handler's kind table and the direct answers by cmd/gen-error-contract — DO NOT EDIT. Run `make error-contract`.",
   "codes": [
     {
       "code": "BAD_REQUEST",
@@ -46,7 +46,9 @@
       "code": "CANDIDATE_INVALID",
       "remedy": "fix_request",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        400
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -191,7 +193,9 @@
       "code": "GROUP_ID_UNAVAILABLE",
       "remedy": "choose_other",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        409
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -213,7 +217,9 @@
       "code": "INVALID_BODY",
       "remedy": "fix_request",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        400
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -221,7 +227,9 @@
       "code": "MASKED_PREVIEW_UNAVAILABLE",
       "remedy": "permission",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        422
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -253,7 +261,9 @@
       "code": "NOT_IMPLEMENTED",
       "remedy": "operator",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        501
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -261,7 +271,9 @@
       "code": "PAYLOAD_TOO_LARGE",
       "remedy": "fix_request",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        413
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -269,7 +281,9 @@
       "code": "PENDING_PR_EXISTS",
       "remedy": "existing",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        409
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -325,7 +339,9 @@
       "code": "TASK_NOT_FOUND",
       "remedy": "not_found",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        404
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -443,7 +459,9 @@
       "code": "UNAUTHORIZED",
       "remedy": "permission",
       "retryable": "never",
-      "statuses": [],
+      "statuses": [
+        401
+      ],
       "retry_after_s": null,
       "kinds": []
     },
@@ -452,6 +470,7 @@
       "remedy": "retry_after",
       "retryable": "always",
       "statuses": [
+        502,
         503
       ],
       "retry_after_s": null,

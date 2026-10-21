@@ -2086,9 +2086,10 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: 'PR write-back mode: the forge token lacks write scope to open
-            the PR/MR. (A member refused by the write scope, on the local copy or
-            on the latest base branch, rejects the batch with a 422 instead.)'
+          description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
+            own forge token lacks write scope to open the PR/MR — an operator must
+            fix the token. (A member refused by the write scope, on the local copy
+            or on the latest base branch, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "404":
@@ -2386,7 +2387,10 @@ paths:
           description: 'Forbidden: insufficient permissions. In PR write-back mode
             the write scope is judged again on the latest base branch, which this
             server''s local copy may lag: a refusal there is the same 403 with tenant_id,
-            and no PR/MR or branch is left'
+            and no PR/MR or branch is left. Code FORBIDDEN for the caller''s permission;
+            in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the forge refuses
+            tenant-api''s own configured token the write scope to open the PR/MR —
+            an operator must fix the token'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -3077,9 +3081,10 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: 'PR write-back mode: the forge token lacks write scope to open
-            the PR/MR. (An operation refused by the write scope, on the local copy
-            or on the latest base branch, rejects the batch with a 422 instead.)'
+          description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
+            own forge token lacks write scope to open the PR/MR — an operator must
+            fix the token. (An operation refused by the write scope, on the local
+            copy or on the latest base branch, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
