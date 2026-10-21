@@ -49,7 +49,7 @@ def test_flags_preview_env_var_in_recipe_preview_chart(tmp_path: Path):
 
 
 def test_flags_flag_form_in_k8s_manifest(tmp_path: Path):
-    _write(tmp_path, "k8s/04-tenant-api/deploy.yaml", "args: [--dev-bypass-auth]\n")
+    _write(tmp_path, "k8s/99-custom/deploy.yaml", "args: [--dev-bypass-auth]\n")
     assert len(guard.find_violations(tmp_path)) == 1
 
 
@@ -111,7 +111,7 @@ def test_main_without_ci_is_advisory(monkeypatch):
     monkeypatch.setattr(
         guard,
         "find_violations",
-        lambda: [("k8s/04-tenant-api/deploy.yaml", 1, "--dev-bypass-auth")],
+        lambda: [("k8s/99-custom/deploy.yaml", 1, "--dev-bypass-auth")],
     )
     monkeypatch.setattr(sys, "argv", ["prog"])
     assert guard.main() == 0

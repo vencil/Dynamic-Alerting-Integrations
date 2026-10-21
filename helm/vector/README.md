@@ -59,7 +59,7 @@ The stream-field set is locked at the values level (`streamFields`) — changing
 
 A **set selector** rather than a second `additionalSources` entry is deliberate: two `kubernetes_logs` sources sharing one `data_dir` have undocumented checkpoint behaviour, and overlapping selectors double-ingest. One source, one checkpoint namespace, split downstream by `origin_split`.
 
-⚠️ The selector matches `app.kubernetes.io/name`. Both `helm/tenant-api` and (since #1234) the raw `k8s/04-tenant-api/deployment.yaml` set that label on the pod, so either deployment path is collected. If you run tenant-api from your own manifests, that label is what puts it on the evidence channel.
+⚠️ The selector matches `app.kubernetes.io/name`, which `helm/tenant-api` sets on the pod. If you run tenant-api from your own manifests, that label is what puts it on the evidence channel.
 
 ⛔ **A miss here is COVERED, but by an alert — not by anything in this chart.** An evidence channel that collects nothing is otherwise indistinguishable from "no revocations happened": the reconciler queries a reachable store, gets zero rows, and reports a clean all-clear with a fresh `last_reconcile_ts`. What closes that is `FederationRevocationEvidenceChannelDown` (critical, `federation_revocation_channel_up == 0 for 15m`, in `k8s/03-monitoring/configmap-rules-platform.yaml`): tenant-api emits a `federation_revocation_channel_heartbeat` canary every 5m down this exact transform and sink path, and its absence from the store pages.
 

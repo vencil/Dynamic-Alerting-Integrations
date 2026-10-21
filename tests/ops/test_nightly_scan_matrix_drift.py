@@ -341,14 +341,13 @@ def test_hardcoded_template_image_refs_are_covered_by_the_scan() -> None:
     until the Go-template actions are stripped, so `yaml.safe_load` throws. That
     is a sound reason to exclude them, but it leaves any ref hardcoded there
     outside the sampling face entirely. `helm/tenant-api/templates/deployment.yaml`
-    has exactly such a ref (the alpine/git init-container), and today it happens
-    to equal the copy in `k8s/04-tenant-api/deployment.yaml` — the one that IS
-    extracted and IS in the matrix. Nothing enforced that equality: bump one and
-    the nightly scan covers the other.
+    has exactly such a ref (the alpine/git init-container). It used to also
+    appear in the raw tenant-api manifest under k8s/, which the extractor DID
+    see; that copy was removed in #1594, so this test is now the only thing
+    tying the template's ref to the scan matrix.
 
-    Asserted as "must be in the scan matrix" rather than "must equal the k8s
-    copy", because that is the property that actually matters and it keeps
-    holding if the k8s manifest ever goes away.
+    Asserted as "must be in the scan matrix" rather than "must equal some other
+    copy", because that is the property that actually matters.
     """
     # ⛔ NO `/` requirement, and BOTH YAML extensions. An earlier cut of this
     # regex demanded at least one slash, so a perfectly ordinary Docker Hub

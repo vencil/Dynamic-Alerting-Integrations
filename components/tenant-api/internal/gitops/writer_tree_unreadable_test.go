@@ -95,7 +95,8 @@ func TestTreeUnreadable_DanglingSymlinkElsewhereRefusesEveryPath(t *testing.T) {
 			gitRun(t, dir, "commit", "-m", "dangling link")
 			head := gitRevParse(t, dir, "HEAD")
 			err := treeVerdictVia(t, mode, newTestWriter(dir, dir), "dang-t")
-			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError}}, false)
+			// Missing: the stat found nothing (ENOENT) — provably no file (#3206).
+			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError, Missing: true}}, false)
 			if got := gitRevParse(t, dir, "HEAD"); got != head {
 				t.Errorf("HEAD moved %s → %s", head, got)
 			}
@@ -219,7 +220,7 @@ func TestTreeUnreadable_PreviewMatchesWrite(t *testing.T) {
 		name, link, tenant string
 		want               []cfg.UnreadableFile
 	}{
-		{"elsewhere", "gone.yaml", "pv-t", []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError}}},
+		{"elsewhere", "gone.yaml", "pv-t", []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError, Missing: true}}},
 		{"target", "pv-t.yaml", "pv-t", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -285,7 +286,8 @@ func TestTreeUnreadable_UnresolvableLinksElsewhereAreGitFixable(t *testing.T) {
 				gitRun(t, dir, "add", "-A")
 				gitRun(t, dir, "commit", "-m", "unresolvable link")
 				err := treeVerdictVia(t, mode, newTestWriter(dir, dir), "un-t")
-				assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: c.link, Reason: cfg.UnreadableStatError}}, false)
+				// ELOOP / ENOTDIR: provably no file there (Missing, #3206).
+				assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: c.link, Reason: cfg.UnreadableStatError, Missing: true}}, false)
 			})
 		}
 	}

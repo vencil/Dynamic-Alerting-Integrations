@@ -1,17 +1,19 @@
 package main
 
-// parse-tree --list-only (ADR-036 §2, §7 step 9; #3206): which conf.d files
-// there are, what each one's NAME makes it, and who reads it — without
-// reading or parsing a byte of any file. For a reader that needs the file
-// list and not the content (a tool that walks conf.d to copy, hash or count
-// files), so it has no reason to keep a name rule of its own.
+// parse-tree's per-path index ("entries"), and the two modes that write it
+// alone: --list-only --config-dir (list mode) and --list-only --names (names
+// mode) (ADR-036 §2, §7 step 9; #3206). List mode answers "which conf.d
+// files are there, what is each one, who reads it" without reading or
+// parsing a byte of any file — for a reader that needs the file list and not
+// the content (a tool that walks conf.d to copy, hash or count files), so it
+// has no reason to keep a name rule of its own.
 //
 // ⛔ NO RULES OF ITS OWN, as for the tree mode: the walk is
 // config.ScanDirTreeNames (the exporter's walker, files opened and closed
-// but never read), names are pkg/confdname, readers and carrier selection
-// are tree mode's readersFor / DefaultsCarriers. A separate schema value, so
-// a reader of the full document cannot take this one (no "files") for a
-// tree whose files are all unreadable or empty.
+// but never read), names are pkg/confdname, what a path IS is config.Role,
+// readers and carrier selection are tree mode's readersFor /
+// DefaultsCarriers. walkEntries is the ONE builder of a walk's entries,
+// shared with tree mode: the two modes cannot list a path differently.
 
 import (
 	"encoding/json"
@@ -29,11 +31,7 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
-// parseTreeListSchema names the --list-only document's shape; a reader
-// refuses any other value, as for parseTreeSchema.
-const parseTreeListSchema = "da-guard.parse-tree-list/v1"
-
-// Closed set of parseTreeListEntry.Class values.
+// Closed set of parseTreeEntry.Class values.
 const (
 	// classTenant: a config file name that is neither reserved (`_`) nor
 	// hidden — a tenant file; TenantNamed is the id its name carries.
@@ -42,68 +40,17 @@ const (
 	classDefaults = "defaults"
 	// classPlatform: any other `_`-prefixed config file name.
 	classPlatform = "platform"
-	// classDirectory: not a file — a config-named directory, a symlink to a
-	// directory the walk does not follow, or a directory that could not be
-	// listed (tree listing only).
+	// classDirectory: a directory, whatever its name — a config-named
+	// directory, a symlink to a directory the walk does not follow, or a
+	// directory that could not be listed.
 	classDirectory = "directory"
-	// classHidden: `.`-prefixed (names mode only; the walk never lists one).
+	// classHidden: `.`-prefixed, or under a `.` directory (file and names
+	// mode only; the walk never lists one).
 	classHidden = "hidden"
-	// classNotConfigName: no `.yaml` / `.yml` extension (names mode only).
+	// classNotConfigName: no `.yaml` / `.yml` extension (file and names mode
+	// only).
 	classNotConfigName = "not_config_name"
 )
-
-// parseTreeListDoc is the --list-only document on stdout.
-type parseTreeListDoc struct {
-	Schema         string `json:"schema"`
-	DaGuardVersion string `json:"da_guard_version"`
-	// Mode is "list" (--config-dir) or "names" (--names).
-	Mode string `json:"mode"`
-	// DefaultsCarriers is tree mode's: directory ("." for the root) → the
-	// one defaults carrier its chain reads. Empty in names mode.
-	DefaultsCarriers map[string]string `json:"defaults_carriers"`
-	// Entries: every entry the walk records, sorted by Path (list mode), or
-	// every given name in the order given (names mode).
-	Entries []parseTreeListEntry `json:"entries"`
-}
-
-// parseTreeListEntry is one listed path or one given name.
-type parseTreeListEntry struct {
-	// Path is root-relative with '/' ("." for the root itself); in names
-	// mode, the name as given.
-	Path string `json:"path"`
-	// Depth is the number of directories between the root and Path (0 for a
-	// file in the root). Names mode: always 0.
-	Depth int `json:"depth"`
-	// Class is what the name makes the entry (closed set, class*).
-	Class string `json:"class"`
-	// TenantNamed is the tenant id the name carries (confdname.TenantNamedBy)
-	// — set only for class "tenant". ⛔ The write plane's naming
-	// convention, not who is served: the exporter takes tenant ids from the
-	// `tenants:` keys inside the file.
-	TenantNamed string `json:"tenant_named,omitempty"`
-	// Readers is who reads it, as tree mode's "selected" says; [] when no
-	// reader does (then NotRead says why). null in names mode, which has no
-	// tree.
-	Readers []string `json:"readers"`
-	// NotRead is tree mode's not_read reason (unselected_defaults_carrier).
-	NotRead string `json:"not_read,omitempty"`
-	// Unreadable is set when the entry cannot be read: a kind from tree
-	// mode's closed list that is decided without reading (read_failure,
-	// not_regular_file) and a message for a person.
-	Unreadable *parseTreeListProblem `json:"unreadable,omitempty"`
-}
-
-type parseTreeListProblem struct {
-	Kind    parsetree.Kind `json:"kind"`
-	Message string         `json:"message"`
-}
-
-func newParseTreeListDoc(mode string) *parseTreeListDoc {
-	return &parseTreeListDoc{
-		Schema: parseTreeListSchema, DaGuardVersion: Version, Mode: mode,
-		DefaultsCarriers: map[string]string{}, Entries: []parseTreeListEntry{},
-	}
-}
 
 // nameClass is what a base name alone makes a file, and the tenant id it
 // carries (classTenant only).
@@ -129,83 +76,128 @@ func depthOf(rel string) int {
 	return strings.Count(rel, "/")
 }
 
-// parseTreeListOf is the --list-only document of one ScanDirTreeNames walk.
-// Selection, readers and every unreadable entry are tree mode's, decided the
-// same way; only the content verdicts (which need the bytes) are absent.
-func parseTreeListOf(scan *config.TreeScan) (*parseTreeListDoc, error) {
-	doc := newParseTreeListDoc("list")
+// nameEntry is the entry the NAME of rel makes, before any verdict on disk:
+// role, readers and problem are the caller's. A path under a hidden
+// directory is class hidden whatever its own name (file mode).
+func nameEntry(rel string) parseTreeEntry {
+	base := path.Base(rel)
+	class, id := nameClass(base)
+	if class != classHidden && confdname.HasHiddenSegment(rel) {
+		class, id = classHidden, ""
+	}
+	return parseTreeEntry{Path: rel, Depth: depthOf(rel), Class: class, TenantNamed: id,
+		DefaultsDocument: class != classHidden && confdname.IsDefaultsDocument(base)}
+}
+
+// withRole sets the entry's role; an entry that is not a config file is a
+// document of no schema (DefaultsDocument false), and a directory has no
+// name class.
+func withRole(e parseTreeEntry, role config.Role) parseTreeEntry {
+	e.Role = role
+	if role != config.RoleConfig {
+		e.DefaultsDocument = false
+	}
+	if role == config.RoleUnlistableDir {
+		e.Class, e.TenantNamed = classDirectory, ""
+	}
+	return e
+}
+
+// unreadableAsEntry is the entry of one walk record of TreeScan.Unreadable.
+func unreadableAsEntry(u config.UnreadableFile) parseTreeEntry {
+	e := withRole(nameEntry(u.RelKey), u.Role())
+	if u.Reason == config.UnreadableWalkError {
+		e.Readers = []string{readerExporter, readerGenerator}
+	} else {
+		// Never an unselected carrier: selection runs over the files the
+		// walk could read (the generator's readable_carriers too).
+		e.Readers = readersFor(u.RelKey, true)
+	}
+	e.Problem = &parseTreeProblem{Kind: unreadableKind(u.Reason), Message: unreadableMessage(u.Reason)}
+	return e
+}
+
+// notFileAsEntry is the entry of one walk record of TreeScan.NotFiles.
+func notFileAsEntry(nf config.NotFile) parseTreeEntry {
+	e := withRole(nameEntry(nf.RelKey), nf.Role())
+	readers, msg := notFileEntry(nf.RelKey, nf.Reason)
+	e.Class, e.TenantNamed, e.Readers = classDirectory, "", readers
+	e.Problem = &parseTreeProblem{Kind: parsetree.KindNotRegularFile, Message: msg}
+	return e
+}
+
+// walkEntries fills idx's defaults_carriers and entries from one walk: every
+// file it keeps, every entry it dropped, every config-named path that is not
+// a file, and the root when it could not be listed — sorted by path. The
+// problems are those decided without reading; tree mode adds the content
+// problems of the files it reads.
+func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 	byDir := scan.DefaultsCarriers().ByDir
 	selected := make(map[string]bool, len(byDir))
 	for dir, carrier := range byDir {
 		selected[carrier] = true
 		d, err := relTo(scan.AbsRoot, dir)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		c, err := relTo(scan.AbsRoot, carrier)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		doc.DefaultsCarriers[d] = c
-	}
-	fileEntry := func(rel string) parseTreeListEntry {
-		class, id := nameClass(path.Base(rel))
-		return parseTreeListEntry{Path: rel, Depth: depthOf(rel), Class: class, TenantNamed: id}
+		idx.DefaultsCarriers[d] = c
 	}
 	for _, rel := range scan.Keys {
-		e := fileEntry(rel)
+		e := withRole(nameEntry(rel), config.RoleConfig)
 		e.Readers = readersFor(rel, !confdname.IsDefaults(path.Base(rel)) || selected[scan.Files[rel].AbsPath])
 		if len(e.Readers) == 0 {
 			e.Readers, e.NotRead = []string{}, notReadUnselectedCarrier
 		}
-		doc.Entries = append(doc.Entries, e)
+		idx.Entries = append(idx.Entries, e)
 	}
 	for _, u := range scan.Unreadable {
-		e := fileEntry(u.RelKey)
-		e.Readers = []string{readerExporter, readerGenerator}
-		if u.Reason == config.UnreadableWalkError {
-			e.Class, e.TenantNamed = classDirectory, ""
-		} else {
-			e.Readers = readersFor(u.RelKey, true)
-		}
-		e.Unreadable = &parseTreeListProblem{Kind: unreadableKind(u.Reason), Message: unreadableMessage(u.Reason)}
-		doc.Entries = append(doc.Entries, e)
+		idx.Entries = append(idx.Entries, unreadableAsEntry(u))
 	}
 	if scan.RootWalkErr != nil {
-		doc.Entries = append(doc.Entries, parseTreeListEntry{
-			Path: ".", Class: classDirectory, Readers: []string{readerExporter, readerGenerator},
-			Unreadable: &parseTreeListProblem{Kind: parsetree.KindReadFailure, Message: unreadableMessage(config.UnreadableWalkError)},
-		})
+		e := withRole(parseTreeEntry{Path: "."}, config.RootWalkRole)
+		e.Readers = []string{readerExporter, readerGenerator}
+		e.Problem = &parseTreeProblem{Kind: parsetree.KindReadFailure,
+			Message: unreadableMessage(config.UnreadableWalkError)}
+		idx.Entries = append(idx.Entries, e)
 	}
 	for _, nf := range scan.NotFiles {
-		readers, msg := notFileEntry(nf.RelKey, nf.Reason)
-		doc.Entries = append(doc.Entries, parseTreeListEntry{
-			Path: nf.RelKey, Depth: depthOf(nf.RelKey), Class: classDirectory, Readers: readers,
-			Unreadable: &parseTreeListProblem{Kind: parsetree.KindNotRegularFile, Message: msg},
-		})
+		idx.Entries = append(idx.Entries, notFileAsEntry(nf))
 	}
-	sort.SliceStable(doc.Entries, func(i, j int) bool { return doc.Entries[i].Path < doc.Entries[j].Path })
-	return doc, nil
+	sort.SliceStable(idx.Entries, func(i, j int) bool { return idx.Entries[i].Path < idx.Entries[j].Path })
+	return nil
+}
+
+// parseTreeListOf is the list-mode document of one ScanDirTreeNames walk.
+func parseTreeListOf(scan *config.TreeScan) (*parseTreeIndex, error) {
+	idx := newParseTreeIndex("list")
+	if err := walkEntries(scan, &idx); err != nil {
+		return nil, err
+	}
+	return &idx, nil
 }
 
 // parseTreeNamesOf is names mode: each given base name classified by
 // pkg/confdname alone — for names that are not on a disk this process can
-// walk (e.g. the keys of a ConfigMap built from a conf.d).
-func parseTreeNamesOf(names []string) (*parseTreeListDoc, error) {
-	doc := newParseTreeListDoc("names")
+// walk (e.g. the keys of a ConfigMap built from a conf.d). No role, no
+// readers: there is no disk and no tree.
+func parseTreeNamesOf(names []string) (*parseTreeIndex, error) {
+	idx := newParseTreeIndex("names")
 	for _, n := range names {
 		if n == "" || strings.ContainsAny(n, "/\\") || !utf8.ValidString(n) {
 			return nil, fmt.Errorf("--names: %q is not a base name (empty, holds a separator, or not valid UTF-8)", n)
 		}
-		class, id := nameClass(n)
-		doc.Entries = append(doc.Entries, parseTreeListEntry{Path: n, Class: class, TenantNamed: id})
+		idx.Entries = append(idx.Entries, nameEntry(n))
 	}
-	return doc, nil
+	return &idx, nil
 }
 
 // runParseTreeList is `parse-tree --list-only`, after the flags are parsed.
 func runParseTreeList(f *parseTreeFlags, stdin io.Reader, stdout io.Writer, fail func(string, ...any) int) int {
-	var doc *parseTreeListDoc
+	var idx *parseTreeIndex
 	var err error
 	if f.names != "" {
 		var raw []byte
@@ -217,29 +209,28 @@ func runParseTreeList(f *parseTreeFlags, stdin io.Reader, stdout io.Writer, fail
 		if err != nil {
 			return fail("--names: %v", err)
 		}
+		// Before decoding: json.Unmarshal turns each invalid byte into
+		// U+FFFD, so a name checked after it is always valid UTF-8 — and two
+		// different names could come out as one.
+		if !utf8.Valid(raw) {
+			return fail("--names: the input is not valid UTF-8; JSON cannot carry such a name")
+		}
 		var names []string
 		if err := json.Unmarshal(raw, &names); err != nil {
 			return fail("--names: not a JSON array of strings: %v", err)
 		}
-		doc, err = parseTreeNamesOf(names)
+		idx, err = parseTreeNamesOf(names)
 	} else {
 		var scan *config.TreeScan
 		scan, err = config.ScanDirTreeNames(f.configDir, log.New(io.Discard, "", 0))
 		if err == nil {
-			doc, err = parseTreeListOf(scan)
+			idx, err = parseTreeListOf(scan)
 		}
 	}
 	if err != nil {
 		return fail("%v", err)
 	}
-	for _, e := range doc.Entries {
-		if !utf8.ValidString(e.Path) {
-			return fail("the path %q is not valid UTF-8; JSON cannot carry it", e.Path)
-		}
-	}
-	enc := json.NewEncoder(stdout)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(doc); err != nil {
+	if err := writeParseTree(stdout, idx.Entries, idx); err != nil {
 		return fail("%v", err)
 	}
 	return exitOK

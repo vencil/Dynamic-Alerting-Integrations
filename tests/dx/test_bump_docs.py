@@ -1964,19 +1964,18 @@ class TestReleaseLineTableRows:
         assert row.group(2) == chart_version, (row.group(2), chart_version)
 
     def test_image_runtime_pins_have_no_rule(self):
-        """沒有任何 tenant-api 線規則會去動那三處 image pin。
+        """沒有任何 tenant-api 線規則會去動那兩處 image pin。
 
         產生出來的 platform-data.json 與它的鏡像 images.js 必須等於 chart 的
         appVersion——那是 `make platform-data` 的產物，bump 之後沒重跑就會在這裡
-        先紅。k8s deployment 不比對數字，只確認沒有規則碰它。
+        先紅。
         """
         chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
         app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
                                 re.MULTILINE).group(1)
-        generated = ["docs/assets/platform-data.json",
-                     "tools/portal/src/interactive/tools/_common/data/images.js"]
-        targets = ["k8s/04-tenant-api/deployment.yaml", *generated]
-        for rel in generated:
+        targets = ["docs/assets/platform-data.json",
+                   "tools/portal/src/interactive/tools/_common/data/images.js"]
+        for rel in targets:
             path = bump_docs.REPO_ROOT / rel
             pins = re.findall(r"tenant-api:v?(\d+\.\d+\.\d+)",
                               path.read_text(encoding="utf-8"))
@@ -1987,7 +1986,7 @@ class TestReleaseLineTableRows:
 
         covered = {r.get("file") for r in bump_docs._build_rules()["tenant-api"]}
         assert covered.isdisjoint(targets), (
-            f"這三個檔案的 tenant-api image pin 不由版號線規則驅動："
+            f"這兩個檔案的 tenant-api image pin 不由版號線規則驅動："
             f"{covered & set(targets)}")
 
 
@@ -2454,11 +2453,10 @@ class TestRoundFourSurvivors:
 
     def test_a_glob_rule_cannot_smuggle_a_rule_over_the_image_pins(self):
         """⛔ 反向釘只看了 `"file"` 這個 key，而 glob 規則的 `"file"` 是字面
-        字串 `"__glob__"`——所以一條掃過那三個 image pin 的 glob 完全
+        字串 `"__glob__"`——所以一條掃過那兩個 image pin 的 glob 完全
         繞過它。要比對的是**展開後**的檔案集合。
         """
         protected = {
-            "k8s/04-tenant-api/deployment.yaml",
             "docs/assets/platform-data.json",
             "tools/portal/src/interactive/tools/_common/data/images.js",
         }

@@ -383,13 +383,22 @@ def _fake_da_guard(tmp_path: Path, body: str) -> str:
     return str(p)
 
 
+_ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+          '"defaults_document": false, "readers": ["exporter"], "not_read": null, '
+          '"role": "config", "problem": null}')
+
+
 @pytest.mark.parametrize("body,needle", [
-    ('echo \'{"schema": "da-guard.parse-tree/v2", "selected": {}, "files": {}, '
-     '"unreadable": [], "not_read": []}\'\n', "schema 'da-guard.parse-tree/v2'"),
-    ('echo \'{"schema": "da-guard.parse-tree/v1", "selected": {}}\'\n', "field 'files'"),
+    ('echo \'{"schema": "da-guard.parse-tree/v3", "entries": [], "files": {}}\'\n',
+     "schema 'da-guard.parse-tree/v3'"),
+    # A da-guard from before the per-path entries (#3206) is named as older.
+    ('echo \'{"schema": "da-guard.parse-tree/v1", "selected": {}}\'\n', "older than this tool"),
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
+     '"files": {}, "rendered_by": {}}\'\n', "field 'entries' missing"),
     ("echo not-json\n", "wrote no document"),
-    ('echo \'{"schema": "da-guard.parse-tree/v1", "selected": {"t.yaml": ["exporter"]}, '
-     '"files": {}, "unreadable": [], "not_read": []}\'\n', "is not \"files\" plus"),
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
+     '"entries": [' + _ENTRY + '], "files": {}, "rendered_by": {}}\'\n',
+     "neither content nor a problem"),
     ('echo "flag provided but not defined" >&2; exit 2\n', "older than this tool"),
     ("exit 3\n", "exited 3"),
 ])
@@ -506,21 +515,25 @@ def test_lines_of_aliased_and_merged_values(tmp_path, da_guard_binary) -> None:
 
 
 @pytest.mark.parametrize("doc,needle", [
-    ('{"unreadable": [1]}', "unreadable[0] is not an object"),
-    ('{"unreadable": [{"file": "t.yaml"}]}', "unreadable[0] is not an object"),
-    ('{"not_read": [{"file": 1, "reason": "x"}]}', "not_read[0] is not an object"),
-    ('{"selected": {"t.yaml": "exporter"}, "files": {"t.yaml": {}}}', "selected['t.yaml']"),
+    ('{"entries": [1]}', "entries[0] is not an object"),
+    ('{"entries": [{"path": "t.yaml"}]}', "entries[0] ('t.yaml'): no depth"),
+    ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+     '"defaults_document": false, "readers": "exporter", "not_read": null, "role": "config", '
+     '"problem": null}]}', "readers is not a list"),
+    ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+     '"defaults_document": false, "readers": ["exporter"], "not_read": null, "role": "maybe", '
+     '"problem": null}]}', "role 'maybe'"),
     ('{"files": {"t.yaml": [1]}}', "files['t.yaml'] is not a mapping"),
     ('{"files": {"t.yaml": {"a": 1}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x", "tag": "!!str", "value": [1]}}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x"}}}}', "wrong shape"),
 ])
 def test_cli_refuses_a_parse_tree_document_of_the_wrong_shape(tmp_path, doc, needle) -> None:
-    base = {"schema": "da-guard.parse-tree/v1", "selected": {"t.yaml": ["exporter"]},
-            "files": {"t.yaml": {}}, "unreadable": [], "not_read": []}
+    base = {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {},
+            "entries": [json.loads(_ENTRY)], "files": {"t.yaml": {}}, "rendered_by": {}}
     patch = json.loads(doc)
     base.update(patch)
-    if "unreadable" in patch and "files" not in patch:
+    if "entries" in patch and "files" not in patch:
         base["files"] = {}
     root = _write(tmp_path / "conf.d", {"t.yaml": b"a: 1\n"})
     fake = _fake_da_guard(tmp_path, "cat <<'JSON'\n" + json.dumps(base) + "\nJSON\n")

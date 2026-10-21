@@ -58,7 +58,9 @@ func TestLoadDirReport_DanglingSymlinkIsUnreadable(t *testing.T) {
 	dir := writeUnreadableTree(t)
 	symlinkOrSkip(t, "missing.yaml", filepath.Join(dir, "tenant-b.yaml"))
 	cfg, rep, logged := loadReport(t, dir)
-	want := []UnreadableFile{{RelKey: "tenant-b.yaml", Reason: UnreadableStatError}}
+	// Missing: the stat found nothing there (ENOENT) — provably no file
+	// (#3206), unlike a stat refused by permissions.
+	want := []UnreadableFile{{RelKey: "tenant-b.yaml", Reason: UnreadableStatError, Missing: true}}
 	if !reflect.DeepEqual(rep.Unreadable, want) {
 		t.Errorf("Unreadable = %v, want %v", rep.Unreadable, want)
 	}

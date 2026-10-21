@@ -45,12 +45,12 @@ SCOPE:
   structure only.
 
   EMBEDDED SOURCES (production RBAC): the tenant-api RBAC config also ships EMBEDDED
-  as a YAML block-scalar string inside a larger document — `data._rbac.yaml` in the
-  raw k8s ConfigMap (k8s/04-tenant-api/configmap-rbac.yaml) and `rbac._rbacYaml` in
-  the Helm chart values (helm/tenant-api/values.yaml). Those basenames are NOT
-  `_rbac.yaml`, so the whole-file path above never reaches the production authz
-  config. EMBEDDED_RBAC_SOURCES maps each (by repo-relative path, NOT basename —
-  there are 11 other values.yaml) to the key to EXTRACT → parse → validate against
+  as a YAML block-scalar string inside a larger document — `rbac._rbacYaml` in the
+  Helm chart values (helm/tenant-api/values.yaml), tenant-api's only deployment
+  source since the raw tenant-api manifests under k8s/ were removed (#1594). That
+  basename is NOT `_rbac.yaml`, so the whole-file path above never reaches the
+  production authz config. EMBEDDED_RBAC_SOURCES maps each source (by repo-relative
+  path, NOT basename — there are other values.yaml) to the key to EXTRACT → parse → validate against
   the SAME rbac schema. The Helm TEMPLATE
   (helm/tenant-api/templates/configmap-rbac.yaml) carries Go `{{ }}` markers and
   cannot be parsed as plain YAML, so it is DEFERRED (skipped) — its rendered RBAC is
@@ -117,14 +117,12 @@ def schema_for(path: str) -> str | None:
 
 
 # Production RBAC embedded as a block-scalar string inside a larger document.
-# Keyed by repo-relative path SUFFIX (never basename — there are 11 other
-# values.yaml and a second configmap-rbac.yaml, the Helm template, which must
-# NOT match). Each value = (dotted key-path to extract, schema filename). This
+# Keyed by repo-relative path SUFFIX (never basename — there are other
+# values.yaml and a configmap-rbac.yaml Helm template, which must NOT match). Each value = (dotted key-path to extract, schema filename). This
 # MUST stay in step with the pre-commit hook's `files:` regex, which pins these
 # exact paths; a path the hook selects but this map does not know would be
 # silently skipped (fail-open). Pinned by TestGateIntegrity.
 EMBEDDED_RBAC_SOURCES = {
-    "k8s/04-tenant-api/configmap-rbac.yaml": (("data", "_rbac.yaml"), "rbac.schema.json"),
     "helm/tenant-api/values.yaml": (("rbac", "_rbacYaml"), "rbac.schema.json"),
 }
 

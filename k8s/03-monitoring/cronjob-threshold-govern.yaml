@@ -12,17 +12,27 @@
 # reused verbatim from `da-tools threshold-recommend` (#719).
 #
 # ── Wiring (shipped alongside this manifest) ────────────────────────────────
-#   1. RBAC: the --identity-groups group "threshold-governance" is granted
-#      fleet-wide read+write in k8s/04-tenant-api/configmap-rbac.yaml (governance
-#      writes use the same RBAC as the portal). Scope it down there if a narrower
-#      remit is wanted. (try-local uses the demo group in conf.d/_rbac.yaml.)
+#   1. RBAC: ⛔ NOT SHIPPED. The --identity-groups group "threshold-governance"
+#      needs read+write on the tenants it governs, and helm/tenant-api — the only
+#      tenant-api deployment source since #1594 — does NOT grant it: the default
+#      `rbac._rbacYaml` in helm/tenant-api/values.yaml has no such group, so
+#      every governance write is refused until the operator adds one there, e.g.
+#        - name: threshold-governance
+#          tenants: ["*"]          # scope down if a narrower remit is wanted
+#          permissions: [read, write]   # never admin
+#      (The removed raw manifests carried that group.) Whether those writes are
+#      human-reviewed PRs or direct commits is the chart's `writeBack.mode`, not
+#      this Job. (try-local uses the demo group in conf.d/_rbac.yaml.)
 #   2. NetworkPolicy: egress `allow-threshold-govern-egress` (this dir's
 #      network-policies.yaml) lets this Job reach Prometheus:9090 + tenant-api
-#      :8080; the matching ingress (k8s/04-tenant-api/networkpolicy.yaml) already
-#      admits the monitoring ns to 8080. Port 8080 BYPASSES oauth2-proxy, so that
-#      netpol IS the control that stops anyone else injecting a governance
-#      identity here. (oauth2-proxy-fronted alternative: drop the identity
-#      headers, target port 80, pass --auth-token / $DA_GOVERN_TOKEN.)
+#      :8080; the matching ingress is helm/tenant-api's NetworkPolicy, which
+#      admits pods in `networkPolicy.prometheusNamespace` (default monitoring)
+#      matching `networkPolicy.internalPortAllow.thresholdGovern` (default
+#      component=threshold-govern, this Job's pod label) to 8080. Port 8080
+#      BYPASSES oauth2-proxy, so that netpol IS the control that stops anyone
+#      else injecting a governance identity here. (oauth2-proxy-fronted
+#      alternative: drop the identity headers, target port 80, pass
+#      --auth-token / $DA_GOVERN_TOKEN.)
 #   3. Image: a da-tools build that includes threshold_govern.py (#656; listed in
 #      build.sh TOOL_FILES). The tag below is bumped per-release alongside
 #      cronjob-maintenance-scheduler.

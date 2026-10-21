@@ -240,7 +240,6 @@ _NOT_PROBED: dict[str, str] = {
     "dx/sync_schema.py": _NAMES, "lint/check_cli_contract.py": _NAMES,
     "lint/check_cli_default_drift.py": _NAMES, "lint/check_doc_datools_cmds.py": _NAMES,
     "lint/check_frontmatter_versions.py": _NAMES, "lint/check_structure.py": _NAMES,
-    "lint/check_k8s_manifests.py": "reads Kubernetes manifests, not a tenant conf.d",
     "lint/check_md_yaml_drift.py": "reads YAML fences / CRDs quoted in docs, not a tenant conf.d",
     "ops/config_diff.py": ("renders both trees through da-guard and the route generator "
                            "(subprocess): its routing half is the generator's probe"),

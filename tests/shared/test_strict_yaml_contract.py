@@ -78,8 +78,6 @@ _LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
 LENIENT_BY_DESIGN: dict[str, str] = {
     "lint/_rule_tree.py":
         "reads rule-pack trees, not a tenant conf.d",
-    "lint/check_k8s_manifests.py":
-        "reads Kubernetes manifests, not a tenant conf.d",
     "lint/check_md_yaml_drift.py":
         "reads YAML fences / CRDs quoted in docs, not a tenant conf.d",
     "lint/check_threshold_unit_sanity.py":

@@ -473,12 +473,11 @@ def _build_tenant_api_rules():
     #
     # It tracks Chart.yaml `version:`, this line's SSOT (== appVersion since
     # #3228). The image-runtime pins elsewhere get NO rule here, each for its
-    # own reason: k8s/04-tenant-api/deployment.yaml pins the binary its
-    # hand-written args were written against, docs/assets/platform-data.json
-    # is GENERATED from the chart's appVersion by generate_platform_data.py (a
-    # rule here would fight the generator), and the portal's images.js mirror
-    # is held to platform-data.json by images-fallback-drift.test.ts. After a
-    # bump, `make platform-data` and that mirror carry the new value.
+    # own reason: docs/assets/platform-data.json is GENERATED from the chart's
+    # appVersion by generate_platform_data.py (a rule here would fight the
+    # generator), and the portal's images.js mirror is held to
+    # platform-data.json by images-fallback-drift.test.ts. After a bump,
+    # `make platform-data` and that mirror carry the new value.
     #
     # Version and tag sit on one line and are always equal, so one rule owns
     # both — the same shape as the 平台文件 row in _build_platform_rules().

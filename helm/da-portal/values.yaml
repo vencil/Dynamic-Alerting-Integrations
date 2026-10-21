@@ -172,11 +172,12 @@ networkPolicy:
     # dedicated `tenant-api` ns (#1004) — must track portal.tenantApiUrl above.
     tenantApiNamespace: tenant-api
     tenantApiPort: 8080
-    # OR-ed pod selectors: helm-deployed tenant-api uses app.kubernetes.io/name,
-    # the raw k8s/04-tenant-api manifests use `app`. Both listed for either stack.
+    # OR-ed pod selectors: helm/tenant-api labels its pods app.kubernetes.io/name.
+    # (`app: tenant-api` was dropped in #1594 with the raw manifests that set it;
+    # a tenant-api run from your own manifests must carry this label or be added
+    # here.)
     tenantApiPodSelectors:
       - app.kubernetes.io/name: tenant-api
-      - app: tenant-api
     # recipe-preview backend (/preview proxy). Same ns as da-portal (monitoring).
     recipePreviewPort: 8082
     recipePreviewPodSelectors:

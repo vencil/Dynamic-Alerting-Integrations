@@ -1,20 +1,31 @@
 package main
 
 // parse-tree: the conf.d "parse result" of ADR-036 §2, as JSON (#2897) —
-// which files each reader reads, every readable file's content as yaml.v3
-// decodes it, and the files that cannot be read, each with a fixed kind.
-// config-diff and migration-audit read it (scripts/tools/_lib_parse_tree.py).
+// one entry per path the exporter's walk records (what the path is, who
+// reads it, what stops a read), every readable file's content as yaml.v3
+// decodes it, and, for the platform files, which render a key there reaches.
+// Every Python reader of conf.d reads it (scripts/tools/_lib_parse_tree.py).
 //
 // ⛔ NO RULES OF ITS OWN. Which files exist is the exporter's walker
 // (config.ScanDirTree: hidden names, extensions in any case, directories
-// below the root, the one defaults carrier per directory); which of them
-// the route generator reads besides is stated once, in readersFor, from
+// below the root, the one defaults carrier per directory); what each walked
+// path IS — a config file, no file the walk can reach, a directory that could not
+// be listed — is config.Role, the one verdict (#3206); which files the route
+// generator reads besides is stated once, in readersFor, from
 // `_grar_parse._parse_config_files`; what a file holds is pkg/parsetree.
 // The one table of its own is rendered_by (rendered_by.go): which render a
 // platform carrier reaches where it is written, held to the renders by
 // tests/shared/test_parse_tree_rendered_by.py.
+//
+// ONE DOCUMENT SHAPE, FOUR MODES (schema da-guard.parse-tree/v2): tree and
+// file mode read content ("files", "rendered_by"); list mode
+// (--list-only --config-dir) is the same walk and the same "entries" without
+// reading a byte; names mode (--list-only --names) classifies names that are
+// not on a disk. Tree and list mode build "entries" with one function
+// (walkEntries), so the two cannot disagree about a path.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,7 +35,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -36,25 +46,29 @@ import (
 // parseTreeCmd is the subcommand name: `da-guard parse-tree ...`.
 const parseTreeCmd = "parse-tree"
 
-// parseTreeSchema names the document's shape. A reader refuses any other
-// value (and a document without one), as for served-values.
-const parseTreeSchema = "da-guard.parse-tree/v1"
+// parseTreeSchema names the document's shape, in every mode. A reader
+// refuses any other value (and a document without one), as for
+// served-values. v1 (and the separate --list-only schema beside it) had no
+// per-path verdict; both were never in a release.
+const parseTreeSchema = "da-guard.parse-tree/v2"
 
-// The readers a file can have, in the order a "selected" entry lists them.
+// The readers a file can have, in the order an entry lists them.
 const (
 	readerExporter  = "exporter"
 	readerGenerator = "generator"
 )
 
-// Closed set of parseTreeNotRead.Reason values.
+// Closed set of parseTreeEntry.NotRead values.
 const (
 	// notReadUnselectedCarrier: a defaults carrier (`_defaults.yaml` /
 	// `.yml`, any case) that its directory's chain does not select — at the
 	// root or below it (#1674: every plane ignores it whole).
 	notReadUnselectedCarrier = "unselected_defaults_carrier"
-	// notReadHidden: the path, or a directory on it, starts with '.'.
+	// notReadHidden (file mode): the path, or a directory on it, starts
+	// with '.'.
 	notReadHidden = "hidden"
-	// notReadNotConfigName: the name does not end in .yaml / .yml (any case).
+	// notReadNotConfigName (file mode): the name does not end in .yaml /
+	// .yml (any case).
 	notReadNotConfigName = "not_config_name"
 	// notReadParentNotWalked (file mode): a directory on the path exists but
 	// is not a real directory the walk descends — a symlink (followed by no
@@ -62,45 +76,118 @@ const (
 	notReadParentNotWalked = "parent_not_walked"
 )
 
-// parseTreeDoc is the JSON document on stdout.
-type parseTreeDoc struct {
+// parseTreeIndex is what every mode writes: the envelope and the per-path
+// entries. List and names mode write it alone.
+type parseTreeIndex struct {
 	Schema         string `json:"schema"`
 	DaGuardVersion string `json:"da_guard_version"`
-	// Mode is "tree" (--config-dir alone) or "file" (--path / --input).
+	// Mode is "tree" (--config-dir alone), "file" (--path / --input),
+	// "list" (--list-only --config-dir) or "names" (--list-only --names).
 	Mode string `json:"mode"`
-	// Selected: every path some reader reads (root-relative, slash), with
-	// its readers. Its keys are exactly the keys of Files plus the files of
-	// Unreadable. In file mode it holds the one --path, whose readers may
-	// be empty (then NotRead says why).
-	Selected map[string][]string `json:"selected"`
 	// DefaultsCarriers: directory ("." for the root) → the one defaults
-	// carrier its chain reads. In file mode, only --path's directory, as it
-	// is once --path is written.
+	// carrier its chain reads. File mode: only --path's directory, as it is
+	// once --path is written. Names mode: {}.
 	DefaultsCarriers map[string]string `json:"defaults_carriers"`
-	// NotRead: files the walk found that no reader reads (tree mode), or
-	// --path when no reader would read it (file mode).
-	NotRead []parseTreeNotRead `json:"not_read"`
-	// Files: each readable file's content (parsetree.Content).
+	// Entries: tree and list mode, every path the walk records, sorted by
+	// Path; file mode, --path alone; names mode, every given name in the
+	// order given.
+	Entries []parseTreeEntry `json:"entries"`
+}
+
+// parseTreeDoc is the tree- and file-mode document: the index plus content.
+type parseTreeDoc struct {
+	parseTreeIndex
+	// Files: each readable file some reader reads (and, in file mode, the
+	// text of --path whoever reads it) — parsetree.Content. A config entry
+	// with readers is in Files exactly when it has no Problem.
 	Files map[string]parsetree.Content `json:"files"`
-	// Unreadable: each file no reader can read, with a parsetree.Kind.
-	Unreadable []parseTreeUnreadable `json:"unreadable"`
 	// RenderedBy (#2962): for each readable `_` file in Files, the platform
 	// carriers it holds (renderedByKeys) → the readers whose render a change
 	// to that key can alter; [] = no render reads it there. A key outside
-	// renderedByKeys is absent (not answered). Added beside the v1 fields
-	// (ADR-036 §2): a reader that needs it must refuse a document without it.
+	// renderedByKeys is absent (not answered).
 	RenderedBy map[string]map[string][]string `json:"rendered_by"`
 }
 
-type parseTreeNotRead struct {
-	File   string `json:"file"`
-	Reason string `json:"reason"`
+// parseTreeEntry is one walked path, the one --path, or one given name.
+// Every field is written in every mode; a field a mode cannot answer is null
+// (see MarshalJSON), so a reader can tell a document that lacks a field
+// from one that answers "none".
+type parseTreeEntry struct {
+	// Path is root-relative with '/' ("." for the root itself); in names
+	// mode, the name as given.
+	Path string
+	// Depth is the number of directories between the root and Path (0 for a
+	// file in the root). Names mode: always 0.
+	Depth int
+	// Class is what the name makes the entry (closed set, class*);
+	// "directory" for every entry that is one (whatever its name).
+	Class string
+	// TenantNamed is the tenant id the name carries (confdname.TenantNamedBy)
+	// — class "tenant" only, else null. ⛔ The write plane's naming
+	// convention, not who is served: the exporter takes tenant ids from the
+	// `tenants:` keys inside the file.
+	TenantNamed string
+	// DefaultsDocument: the entry is a platform-defaults DOCUMENT
+	// (confdname.IsDefaultsDocument: a `_defaults` prefix, wider than class
+	// "defaults", the exact chain carrier — `_defaults-multidb.yaml` is class
+	// "platform" with this true), held to the platform-defaults schema.
+	// ⛔ False for every entry whose role is not "config" (a directory, a
+	// FIFO, a dangling link hold no document any schema could validate).
+	// Names mode answers by the name alone.
+	DefaultsDocument bool
+	// Readers is who reads it; [] when no reader does (then NotRead says
+	// why). null in names mode, which has no tree.
+	Readers []string
+	// NotRead is why no reader reads it (notRead*), else null.
+	NotRead string
+	// Role is config.Role's verdict on the path — the one place it is made.
+	// null in names mode (no disk to judge).
+	Role config.Role
+	// Problem is why a read of the entry fails, else null: a parsetree.Kind
+	// and a message for a person. List mode gives only what is decided
+	// without reading (read_failure, not_regular_file); tree and file mode
+	// add the content kinds (syntax_error, …) for a config file they read.
+	Problem *parseTreeProblem
 }
 
-type parseTreeUnreadable struct {
-	File    string         `json:"file"`
+type parseTreeProblem struct {
 	Kind    parsetree.Kind `json:"kind"`
 	Message string         `json:"message"`
+}
+
+// MarshalJSON writes every field, an empty TenantNamed / NotRead / Role as
+// null, and does not escape HTML characters (a path is data, not markup).
+func (e parseTreeEntry) MarshalJSON() ([]byte, error) {
+	orNull := func(s string) *string {
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+	var role *config.Role
+	if e.Role != "" {
+		r := e.Role
+		role = &r
+	}
+	w := struct {
+		Path             string            `json:"path"`
+		Depth            int               `json:"depth"`
+		Class            string            `json:"class"`
+		TenantNamed      *string           `json:"tenant_named"`
+		DefaultsDocument bool              `json:"defaults_document"`
+		Readers          []string          `json:"readers"`
+		NotRead          *string           `json:"not_read"`
+		Role             *config.Role      `json:"role"`
+		Problem          *parseTreeProblem `json:"problem"`
+	}{e.Path, e.Depth, e.Class, orNull(e.TenantNamed), e.DefaultsDocument, e.Readers,
+		orNull(e.NotRead), role, e.Problem}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(w); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 type parseTreeFlags struct {
@@ -116,15 +203,15 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 	fs.SetOutput(errOut)
 	f := &parseTreeFlags{}
 	fs.StringVar(&f.configDir, "config-dir", "",
-		"Path to the conf.d/ root. Required.")
+		"Path to the conf.d/ root. Required but with --names.")
 	fs.StringVar(&f.path, "path", "",
 		"File mode: the path, relative to --config-dir, the text of --input is meant for.\n"+
 			"Its readers are judged in the tree as it is once that file is written.")
 	fs.StringVar(&f.input, "input", "",
 		"File mode: the file whose text to read ('-' = stdin). Required with --path.")
 	fs.BoolVar(&f.listOnly, "list-only", false,
-		"List mode: list the files and who reads each one, reading no file's content\n"+
-			"(schema "+parseTreeListSchema+"). With --config-dir, or with --names.")
+		"List mode: the same document without \"files\" and \"rendered_by\", reading no\n"+
+			"file's content. With --config-dir, or with --names.")
 	fs.StringVar(&f.names, "names", "",
 		"Names mode (with --list-only, without --config-dir): classify the base names in\n"+
 			"this file ('-' = stdin), a JSON array of strings, by name alone.")
@@ -133,71 +220,78 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --path <rel> --input <file|->\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --list-only --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --list-only --names <file|->\n", programName, parseTreeCmd)
-		fmt.Fprintf(errOut, "Print, as JSON, which conf.d files each reader reads and what each one holds, as\n"+
-			"yaml.v3 decodes it (ADR-036 §2). The document's \"schema\" is "+parseTreeSchema+";\n"+
-			"a reader refuses any other value.\n\n"+
+		fmt.Fprintf(errOut, "Print, as JSON, every conf.d path the exporter's walk records — what it is, who\n"+
+			"reads it, what stops a read — and what each readable file holds, as yaml.v3\n"+
+			"decodes it (ADR-036 §2). The document's \"schema\" is "+parseTreeSchema+" in every\n"+
+			"mode; a reader refuses any other value.\n\n"+
 			"Document (one line on stdout):\n"+
-			"  {\"schema\", \"da_guard_version\", \"mode\": \"tree\"|\"file\",\n"+
-			"   \"selected\": {<path>: [\"exporter\", \"generator\"]},  every file a reader reads, and who\n"+
+			"  {\"schema\", \"da_guard_version\", \"mode\": \"tree\"|\"file\"|\"list\"|\"names\",\n"+
 			"   \"defaults_carriers\": {<dir>: <path>},  the one _defaults file each directory's chain reads\n"+
-			"   \"not_read\": [{\"file\", \"reason\"}],  files no reader reads (unselected_defaults_carrier,\n"+
-			"                                       at the root or below it;\n"+
-			"                                       in file mode also hidden, not_config_name,\n"+
-			"                                       parent_not_walked)\n"+
-			"   \"files\": {<path>: <content>},  every readable selected file\n"+
-			"   \"unreadable\": [{\"file\", \"kind\", \"message\"}],  every selected file that cannot be read\n"+
-			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  for each readable `_` file,\n"+
-			"                                       its platform carriers (defaults, state_filters,\n"+
-			"                                       optional_overrides, profiles, tenants,\n"+
-			"                                       _routing_defaults, _routing_enforced, routing_profiles)\n"+
-			"                                       and the renders a change to one there can alter;\n"+
-			"                                       [] = read by nothing there; other keys are absent\n"+
-			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root. The keys of\n"+
-			"\"selected\" are the keys of \"files\" plus the files of \"unreadable\".\n"+
-			"Readers: the exporter reads every tenant file, the root's platform (`_`) files and each\n"+
-			"directory's selected defaults carrier; the route generator reads those and every other\n"+
-			"`_` file below the root (e.g. team/_domain_policy.yaml, team/_routing_profiles.yaml).\n\n"+
-			"<content> is the top-level mapping, aliases and unquoted `<<` merges expanded. A mapping\n"+
-			"is a JSON object keyed by each key's source text (`010:` is \"010\"); a sequence is an\n"+
-			"array; a scalar is {\"text\", \"tag\", \"value\"}: its source text, its yaml.v3 tag\n"+
-			"(!!str !!int !!float !!bool !!null !!timestamp), and its value — true/false/null for\n"+
-			"!!bool/!!null, the decimal text for !!int/!!float (\"0777\" is \"511\"), the string for\n"+
-			"!!str, absent for !!timestamp and for .inf/.nan. A scalar is the only object whose\n"+
-			"\"text\" is a JSON string. An empty file, or one holding only null, is {}. One file's\n"+
-			"content may encode to at most %d bytes of JSON (aliases expanded); past that the\n"+
-			"file is a decode_error.\n"+
+			"   \"entries\": [<entry>],                  one per path (below)\n"+
+			"   \"files\": {<path>: <content>},          tree and file mode only\n"+
+			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  tree and file mode only\n"+
+			"<entry> holds every field, null where it has no value:\n"+
+			"  {\"path\", \"depth\", \"class\", \"tenant_named\", \"defaults_document\", \"readers\",\n"+
+			"   \"not_read\", \"role\", \"problem\": {\"kind\", \"message\"}}\n"+
+			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root.\n"+
+			"\"depth\": directories between the root and the path. \"class\": tenant, defaults,\n"+
+			"platform (another `_` name) or directory (file and names mode also hidden,\n"+
+			"not_config_name). \"tenant_named\" (class tenant only): the id the name carries (the\n"+
+			"name minus .yaml / .yml, case kept) — not who is served: the exporter takes tenant\n"+
+			"ids from the file's `tenants:` keys. \"defaults_document\": the name starts with\n"+
+			"`_defaults` (any case) — a platform-defaults document, held to the platform-defaults\n"+
+			"schema; wider than class defaults (`_defaults-multidb.yaml` is platform with this\n"+
+			"true); false whenever \"role\" is not config.\n"+
+			"\"readers\": the exporter reads every tenant file, the root's platform (`_`) files and\n"+
+			"each directory's selected defaults carrier; the route generator reads those and every\n"+
+			"other `_` file below the root (e.g. team/_domain_policy.yaml); [] with \"not_read\" set\n"+
+			"when no reader does: unselected_defaults_carrier (at the root or below it), and in\n"+
+			"file mode also hidden, not_config_name, parent_not_walked.\n"+
+			"\"role\", the verdict on what the path is, a closed list:\n"+
+			"  config          a config file. Readers read it; a \"problem\" says their read fails\n"+
+			"                  (a stat or open refused for any reason but the ones below, EIO, a\n"+
+			"                  content kind in tree and file mode).\n"+
+			"  not_a_file      the exporter's walk cannot reach a regular file there: a config-named\n"+
+			"                  directory, a symlink to a directory, a FIFO / socket / device (or a\n"+
+			"                  link to one), a stat that finds nothing (a dangling link, a looping\n"+
+			"                  link, a chain of more than 40 links even when it ends at a file).\n"+
+			"  unlistable_dir  a directory whose contents could not be listed (\".\" for the root):\n"+
+			"                  nothing under it was seen, so the document is incomplete.\n"+
+			"Only those make a path not_a_file; anything else that fails (permission denied, EIO,\n"+
+			"a name too long, …) is config.\n"+
+			"\"problem\": a kind from the closed list below; list mode decides only read_failure and\n"+
+			"not_regular_file (files are opened and closed, never read), so a file that opens but\n"+
+			"fails mid-read has no problem there.\n\n"+
+			"\"files\" holds every config entry with readers and no problem (tree mode), or the\n"+
+			"text of --path (file mode). <content> is the top-level mapping, aliases and unquoted\n"+
+			"`<<` merges expanded. A mapping is a JSON object keyed by each key's source text\n"+
+			"(`010:` is \"010\"); a sequence is an array; a scalar is {\"text\", \"tag\", \"value\"}: its\n"+
+			"source text, its yaml.v3 tag (!!str !!int !!float !!bool !!null !!timestamp), and its\n"+
+			"value — true/false/null for !!bool/!!null, the decimal text for !!int/!!float\n"+
+			"(\"0777\" is \"511\"), the string for !!str, absent for !!timestamp and for .inf/.nan. A\n"+
+			"scalar is the only object whose \"text\" is a JSON string. An empty file, or one\n"+
+			"holding only null, is {}. One file's content may encode to at most %d bytes of\n"+
+			"JSON (aliases expanded); past that the file is a decode_error.\n"+
 			"A file nested close to yaml.v3's limit (10,000 levels) nests the JSON as deep, which a\n"+
 			"JSON decoder may refuse (measured: Python 3.13's json raises RecursionError at 10,000\n"+
 			"nested arrays): a reader that cannot decode the document must treat the whole\n"+
-			"document as unusable, never a part of it as read.\n\n"+
-			"Unreadable kinds, a closed list (anything else is read as yaml.v3 reads it, even where\n"+
+			"document as unusable, never a part of it as read.\n"+
+			"\"rendered_by\": for each readable `_` file, its platform carriers (defaults,\n"+
+			"state_filters, optional_overrides, profiles, tenants, _routing_defaults,\n"+
+			"_routing_enforced, routing_profiles) and the renders a change to one there can\n"+
+			"alter; [] = read by nothing there; other keys are absent.\n\n"+
+			"Problem kinds, a closed list (anything else is read as yaml.v3 reads it, even where\n"+
 			"today's route generator refuses the file): %s.\n\n"+
-			"File mode reads --input as the text of --path: \"selected\" holds --path with its readers\n"+
-			"(an empty list, and an entry in \"not_read\", when no reader would read it), and \"files\"\n"+
-			"or \"unreadable\" what the text holds. --path is also judged on disk: a directory on it\n"+
-			"that exists but is not a real directory (a symlink, a file) is parent_not_walked (no\n"+
-			"reader, in \"not_read\"); an existing --path that is not a regular file (or a link to\n"+
-			"one) is in \"unreadable\" exactly as tree mode gives it (not_regular_file, or\n"+
-			"read_failure for a dangling link), and the text is not read.\n\n"+
-			"--list-only reads no file's content. Document (one line on stdout):\n"+
-			"  {\"schema\": \""+parseTreeListSchema+"\", \"da_guard_version\", \"mode\": \"list\"|\"names\",\n"+
-			"   \"defaults_carriers\": {<dir>: <path>},  as above (list mode; {} in names mode)\n"+
-			"   \"entries\": [{\"path\", \"depth\", \"class\", \"tenant_named\", \"readers\",\n"+
-			"                \"not_read\", \"unreadable\": {\"kind\", \"message\"}}]}\n"+
-			"List mode (--config-dir): the same walk, the same \"selected\" readers, \"not_read\" and\n"+
-			"\"defaults_carriers\" as tree mode, one entry per path, sorted; each file is opened and\n"+
-			"closed, never read, so \"unreadable\" holds only read_failure (cannot be statted or\n"+
-			"opened, a directory that cannot be listed — \".\" for the root) and not_regular_file\n"+
-			"(a FIFO, socket or device, a config-named directory, a directory symlink), and a file\n"+
-			"that opens but fails mid-read is listed as readable. \"depth\": directories between\n"+
-			"the root and the path. \"class\": tenant, defaults, platform (another `_` name) or\n"+
-			"directory. \"tenant_named\" (class tenant only): the id the name carries (the name\n"+
-			"minus .yaml / .yml, case kept) — not who is served: the exporter takes tenant ids\n"+
-			"from the file's `tenants:` keys. Hidden and non-config names are not walked, so not\n"+
-			"listed. \"not_read\": unselected_defaults_carrier, with \"readers\": [].\n"+
-			"Names mode (--names): each given base name in the order given, \"depth\" 0,\n"+
-			"\"readers\" null, \"class\" also hidden or not_config_name — for names that are not on a\n"+
-			"disk (e.g. the keys of a ConfigMap built from a conf.d).\n\n",
+			"File mode reads --input as the text of --path: one entry, --path with its readers,\n"+
+			"and \"files\" holds the text or the entry a content problem. --path is also judged on\n"+
+			"disk: a directory on it that exists but is not a real directory (a symlink, a file) is\n"+
+			"parent_not_walked; an existing --path that is not a regular file (or a link to one)\n"+
+			"gets the entry tree mode gives the same path, and the text is not read.\n"+
+			"List mode (--list-only --config-dir): the walk of tree mode and the same entries\n"+
+			"(the same function builds both), but for the problems only reading finds.\n"+
+			"Names mode (--list-only --names): each given base name in the order given, \"depth\" 0,\n"+
+			"\"readers\" and \"role\" null — for names that are not on a disk (e.g. the keys of a\n"+
+			"ConfigMap built from a conf.d).\n\n",
 			parsetree.MaxContentBytes, kindList())
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok — an unreadable file is data in the document, not a verdict\n"+
@@ -226,7 +320,7 @@ func kindList() string {
 }
 
 // runParseTree is the subcommand's entry point. stdin is read only for
-// `--input -`.
+// `--input -` and `--names -`.
 func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int {
 	f, err := parseParseTreeFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
@@ -292,78 +386,50 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	if err != nil {
 		return fail("%v", err)
 	}
-	if err := writeParseTree(stdout, doc); err != nil {
+	if err := writeParseTree(stdout, doc.Entries, doc); err != nil {
 		return fail("%v", err)
 	}
 	return exitOK
 }
 
-func newParseTreeDoc(mode string) *parseTreeDoc {
-	return &parseTreeDoc{
+func newParseTreeIndex(mode string) parseTreeIndex {
+	return parseTreeIndex{
 		Schema: parseTreeSchema, DaGuardVersion: Version, Mode: mode,
-		Selected: map[string][]string{}, DefaultsCarriers: map[string]string{},
-		NotRead: []parseTreeNotRead{}, Files: map[string]parsetree.Content{},
-		Unreadable: []parseTreeUnreadable{}, RenderedBy: map[string]map[string][]string{},
+		DefaultsCarriers: map[string]string{}, Entries: []parseTreeEntry{},
 	}
 }
 
-// parseTreeOf is tree mode over one walk.
+func newParseTreeDoc(mode string) *parseTreeDoc {
+	return &parseTreeDoc{parseTreeIndex: newParseTreeIndex(mode),
+		Files: map[string]parsetree.Content{}, RenderedBy: map[string]map[string][]string{}}
+}
+
+// parseTreeOf is tree mode over one walk: walkEntries' index, then the
+// content of every config file a reader reads.
 func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 	doc := newParseTreeDoc("tree")
-	byDir := scan.DefaultsCarriers().ByDir
-	selected := make(map[string]bool, len(byDir))
-	for dir, carrier := range byDir {
-		selected[carrier] = true
-		d, err := relTo(scan.AbsRoot, dir)
-		if err != nil {
-			return nil, err
-		}
-		c, err := relTo(scan.AbsRoot, carrier)
-		if err != nil {
-			return nil, err
-		}
-		doc.DefaultsCarriers[d] = c
+	if err := walkEntries(scan, &doc.parseTreeIndex); err != nil {
+		return nil, err
 	}
-	unreadable := func(rel string, readers []string, kind parsetree.Kind, msg string) {
-		doc.Selected[rel] = readers
-		doc.Unreadable = append(doc.Unreadable, parseTreeUnreadable{File: rel, Kind: kind, Message: msg})
-	}
-	for _, rel := range scan.Keys {
-		f := scan.Files[rel]
-		readers := readersFor(rel, !confdname.IsDefaults(path.Base(rel)) || selected[f.AbsPath])
-		if len(readers) == 0 {
-			doc.NotRead = append(doc.NotRead, parseTreeNotRead{File: rel, Reason: notReadUnselectedCarrier})
+	for i := range doc.Entries {
+		e := &doc.Entries[i]
+		f, ok := scan.Files[e.Path]
+		if !ok || len(e.Readers) == 0 {
+			// Not a file the walk read, or one no reader reads (an
+			// unselected carrier is ignored whole: not parsed, #1674).
 			continue
 		}
 		content, bad := parsetree.Parse(f.Data)
 		if bad != nil {
-			unreadable(rel, readers, bad.Kind, bad.Message)
+			e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message}
 			continue
 		}
-		doc.Selected[rel] = readers
-		doc.Files[rel] = content
-		if rb := renderedBy(rel, confdname.IsDefaults(path.Base(rel)) && selected[f.AbsPath], content); rb != nil {
-			doc.RenderedBy[rel] = rb
+		doc.Files[e.Path] = content
+		// A defaults carrier with readers is its directory's selected one.
+		if rb := renderedBy(e.Path, confdname.IsDefaults(path.Base(e.Path)), content); rb != nil {
+			doc.RenderedBy[e.Path] = rb
 		}
 	}
-	for _, u := range scan.Unreadable {
-		readers := []string{readerExporter, readerGenerator}
-		if u.Reason != config.UnreadableWalkError {
-			// Never an unselected carrier: selection runs over the files
-			// the walk could read (the generator's readable_carriers too).
-			readers = readersFor(u.RelKey, true)
-		}
-		unreadable(u.RelKey, readers, unreadableKind(u.Reason), unreadableMessage(u.Reason))
-	}
-	if scan.RootWalkErr != nil {
-		unreadable(".", []string{readerExporter, readerGenerator}, parsetree.KindReadFailure, unreadableMessage(config.UnreadableWalkError))
-	}
-	for _, nf := range scan.NotFiles {
-		readers, msg := notFileEntry(nf.RelKey, nf.Reason)
-		unreadable(nf.RelKey, readers, parsetree.KindNotRegularFile, msg)
-	}
-	sort.Slice(doc.Unreadable, func(i, j int) bool { return doc.Unreadable[i].File < doc.Unreadable[j].File })
-	sort.Slice(doc.NotRead, func(i, j int) bool { return doc.NotRead[i].File < doc.NotRead[j].File })
 	return doc, nil
 }
 
@@ -371,7 +437,9 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 // holds once rel is written.
 func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc, error) {
 	doc := newParseTreeDoc("file")
-	readers, reason := []string{}, ""
+	e := nameEntry(rel)
+	e.Role = config.RoleConfig
+	reason := ""
 	switch {
 	case confdname.HasHiddenSegment(rel):
 		reason = notReadHidden
@@ -380,17 +448,15 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 	default:
 		reason = parentsOnDisk(scan.AbsRoot, rel)
 	}
-	issue := (*diskIssue)(nil)
 	if reason == "" {
-		issue = fileOnDisk(scan.AbsRoot, rel)
+		if issue := fileOnDisk(scan.AbsRoot, rel); issue != nil {
+			// What tree mode gives the same path: the same entry, and the
+			// text is not read.
+			doc.Entries = append(doc.Entries, *issue)
+			return doc, nil
+		}
 	}
-	if issue != nil {
-		// What tree mode gives the same path: unreadable, with the readers
-		// the name rules give, and the text is not read.
-		doc.Selected[rel] = issue.readers
-		doc.Unreadable = append(doc.Unreadable, parseTreeUnreadable{File: rel, Kind: issue.kind, Message: issue.msg})
-		return doc, nil
-	}
+	readers := []string{}
 	carrier := false
 	if reason == "" {
 		selected := true
@@ -422,24 +488,22 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 			readers, reason = []string{}, notReadUnselectedCarrier
 		}
 	}
-	doc.Selected[rel] = readers
-	if reason != "" {
-		doc.NotRead = append(doc.NotRead, parseTreeNotRead{File: rel, Reason: reason})
-	}
+	e.Readers, e.NotRead = readers, reason
 	content, bad := parsetree.Parse(input)
 	if bad != nil {
-		doc.Unreadable = append(doc.Unreadable, parseTreeUnreadable{File: rel, Kind: bad.Kind, Message: bad.Message})
+		e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message}
 	} else {
 		doc.Files[rel] = content
 		if rb := renderedBy(rel, carrier, content); rb != nil && reason == "" {
 			doc.RenderedBy[rel] = rb
 		}
 	}
+	doc.Entries = append(doc.Entries, e)
 	return doc, nil
 }
 
 // notFileEntry is the readers and the message of a path that is not a file
-// (a config.NotFile reason), the same in tree mode and file mode.
+// (a config.NotFile reason), the same in every mode.
 func notFileEntry(rel, reason string) ([]string, string) {
 	switch reason {
 	case config.NotFileDirLink:
@@ -448,51 +512,43 @@ func notFileEntry(rel, reason string) ([]string, string) {
 	return []string{readerGenerator}, "a directory with a config file name"
 }
 
-// diskIssue is what file mode finds at an existing --path that is not a
-// regular file: the entry tree mode would give the same path.
-type diskIssue struct {
-	readers []string
-	kind    parsetree.Kind
-	msg     string
-}
-
 // fileOnDisk is the tree-mode entry of an existing rel that is not a regular
 // file (or a symlink to one); nil when rel is missing or a regular file.
-func fileOnDisk(root, rel string) *diskIssue {
+// Each case builds the walk's own record (config.UnreadableFile /
+// config.NotFile) and asks it for its role, so the verdict is the walk's.
+func fileOnDisk(root, rel string) *parseTreeEntry {
 	abs := filepath.Join(root, filepath.FromSlash(rel))
 	fi, err := os.Lstat(abs)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return nil
 	case err != nil:
-		return &diskIssue{readersFor(rel, true), parsetree.KindReadFailure, unreadableMessage(config.UnreadableStatError)}
+		return unreadableEntry(config.UnreadableFile{RelKey: rel, Reason: config.UnreadableStatError,
+			Missing: config.StatErrIsWrongPath(err)})
 	case fi.Mode()&os.ModeSymlink != 0:
 		ti, terr := os.Stat(abs)
 		switch {
 		case terr != nil:
-			return &diskIssue{readersFor(rel, true), parsetree.KindReadFailure, unreadableMessage(config.UnreadableStatError)}
+			return unreadableEntry(config.UnreadableFile{RelKey: rel, Reason: config.UnreadableStatError,
+				Missing: config.StatErrIsWrongPath(terr)})
 		case ti.IsDir():
-			r, m := notFileEntry(rel, config.NotFileDirLink)
-			return &diskIssue{r, parsetree.KindNotRegularFile, m}
+			e := notFileAsEntry(config.NotFile{RelKey: rel, Reason: config.NotFileDirLink})
+			return &e
 		case config.IsSpecialFile(ti.Mode()):
-			return specialFileIssue(rel)
+			return unreadableEntry(config.UnreadableFile{RelKey: rel, Reason: config.UnreadableSpecialFile})
 		}
 	case fi.IsDir():
-		r, m := notFileEntry(rel, config.NotFileDirectory)
-		return &diskIssue{r, parsetree.KindNotRegularFile, m}
+		e := notFileAsEntry(config.NotFile{RelKey: rel, Reason: config.NotFileDirectory})
+		return &e
 	case config.IsSpecialFile(fi.Mode()):
-		return specialFileIssue(rel)
+		return unreadableEntry(config.UnreadableFile{RelKey: rel, Reason: config.UnreadableSpecialFile})
 	}
 	return nil
 }
 
-// specialFileIssue is the entry tree mode gives a special file at rel
-// (config.UnreadableSpecialFile): the exporter and the generator would both
-// read it by name, and neither can (the generator books it as unusable,
-// `Path.is_file()`).
-func specialFileIssue(rel string) *diskIssue {
-	r := config.UnreadableSpecialFile
-	return &diskIssue{readersFor(rel, true), unreadableKind(r), unreadableMessage(r)}
+func unreadableEntry(u config.UnreadableFile) *parseTreeEntry {
+	e := unreadableAsEntry(u)
+	return &e
 }
 
 // parentsOnDisk is notReadParentNotWalked when a directory on the way to rel
@@ -591,25 +647,15 @@ func relTo(root, p string) (string, error) {
 	return r, nil
 }
 
-// writeParseTree refuses a path that is not valid UTF-8 (JSON would write
-// U+FFFD for its bad bytes, so two files could come out as one), then
-// writes the document on one line. File contents are valid UTF-8 by
-// construction (parsetree refuses anything else).
-func writeParseTree(w io.Writer, doc *parseTreeDoc) error {
-	check := func(p string) error {
-		if !utf8.ValidString(p) {
-			return fmt.Errorf("the path %q is not valid UTF-8; JSON cannot carry it", p)
-		}
-		return nil
-	}
-	for p := range doc.Selected {
-		if err := check(p); err != nil {
-			return err
-		}
-	}
-	for _, n := range doc.NotRead {
-		if err := check(n.File); err != nil {
-			return err
+// writeParseTree refuses an entry path that is not valid UTF-8 (JSON would
+// write U+FFFD for its bad bytes, so two files could come out as one), then
+// writes doc on one line. Every path in "files" and "rendered_by" is an
+// entry's; file contents are valid UTF-8 by construction (parsetree refuses
+// anything else).
+func writeParseTree(w io.Writer, entries []parseTreeEntry, doc any) error {
+	for _, e := range entries {
+		if !utf8.ValidString(e.Path) {
+			return fmt.Errorf("the path %q is not valid UTF-8; JSON cannot carry it", e.Path)
 		}
 	}
 	enc := json.NewEncoder(w)

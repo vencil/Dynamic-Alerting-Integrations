@@ -29,15 +29,21 @@ func TestParseWriteModeContract(t *testing.T) {
 		pre1559Direct bool
 		why           string
 	}{
-		// The four legal values.
+		// The three legal values.
 		{raw: "direct", want: handler.WriteModeDirect, pre1559Direct: true, why: "the deliberate direct opt-in"},
-		{raw: "pr", want: handler.WriteModePR, why: "GitHub PR mode, canonical spelling"},
-		{raw: "pr-github", want: handler.WriteModePRGitHub, why: "explicit GitHub alias"},
+		{raw: "pr-github", want: handler.WriteModePRGitHub, why: "GitHub PR mode"},
 		{raw: "pr-gitlab", want: handler.WriteModePRGitLab, why: "GitLab MR mode"},
 
+		// #1594: "pr" was a fourth input spelling of GitHub PR mode. The Helm
+		// chart (the only deployment source) never wired it, so the input set
+		// is now exactly what the chart offers; "pr" survives only as the
+		// INTERNAL value pr-github normalizes to.
+		{raw: "pr", wantErr: true, why: "the retired alias of pr-github (#1594 SSOT)"},
+		{raw: " pr ", wantErr: true, why: "the retired alias, padded — trimming must not revive it"},
+
 		// Whitespace is carrier noise, not a different value.
-		{raw: " pr", want: handler.WriteModePR, pre1559Direct: true, why: "leading space from a YAML scalar"},
-		{raw: "pr ", want: handler.WriteModePR, pre1559Direct: true, why: "trailing space from a YAML scalar"},
+		{raw: " pr-github", want: handler.WriteModePRGitHub, pre1559Direct: true, why: "leading space from a YAML scalar"},
+		{raw: "pr-github ", want: handler.WriteModePRGitHub, pre1559Direct: true, why: "trailing space from a YAML scalar"},
 		{raw: "\tpr-gitlab\n", want: handler.WriteModePRGitLab, why: "tab/newline carrier noise"},
 
 		// Typos: the defect #1559 is about.
@@ -118,7 +124,7 @@ func TestWirePRBackendFatalOnUnknownMode(t *testing.T) {
 		t.Fatalf("wirePRBackend(Mode: \"pr-guthub\") exited 0; it must be fatal, not a silent direct commit. Output:\n%s", out)
 	}
 	// The operator needs the rejected value, the legal set, and the rule.
-	for _, want := range []string{"pr-guthub", "direct, pr, pr-github, pr-gitlab", "ADR-034"} {
+	for _, want := range []string{"pr-guthub", "direct, pr-github, pr-gitlab", "ADR-034"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("fatal message does not mention %q. Got:\n%s", want, out)
 		}
@@ -156,8 +162,8 @@ func TestWriteModeLegalValuesMatchesIsPRMode(t *testing.T) {
 			directModes++
 		}
 	}
-	if prModes != 3 {
-		t.Errorf("writeModeLegalValues holds %d PR modes, want 3 (pr, pr-github, pr-gitlab); "+
+	if prModes != 2 {
+		t.Errorf("writeModeLegalValues holds %d PR modes, want 2 (pr-github, pr-gitlab); "+
 			"a new PR mode must be added to the set too or deployments using it will refuse to start", prModes)
 	}
 	if directModes != 1 {
