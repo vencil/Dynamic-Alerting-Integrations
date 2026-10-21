@@ -52,7 +52,7 @@ func contractCases() map[string]map[string]string {
 		}
 		return tree
 	}
-	return map[string]map[string]string{
+	cases := map[string]map[string]string{
 		"OK_baseline":        base(nil),
 		"OK_platform":        base(map[string]string{"_platform.yaml": "tenants:\n  tenant-a:\n    mem: \"44\"\n"}),
 		"OK_profiles":        base(map[string]string{"_profiles.yaml": "profiles:\n  gold:\n    mem: \"33\"\n", "tenant-a.yaml": tenantAProfile}),
@@ -106,6 +106,52 @@ func contractCases() map[string]map[string]string {
 		"G5_platform_merge_key_twice":      base(map[string]string{"_platform.yaml": "a: &x {mem: \"44\"}\nb: &y {cpu: \"45\"}\ntenants:\n  tenant-a:\n    <<: *x\n    <<: *y\n"}),
 		"G6_domain_policy_alias_dupkey":    base(map[string]string{"_domain_policy.yaml": "domain_policies:\n  &d d1 :\n    tenants: [tenant-a]\n  *d :\n    tenants: [tenant-a]\n"}),
 		"G7_tenant_merge_override_control": base(map[string]string{"tenant-a.yaml": "base: &b\n  cpu: \"70\"\ntenants:\n  tenant-a:\n    <<: *b\n    cpu: \"80\"\n"}),
+	}
+	// ADR-036 step 6 (#3206): the shapes the exporter read before it and
+	// drops since, because parse-tree refuses them (parseTreeDropped pins
+	// which file each one drops, independently of LoadDir).
+	for name, c := range parseTreeDropped {
+		cases[name] = base(map[string]string{c.file: c.body})
+	}
+	return cases
+}
+
+// parseTreeDropped is each contract row of a shape parse-tree refuses: the
+// file it is written in, which the exporter must drop (exit 3 names it).
+// Pinned here, not derived from LoadDir, so the rows go red if the exporter
+// stops refusing them.
+var parseTreeDropped = map[string]struct{ file, body string }{
+	"V1_tenant_multi_document":   {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\n---\nx: 1\n"},
+	"V2_tenant_trailing_marker":  {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\n---\n"},
+	"V3_tenant_binary":           {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\nx: !!binary aGk=\n"},
+	"V4_tenant_set":              {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\nx: !!set {a: null}\n"},
+	"V5_tenant_nonspecific_tag":  {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: ! \"60\"\n"},
+	"V6_tenant_bom_mid_file":     {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\n# \uFEFF\n"},
+	"V7_tenant_null_key":         {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\n~: 1\n"},
+	"V8_tenant_non_scalar_key":   {"db/tenant-b.yaml", "tenants:\n  tenant-b:\n    mem: \"60\"\n? [a]\n: 1\n"},
+	"V9_root_defaults_multi_doc": {"_defaults.yaml", "defaults:\n  cpu: 70\n  mem: 80\n---\nx: 1\n"},
+	"V10_root_defaults_binary":   {"_defaults.yaml", "defaults:\n  cpu: 70\n  mem: 80\nx: !!binary aGk=\n"},
+}
+
+// The pinned half: every parseTreeDropped row is dropped by the exporter, and
+// only its file.
+func TestExitThree_ParseTreeRowsAreDropped(t *testing.T) {
+	t.Parallel()
+	cases := contractCases()
+	for name, c := range parseTreeDropped {
+		tmp := t.TempDir()
+		files := map[string]string{}
+		for rel, body := range cases[name] {
+			files["conf.d/"+rel] = body
+		}
+		testutil.WriteTree(t, tmp, files)
+		_, dropped, err := config.LoadDir(filepath.Join(tmp, "conf.d"), nil)
+		if err != nil {
+			t.Fatalf("%s: LoadDir: %v", name, err)
+		}
+		if !reflect.DeepEqual(dropped, []string{c.file}) {
+			t.Errorf("%s: the exporter drops %v, want [%s]", name, dropped, c.file)
+		}
 	}
 }
 

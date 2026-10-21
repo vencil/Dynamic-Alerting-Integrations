@@ -1051,94 +1051,66 @@ func TestServedValues_DroppedIsAnEmptyObjectWhenNothingIsDropped(t *testing.T) {
 // --- strings JSON cannot carry ----------------------------------------------------
 
 // A tenant id or key that is not valid UTF-8 would reach JSON as U+FFFD, so
-// two distinct keys could come out as one; it is refused and named instead.
+// two distinct keys could come out as one. Since ADR-036 step 6 (#3206) the
+// only way to spell such a string inside a file is `!!binary`, which makes
+// parse-tree refuse that file (tag_not_allowed): the exporter drops the file
+// before any string of it is read, so it is exit 3 naming the file, not the
+// exit 2 these shapes used to get. Only a file NAME can still carry the
+// bytes into the output: TestServedValues_NonUTF8FileName_ExitsTwoNamingIt.
 //
 // NOT parallel, subtests included: these trees make the collector fail
 // NewConstMetric and log.Printf through the process-global logger. run() no
 // longer redirects it (#2444), so the reset below is only an idempotent guard
 // that the lines go to the real stderr, never to some test's buffer.
-func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
+func TestServedValues_NonUTF8_ExitsThreeNamingTheFile(t *testing.T) {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags)
 	const sf = "state_filters:\n  maintenance:\n    reasons: []\n    default_state: disable\n"
 	for name, tc := range map[string]struct {
-		files map[string]string
-		want  string
+		files  map[string]string
+		broken string // the one file parse-tree refuses
 	}{
 		// A tenant id that is not valid UTF-8 is not here: since #2266 the
 		// tenant file declaring it fails the decode (exit 3, see
 		// TestServedValues_ParseFailedFile_ExitsThreeAndNamesIt).
-		// mysql_connections{q="\xff"} and mysql_connections{q="\xfe"}: both become {q="\ufffd"} in JSON.
+		// mysql_connections{q="\xff"} and mysql_connections{q="\xfe"}.
 		"tenant key": {map[string]string{
 			"_defaults.yaml": defaultsOnly,
 			"tenant-a.yaml": "tenants:\n  tenant-a:\n    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n    : 5\n" +
 				"    ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n    : 6\n",
-		}, `tenant "tenant-a": key "mysql_connections{q=\"\x`}, // \xfe or \xff: whichever the map yields first
+		}, "tenant-a.yaml"},
 		"defaults key": {map[string]string{
 			"_defaults.yaml": defaultsOnly + "  ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/yJ9\n  : 5\n" +
 				"  ? !!binary bXlzcWxfY29ubmVjdGlvbnN7cT0i/iJ9\n  : 6\n",
 			"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
-		}, `defaults: key "mysql_connections{q=\"\x`},
+		}, "_defaults.yaml"},
 		// `eP8=` / `eP4=` are "x\xff" / "x\xfe".
 		"state filter name": {map[string]string{
 			"_defaults.yaml": defaultsOnly + "state_filters:\n  ? !!binary eP8=\n  : {reasons: [\"a\"]}\n  ? !!binary eP4=\n  : {reasons: [\"b\"]}\n",
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
-		}, `state_filters: name "x\x`},
-		// Values, not keys: the reserved readings carry them out.
+		}, "_defaults.yaml"},
+		// Values, not keys: the reserved readings would carry them out.
 		"_metadata value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _metadata:\n      runbook_url: !!binary /w==\n      db_type: !!binary /w==\n",
-		}, `tenants["tenant-a"].values["_metadata"]["db_type"]`}, // first in key order
-		// A map KEY, not a value: `eP8=` / `eP4=` are "x\xff" / "x\xfe".
+		}, "tenant-a.yaml"},
+		// A map KEY, not a value.
 		"_routing receiver key": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml": "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: http://x\n" +
 				"        ? !!binary eP8=\n        : a\n        ? !!binary eP4=\n        : b\n",
-		}, `routing["receiver"]["x\xfe"] (key)`},
+		}, "tenant-a.yaml"},
 		"_routing value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: !!binary /w==\n",
-		}, `tenants["tenant-a"].routing["receiver"]`},
-		// Two broken files whose names differ only in a non-UTF-8 byte: JSON
-		// would render both as "b\ufffd.yaml".
-		"parse_failed file name": {map[string]string{
-			"_defaults.yaml": defaultsOnly,
-			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
-			"b\xfe.yaml":     "tenants: [\n",
-			"b\xff.yaml":     "tenants: [\n",
-		}, `parse_failed[0]: "b\xfe.yaml"`},
+		}, "tenant-a.yaml"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			// ADR-036 step 6 (#3206): a `!!binary` spelling of such a string
-			// makes parse-tree refuse its file (tag_not_allowed), so the
-			// exporter drops that file before any string of it is read: exit
-			// 3 naming the file, not exit 2. Only a file NAME can still carry
-			// the bytes into the output.
-			if name != "parse_failed file name" {
-				code, doc, _, stderr := served(t, tc.files, "")
-				broken := "tenant-a.yaml"
-				if _, ok := tc.files["tenant-a.yaml"]; ok && !strings.Contains(tc.files["tenant-a.yaml"], "!!binary") {
-					broken = "_defaults.yaml"
-				}
-				if code != exitParseFailed || !reflect.DeepEqual(doc.ParseFailed, []string{broken}) ||
-					!strings.Contains(stderr, "(kind tag_not_allowed)") {
-					t.Fatalf("exit = %d, parse_failed %v, want %d naming %s refused as tag_not_allowed; stderr=%q",
-						code, doc.ParseFailed, exitParseFailed, broken, stderr)
-				}
-				_ = tc.want // what exit 2 named before step 6
-				return
-			}
-			// Several runs: where two strings are bad, the one named must be
-			// the first in key order every time, not whichever map
-			// iteration happens to reach first.
-			for run := 0; run < 8; run++ {
-				code, _, _, stderr := served(t, tc.files, "")
-				if code != exitCallerErr {
-					t.Fatalf("exit = %d, want %d; stderr=%q", code, exitCallerErr, stderr)
-				}
-				if !strings.Contains(stderr, tc.want) || !strings.Contains(stderr, "not valid UTF-8") {
-					t.Fatalf("run %d: stderr should name it (%s): %q", run, tc.want, stderr)
-				}
+			code, doc, _, stderr := served(t, tc.files, "")
+			if code != exitParseFailed || !reflect.DeepEqual(doc.ParseFailed, []string{tc.broken}) ||
+				!strings.Contains(stderr, "(kind tag_not_allowed)") {
+				t.Fatalf("exit = %d, parse_failed %v, want %d naming %s refused as tag_not_allowed; stderr=%q",
+					code, doc.ParseFailed, exitParseFailed, tc.broken, stderr)
 			}
 		})
 	}
@@ -1152,6 +1124,32 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 	wantValue(t, doc, "tenant-ü", "mysql_connections", 5)
 	wantValue(t, doc, "tenant-a", `mysql_connections{q="é"}`, 5)
 	wantValue(t, doc, "tenant-a", `mysql_connections{q="è"}`, 6)
+}
+
+// Two broken files whose names differ only in a non-UTF-8 byte: JSON would
+// render both as "b\ufffd.yaml", so exit 2 names the first in byte order.
+// Several runs: the one named must be the first every time, not whichever
+// map iteration happens to reach first. Not parallel, for the reason given
+// on TestServedValues_NonUTF8_ExitsThreeNamingTheFile.
+func TestServedValues_NonUTF8FileName_ExitsTwoNamingIt(t *testing.T) {
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.LstdFlags)
+	files := map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
+		"b\xfe.yaml":     "tenants: [\n",
+		"b\xff.yaml":     "tenants: [\n",
+	}
+	const want = `parse_failed[0]: "b\xfe.yaml"`
+	for run := 0; run < 8; run++ {
+		code, _, _, stderr := served(t, files, "")
+		if code != exitCallerErr {
+			t.Fatalf("run %d: exit = %d, want %d; stderr=%q", run, code, exitCallerErr, stderr)
+		}
+		if !strings.Contains(stderr, want) || !strings.Contains(stderr, "not valid UTF-8") {
+			t.Fatalf("run %d: stderr should name it (%s): %q", run, want, stderr)
+		}
+	}
 }
 
 // A key whose row AND its #1231 legacy twin are both dropped has two reasons,

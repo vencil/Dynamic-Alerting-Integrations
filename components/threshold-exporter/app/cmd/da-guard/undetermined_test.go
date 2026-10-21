@@ -389,10 +389,8 @@ func TestUndetermined_UnreadableOutsideRun(t *testing.T) {
 	if whole.code != exitParseFailed || len(whole.undetermined) != 0 {
 		t.Errorf("whole tree: exit %d, undetermined %v; want 3 and no evidence", whole.code, whole.undetermined)
 	}
-	for _, scope := range []string{"team"} {
-		if got := runJudged(t, files, scope); got.code != exitParseFailed || len(got.undetermined) != 0 {
-			t.Errorf("scope %s: exit %d, undetermined %v; want 3 and no evidence", scope, got.code, got.undetermined)
-		}
+	if got := runJudged(t, files, "team"); got.code != exitParseFailed || len(got.undetermined) != 0 {
+		t.Errorf("scope team: exit %d, undetermined %v; want 3 and no evidence", got.code, got.undetermined)
 	}
 	for _, scope := range []string{"a", "empty"} {
 		got := runJudged(t, files, scope)

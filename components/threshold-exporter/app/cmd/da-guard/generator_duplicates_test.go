@@ -66,11 +66,12 @@ func runDupTree(t *testing.T, files map[string]string) dupRun {
 	return r
 }
 
-// assertGeneratorRefusedIsDropped: the run over a tree whose only file the
-// generator refuses is file (parse-tree kind kind) is exit 3 with exactly
-// that file in parse_failed, its kind on the report's stderr-facing line
-// unneeded (the exporter's log carries it), and no undetermined item for it
-// (#3206: no unreadable_outside_run, the run names it).
+// assertGeneratorRefusedIsDropped checks a run over a tree whose one bad
+// file is file, which parse-tree refuses as kind: the run ends in exit 3,
+// parse_failed is exactly [file], and no undetermined item names file (the
+// run already names it under exit 3, so it is not unreadable_outside_run,
+// #3206). kind only labels the failure message; the kind itself reaches the
+// operator through the exporter's log, not this report.
 func assertGeneratorRefusedIsDropped(t *testing.T, name string, r dupRun, file, kind string) {
 	t.Helper()
 	if r.code != exitParseFailed || !reflect.DeepEqual(r.parseFailed, []string{file}) ||
