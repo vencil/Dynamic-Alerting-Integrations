@@ -1347,6 +1347,14 @@ da-tools gitops-check <subcommand> [options]
 
 **`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了就列在 `parse_errors`、fail。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
 
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 通過；帶 `--ci` 時 warning 也是 0。只有 `sidecar` 會給 warning（kubectl 不可用，或 git-sync Secret／sidecar 缺一或全缺）；`repo` 的 `--path` 沒有驗證成功（路徑不存在，或伺服器不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
+| `1` | 有 fail：`repo` 倉庫連不上或分支不存在；`local` 目錄不存在、缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）。不帶 `--ci` 時 warning 也是 1。⚠️ `local --dir` 指到不存在的目錄是 1 不是 2——目錄檢查在呼叫 da-guard 之前 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
+
 **範例**
 
 ```bash

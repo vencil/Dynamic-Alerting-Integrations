@@ -1350,6 +1350,14 @@ da-tools gitops-check <subcommand> [options]
 
 **How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and every file the exporter reads (`_` platform files included) that cannot be read is listed in `parse_errors` and fails the check. It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
 
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Passed; with `--ci` a warning is 0 too. Only `sidecar` gives warnings (kubectl unavailable, or the git-sync Secret / sidecar partly or entirely missing); a `repo` `--path` that is not verified (the path does not exist, or the server does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
+| `1` | A failure: `repo` cannot reach the repository or the branch does not exist; `local` directory missing, no root defaults carrier, or a file that cannot be read (`parse_errors`). Without `--ci` a warning is 1 too. ⚠️ `local --dir` naming a directory that does not exist is 1, not 2 — the directory check runs before da-guard is called |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
+
 **Examples**
 
 ```bash
