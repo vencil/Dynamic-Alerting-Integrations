@@ -1058,9 +1058,15 @@ type skippedOp struct {
 // read it — declares no `tenants.<tenantID>` section: the file is missing or
 // blank, or carries no section for it (#2882). A file that cannot be read as
 // a `tenants:` document is not called absent; mergePatchYAML refuses it.
+// That includes a file parse-tree refuses (#3206): the decode below would
+// read its first document alone, and a tenant declared after a `---` would
+// be called absent and its op skipped instead of refused.
 func tenantAbsentIn(existing []byte, tenantID string) bool {
 	if len(bytes.TrimSpace(existing)) == 0 {
 		return true
+	}
+	if confd.Judge(existing) != nil {
+		return false
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(existing, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {

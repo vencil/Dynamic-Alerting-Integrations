@@ -37,7 +37,7 @@ import (
 )
 
 // Kind is the fixed code of one reason a file cannot be read. The set is
-// closed: a reader may switch on it. Every Kind is listed in Kinds.
+// closed: a reader may switch on it. Every Kind is listed in Kinds().
 type Kind string
 
 const (
@@ -98,7 +98,17 @@ const (
 // is read as yaml.v3 reads it, even where today's route generator refuses
 // the file only because PyYAML does — tests/shared/parse_tree_corpus.json
 // pins both directions row by row.
-var Kinds = []Kind{
+//
+// ⛔ A FRESH COPY EACH CALL. The list is read by more than one module
+// (da-guard prints it, tenant-api judges with this package, #3206), and a
+// package-level slice is one any importer can append to or overwrite — a
+// "closed" list that is not. Mutating the returned slice changes nothing
+// here.
+func Kinds() []Kind {
+	return append([]Kind(nil), kinds[:]...)
+}
+
+var kinds = [...]Kind{
 	KindReadFailure, KindNotRegularFile, KindInvalidUTF8, KindBOMNotAtStart,
 	KindSyntaxError, KindMultipleDocuments, KindNonSpecificTag, KindTagNotAllowed, KindNonScalarKey,
 	KindNullKey, KindDuplicateKey, KindDecodeError, KindTopLevelNotMapping,

@@ -37,6 +37,7 @@ import (
 	"log/slog"
 	"regexp"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
@@ -115,7 +116,17 @@ func emptyPolicyConfig() *Config {
 	return &Config{Whitelist: []WhitelistEntry{}}
 }
 
+// parsePolicyConfig decodes the whitelist record.
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge): the
+// record came from conf.d/_federation_policy.yaml (statemigrate imports it
+// verbatim) or from tenant-api's own write, and a document parse-tree refuses
+// is a parse error (the watcher keeps its last good whitelist), never the
+// whitelist of its first document.
 func parsePolicyConfig(data []byte) (*Config, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
@@ -138,8 +149,12 @@ func (m *Manager) IsWhitelisted(metric string) bool {
 }
 
 // ParseSubset decodes a per-tenant subset file. An empty document
-// yields an empty (non-nil) subset.
+// yields an empty (non-nil) subset. parse-tree's verdict first, as for the
+// whitelist (#3206): the record may be a conf.d subset file imported verbatim.
 func ParseSubset(data []byte) (*Subset, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var s Subset
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, err

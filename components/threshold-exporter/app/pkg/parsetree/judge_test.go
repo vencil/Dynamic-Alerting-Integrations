@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -202,5 +203,18 @@ func TestMessageIsCutAtTheSourceKeepingHeadAndTail(t *testing.T) {
 	short := "a: 1\na: 2\n"
 	if _, bad := Parse([]byte(short)); bad == nil || strings.Contains(bad.Message, "omitted") {
 		t.Errorf("a short message is cut: %v", bad)
+	}
+}
+
+// TestKindsIsACopy: the closed list cannot be changed from outside the
+// package — what Kinds returns is the caller's own slice (#3206).
+func TestKindsIsACopy(t *testing.T) {
+	t.Parallel()
+	a := Kinds()
+	want := append([]Kind(nil), a...)
+	a[0] = "tampered"
+	_ = append(a[:1], "appended")
+	if got := Kinds(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Kinds changed after a caller wrote its copy: %v, want %v", got, want)
 	}
 }

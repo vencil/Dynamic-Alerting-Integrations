@@ -82,13 +82,31 @@ func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
 // file another tenant already merged remotely — the whole TRK-318 hazard).
 var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
 
+// MsgPlatformWriteRepair is how a caller is told who may replace a current
+// tenant file the end-of-life guard cannot read, and what everyone else does
+// (#2405, #3206). Shared by MsgUnparseableBaseNeedsPlatformWrite and the
+// handler's 409 TENANT_CONFIG_NOT_LOADABLE text, so the two never disagree.
+const MsgPlatformWriteRepair = "replacing it through the API (a whole-file PUT /api/v1/tenants/{id}) " +
+	"requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] and no org-scope, " +
+	"environments or domains); without it, ask a caller who has that permission to replace it, " +
+	"or repair the file in git"
+
 // MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
-// whole-file write over a current tenant file that cannot be parsed, by a
-// caller without platform-wide write permission (#2405; see eolGuardErrs).
-const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be parsed; " +
-	"replacing it through the API requires write permission on all tenants " +
-	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
-	"otherwise repair the file in git"
+// whole-file write over a current tenant file the end-of-life guard cannot
+// read, by a caller without platform-wide write permission (#2405; see
+// eolGuardErrs). err is why it cannot: parse-tree's refusal — named with its
+// kind, since such a file is often valid YAML (a trailing `---`, a `!!binary`
+// value) and "cannot be parsed" would send the reader looking for a syntax
+// error — or the custom-alerts decode of a file parse-tree reads.
+func MsgUnparseableBaseNeedsPlatformWrite(err error) string {
+	if kind, ok := cfg.UnreadableKindOf(err); ok {
+		return "the current tenant file is refused by parse-tree (kind " + string(kind) +
+			"), so threshold-exporter and the route generator read none of it and its " +
+			"end-of-life usage is unknown; " + MsgPlatformWriteRepair
+	}
+	return "the current tenant file's tenants: block cannot be decoded for the end-of-life check; " +
+		MsgPlatformWriteRepair
+}
 
 // msgBodyNotAPIShaped (with the tenant id) refuses a write body that is not
 // API-shaped (#3064, confd.TenantFileManagement).
@@ -299,118 +317,6 @@ func yamlDecodeMessage(what string, err error) string {
 }
 
 var yamlErrorLine = regexp.MustCompile(`\bline (\d+)\b`)
-
-// yamlDocumentShapeErrors is the whole-body YAML gate behind validateShape
-// (#1681, #1721). It exists because Write commits the body VERBATIM while the
-// struct yaml.Unmarshal in validateShape reads only the FIRST document and only
-// the fields ThresholdConfig names — so any byte the struct decode skips is a
-// byte that reaches git unjudged, and the exporter reads it.
-//
-// It walks every document as a yaml.Node and refuses, in this order:
-//
-//  1. Any decode error, in ANY document. The struct Unmarshal does not own
-//     these: it stops after the first document, so a parse error behind an
-//     end-of-document marker (`...`) is invisible to it. A gate that treated
-//     that error as end-of-stream accepted the unparseable tail, and the
-//     unparseable tail is where the smuggled section sat (#1721).
-//  2. In the FIRST document only, a root key the struct decode and
-//     cfg.CheckTenantRootKeys can both look past (see rootKeyShapeError):
-//     a merge key (`<<`, checked first, with its own message), or any key
-//     that is not a plain string scalar — null (`~`, `null`, an empty `? `),
-//     int, bool, an alias, a complex key, a custom tag. CheckTenantRootKeys
-//     decodes into map[string]any, fails on such a key and then reports
-//     NOTHING, while a generic decode falls back to map[any]any and succeeds,
-//     so the key's value — a `tenants:` section, a `defaults:` block — would
-//     be committed unjudged. A string key other than `tenants` is NOT refused
-//     here: CheckTenantRootKeys owns that and names the key. Merge keys and
-//     aliases INSIDE a tenant section are ordinary YAML and stay legal.
-//  3. A document that does not decode generically (`node.Decode(&any)`). The
-//     struct decode never visits a root key ThresholdConfig lacks, so a bad
-//     tag under one passes it, and CheckTenantRootKeys returns no errors when
-//     its own decode fails. This also refuses an unconstructable tagged value
-//     inside the body's own tenant section (`!!int "abc"`), which the struct
-//     decode reads as a string — deliberately: those bytes would be committed.
-//  4. Content after the first document — anything after it would be written
-//     but never validated. An empty trailer (a bare `---`, a lone `...`, a
-//     comment-only or `~` document) carries nothing and stays legal, so this
-//     counts content rather than documents.
-//
-// Messages go to API callers: they name the rule, never a server path.
-func yamlDocumentShapeErrors(yamlContent string) []string {
-	dec := yaml.NewDecoder(strings.NewReader(yamlContent))
-	extra := 0
-	for i := 0; ; i++ {
-		var node yaml.Node
-		if err := dec.Decode(&node); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
-		}
-		// Before the generic decode: a complex root key makes that decode fail
-		// with a message about the key's value, not about the rule it broke.
-		if i == 0 {
-			if msg := rootKeyShapeError(&node); msg != "" {
-				return []string{msg}
-			}
-		}
-		var doc any
-		if err := node.Decode(&doc); err != nil {
-			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
-		}
-		if i > 0 && doc != nil {
-			extra++
-		}
-	}
-	if extra > 0 {
-		return []string{fmt.Sprintf(
-			"YAML has %d document(s) with content after the first — a tenant config "+
-				"is a single document; anything after it would be written but never "+
-				"validated", extra)}
-	}
-	return nil
-}
-
-// rootKeyShapeError returns the refusal for the first root key of a decoded
-// document that is not a plain string, or "" when every root key is one. A
-// merge key (`<<` in any form — a mapping, an alias, or a sequence of either)
-// is looked for across ALL root keys first, so it always gets its dedicated
-// message whatever else the root holds.
-func rootKeyShapeError(doc *yaml.Node) string {
-	root := doc
-	if root.Kind == yaml.DocumentNode {
-		if len(root.Content) == 0 {
-			return ""
-		}
-		root = root.Content[0]
-	}
-	if root.Kind != yaml.MappingNode {
-		return ""
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].ShortTag() == "!!merge" {
-			return "YAML uses a merge key (<<) at the root — a tenant config " +
-				"may only contain a literal top-level 'tenants' block; merge keys are " +
-				"allowed inside a tenant section, not at the root"
-		}
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		key := root.Content[i]
-		if key.Kind == yaml.ScalarNode && key.ShortTag() == "!!str" {
-			continue
-		}
-		found := key.ShortTag()
-		switch key.Kind {
-		case yaml.AliasNode:
-			found = "alias"
-		case yaml.MappingNode, yaml.SequenceNode:
-			found = "complex " + found
-		}
-		return fmt.Sprintf("YAML root keys must be plain strings — found a %s key; "+
-			"a tenant config may only contain a top-level 'tenants' block", found)
-	}
-	return ""
-}
 
 // guardTenantID rejects an id whose {id}.yaml would not be a tenant config
 // file. It is the writer-side second enforcement of the same confd predicate
@@ -2076,8 +1982,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
-	// caller below parses yamlContent four times (Unmarshal here,
-	// CheckTenantRootKeys, yamlDocumentShapeErrors,
+	// caller below parses yamlContent several times (parse-tree's verdict,
+	// Unmarshal here, CheckTenantRootKeys, TenantFileManagement,
 	// TenantWritesStringMetadata).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
@@ -2091,6 +1997,22 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	if errs := CheckTenantDocSize(yamlContent); len(errs) > 0 {
 		return tcfg, errs
 	}
+	// ⛔ PARSE-TREE'S VERDICT BEFORE ANY DECODE (ADR-036 §7 step 7, #3206;
+	// confd.Judge). Write commits yamlContent VERBATIM, and every check below
+	// reads less than that: the struct Unmarshal and CheckTenantRootKeys
+	// decode ONE document, the struct decode skips root keys
+	// ThresholdConfig lacks, both resolve a root merge key away, and
+	// CheckTenantRootKeys reports nothing for a root key that is not a string
+	// (#1681, #1721). parse-tree reads the whole text — every document, every
+	// node, every tag — and refuses what the exporter and the route generator
+	// refuse, so from here on each decode sees bytes all three read the same
+	// way. It replaces tenant-api's own whole-body shape gate, whose rules
+	// differed from parse-tree's (it let an empty trailing document, a local
+	// tag `!foo`, `!!binary` and `!!set` through).
+	if err := confd.Judge([]byte(yamlContent)); err != nil {
+		slog.Warn("tenant config is refused by parse-tree", "tenant", tenantID, "error", err)
+		return tcfg, []string{confd.UnreadableForCaller("the YAML document", err)}
+	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return tcfg, []string{yamlDecodeMessage("invalid YAML", err)}
 	}
@@ -2100,19 +2022,6 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return tcfg, []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
-	}
-	// The write path commits yamlContent VERBATIM, but the Unmarshal and
-	// CheckTenantRootKeys above each see less than that: both decode ONE
-	// document, the struct decode skips root keys ThresholdConfig lacks, both
-	// resolve a root merge key (`<<`) away, and CheckTenantRootKeys reports
-	// nothing for a root key that is not a string (`~:`). So a second document,
-	// a parse error behind `...`, a bad tag under an unknown root key, a root
-	// merge key or a non-string root key could each carry a `tenants:` section
-	// straight into git past every gate in this function (#1681, #1721). A successful Unmarshal above does
-	// NOT mean the rest of the body parses — it stopped reading after the first
-	// document — so this gate owns every decode error it meets.
-	if shapeErrs := yamlDocumentShapeErrors(yamlContent); len(shapeErrs) > 0 {
-		return tcfg, shapeErrs
 	}
 	// The write plane addresses a file by tenant id, but the exporter takes
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
@@ -2335,6 +2244,10 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 // launder new eol usage in. Pinned by
 // TestEolGuard_UnparseableBaseForbidsEveryEolRecipe.
 //
+// "Would not parse" is parse-tree's verdict first (confd.Judge, #3206), then
+// Extract's decode: a file parse-tree refuses takes this path even when its
+// first document alone would decode.
+//
 // Only a PARSE failure takes that path. A file that exists but cannot be READ
 // (permissions, I/O) still refuses the write: nothing about it is known, and
 // the write would land on the same unreadable path.
@@ -2343,12 +2256,20 @@ func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, r
 	var oldAlerts []map[string]any
 	switch {
 	case baseErr == nil:
-		cur, err := customalerts.Extract(string(baseRaw), tenantID)
+		// #3206 (ADR-036 §7 step 7): a current file parse-tree refuses is one
+		// that does not parse — the exporter serves none of it — even where
+		// Extract's one-document decode would read its first document (a
+		// second document, a `!!binary` value). Its baseline is unknown.
+		err := confd.Judge(baseRaw)
+		var cur []map[string]any
+		if err == nil {
+			cur, err = customalerts.Extract(string(baseRaw), tenantID)
+		}
 		switch {
 		case err == nil:
 			oldAlerts = cur
 		case !replaceUnparseable:
-			return []string{MsgUnparseableBaseNeedsPlatformWrite}
+			return []string{MsgUnparseableBaseNeedsPlatformWrite(err)}
 		}
 		// err != nil with the bit: baseline unknown ⇒ oldAlerts stays empty.
 	case !os.IsNotExist(baseErr):

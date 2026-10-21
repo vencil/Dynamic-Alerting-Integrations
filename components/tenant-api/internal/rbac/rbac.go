@@ -35,6 +35,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
@@ -327,7 +328,19 @@ func emptyConfig() *RBACConfig { return &RBACConfig{} }
 // declaredClaimKeys is the --identity-claim-headers declaration captured by
 // the NewManager parse closure; validateConfig rejects a config whose
 // match.claims references a key outside it.
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge),
+// wherever --rbac points: a file it refuses — a second document, even an
+// empty one, a `!!binary` or `!` tag, a null key — is a load error (fatal at
+// startup, last-good on a reload), never the empty config. yaml.v3 alone
+// reads the first document and ignores the rest, so rules written after a
+// `---` were silently dropped. The file is judged whether or not it sits in
+// conf.d: tenant-api is its one reader (ADR-036 §12), and a second rule for
+// the same file depending on its path would be two loaders.
 func parseConfig(data []byte, declaredClaimKeys map[string]string) (*RBACConfig, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var cfg RBACConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
