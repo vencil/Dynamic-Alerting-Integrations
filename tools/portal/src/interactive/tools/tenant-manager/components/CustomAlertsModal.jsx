@@ -35,7 +35,7 @@ const t = window.__t || ((zh, en) => en);
  *
  * #3202: a refused save is read by its code's remedy (the generated
  * tenant-api contract, _common/api/classify-error.js), not by its status.
- * Only CONFLICT (remedy refresh_retry) WITH a current_source_hash is the
+ * Only code CONFLICT WITH a current_source_hash is the
  * Reef 6 base_hash race; a fix-in-git 409 (TENANT_DECLARED_ELSEWHERE,
  * TENANT_TREE_UNREADABLE, TENANT_FILE_AMBIGUOUS, ...) says so and offers no
  * retry, and a missing or unknown code gets a generic message.
@@ -252,9 +252,11 @@ function CustomAlertsModal(props) {
           setNotLoadable({ error: data.error || '', configError: data.config_error || '' });
           return;
         }
-        if (classified.remedy === 'refresh_retry' && data.current_source_hash) {
+        if (classified.code === ERROR_CODES.CONFLICT && data.current_source_hash) {
           // Reef 6: NON-DESTRUCTIVE — keep the user's work, don't reload.
-          // Only a CONFLICT that names the current hash is the base_hash race.
+          // Only a CONFLICT that names the current hash is the base_hash
+          // race — matched by code, not by remedy, so a future code that
+          // also says refresh_retry does not open this box.
           setConflict({ currentHash: data.current_source_hash });
           return;
         }
@@ -403,6 +405,7 @@ function CustomAlertsModal(props) {
           {saveError && (
             <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="save-error" data-remedy={saveError.remedy}>
               <p className="text-sm">{saveError.message}</p>
+              <p className="text-sm mt-1">{t('你的編輯已保留。', 'Your edits are kept.')}</p>
               <p className="text-xs mt-1 font-mono">{saveError.detail}</p>
               <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
                 onClick={() => copy(JSON.stringify(recipes, null, 2))}>

@@ -319,6 +319,7 @@ describe('CustomAlertsModal', () => {
     fireEvent.click(screen.getByTestId('save'));
     await waitFor(() => expect(screen.getByTestId('save-error')).toBeInTheDocument());
     expect(screen.getByTestId('save-error').getAttribute('data-remedy')).toBe('refresh_retry');
+    expect(screen.getByTestId('save-error').textContent).toMatch(/Your edits are kept/);
     expect(screen.queryByTestId('conflict')).toBeNull();
   });
 

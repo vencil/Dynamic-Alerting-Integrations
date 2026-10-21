@@ -1405,8 +1405,8 @@ repos:
         # kinds, their statuses) and the answers handlers and middleware write
         # directly — read from every non-test .go file under internal/ and cmd/
         # (cmd/gen-error-contract/scan.go), hence that whole range here: a new
-        # WriteJSONErrorWithCode in any package changes the contract. For the
-        # portal to read (wired in #3202 PR-2). Add a code or an answer but
+        # WriteJSONErrorWithCode in any package changes the contract. The
+        # portal reads it (_common/api/classify-error.js). Add a code or an answer but
         # forget to regenerate → this fails before CI. Fix: `make error-contract`.
 
       - id: forbid-legacy-mariadb-threshold-name

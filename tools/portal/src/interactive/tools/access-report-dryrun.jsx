@@ -93,7 +93,7 @@ async function runDryRun(tenantId, rbacYaml, view, includeOrgValues) {
   if (status === 400) {
     let body = {};
     try { body = await resp.json(); } catch (e) { body = {}; }
-    if (body && body.code === ERROR_CODES.CANDIDATE_INVALID) {
+    if (body && typeof body.code === 'string' && body.code === ERROR_CODES.CANDIDATE_INVALID) {
       return { kind: 'candidate_invalid', error: body.error || '' };
     }
     return { kind: 'bad_request', error: (body && body.error) || '' };

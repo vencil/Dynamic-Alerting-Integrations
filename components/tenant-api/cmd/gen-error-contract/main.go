@@ -2,8 +2,8 @@
 // codes (#3202): tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json,
 // one entry per code of internal/errcode with its remedy and what the
 // handler's kind table and the direct answers write it with — for the portal
-// to read instead of writing the codes down a second time (the portal side
-// is wired in #3202 PR-2; until then nothing reads the file).
+// to read instead of writing the codes down a second time (it does, through
+// tools/portal/src/interactive/tools/_common/api/classify-error.js).
 //
 //	go run ./cmd/gen-error-contract           # write the contract
 //	go run ./cmd/gen-error-contract --check   # exit 1 if the committed copy drifted
@@ -73,7 +73,8 @@ type entry struct {
 // remedyAllows is the statuses an answer with a code of that remedy may
 // have: a client reading the status alone must not be told the opposite of
 // what the code says (a "resend" code on a 400, a "fix the request" code on
-// a 503).
+// a 503). To allow a status for a remedy (for example 412/423 for
+// refresh_retry, or 410 for not_found), change it here.
 func remedyAllows(r errcode.Remedy, status int) bool {
 	switch r {
 	case errcode.RemedyRefreshRetry, errcode.RemedyChooseOther, errcode.RemedyExisting:

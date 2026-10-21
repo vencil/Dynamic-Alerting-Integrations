@@ -385,7 +385,7 @@
     },
     {
       "code": "TENANT_FILE_DIRTY",
-      "remedy": "operator",
+      "remedy": "fix_in_repo",
       "retryable": "never",
       "statuses": [
         409
