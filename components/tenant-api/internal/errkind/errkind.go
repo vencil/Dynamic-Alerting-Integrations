@@ -157,6 +157,24 @@ const (
 	// than the mint rate limit allows.
 	FederationMintRateLimited Kind = "federation_mint_rate_limited"
 
+	// FederationNotConfigured: logs federation (the account registry) is not
+	// configured on this server — a deployment setting, not a passing state.
+	FederationNotConfigured Kind = "federation_not_configured"
+
+	// RouteNotFound: no route matches the request's path (#3226).
+	RouteNotFound Kind = "route_not_found"
+	// MethodNotAllowed: a route matches the path, but not the method.
+	MethodNotAllowed Kind = "method_not_allowed"
+	// RequestTimeout: the request reached the server's per-request deadline
+	// before its handler answered.
+	RequestTimeout Kind = "request_timeout"
+	// StreamUnsupported: the event stream cannot be served — the response
+	// writer cannot flush.
+	StreamUnsupported Kind = "stream_unsupported"
+	// ServerShuttingDown: the server is shutting down and admits no new
+	// event stream.
+	ServerShuttingDown Kind = "server_shutting_down"
+
 	// Internal: a failure that is the server's and that no other kind names.
 	Internal Kind = "internal"
 )

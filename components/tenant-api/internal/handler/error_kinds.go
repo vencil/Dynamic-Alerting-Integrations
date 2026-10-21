@@ -12,6 +12,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/statestore"
+	"github.com/vencil/tenant-api/internal/ws"
 )
 
 // #3226: the error → response mapping of the write and state entries is two
@@ -123,6 +124,19 @@ var kindTable = []KindSpec{
 	// 60: the mint window (token.mintWindow), for the bare sentinel; the
 	// typed refusal says when the next mint is admitted.
 	{Kind: errkind.FederationMintRateLimited, Status: http.StatusTooManyRequests, Code: CodeRateLimited, Retryable: true, RetryAfterS: 60},
+
+	// A deployment setting: no retry finds it configured, so no Retry-After.
+	{Kind: errkind.FederationNotConfigured, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
+
+	// The router's and the middleware chain's own answers (#3226). The codes
+	// are the existing ones for the status (#3202 rearranges the codes).
+	{Kind: errkind.RouteNotFound, Status: http.StatusNotFound, Code: CodeNotFound, ClientError: true},
+	{Kind: errkind.MethodNotAllowed, Status: http.StatusMethodNotAllowed, Code: CodeBadRequest, ClientError: true},
+	// Not retryable: the handler did not answer, so whether a write it ran
+	// took effect is not known here.
+	{Kind: errkind.RequestTimeout, Status: http.StatusGatewayTimeout, Code: CodeUpstream},
+	{Kind: errkind.StreamUnsupported, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
+	{Kind: errkind.ServerShuttingDown, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 1},
 
 	{Kind: errkind.Internal, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
 }
@@ -245,6 +259,8 @@ var kindRules = []kindRule{
 	{Kind: errkind.WriteOutcomeUnknown, match: isWriteOutcomeUnknown},
 	{Kind: errkind.WriteCancelled, match: isWriteCancelled},
 	sentinelKind(errkind.NoChanges, gitops.ErrNoChanges),
+	sentinelKind(errkind.StreamUnsupported, ws.ErrStreamingUnsupported),
+	sentinelKind(errkind.ServerShuttingDown, ws.ErrShuttingDown),
 }
 
 // carriesKind reports whether err's tree (Unwrap, both forms) holds an

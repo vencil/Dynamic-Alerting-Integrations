@@ -101,16 +101,32 @@ func writeErr(w http.ResponseWriter, r *http.Request, d *Deps, err error, ec err
 	}
 	spec := kindSpecOf(k)
 	text, extra := renderKind(k, r, d, err, ec)
-	env := ErrorResponse{Error: text, Code: spec.Code, Extra: extra}
-	if s := retryAfterS(spec, err); s > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(s))
-		env.RetryAfterS = s
+	writeKindAnswer(w, r, spec, retryAfterS(spec, err), ErrorResponse{Error: text, Extra: extra})
+	return true, spec.Fault
+}
+
+// writeKindAnswer writes spec's answer: env with spec's code, retryAfter
+// (> 0) as both the Retry-After header and retry_after_s, spec's status.
+// A Fault kind marks the write attempt (markWriteFault).
+func writeKindAnswer(w http.ResponseWriter, r *http.Request, spec KindSpec, retryAfter int, env ErrorResponse) {
+	env.Code = spec.Code
+	if retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		env.RetryAfterS = retryAfter
 	}
 	if spec.Fault {
 		markWriteFault(w)
 	}
 	WriteErrorEnvelope(w, r, spec.Status, env)
-	return true, spec.Fault
+}
+
+// WriteKind answers kind k with text: kindTable's status, code and
+// Retry-After (#3226). For an answer that has no error to render — a
+// deployment setting (errkind.FederationNotConfigured), the router's own
+// refusals — where WriteKindError renders one.
+func WriteKind(w http.ResponseWriter, r *http.Request, k errkind.Kind, text string) {
+	spec := kindSpecOf(k)
+	writeKindAnswer(w, r, spec, spec.RetryAfterS, ErrorResponse{Error: text})
 }
 
 // retryAfterS is spec's Retry-After in seconds, or err's own wait when it

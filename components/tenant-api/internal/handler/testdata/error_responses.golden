@@ -1253,6 +1253,12 @@ forge_circuit_open => 503 FORGE_UNAVAILABLE retryable retry_after_s=5
 forge_create_failed => 503 UPSTREAM_ERROR retryable retry_after_s=5
 federation_token_limit => 409 CONFLICT
 federation_mint_rate_limited => 429 RATE_LIMITED retryable retry_after_s=60
+federation_not_configured => 503 UPSTREAM_ERROR
+route_not_found => 404 NOT_FOUND client_error
+method_not_allowed => 405 BAD_REQUEST client_error
+request_timeout => 504 UPSTREAM_ERROR
+stream_unsupported => 500 INTERNAL_ERROR fault
+server_shutting_down => 503 UPSTREAM_ERROR retryable retry_after_s=1
 internal => 500 INTERNAL_ERROR fault
 
 ### kindRules precedence: each rule's sample wrapped around the next rule's sample
@@ -1299,3 +1305,5 @@ federation_token_limit > federation_mint_rate_limited => federation_token_limit
 federation_mint_rate_limited > write_outcome_unknown => federation_mint_rate_limited
 write_outcome_unknown > write_cancelled => write_outcome_unknown
 write_cancelled > no_changes => write_cancelled
+no_changes > stream_unsupported => no_changes
+stream_unsupported > server_shutting_down => stream_unsupported

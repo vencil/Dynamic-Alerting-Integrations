@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -166,7 +167,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 			// or overloaded write plane surfaces as 503 so the client retries
 			// rather than getting a token with a bogus id.
 			if d.Accounts == nil {
-				handler.WriteJSONError(w, r, http.StatusServiceUnavailable,
+				handler.WriteKind(w, r, errkind.FederationNotConfigured,
 					"logs federation is not configured on this server")
 				return
 			}

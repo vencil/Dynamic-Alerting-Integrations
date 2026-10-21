@@ -517,12 +517,18 @@ const msgInternal = "internal error; the server log has the details under this r
 // Adding one here is a decision that the text can never carry server state.
 var publicInternalMessages = map[string]bool{
 	msgInternal:                true,
+	msgStreamingUnsupported:    true,
 	msgTenantTreeScan:          true,
 	msgRootPlatformRead:        true,
 	msgEffectiveUnresolved:     true,
 	msgCustomAlertsUnparseable: true,
 	msgWriteFailed:             true,
 }
+
+// msgStreamingUnsupported is ws.ErrStreamingUnsupported's text, the 500 of
+// an event stream the response writer cannot flush (#3226): it names the
+// failed operation and nothing of the server.
+const msgStreamingUnsupported = "streaming not supported"
 
 // msgWriteFailed is the client-facing text of a tenant write that failed for a
 // reason that is not the client's (#1700); the request_id finds the full text.

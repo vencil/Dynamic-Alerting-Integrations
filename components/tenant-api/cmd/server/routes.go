@@ -47,7 +47,7 @@ type routerDeps struct {
 	RequestTimeout time.Duration
 }
 
-// defaultRequestTimeout is the per-request deadline (chi middleware.Timeout).
+// defaultRequestTimeout is the per-request deadline (handler.Timeout).
 const defaultRequestTimeout = 30 * time.Second
 
 // eventsPath is the SSE stream, the one long-lived route. Registered below as
@@ -58,10 +58,10 @@ const (
 	eventsPath  = apiV1Prefix + eventsRoute
 )
 
-// timeoutExceptStream is chi's middleware.Timeout for every request except
+// timeoutExceptStream is the request deadline (handler.Timeout, chi's
+// middleware.Timeout with an envelope 504, #3226) for every request except
 // GET eventsPath. Under the timeout a stream is cut at the deadline (its
-// context is cancelled, the handler returns, and chi then writes a 504 onto
-// the open stream). The stream is bounded instead by the hub: a heartbeat and
+// context is cancelled and the handler returns). The stream is bounded instead by the hub: a heartbeat and
 // a per-write deadline drop a dead client, and an optional max lifetime ends
 // any connection. It sits where middleware.Timeout sat, so every other request
 // keeps the same chain in the same order.
@@ -70,7 +70,7 @@ const (
 // the exemption applies exactly to the requests chi hands the events handler.
 func timeoutExceptStream(d time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		timed := middleware.Timeout(d)(next)
+		timed := handler.Timeout(d)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.RawPath
 			if path == "" {
@@ -131,13 +131,22 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	// trusted L7 proxy in front, so there is no legitimate reason to trust
 	// those headers for the peer address; keep the true TCP peer.
 	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
-	r.Use(middleware.Recoverer)
+	// #3226: chi's Recoverer and Timeout answer a panic and the deadline with
+	// a bare status; these answer in the error envelope (handler/http_exits.go).
+	r.Use(handler.Recoverer)
 	timeout := rd.RequestTimeout
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
 	}
 	r.Use(timeoutExceptStream(timeout)) // every route but the SSE stream
 	r.Use(handler.MetricsMiddleware)
+
+	// #3226: no route / no such method answer in the error envelope too
+	// (chi's defaults: a plain-text 404, an empty 405). The 404 handler is
+	// set before any route, so every sub-router inherits it; the 405 stays
+	// chi's (it sets the Allow header) and is rewritten on its way out.
+	r.Use(handler.MethodNotAllowedEnvelope)
+	r.NotFound(handler.NotFound)
 
 	// dev-auth-bypass (ADR-022): mounted only when --dev-bypass-auth is set
 	// (Layer 1 = default off). Placed before the rate limiter so the injected

@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -519,5 +520,40 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ch := h.Subscribe(allowAll)
 		h.Unsubscribe(ch)
+	}
+}
+
+// noFlushWriter is a ResponseWriter that is not an http.Flusher.
+type noFlushWriter struct{ h http.Header }
+
+func (w *noFlushWriter) Header() http.Header       { return w.h }
+func (*noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (*noFlushWriter) WriteHeader(int)             {}
+
+// #3226: HandlerRefusing hands each refusal to refuse, as its sentinel, with
+// nothing of the stream staged (no text/event-stream Content-Type); Handler
+// keeps the plain-text answers.
+func TestHandlerRefusing_HandsTheRefusalOver(t *testing.T) {
+	t.Parallel()
+	var got []error
+	refuse := func(w http.ResponseWriter, _ *http.Request, err error) {
+		got = append(got, err)
+		if ct := w.Header().Get("Content-Type"); ct != "" {
+			t.Errorf("refusal of %v: Content-Type %q already staged", err, ct)
+		}
+	}
+
+	h := NewHub()
+	h.HandlerRefusing(allowAllFor, refuse)(&noFlushWriter{h: http.Header{}}, httptest.NewRequest("GET", "/api/v1/events", nil))
+	h.Shutdown(0)
+	h.HandlerRefusing(allowAllFor, refuse)(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/v1/events", nil))
+	if len(got) != 2 || !errors.Is(got[0], ErrStreamingUnsupported) || !errors.Is(got[1], ErrShuttingDown) {
+		t.Errorf("refusals = %v, want [ErrStreamingUnsupported ErrShuttingDown]", got)
+	}
+
+	w := httptest.NewRecorder()
+	h.Handler(allowAllFor)(w, httptest.NewRequest("GET", "/api/v1/events", nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "server shutting down") {
+		t.Errorf("Handler after shutdown: %d %q, want the plain 503", w.Code, w.Body.String())
 	}
 }
