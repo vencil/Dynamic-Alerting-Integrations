@@ -14,6 +14,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,5 +138,64 @@ func TestPutGroup_UnrecognisedFileShapeIsRefusedNotRebuilt(t *testing.T) {
 	}
 	if strings.Contains(string(after), "g-x") {
 		t.Error("the new entry landed on disk despite the refusal")
+	}
+}
+
+// #3206 (ADR-036 §7 step 7): a groups / views record parse-tree refuses is a
+// parse error of the record, not an empty base — yaml.v3 alone reads each of
+// these (the first document; a `!!binary` or `!` label as a string). The PUT
+// answers what writeConfigFileError answers every parse error of the record,
+// 500 CONFIG_DECODE, and the record is not rebuilt.
+func TestPutGroup_ParseTreeRefusedRecordIsNotRebuilt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, record, kind string }{
+		{"second document", "groups:\n  g-a:\n    label: a\n---\ngroups:\n  g-b:\n    label: b\n", "multiple_documents"},
+		{"trailing empty document", "groups:\n  g-a:\n    label: a\n---\n", "multiple_documents"},
+		{"!!binary label", "groups:\n  g-a:\n    label: !!binary YQ==\n", "tag_not_allowed"},
+		{"non-specific tag", "groups:\n  g-a:\n    label: ! \"a\"\n", "non_specific_tag"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			for _, parse := range []func([]byte) error{
+				func(b []byte) error { _, err := parseGroupsFile(b); return err },
+				func(b []byte) error {
+					_, err := parseViewsFile([]byte(strings.ReplaceAll(string(b), "groups:", "views:")))
+					return err
+				},
+			} {
+				var pe *configFileParseError
+				if err := parse([]byte(c.record)); !errors.As(err, &pe) || !strings.Contains(err.Error(), "kind "+c.kind) {
+					t.Fatalf("parse = %v, want a configFileParseError of kind %s", err, c.kind)
+				}
+			}
+
+			configDir := setupConfigDir(t, nil)
+			initGitRepo(t, configDir)
+			path := filepath.Join(configDir, "_groups.yaml")
+			if err := os.WriteFile(path, []byte(c.record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			rbacMgr := newRBACManager(t, partialWriterRBAC)
+			d := &Deps{State: mustDirState(configDir),
+				Writer: gitopstest.NewWriter(configDir, configDir),
+				Groups: groups.NewDirManager(configDir),
+				RBAC:   rbacMgr,
+			}
+			h := wrapWithRBACMiddleware(PutGroup(d), rbacMgr, rbac.PermRead, nil)
+			body, _ := json.Marshal(PutGroupRequest{Label: "gx", Members: []string{"t-owned"}})
+			req := newRequestWithChiParam("PUT", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(body))
+			req.Header.Set("X-Forwarded-Email", "op@example.com")
+			req.Header.Set("X-Forwarded-Groups", "readers,owners")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) ||
+				!strings.Contains(w.Body.String(), "kind "+c.kind) {
+				t.Fatalf("status %d body %s; want 500 %s naming kind %s", w.Code, w.Body.String(), CodeConfigDecode, c.kind)
+			}
+			if after, _ := os.ReadFile(path); string(after) != c.record {
+				t.Errorf("the refused write rewrote the record:\n%s", after)
+			}
+		})
 	}
 }

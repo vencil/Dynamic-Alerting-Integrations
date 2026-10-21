@@ -1,6 +1,7 @@
 package groups
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -220,5 +221,62 @@ func TestManager_Reload(t *testing.T) {
 	}
 	if list[0].ID != "new-group" {
 		t.Errorf("group ID = %q, want %q", list[0].ID, "new-group")
+	}
+}
+
+// parseTreeRefused are groups records yaml.v3 alone reads (the first document;
+// a `!!binary` or `!` value as a string) and parse-tree refuses (ADR-036 §7
+// step 7, #3206): ParseConfig errors on each, and a reload onto one keeps the
+// last good snapshot — never the empty config, never the first document.
+var parseTreeRefused = []struct{ name, yaml, kind string }{
+	{"second document", "groups:\n  g1:\n    label: one\n---\ngroups:\n  g2:\n    label: two\n", "multiple_documents"},
+	{"trailing empty document", "groups:\n  g1:\n    label: one\n---\n", "multiple_documents"},
+	{"!!binary value", "groups:\n  g1:\n    label: !!binary b25l\n", "tag_not_allowed"},
+	{"non-specific tag", "groups:\n  g1:\n    label: ! \"one\"\n", "non_specific_tag"},
+}
+
+func TestParseConfig_ParseTreeRefusal(t *testing.T) {
+	t.Parallel()
+	for _, c := range parseTreeRefused {
+		if cfg, err := ParseConfig([]byte(c.yaml)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+			t.Errorf("%s: ParseConfig = %v, %v; want an error of kind %s", c.name, cfg, err, c.kind)
+		}
+	}
+}
+
+func TestManager_Reload_ParseTreeRefusalKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	for _, c := range parseTreeRefused {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir, _ := testutil.MkTempYAML(t, "_groups.yaml", "groups:\n  g0:\n    label: zero\n")
+			mgr := NewDirManager(dir)
+			if _, ok := mgr.GetGroup("g0"); !ok {
+				t.Fatal("precondition: g0 loaded")
+			}
+			testutil.WriteYAML(t, dir, "_groups.yaml", c.yaml)
+			if err := mgr.Reload(); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+				t.Fatalf("Reload = %v, want an error of kind %s", err, c.kind)
+			}
+			if _, ok := mgr.GetGroup("g0"); !ok {
+				t.Error("after the refused reload g0 is gone; want the last good snapshot")
+			}
+			if _, ok := mgr.GetGroup("g1"); ok {
+				t.Error("after the refused reload g1 of the refused record is visible")
+			}
+		})
+	}
+}
+
+// A record parse-tree refuses at startup is the initial-load failure it
+// always was for this manager: logged, and the manager starts from the empty
+// config — not from the refused record's first document.
+func TestNewManager_ParseTreeRefusalStartsEmpty(t *testing.T) {
+	t.Parallel()
+	for _, c := range parseTreeRefused {
+		dir, _ := testutil.MkTempYAML(t, "_groups.yaml", c.yaml)
+		if _, ok := NewDirManager(dir).GetGroup("g1"); ok {
+			t.Errorf("%s: g1 of the refused record was loaded", c.name)
+		}
 	}
 }

@@ -153,6 +153,12 @@ func scopeBlockOnDisk(configDir, tenantID string) map[string]any {
 		if problem != confd.ProblemNone {
 			slog.Warn("batch scope check: tenant file unreadable, judging the patch alone",
 				"tenant", tenantID, "problem", problem)
+		} else if err := confd.Judge(data); err != nil {
+			// #3206: a file parse-tree refuses is not read either — its first
+			// document is not the tenant's metadata (nothing serves it).
+			slog.Warn("batch scope check: tenant file refused by parse-tree, judging the patch alone",
+				"tenant", tenantID, "error", err)
+			data = nil
 		}
 		for k, v := range tenantBlockOf(data, tenantID) {
 			block[k] = v

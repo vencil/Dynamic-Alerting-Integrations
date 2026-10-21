@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/customalerts"
 )
 
 // #2405: the eol-expansion guard reads the file a write replaces to learn how
@@ -104,21 +106,35 @@ func TestEolGuard_UnparseableBaseNeedsPlatformWrite(t *testing.T) {
 	}
 }
 
-// Control for the line between "cannot parse" and "cannot be loaded as a
-// tenant config": a file that is invalid_config only because it also
-// declares a non-UTF-8 tenant id still parses for the eol guard, so its
-// baseline is the ACTUAL usage — keeping the existing eol alert passes,
-// growing it is refused against a baseline of one, not zero.
-func TestEolGuard_NonUTF8SiblingBaseKeepsActualBaseline(t *testing.T) {
+// A base parse-tree refuses is a base that does not parse (#3206, ADR-036
+// §7 step 7), even where Extract's one-document decode would read its first
+// document: a declared non-UTF-8 sibling id (`!!binary`, which used to keep
+// the ACTUAL baseline here), a trailing `---`, a `!` tag. Without the
+// platform-write bit the write is refused; with it the baseline is zero.
+func TestEolGuard_ParseTreeRefusedBaseIsUnparseable(t *testing.T) {
 	t.Parallel()
-	base := []byte("tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
-		strings.TrimPrefix(eolBody("a"), "tenants:\n"))
-	if errs := eolGuardErrs(base, nil, eolBody("a-renamed"), eolTestTenant, false, fakeEolViolations); len(errs) > 0 {
-		t.Errorf("keeping the one existing eol alert over a non-UTF-8 sibling base refused: %q", errs)
-	}
-	errs := eolGuardErrs(base, nil, eolBody("a", "b"), eolTestTenant, false, fakeEolViolations)
-	if len(errs) != 1 || !strings.Contains(errs[0], "have 1, write requests 2") {
-		t.Errorf("growing eol usage over a non-UTF-8 sibling base: errs = %q, want one violation against have 1", errs)
+	for _, c := range []struct{ name, base string }{
+		{"binary sibling id", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
+			strings.TrimPrefix(eolBody("a"), "tenants:\n")},
+		{"trailing empty document", eolBody("a") + "---\n"},
+		{"second document", eolBody("a") + "---\ntenants: {}\n"},
+		{"non-specific tag", eolBody("a") + "x: ! \"y\"\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			base := []byte(c.base)
+			if _, err := customalerts.Extract(c.base, eolTestTenant); err != nil {
+				t.Fatalf("Extract refuses this base itself (%v): the row tests nothing parse-tree adds", err)
+			}
+			errs := eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, false, fakeEolViolations)
+			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+				t.Errorf("without the bit: errs = %q, want the platform-write refusal", errs)
+			}
+			errs = eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, true, fakeEolViolations)
+			if len(errs) != 1 || !strings.Contains(errs[0], eolTestRecipe) {
+				t.Errorf("with the bit, keeping the one eol alert: errs = %q, want a violation against a zero baseline", errs)
+			}
+		})
 	}
 }
 

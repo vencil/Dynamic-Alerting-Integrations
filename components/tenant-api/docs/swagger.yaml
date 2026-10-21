@@ -2269,12 +2269,18 @@ paths:
             is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
             a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
             with a letter or digit (ADR-035; the route generator refuses a tree that
-            declares any other id; nothing written). Also 400 when the body is not
-            API-shaped (#3064): it declares a tenant besides {id}, several documents,
-            or an anchor, alias, merge key or tagged key at the top level or directly
-            under tenants: (nothing written). Also 400 when the current tenant file''s
-            tenants: block cannot be decoded for the end-of-life check and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            declares any other id; nothing written). Also 400 when parse-tree refuses
+            the body, the error naming its kind (#3206, ADR-036): more than one YAML
+            document (an empty trailing --- included), a tag outside !!str !!int !!float
+            !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific
+            ! tags included), a null or non-scalar key, a repeated key, a byte order
+            mark past the start, or a syntax or decode error (nothing written). Also
+            400 when the body is not API-shaped (#3064): it declares a tenant besides
+            {id}, several documents, or an anchor, alias, merge key or tagged key
+            at the top level or directly under tenants: (nothing written). Also 400
+            when the current tenant file''s tenants: block cannot be decoded for the
+            end-of-life check and the caller lacks write permission on all tenants
+            (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":

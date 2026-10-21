@@ -187,8 +187,9 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 }
 
 func kindList() string {
-	names := make([]string, len(parsetree.Kinds))
-	for i, k := range parsetree.Kinds {
+	kinds := parsetree.Kinds()
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
 		names[i] = string(k)
 	}
 	return strings.Join(names, ", ")

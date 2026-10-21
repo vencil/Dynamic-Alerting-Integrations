@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 	"gopkg.in/yaml.v3"
 )
 
@@ -235,68 +236,108 @@ func TestWritePRRefusesContentAfterTheFirstDocument(t *testing.T) {
 	}
 }
 
-// An empty trailer is not a smuggling channel, and refusing it would reject
-// bodies a YAML emitter may legitimately produce. Content after the first
-// document is refused and its COUNT is reported, so a caller can find it.
-// Invalid YAML is refused by this gate itself (#1721): the struct Unmarshal in
-// validateShape stops after the first document, so it cannot own the rest.
-func TestYAMLDocumentShapeErrors(t *testing.T) {
+// TestValidateShape_ParseTreeVerdict: the body gate is parse-tree's verdict
+// (ADR-036 §7 step 7, #3206), not a shape rule of tenant-api's own. want is
+// the parse-tree kind the refusal must name ("" = accepted; "!" = refused by
+// a later check of validateShape, not by parse-tree). The rows that the
+// removed tenant-api gate let through and parse-tree refuses are marked
+// CHANGED.
+func TestValidateShape_ParseTreeVerdict(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
-		// want is a substring the single error must contain; "" = accepted.
 		want string
 	}{
 		{"single document", ownOnly, ""},
 		{"leading marker", "---\n" + ownOnly, ""},
-		{"trailing marker, no content", ownOnly + "---\n", ""},
 		{"trailing end-of-document marker", ownOnly + "...\n", ""},
-		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", ""},
-		{"second document with a tenant", smuggledDoc2, "YAML has 1 document(s) with content after the first"},
-		{"second document with a root key", rootKeyDoc2, "YAML has 1 document(s) with content after the first"},
-		{"two extra documents", smuggledDoc2 + "---\ndefaults:\n  cpu_critical: 1\n", "YAML has 2 document(s) with content after the first"},
-		{"invalid YAML in the first document", "{{not yaml", "invalid YAML in document 1"},
-		{"invalid YAML after an end-of-document marker",
-			ownOnly + "...\ntenants:\n  other:\n    _silent_mode: \"true\"\n", "invalid YAML in document 2"},
-		{"bad tag under an unknown root key",
-			ownOnly + "zzz: !!int \"abc\"\n", "invalid YAML in document 1"},
-		{"root merge key", "<<: {tenants: {other: {}}}\n" + ownOnly, "merge key (<<) at the root"},
 		{"merge key inside a tenant section", "tenants:\n  db-a:\n    <<: {_silent_mode: \"warning\"}\n", ""},
-		{"null root key", ownOnly + "~: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
-		{"integer root key", ownOnly + "1: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
-		{"complex root key", ownOnly + "? [a, b]\n: {tenants: {other: {}}}\n", "YAML root keys must be plain strings"},
-		// A string root key other than `tenants` is NOT this gate's to refuse:
-		// CheckTenantRootKeys owns it and names the key.
-		{"unknown string root key is left to CheckTenantRootKeys", ownOnly + "defaults: {}\n", ""},
-		// DELIBERATE BEHAVIOUR CHANGE (#1721): a value in the body's own tenant
-		// section whose explicit tag cannot be constructed used to be accepted
-		// (the struct decode reads it as a string) and committed verbatim; the
-		// generic decode now refuses it. The exporter reads those bytes, so a
-		// body that is not constructable YAML is not written.
+		// CHANGED: an empty trailing document used to be legal here, while
+		// parse-tree (and so the exporter since step 6) refuses the file.
+		{"trailing marker, no content", ownOnly + "---\n", "multiple_documents"},
+		{"trailing comment-only document", ownOnly + "---\n# nothing here\n", "multiple_documents"},
+		{"trailing null document", ownOnly + "---\n~\n", "multiple_documents"},
+		{"second document with a tenant", smuggledDoc2, "multiple_documents"},
+		{"second document with a root key", rootKeyDoc2, "multiple_documents"},
+		{"invalid YAML in the first document", "{{not yaml", "syntax_error"},
+		{"invalid YAML after an end-of-document marker",
+			ownOnly + "...\ntenants:\n  other:\n    _silent_mode: \"true\"\n", "syntax_error"},
+		{"bad tag under an unknown root key", ownOnly + "zzz: !!int \"abc\"\n", "decode_error"},
+		{"null root key", ownOnly + "~: {tenants: {other: {}}}\n", "null_key"},
+		{"complex root key", ownOnly + "? [a, b]\n: {tenants: {other: {}}}\n", "non_scalar_key"},
 		{"unconstructable !!int value in the own section",
-			"tenants:\n  db-a:\n    _silent_mode: !!int \"abc\"\n", "invalid YAML in document 1"},
+			"tenants:\n  db-a:\n    _silent_mode: !!int \"abc\"\n", "decode_error"},
 		{"unconstructable !!bool value in the own section",
-			"tenants:\n  db-a:\n    _silent_mode: !!bool \"warning\"\n", "invalid YAML in document 1"},
+			"tenants:\n  db-a:\n    _silent_mode: !!bool \"warning\"\n", "decode_error"},
+		// CHANGED: tags the struct and generic decodes read as strings.
+		{"!!binary value", "tenants:\n  db-a:\n    _silent_mode: !!binary d2FybmluZw==\n", "tag_not_allowed"},
+		{"!!set value", "tenants:\n  db-a:\n    _metadata: !!set {a: null}\n", "tag_not_allowed"},
+		{"local tag", "tenants:\n  db-a:\n    _silent_mode: !foo warning\n", "tag_not_allowed"},
+		{"non-specific tag", "tenants:\n  db-a:\n    _silent_mode: ! \"warning\"\n", "non_specific_tag"},
+		{"byte order mark past the start", "tenants:\n  db-a:\n    _silent_mode: \"warn\ufeffing\"\n", "bom_not_at_start"},
+		{"repeated key", "tenants:\n  db-a:\n    _silent_mode: warning\n    _silent_mode: critical\n", "duplicate_key"},
+		{"top level not a mapping", "- tenants\n", "top_level_not_mapping"},
+		// Read by parse-tree; refused by the checks after it.
+		{"root merge key", "<<: {tenants: {other: {}}}\n" + ownOnly, "!"},
+		{"integer root key", ownOnly + "1: {tenants: {other: {}}}\n", "!"},
+		{"unknown string root key", ownOnly + "defaults: {}\n", "!"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := yamlDocumentShapeErrors(tc.body)
-			if tc.want == "" {
+			_, errs := validateShape("db-a", tc.body)
+			switch tc.want {
+			case "":
 				if len(errs) > 0 {
 					t.Fatalf("legal body refused: %v", errs)
 				}
-				return
-			}
-			if len(errs) != 1 || !strings.Contains(errs[0], tc.want) {
-				t.Errorf("got %v, want one error containing %q", errs, tc.want)
+			case "!":
+				if len(errs) == 0 {
+					t.Fatal("body accepted; want a refusal from a check after parse-tree")
+				}
+				if strings.Contains(errs[0], "parse-tree refuses") {
+					t.Fatalf("parse-tree refused a body it reads: %v", errs)
+				}
+			default:
+				if len(errs) != 1 || !strings.Contains(errs[0], "parse-tree refuses it (kind "+tc.want) {
+					t.Fatalf("got %v, want one parse-tree refusal of kind %s", errs, tc.want)
+				}
+				if bad := parsetree.Judge([]byte(tc.body)); bad == nil || string(bad.Kind) != tc.want {
+					t.Fatalf("parse-tree's own verdict is %v, the table says %s", bad, tc.want)
+				}
 			}
 		})
 	}
 }
 
-func TestWriteStillAcceptsAnEmptyTrailingDocument(t *testing.T) {
+// TestValidateShape_RefusalNamesNoValue: the refusal names the kind and the
+// line, never parse-tree's message — that quotes what it refuses, and on a
+// batch patch the bytes are a file other tenants share (#2903).
+func TestValidateShape_RefusalNamesNoValue(t *testing.T) {
+	body := "tenants:\n  db-a:\n    _silent_mode: warning\n  other:\n    secret_key_xyz: 1\n    secret_key_xyz: 2\n"
+	_, errs := validateShape("db-a", body)
+	if len(errs) != 1 || !strings.Contains(errs[0], "kind duplicate_key, line 6") {
+		t.Fatalf("got %v, want a duplicate_key refusal naming line 6", errs)
+	}
+	if strings.Contains(errs[0], "secret_key_xyz") {
+		t.Fatalf("the refusal quotes another tenant's key: %v", errs)
+	}
+}
+
+// An empty trailing document was legal until #3206: tenant-api's own gate
+// counted content, not documents. parse-tree refuses the file (and so the
+// exporter, since ADR-036 step 6, serves none of it), so the write does too —
+// at the call site that reaches git, leaving disk and HEAD untouched.
+func TestWriteRefusesAnEmptyTrailingDocument(t *testing.T) {
 	dir := initRepoOnMain(t)
-	if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly+"---\n"); err != nil {
-		t.Fatalf("gate rejected an empty trailing document: %v", err)
+	before := gitHead(t, dir)
+	_, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly+"---\n")
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "kind multiple_documents") {
+		t.Fatalf("want a multiple_documents ErrValidation, got %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "db-a.yaml")); !os.IsNotExist(serr) {
+		t.Errorf("refused write reached disk")
+	}
+	if after := gitHead(t, dir); after != before {
+		t.Errorf("refused write moved HEAD: %s -> %s", before, after)
 	}
 }
 
