@@ -4,18 +4,18 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
 // TestStatErrorFileMissingOfEachErrno: the walk's record of a failed stat is
@@ -109,75 +109,6 @@ func TestScanRecordsWhetherAStatFoundNothing(t *testing.T) {
 	}
 }
 
-// Running TestRoleUnderRealModes where a mode bit really denies.
-const (
-	// roleUnprivChildEnv marks the re-executed test binary (run as nobody).
-	roleUnprivChildEnv = "VIBE_ROLE_UNPRIV_CHILD"
-	// requireUnprivEnv, when set (CI), makes a missing setup a failure
-	// rather than a skip — as VIBE_REQUIRE_HELM does for the helm-gated
-	// tests: without it, a uid-0 run would leave EACCES unmeasured.
-	requireUnprivEnv = "VIBE_REQUIRE_UNPRIVILEGED_FS"
-)
-
-// skipOrFail skips, or fails when requireUnprivEnv is set.
-func skipOrFail(t *testing.T, why string) {
-	t.Helper()
-	if os.Getenv(requireUnprivEnv) != "" {
-		t.Fatalf("%s is set, but %s: the permission cases of the role verdict would go unmeasured", requireUnprivEnv, why)
-	}
-	t.Skip(why)
-}
-
-// rerunAsNobody re-executes this test binary, running only test `name`, as
-// uid/gid 65534 (setpriv), and fails when that run does not pass. The binary
-// is copied into a 0755 directory under /var/tmp: the go build directory is
-// 0700 and nobody could not run it from there.
-func rerunAsNobody(t *testing.T, name string) {
-	t.Helper()
-	setpriv, err := exec.LookPath("setpriv")
-	if err != nil {
-		skipOrFail(t, "running as uid 0 and `setpriv` is not installed")
-		return
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		skipOrFail(t, fmt.Sprintf("cannot find the test binary: %v", err))
-		return
-	}
-	box, err := os.MkdirTemp("/var/tmp", "vibe-role-unpriv-")
-	if err != nil {
-		skipOrFail(t, fmt.Sprintf("cannot make a directory under /var/tmp: %v", err))
-		return
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(box) })
-	tmp := filepath.Join(box, "tmp")
-	bin := filepath.Join(box, "config.test")
-	src, err := os.ReadFile(exe) // #nosec G304 -- this test's own binary
-	if err == nil {
-		err = os.WriteFile(bin, src, 0o755) // #nosec G306 -- nobody must run it
-	}
-	if err == nil {
-		err = os.Mkdir(tmp, 0o777)
-	}
-	if err == nil {
-		err = os.Chmod(tmp, 0o1777)
-	}
-	if err == nil {
-		err = os.Chmod(box, 0o755)
-	}
-	if err != nil {
-		t.Fatalf("cannot prepare the unprivileged run: %v", err)
-	}
-	cmd := exec.Command(setpriv, "--reuid=65534", "--regid=65534", "--clear-groups", // #nosec G204 -- fixed argv
-		bin, "-test.run=^"+name+"$", "-test.count=1", "-test.v")
-	cmd.Dir = tmp
-	cmd.Env = append(os.Environ(), roleUnprivChildEnv+"=1", "TMPDIR="+tmp, "HOME="+tmp)
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "--- PASS: "+name) {
-		t.Fatalf("%s as uid 65534: %v\n%s", name, err, out)
-	}
-}
-
 // TestRoleUnderRealModes measures the whitelist where the permission bits
 // really deny (as uid 65534 when this process is uid 0): a link into a
 // directory nobody may search (stat EACCES), an entry of a directory that
@@ -187,11 +118,7 @@ func rerunAsNobody(t *testing.T, name string) {
 // control, is not_a_file. A walk that took any stat failure for "no file"
 // would let those tenant files vanish (#3206).
 func TestRoleUnderRealModes(t *testing.T) {
-	if os.Geteuid() == 0 {
-		if os.Getenv(roleUnprivChildEnv) != "" {
-			t.Fatal("the re-executed run is still uid 0")
-		}
-		rerunAsNobody(t, "TestRoleUnderRealModes")
+	if !testutil.RunUnprivileged(t, "TestRoleUnderRealModes") {
 		return
 	}
 	root := t.TempDir()
@@ -203,15 +130,17 @@ func TestRoleUnderRealModes(t *testing.T) {
 			t.Fatalf("cannot build the fixture: %v", err)
 		}
 	}
-	for _, d := range []string{conf, locked, filepath.Join(conf, "sealed"), filepath.Join(conf, "noexec")} {
+	for _, d := range []string{conf, locked, filepath.Join(conf, "sealed"), filepath.Join(conf, "noexec"),
+		filepath.Join(conf, "unlist.yaml")} {
 		must(os.Mkdir(d, 0o755))
 	}
 	for p, body := range map[string]string{
-		filepath.Join(conf, "ok.yaml"):          "tenants: {ok: {}}\n",
-		filepath.Join(conf, "zero.yaml"):        "tenants: {zero: {}}\n",
-		filepath.Join(locked, "real.yaml"):      "tenants: {b: {}}\n",
-		filepath.Join(conf, "sealed", "s.yaml"): "tenants: {s: {}}\n",
-		filepath.Join(conf, "noexec", "t.yaml"): "tenants: {t: {}}\n",
+		filepath.Join(conf, "ok.yaml"):               "tenants: {ok: {}}\n",
+		filepath.Join(conf, "zero.yaml"):             "tenants: {zero: {}}\n",
+		filepath.Join(locked, "real.yaml"):           "tenants: {b: {}}\n",
+		filepath.Join(conf, "sealed", "s.yaml"):      "tenants: {s: {}}\n",
+		filepath.Join(conf, "noexec", "t.yaml"):      "tenants: {t: {}}\n",
+		filepath.Join(conf, "unlist.yaml", "u.yaml"): "tenants: {u: {}}\n",
 	} {
 		must(os.WriteFile(p, []byte(body), 0o644))
 	}
@@ -220,6 +149,9 @@ func TestRoleUnderRealModes(t *testing.T) {
 	modes := map[string]os.FileMode{
 		filepath.Join(conf, "zero.yaml"): 0, locked: 0, filepath.Join(conf, "sealed"): 0,
 		filepath.Join(conf, "noexec"): 0o444, // listable, not searchable
+		// A config-named directory that cannot be listed: one record, the
+		// walk error, not a NotFile beside it.
+		filepath.Join(conf, "unlist.yaml"): 0,
 	}
 	t.Cleanup(func() {
 		for p := range modes {
@@ -243,7 +175,23 @@ func TestRoleUnderRealModes(t *testing.T) {
 		}
 		want := map[string]Role{
 			"b.yaml": RoleConfig, "noexec/t.yaml": RoleConfig, "zero.yaml": RoleConfig,
-			"sealed": RoleUnlistableDir, "gone.yaml": RoleNotAFile,
+			"sealed": RoleUnlistableDir, "gone.yaml": RoleNotAFile, "unlist.yaml": RoleUnlistableDir,
+		}
+		// One record per path, across every list the walk keeps.
+		seen := map[string]int{}
+		for _, u := range scan.Unreadable {
+			seen[u.RelKey]++
+		}
+		for _, nf := range scan.NotFiles {
+			seen[nf.RelKey]++
+		}
+		for rel := range scan.Files {
+			seen[rel]++
+		}
+		for rel, n := range seen {
+			if n != 1 {
+				t.Errorf("%s: %d records (unreadable %+v, not files %+v)", rel, n, scan.Unreadable, scan.NotFiles)
+			}
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("roles\n got  %v\n want %v (unreadable %+v)", got, want, scan.Unreadable)

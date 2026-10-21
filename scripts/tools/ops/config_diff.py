@@ -173,8 +173,8 @@ SETTING_NOT_COMPARED = "not_compared"
 SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
                                 SETTING_NOT_COMPARED})
 
-_EMPTY_TREE = {"mode": "tree", "entries": [], "files": {}, "defaults_carriers": {},
-               "rendered_by": {}}
+_EMPTY_TREE = {"da_guard_version": None, "mode": "tree", "entries": [], "files": {},
+               "defaults_carriers": {}, "rendered_by": {}}
 
 
 def _canonical(node, *, by_text=False):

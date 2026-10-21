@@ -398,6 +398,8 @@ def _entry_set(i, **kv):
     _without("rendered_by"),
     _without("entries"),
     _without("defaults_carriers"),
+    _without("da_guard_version"),
+    _set(da_guard_version=1),
     _set(mode="list"),
     _set(entries=[_entry("t.yaml"), _entry("t.yaml")]),          # a path twice
     _entry_without("role"),                                       # a da-guard before roles
@@ -422,6 +424,23 @@ def test_an_older_da_guard_s_document_is_named_as_such(schema) -> None:
     raw = json.dumps({**_doc(), "schema": schema}).encode()
     with pytest.raises(lpt.ParseTreeError, match="older than this tool"):
         lpt.read_document(raw)
+
+
+def test_a_document_without_a_mode_names_an_older_da_guard() -> None:
+    doc = _doc()
+    del doc["mode"]
+    with pytest.raises(lpt.ParseTreeError, match="no 'mode' .*older than this tool"):
+        lpt.read_document(json.dumps(doc).encode())
+
+
+def test_content_on_an_entry_that_is_no_config_file_is_refused() -> None:
+    """Tree mode reads only config files: content beside a `not_a_file`
+    entry is a document wrong somewhere, refused whole."""
+    doc = _doc()
+    doc["entries"][2]["problem"] = None
+    doc["files"]["gone.yaml"] = {}
+    with pytest.raises(lpt.ParseTreeError, match="content but role 'not_a_file'"):
+        lpt.tree_of(doc)
 
 
 def test_an_entry_without_a_field_names_an_older_da_guard() -> None:

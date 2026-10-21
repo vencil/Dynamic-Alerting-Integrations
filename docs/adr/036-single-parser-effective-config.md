@@ -141,9 +141,9 @@ policy 檔的完整清單見 [#2759](https://github.com/vencil/Dynamic-Alerting-
 
 da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一份 JSON。另有單檔模式，用於寫入前的讀回確認（見本節「寫 conf.d 檔」）；只列檔模式（`--list-only`），不讀任何檔的內容；名稱模式（`--list-only --names`），只依名稱分類不在磁碟上的檔名（例如 ConfigMap 的鍵）。四種模式輸出同一種文件。
 
-**每個路徑一筆**：文件的 `entries` 對走訪記下的每個路徑各有一筆，整棵樹模式與只列檔模式由同一段程式產生，所以兩者對同一棵樹的每一筆逐欄相同，差別只在讀內容才發現得到的問題。每一筆寫出全部欄位，沒有值的是 `null`：
+**每個路徑一筆**：文件的 `entries` 對走訪記下的每個路徑各有一筆（走訪對一個路徑只留一筆紀錄：檔名像設定檔、但列不出內容的目錄是 `unlistable_dir`，不會另外再記成 `not_a_file`），整棵樹模式與只列檔模式由同一段程式產生，所以兩者對同一棵樹的每一筆逐欄相同，差別只在讀內容才發現得到的問題。每一筆寫出全部欄位，沒有值的是 `null`：
 
-- `path`、`depth`（根目錄到它之間的目錄層數）、`class`（名稱決定的分類：`tenant`、`defaults`、`platform`，或 `directory`）、`tenant_named`（檔名帶的租戶 id；exporter 服務的租戶仍取自檔內 `tenants:` 的鍵）、`defaults_document`（檔名以 `_defaults` 開頭的平台預設文件，以 platform-defaults schema 驗證）。
+- `path`、`depth`（根目錄到它之間的目錄層數）、`class`（名稱決定的分類：`tenant`、`defaults`、`platform`，或 `directory`；單檔模式與名稱模式另有 `hidden`、`not_config_name`，走訪不會列出這兩類）、`tenant_named`（檔名帶的租戶 id；exporter 服務的租戶仍取自檔內 `tenants:` 的鍵）、`defaults_document`（檔名以 `_defaults` 開頭的平台預設文件，以 platform-defaults schema 驗證）。
 - `readers`：誰讀它（`exporter`、`generator`）；沒有讀取端讀時是空清單，`not_read` 寫原因。
 - `role`：這個路徑是什麼，由 Go 判定，讀取端照讀、不自己組合：
   - `config`：設定檔。讀得了或讀不了都算；讀不了時 `problem` 寫原因，讀取端讀它時明確失敗。
@@ -330,8 +330,9 @@ tenant-api pod
   - 現在的逐檔快取冷啟動（啟動時或遇到新的 base commit 後第一次填滿快取）是 O(N²)，也就是時間隨檔案數的平方成長：每個沒命中的檔各跑一次 `parse-tree` 的單檔模式，而單檔模式每次都掃整棵樹來判定選檔。1000 個租戶約 43 秒；整棵樹模式讀同一棵樹一次約 0.4 秒。
   - 撤掉快取、每次判定都跑整棵樹模式時，5000 個租戶在子程序 192 MiB 的預算下只剩不到 8% 的餘裕，主因之一是 `parse-tree` 把整份 JSON 輸出先緩衝在記憶體裡。
   - 決定方式：先讓 `parse-tree` 串流輸出（邊產生邊寫出，不先在記憶體裡組完整份），再在含 amtool、形狀接近真實的 5000 個租戶的樹上，以子程序 `RLIMIT_DATA` 192 MiB、容器 1 CPU 量測一次完整判定。
-  - 「一次完整判定」是產生器容器處理一筆寫入時實際跑的全部程式：整棵樹模式的 `parse-tree`、產生器、amtool，以及 [ADR-038](./038-unread-keys-judged-by-readers.md) 推進順序第 3 項把共用判決接上產生器容器之後要跑的 served-values（只算這次寫入影響到的租戶的子集模式）。只量其中一部分，餘裕會被高估。
-  - 量測腳本直接從 Helm chart 與程式讀出記憶體上限與判定期限，不另寫一份數字；上限或期限改了，量測跟著改。
+  - 「一次完整判定」是產生器容器處理一筆寫入時要跑的全部程式：整棵樹模式的 `parse-tree`、產生器、amtool，以及 [ADR-038](./038-unread-keys-judged-by-readers.md) 推進順序第 3 項把共用判決接上產生器容器之後要跑的 served-values。撤快取前的量測必須包含 served-values；只量其中一部分，餘裕會被高估。
+  - 在那之前，served-values 要先提供只算受影響租戶的方式（目前它每次算整棵樹的每個租戶），量測以那個方式為準。
+  - 量測時，記憶體上限與判定期限取自 Helm chart 與程式本身，不另寫一份數字；上限或期限改了，量測跟著改。
   - 撤快取的條件，兩者都要成立：子程序與它啟動的每一支程式，峰值記憶體各自不超過 144 MiB（192 MiB 的 75%）；判定時間不超過 10 秒（20 秒判定期限的一半，另一半留給排隊與租戶成長）。成立就撤快取：容器與 CLI 走同一條整棵樹模式的路徑，本節的快取、淘汰規則與快取大小的 metric 一併移除。
   - 不成立就保留快取，只修冷啟動 O(N²) 的成因（單檔模式不再每次掃整棵樹）。
 - **期限**：一個請求只有一個總期限，從 tenant-api 收到請求起算 30 秒，也就是 HTTP server 的寫入逾時（`--write-timeout`，預設 30 秒；另有固定 30 秒的請求逾時 middleware）。等寫入鎖、呼叫產生器容器、重驗、commit 都在這 30 秒之內。
@@ -461,7 +462,7 @@ tenant-api pod
 - **步驟 6：exporter 與 da-guard 載入 conf.d 先經這份判定**（§2），tenant-api 經 `pkg/config` 的讀取面（`/effective`、租戶列表等）同一步跟著改。exporter 不服務讀不了的檔並以 metric 與 log 回報；da-guard 對這些檔回 exit 3，不再以 exit 4 列為產生器才判的證據（§9）。這是 breaking change，升級前的把關見 §8。
 - **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定；tenant-api 自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本）同一步改經這份判定再解碼。這些多半是授權邊界的輸入，判為讀不了時照各自現有的「解析失敗」處置，不當成空檔（§2）。
 - **步驟 8：刪除「非特定 tag」patch。** 這時 exporter、da-guard、tenant-api 都已經經共用的判定（理由見下方）。
-- **步驟 9：檔名規則與檔案清單收斂。** Go 端 4 份檔名規則合併為一份。`parse-tree` 的每一種模式輸出同一份逐路徑索引（`entries`），每個路徑是不是設定檔由 Go 判定（`role`），只列檔模式是同一份文件少了內容。Python 端只有一個讀這份文件的地方，讀 `role`，不再自己判斷路徑是不是設定檔；名稱述詞與 Go／Python 名稱規則的對照表退場。需要檔案清單的工具改用只列檔模式，已有整棵樹文件的工具讀它的 `entries`；仍自己走訪 conf.d 的六支工具（`batch_diagnose`、`config_history`、`drift_detect`、`migrate_to_operator`、`operator_generate`、`run_chaos_soak`）一併改經 da-guard。
+- **步驟 9：檔名規則與檔案清單收斂。** Go 端 4 份檔名規則合併為一份。`parse-tree` 的每一種模式輸出同一份逐路徑索引（`entries`），每個路徑是不是設定檔由 Go 判定（`role`），只列檔模式是同一份文件少了內容。Python 端只有一個讀這份文件的地方，讀 `role`，不再自己判斷路徑是不是設定檔；名稱述詞與 Go／Python 名稱規則的對照表退場。需要檔案清單的工具改用只列檔模式，已有整棵樹文件的工具讀它的 `entries`；仍以 Python 端自己的名稱規則列出 conf.d 檔案的六支工具（`batch_diagnose`、`config_history`、`drift_detect`、`migrate_to_operator`、`operator_generate`、`run_chaos_soak`）一併改經 da-guard。
 - **步驟 10：編輯原語與 da-guard 的 `edit`／`emit`**（§2）。寫 conf.d 的 Python 工具分批改為送「要改什麼」，寫入後的讀回確認移進 Go。
 - **步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層**，連同它依賴的、模仿 yaml.v3 的 loader（§11）。
 - **步驟 12：conf.d 以外的 YAML 改以消費者為準，加上守住邊界的 lint**（§12），並決定 tenant-api 管理設定的取得機制。
@@ -697,7 +698,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
 - 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
 - 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
-- 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）；尚未完成 Python 工具改讀 `role`、六支自己走訪 conf.d 的工具改經 da-guard、Python 名稱述詞與名稱規則對照表退場。
+- 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）；尚未完成 Python 工具改讀 `role`、六支以自己的名稱規則列檔的工具改經 da-guard、Python 名稱述詞與名稱規則對照表退場。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準；`da-crdecode` 通用化並支援多份文件；AST lint 與白名單。

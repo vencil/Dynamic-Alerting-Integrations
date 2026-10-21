@@ -67,7 +67,7 @@ import re
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field as _field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional
@@ -258,7 +258,12 @@ class Entry:
     only); *defaults_document* whether it is a platform-defaults document;
     *readers* who reads it (None in names mode); *not_read* why nobody does;
     *role* Go's verdict on what the path is (None in names mode); *problem*
-    ``(kind, message)`` when a read of it fails."""
+    ``(kind, message)`` when a read of it fails.
+
+    ⚠️ In file mode *role* says only whether the path on disk holds a
+    regular file the walk can reach (or nothing yet) — not that its name is
+    a config file name: a `--path` of `x.txt` or `.git/x.yaml` is `config`
+    with *not_read* saying no reader reads it."""
     path: str
     depth: int
     cls: str
@@ -365,6 +370,11 @@ def entries_of(doc: dict) -> "tuple[Entry, ...]":
 
 
 def _check_index(doc: dict, modes: "frozenset[str]") -> "tuple[Entry, ...]":
+    for field in ("mode", "da_guard_version"):
+        if field not in doc:
+            raise ValueError(f"no {field!r} — {_OLDER}")
+    if not isinstance(doc["da_guard_version"], str):
+        raise ValueError("da_guard_version is not a string")
     if doc.get("mode") not in modes:
         raise ValueError(f"mode {doc.get('mode')!r}, this reader asked for {' or '.join(sorted(modes))}")
     dc = doc.get("defaults_carriers")
@@ -409,6 +419,8 @@ def check_shape(doc: dict) -> None:
             raise ValueError(f"files[{f!r}] is no entry's")
         if by_path[f].problem is not None:
             raise ValueError(f"{f!r} has content and a problem")
+        if doc["mode"] == "tree" and not by_path[f].config_file:
+            raise ValueError(f"{f!r} has content but role {by_path[f].role!r}")
     if doc["mode"] == "file" and len(entries) != 1:
         raise ValueError("a file-mode document holds one entry")
     for e in entries:
@@ -614,22 +626,28 @@ def to_python_text_sequences(node: Any, keys: "frozenset[str] | tuple[str, ...]"
 @dataclass(frozen=True)
 class Listing:
     """One list-mode document. *root* is the directory as the caller named
-    it; *entries* are sorted by path (the walk's order); *defaults_carriers*
-    maps a directory ("." for the root) to the one defaults carrier its chain
-    reads."""
+    it; *entries* are sorted by path (the walk's order), one per path;
+    *defaults_carriers* maps a directory ("." for the root) to the one
+    defaults carrier its chain reads."""
     root: Path
     entries: "tuple[Entry, ...]"
     defaults_carriers: Mapping[str, str]
+    _by_path: Mapping[str, Entry] = _field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_by_path", MappingProxyType({e.path: e for e in self.entries}))
 
     def entry(self, rel: str) -> Optional[Entry]:
         """The entry at root-relative *rel* ('/'), or None when not listed."""
-        for e in self.entries:
-            if e.path == rel:
-                return e
-        return None
+        return self._by_path.get(rel)
 
     def config_files(self) -> "list[Entry]":
-        """Every config-file entry (role `config`), in walk order."""
+        """Every config-file entry (role `config`), in walk order.
+
+        ⚠️ Includes the config files no reader reads (`readers == ()`, e.g.
+        an unselected `_defaults.yml`) and those whose read fails (a
+        `problem`): a consumer that wants "what is read" looks at `readers`
+        itself."""
         return [e for e in self.entries if e.config_file]
 
 

@@ -209,6 +209,12 @@ func runParseTreeList(f *parseTreeFlags, stdin io.Reader, stdout io.Writer, fail
 		if err != nil {
 			return fail("--names: %v", err)
 		}
+		// Before decoding: json.Unmarshal turns each invalid byte into
+		// U+FFFD, so a name checked after it is always valid UTF-8 — and two
+		// different names could come out as one.
+		if !utf8.Valid(raw) {
+			return fail("--names: the input is not valid UTF-8; JSON cannot carry such a name")
+		}
 		var names []string
 		if err := json.Unmarshal(raw, &names); err != nil {
 			return fail("--names: not a JSON array of strings: %v", err)

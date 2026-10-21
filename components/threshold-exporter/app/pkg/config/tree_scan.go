@@ -90,6 +90,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -708,6 +709,15 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			// symlink to a directory never gets here (it is a leaf, not
 			// walked).
 			if path != absRoot {
+				// ⛔ ONE RECORD PER PATH (#3206). A config-named directory
+				// was recorded as a NotFile when WalkDir entered it; that it
+				// cannot be listed is the stronger fact (nothing under it was
+				// seen), and it says "a directory" as well — so the walk error
+				// replaces the NotFile instead of standing beside it. Two
+				// records for one path would give `parse-tree` two entries
+				// for it, which every reader refuses whole.
+				rel := relKey(path)
+				notFiles = slices.DeleteFunc(notFiles, func(nf NotFile) bool { return nf.RelKey == rel })
 				dropUnreadable(path, UnreadableWalkError)
 			} else {
 				rootWalkErr = werr

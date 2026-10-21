@@ -85,10 +85,12 @@ def _build(box: Path) -> Path:
     """A conf.d where permissions really deny: `b.yaml` links into a mode-000
     directory (stat EACCES), `noexec/t.yaml` sits in a directory that may be
     listed but not searched (lstat EACCES), `zero.yaml` is mode 000 (open
-    refused), `sealed/` cannot be listed; `gone.yaml` dangles, `dir.yaml/` is
-    a config-named directory, `broken.yaml` a syntax error."""
+    refused), `sealed/` and the config-named `unlist.yaml/` cannot be
+    listed; `gone.yaml` dangles, `dir.yaml/` is a config-named directory,
+    `broken.yaml` a syntax error."""
     conf, locked = box / "conf.d", box / "locked"
-    for d in (conf, locked, conf / "sealed", conf / "noexec", conf / "dir.yaml"):
+    for d in (conf, locked, conf / "sealed", conf / "noexec", conf / "dir.yaml",
+              conf / "unlist.yaml"):
         d.mkdir()
         d.chmod(0o755)
     for p, body in {conf / "ok.yaml": "tenants: {ok: {}}\n",
@@ -97,13 +99,14 @@ def _build(box: Path) -> Path:
                     locked / "real.yaml": "tenants: {b: {}}\n",
                     conf / "sealed" / "s.yaml": "tenants: {s: {}}\n",
                     conf / "noexec" / "t.yaml": "tenants: {t: {}}\n",
-                    conf / "dir.yaml" / "in.yaml": "tenants: {in: {}}\n"}.items():
+                    conf / "dir.yaml" / "in.yaml": "tenants: {in: {}}\n",
+                    conf / "unlist.yaml" / "u.yaml": "tenants: {u: {}}\n"}.items():
         p.write_text(body, encoding="utf-8")
         p.chmod(0o644)
     symlink_or_skip(locked / "real.yaml", conf / "b.yaml")
     symlink_or_skip("nowhere.yaml", conf / "gone.yaml")
     for p, mode in ((conf / "zero.yaml", 0), (locked, 0), (conf / "sealed", 0),
-                    (conf / "noexec", 0o444)):
+                    (conf / "noexec", 0o444), (conf / "unlist.yaml", 0)):
         p.chmod(mode)
     return conf
 
@@ -112,6 +115,9 @@ _WANT_ROLES = {
     "b.yaml": "config", "noexec/t.yaml": "config", "zero.yaml": "config",
     "ok.yaml": "config", "broken.yaml": "config", "dir.yaml/in.yaml": "config",
     "gone.yaml": "not_a_file", "dir.yaml": "not_a_file", "sealed": "unlistable_dir",
+    # A config-named directory that cannot be listed: ONE entry (the walk
+    # once recorded it twice, and the reader refused the whole document).
+    "unlist.yaml": "unlistable_dir",
 }
 
 

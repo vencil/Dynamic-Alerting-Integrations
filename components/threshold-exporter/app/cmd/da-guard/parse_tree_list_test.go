@@ -323,6 +323,9 @@ func TestParseTreeList_CallerErrors(t *testing.T) {
 		{`"a.yaml"`, []string{"--names", "-"}},     // not an array
 		{`["a/b.yaml"]`, []string{"--names", "-"}}, // not a base name
 		{`[""]`, []string{"--names", "-"}},
+		// A byte that is not UTF-8: refused before decoding, never read as
+		// U+FFFD (json.Unmarshal would) and so never passed as valid.
+		{"[\"bad\xff.yaml\"]", []string{"--names", "-"}},
 		{"", []string{"--config-dir", filepath.Join(root, "missing")}},
 	} {
 		if code, _, _ := runPTList(t, tc.stdin, tc.args...); code != exitCallerErr {

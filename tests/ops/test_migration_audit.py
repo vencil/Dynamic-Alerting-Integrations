@@ -393,10 +393,10 @@ _ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t"
      "schema 'da-guard.parse-tree/v3'"),
     # A da-guard from before the per-path entries (#3206) is named as older.
     ('echo \'{"schema": "da-guard.parse-tree/v1", "selected": {}}\'\n', "older than this tool"),
-    ('echo \'{"schema": "da-guard.parse-tree/v2", "mode": "tree", "defaults_carriers": {}, '
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
      '"files": {}, "rendered_by": {}}\'\n', "field 'entries' missing"),
     ("echo not-json\n", "wrote no document"),
-    ('echo \'{"schema": "da-guard.parse-tree/v2", "mode": "tree", "defaults_carriers": {}, '
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
      '"entries": [' + _ENTRY + '], "files": {}, "rendered_by": {}}\'\n',
      "neither content nor a problem"),
     ('echo "flag provided but not defined" >&2; exit 2\n', "older than this tool"),
@@ -529,7 +529,7 @@ def test_lines_of_aliased_and_merged_values(tmp_path, da_guard_binary) -> None:
     ('{"files": {"t.yaml": {"a": {"text": "x"}}}}', "wrong shape"),
 ])
 def test_cli_refuses_a_parse_tree_document_of_the_wrong_shape(tmp_path, doc, needle) -> None:
-    base = {"schema": "da-guard.parse-tree/v2", "mode": "tree", "defaults_carriers": {},
+    base = {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {},
             "entries": [json.loads(_ENTRY)], "files": {"t.yaml": {}}, "rendered_by": {}}
     patch = json.loads(doc)
     base.update(patch)
