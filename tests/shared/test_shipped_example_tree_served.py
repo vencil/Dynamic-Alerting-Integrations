@@ -31,13 +31,16 @@ _spec.loader.exec_module(_gate)
 SHIPPED_ROOTS = sorted(_gate._SHIPPED_CONFD_ROOTS)
 
 
-def _is_stated_exception(key: str, value: object) -> bool:
+def _is_stated_exception(key: str, value: object, exporter_reads: bool = False) -> bool:
     """The only `unserved` keys a shipped tree may carry.
 
     * `_routing_profile` — read by the route generator, not by the exporter.
     * a dimensional key set to `disable` — deliberately emits no row.
+    * a key served-values says the exporter reads that serves no row of its
+      own — `_profile`, which binds the profile it names (#3042: the recipes
+      example's finance tenants bind one).
     """
-    if key == "_routing_profile":
+    if key == "_routing_profile" or exporter_reads:
         return True
     return "{" in key and str(value).strip().lower() == "disable"
 
@@ -47,7 +50,8 @@ def test_shipped_example_tree_serves_every_tenant_key(root, da_guard_binary):
     tenants = load_served_values(REPO_ROOT / root, binary=da_guard_binary)
     assert tenants, f"{root}: the exporter loaded no tenant — nothing was measured"
     dead = {
-        tid: sorted(k for k, v in tv.unserved.items() if not _is_stated_exception(k, v))
+        tid: sorted(k for k, v in tv.unserved.items()
+                    if not _is_stated_exception(k, v, getattr(tv.keys.get(k), "exporter", False)))
         for tid, tv in tenants.items()
     }
     dead = {tid: keys for tid, keys in dead.items() if keys}

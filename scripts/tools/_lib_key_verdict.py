@@ -41,6 +41,16 @@ The same unread key written in a platform file or a profile is ONE finding
 naming the file, with the tenants it reaches (decision 4: deduplicated by
 file and key).
 
+A `_` key written in a profile is judged on its own, from the registry's
+`profile` layer, whether or not a tenant binds the profile or gets its value
+(a tenant's own value shadows it; `_profile` in a profile always is): a key
+no reader reads in a profile is ONE notice on that file, with this judgment's
+reason and the tenants that bind the profile (none for an unbound one) — it
+replaces the finding the tenants' keys would give, so the reason does not
+depend on who binds the profile (#3042 — the judgment validate-config's
+`profiles` row made by key name before). Policy-as-Code is not counted here:
+it reads a tenant's view, and a tenant that gets the value is judged above.
+
 Exceptions are those of `_lib_tenant_values`; a caller that must not block
 on them (decision 5: da-guard unavailable or failing is a notice, never a
 refusal) catches `_lib_tenant_values.DaGuardError` and its kin.
@@ -205,8 +215,83 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
                                disable_effects=disable_effects)
     effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
     all_rules = list(_tree_rules(conf_d, binary)) + list(rules or [])
-    return judge(tree.tenants, effective, policy_targets(all_rules), aliases=tree.aliases,
-                 undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
+    heads = policy_targets(all_rules)
+    verdict = judge(tree.tenants, effective, heads, aliases=tree.aliases,
+                    undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
+    by_profile = profile_layer_findings(_root_profiles(conf_d, binary), effective)
+    return verdict._replace(findings=_merge_profile_findings(verdict, by_profile))
+
+
+def _merge_profile_findings(verdict: TreeVerdict, by_profile: list[Finding]) -> list[Finding]:
+    """`verdict.findings` with the profile-layer judgment taking the place of
+    a tenant-path `unread` finding that only profile-layer keys gave — the
+    same (file, key) — and adding the rest. A (file, key) the tenants also
+    get from a root file's `tenants:` keeps the tenant-path finding; one some
+    tenant's reader reads (a Policy-as-Code rule naming it) is no finding."""
+    layers: dict[tuple[str | None, str], set[str | None]] = {}
+    read = set()
+    for rows in verdict.keys.values():
+        for v in rows:
+            if v.verdict == UNREAD:
+                layers.setdefault((v.file, v.key), set()).add(v.layer)
+            elif v.verdict == READ and v.layer == "profile":
+                read.add((v.file, v.key))
+    by_profile = [f for f in by_profile if (f.file, f.key) not in read]
+    profile_only = {fk for fk, ls in layers.items() if ls == {"profile"}}
+    ours = {(f.file, f.key) for f in by_profile}
+    kept = [f for f in verdict.findings
+            if not (f.kind == UNREAD and (f.file, f.key) in profile_only and (f.file, f.key) in ours)]
+    theirs = {(f.file, f.key) for f in kept if f.kind == UNREAD}
+    return _sorted_findings(kept + [f for f in by_profile if (f.file, f.key) not in theirs])
+
+
+def _root_profiles(conf_d: str | os.PathLike[str],
+                   binary: str | None = None) -> dict[str, dict[str, Any]]:
+    """file → the `profiles:` mapping of each root platform file that has
+    one (the files the exporter takes profiles from), read through `da-guard
+    parse-tree` as the rest of the tree is (ADR-036 step 4)."""
+    import _lib_parse_cache
+    reader = (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
+              else _lib_parse_cache.reader_for(conf_d))
+    out = {}
+    for name in root_platform_files(conf_d):
+        try:
+            doc = reader.read(Path(conf_d) / name)
+        except _lib_parse_cache.NotSelected:
+            continue  # a root defaults spelling parse-tree does not select: never read
+        profiles = doc.get("profiles") if isinstance(doc, dict) else None
+        if isinstance(profiles, dict):
+            out[name] = profiles
+    return out
+
+
+def profile_layer_findings(profiles_by_file: dict[str, dict[str, Any]],
+                           effective: dict[str, tv.TenantEffective]) -> list[Finding]:
+    """The notices for `_` keys written in a profile that no reader reads in
+    the `profile` layer (module docstring)."""
+    found: dict[tuple[str, str], tuple[str, set[str]]] = {}
+    for file, profiles in sorted(profiles_by_file.items()):
+        for name, body in profiles.items():
+            if not isinstance(body, dict):
+                continue
+            bound = {t for t, te in effective.items() if te.profile == str(name)}
+            for key in body:
+                key = str(key)
+                if not key.startswith("_"):
+                    continue
+                declared, registered = registered_readers(key)
+                if any("profile" in layers for layers in declared.values()):
+                    continue
+                reason = ("retired" if key in RETIRED_RESERVED_KEYS
+                          else "not_read_in_profile" if registered else "unregistered")
+                found.setdefault((file, key), (reason, set()))[1].update(bound)
+    return [Finding(NOTICE, UNREAD, key, file, tuple(sorted(tenants)), reason)
+            for (file, key), (reason, tenants) in found.items()]
+
+
+def _sorted_findings(findings: list[Finding]) -> list[Finding]:
+    order = {ERROR: 0, WARNING: 1, NOTICE: 2}
+    return sorted(findings, key=lambda f: (order.get(f.severity, 3), f.file or "", f.key, f.kind, f.tenants))
 
 
 def judge(served: dict[str, tv.TenantValues], effective: dict[str, tv.TenantEffective],
@@ -370,6 +455,4 @@ def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str],
             src = tuple(", ".join(sorted({p[k] or "?" for p in per if k in p})) for k in fam)
         out.append(Finding(sev, kind, key, file, tuple(sorted({v.tenant for v in vs})),
                            None if kind == "disable_partial" else vs[0].reason, fam, src))
-    order = {ERROR: 0, WARNING: 1, NOTICE: 2}
-    out.sort(key=lambda f: (order.get(f.severity, 3), f.file or "", f.key, f.kind, f.tenants))
-    return out
+    return _sorted_findings(out)
