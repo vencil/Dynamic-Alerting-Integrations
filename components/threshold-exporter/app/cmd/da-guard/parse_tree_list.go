@@ -107,7 +107,9 @@ func withRole(e parseTreeEntry, role config.Role) parseTreeEntry {
 func unreadableAsEntry(u config.UnreadableFile) parseTreeEntry {
 	e := withRole(nameEntry(u.RelKey), u.Role())
 	if u.Reason == config.UnreadableWalkError {
-		e.Readers = []string{readerExporter, readerGenerator}
+		// A directory it could not list (role unlistable_dir) is, like any
+		// directory, no file a reader reads: readers [], nothing passed over.
+		e.Readers = []string{}
 	} else {
 		// Never an unselected carrier: selection runs over the files the
 		// walk could read (the generator's readable_carriers too).
@@ -159,7 +161,7 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 	}
 	if scan.RootWalkErr != nil {
 		e := withRole(parseTreeEntry{Path: "."}, config.RootWalkRole)
-		e.Readers = []string{readerExporter, readerGenerator}
+		e.Readers = []string{}
 		e.Problem = &parseTreeProblem{Kind: parsetree.KindReadFailure,
 			Message: unreadableMessage(config.UnreadableWalkError)}
 		idx.Entries = append(idx.Entries, e)

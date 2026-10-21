@@ -136,8 +136,9 @@ type parseTreeEntry struct {
 	// Names mode answers by the name alone.
 	DefaultsDocument bool
 	// Readers is who reads it; [] when no reader does (then NotRead says
-	// why — except for role dir: a directory is read by no one and nothing
-	// is passed over, so NotRead stays empty). null in names mode.
+	// why — except for role dir and unlistable_dir: a directory is read by
+	// no one and nothing is passed over, so NotRead stays empty). null in
+	// names mode.
 	Readers []string
 	// NotRead is why no reader reads it (notRead*), else null.
 	NotRead string
@@ -251,14 +252,16 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"each directory's selected defaults carrier; the route generator reads those and every\n"+
 			"other `_` file below the root (e.g. team/_domain_policy.yaml); [] with \"not_read\" set\n"+
 			"when no reader does: unselected_defaults_carrier (at the root or below it), and in\n"+
-			"file mode also hidden, not_config_name, parent_not_walked. A role dir entry has\n"+
-			"readers [] and not_read null: a directory is no file anyone reads.\n"+
+			"file mode also hidden, not_config_name, parent_not_walked. A role dir or\n"+
+			"unlistable_dir entry has readers [] and not_read null: a directory is no file\n"+
+			"anyone reads.\n"+
 			"\"role\", the verdict on what the path is, a closed list:\n"+
 			"  config          a config file. Readers read it; a \"problem\" says their read fails\n"+
 			"                  (a stat or open refused for any reason but the ones below, EIO, a\n"+
 			"                  content kind in tree and file mode).\n"+
 			"  dir             a directory the walk goes into and lists — every one has an entry;\n"+
 			"                  a config-named one (x.yaml/) too, with a not_regular_file problem.\n"+
+			"                  File mode gives an existing directory --path the same entry.\n"+
 			"  not_a_file      the exporter's walk cannot reach a regular file there and does not\n"+
 			"                  go into it: a symlink to a directory, a FIFO / socket / device (or a\n"+
 			"                  link to one), a stat that finds nothing (a dangling link, a looping\n"+
@@ -453,6 +456,12 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		reason = notReadHidden
 	case !confdname.IsScannedPath(rel):
 		reason = notReadNotConfigName
+		if d := dirOnDisk(scan.AbsRoot, rel); d != nil {
+			// An existing directory the walk enters: what tree mode gives it
+			// (role dir), not a config file no reader reads.
+			doc.Entries = append(doc.Entries, *d)
+			return doc, nil
+		}
 	default:
 		reason = parentsOnDisk(scan.AbsRoot, rel)
 	}
@@ -557,6 +566,23 @@ func fileOnDisk(root, rel string) *parseTreeEntry {
 		return unreadableEntry(config.UnreadableFile{RelKey: rel, Reason: config.UnreadableSpecialFile})
 	}
 	return nil
+}
+
+// dirOnDisk is tree mode's entry of rel when it is an existing directory the
+// walk enters (a real directory, every directory above it walked too): role
+// dir, readers [] — else nil. A config-named one is fileOnDisk's (it also
+// carries a problem); a hidden one is passed over by the walk and not here.
+func dirOnDisk(root, rel string) *parseTreeEntry {
+	if parentsOnDisk(root, rel) != "" {
+		return nil
+	}
+	fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil || !fi.IsDir() {
+		return nil
+	}
+	e := withRole(nameEntry(rel), config.RoleDir)
+	e.Readers = []string{}
+	return &e
 }
 
 func unreadableEntry(u config.UnreadableFile) *parseTreeEntry {

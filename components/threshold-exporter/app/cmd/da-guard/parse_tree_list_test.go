@@ -278,6 +278,10 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 		if e.Role == config.RoleUnlistableDir && e.Class != classDirectory {
 			t.Errorf("%s: unlistable_dir of class %q", e.Path, e.Class)
 		}
+		if e.Role == config.RoleUnlistableDir && (len(e.Readers) != 0 || e.NotRead != "") {
+			// A directory, listed or not, is no file a reader reads.
+			t.Errorf("%s: unlistable_dir with readers %v, not_read %q", e.Path, e.Readers, e.NotRead)
+		}
 		if e.Path == "_defaults.yaml" && !e.DefaultsDocument {
 			t.Errorf("%s: a config file named as a defaults document is one, readable or not", e.Path)
 		}
