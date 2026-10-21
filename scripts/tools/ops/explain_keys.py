@@ -64,6 +64,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_io import YamlFileError, safe_label  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
@@ -105,9 +106,11 @@ def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Option
         raise ExplainError(f"--config-dir is not a directory: {conf_d}")
     # The verdict takes `_policies` from the root `_defaults.yaml` only, as
     # Policy-as-Code does; say which subdirectory ones it does not count.
-    kv.note_root_only_policies(conf_d)
+    # #3206: ONE reader — one parse-tree document — for the note and the verdict.
+    reader = _lib_parse_cache.ConfdReader(conf_d, binary=binary, timeout=timeout)
     try:
-        verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout)
+        kv.note_root_only_policies(conf_d, reader)
+        verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout, reader=reader)
     except (tv.DaGuardNotFoundError, tv.DaGuardError, tv.ParseFailedError) as e:
         raise ExplainError(f"da-guard: {e}") from e
     except ParseTreeError as e:

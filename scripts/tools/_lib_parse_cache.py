@@ -504,13 +504,15 @@ def nested_defaults_carriers(tree: Tree) -> list[str]:
 
 
 def tenant_files(tree: Tree) -> list[str]:
-    """The files a tenant can be declared in: every file parse-tree selects
-    whose name has no `_` prefix (a `_` file is a platform file, read for
-    no tenant), sorted, root-relative — readable or not, and whatever its
-    role: `node` names why one cannot be read, so a reader of the tenant set
-    refuses rather than counting a tenant fewer."""
-    return sorted(rel for rel in tree.selected
-                  if not rel.rsplit("/", 1)[-1].startswith("_"))
+    """The files a tenant can be declared in: the config files (Go's
+    `role`) of class `tenant` parse-tree selects (a `_` file is a platform
+    file, read for no tenant), sorted, root-relative — readable or not
+    (`node` names why one cannot be read). #3206: Go's class and role, not a
+    name rule here. What is no config file (a link not followed, a dangling
+    link, a directory it could not list) is not a tenant file: a reader of
+    the tenant set refuses on it itself (`_lib_confd.tree_tenants`)."""
+    return sorted(e.path for e in tree.entries
+                  if e.cls == "tenant" and e.config_file and e.path in tree.selected)
 
 
 def declared_tenants(reader: ConfdReader, files: "Iterable[str] | None" = None

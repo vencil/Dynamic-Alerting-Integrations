@@ -195,30 +195,36 @@ def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None,
     return pe.load_policies(str(path), config_dir=str(conf_d), reader=reader)
 
 
-def note_root_only_policies(conf_d: str | os.PathLike[str]) -> None:
+def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) -> None:
     """Print, once, Policy-as-Code's own note naming the subdirectory
     `_defaults.yaml` files whose `_policies` it does not read — and so this
     verdict does not count — for a caller with no Policy-as-Code row of its
-    own to say it (explain-keys). Nothing when there is none."""
+    own to say it (explain-keys). Nothing when there is none. *reader*: the
+    caller's reader of `conf_d` — the one `judge_tree` reads too (#3206)."""
     ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops")
     if ops not in sys.path:
         sys.path.insert(0, ops)
     import policy_engine as pe
     _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE,
-                                     reader=_reader_for(conf_d, None))
+                                     reader=reader if reader is not None
+                                     else _reader_for(conf_d, None))
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
                timeout: float = tv.DEFAULT_TIMEOUT,
-               effective_tree: tv.EffectiveTree | None = None) -> TreeVerdict:
+               effective_tree: tv.EffectiveTree | None = None,
+               reader: Any = None) -> TreeVerdict:
     """The verdict on every key of every tenant of the tree at `conf_d`.
     `effective_tree`, given, is a `load_effective_tree` of the same tree the
-    caller already has (validate-config shares one run among its rows)."""
+    caller already has (validate-config shares one run among its rows);
+    `reader`, given, is the caller's `_lib_parse_cache.ConfdReader` of it
+    (#3206: one parse-tree document for the run)."""
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                disable_effects=disable_effects)
     effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
-    reader = _reader_for(conf_d, binary)  # one snapshot for the rules and the root files
+    if reader is None:
+        reader = _reader_for(conf_d, binary)  # one snapshot for the rules and the root files
     all_rules = list(_tree_rules(conf_d, binary, reader)) + list(rules or [])
     return judge(tree.tenants, effective, policy_targets(all_rules), aliases=tree.aliases,
                  undecidable=not root_platform_files(conf_d, reader),

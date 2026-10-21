@@ -48,7 +48,6 @@ from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#17
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
 import _lib_write_check  # noqa: E402
-import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 
@@ -85,29 +84,6 @@ def _unplaceable_reason(meta) -> str:
     return ""
 
 
-def _is_dir(p: Path) -> bool:
-    """`is_dir()` that answers False instead of raising: a link into a
-    directory this uid may not search (#3206) is not reported as a
-    subdirectory; if its name is a config name, the listing names it."""
-    try:
-        return p.is_dir()
-    except OSError:
-        return False
-
-
-def _subdirectories(conf_d: Path, reader: "_lib_parse_cache.ConfdReader") -> "list[Path]":
-    """The directories directly in *conf_d* that the exporter's walk enters
-    or names — every one but those da-guard classes `hidden` by name — sorted.
-    Flat, so it says what is below them (`warn_nested`, deduplicated)."""
-    warn_nested(conf_d, tool="migrate_conf_d", reader=reader)
-    dirs = sorted(fp for fp in conf_d.iterdir() if _is_dir(fp))
-    if not dirs:
-        return []
-    named = _lib_parse_tree.classify_names([fp.name for fp in dirs], reader.binary,
-                                           reader.timeout)
-    return [fp for fp in dirs if named[fp.name].cls != "hidden"]
-
-
 def plan_migration(conf_d: Path, reader: "_lib_parse_cache.ConfdReader | None" = None
                    ) -> list[dict]:
     """Scan flat conf.d/ and plan git mv operations.
@@ -138,20 +114,27 @@ def plan_migration(conf_d: Path, reader: "_lib_parse_cache.ConfdReader | None" =
     listing = reader.listing()
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(conf_d, tool="migrate_conf_d", listing=listing)
-    top_entries = [e for e in listing.entries if e.depth == 0]
-    for e in top_entries:
-        if e.not_a_file and e.cls != "directory":
-            # Provably no file and no directory (a dangling link, a FIFO):
-            # nothing to move or skip — named, nothing is planned.
-            kind, message = e.problem or ("not_regular_file", "not a regular file")
+    for e in listing.entries:
+        if e.not_a_file or e.unlistable_dir:
+            # Refused, whatever its name or depth (#3206): a directory it
+            # cannot list makes the plan incomplete (what is under it is
+            # unknown); a link to a directory is NOT "already nested" — the
+            # exporter does not follow it, nothing under it is loaded; a
+            # dangling link or a FIFO is nothing to move. Named; nothing is
+            # planned or moved.
+            kind, message = e.problem or ("read_failure", e.role or "")
             raise FileUnreadable(e.path, kind, message)
+    top_entries = [e for e in listing.entries if e.depth == 0]
     top = sorted(e.path for e in top_entries if e.config_file)
 
-    for fp in _subdirectories(conf_d, reader):
-        # Already nested — skip (a name; parse-tree reads what is in it)
+    # The directories the walk enters (Go's role `dir`, a config-named one
+    # included: its files are read like any directory's) — already nested.
+    for e in top_entries:
+        if not e.is_dir:
+            continue
         actions.append({
-            "source": fp.name + "/",
-            "target": fp.name + "/",
+            "source": e.path + "/",
+            "target": e.path + "/",
             "tenant_id": None,
             "metadata": None,
             "status": "skip_already_nested",

@@ -558,40 +558,26 @@ def test_main_is_quiet_on_a_clean_tree(tmp_path, capsys, monkeypatch):
     assert "略過" not in (cap.out + cap.err)
 
 
-def test_an_unlistable_config_dir_fails_the_same_way_it_always_did(
-        tmp_path, capsys, monkeypatch):
-    """An unlistable conf.d is fatal, and stays fatal.
+def test_an_unlistable_config_dir_is_never_a_clean_run(tmp_path, capsys, monkeypatch,
+                                                       unlistable_dir):
+    """An unlistable conf.d — or a directory under it — is never rc 0
+    (#3206): nothing under it was scanned, so whether a residue is left is
+    unknown. Named, and the run ends "未完成" with rc 1.
 
-    Pins the CONTRACT — permission, EIO, a FUSE mount going away, the
-    directory removed mid-scan all surface as an error — so that a future
-    change which starts swallowing it here reddens.
-
-    ⚠️ It does NOT pin the removal of the `except OSError` that the first
-    version of the #1607 report had around its own listing, and cannot:
-    `scan_for_metric` lists the same directory two lines later with no guard
-    of its own, so the two versions are behaviourally IDENTICAL — measured,
-    this test stays green with the guard put back. The guard was removed
-    because it bought nothing while suggesting the case was handled; that is
-    a readability change, and no test can hold it. Saying so here rather than
-    letting the docstring imply coverage this test does not have.
-
-    ⚠️ Injected rather than produced with mode bits: the environment runs as
-    root, so `chmod 000` does not deny anything. `main` also rejects a path
-    that is a FILE with its own `is_dir()` guard, so that route cannot reach
-    the listing at all.
+    ⚠️ Injected into da-guard's document (`unlistable_dir`, the entry its
+    walk writes for a directory it cannot list), not with mode bits: the
+    environment runs as root, so `chmod 000` does not deny anything, and the
+    listing is da-guard's — patching `Path.iterdir` no longer reaches it.
     """
     root = _confd_with_unusable(tmp_path)
-    real_iterdir = Path.iterdir
-
-    def exploding_iterdir(self):
-        if self.resolve() == root.resolve():
-            raise OSError(5, "Input/output error")
-        return real_iterdir(self)
-
-    monkeypatch.setattr(Path, "iterdir", exploding_iterdir)
-
-    with pytest.raises(OSError):
+    (root / "team").mkdir()
+    (root / "team" / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    unlistable_dir(root, root / "team")
+    with pytest.raises(SystemExit) as exc:
         _run_main(monkeypatch, ["pg_connections", "--config-dir", str(root)])
+    assert exc.value.code == 1
+    out = capsys.readouterr()
+    assert "team" in out.out and "列不出" in out.out, out.out[-2000:]
 
 
 def test_scan_for_metric_skips_unusable_entries(tmp_path):

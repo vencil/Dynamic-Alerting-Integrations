@@ -99,7 +99,6 @@ from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer
 )
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_defaults_name,
-    unusable_config_entries,
     unusable_reason,
     warn_nested,
 )
@@ -535,38 +534,36 @@ def nested_residue(metric_key, config_dir, spellings=(), *, reader=None):
     return out
 
 
-def out_of_reach(entries, plane="root", *, config_dir=None):
+def out_of_reach(config_dir, plane="root"):
     """這一層本工具不寫的載體 `[(名字, 理由), ...]`: 子目錄、`_` 前綴檔的
     `tenants:`／`profiles:` 區塊（含 `_defaults.yaml` 自己的）、沒有讀取端的
-    defaults 拼法（parse-tree 的 `not_read`）。"""
-    reader = _reader(config_dir if config_dir is not None
-                     else (entries[0].parent if entries else "."))
+    defaults 拼法（parse-tree 的 `not_read`）。
+
+    #3206：這一層有哪些項目、各是什麼，全取自 `reader` 那份索引（Go 的 `role`）：
+    子目錄是走訪會進去的目錄（role `dir`，名字像設定檔的也算——它底下的檔照讀）；
+    不以 `iterdir()`／`is_dir()` 自己判。"""
+    reader = _reader(config_dir)
     tree = reader.tree()
-    top = _top(reader)
-    # #3206：子目錄是走訪在其下列出檔的那些（同一份索引；隱藏目錄走訪不進、不在其中）
-    # ——不以 `is_dir()` 判，它對指進 000 目錄的連結拋 PermissionError。
-    subdirs = {e.path.split("/", 1)[0] for e in reader.listing().entries if e.depth > 0}
     out = []
-    for e in entries:
-        listed = top.get(e.name)
-        if listed is not None and not listed.config_file:
+    for name, listed in sorted(_top(reader).items()):
+        if listed.flagged:
             continue                           # `main` 已以 `unusable_reason` 具名
-        if listed is None and e.name in subdirs:
-            out.append((f"{e.name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
-                                      "`--config-dir <子樹> --plane subtree`"))
-        elif listed is None:
-            continue                           # 走訪不列（隱藏、非設定檔名、空目錄）
-        elif e.name in tree.not_read and listed.cls == "defaults":
-            out.append((e.name, f"沒有讀取端讀這個 defaults 拼法（parse-tree："
-                                f"{tree.not_read[e.name]}），本工具不寫它；"
+        if listed.is_dir:
+            out.append((f"{name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
+                                    "`--config-dir <子樹> --plane subtree`"))
+        elif not listed.config_file:
+            continue
+        elif name in tree.not_read and listed.cls == "defaults":
+            out.append((name, f"沒有讀取端讀這個 defaults 拼法（parse-tree："
+                                f"{tree.not_read[name]}），本工具不寫它；"
                                 f"殘留需手動移除或刪掉此檔"))
-        elif e.name in tree.selected and listed.reserved and plane == "root":
-            data, err = _tree_read(reader, e.name)
+        elif name in tree.selected and listed.reserved and plane == "root":
+            data, err = _tree_read(reader, name)
             if err is not None:
                 continue                       # 載體體檢會具名
             for section in ("tenants", "profiles"):
                 if data.get(section):
-                    out.append((e.name, f"`_` 前綴檔的 `{section}:` 區塊，"
+                    out.append((name, f"`_` 前綴檔的 `{section}:` 區塊，"
                                         f"本工具不寫，殘留需手動移除"))
     return out
 
@@ -1029,11 +1026,14 @@ def _main():
     # 都取自它。
     listing = reader.listing()
     warn_nested(base, tool="deprecate_rule", listing=listing)
-    entries = sorted(base.iterdir())
-    for bad in unusable_config_entries(entries, listing=listing):
-        print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad, listing)}",
-              file=sys.stderr)
-    unreachable = out_of_reach(entries, args.plane, config_dir=base)
+    for e in listing.entries:
+        if e.depth == 0 and e.flagged:
+            print(f"  ⚠️  略過 {safe_label(e.name)}——{unusable_reason(base / e.path, listing)}",
+                  file=sys.stderr)
+    # 列不出內容的目錄（任何一層、任何名字）：底下的檔沒被掃描，下架完成與否無從判定，
+    # 結尾列為未完成、rc 1——報告不完整就不給 rc 0（#3206）。
+    blind = [e.path for e in listing.entries if e.unlistable_dir]
+    unreachable = out_of_reach(base, args.plane)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
         for name, reason in unreachable:
@@ -1290,6 +1290,9 @@ def _main():
                                _health_reason(key, raw, kind)))
     if refused is not None:
         incomplete.append(("寫入前確認", refused[0], refused[1]))
+    for rel in blind:
+        incomplete.append(("走訪", rel, "da-guard 列不出這個目錄的內容，底下的檔沒有被掃描，"
+                                        "無從判定該處是否仍有殘留；請修好權限後重跑"))
 
     # 總結
     print(f"\n{'='*60}")

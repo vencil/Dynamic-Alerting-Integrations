@@ -3027,7 +3027,7 @@ def _kustomize_carrier_files(
         entry = (lambda n: None) if listing is None else listing.entry
         names |= {n for n in top if entry(n) is not None and entry(n).config_file}
         unusable = sorted(Path(conf_dir) / n for n in top
-                          if entry(n) is not None and not entry(n).config_file)
+                          if entry(n) is not None and entry(n).flagged)
         for p in unusable[:WARN_LIMIT]:
             print(f"WARN: init_project: {printable_name(p.name)!r} in "
                   f"{conf_dir} {unusable_reason(p, listing)} — it carries a config "

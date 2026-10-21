@@ -44,8 +44,9 @@ Every mode's document carries `entries`, read here into `Entry` objects:
 (`list_tree`, `parse-tree --list-only`, no content read) and
 `classify_names` for names that are not on a disk. ⛔ An entry's `role` is
 the verdict — `config` (a config file; its readers fail loudly on a
-`problem`), `not_a_file`, `unlistable_dir` — and nothing here composes one of
-its own from the other fields. `Tree.selected` / `unreadable` / `not_read`
+`problem`), `dir` (a directory the walk enters: every one has an entry, so
+no reader lists directories itself), `not_a_file`, `unlistable_dir` — and
+nothing here composes one of its own from the other fields. `Tree.selected` / `unreadable` / `not_read`
 are computed from the entries, for the readers written against them.
 
 A document of another schema (v1 included: a da-guard older than this tool),
@@ -298,7 +299,7 @@ def _signal_name(signum: int) -> str:
 # ── entries (ADR-036 §7 step 9, #3206) ──────────────────────────────
 
 #: `role` values, a closed set (pkg/config Role): Go's verdict on a path.
-ROLES = frozenset({"config", "not_a_file", "unlistable_dir"})
+ROLES = frozenset({"config", "dir", "not_a_file", "unlistable_dir"})
 #: `class` values: of a walked path, and the more a name alone can be.
 WALK_CLASSES = frozenset({"tenant", "defaults", "platform", "directory"})
 NAME_CLASSES = frozenset({"tenant", "defaults", "platform", "hidden", "not_config_name"})
@@ -346,6 +347,23 @@ class Entry:
         """A config file (role `config`) — readable or not: a `problem` on one
         is a read that fails, loudly, never a reason to skip it."""
         return self.role == "config"
+
+    @property
+    def is_dir(self) -> bool:
+        """A directory the walk enters and lists (role `dir`). One whose name
+        is a config file name (`x.yaml/`) carries a `problem` saying so; its
+        files are read like any directory's."""
+        return self.role == "dir"
+
+    @property
+    def flagged(self) -> bool:
+        """Not a config file, and Go names a problem with it: what every
+        reader names instead of passing over — a symlink to a directory the
+        walk does not follow, a special file, a dangling link (`not_a_file`),
+        a directory it could not list (`unlistable_dir`), a directory with a
+        file's name (`dir` with a problem). The fact is Go's; this composes
+        nothing beyond reading it."""
+        return not self.config_file and self.problem is not None
 
     @property
     def not_a_file(self) -> bool:

@@ -227,7 +227,7 @@ def _read_tree(conf_d, timeout):
     if not os.path.isdir(conf_d):
         return _EMPTY_TREE
     doc = _lib_parse_tree.run(conf_d, None, timeout)
-    if not any(e.config_file for e in _lib_parse_tree.entries_of(doc)):
+    if not _has_config_file(doc):
         return _EMPTY_TREE
     # #2962: which reader reads a key WHERE it is written. A da-guard without
     # it is older than this tool; falling back to the file-level `selected`
@@ -237,6 +237,11 @@ def _read_tree(conf_d, timeout):
             "da-guard parse-tree wrote no `rendered_by` (#2962): this da-guard is older "
             "than this tool; use the da-guard from the same release")
     return doc
+
+
+def _has_config_file(doc):
+    """Whether a `_read_tree` document holds any config file (Go's `role`)."""
+    return any(e.config_file for e in _lib_parse_tree.entries_of(doc))
 
 
 def _platform_files(doc):
@@ -937,9 +942,11 @@ def served_disable_warnings(old_tenants, new_tenants):
     return out
 
 
-def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
+def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT, platform=None):
     """Everything both output formats print, from a `_render_diff.RenderDiff`
-    and the two sides' `_` files as parse-tree reads them."""
+    and the two sides' `_` files as parse-tree reads them. *platform*: the
+    caller's `_platform_view` of the same two directories (#3206: the run's
+    one document per side), read here when None."""
     served = diff.served.report or {}
     metric = served.get("metric") or {}
     setting = served.get("setting") or {}
@@ -978,7 +985,8 @@ def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
         "dropped": dropped, "other_served": other,
         "routes": routes, "receivers": receivers, "inhibits": inhibits,
     }
-    platform, old_doc, new_doc = _platform_view(old_dir, new_dir, timeout)
+    platform, old_doc, new_doc = (platform if platform is not None
+                                  else _platform_view(old_dir, new_dir, timeout))
     report["views"][VIEW_PLATFORM] = platform
     rows = []
     if platform.status == "computed":
@@ -1630,8 +1638,14 @@ def _run(args):
             print(f"ERROR: {flag} is not a directory: {path}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
     at = args.at or now_at()
-    diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections)
-    report = build_report(diff, args.old_dir, args.new_dir)
+    # #3206: ONE parse-tree document per side for the whole run — the platform
+    # settings read it, and whether a side has any config file is asked of
+    # its entries, not of a second listing.
+    platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT)
+    _view, old_doc, new_doc = platform
+    has = None if old_doc is None else (_has_config_file(old_doc), _has_config_file(new_doc))
+    diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections, has=has)
+    report = build_report(diff, args.old_dir, args.new_dir, platform=platform)
     code = report_exit_code(diff, report)
     report = mask_report(report, diff.secrets)
 

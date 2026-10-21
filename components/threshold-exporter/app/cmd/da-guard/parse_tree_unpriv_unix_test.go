@@ -56,8 +56,8 @@ func TestParseTree_OneEntryPerPathUnderRealModes(t *testing.T) {
 		must(os.Chmod(p, m))
 	}
 	want := map[string]string{
-		"unlist.yaml": "unlistable_dir", "sealed": "unlistable_dir", "dir.yaml": "not_a_file",
-		"noexec/t.yaml": "config", "zero.yaml": "config", "b.yaml": "config", "ok.yaml": "config",
+		"unlist.yaml": "unlistable_dir", "sealed": "unlistable_dir", "dir.yaml": "dir",
+		"noexec": "dir", "noexec/t.yaml": "config", "zero.yaml": "config", "b.yaml": "config", "ok.yaml": "config",
 		"dir.yaml/in.yaml": "config",
 	}
 	for _, mode := range [][]string{nil, {"--list-only"}} {

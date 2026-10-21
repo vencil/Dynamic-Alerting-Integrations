@@ -714,24 +714,6 @@ def test_entries_agrees_with_paths_on_the_same_flat_tree(with_unusable):
         "naming one is a finding the operator cannot act on")
 
 
-def test_entries_honours_the_callers_suffix_set(with_unusable):
-    """A reader that only reads `*.yaml` must not be handed a `.yml` finding.
-
-    It could not have read the file either way, so naming it would put a
-    finding in front of the operator that the tool printing it cannot act
-    on. (That such narrow readers exist at all is #1603.)
-    """
-    (with_unusable / "delta.yml").mkdir()
-    both = {p.name for p in
-            unusable_config_entries(sorted(with_unusable.iterdir()))}
-    narrow = {p.name for p in
-              unusable_config_entries(sorted(with_unusable.iterdir()),
-                                      suffixes=(".yaml",))}
-    assert "delta.yml" in both, "default must mirror iter_config_files"
-    assert "delta.yml" not in narrow
-    assert {"beta.yaml", "gamma.yaml"} <= narrow
-
-
 def test_entries_excludes_readable_and_non_config_names(with_unusable):
     got = {p.name for p in
            unusable_config_entries(sorted(with_unusable.iterdir()))}
@@ -763,7 +745,7 @@ def test_entries_does_not_list_the_directory_itself(tmp_path, capsys):
     (root / "real.yaml").write_text("tenants: {}\n", encoding="utf-8")
     entries = sorted(root.iterdir())
     assert [p.name for p in unusable_config_entries(entries)] == ["ghost.yaml"]
-    assert config_listing(root).entry("ghost.yaml").not_a_file
+    assert config_listing(root).entry("ghost.yaml").flagged  # a dir with a file's name
     for p in root.iterdir():
         if p.is_dir():
             p.rmdir()

@@ -384,9 +384,10 @@ def config_stem(name: str) -> str:
 #
 # ⛔ NO WALK OF ITS OWN, AND NO VERDICT OF ITS OWN. Which entries a conf.d
 # holds and what each one IS — a config file (role `config`: read, and a
-# read that fails fails loudly), provably not a file (`not_a_file`: a
-# directory, a directory symlink the walk does not follow, a FIFO, a dangling
-# link), a directory that cannot be listed (`unlistable_dir`) — is Go's
+# read that fails fails loudly), a directory the walk enters (`dir`; one with
+# a file's name carries a problem), provably not a file and not entered
+# (`not_a_file`: a directory symlink the walk does not follow, a FIFO, a
+# dangling link), a directory that cannot be listed (`unlistable_dir`) — is Go's
 # verdict, `pkg/config`'s, read from `da-guard parse-tree`'s entries through
 # `_lib_parse_tree`. Nothing here composes a verdict from the other fields
 # (`class`, `problem`) or from a stat: twice a Python default leaning toward
@@ -529,6 +530,8 @@ class ConfigTreeListing(NamedTuple):
     exactly what `unusable_config_paths(root)` returns — projections of the
     same listing, split by the entry's role, so they cannot drift.
 
+    `unusable` is every entry Go flags (`Entry.flagged`: not a config file,
+    with a problem) — a plain directory the walk enters is neither list.
     `unscannable` is the subset of `unusable` whose role is
     `unlistable_dir` (the root itself when it cannot be listed). Kept apart
     because it is a different loss — a whole subtree, not one entry — so a
@@ -559,7 +562,7 @@ def list_config_tree(config_dir: str | os.PathLike[str], *, listing: Any = None,
     if held is None:
         return ConfigTreeListing([], [], [])
     root = held.root
-    bad = [e for e in held.entries if not e.config_file]
+    bad = [e for e in held.entries if e.flagged]
     return ConfigTreeListing(
         [root / e.path for e in held.config_files()],
         [root / e.path for e in bad],
@@ -622,30 +625,29 @@ def unusable_text(kind: str, message: str, path: "str | os.PathLike[str] | None"
 
 
 def not_config_files(listing: Any) -> "frozenset[str]":
-    """The root-relative paths *listing* says are no config file (role
-    `not_a_file` or `unlistable_dir`) — for a reader that walks a selection
-    of its own (a tree-mode document's `selected`) and must skip exactly
-    those. ⛔ Only those (#3206): a path whose stat or open a permission
-    refuses is a config file, read and failing loudly."""
+    """The root-relative paths *listing* says are no config file (any role
+    but `config`: a directory, a link not followed, a special file, a
+    dangling link, a directory it could not list) — for a reader that walks a
+    selection of its own (a tree-mode document's `selected`) and must skip
+    exactly those. ⛔ Only those (#3206): a path whose stat or open a
+    permission refuses is a config file, read and failing loudly."""
     return frozenset() if listing is None else frozenset(
         e.path for e in listing.entries if not e.config_file)
 
 
 def unusable_config_entries(
-    entries: "Iterable[Path]", *, suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
-    listing: Any = None,
+    entries: "Iterable[Path]", *, listing: Any = None,
 ) -> list[Path]:
     """The entries among ALREADY-LISTED `entries` (a caller's own `iterdir`
     of a level) that *listing* — the caller's snapshot of their directory —
-    says are no config file (role other than `config`), sorted by POSIX
-    path, so the caller still names what it cannot read. Without *listing*,
-    one listing per parent directory (a caller that holds a snapshot passes
-    it: the reason it then words comes from the same one). Hidden and
-    non-config names are never in a listing, so never here.
-
-    ⛔ `suffixes` mirrors what the CALLER reads: an entry whose name carries
-    none of them is left out, so a reader of `(".yaml",)` is not told about a
-    `db-b.yml/` directory it was never going to read (#1603).
+    flags (`Entry.flagged`: not a config file, with a problem), sorted by
+    POSIX path, so the caller still names what it cannot read. Without
+    *listing*, one listing per parent directory (a caller that holds a
+    snapshot passes it: the reason it then words comes from the same one).
+    ⛔ Whatever the name (#3206): a directory that cannot be listed, or a
+    link to a directory the walk does not follow, is named even when its
+    name is no config file name — what it costs is a subtree. Hidden names
+    are never in a listing, so never here.
 
     ⚠️ DISJOINT from the config files: a file whose open is refused is a
     config file (not here); its reader's own read names the failure.
@@ -654,8 +656,6 @@ def unusable_config_entries(
     held: dict[str, Any] = {}
     for p in entries:
         p = Path(p)
-        if not has_yaml_extension(p.name, suffixes):
-            continue
         if listing is not None:
             e = unusable_entry(p, listing)
         else:
@@ -663,7 +663,7 @@ def unusable_config_entries(
             if parent not in held:
                 held[parent] = config_listing(parent)
             e = unusable_entry(p, held[parent])
-        if e is not None and not e.config_file:
+        if e is not None and e.flagged:
             out.append(p)
     return sorted(out, key=lambda q: q.as_posix())
 
@@ -673,7 +673,8 @@ def unusable_config_paths(
     listing: Any = None, reader: Any = None,
 ) -> list[Path]:
     """Paths the exporter's walk lists that are not config files — every
-    entry whose role is not `config`: a config-named directory, a directory
+    entry Go flags (`Entry.flagged`; a plain directory the walk enters is
+    not one): a config-named directory, a directory
     symlink the walk does not follow (#1972), a dangling link, a FIFO, a
     directory that cannot be listed (whatever its name: what it costs is a
     whole subtree; the root itself when it cannot be listed).
@@ -693,7 +694,7 @@ def unusable_config_paths(
     if held is None:
         return []
     return [held.root / e.path for e in held.entries
-            if not e.config_file and (recursive or e.depth == 0)]
+            if e.flagged and (recursive or e.depth == 0)]
 
 
 # ── ConfigMap key legality (#1796; shared since #1791) ────────────────
@@ -1109,6 +1110,11 @@ def tree_tenants(
     * a tenant file parse-tree cannot read — every one is named with its
       kind; a file whose top level is not a mapping declares nothing and is
       not one of them;
+    * an entry that may be — or hide — a tenant file: a directory Go could
+      not list, a link to a directory it does not follow, a dangling link, a
+      special file, a directory with a config file's name, unless Go classes
+      the name a platform one (`_tenant_set_blockers`) — named with its
+      problem;
     * an id declared by two or more files (`duplicate_declarations`): the
       exporter rejects such a tree (`DuplicateTenantError`), so emitting one
       tenant from it would describe a state the exporter refuses.
@@ -1121,6 +1127,16 @@ def tree_tenants(
     """
     from _lib_parse_cache import declared_tenants
     reader = _reader_of(config_dir, reader)
+    flagged = _tenant_set_blockers(config_dir, reader) if Path(config_dir).is_dir() else []
+    if flagged:
+        shown = "; ".join(f"{printable_name(e.path)} ({printable_name(e.problem[0])}: "
+                          f"{printable_name(' '.join(e.problem[1].split()))})"
+                          for e in flagged[:WARN_LIMIT])
+        more = f" (+{len(flagged) - WARN_LIMIT} more)" if len(flagged) > WARN_LIMIT else ""
+        raise TenantSetUnknown(
+            f"cannot tell which tenants {printable_name(os.fspath(config_dir))} "
+            f"declares: {len(flagged)} entr(y/ies) da-guard parse-tree cannot read as "
+            f"config files: {shown}{more}")
     declared, unreadable = declared_tenants(reader)
     if unreadable:
         shown = "; ".join(
@@ -1147,6 +1163,39 @@ def tree_tenants(
     for tenant in sorted(declared):
         (tenants if validate is None or validate(tenant) else invalid).append(tenant)
     return TreeTenants(tenants, invalid)
+
+
+def _tenant_set_blockers(config_dir: "str | os.PathLike[str]", reader: Any) -> list:
+    """The entries that make a tree's tenant set unknown (#3206), from the
+    reader's listing — Go's role, class and problem, and for a directory
+    Go's class of its NAME (`classify_names`), never a name rule here:
+
+    * a directory it could not list, whatever its name — what is under it
+      is unknown;
+    * a link to a directory the walk does not follow, whatever its name —
+      nothing under it is loaded;
+    * any other entry Go flags (a dangling link, a special file, a directory
+      with a config file's name) unless Go classes the name a platform one
+      (`_`, read for no tenant: naming it would report a loss that did not
+      happen)."""
+    from _lib_parse_tree import classify_names  # lazy: see the walk section
+    listing = config_listing(config_dir, reader=reader)
+    if listing is None:
+        return []
+    cand = [e for e in listing.entries if e.flagged]
+    dirs = {e.name for e in cand if e.is_dir}
+    named = classify_names(sorted(dirs), getattr(reader, "binary", None),
+                           getattr(reader, "timeout", None)) if dirs else {}
+    out = []
+    for e in cand:
+        if e.unlistable_dir or (e.not_a_file and e.cls == "directory"):
+            out.append(e)
+        elif e.is_dir:
+            if not named[e.name].reserved:
+                out.append(e)
+        elif not e.reserved:
+            out.append(e)
+    return out
 
 
 def _reader_of(config_dir: "str | os.PathLike[str]", reader: Any) -> Any:

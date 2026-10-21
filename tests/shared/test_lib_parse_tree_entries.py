@@ -114,7 +114,9 @@ def _build(box: Path) -> Path:
 _WANT_ROLES = {
     "b.yaml": "config", "noexec/t.yaml": "config", "zero.yaml": "config",
     "ok.yaml": "config", "broken.yaml": "config", "dir.yaml/in.yaml": "config",
-    "gone.yaml": "not_a_file", "dir.yaml": "not_a_file", "sealed": "unlistable_dir",
+    "gone.yaml": "not_a_file", "sealed": "unlistable_dir",
+    # Directories the walk enters, a config-named one included (#3206).
+    "dir.yaml": "dir", "noexec": "dir",
     # A config-named directory that cannot be listed: ONE entry (the walk
     # once recorded it twice, and the reader refused the whole document).
     "unlist.yaml": "unlistable_dir",
@@ -153,10 +155,12 @@ def test_config_file_is_the_role_and_nothing_else() -> None:
                  readers=("exporter", "generator"), not_read=None,
                  problem=("read_failure", "the path cannot be statted (stat_error)"))
     got = {role: lpt.Entry(**facts, role=role) for role in sorted(lpt.ROLES)}
-    assert {r: (e.config_file, e.not_a_file, e.unlistable_dir) for r, e in got.items()} == {
-        "config": (True, False, False),
-        "not_a_file": (False, True, False),
-        "unlistable_dir": (False, False, True),
+    assert {r: (e.config_file, e.is_dir, e.not_a_file, e.unlistable_dir)
+            for r, e in got.items()} == {
+        "config": (True, False, False, False),
+        "dir": (False, True, False, False),
+        "not_a_file": (False, False, True, False),
+        "unlistable_dir": (False, False, False, True),
     }
 
 
@@ -169,11 +173,13 @@ def test_list_tree_and_classify_names_read_the_same_reader(tmp_path, da_guard_en
     (conf / "team" / "_domain_policy.yaml").write_text("x: 1\n", encoding="utf-8")
     listing = lpt.list_tree(conf)
     assert [e.path for e in listing.entries] == [
-        "_defaults.yaml", "_defaults.yml", "t1.yaml", "team/_domain_policy.yaml"]
+        "_defaults.yaml", "_defaults.yml", "t1.yaml", "team", "team/_domain_policy.yaml"]
+    assert listing.entry("team").is_dir and listing.entry("team").problem is None
     assert dict(listing.defaults_carriers) == {".": "_defaults.yaml"}
     assert listing.entry("_defaults.yml").not_read == "unselected_defaults_carrier"
     assert listing.entry("team/_domain_policy.yaml").readers == ("generator",)
-    assert [e.path for e in listing.config_files()] == [e.path for e in listing.entries]
+    assert [e.path for e in listing.config_files()] == [
+        e.path for e in listing.entries if e.path != "team"]
     names = lpt.classify_names(["db-a.yaml", ".h.yaml", "_defaults-multidb.yaml", "n.txt"])
     assert {n: (e.cls, e.tenant_named, e.defaults_document, e.role, e.readers)
             for n, e in names.items()} == {

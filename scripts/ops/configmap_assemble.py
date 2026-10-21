@@ -169,7 +169,8 @@ def _carriers(config_dir: Path) -> tuple[list[Path], list[Path], Any]:
     name and neither is a file, so both used to leave the run with rc 0 and
     one tenant fewer than the tree declares — the exact "a tenant disappears
     with a green light" this module's own docstring names. It is every entry
-    at this level whose role is not `config`, phrased by `unusable_reason`,
+    at this level Go flags (`Entry.flagged`: not a config file, with a
+    problem — a plain subdirectory is neither list), phrased by `unusable_reason`,
     the wording the operator-plane readers share.
 
     ⛔ A file whose stat or open is refused is a carrier (role `config`), not
@@ -184,7 +185,7 @@ def _carriers(config_dir: Path) -> tuple[list[Path], list[Path], Any]:
         return [], [], None
     top = [e for e in listing.entries if e.depth == 0]
     return ([config_dir / e.path for e in top if e.config_file],
-            [config_dir / e.path for e in top if not e.config_file], listing)
+            [config_dir / e.path for e in top if e.flagged], listing)
 
 
 def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], dict[str, int]]:

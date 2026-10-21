@@ -132,12 +132,23 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(dir_path, tool="assemble_config_dir", listing=listing)
-    for p in sorted(dir_path.iterdir()):
+    # ⚠️ WORDING ONLY: this loop selects nothing (the entries are the
+    # listing's); a directory this uid cannot list just has no hidden-entry
+    # WARN — its own failure is the listing's to report.
+    try:
+        own = sorted(dir_path.iterdir())
+    except OSError:
+        own = []
+    for p in own:
         if has_yaml_extension(p.name) and is_hidden_name(p.name):
             print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
                   f"does not read it", file=sys.stderr)
     return [] if listing is None else [dir_path / e.path for e in listing.entries
                                        if e.depth == 0]
+
+
+class SourceUnreadable(FileNotFoundError):
+    """A source directory the exporter's walk cannot list (`main` → rc 2)."""
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
@@ -182,6 +193,12 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # a missing alert. The listing (and the nested-config guard) is the
     # shared one — `validate_merged` reads the artifact through it too.
     listing = config_listing(source_dir)
+    root = None if listing is None else listing.entry(".")
+    if root is not None and root.unlistable_dir:
+        # #3206: the source itself cannot be listed — nothing of it can be
+        # merged, and an empty merge would read as "no tenants": rc 2, named.
+        raise SourceUnreadable(f"source directory cannot be listed: {source_dir} — "
+                               f"{unusable_reason(source_dir, listing)}")
     named = list_visible_config_entries(source_dir, listing)
 
     # ⛔ A config-NAMED entry that is not a readable file (a shard's broken

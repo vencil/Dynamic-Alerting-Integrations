@@ -428,8 +428,12 @@ def validate_dir(config_dir: str, schema: dict, validator,
         rel = entry.path
         path = os.path.join(config_dir, rel)
         basename = entry.name
+        if entry.is_dir and entry.problem is None:
+            continue  # a directory the walk enters: its files are entries too
         if not entry.config_file:
-            # Go's verdict: no config file here (#3206) — named, never skipped.
+            # Go's verdict: no config file here (#3206) — named, never skipped:
+            # a link not followed, a dangling link, a directory it could not
+            # list, a directory with a file's name.
             kind, message = entry.problem or ("not_regular_file", "not a config file")
             _cannot_read(_unreadable_line(rel, kind, message))
             continue

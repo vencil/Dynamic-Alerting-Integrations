@@ -270,8 +270,13 @@ def _last_line(text: str) -> str:
 
 def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at: str, *,
             binary: str | None = None, timeout: float = DEFAULT_TIMEOUT,
-            served_report: Callable[[dict, dict], Any] | None = None) -> RenderDiff:
+            served_report: Callable[[dict, dict], Any] | None = None,
+            has: "tuple[bool, bool] | None" = None) -> RenderDiff:
     """Render both sides and compare them (see the module docstring).
+
+    `has` is `(base has a config file, PR side has one)` when the caller
+    already read both sides' parse-tree documents (#3206: from those
+    documents' entries, so no second listing); None asks `has_config`.
 
     `served_report(base, pr)`, given, is called with the two sides' served
     tenants when that view is computed, and its result kept as the view's
@@ -280,7 +285,8 @@ def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at
     from _lib_parse_tree import ParseTreeError, use_da_guard  # lazy: runs da-guard
     try:
         with use_da_guard(binary, timeout):
-            pr_has, base_has = has_config(pr_dir), has_config(base_dir)
+            base_has, pr_has = has if has is not None else (has_config(base_dir),
+                                                             has_config(pr_dir))
     except ParseTreeError as e:
         miss = ViewResult("not_computed", f"cannot list the conf.d through `da-guard "
                                           f"parse-tree --list-only`: {' '.join(str(e).split())}")

@@ -255,8 +255,10 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"  config          a config file. Readers read it; a \"problem\" says their read fails\n"+
 			"                  (a stat or open refused for any reason but the ones below, EIO, a\n"+
 			"                  content kind in tree and file mode).\n"+
-			"  not_a_file      the exporter's walk cannot reach a regular file there: a config-named\n"+
-			"                  directory, a symlink to a directory, a FIFO / socket / device (or a\n"+
+			"  dir             a directory the walk goes into and lists — every one has an entry;\n"+
+			"                  a config-named one (x.yaml/) too, with a not_regular_file problem.\n"+
+			"  not_a_file      the exporter's walk cannot reach a regular file there and does not\n"+
+			"                  go into it: a symlink to a directory, a FIFO / socket / device (or a\n"+
 			"                  link to one), a stat that finds nothing (a dangling link, a looping\n"+
 			"                  link, a chain of more than 40 links even when it ends at a file).\n"+
 			"  unlistable_dir  a directory whose contents could not be listed (\".\" for the root):\n"+
@@ -513,7 +515,11 @@ func notFileEntry(rel, reason string) ([]string, string) {
 	case config.NotFileDirLink:
 		return []string{readerGenerator}, "a symlink to a directory the walk does not follow"
 	}
-	return []string{readerGenerator}, "a directory with a config file name"
+	// A config-named directory: the walk descends it like any directory
+	// (role dir), so both readers go into it; the problem says only that its
+	// name looks like a file's.
+	return []string{readerExporter, readerGenerator},
+		"a directory with a config file name (the walk descends it; its files are read)"
 }
 
 // fileOnDisk is the tree-mode entry of an existing rel that is not a regular

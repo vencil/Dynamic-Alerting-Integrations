@@ -137,6 +137,16 @@ def load_all_configs(config_dir, unreadable=None):
     tree = reader.tree()
     listing = reader.listing()  # #3206: one snapshot for the warning, the skip, the reasons
     warn_nested(base, tool="offboard_tenant", listing=listing)
+    # #3206: a directory the walk could not list — any depth, any name — hides
+    # what is under it (a reference to this tenant could be there): named and
+    # counted unreadable, which blocks --execute; never a clean pre-check.
+    for e in listing.entries:
+        if e.unlistable_dir:
+            kind, message = e.problem
+            print(f"  ⚠️  無法讀取 {safe_label(e.path)}: da-guard parse-tree: "
+                  f"{safe_label(kind)}: {safe_label(message)}")
+            if unreadable is not None:
+                unreadable.append(e.path)
     for filename, entry in _top_level(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
@@ -145,6 +155,8 @@ def load_all_configs(config_dir, unreadable=None):
             print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
                   "於開機匯入它（引用改由 --state 判定）")
             continue
+        if entry.unlistable_dir:
+            continue  # named and counted above
         if not entry.config_file:
             # #1607: an entry with a config name that Go says is no config
             # file (a directory, a directory symlink, a FIFO, a dangling
