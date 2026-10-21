@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -142,6 +143,14 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("ErrForgeDegraded fetch timeout", fmt.Errorf("git fetch origin %s timed out after %s: %w", "main", "5s", gitops.ErrForgeDegraded))
 	add("ErrGitTimeout %w DeadlineExceeded", fmt.Errorf("%w: %w", gitops.ErrGitTimeout, context.DeadlineExceeded))
 	add("ErrValidation %w ErrInvalidTenantID", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrInvalidTenantID))
+	// ErrNoChanges together with another class: pins where each entry
+	// judges ErrNoChanges relative to the others.
+	add("ErrPushFailed %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrPushFailed, gitops.ErrNoChanges))
+	add("PushError %w ErrNoChanges", fmt.Errorf("%w: %w", &gitops.PushError{Branch: "da-tenant/tu-a-1", Cause: gitops.ErrGitTimeout}, gitops.ErrNoChanges))
+	add("ErrWriteOverloaded %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrWriteOverloaded, gitops.ErrNoChanges))
+	add("ErrNoChanges %w context.Canceled", fmt.Errorf("%w: %w", gitops.ErrNoChanges, context.Canceled))
+	add("ErrValidation %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrNoChanges))
+	add("freshBaseScopeError %w ErrNoChanges", fmt.Errorf("%w: %w", &freshBaseScopeError{TenantID: goldenTenant, Put: true}, gitops.ErrNoChanges))
 	add("ErrMergeFailed %w merge error", fmt.Errorf("%w for %s: %w", gitops.ErrMergeFailed, goldenTenant, errors.New("yaml: line 3: mapping values are not allowed")))
 
 	// Typed errors.
@@ -156,7 +165,7 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("BaseRestoreError{Pushed: false}", &gitops.BaseRestoreError{Branch: "da-tenant/tu-a-1", Attempts: 1, Cause: errors.New("checkout /srv/conf: exit 128")})
 	add("BatchCommittedError", &gitops.BatchCommittedError{Commit: "c0ffee", Cause: errors.New("worktree reset failed")})
 	add("BatchRejectedError{op0: ErrValidation}", &gitops.BatchRejectedError{Outcomes: []gitops.BatchOpOutcome{{Err: fmt.Errorf("%w: bad threshold", gitops.ErrValidation)}, {}}})
-	treeEntries := []cfg.UnreadableFile{{RelKey: "tu-b.yaml", Reason: cfg.UnreadableStatError}, {RelKey: "sub", Reason: cfg.UnreadableWalkError}}
+	treeEntries := goldenTreeEntries
 	add("TreeUnreadableError{StoreFault: false}", &gitops.TreeUnreadableError{Entries: treeEntries})
 	add("TreeUnreadableError{StoreFault: true}", &gitops.TreeUnreadableError{Entries: treeEntries, StoreFault: true})
 	add("wrapped(TreeUnreadableError{StoreFault: true})", fmt.Errorf("stage: %w", &gitops.TreeUnreadableError{Entries: treeEntries, StoreFault: true}))
@@ -291,6 +300,9 @@ func goldenCaller(t *testing.T, mgr *rbac.Manager, group string) *http.Request {
 // header / retry_after_s pair when either is set, NO-REQUEST-ID when the
 // envelope lacks it, the other body fields as sorted JSON when there are any,
 // and the error text.
+// noResponse ends the cell of an entry that wrote nothing.
+const noResponse = " | (no response)"
+
 func renderGoldenCell(e goldenEntry, r *http.Request, d *Deps, err error) string {
 	rec := httptest.NewRecorder()
 	sink := &WriteResults{}
@@ -308,7 +320,7 @@ func renderGoldenCell(e goldenEntry, r *http.Request, d *Deps, err error) string
 		}
 	}
 	if !answered && rec.Body.Len() == 0 {
-		return ret + " | (no response)"
+		return ret + noResponse
 	}
 	var body map[string]any
 	if jerr := json.Unmarshal(rec.Body.Bytes(), &body); jerr != nil {
@@ -342,13 +354,90 @@ func renderGoldenCell(e goldenEntry, r *http.Request, d *Deps, err error) string
 		extra, _ := json.Marshal(body) // map keys are sorted
 		opt = append(opt, "extra="+string(extra))
 	}
-	opt = append(opt, fmt.Sprintf("error=%q", text))
+	opt = append(opt, "error="+goldenText(text))
 	return fmt.Sprintf("%s | %d %s counted=%s %s", ret, rec.Code, code, counted, strings.Join(opt, " "))
 }
 
 // renderBatchResult is one per-op BatchResult on one line.
+// The tenant (goldenTenant) and the status ("error") every projection here
+// gives are shown only when a result has another.
 func renderBatchResult(res BatchResult) string {
-	return fmt.Sprintf("tenant=%s status=%s code=%s message=%q", res.TenantID, res.Status, orDash(res.Code), res.Message)
+	var head string
+	if res.TenantID != goldenTenant {
+		head += "tenant=" + res.TenantID + " "
+	}
+	if res.Status != "error" {
+		head += "status=" + res.Status + " "
+	}
+	return fmt.Sprintf("%scode=%s message=%s", head, orDash(res.Code), goldenText(res.Message))
+}
+
+// goldenTexts are the fixed client texts the golden names instead of
+// repeating them; their values are printed once in the golden's legend, so a
+// changed text still shows in the diff.
+var goldenTexts = []struct{ name, text string }{
+	{"msgInternal", msgInternal},
+	{"msgWriteFailed", msgWriteFailed},
+	{"msgBatchOpFailed", msgBatchOpFailed},
+	{"msgWriteCancelled", msgWriteCancelled},
+	{"msgWriteOutcomeUnknown", msgWriteOutcomeUnknown},
+	{"msgTenantDeclaredElsewhere", msgTenantDeclaredElsewhere},
+	{"msgTenantFileDirty", msgTenantFileDirty},
+	{"msgTenantTreeScan", msgTenantTreeScan},
+	{"msgGitPushFailed", msgGitPushFailed},
+	{"msgBatchConflict", msgBatchConflict},
+	{"msgBatchCommittedIncomplete", msgBatchCommittedIncomplete},
+	{"msgGeneratorTooLarge", msgGeneratorTooLarge},
+	{"msgGitDriverConfigured", msgGitDriverConfigured},
+	// Texts the production code composes; the golden names the ones its
+	// corpus produces (goldenComposedTexts).
+}
+
+// goldenTreeEntries are the entries of the corpus's TreeUnreadableErrors.
+var goldenTreeEntries = []cfg.UnreadableFile{{RelKey: "tu-b.yaml", Reason: cfg.UnreadableStatError}, {RelKey: "sub", Reason: cfg.UnreadableWalkError}}
+
+// goldenComposedTexts are client texts the production helpers compose for
+// the corpus's errors, computed by those helpers (or, for the findings
+// texts written inline in writeGeneratorError, copied): named like
+// goldenTexts, with their values in the legend.
+func goldenComposedTexts() []struct{ name, text string } {
+	type nt = struct{ name, text string }
+	tree := &gitops.TreeUnreadableError{Entries: goldenTreeEntries}
+	store := &gitops.TreeUnreadableError{Entries: goldenTreeEntries, StoreFault: true}
+	out := []nt{
+		{"treeUnreadableText(symlinks, hidden)", treeUnreadableText(tree, false)},
+		{"treeUnreadableText(symlinks, visible)", treeUnreadableText(tree, true)},
+		{"treeUnreadableText(store fault, hidden)", treeUnreadableText(store, false)},
+		{"treeUnreadableText(store fault, visible)", treeUnreadableText(store, true)},
+		{"targetUnreadableText(special_file)", targetUnreadableText(&gitops.TargetUnreadableError{TenantID: goldenTenant, RelKey: "tu-a.yaml", Reason: cfg.UnreadableSpecialFile})},
+		{"targetUnreadableText(read_error)", targetUnreadableText(&gitops.TargetUnreadableError{TenantID: goldenTenant, RelKey: "tu-a.yaml", Reason: cfg.UnreadableReadError})},
+		{"GitManagedError(tenant_count).Error()", (&gitops.GitManagedError{TenantID: goldenTenant, Reason: "tenant_count"}).Error()},
+		{"findingsText(compared)", "the route generator refuses the configuration this write would produce; nothing was written"},
+		{"findingsText(not compared)", "the route generator refuses the configuration this write would produce; nothing was written " +
+			"(not compared with the configuration before the write: pre_existing is not set)"},
+		{"generatorUnavailableText(VALIDATOR_UNAVAILABLE, unreachable)", generatorUnavailableText(&generator.UnavailableError{Code: generator.CodeValidatorUnavailable, Reason: generator.ReasonUnreachable})},
+		{"generatorUnavailableText(POLICY_UNAVAILABLE, policy_unusable)", generatorUnavailableText(&generator.UnavailableError{Code: generator.CodePolicyUnavailable, Reason: generator.ReasonPolicyUnusable})},
+	}
+	for _, reason := range append(append([]string{}, generator.RejectionReasons...), "not_a_known_reason") {
+		if reason == generator.ReasonTooLarge {
+			continue // msgGeneratorTooLarge
+		}
+		out = append(out, nt{"generatorRejectedText(" + reason + ")", generatorRejectedText(&generator.RejectedError{Reason: reason})})
+	}
+	return out
+}
+
+// allGoldenTexts is goldenTexts then goldenComposedTexts.
+var allGoldenTexts = append(append([]struct{ name, text string }{}, goldenTexts...), goldenComposedTexts()...)
+
+// goldenText is s quoted, or the name of the goldenTexts entry it equals.
+func goldenText(s string) string {
+	for _, gt := range allGoldenTexts {
+		if s == gt.text {
+			return gt.name
+		}
+	}
+	return fmt.Sprintf("%q", s)
 }
 
 func orDash(s string) string {
@@ -359,28 +448,72 @@ func orDash(s string) string {
 }
 
 // renderVariants renders f for the hidden and the visible caller: one line
-// marked [*] when both answer the same, else one line each.
+// "name => answer" when both answer the same, else one line each, marked
+// [hidden] / [visible].
 func renderVariants(b *strings.Builder, name string, f func(visible bool) string) {
 	hidden, visible := f(false), f(true)
 	if hidden == visible {
-		fmt.Fprintf(b, "  %-62s [*]       %s\n", name, hidden)
+		fmt.Fprintf(b, "%s => %s\n", name, hidden)
 		return
 	}
-	fmt.Fprintf(b, "  %-62s [hidden]  %s\n", name, hidden)
-	fmt.Fprintf(b, "  %-62s [visible] %s\n", name, visible)
+	fmt.Fprintf(b, "%s [hidden] => %s\n", name, hidden)
+	fmt.Fprintf(b, "%s [visible] => %s\n", name, visible)
 }
 
-// renderRow renders f for one corpus error: its bare form, and its wrapped
-// form on the same line ("name ≡ %w") when every variant answers the same,
-// else on its own lines as wrapped(name).
-func renderRow(b *strings.Builder, ge goldenErr, f func(err error, visible bool) string) {
-	if ge.wrapped != nil && f(ge.err, false) == f(ge.wrapped, false) && f(ge.err, true) == f(ge.wrapped, true) {
-		renderVariants(b, ge.name+" ≡ %w", func(v bool) string { return f(ge.err, v) })
-		return
+// renderGrouped renders f over the corpus grouped by answer: each distinct
+// answer once ("[hidden] … / [visible] …" when the two callers differ),
+// followed by the sorted inputs that get it ("x ≡ %w" when x and its
+// %w-wrapped form both do). A changed answer for one input moves it to
+// another group, so the diff names it. Inputs an HTTP entry writes nothing
+// for come last, one line per return value: "no response (<return>): …".
+func renderGrouped(b *strings.Builder, corpus []goldenErr, f func(err error, visible bool) string) {
+	type group struct {
+		answer string
+		names  []string
 	}
-	renderVariants(b, ge.name, func(v bool) string { return f(ge.err, v) })
-	if ge.wrapped != nil {
-		renderVariants(b, "wrapped("+ge.name+")", func(v bool) string { return f(ge.wrapped, v) })
+	var groups []*group
+	byAnswer := map[string]*group{}
+	put := func(name, answer string) {
+		g := byAnswer[answer]
+		if g == nil {
+			g = &group{answer: answer}
+			byAnswer[answer] = g
+			groups = append(groups, g)
+		}
+		g.names = append(g.names, name)
+	}
+	answer := func(err error) string {
+		hidden, visible := f(err, false), f(err, true)
+		if hidden == visible {
+			return hidden
+		}
+		return "[hidden] " + hidden + "\n[visible] " + visible
+	}
+	for _, ge := range corpus {
+		a := answer(ge.err)
+		if ge.wrapped == nil {
+			put(ge.name, a)
+			continue
+		}
+		if aw := answer(ge.wrapped); aw != a {
+			put(ge.name, a)
+			put("wrapped("+ge.name+")", aw)
+			continue
+		}
+		put(ge.name+" ≡ %w", a)
+	}
+	var silent []*group
+	for _, g := range groups {
+		sort.Strings(g.names)
+		if ret, ok := strings.CutSuffix(g.answer, noResponse); ok && !strings.Contains(g.answer, "\n") {
+			silent = append(silent, &group{answer: ret, names: g.names})
+			continue
+		}
+		fmt.Fprintf(b, "%s\n  <- %s\n", g.answer, strings.Join(g.names, ", "))
+	}
+	sort.Slice(silent, func(i, j int) bool { return silent[i].answer < silent[j].answer })
+	for _, g := range silent {
+		fmt.Fprintf(b, "no response (%s): %s\n", g.answer, strings.Join(g.names, ", "))
 	}
 }
 
@@ -400,19 +533,25 @@ func buildErrorGolden(t *testing.T) string {
 	b.WriteString("# Error → response golden (#3226). Generated by TestErrorResponses_Golden; regenerate with\n")
 	b.WriteString("# UPDATE_GOLDEN=1 and review every changed line: each is a changed answer.\n")
 	b.WriteString("# Every error is fed to every entry, including errors the entry never receives in production.\n")
-	b.WriteString("# [*] = the same answer for a caller treePathsVisible admits (visible) and one it does not (hidden).\n")
+	b.WriteString("# Grouped by answer: each answer once, then \"  <- \" and the sorted inputs that get it. [hidden] / [visible]:\n")
+	b.WriteString("# a caller treePathsVisible does not / does admit, when the two are answered differently.\n")
+	b.WriteString("# \"x ≡ %w\": x and x %w-wrapped once get the same answer. \"no response (<return>): …\" lists the\n")
+	b.WriteString("# inputs an entry writes nothing for. Scenario rows (no error input) are \"<scenario> => <answer>\".\n")
 	b.WriteString("# counted = tenant_api_writes_total result of the attempt (fault from the entry or its caller wins).\n")
+	b.WriteString("\n## Fixed texts named below\n")
+	for _, gt := range allGoldenTexts {
+		fmt.Fprintf(&b, "%s = %q\n", gt.name, gt.text)
+	}
 	b.WriteString("\n## Part 1: HTTP entries\n")
 	for _, e := range goldenEntries() {
 		fmt.Fprintf(&b, "\n### %s\n", e.name)
-		for _, ce := range corpus {
-			renderRow(&b, ce, func(err error, visible bool) string {
-				if !e.usesDeps {
-					visible = false
-				}
-				return renderGoldenCell(e, reqs[visible], d, err)
-			})
+		cell := func(err error, visible bool) string {
+			if !e.usesDeps {
+				visible = false
+			}
+			return renderGoldenCell(e, reqs[visible], d, err)
 		}
+		renderGrouped(&b, corpus, cell)
 	}
 
 	b.WriteString("\n## Part 2: batch projections (per-op result / task error / metric / dry-run text)\n")
@@ -441,19 +580,17 @@ func buildErrorGolden(t *testing.T) string {
 		{"batchTaskError (run.Err = error, run.Results[0] = batchErrorResult as stored)", func(err error, _ bool) string {
 			run := directBatchRun{Err: err, Results: []BatchResult{batchErrorResult(goldenTenant, err, false)}}
 			if terr := batchTaskError(run); terr != nil {
-				return fmt.Sprintf("%q", terr.Error())
+				return goldenText(terr.Error())
 			}
 			return "<nil>"
 		}},
 		{"dryRunRefusalMessage", func(err error, visible bool) string {
-			return fmt.Sprintf("%q", dryRunRefusalMessage(err, visible))
+			return goldenText(dryRunRefusalMessage(err, visible))
 		}},
 	}
 	for _, p := range projections {
 		fmt.Fprintf(&b, "\n### %s\n", p.name)
-		for _, ce := range corpus {
-			renderRow(&b, ce, p.f)
-		}
+		renderGrouped(&b, corpus, p.f)
 	}
 	b.WriteString("\n### batchTaskError (runs that are not one error)\n")
 	for _, s := range []struct {
@@ -466,7 +603,7 @@ func buildErrorGolden(t *testing.T) string {
 	} {
 		line := "<nil>"
 		if terr := batchTaskError(s.run); terr != nil {
-			line = fmt.Sprintf("%q", terr.Error())
+			line = goldenText(terr.Error())
 		}
 		renderVariants(&b, s.name, func(bool) string { return line })
 	}

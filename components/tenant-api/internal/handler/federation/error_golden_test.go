@@ -109,7 +109,7 @@ func TestFederationErrorResponses_Golden(t *testing.T) {
 	b.WriteString("# writeFederationGitError golden (#3226; msg500 = \"backfill account ids: \"). Regenerate with\n")
 	b.WriteString("# UPDATE_GOLDEN=1 and review every changed line: each is a changed answer.\n\n")
 	for _, ce := range federationErrorCorpus() {
-		fmt.Fprintf(&b, "  %-44s %s\n", ce.name, renderFederationCell(ce.err))
+		fmt.Fprintf(&b, "%s => %s\n", ce.name, renderFederationCell(ce.err))
 	}
 	got := b.String()
 
