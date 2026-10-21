@@ -55,7 +55,9 @@ def _entry(path, *, role="config", cls="tenant", problem=None, depth=None, reade
             "class": cls, "tenant_named": path.rsplit("/", 1)[-1].split(".")[0]
             if cls == "tenant" else None,
             "defaults_document": False,
-            "readers": ["exporter", "generator"] if readers is None else readers,
+            # A directory is read by no reader (role dir: readers []).
+            "readers": (([] if role == "dir" else ["exporter", "generator"])
+                        if readers is None else readers),
             "not_read": not_read, "role": role,
             "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
 

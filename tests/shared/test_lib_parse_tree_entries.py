@@ -175,6 +175,8 @@ def test_list_tree_and_classify_names_read_the_same_reader(tmp_path, da_guard_en
     assert [e.path for e in listing.entries] == [
         "_defaults.yaml", "_defaults.yml", "t1.yaml", "team", "team/_domain_policy.yaml"]
     assert listing.entry("team").is_dir and listing.entry("team").problem is None
+    # A directory is no file a reader reads, and nothing is passed over.
+    assert (listing.entry("team").readers, listing.entry("team").not_read) == ((), None)
     assert dict(listing.defaults_carriers) == {".": "_defaults.yaml"}
     assert listing.entry("_defaults.yml").not_read == "unselected_defaults_carrier"
     assert listing.entry("team/_domain_policy.yaml").readers == ("generator",)
@@ -206,3 +208,22 @@ def test_a_list_document_is_no_tree_document() -> None:
     tree = {**listed, "mode": "tree", "files": {"t.yaml": {}}, "rendered_by": {}}
     with pytest.raises(lpt.ParseTreeError, match="list mode with 'files'"):
         lpt.read_document(json.dumps(tree).encode(), check=lpt._check_list("list"))
+
+
+def test_a_dir_entry_names_no_reader() -> None:
+    """Role `dir` is read by no reader and passes nothing over: an entry that
+    gives a directory readers, or a not_read reason, is a document from a
+    da-guard this reader does not understand, refused whole."""
+    import json
+    base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
+            "defaults_document": False, "readers": [], "not_read": None,
+            "role": "dir", "problem": None}
+    doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
+           "defaults_carriers": {}}
+    listing = lpt.read_document(json.dumps({**doc, "entries": [base]}).encode(),
+                                check=lpt._check_list("list"))
+    assert listing["entries"][0]["readers"] == []
+    for bad in ({"readers": ["exporter"]}, {"not_read": "unselected_defaults_carrier"}):
+        with pytest.raises(lpt.ParseTreeError, match="a dir with readers"):
+            lpt.read_document(json.dumps({**doc, "entries": [{**base, **bad}]}).encode(),
+                              check=lpt._check_list("list"))

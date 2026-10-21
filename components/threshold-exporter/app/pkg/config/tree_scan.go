@@ -341,14 +341,15 @@ type TreeScan struct {
 	// nil when there is none, and always nil for the root-only modes.
 	NotFiles []NotFile
 
-	// Dirs is every directory below the root the full walk entered and
-	// listed, whose name is not a config file name (a config-named one is a
-	// NotFile, NotFileDirectory), sorted (#3206): with NotFiles and
-	// Unreadable it makes the record of the walk complete, so `parse-tree`
-	// gives every directory an entry (role "dir") and no reader lists a
-	// directory itself. A directory that could not be listed is in
-	// Unreadable (walk_error) instead. nil when there is none, and always
-	// nil for the root-only modes.
+	// Dirs is every directory under the root that the full walk enters,
+	// whose name is not a config file name (a config-named one is a NotFile,
+	// NotFileDirectory), sorted (#3206): with NotFiles, Unreadable and
+	// RootWalkErr the record of the walk is complete, so `parse-tree` gives
+	// every directory an entry (role "dir") and no reader lists a directory
+	// itself. A directory it enters but cannot list is in Unreadable
+	// (walk_error) instead; the root itself is never here — it appears (as
+	// ".") only when it cannot be listed (RootWalkErr). nil when there is
+	// none, and always nil for the root-only modes.
 	Dirs []string
 
 	// attrib is every tenant's FIRST declaring file in walk order, recorded

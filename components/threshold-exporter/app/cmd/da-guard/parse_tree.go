@@ -136,7 +136,8 @@ type parseTreeEntry struct {
 	// Names mode answers by the name alone.
 	DefaultsDocument bool
 	// Readers is who reads it; [] when no reader does (then NotRead says
-	// why). null in names mode, which has no tree.
+	// why — except for role dir: a directory is read by no one and nothing
+	// is passed over, so NotRead stays empty). null in names mode.
 	Readers []string
 	// NotRead is why no reader reads it (notRead*), else null.
 	NotRead string
@@ -250,7 +251,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"each directory's selected defaults carrier; the route generator reads those and every\n"+
 			"other `_` file below the root (e.g. team/_domain_policy.yaml); [] with \"not_read\" set\n"+
 			"when no reader does: unselected_defaults_carrier (at the root or below it), and in\n"+
-			"file mode also hidden, not_config_name, parent_not_walked.\n"+
+			"file mode also hidden, not_config_name, parent_not_walked. A role dir entry has\n"+
+			"readers [] and not_read null: a directory is no file anyone reads.\n"+
 			"\"role\", the verdict on what the path is, a closed list:\n"+
 			"  config          a config file. Readers read it; a \"problem\" says their read fails\n"+
 			"                  (a stat or open refused for any reason but the ones below, EIO, a\n"+
@@ -516,9 +518,10 @@ func notFileEntry(rel, reason string) ([]string, string) {
 		return []string{readerGenerator}, "a symlink to a directory the walk does not follow"
 	}
 	// A config-named directory: the walk descends it like any directory
-	// (role dir), so both readers go into it; the problem says only that its
-	// name looks like a file's.
-	return []string{readerExporter, readerGenerator},
+	// (role dir) and its files are read — the directory itself is read by
+	// no reader (readers []); the problem says only that its name looks like
+	// a file's.
+	return []string{},
 		"a directory with a config file name (the walk descends it; its files are read)"
 }
 

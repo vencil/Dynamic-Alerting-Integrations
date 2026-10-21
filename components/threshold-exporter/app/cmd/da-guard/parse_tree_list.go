@@ -168,8 +168,10 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 		idx.Entries = append(idx.Entries, notFileAsEntry(nf))
 	}
 	for _, d := range scan.Dirs {
+		// A directory is no file a reader reads: readers [], and no not_read
+		// reason (nothing is passed over).
 		e := withRole(nameEntry(d), config.RoleDir)
-		e.Readers = []string{readerExporter, readerGenerator}
+		e.Readers = []string{}
 		idx.Entries = append(idx.Entries, e)
 	}
 	sort.SliceStable(idx.Entries, func(i, j int) bool { return idx.Entries[i].Path < idx.Entries[j].Path })
