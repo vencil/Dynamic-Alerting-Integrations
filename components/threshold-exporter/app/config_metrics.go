@@ -90,8 +90,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/internal/scrape"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 

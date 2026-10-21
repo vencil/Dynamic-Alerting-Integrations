@@ -32,6 +32,7 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
@@ -635,7 +636,7 @@ var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
 // TryWithTreeLock); it only reads, so it is also harmless outside it.
 //
 // What counts as a change: any tracked modification, and an untracked OR
-// gitignored file the loader would read (config.IsScannedPath relative to
+// gitignored file the loader would read (confdname.IsScannedPath relative to
 // configDir — a gitignored *.yaml in conf.d is still read by the loader).
 // Other files — a crashed writeFileAtomic's hidden temp file, anything
 // outside conf.d — do not change what the loader builds.
@@ -708,14 +709,14 @@ func loaderReads(confAbs, abs string) (string, bool) {
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || !fi.IsDir() {
-		return rel, rel != "." && cfg.IsScannedPath(rel)
+		return rel, rel != "." && confdname.IsScannedPath(rel)
 	}
 	var found string
 	_ = filepath.WalkDir(abs, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || found != "" {
 			return nil
 		}
-		if r, rerr := filepath.Rel(confAbs, p); rerr == nil && !strings.HasPrefix(r, "..") && cfg.IsScannedPath(r) {
+		if r, rerr := filepath.Rel(confAbs, p); rerr == nil && !strings.HasPrefix(r, "..") && confdname.IsScannedPath(r) {
 			found = r
 			return fs.SkipAll
 		}

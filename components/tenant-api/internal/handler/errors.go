@@ -52,6 +52,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
@@ -1258,15 +1259,16 @@ func disclosedFindings(d *Deps, r *http.Request, all []generator.Finding) ([]gen
 }
 
 // findingReadable reports whether f names nothing names withholds: its
-// tenant, and the tenant its file is named after (<id>.yaml / <id>.yml —
-// a file-only finding names its tenant that way).
+// tenant, and the tenant its file is named after (a file-only finding names
+// its tenant that way; confdname.TenantNamedBy, the one name rule — so
+// `<id>.YAML` names `<id>` here as it does on every other plane, #3206).
 func findingReadable(names gitops.TenantNames, f generator.Finding) bool {
 	if f.Tenant != nil && *f.Tenant != "" && !names.Shown(*f.Tenant) {
 		return false
 	}
 	if f.File != nil {
 		base := path.Base(filepath.ToSlash(*f.File))
-		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !names.Shown(id) {
+		if id, ok := confdname.TenantNamedBy(base); ok && !names.Shown(id) {
 			return false
 		}
 	}

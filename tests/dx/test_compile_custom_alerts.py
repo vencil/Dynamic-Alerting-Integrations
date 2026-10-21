@@ -1966,7 +1966,7 @@ def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
 # --- N. what the exporter does not walk is not a recipe source (#2086) --------
 # `collect_instances` used to list conf.d with `rglob("*")`, which descends
 # `.`-prefixed directories and yields `.`-prefixed files — carriers the
-# exporter's walker (`pkg/config.ScanDirTree` / `IsScannedFileName`) never
+# exporter's walker (`pkg/config.ScanDirTree` / `confdname.IsScanned`) never
 # serves. Measured on main 42db84e4 with the trees below: the hidden tree
 # compiled 2 shapes (one for a GHOST recipe nothing serves) and describe_tenant
 # showed `_custom_alerts=['GHOST', 'a1']`; the ConfigMap-mount tree read every

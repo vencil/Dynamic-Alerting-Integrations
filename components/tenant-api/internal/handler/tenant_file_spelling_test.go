@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// Regression tests for #1673: the enumerating plane (confd.TenantIDFromFile)
+// Regression tests for #1673: the enumerating plane (confdname.TenantNamedBy, via confd.ListTenantFiles)
 // accepts `.yaml` and `.yml` in any case, while every per-tenant site used to
 // join a hardcoded `<id>.yaml`. The two planes therefore disagreed about which
 // file — or whether any file — is a given tenant's.

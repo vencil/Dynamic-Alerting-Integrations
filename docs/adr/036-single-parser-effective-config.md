@@ -699,7 +699,8 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 端的寫入前確認（移進 Go） | `scripts/tools/_lib_write_check.py` |
 | 編輯原語的來源（抽成共用套件） | tenant-api 的 `internal/customalerts/merge.go`（`setMapValue`、`deleteMapKey` 等）與批次 patch 的 `mergePatchYAML` |
 | `parse-tree` 的判定 | `pkg/parsetree` |
-| Go 端 4 份檔名規則（合併為一份） | `internal/confdname`；`pkg/config/source.go`；`pkg/config/tree_scan.go`；tenant-api 的 `internal/confd` 的 `TenantIDFromFile` |
+| Go 端的檔名規則（已合併為一份） | `pkg/confdname`；原本另外三份在 `pkg/config/source.go`、`pkg/config/tree_scan.go`（`IsScannedFileName`）與 tenant-api 的 `internal/confd`（`TenantIDFromFile`），已改呼叫它 |
+| `parse-tree` 只列檔、不解析內容的模式 | `da-guard parse-tree --list-only`（`cmd/da-guard/parse_tree_list.go`）；走訪是 `pkg/config` 的 `ScanDirTreeNames` |
 | Python 端的名稱述詞與名稱規則對照表（退場） | `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）；`tests/shared/confd_name_classification_matrix.json` 與比對它的測試 |
 | 以 sigs.k8s.io/yaml 解碼的先例（通用化） | `cmd/da-crdecode`（目前一個檔多份文件時拒收） |
 | 遷移稽核指令（退場） | `scripts/tools/ops/migration_audit.py` |

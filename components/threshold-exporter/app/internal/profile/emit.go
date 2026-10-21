@@ -53,8 +53,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/internal/parser"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // EmissionInput is the contract for a single emit run.
