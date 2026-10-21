@@ -90,7 +90,7 @@ def test_render_produces_output_and_names_the_unselected_carrier(tmp_path, where
     assert line.startswith(f"WARN: {unselected} is not read:"), line
     assert f"only {chosen} is read" in line and "merge them into one file" in line, line
     assert res.stderr.count(line) == 1, res.stderr
-    # warn_multi_carrier's own line is not printed besides (one fact, once).
+    # No second, exporter-worded multi-carrier line besides (one fact, once).
     assert "defaults carriers (" not in res.stderr, res.stderr
     # Not opened: nothing it carries becomes a finding of its own.
     assert not [x for x in findings if x["kind"] != KIND and x.get("file") == unselected], findings

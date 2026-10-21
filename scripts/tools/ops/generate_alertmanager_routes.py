@@ -96,7 +96,6 @@ from _grar_parse import (  # noqa: E402, F401
     _parse_config_files,
     _parse_platform_config,
     _parse_tenant_overrides,
-    load_tenant_configs,
     load_tenant_tree,
     print_reader_warnings,  # #2906: for the tools that do not print the stream
 )
@@ -193,7 +192,7 @@ def _policy_errors(all_warnings: list[str]) -> list[str]:
     """Extract blocking domain-policy ERROR lines (ADR-007 --strict).
 
     Only the strict domain-policy paths (check_domain_policies(strict=True)
-    plus the fail-open closures in load_tenant_configs) emit
+    plus the fail-open closures in load_tenant_tree) emit
     POLICY_ERROR_PREFIX lines into the warning stream; everything else
     there is WARN-prefixed (pinned by TestPolicyErrorPrefixPin).
     """
@@ -1298,13 +1297,14 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
         except BaseConfigInputError as exc:
             die_caller_error(str(exc))
 
-    # Load tenant configs (routing + dedup + schema warnings + enforced routing + metadata)
-    # #1460: the tree form, not the tuple — the tuple has no record of the
-    # files that did not parse, and that record decides whether anything
-    # below is allowed to call itself a result.
+    # Load tenant configs (routing + dedup + schema warnings + enforced routing)
+    # #1460: the tree carries the record of the files that did not parse, and
+    # that record decides whether anything below may call itself a result.
     tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
-    routing_configs, dedup_configs, schema_warnings, enforced_routing, _unused = \
-        tree.as_tuple()
+    routing_configs = tree.routing_configs
+    dedup_configs = tree.dedup_configs
+    schema_warnings = tree.schema_warnings
+    enforced_routing = tree.enforced_routing
     # #2766: --findings-json holds exactly the findings this run PRINTS — a
     # refusal prints its own lines and not the schema stream, so the stream
     # joins only once no refusal has stopped the run.

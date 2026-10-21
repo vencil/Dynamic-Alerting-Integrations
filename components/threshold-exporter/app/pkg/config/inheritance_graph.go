@@ -167,9 +167,9 @@ func selectDefaultsCarriers(defaults map[string]bool, ops pathOps) DefaultsCarri
 }
 
 // AmbiguityWarnings renders one WARN line per directory holding more than
-// one carrier, sorted by directory. The wording is shared with
-// describe_tenant.py (`_lib_confd.multi_carrier_warning`) so an operator
-// grepping for one finds the other.
+// one carrier, sorted by directory. The Python readers name the same
+// misconfiguration per unselected carrier, from parse-tree's `not_read`
+// verdict.
 func (c DefaultsCarriers) AmbiguityWarnings() []string {
 	if len(c.Ambiguous) == 0 {
 		return nil

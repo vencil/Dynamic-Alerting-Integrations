@@ -268,8 +268,8 @@ def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):
 def test_shared_helpers_name_the_entry_point_not_themselves(monkeypatch, tmp_path):
     """`tool=` omitted → the message names the command the operator ran.
 
-    A shared helper (`_lib_io.iter_yaml_files`) is reached from several
-    entry points. Labelling its warning with the helper's own name tells
+    A shared helper (`warn_nested` called without `tool=`) is reached from
+    several entry points. Labelling its warning with the helper's own name tells
     the operator nothing about which command produced it — the
     traceability concern CodeRabbit raised on PR #1343.
     """

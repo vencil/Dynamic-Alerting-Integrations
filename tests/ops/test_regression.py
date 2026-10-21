@@ -18,7 +18,8 @@ from factories import (
 )
 
 from generate_alertmanager_routes import (
-    load_tenant_configs,
+    TenantTree,
+    load_tenant_tree,
     generate_routes,
     generate_inhibit_rules,
 )
@@ -38,18 +39,17 @@ class TestDictKeyRegression:
     def test_parse_config_returns_explicit_routing_not_routing_configs(self, config_dir):
         """Bug: 曾用 parsed["routing_configs"] 但正確 key 是 parsed["explicit_routing"]。
 
-        load_tenant_configs 回傳 tuple 而非 dict，routing_configs 在 index 0。
-        此測試確認 API 回傳結構穩定。
+        load_tenant_tree 回傳 TenantTree（具名欄位）而非 dict，routing_configs
+        是它的屬性。此測試確認 API 回傳結構穩定。
         """
         write_yaml(config_dir, "db-a.yaml", make_tenant_yaml(
             "db-a",
             keys={"mysql_connections": "70"},
             routing={"receiver": make_receiver("webhook")},
         ))
-        result = load_tenant_configs(config_dir)
-        # load_tenant_configs 回傳 tuple: (routing_configs, dedup_configs, ...)
-        assert isinstance(result, tuple)
-        routing_configs = result[0]
+        result = load_tenant_tree(config_dir)
+        assert isinstance(result, TenantTree)
+        routing_configs = result.routing_configs
         assert isinstance(routing_configs, dict)
         assert "db-a" in routing_configs
 
@@ -135,15 +135,15 @@ class TestFloatTruncationRegression:
         assert isinstance(parse_duration_seconds(3.7), int)
 
 
-# ── Regression: scaffold output + load_tenant_configs ─────────
+# ── Regression: scaffold output + load_tenant_tree ─────────
 
 
 class TestScaffoldLoadRegression:
-    """scaffold 輸出與 load_tenant_configs 的相容性回歸測試。"""
+    """scaffold 輸出與 load_tenant_tree 的相容性回歸測試。"""
 
     def test_scaffold_non_interactive_needs_manual_routing(self, config_dir):
         """Bug: scaffold non-interactive 模式不自動加 _routing，
-        需手動注入後才能被 load_tenant_configs 正確讀取。
+        需手動注入後才能被 load_tenant_tree 正確讀取。
         """
         td = generate_tenant("db-a", ["kubernetes"], interactive=False)
         # Non-interactive 不會有 _routing
@@ -157,7 +157,7 @@ class TestScaffoldLoadRegression:
         from scaffold_tenant import write_outputs
         write_outputs(config_dir, "db-a", defaults, td, "# report")
 
-        routing_configs, _, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing_configs
         assert routing_configs["db-a"]["receiver"]["type"] == "webhook"
 

@@ -25,7 +25,7 @@ from scaffold_tenant import (
     RULE_PACKS,
 )
 from generate_alertmanager_routes import (
-    load_tenant_configs,
+    load_tenant_tree,
     generate_routes,
     generate_inhibit_rules,
 )
@@ -76,8 +76,8 @@ class TestOnboardToScaffoldPipeline:
         report = "# test report"
         write_outputs(config_dir, "db-a", defaults, tenant_data, report)
 
-        # Step 2: load_tenant_configs 讀取
-        routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
+        # Step 2: load_tenant_tree 讀取
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing_configs
         assert routing_configs["db-a"]["receiver"]["type"] == "webhook"
 
@@ -97,7 +97,8 @@ class TestScaffoldToGeneratePipeline:
         tenant_data["tenants"]["db-a"]["_severity_dedup"] = "enable"
         write_outputs(config_dir, "db-a", defaults, tenant_data, "report")
 
-        routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         routes, receivers, warnings = generate_routes(routing_configs, tenants=())
 
         assert len(routes) >= 1
@@ -120,7 +121,7 @@ class TestScaffoldToGeneratePipeline:
             }
             write_outputs(config_dir, tenant, defaults, td, "report")
 
-        routing_configs, _, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         routes, receivers, _ = generate_routes(routing_configs, tenants=())
 
         tenant_names = {r["receiver"].replace("tenant-", "") for r in routes}
@@ -132,7 +133,7 @@ class TestOnboardToGeneratePipeline:
     """onboard_platform → generate_alertmanager_routes 完整流水線。"""
 
     def test_analyze_am_then_generate_yamls_then_load(self, config_dir):
-        """AM 逆向分析 → 產生 tenant YAML → load_tenant_configs 讀取。"""
+        """AM 逆向分析 → 產生 tenant YAML → load_tenant_tree 讀取。"""
         am_config = make_am_config(
             routes=[{"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a",
                      "group_wait": "30s", "repeat_interval": "4h"}],
@@ -151,7 +152,7 @@ class TestOnboardToGeneratePipeline:
         for tenant, content in yaml_dict.items():
             write_yaml(config_dir, f"{tenant}.yaml", content)
 
-        routing_configs, _, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing_configs
 
     def test_full_pipeline_with_dedup(self, config_dir):
@@ -180,7 +181,8 @@ class TestOnboardToGeneratePipeline:
         for tenant, content in yaml_dict.items():
             write_yaml(config_dir, f"{tenant}.yaml", content)
 
-        routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         routes, receivers, _ = generate_routes(routing_configs, tenants=())
         inhibit = generate_inhibit_rules(dedup_configs)
 
@@ -214,7 +216,7 @@ class TestDataContracts:
         assert isinstance(loaded["routing_hints"], dict)
 
     def test_scaffold_yaml_loadable_as_tenant_config(self, config_dir):
-        """scaffold 產出的 YAML 符合 load_tenant_configs 預期格式。"""
+        """scaffold 產出的 YAML 符合 load_tenant_tree 預期格式。"""
         defaults = generate_defaults(["kubernetes"])
         td = generate_tenant("db-x", ["kubernetes"], interactive=False)
         td["tenants"]["db-x"]["_routing"] = {
@@ -224,7 +226,8 @@ class TestDataContracts:
         td["tenants"]["db-x"]["_severity_dedup"] = "enable"
         write_outputs(config_dir, "db-x", defaults, td, "report")
 
-        routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
 
         # Routing config 有 receiver key
         assert "receiver" in routing_configs["db-x"]
@@ -247,8 +250,9 @@ class TestRoutingDirFixture:
     """使用 routing_dir fixture 的快速整合測試。"""
 
     def test_load_preloaded_configs(self, routing_dir):
-        """routing_dir 預載的 db-a + db-b 可被 load_tenant_configs 正確讀取。"""
-        routing_configs, dedup_configs, *_ = load_tenant_configs(routing_dir)
+        """routing_dir 預載的 db-a + db-b 可被 load_tenant_tree 正確讀取。"""
+        tree = load_tenant_tree(routing_dir)
+        routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         assert "db-a" in routing_configs
         assert "db-b" in routing_configs
         assert routing_configs["db-a"]["receiver"]["type"] == "webhook"
@@ -258,7 +262,8 @@ class TestRoutingDirFixture:
 
     def test_generate_routes_from_preloaded(self, routing_dir):
         """預載 configs 產生合法 routes + receivers + inhibit。"""
-        routing_configs, dedup_configs, *_ = load_tenant_configs(routing_dir)
+        tree = load_tenant_tree(routing_dir)
+        routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         routes, receivers, _ = generate_routes(routing_configs, tenants=())
         inhibit, _ = generate_inhibit_rules(dedup_configs)
 
@@ -270,7 +275,7 @@ class TestRoutingDirFixture:
     def test_preloaded_with_enforced_routing(self, routing_dir):
         """預載 configs + enforced routing 產生 continue routes。"""
         from factories import make_enforced_routing
-        routing_configs, _, *_ = load_tenant_configs(routing_dir)
+        routing_configs = load_tenant_tree(routing_dir).routing_configs
         enforced = make_enforced_routing()
         routes, receivers, _ = generate_routes(
             routing_configs, enforced_routing=enforced, tenants=())

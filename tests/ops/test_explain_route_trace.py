@@ -807,12 +807,12 @@ class TestPolicyScope:
 
     def test_agrees_with_the_generator(self, tmp_path):
         """Both sides of the fork: the generator's own verdict on the tree."""
-        from generate_alertmanager_routes import load_tenant_configs
+        from generate_alertmanager_routes import load_tenant_tree
         for tenants, flagged in ((["some-other-tenant"], False), ([_TT], True)):
             d = tmp_path / str(flagged)
             d.mkdir()
             conf = self._conf(d, tenants)
-            schema_warnings = load_tenant_configs(str(conf))[2]
+            schema_warnings = load_tenant_tree(str(conf)).schema_warnings
             assert any("slack" in w for w in schema_warnings) is flagged
 
     def test_listed_but_constraints_null_is_said_so(self, capsys, tmp_path):

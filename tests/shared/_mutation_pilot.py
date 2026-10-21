@@ -20,9 +20,9 @@ Why hand-crafted vs `mutmut`/`cosmic-ray`:
 Usage:
   python tests/shared/_mutation_pilot.py [--target FUNC]
 
-Current count: 87 entries across 41 functions (counted 2026-08-27 with
+Current count: 88 entries across 46 functions (counted 2026-10-20 with
 `len(MUTATIONS)` / `len({m.fn_name for m in MUTATIONS})`; re-count rather
-than trust this line — it said 83/40 while the file held 86/41, which is
+than trust this line — it said 87/41 while the file held 92/47, which is
 the same rot the paragraph below is about).
 
 ⛔ A pass-rate sentence used to stand here — "75/78 caught (~96%) across
@@ -360,48 +360,6 @@ MUTATIONS: list[Mutation] = [
         fn_name="load_yaml_file",
         old="    return data if data is not None else default",
         new="    return data",
-    ),
-    # ── iter_yaml_files (_lib_io) ────────────────────────────────
-    Mutation(
-        target_file="scripts/tools/_lib_io.py",
-        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
-        label="iter_yaml: drop .yml from extension check",
-        fn_name="iter_yaml_files",
-        # Anchor re-pointed in #1537: the extension test now runs against a
-        # case-folded copy of the name, so the old `fname.endswith(...)`
-        # spelling stopped existing. The mutation itself is unchanged in
-        # meaning — drop the .yml branch.
-        old='        if not (lower.endswith(".yaml") or lower.endswith(".yml")):',
-        new='        if not lower.endswith(".yaml"):',
-    ),
-    Mutation(
-        target_file="scripts/tools/_lib_io.py",
-        test_file="tests/shared/test_confd_name_classification_parity.py",
-        # #1537's own defect, as a mutation: un-fold the name and `upper.YAML`
-        # goes back to being invisible to this reader while the exporter keeps
-        # reading and serving it. Added with the fold so the new line does not
-        # sit in this catalog's blind spot.
-        label="iter_yaml: drop the case fold (upper.YAML goes invisible again)",
-        fn_name="iter_yaml_files",
-        old="        lower = fname.lower()",
-        new="        lower = fname",
-        kill_test="test_iter_yaml_files_skip_reserved_matches_the_matrix",
-    ),
-    Mutation(
-        target_file="scripts/tools/_lib_io.py",
-        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
-        label="iter_yaml: drop dotfile filter (.hidden.yaml leaks through)",
-        fn_name="iter_yaml_files",
-        old='        if skip_reserved and (fname.startswith("_") or fname.startswith(".")):',
-        new='        if skip_reserved and fname.startswith("_"):',
-    ),
-    Mutation(
-        target_file="scripts/tools/_lib_io.py",
-        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
-        label="iter_yaml: drop isfile filter (directories ending in .yaml leak through)",
-        fn_name="iter_yaml_files",
-        old="        if entry.is_file():\n            result.append((fname, str(entry)))",
-        new="        result.append((fname, str(entry)))",
     ),
     # ── format_json_report (_lib_io) ─────────────────────────────
     Mutation(

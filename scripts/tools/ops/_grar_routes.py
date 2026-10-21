@@ -98,7 +98,7 @@ def enforced_route_tenants(routing_configs: dict[str, dict],
     """The tenants a ``{{tenant}}`` ``_routing_enforced`` expands over, sorted.
 
     #2519: EVERY tenant the generator recognises — *tenants* is
-    ``load_tenant_configs``'s ``dedup_configs`` keys (every valid tenant id
+    ``load_tenant_tree``'s ``dedup_configs`` keys (every valid tenant id
     it loaded: threshold-only, ``_silent_mode``-only, ``_routing: disable``
     and refused ``_routing`` included; an id ``is_valid_tenant_id`` refuses
     is never in it) — not only the ones with a resolved routing. The route

@@ -32,7 +32,7 @@ from generate_alertmanager_routes import (
     generate_inhibit_rules,
     generate_routes,
     load_base_config,
-    load_tenant_configs,
+    load_tenant_tree,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,7 +67,10 @@ def _render_live_alertmanager_yml(tmp_path):
     base_file = tmp_path / "base.yml"
     base_file.write_text(base_doc["data"]["alertmanager.yml"], encoding="utf-8")
 
-    routing_configs, dedup_configs, _sw, enforced_routing, _mc = load_tenant_configs(_CONF_D)
+    tree = load_tenant_tree(_CONF_D)
+    routing_configs = tree.routing_configs
+    dedup_configs = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
     routes, receivers, _rw = generate_routes(
         routing_configs, allowed_domains=None, enforced_routing=enforced_routing,
         tenants=dedup_configs)
@@ -120,7 +123,7 @@ class TestEmailToCoercion:
     def test_live_default_email_receiver_renders_string_to_and_from(self):
         """live _defaults.yaml 的 email default 建出的 receiver：`to` 為字串
         且帶 `from`（缺陷 A+B 的廉價結構回歸；權威驗證見 amtool 測試）。"""
-        routing_configs, _d, _sw, _er, _mc = load_tenant_configs(_CONF_D)
+        routing_configs = load_tenant_tree(_CONF_D).routing_configs
         # db-a inherits the email default (db-b overrides to webhook).
         assert routing_configs["db-a"]["receiver"]["type"] == "email"
         cfg, warnings = build_receiver_config(routing_configs["db-a"]["receiver"], "db-a")
@@ -148,7 +151,7 @@ def test_live_render_custom_route_carries_tenant_children(tmp_path):
 
     # children mirror the live routing_configs tenant set, sorted, and each
     # points at its own tenant-<name> receiver
-    routing_configs, _d, _sw, _er, _mc = load_tenant_configs(_CONF_D)
+    routing_configs = load_tenant_tree(_CONF_D).routing_configs
     expected = sorted(routing_configs.keys())
     child_tenants = []
     for child in children:
