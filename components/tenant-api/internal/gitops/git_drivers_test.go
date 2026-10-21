@@ -474,3 +474,141 @@ func TestHistoricalMax_RunsNoTextconv(t *testing.T) {
 		t.Errorf("git log -p ran the textconv driver")
 	}
 }
+
+// The same conditional include, seen from the other side: the check under
+// the lock runs on whatever branch HEAD is on when the lock is taken — an
+// operator's checkout, or a PR branch a failed return to base left behind —
+// and `onbranch:main` applies only once the write has moved HEAD to base.
+// Every move to base re-checks there (checkoutBaseClean) before git runs on
+// files under base's config. Without it, WritePR's `checkout -b <branch>
+// origin/main` would run the smudge filter under main's config: origin/main
+// is ahead of the local main in t1.yaml, so that checkout rewrites it.
+//
+// Refused, the tree is left on base (where the move put it, with base's
+// files: the checkout that put them there ran under the old branch's
+// config, which the lock's check passed), no feature branch or worktree is
+// left, and the next write is refused under the lock, before any git.
+func TestWrites_RefusedWhenHEADStrandedOffBaseAtLock(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	cases := []struct {
+		name, stranded, mode string
+	}{
+		{"WritePR from an operator branch", "operator", "WritePR"},
+		{"WritePRBatch from an operator branch", "operator", "WritePRBatch"},
+		{"Write from a stranded PR branch", "tenant-api/t1/20260101-000000-0000", "Write"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo, mark := driverRepo(t)
+			// origin/main one commit ahead of the local main, in t1.yaml.
+			gitRun(t, repo, "checkout", "-q", "-b", "ahead")
+			writeIn(t, repo, "t1.yaml", silentBody("t1", "critical"))
+			gitRun(t, repo, "commit", "-qam", "ahead")
+			gitRun(t, repo, "push", "-q", "origin", "ahead:main")
+			gitRun(t, repo, "checkout", "-q", "main")
+			gitRun(t, repo, "branch", "-q", "-D", "ahead")
+			gitRun(t, repo, "checkout", "-q", "-b", tc.stranded)
+
+			drv := filepath.Join(t.TempDir(), "drivers.gitconfig")
+			var conf strings.Builder
+			for _, key := range gitDriverKeys {
+				conf.WriteString(configFileFor(key, "\"touch '"+filepath.Join(mark, key)+"'; cat\""))
+			}
+			if err := os.WriteFile(drv, []byte(conf.String()), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, repo, "config", "includeIf.onbranch:main.path", drv)
+
+			w := newTestWriter(repo, repo)
+			if err := w.CheckGitDrivers(); err != nil {
+				t.Fatalf("fixture: the check on %s already sees the driver: %v", tc.stranded, err)
+			}
+			mainHead := gitOut(t, repo, "rev-parse", "main")
+			want := gitOut(t, repo, "cat-file", "-p", "main:t1.yaml")
+
+			for _, attempt := range []string{"first", "next"} {
+				err := writeVia(t, tc.mode, w, "t1")
+				if ran := ranPrograms(t, mark); len(ran) > 0 {
+					t.Errorf("%s %s: the driver programs ran: %v", attempt, tc.mode, ran)
+				}
+				if !errors.Is(err, ErrGitDriverConfigured) {
+					t.Fatalf("%s %s = %v, want ErrGitDriverConfigured", attempt, tc.mode, err)
+				}
+				// The tree is on base: not the "retry" of a stranded tree.
+				if errors.Is(err, ErrTreeNotOnBase) {
+					t.Errorf("%s %s = %v, which says the tree is not on base", attempt, tc.mode, err)
+				}
+			}
+			// None of these reads runs a driver: no file content is read.
+			if got := gitOut(t, repo, "symbolic-ref", "--short", "HEAD"); got != "main" {
+				t.Errorf("HEAD is %q, want main", got)
+			}
+			if got := gitOut(t, repo, "rev-parse", "main"); got != mainHead {
+				t.Errorf("main moved from %s to %s", mainHead, got)
+			}
+			if got := gitOut(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"); got != "main\n"+tc.stranded && got != tc.stranded+"\nmain" {
+				t.Errorf("branches left:\n%s", got)
+			}
+			if got := gitOut(t, repo, "worktree", "list", "--porcelain"); strings.Count(got, "worktree ") != 1 {
+				t.Errorf("a staging worktree was left:\n%s", got)
+			}
+			if got, _ := os.ReadFile(filepath.Join(repo, "t1.yaml")); strings.TrimSpace(string(got)) != want {
+				t.Errorf("t1.yaml is not main's:\n%s", got)
+			}
+			if ran := ranPrograms(t, mark); len(ran) > 0 {
+				t.Errorf("the driver programs ran: %v", ran)
+			}
+		})
+	}
+}
+
+// A driver that applies on base only from after a PR write's commit (the
+// config changed mid-write) is found by the return to base
+// (checkoutBaseClean's check). The tree is on base by then and the branch
+// committed and pushed, so the write completes — failing it would make a
+// client retry a pushed write — but the return is not retried (a retry's
+// reset would run under base's config), and the next write is refused.
+func TestWritePR_DriverOnBaseFoundOnReturnIsNotRetried(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	repo, mark := driverRepo(t)
+	drv := filepath.Join(t.TempDir(), "drivers.gitconfig")
+	var conf strings.Builder
+	for _, key := range gitDriverKeys {
+		conf.WriteString(configFileFor(key, "\"touch '"+filepath.Join(mark, key)+"'; cat\""))
+	}
+	if err := os.WriteFile(drv, []byte(conf.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWriter(repo, repo)
+	attempts := 0
+	w.beforeBaseRestore = func(int) {
+		attempts++
+		gitRun(t, repo, "config", "includeIf.onbranch:main.path", drv)
+	}
+
+	res, err := w.WritePR(context.Background(), "t1", "op@example.com", silentBody("t1", "critical"))
+	if err != nil {
+		t.Fatalf("WritePR = %v, want success", err)
+	}
+	if ran := ranPrograms(t, mark); len(ran) > 0 {
+		t.Errorf("the driver programs ran: %v", ran)
+	}
+	if attempts != 1 {
+		t.Errorf("the return to base ran %d times, want 1", attempts)
+	}
+	if got := gitOut(t, repo, "symbolic-ref", "--short", "HEAD"); got != "main" {
+		t.Errorf("HEAD is %q, want main", got)
+	}
+	if got := gitOut(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/"); got != "main" {
+		t.Errorf("branches left (%s pushed):\n%s", res.BranchName, got)
+	}
+	if err := writeVia(t, "WritePR", w, "t1"); !errors.Is(err, ErrGitDriverConfigured) {
+		t.Errorf("next WritePR = %v, want ErrGitDriverConfigured", err)
+	}
+	if ran := ranPrograms(t, mark); len(ran) > 0 {
+		t.Errorf("the driver programs ran: %v", ran)
+	}
+}

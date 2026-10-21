@@ -28,8 +28,9 @@ package gitops
 // WHERE IT IS CHECKED: at startup (main calls CheckGitDrivers before any
 // other git command), and again before every git command a request can
 // cause — every write (lockTreeRecovered, the first step under the writer
-// lock), the write preview (PreviewPut) and the PR-mode tree check
-// (TreeOnBase) — because the config can change while tenant-api runs (an
+// lock, and again after every branch switch: checkGitDriversIn), the
+// write preview (PreviewPut) and the PR-mode tree check (TreeOnBase) —
+// because the config can change while tenant-api runs (an
 // init container or a sidecar editing .git/config, a mounted global config
 // replaced).
 //
@@ -100,9 +101,14 @@ func (w *Writer) CheckGitDrivers() error {
 // will be in when it runs there (F1 of #3175's review). A conditional
 // include decides by that context: `includeIf "onbranch:…"` by the branch
 // HEAD names, `includeIf "gitdir:…"` by the repository directory — a
-// linked worktree has its own. So the check runs again where the context
-// changes before files are touched: in the serving tree right after a PR
-// write's `checkout -b` (WritePRChecked), and inside a batch's staging
+// linked worktree has its own. The check under the lock covers the context
+// HEAD is in when the lock is taken, which need not be base (a PR branch a
+// failed return left behind, an operator's checkout). So the check runs
+// again wherever tenant-api changes the context, before git runs on files
+// in the new one: in the serving tree after every move to base
+// (checkoutBaseClean: a PR write anchoring on base, its return and its
+// abort, the direct-mode return from a stranded PR branch), right after a
+// PR write's `checkout -b` (WritePRChecked), and inside a batch's staging
 // worktree after `worktree add --no-checkout`, before its index or files
 // are populated (openStaging).
 func (w *Writer) checkGitDriversIn(dir string) error {

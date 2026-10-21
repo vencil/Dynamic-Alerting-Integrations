@@ -674,7 +674,9 @@ func (w *Writer) lockTreeOnBase() error {
 // or merge driver (CheckGitDrivers) — the first thing every write does
 // under the lock, before any git command of it can run one. Startup
 // checked it already; this catches a driver added since (an init container
-// or a sidecar editing .git/config, a replaced global config).
+// or a sidecar editing .git/config, a replaced global config). It checks
+// the context HEAD is in now; a write that then moves HEAD to base checks
+// again there (checkoutBaseClean).
 func (w *Writer) lockTreeRecovered() error {
 	w.lockTree()
 	if err := w.CheckGitDrivers(); err != nil {
