@@ -513,10 +513,10 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
     report["da_guard_version"] = doc.get("da_guard_version")
 
     entries = {e.path: e for e in _lib_parse_tree.entries_of(doc)}
-    # A directory the walk enters (role `dir`) is no file anyone selects; one
-    # Go flags (a config-named one) stays, as today's reader refuses it too.
-    after_selected = {f for f, e in entries.items()
-                      if e.readers and (e.config_file or e.flagged)}
+    # The reader's own `selected` (content or a problem): no filter of ours. A
+    # config-named directory is in it by its problem, as today's reader
+    # refuses it too; a plain directory (readers []) is not.
+    after_selected = set(_lib_parse_tree.tree_of(doc).selected)
     after_unreadable = {f: {"kind": e.problem[0], "message": e.problem[1]}
                         for f, e in entries.items() if e.problem is not None}
     today_selected = set(today_read) | set(today_refused)

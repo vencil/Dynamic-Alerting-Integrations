@@ -137,7 +137,12 @@ func checkSelectedInvariant(t *testing.T, doc map[string]any) {
 		}
 		_, hasContent := files[p]
 		readers := stringsOf(e["readers"])
-		if (len(readers) == 0) != (e["not_read"] != nil) {
+		if e["role"] == "dir" {
+			// A directory is no file a reader reads, and nothing is passed over.
+			if len(readers) != 0 || e["not_read"] != nil {
+				t.Errorf("%s: role dir with readers %v, not_read %v", p, readers, e["not_read"])
+			}
+		} else if (len(readers) == 0) != (e["not_read"] != nil) {
 			t.Errorf("%s: readers %v, not_read %v", p, readers, e["not_read"])
 		}
 		if hasContent && e["problem"] != nil {
@@ -235,7 +240,7 @@ func TestParseTree_PathKinds(t *testing.T) {
 	if got := unreadableKinds(doc); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unreadable\n got %v\nwant %v", got, want)
 	}
-	if r := readersOf(doc)["dir.yaml"]; !reflect.DeepEqual(r, []string{"exporter", "generator"}) {
+	if r := readersOf(doc)["dir.yaml"]; len(r) != 0 {
 		t.Fatalf("dir.yaml readers %v", r)
 	}
 	if _, ok := doc["files"].(map[string]any)["dir.yaml/x.yaml"]; !ok {

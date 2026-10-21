@@ -357,7 +357,11 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
             raise ValueError(f"{where}: role {role!r} is not one this reader knows")
         if not_read is not None and not (isinstance(not_read, str) and not_read):
             raise ValueError(f"{where}: not_read is not a reason")
-        if (not_read is None) == (not readers):
+        if role == "dir":
+            # A directory is no file a reader reads, and nothing is passed over.
+            if readers or not_read is not None:
+                raise ValueError(f"{where}: a dir with readers {readers!r} / not_read {not_read!r}")
+        elif (not_read is None) == (not readers):
             raise ValueError(f"{where}: readers {readers!r} with not_read {not_read!r}")
     problem = None
     if bad is not None:

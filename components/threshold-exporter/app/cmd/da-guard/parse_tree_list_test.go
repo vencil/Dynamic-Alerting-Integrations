@@ -411,7 +411,7 @@ func TestParseTree_EveryEnteredDirectoryHasAnEntry(t *testing.T) {
 				kind = pr["kind"].(string)
 			}
 			got[p] = [2]string{e["role"].(string), kind}
-			if e["role"] == "dir" && (e["class"] != classDirectory || len(e["readers"].([]any)) != 2) {
+			if e["role"] == "dir" && (e["class"] != classDirectory || len(e["readers"].([]any)) != 0 || e["not_read"] != nil) {
 				t.Errorf("%v %s: a dir entry %v", mode, p, e)
 			}
 		}
