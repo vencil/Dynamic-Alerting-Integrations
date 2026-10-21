@@ -9,7 +9,8 @@
 // "which 409 means what".
 //
 // The rule that matters: an answer whose code is missing or not in the
-// contract is classified `unknown` and gets a generic message. It is never
+// contract is classified `unknown` and gets no remedy's copy — the server's
+// message when there is one, a generic message otherwise. It is never
 // guessed into `refresh_retry` from its status — a 409 is not necessarily a
 // base_hash race, and "refresh and retry" on a fix-in-git 409 sends the user
 // round a loop that cannot succeed (#3202).
