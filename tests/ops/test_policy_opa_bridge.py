@@ -55,7 +55,7 @@ class TestPolicyResult:
 # ---------------------------------------------------------------------------
 # load_tenant_inputs (#2115 0-B)
 # ---------------------------------------------------------------------------
-# 取代原本的 TestLoadTenantConfigs：它守的是舊契約（`_lib_io.load_tenant_configs`：
+# 取代原本的 TestLoadTenantConfigs：它守的是已刪除的舊讀取端的契約（
 # 只讀根目錄租戶檔、平面檔以檔名當租戶、不存在的目錄回 {}）。現在 `tenants` 來自
 # `da-guard effective`、`served` 來自 `da-guard served-values`；平面檔不是租戶（WARN），
 # 子目錄的租戶在，值寫在哪一層都一樣（tests/shared/test_served_values_policy_readers_matrix.py）。
@@ -589,7 +589,7 @@ class TestMain:
 
     def test_dry_run_prints_input_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        # Stub load_tenant_configs to return one tenant.
+        # Stub load_tenant_inputs to return one tenant.
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})

@@ -74,9 +74,7 @@ __all__ = [
     "iter_config_files",
     "ConfigTreeListing",
     "list_config_tree",
-    "multi_carrier_warning",
     "readable_carriers",
-    "warn_multi_carrier",
     "warn_dir_symlink_once",
     "is_dir_symlink",
     "dir_link_target_is_walked",
@@ -89,8 +87,9 @@ __all__ = [
     "printable_name",
     "reset_warned_for_test",
     "unusable_config_entries",
-    "TenantCarriers",
-    "tenant_carriers",
+    "TenantSetUnknown",
+    "TreeTenants",
+    "tree_tenants",
     "unusable_config_paths",
     "unusable_reason",
     "warn_nested",
@@ -132,15 +131,15 @@ def _is_config(name: str) -> bool:
     Note this predicate answers TWO of the three name properties: extension
     (here) and hidden (`_is_hidden`). It deliberately does NOT filter the
     `_` prefix — reserved control files ARE part of "what is in a conf.d
-    directory"; callers that want tenant carriers only (`_lib_io`,
-    tenant-api) apply that third property themselves.
+    directory"; callers that want tenant carriers only (tenant-api, or a
+    tool composing `is_reserved_name`) apply that third property themselves.
 
     ⛔ Nothing here greps the Go source. This repo measured (#1448 blind
     review) that a Python guard asserting things about Go source text goes
     red on legitimate Go refactors and states the opposite of the truth
     when it does. What keeps this honest instead is the shared name
     classification matrix under `tests/shared/` — the exporter's scanner,
-    tenant-api's filename→id mapping, `_lib_io.iter_yaml_files` and this
+    tenant-api's filename→id mapping, `iter_config_files` and this
     predicate each assert THAT table, so their agreement is transitive
     rather than claimed, and a rule change turns the owning side red first.
     """
@@ -169,7 +168,7 @@ def _is_config(name: str) -> bool:
 # `tests/shared/confd_name_classification_matrix.json`
 # (`yaml_extension` / `reserved_prefix` / `hidden` / `defaults_file`, plus
 # `stem`). Because the exporter's production scanner, tenant-api's
-# filename→id mapping and `_lib_io.iter_yaml_files` all assert that same
+# filename→id mapping and `iter_config_files` all assert that same
 # table, a caller composing these predicates agrees with the exporter
 # TRANSITIVELY — nothing here claims agreement, and no guard greps anyone
 # else's source (#1448).
@@ -224,7 +223,7 @@ def is_reserved_name(name: str) -> bool:
 
     ⚠️ ASCII `_` only, and that is not laziness: the reserved prefix is a
     single ASCII byte with no case, so unlike the extension there is
-    nothing here to fold. tenant-api's `isReservedName` makes the same
+    nothing here to fold. Go's `confdname.IsReserved` makes the same
     call and the shared matrix pins both.
     """
     return name.startswith("_")
@@ -291,8 +290,10 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
     it. Order is the name's code-point order, which for UTF-8 names is
     Go's byte order — the one `filepath.WalkDir` visits a directory in.
 
-    ⛔ Two carriers in one directory is a misconfiguration: callers WARN
-    (see `multi_carrier_warning`) instead of choosing silently.
+    ⛔ Two carriers in one directory is a misconfiguration: it is WARNed
+    (the exporter's `DefaultsCarriers.AmbiguityWarnings`; a conf.d reader
+    here names the carrier parse-tree marks `not_read`) instead of being
+    chosen silently.
     """
     ordered = sorted(carriers, key=lambda p: Path(p).name)
     yaml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yaml"]
@@ -327,48 +328,6 @@ def readable_carriers(carriers: "Iterable[Path]"
     return readable, unreadable
 
 
-def multi_carrier_warning(directory: "str | os.PathLike[str]",
-                          carriers: "Iterable[Path]") -> "str | None":
-    """The operator-facing WARN for a directory with more than one carrier.
-
-    None when there is at most one. The wording matches the exporter's log
-    line so an operator grepping for one finds the other.
-    """
-    paths = sorted((Path(p) for p in carriers), key=lambda p: p.name)
-    if len(paths) < 2:
-        return None
-    chosen = select_defaults_carrier(paths)
-    # ⛔ Compared by PATH, not by basename: grouped the wrong way, two
-    # entries can share a name, and the basename comparison printed
-    # "…only _defaults.yaml is read,  is ignored" (blind review of #1674).
-    ignored = [p.name for p in paths if p != chosen]
-    names = [p.name for p in paths]
-    return (f"WARN: conf.d directory {directory} has {len(names)} defaults "
-            f"carriers ({', '.join(names)}); only {chosen.name} is read, "
-            f"{', '.join(ignored)} is ignored on every plane (#1674) — "
-            f"merge them into one file")
-
-
-# Directories whose multi-carrier WARN this process has already printed.
-_MULTI_CARRIER_WARNED: set[str] = set()
-
-
-def warn_multi_carrier(directory: "str | os.PathLike[str]",
-                       carriers: "Iterable[Path]") -> None:
-    """Print `multi_carrier_warning` to stderr at most ONCE per directory per
-    process. describe_tenant reads the chain AND calls the custom-alerts
-    loader over the same tree, so each printing its own copy named every
-    misconfigured directory twice (blind review of #1674)."""
-    msg = multi_carrier_warning(directory, carriers)
-    if msg is None:
-        return
-    key = os.path.realpath(directory)
-    if key in _MULTI_CARRIER_WARNED:
-        return
-    _MULTI_CARRIER_WARNED.add(key)
-    print(msg, file=sys.stderr)
-
-
 # Directory symlinks whose skip WARNING this process has already printed.
 _DIR_LINK_WARNED: set[str] = set()
 
@@ -378,7 +337,7 @@ def warn_dir_symlink_once(link: Path) -> None:
     process (#1972). describe_tenant names it from its own listing AND calls
     the custom-alerts loader over the same tree (and compile_custom_alerts
     runs the loader more than once): each printing its own copy named every
-    link two times — the #1674 shape `warn_multi_carrier` already fixed.
+    link two times — the #1674 once-per-directory shape.
     Keyed by the LINK's own absolute path (not its target, which is what
     two different links may share)."""
     key = os.path.abspath(link)
@@ -1062,7 +1021,7 @@ def _running_tool() -> str:
     """Best guess at the command the operator actually typed.
 
     Derived from `sys.argv[0]`, not hard-coded: a SHARED helper such as
-    `_lib_io.iter_yaml_files` is reached from several entry points, and
+    `warn_nested` is reached from several entry points, and
     labelling its warning with the helper's own name tells the operator
     nothing about which command produced it. Falls back to a neutral
     label when argv is unavailable (embedded / REPL use).
@@ -1142,7 +1101,6 @@ def reset_warned_for_test() -> None:
     "last cleanup wins" and would undo a parallel test's writes.
     """
     _WARNED.clear()
-    _MULTI_CARRIER_WARNED.clear()
     _DIR_LINK_WARNED.clear()
 
 
@@ -1219,9 +1177,8 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) 
     Returns whether anything was printed.
 
     Why the memo: one command often scans the same `conf.d/` from more than
-    one place — `validate_config.py` reaches the routing parser twice, and
-    `migrate_to_operator.analyze_migration` both scans directly and calls
-    `discover_tenant_configs`. Printing the identical WARN twice reads as
+    one place — `validate_config.py` reaches the routing parser twice.
+    Printing the identical WARN twice reads as
     two separate problems (CodeRabbit, PR #1343). De-duplicating here rather
     than deleting one of the guards keeps every flat scan covered — a scan
     whose only warning lives in some other function is exactly the
@@ -1271,123 +1228,85 @@ def _print_nested_once(config_dir: str | os.PathLike[str], *,
     return True
 
 
-class TenantCarriers(NamedTuple):
-    """One flat conf.d scan, split into what each caller has to say about it.
-
-    ⛔ Three lists, not one, because the two operator-plane readers print to
-    different sinks: `operator_generate` warns on stderr, while
-    `migrate_to_operator.analyze_migration` collects the same facts into its
-    JSON `issues` array. Returning the classification instead of printing it
-    is what lets ONE scan serve both — see `tenant_carriers`.
-    """
+class TreeTenants(NamedTuple):
+    """The tenant ids a conf.d tree declares, split by a name predicate."""
 
     tenants: list[str]
-    """Stems of readable carriers that passed `validate`, sorted."""
+    """Declared ids that passed `validate`, sorted."""
 
     invalid: list[str]
-    """Stems `validate` rejected, in scan order (so warnings stay stable)."""
-
-    unusable: list[Path]
-    """Config-NAMED entries the reader cannot read (directory, broken link)."""
+    """Declared ids `validate` rejected, sorted."""
 
 
-def tenant_carriers(
+class TenantSetUnknown(ValueError):
+    """The tree's tenant set cannot be answered: a tenant file `da-guard
+    parse-tree` cannot read (what it declares is unknown), or one tenant id
+    declared by more than one file (threshold-exporter serves neither)."""
+
+
+def tree_tenants(
     config_dir: "str | os.PathLike[str]",
     *,
-    tool: "str | None" = None,
     validate: "Callable[[str], bool] | None" = None,
-    suffixes: "tuple[str, ...]" = CONFIG_SUFFIXES,
-) -> TenantCarriers:
-    """The ONE flat scan both operator-plane readers take tenant stems from.
+    reader: Any = None,
+) -> TreeTenants:
+    """Every tenant id the conf.d at *config_dir* declares, as the exporter
+    keys it: the keys of the `tenants:` mapping of each tenant file
+    `da-guard parse-tree` selects, at any depth, as source text
+    (`_lib_parse_cache.declared_tenants`; ADR-036 step 4, #2906).
 
-    ⛔ This exists because there were two of them and they drifted (#1604).
-    `operator_generate.discover_tenant_configs` and
-    `migrate_to_operator.discover_tenant_configs` were verbatim twins over the
-    same tree; #1603/#1607 fixed only the first, and the pair then answered
-    DIFFERENTLY on three axes at once. Measured on one fixture:
+    ⛔ Not a file STEM. `team-a.yaml` holding `tenants: {db-a: …}` declares
+    `db-a`; `sub/x.yaml` declares its tenants too; a file with no
+    `tenants:` mapping (the flat format) declares none — the exporter
+    serves no tenant from it. Which files exist, which are hidden, which
+    spelling counts (`.yml`, upper case), and what a directory named
+    `notes.yaml/` or a dangling link is: all parse-tree's answer, none
+    decided here.
 
-        db-a.yaml (control)   operator_generate: yes   migrate: yes
-        db-b.yml              operator_generate: yes   migrate: NO
-        notes.yaml/  (a dir)  operator_generate: no    migrate: YES  <- invented
-        broken.yaml  (link)   operator_generate: no    migrate: YES  <- invented
+    Fail-closed, raising `TenantSetUnknown`, when the set cannot be
+    answered:
 
-    The two extra rows are the direction the ticket did not name: the narrow
-    twin does not merely miss a tenant, it INVENTS two from a directory and a
-    dangling symlink, and emits CRDs for them in silence.
+    * a tenant file parse-tree cannot read — every one is named with its
+      kind; a file whose top level is not a mapping declares nothing and is
+      not one of them;
+    * an id declared by two or more files (`duplicate_declarations`): the
+      exporter rejects such a tree (`DuplicateTenantError`), so emitting one
+      tenant from it would describe a state the exporter refuses.
 
-    ⛔ Dot-prefixed names are skipped SILENTLY, as the exporter's walker
-    skips them (#2067). Until then they reached the loop and their stem was
-    handed on: with `validate=None` a `.ghost.yaml` came back as tenant
-    `.ghost`, and with the operator readers' RFC 1123 `validate` it came back
-    in `invalid` — so `operator_generate` / `migrate_to_operator` warned
-    `Skipping invalid tenant name '.ghost'` (and the latter put it in its
-    JSON `issues`) about a file the exporter never reads: a loss that did not
-    happen. Silence, not `invalid` or `unusable`, is the answer the other
-    hidden-axis fixes gave (#2055 `generate_tenant_metadata` /
-    `gitops_check`, #2054 `list_config_tree`), and the one
-    `unusable_config_entries` already gave for a hidden config-named
-    directory in this same scan. Pinned across tools by
-    `tests/shared/test_confd_hidden_axis_across_tools.py`.
-
-    ⚠️ `p.stem`, not `config_stem`, for what remains: a visible name whose
-    stem `validate` rejects is still handed over so the caller can SAY it is
-    unusable (#1603).
-
-    ⚠️ Flat by design, and the guard rides along: `warn_nested` is called HERE,
-    in the same scope as the `iterdir()`, because `test_confd_enumeration_contract`
-    requires exactly that — a scan whose warning lives in another function is
-    the gate-never-fires shape. Callers therefore must NOT call `warn_nested`
-    again for the same directory (it de-duplicates, but a second call reads as
-    a second scan to anyone auditing).
-
-    Args:
-        config_dir: the conf.d to scan. Must exist — callers own the
-            "directory missing" error because they word it for their own CLI.
-        tool: name used by the nested-config warning.
-        validate: tenant-name predicate; `None` accepts every stem.
-        suffixes: extension set. ⛔ Defaults to `CONFIG_SUFFIXES` (BOTH
-            spellings, the exporter's own set) — passing `(".yaml",)` here is
-            how the divergence above was built.
-
-    Returns:
-        `TenantCarriers`.
+    *validate* splits the ids into `tenants` / `invalid` (None accepts every
+    id). *reader* is a `_lib_parse_cache.ConfdReader` of *config_dir* (the
+    session's when None). Raises `_lib_parse_tree.ParseTreeError` for no
+    usable parse-tree — never an empty set for a tree that was not read. The
+    caller owns "directory missing": it words that for its own CLI.
     """
-    root = Path(config_dir)
-    warn_nested(root, tool=tool)
-    # ⛔ The listing error is NOT caught here, and that is deliberate
-    # (CodeRabbit proposed catching it, PR #1750). Two reasons, both measured:
-    #   1. Returning an empty classification would be the SILENT ZERO this
-    #      module exists against — a conf.d that cannot be listed would read
-    #      exactly like one with no tenants. Before #1604 `migrate_to_operator`
-    #      globbed instead, and `glob("*.yaml")` on a directory removed after
-    #      the `is_dir()` check returns `[]` with no error at all; `iterdir()`
-    #      raises. Trading the raise for `[]` walks that back.
-    #   2. Reporting the ROOT as an unusable ENTRY would print the wrong
-    #      reason: `unusable_reason(<the conf.d>)` says "is a directory, not a
-    #      config file", which is true of every conf.d and explains nothing.
-    # Callers catch `OSError` where they have somewhere to put it (see
-    # `migrate_to_operator.analyze_migration`).
-    entries = sorted(root.iterdir())
-    # `_`-prefixed control files are not carriers and must not be reported as
-    # unreadable ones either: naming one would claim a loss that did not happen.
-    # ⛔ #2067: nor are `.`-prefixed ones — the exporter's walker never reads
-    # them, so they are neither tenants nor invalid names (see docstring).
-    candidates = [p for p in entries
-                  if not is_reserved_name(p.name) and not is_hidden_name(p.name)]
-    unusable = unusable_config_entries(candidates, suffixes=suffixes)
+    from _lib_parse_cache import declared_tenants
+    reader = _reader_of(config_dir, reader)
+    declared, unreadable = declared_tenants(reader)
+    if unreadable:
+        shown = "; ".join(
+            f"{printable_name(u.file)} ({printable_name(u.kind)}: "
+            f"{printable_name(' '.join(u.message.split()))})"
+            for u in unreadable[:WARN_LIMIT])
+        more = (f" (+{len(unreadable) - WARN_LIMIT} more)"
+                if len(unreadable) > WARN_LIMIT else "")
+        raise TenantSetUnknown(
+            f"cannot tell which tenants {printable_name(os.fspath(config_dir))} "
+            f"declares: da-guard parse-tree cannot read {len(unreadable)} "
+            f"tenant file(s): {shown}{more}")
+    duplicates = duplicate_declarations(declared)
+    if duplicates:
+        shown = "; ".join(
+            f"'{printable_name(t)}' in {', '.join(printable_name(f) for f in files)}"
+            for t, files in sorted(duplicates.items()))
+        raise TenantSetUnknown(
+            f"tenant id declared in more than one file: {shown} — "
+            f"threshold-exporter rejects a tree that declares one tenant in "
+            f"two files (DuplicateTenantError); keep each tenant in one file")
     tenants: list[str] = []
     invalid: list[str] = []
-    for p in candidates:
-        # `is_file()` is its own axis: a DIRECTORY named `notes.yaml/` and a
-        # dangling symlink both satisfy the extension test.
-        if not (p.is_file() and has_yaml_extension(p.name, suffixes)):
-            continue
-        stem = p.stem
-        if validate is None or validate(stem):
-            tenants.append(stem)
-        else:
-            invalid.append(stem)
-    return TenantCarriers(sorted(tenants), invalid, unusable)
+    for tenant in sorted(declared):
+        (tenants if validate is None or validate(tenant) else invalid).append(tenant)
+    return TreeTenants(tenants, invalid)
 
 
 def _reader_of(config_dir: "str | os.PathLike[str]", reader: Any) -> Any:

@@ -49,7 +49,7 @@ from generate_alertmanager_routes import (
     generate_inhibit_rules,
     generate_routes,
     load_base_config,
-    load_tenant_configs,
+    load_tenant_tree,
 )
 
 # 沿用 validity 測試的 amtool 取得策略（同一個 image derivation、同一個
@@ -96,7 +96,7 @@ def test_docker_present_when_required() -> None:
 
 # Live conf.d 的 tenant 集合：動態導出（dev-rule #2 tenant-agnostic——不
 # hardcode tenant id），conf.d 增刪租戶時所有 per-tenant 案例自動跟進。
-_LIVE_TENANTS = sorted(load_tenant_configs(_CONF_D)[0].keys())
+_LIVE_TENANTS = sorted(load_tenant_tree(_CONF_D).routing_configs.keys())
 
 # 保證不存在於 conf.d 的 tenant 名（負向案例用）；模組載入時就驗證前提。
 _UNKNOWN_TENANT = "fixture-unrouted-tenant"
@@ -453,7 +453,7 @@ _PROFILE_OVERRIDE_ALERTNAME = "DemoProfileOverride"
 def _build_profile_routes_am_yml(conf_d) -> str:
     """範例 `_routing_profiles.yaml`（team-sre-apac 帶 `routes:
     match {severity: critical}`）+ 一個引用它、另帶一條 override 的 demo
-    tenant，走 load_tenant_configs → generate_routes → assemble_configmap。"""
+    tenant，走 load_tenant_tree → generate_routes → assemble_configmap。"""
     shutil.copy(os.path.join(_CONF_D, "examples", "_routing_profiles.yaml"),
                 conf_d / "_routing_profiles.yaml")
     (conf_d / f"{_PROFILE_TENANT}.yaml").write_text(yaml.safe_dump({
@@ -465,7 +465,8 @@ def _build_profile_routes_am_yml(conf_d) -> str:
                              "url": "https://hooks.example.com/override-sink"},
             }]},
         }}}), encoding="utf-8")
-    routing, dedup, _sw, enforced, _mc = load_tenant_configs(str(conf_d))
+    tree = load_tenant_tree(str(conf_d))
+    routing, dedup, enforced = tree.routing_configs, tree.dedup_configs, tree.enforced_routing
     routes, receivers, warnings = generate_routes(
         routing, enforced_routing=enforced, tenants=dedup)
     blocking = [w for w in warnings if "skipping" in w or "blocked" in w]

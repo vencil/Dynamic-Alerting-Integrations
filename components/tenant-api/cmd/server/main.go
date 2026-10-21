@@ -389,6 +389,13 @@ func main() {
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
 	writer.SetBaseBranch(*gitBaseBranch) // #638: explicit PR-mode base (forge-neutral)
+	// #3175: no start while the git config names a filter, diff or merge
+	// driver — before any other git command here (RecoverBatchPublish's
+	// checkout below would run a smudge filter). Every write and preview
+	// checks again.
+	if err := writer.CheckGitDrivers(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 	// #2903 (ADR-036 §4): every content-changing write asks the generator
 	// container before it commits; /metrics reads its state and appends its
 	// own metrics.
@@ -399,9 +406,10 @@ func main() {
 	// #2900: a batch runs in a staging worktree; one a killed process left
 	// behind is removed here, before serving and outside the writer lock. A
 	// publish the process was killed in (branch advanced, worktree not yet)
-	// is finished first: the worktree is brought up to the branch.
+	// is finished first: the worktree is brought up to the branch. #3173: a
+	// direct write whose outcome was unknown is settled here too.
 	if err := writer.RecoverBatchPublish(); err != nil {
-		slog.Warn("could not finish an interrupted batch publish", "error", err)
+		slog.Warn("could not finish an interrupted publish", "error", err)
 	}
 	if err := writer.PruneBatchWorktrees(); err != nil {
 		slog.Warn("could not prune leftover batch worktrees", "error", err)

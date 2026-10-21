@@ -680,7 +680,7 @@ def _same_install(a, b):
 
 def exporter_reads(key):
     """Whether the exporter's conf.d walker reads a file named `key`
-    (pkg/config/tree_scan.go IsScannedFileName): not dot-hidden and a
+    (pkg/confdname IsScanned): not dot-hidden and a
     .yaml / .yml extension in any case. A ConfigMap key has no `/`, so no
     directory on the way can be hidden."""
     return has_yaml_extension(key) and not is_hidden_name(key)

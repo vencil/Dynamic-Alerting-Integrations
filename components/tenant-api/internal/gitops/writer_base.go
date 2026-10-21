@@ -48,12 +48,31 @@ func (w *Writer) base() string {
 // worktree changes) then `checkout -f` (switch even past a dirty tree). Safe to
 // discard: in PR mode no uncommitted change here is ever legitimate — each write
 // writes-then-commits on its own feature branch, returning to base when done.
+//
+// #3175: the move changes the git context — an `includeIf "onbranch:<base>"`
+// applies from here on, and the check under the lock ran on whatever branch
+// HEAD was on then (a stranded PR branch, an operator's checkout). So the
+// driver check runs again on base, as the last step, and every caller
+// inherits it. The reset and the checkout above run under the PRE-move
+// context (git reads its config when it starts, while HEAD still names the
+// old branch), which the caller's earlier check covered.
+//
+// A refusal here (errors.Is ErrGitDriverConfigured — the reset and checkout
+// failures never are) means HEAD IS ON BASE, with base's files: the move
+// completed. The caller must run no further git on files. The tree is left
+// there on purpose, not pointed back at the old branch: on base, the next
+// write's check under the lock sees the driver and refuses before any git
+// runs; pointed back, that check would pass and every write would repeat
+// the move.
 func (w *Writer) checkoutBaseClean(base string) error {
 	if err := w.gitExec("reset", "--hard", "HEAD"); err != nil {
 		return fmt.Errorf("reset to clean state: %w", err)
 	}
 	if err := w.gitExec("checkout", "-f", base); err != nil {
 		return fmt.Errorf("checkout base %q: %w", base, err)
+	}
+	if err := w.checkGitDriversIn(w.gitDir); err != nil {
+		return fmt.Errorf("on base %q: %w", base, err)
 	}
 	return nil
 }
@@ -87,9 +106,13 @@ func (w *Writer) checkoutBaseClean(base string) error {
 //     the tree is on base now.
 //   - The return fails → the error ALSO wraps the git error (%w twice), so
 //     index.lock contention still reads as ErrWriteOverloaded.
+//   - The return succeeds but base's git config names a driver (#3175,
+//     checkoutBaseClean's check on base) → that refusal alone
+//     (ErrGitDriverConfigured, not ErrTreeNotOnBase: the tree is on base).
 //
-// Both outcomes mean "retry": no commit and no push happened, unlike
-// ErrBaseRestore, whose push already did.
+// The first two mean "retry": no commit and no push happened, unlike
+// ErrBaseRestore, whose push already did. The third is not retryable until
+// the operator removes the key.
 //
 // Everything else keeps the behaviour this guard predates. Direct mode commits
 // on whatever branch the operator checked out, so a non-PR branch is left
@@ -110,6 +133,14 @@ func (w *Writer) leavePRBranch() error {
 	}
 
 	if err := w.checkoutBaseClean(base); err != nil {
+		if errors.Is(err, ErrGitDriverConfigured) {
+			// #3175: the tree is back on base, and base's config names a
+			// driver (checkoutBaseClean). Answered as that refusal, not as
+			// "retry": a retry would meet the same driver under the lock.
+			slog.Error("gitops: worktree was on a PR branch — returned to base, whose git config names a driver; nothing written (#1723, #3175)",
+				"branch", branch, "base", base, "error", err)
+			return err
+		}
 		slog.Error("gitops: worktree is on a PR branch and returning to base failed — nothing written (#1723)",
 			"branch", branch, "base", base, "error", err)
 		return fmt.Errorf("%w: HEAD is PR branch %q and returning to base %q failed, nothing written: %w",

@@ -316,14 +316,12 @@ class PipelineBuilder:
 
     class Result:
         """build() 的回傳結構。"""
-        __slots__ = ("routing_configs", "dedup_configs", "config_dir",
-                     "extra_configs")
+        __slots__ = ("routing_configs", "dedup_configs", "config_dir")
 
         def __init__(self):
             self.routing_configs = {}
             self.dedup_configs = {}
             self.config_dir = None
-            self.extra_configs = {}
 
     def __init__(self, config_dir):
         self._config_dir = config_dir
@@ -362,10 +360,8 @@ class PipelineBuilder:
             )
             write_yaml(self._config_dir, f"{name}.yaml", yaml_str)
 
-        from generate_alertmanager_routes import load_tenant_configs
-        routing_configs, dedup_configs, *extra = load_tenant_configs(
-            self._config_dir)
-        result.routing_configs = routing_configs
-        result.dedup_configs = dedup_configs
-        result.extra_configs = extra
+        from generate_alertmanager_routes import load_tenant_tree
+        tree = load_tenant_tree(self._config_dir)
+        result.routing_configs = tree.routing_configs
+        result.dedup_configs = tree.dedup_configs
         return result

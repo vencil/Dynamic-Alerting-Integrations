@@ -136,12 +136,29 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return res, errs, nil
 	}
+	// #3175: the check below runs `git status`, which runs a clean filter
+	// the git config names — here for a caller with read permission only.
+	// A driver found refuses the preview as it refuses the write, before
+	// git touches a file. A config git cannot read at all is, for the
+	// preview, one more way git fails: the HEAD check is skipped (git
+	// status would fail on the same config, running nothing) and the write
+	// refuses it under the lock.
+	gateErr := w.CheckGitDrivers()
+	var driverErr *GitDriverError
+	if errors.As(gateErr, &driverErr) {
+		return res, nil, gateErr
+	}
 	// #1535 item 6: the write's TENANT_FILE_DIRTY verdict, when git gives
 	// one. Anything else that keeps the check from deciding (no repository,
 	// git failing) does not stop the preview: it answers the rest, and the
 	// write itself fails on it (its HEAD sample, or the check, under the
 	// lock). Logged, since the preview then says less than the write will.
 	dirty := func(filePath string) error {
+		if gateErr != nil {
+			slog.Warn("tenant preview: could not check the git config; previewing without the HEAD check",
+				"tenant", tenantID, "error", gateErr)
+			return nil
+		}
 		err := w.checkTenantFileClean(filePath)
 		if errors.Is(err, ErrTenantFileDirty) {
 			return err

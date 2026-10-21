@@ -35,6 +35,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
@@ -327,7 +328,19 @@ func emptyConfig() *RBACConfig { return &RBACConfig{} }
 // declaredClaimKeys is the --identity-claim-headers declaration captured by
 // the NewManager parse closure; validateConfig rejects a config whose
 // match.claims references a key outside it.
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge),
+// wherever --rbac points: a file it refuses — a second document, even an
+// empty one, a `!!binary` or `!` tag, a null key — is a load error (fatal at
+// startup, last-good on a reload), never the empty config. yaml.v3 alone
+// reads the first document and ignores the rest, so rules written after a
+// `---` were silently dropped. The file is judged whether or not it sits in
+// conf.d: tenant-api is its one reader (ADR-036 §12), and a second rule for
+// the same file depending on its path would be two loaders.
 func parseConfig(data []byte, declaredClaimKeys map[string]string) (*RBACConfig, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var cfg RBACConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -694,11 +707,17 @@ func (m *Manager) allowedScopedModes(p *VerifiedPrincipal, tenantID string, want
 // (handler.OrgAllowed), and per-tenant READS via AllowedInOrgRead (the middleware
 // read-by-id gate + handler.OrgAllowedRead for the collection filters). The only
 // legitimate Allowed callers left are the platform-scope tenantID="*" checks
-// (org-scope deliberately does not apply to platform scope — an org-scoped rule
-// is not a platform admin) and the middleware's own write-mount branch (which
-// checks read on "*" or defers the per-tenant org decision to the handler's
-// RequireOrgWrite). Pinned by the go/ast tripwire, see guards_ast_test.go
-// (P4c emptied its allowlist).
+// for READS and checks that judge no tenant (invariant I6: there is no tenant
+// org list for the org axis to compare against) and the middleware's own
+// write-mount branch (which checks read on "*" or defers the per-tenant org
+// decision to the handler's RequireOrgWrite). Pinned by the go/ast tripwire,
+// see guards_ast_test.go (P4c emptied its allowlist).
+//
+// ⛔ Allowed(p, "*", PermAdmin) is NOT a platform-admin bar: an ORG-SCOPED
+// "*" admin rule passes it in every mode. I6 does not make an org-scoped
+// rule a platform admin; a platform-admin decision uses
+// PlatformAdminNonOrgScoped (reverse.go) — the /audit endpoints, the
+// federation whitelist PUT and the account backfill (#3160).
 //
 // Allowed records NO would-deny signal — recording lives in AllowedInOrg
 // (org_write) and AllowedInOrgRead (org) only, so nothing routed through the

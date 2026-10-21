@@ -19,8 +19,9 @@ from _lib_confd import (  # noqa: E402
     nested_yaml_warning,
     printable_name,
     reset_warned_for_test,
-    TenantCarriers,
-    tenant_carriers,
+    TenantSetUnknown,
+    TreeTenants,
+    tree_tenants,
     unusable_config_entries,
     unusable_config_paths,
     unusable_reason,
@@ -193,39 +194,57 @@ def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
     assert [p.name for p in nested_yaml_files(root)] == ["tenant-b.yaml"]
 
 
+@pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("validate", [None, str.isalnum],
                          ids=["no-validate", "validate"])
-def test_tenant_carriers_skips_hidden_names_silently(
+def test_tree_tenants_are_declared_keys_not_stems(
         tmp_path: pathlib.Path, validate) -> None:
-    """#2067: `.ghost.yaml` is neither a tenant NOR an invalid name.
+    """#2906: a tenant is a key of a tenant file's `tenants:`, as parse-tree
+    selects the files — not a file stem (the #1604 flat scan's answer).
 
-    The exporter's walker never reads a `.`-prefixed entry. Before the fix
-    `validate=None` returned tenant `.ghost`, and a `validate` that rejects
-    the stem put it in `invalid` — which the operator readers turn into a
-    warning about a file nothing reads. Both arms, so neither lane can hide
-    in the other.
+    Hidden entries (#2067) are not read, so their tenants are neither
+    tenants NOR invalid names; a `.yml` carrier and a subdirectory are read;
+    a file with no `tenants:` mapping declares nothing.
 
-    ⛔ Control in the same tree: a visible carrier the SAME `validate`
-    rejects (`bad_name`) must still land in `invalid`, or "hidden is not in
-    `invalid`" would be satisfied by a scan that never fills `invalid`.
+    ⛔ Control in the same tree: a declared id the SAME `validate` rejects
+    (`bad_name`) must still land in `invalid`, or "hidden is not in
+    `invalid`" would be satisfied by a reader that never fills `invalid`.
     """
     root = tmp_path / "conf.d"
     (root / ".snap").mkdir(parents=True)
-    (root / "real.yaml").write_text("tenants:\n  real: {}\n", encoding="utf-8")
-    (root / "bad_name.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / "sub").mkdir()
+    (root / "carrier.yaml").write_text(
+        "tenants:\n  real: {}\n  bad_name: {}\n", encoding="utf-8")
+    (root / "other.yml").write_text("tenants:\n  yml1: {}\n", encoding="utf-8")
+    (root / "sub" / "x.yaml").write_text("tenants:\n  nested: {}\n", encoding="utf-8")
+    (root / "flat.yaml").write_text("x: '1'\n", encoding="utf-8")
     (root / ".ghost.yaml").write_text("tenants:\n  ghost: {}\n", encoding="utf-8")
-    (root / ".ghost.yml").write_text("tenants:\n  ghost: {}\n", encoding="utf-8")
-    (root / ".dirlike.yaml").mkdir()
-    (root / ".snap" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / ".snap" / "t.yaml").write_text("tenants:\n  snap: {}\n", encoding="utf-8")
 
-    got = tenant_carriers(root, validate=validate)
+    got = tree_tenants(root, validate=validate)
 
-    everything = got.tenants + got.invalid + [p.name for p in got.unusable]
-    assert not [n for n in everything if n.startswith(".")], got
     if validate is None:
-        assert got == TenantCarriers(["bad_name", "real"], [], []), got
+        assert got == TreeTenants(["bad_name", "nested", "real", "yml1"], []), got
     else:
-        assert got == TenantCarriers(["real"], ["bad_name"], []), got
+        assert got == TreeTenants(["nested", "real", "yml1"], ["bad_name"]), got
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_tree_tenants_refuses_what_it_cannot_answer(tmp_path: pathlib.Path) -> None:
+    """Fail-closed: an unreadable tenant file (named, with its kind) and one
+    id in two files are no tenant set — never a partial one."""
+    root = tmp_path / "conf.d"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    assert tree_tenants(root) == TreeTenants(["t"], [])
+
+    (root / "sub" / "bad.yaml").write_text("tenants: [\n", encoding="utf-8")
+    with pytest.raises(TenantSetUnknown, match=r"sub/bad\.yaml \(syntax_error"):
+        tree_tenants(root)
+
+    (root / "sub" / "bad.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    with pytest.raises(TenantSetUnknown, match=r"'t' in a\.yaml, sub/bad\.yaml"):
+        tree_tenants(root)
 
 
 def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):
@@ -249,8 +268,8 @@ def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):
 def test_shared_helpers_name_the_entry_point_not_themselves(monkeypatch, tmp_path):
     """`tool=` omitted → the message names the command the operator ran.
 
-    A shared helper (`_lib_io.iter_yaml_files`) is reached from several
-    entry points. Labelling its warning with the helper's own name tells
+    A shared helper (`warn_nested` called without `tool=`) is reached from
+    several entry points. Labelling its warning with the helper's own name tells
     the operator nothing about which command produced it — the
     traceability concern CodeRabbit raised on PR #1343.
     """
@@ -282,9 +301,8 @@ def test_derived_tool_name_survives_a_missing_argv(monkeypatch, tmp_path):
 def test_warn_nested_prints_once_per_directory(capsys, hierarchical):
     """One command often scans the same conf.d twice; say it once.
 
-    `validate_config.py` reaches the routing parser twice and
-    `migrate_to_operator.analyze_migration` both scans directly and calls
-    `discover_tenant_configs` — printing the identical WARN twice reads as
+    `validate_config.py` reaches the routing parser twice — printing the
+    identical WARN twice reads as
     two separate problems (CodeRabbit, PR #1343). Note the fix is here, not
     "delete one of the guards": a scan whose only warning lives in another
     function is the gate-never-fires shape this module exists against.

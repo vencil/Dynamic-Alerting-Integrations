@@ -380,8 +380,7 @@ RECIPES: list[Recipe] = [
     # expected>0 ("fail") and ServiceMonitor missing ("fail"), caller_error
     # stays False => genuine findings. POSIX-only (HONEST BOUNDARIES §4).
     R("operator_check",
-      lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D)],
+      lambda t, s: ["--rule-packs-dir", str(RULE_PACKS)],
       needs_kubectl=True,
       note="0/N PrometheusRule + missing ServiceMonitor; 0 -> 1"),
 

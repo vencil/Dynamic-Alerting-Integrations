@@ -9,8 +9,8 @@ Functions:
   _parse_tenant_overrides(...)  → per-tenant _routing / _severity_dedup / _metadata
   _parse_config_files(dir)      → walk YAML files → raw parsed dict
   _merge_tenant_routing(...)    → 4-layer merge (defaults → profile → tenant)
-  load_tenant_configs(dir)      → orchestrate the full pipeline (public entry)
-  load_tenant_tree(dir)         → same, plus the file accounting (#1460)
+  load_tenant_tree(dir)         → orchestrate the full pipeline (public entry),
+                                  with the file accounting (#1460)
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ _POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
 ROUTING_READ = _lib_parse_cache.TENANT_LISTS_AS_TEXT
 
 # What to do about a file parse-tree cannot read, by its kind
-# (internal/parsetree Kinds); any other kind gets the generic remedy.
+# (pkg/parsetree Kinds); any other kind gets the generic remedy.
 _UNREADABLE_REMEDY = {
     "syntax_error": "repair the YAML syntax in {f}",
     "invalid_utf8": "re-save {f} as UTF-8",
@@ -1178,9 +1178,8 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             skipped_by_dir.setdefault(p.parent, [])
         for p, _why in not_read:
             skipped_by_dir[p.parent].append(p)
-        # #2906: each carrier not selected is a finding — this replaces
-        # `warn_multi_carrier`'s stderr line on this path, so the one fact
-        # is printed once, by the stream.
+        # #2906: each carrier not selected is a finding, the only report of
+        # it on this path, so the one fact is printed once, by the stream.
         for d, skipped_here in skipped_by_dir.items():
             if not skipped_here:
                 continue
@@ -1490,12 +1489,22 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
 class TenantTree:
     """What ``load_tenant_tree`` read, plus what it could NOT read (#1460).
 
-    The five positional fields are exactly ``load_tenant_configs``'s tuple —
-    ``as_tuple()`` hands them back in that order for the many callers that
-    unpack it. The accounting fields are the reason this type exists: a
-    consumer that only gets the tuple cannot tell "two tenants" from "three
-    tenants, one of which did not parse", and that gap is how a smaller
-    tree was reported as a valid one.
+    Callers read the fields by name; there is no positional form (#2906:
+    the former 5-tuple's last slot had been a constant ``{}`` since #3043).
+
+    * ``routing_configs`` — {tenant: routing config} for tenants with
+      ``_routing`` (the 4-layer merge: defaults → profile → tenant).
+    * ``dedup_configs`` — {tenant: "enable"|"disable"} for ALL tenants
+      (default "enable"); its keys are the generator's tenant set — what a
+      ``{{tenant}}`` ``_routing_enforced`` expands over (#2519) — every
+      valid id loaded, even one with no ``_routing``.
+    * ``schema_warnings`` — the validation warning/error stream.
+    * ``enforced_routing`` — the platform ``_routing_enforced`` or None.
+
+    The accounting fields are the reason this type exists: a consumer that
+    only got the first four cannot tell "two tenants" from "three tenants,
+    one of which did not parse", and that gap is how a smaller tree was
+    reported as a valid one.
 
     * ``files_read`` — config files parsed (a mapping or an empty document).
     * ``files_skipped`` — ``(fname, reason)`` for every file dropped, policy
@@ -1538,59 +1547,6 @@ class TenantTree:
     # `print_reader_warnings`.
     unselected_carriers: list[Finding] = field(default_factory=list)
 
-    def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
-                                dict | None, dict[str, dict]]:
-        # #3043: the fifth slot was the tenants' `_metadata`, read and used by
-        # nothing; it is no longer read and is always {} — kept so the
-        # 5-tuple's callers keep their arity.
-        return (self.routing_configs, self.dedup_configs, self.schema_warnings,
-                self.enforced_routing, {})
-
-
-def load_tenant_configs(
-    config_dir: str,
-    *,
-    strict_policies: bool = False,
-) -> tuple[dict[str, dict], dict[str, str], list[str], dict | None, dict[str, dict]]:
-    """Load and parse all tenant YAML files from a config directory.
-
-    Tuple-shaped wrapper over ``load_tenant_tree``; every field below is a
-    field of the returned ``TenantTree``. ⚠️ This tuple carries NO record of
-    files that failed to parse (#1460) — a consumer whose verdict depends on
-    the tree being complete must call ``load_tenant_tree`` and look at
-    ``tenant_file_errors``.
-
-    Orchestrates the full configuration pipeline:
-      1. Parse all .yaml/.yml files in config_dir (delegated to _parse_config_files())
-      2. Merge _routing_defaults with tenant _routing overrides (delegated to _merge_tenant_routing())
-      3. Validate tenant keys against defaults (checks for typos)
-      4. Resolve routing profile references (ADR-007)
-      5. Validate domain policies against resolved routes (ADR-007);
-         with strict_policies=True violations are emitted as ERROR
-         (blocking for the --strict CLI/CI path) instead of WARN.
-
-    Configuration Hierarchy (4 layers):
-      - Layer 0: _routing_defaults from _ prefixed files
-      - Layer 1: routing_profile reference (_routing_profile key)
-      - Layer 2: profile config resolved from _routing_profiles.yaml
-      - Layer 3: explicit tenant _routing overrides
-
-    Returns:
-        (routing_configs, dedup_configs, schema_warnings, enforced_routing, {}):
-        - routing_configs: {tenant_name: routing_config_dict} for tenants with _routing
-        - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable");
-          its keys are the generator's tenant set — what a `{{tenant}}`
-          `_routing_enforced` expands over (#2519) — every valid id loaded
-        - schema_warnings: list of validation warning strings
-        - enforced_routing: dict or None — platform enforced routing config (v1.7.0+)
-        - {}: the tenants' `_metadata` until #3043, which nothing used; no
-          longer read, kept so the tuple keeps five fields
-
-    Note:
-        All tenants appear in dedup_configs even if they have no _routing config.
-    """
-    return load_tenant_tree(config_dir, strict_policies=strict_policies).as_tuple()
-
 
 def policy_level_source(parsed: dict, level: str) -> str:
     """The policy file(s) a subtree *level*'s ``domain_policies`` came from,
@@ -1606,12 +1562,27 @@ def load_tenant_tree(
     strict_policies: bool = False,
     reader: "_lib_parse_cache.ConfdReader | None" = None,
 ) -> TenantTree:
-    """``load_tenant_configs`` with the file accounting attached (#1460).
+    """Load and parse every tenant file of *config_dir* into a ``TenantTree``.
 
-    Same pipeline, same warnings, same exit-2 on an unusable directory; the
-    only addition is that a file this reader dropped is returned as data
-    (``TenantTree.tenant_file_errors`` / ``files_skipped``) instead of
-    surviving only as a stderr WARN line. *reader*: as for
+    The pipeline:
+      1. Parse all .yaml/.yml files in config_dir (``_parse_config_files``)
+      2. Merge _routing_defaults with tenant _routing overrides
+         (``_merge_tenant_routing``)
+      3. Validate tenant keys against defaults (checks for typos)
+      4. Resolve routing profile references (ADR-007)
+      5. Validate domain policies against resolved routes (ADR-007);
+         with strict_policies=True violations are emitted as ERROR
+         (blocking for the --strict CLI/CI path) instead of WARN.
+
+    Configuration hierarchy (4 layers): Layer 0 ``_routing_defaults`` from
+    ``_``-prefixed files; Layer 1 the ``_routing_profile`` reference; Layer 2
+    the profile resolved from ``_routing_profiles.yaml``; Layer 3 explicit
+    tenant ``_routing`` overrides.
+
+    Exit 2 on an unusable directory. A file this reader dropped is returned
+    as data (``TenantTree.tenant_file_errors`` / ``files_skipped``, #1460),
+    not only as a stderr WARN line — a consumer whose verdict depends on the
+    tree being complete must look at them. *reader*: as for
     ``_parse_config_files`` (the session's reader of *config_dir* when None).
     """
     parsed = _parse_config_files(config_dir, reader)
@@ -1806,9 +1777,8 @@ def print_reader_warnings(source: "TenantTree | dict") -> None:
     generator's warning stream must still show its user (#2906).
 
     *source* is a ``load_tenant_tree`` result or a ``_parse_config_files``
-    dict. Today: each `unselected_defaults_carrier` line — before #2906 the
-    reader printed `warn_multi_carrier`'s line itself, so every caller of
-    the reader showed it; it is a Finding in the stream now, and a caller
+    dict. Today: each `unselected_defaults_carrier` line — it is a Finding
+    in the stream, and the reader prints nothing of its own, so a caller
     that prints neither the stream nor this would hide it. ⛔ Not for
     generate-routes / validate-config (they print the stream: twice), and
     not for a caller whose other reader already names it (policy_engine:

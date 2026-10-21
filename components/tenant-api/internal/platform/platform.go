@@ -38,7 +38,8 @@ const (
 
 // BranchPrefix is the namespace of every feature branch tenant-api cuts for
 // a PR/MR (gitops.WritePR / WritePRBatch name theirs "<prefix><tenant>/<ts>"
-// and "<prefix>batch/<ts>"). It is ONE constant because three things must
+// and "<prefix>batch/<ts>", where <ts> is the UTC second plus a random hex
+// suffix since #1724). It is ONE constant because three things must
 // agree on it: the writer that creates the branches, the forge clients that
 // recognise tenant-api's own PRs/MRs among all open ones, and the writer's
 // direct-commit guard that detects a worktree stranded on such a branch
@@ -65,7 +66,9 @@ func IsBatchBranch(ref string) bool { return strings.HasPrefix(ref, BatchBranchP
 func ReservedTenantID(id string) bool { return id == BatchTenantID }
 
 // TenantIDFromBranch is the tenant a tenant-api branch was cut for
-// ("<prefix><tenant>/<ts>"), and "" for a batch branch or any other ref. The
+// ("<prefix><tenant>/<ts>"; only the segment after the prefix is read, so
+// <ts>'s shape — a random suffix since #1724 — does not matter), and "" for
+// a batch branch or any other ref. The
 // forge clients set PRInfo.TenantID from it. A batch branch used to yield
 // "batch", which made every batch PR readable by whoever may read a tenant
 // called "batch" (#3123); its covered tenants are PRInfo.Tenants instead.

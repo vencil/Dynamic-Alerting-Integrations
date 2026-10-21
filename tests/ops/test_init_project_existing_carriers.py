@@ -556,6 +556,7 @@ def test_the_notices_follow_the_cli_language(tmp_path):
 
 import re  # noqa: E402
 import shutil  # noqa: E402
+from _da_guard_build import go_build_env  # noqa: E402  (#3174: CGO_ENABLED=0)
 
 _APP = Path(REPO_ROOT) / "components" / "threshold-exporter" / "app"
 _DISPATCH = Path(REPO_ROOT) / "scripts" / "tools" / "ops" / "guard_dispatch.py"
@@ -577,7 +578,7 @@ def da_guard(tmp_path_factory):
                     "turns this into a failure)")
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
     subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-                   cwd=_APP, check=True, timeout=600)
+                   cwd=_APP, check=True, timeout=600, env=go_build_env())
     return out
 
 

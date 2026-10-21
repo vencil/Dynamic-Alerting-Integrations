@@ -2055,6 +2055,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # and skips the ones it cannot parse.
             "schedule_null",
             "schema",
+            # #3157. The same scan as `tenant_uniqueness` below, so the same
+            # caveat: it skips what it cannot parse.
+            "tenant_file_name",
             # #1577. It reads `--config-dir` and skips what it cannot parse,
             # so the caveat belongs on its row for the same reason as the
             # four above: without it the row asserts "no duplicate
@@ -2545,6 +2548,137 @@ class TestTenantIdParity:
         assert r["status"] == vc.PASS, r
 
 
+class TestTenantFileName:
+    """Check 9b (#3157): a tenant file's name (stem) is the one tenant id it
+    declares — tenant-api takes the id from the name, the exporter from
+    ``tenants:``, so a mismatch names one tenant two ways.
+
+    ⚠️ Every PASS below sits beside a FAIL on the same helper and the same
+    shape, so "no finding" cannot be met by the check scanning less.
+    """
+
+    @staticmethod
+    def _tree(tmp_path, files):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+        for name, body in files.items():
+            p = d / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+        return str(d)
+
+    @staticmethod
+    def _body(*ids):
+        return "tenants:\n" + "".join(
+            f"  {i}:\n    mysql_connections: 1\n" for i in ids)
+
+    def test_a_file_named_after_its_tenant_passes(self, tmp_path):
+        d = self._tree(tmp_path, {"t-one.yaml": self._body("t-one"),
+                                  "t-two.yml": self._body("t-two")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.PASS, r
+        assert "2 tenant file(s)" in " ".join(r["details"]), r
+
+    def test_a_name_that_is_not_the_declared_id_fails(self, tmp_path):
+        d = self._tree(tmp_path, {"svc-tenant.yaml": self._body("svc-prod")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        detail = r["details"][0]
+        assert 'svc-tenant.yaml declares tenant "svc-prod"' in detail, detail
+        assert 'its file name says "svc-tenant"' in detail, detail
+        assert "rename the file to svc-prod.yaml" in detail, detail
+        # A root file: tenant-api's consequence, by its reason code.
+        assert "(id_mismatch)" in detail, detail
+
+    def test_reserved_and_hidden_files_are_not_checked(self, tmp_path):
+        """``_`` files are platform carriers and ``.`` files are skipped by
+        the exporter's walker: neither is a tenant file. The same body in
+        an ordinary file FAILs (the test above)."""
+        d = self._tree(tmp_path, {
+            "_platform.yaml": self._body("svc-prod"),
+            ".hidden.yaml": self._body("svc-other"),
+            "t-one.yaml": self._body("t-one")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.PASS, r
+        assert "1 tenant file(s)" in " ".join(r["details"]), r
+
+    def test_a_file_in_a_sub_directory_is_held_to_its_own_name(self, tmp_path):
+        d = self._tree(tmp_path, {
+            "team/ok-a.yaml": self._body("ok-a"),
+            "team/deep/pay.yaml": self._body("pay-a")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        detail = r["details"][0]
+        assert 'team/deep/pay.yaml declares tenant "pay-a"' in detail, detail
+        assert "rename the file to team/deep/pay-a.yaml" in detail, detail
+        # tenant-api reads the root only: its consequence is not claimed.
+        assert "id_mismatch" not in detail, detail
+        assert "reads only the conf.d root" in detail, detail
+
+    def test_a_file_declaring_several_tenants_fails_even_if_one_matches(
+            self, tmp_path):
+        """tenant-api git-manages every tenant of such a file (tenant_count);
+        no single name fits it, so the advice is to split, not to rename."""
+        d = self._tree(tmp_path, {"t-a.yaml": self._body("t-a", "t-b")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert 't-a.yaml declares 2 tenants ("t-a", "t-b")' in detail, detail
+        assert "split it into one file per tenant (t-a.yaml, t-b.yaml)" in detail
+        assert "tenant_count" in detail, detail
+
+    @pytest.mark.parametrize("declared, status", [
+        ("Upper", vc.PASS), ("upper", vc.FAIL)])
+    def test_the_comparison_keeps_case(self, tmp_path, declared, status):
+        """The stem keeps its case (`Upper.YAML` is tenant `Upper` to
+        tenant-api), so only the exact id matches it."""
+        d = self._tree(tmp_path, {"Upper.YAML": self._body(declared)})
+        assert vc.check_tenant_file_name(d)["status"] == status
+
+    def test_a_file_that_declares_no_tenant_is_not_compared(self, tmp_path):
+        d = self._tree(tmp_path, {
+            "shell.yaml": "tenants: {}\n",
+            "notes.yaml": "description: no tenants here\n",
+            "t-one.yaml": self._body("t-one")})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.PASS, r
+        assert "1 tenant file(s)" in " ".join(r["details"]), r
+
+    def test_an_unreadable_file_is_a_limit_not_a_pass(self, tmp_path):
+        d = self._tree(tmp_path, {
+            "t-one.yaml": self._body("t-one"),
+            "broken.yaml": "tenants:\n  null:\n    m: 1\n"})
+        r = vc.check_tenant_file_name(d)
+        assert r["status"] == vc.WARN, r
+        assert "broken.yaml" in " ".join(r["details"]), r
+
+    def test_end_to_end_exits_1_and_names_the_file(self, tmp_path, capsys,
+                                                   cli_argv):
+        d = self._tree(tmp_path, {"svc-tenant.yaml": self._body("svc-prod")})
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] tenant_file_name" in out, out
+        assert "svc-tenant.yaml" in out, out
+
+    @pytest.mark.parametrize("tree", [
+        "components/threshold-exporter/config/conf.d",
+        "rule-packs/recipes/examples/conf.d",
+        "try-local/seed/conf.d",
+    ])
+    def test_the_shipped_trees_hold_the_invariant(self, tree):
+        """The repo's own conf.d trees are what customers copy (#3157 renamed
+        the five shipped examples that broke it)."""
+        r = vc.check_tenant_file_name(os.path.join(_REPO_ROOT, tree))
+        assert r["status"] == vc.PASS, r
+
+
 class TestRootDefaultsRouting:
     """Check 10 (#2291): no `_routing*` key under the ROOT `defaults:`.
 
@@ -2698,19 +2832,12 @@ _CARRIER_ORACLE = json.loads(pathlib.Path(
     "defaults-carrier-oracle.json").read_text(encoding="utf-8"))["cases"]
 
 #: Oracle rows where this row's verdict differs from the exporter's, each for
-#: a reason that is not the value rule (#1414) and predates it. The rows FAIL
-#: here while the exporter accepts: conf.d is read through `da-guard
-#: parse-tree` (ADR-036 step 4, #2906), whose closed list refuses what the
-#: exporter's yaml.v3 decode lets by (a duplicate key anywhere, several
-#: documents), and the file fails before the value rule runs — through
-#: `_run_check`'s input-error row. (Before step 4 the PyYAML read also failed
-#: a TAB that yaml.v3 takes, and passed a top level that is not a mapping.)
-_ORACLE_ROW_DEVIATIONS = {
-    "multi-document": vc.FAIL,
-    "dup-in-unknown-section": vc.FAIL,
-    "dup-under-unknown-nested-field": vc.FAIL,
-    "dup-in-custom-alerts-recipe": vc.FAIL,
-}
+#: a reason that is not the value rule (#1414) and predates it. None since
+#: ADR-036 step 6 (#3206): the rows that FAILed here while the exporter
+#: accepted (a duplicate key anywhere, several documents — refused by `da-guard
+#: parse-tree`, through which conf.d is read since step 4, #2906) are refused
+#: by the exporter too, so the oracle says `dropped` for them.
+_ORACLE_ROW_DEVIATIONS: dict = {}
 
 
 class TestRootDefaultsValues:

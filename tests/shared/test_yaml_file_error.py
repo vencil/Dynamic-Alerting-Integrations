@@ -195,14 +195,6 @@ class TestLoadYamlFileContentEncoding:
         finally:
             p.chmod(0o600)
 
-    def test_load_tenant_configs_propagates_the_named_error(self, tmp_path):
-        """The hub six tools read through: it must not fail OPEN either."""
-        (tmp_path / "alpha.yaml").write_bytes(XFF_DOC)
-        (tmp_path / "beta.yaml").write_bytes(b"tenants:\n  beta:\n    cpu_usage: 85\n")
-        with pytest.raises(lio.YamlFileError) as ei:
-            lio.load_tenant_configs(str(tmp_path))
-        assert "alpha.yaml" in str(ei.value)
-
 
 class TestExitOnYamlFileErrorWrapper:
     def test_maps_to_caller_error_naming_the_path(self, capsys):
@@ -405,7 +397,9 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # parse reason when effective refuses a file.
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
-                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant"}
+                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
+                    # #2906 F2: the single file through parse-tree's file mode
+                    "analyze_gaps --tenant-config"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
@@ -453,9 +447,11 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
     elif label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
         # parse_failed): no Python cause class, but the exporter's own parse
-        # reason — here the byte that is not UTF-8 — is carried along.
+        # reason — here the byte that is not UTF-8 — is carried along. Since
+        # ADR-036 step 6 (#3206) that reason is parse-tree's invalid_utf8
+        # (yaml.v3's "invalid leading UTF-8 octet" before).
         assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
-        assert "invalid leading UTF-8 octet" in p.stderr, "the exporter's parse reason must reach the operator"
+        assert "not valid UTF-8 at byte" in p.stderr, "the exporter's parse reason must reach the operator"
     else:
         assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 
@@ -563,8 +559,8 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # ---------------------------------------------------------------------------
 # `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
 # owe the same guard; so do the #2114 exporter-key siblings of both.
-_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs",
-              "load_yaml_file_exporter_keys", "load_yaml_file_strict_exporter_keys",
+_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict",
+              "load_yaml_file_exporter_keys",
               # #2115: raises YamlFileError for a file the exporter's load skips.
               "load_served_tree", "load_served_values"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",
@@ -601,7 +597,7 @@ def _handler_names(h: ast.ExceptHandler) -> list[str]:
 
 
 def _lib_aliases(tree: ast.Module) -> dict[str, str]:
-    """Local names bound to the lib's load_yaml_file / load_tenant_configs."""
+    """Local names bound to the lib's load helpers (`_LIB_ROOTS`)."""
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in _LIB_MODULES:
@@ -629,8 +625,9 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
 
 def _module_reexports_lib_root(modname: str, attr: str) -> bool:
     """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
-    defined locally)? ``gen.load_tenant_configs`` is grar's own function;
-    ``pe.load_yaml_file`` is the lib's, re-exported."""
+    defined locally)? ``deprecate_rule.load_yaml_file`` is that tool's own
+    function; ``generate_tenant_mapping_rules.load_yaml_file`` is the lib's,
+    re-exported."""
     for d in (TOOLS, OPS, LINT):
         p = d / f"{modname}.py"
         if p.is_file():
@@ -826,16 +823,19 @@ def test_scanner_still_flags_a_handler_that_does_not_catch_it():
 
 def test_scanner_sees_reexport_through_a_tool_module():
     """`from generate_tenant_mapping_rules import load_yaml_file` resolves to
-    the lib helper (the tool imports it and does not define its own). #2114:
-    so does the strict exporter-key sibling `analyze_rule_pack_gaps` reads
-    its single file with. (policy_engine was the example until #2906 moved
-    its policy reads to parse-tree.)"""
+    the lib helper (the tool imports it and does not define its own); so
+    does `analyze_rule_pack_gaps`'s, which reads the metric dictionary with
+    it. (policy_engine was the example until #2906 moved its policy reads to
+    parse-tree; analyze_rule_pack_gaps's strict exporter-key read left with
+    its `--tenant-config` file, #2906 F2.)"""
     assert _sites_of("from generate_tenant_mapping_rules import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
-    assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file_strict_exporter_keys\n"
-                     "def f(p):\n    return load_yaml_file_strict_exporter_keys(p)\n")
+    assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
+                     "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib
-    assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")
+    # (deprecate_rule defines its own parse-tree `load_yaml_file`)
+    assert not _sites_of("from deprecate_rule import load_yaml_file\n"
+                         "def f(p):\n    return load_yaml_file(p)\n")
 
 
 # ── per-file isolation kept where the tool already had it (blind review) ──

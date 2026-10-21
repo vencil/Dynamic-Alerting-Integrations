@@ -131,8 +131,9 @@ func TestReady(t *testing.T) {
 	if resp["status"] != "ready" {
 		t.Errorf("Ready() status = %q, want %q", resp["status"], "ready")
 	}
-	if resp["config_dir"] != dir {
-		t.Errorf("Ready() config_dir = %q, want %q", resp["config_dir"], dir)
+	// #2811: /ready is unauthenticated, so the body names no server path.
+	if _, ok := resp["config_dir"]; ok || strings.Contains(w.Body.String(), dir) {
+		t.Errorf("Ready() body %s exposes the config dir %q", w.Body.String(), dir)
 	}
 }
 
@@ -414,8 +415,8 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 	// #1680: bad.yaml is no longer silently skipped — it is a degraded row,
 	// so the tenant does not vanish while every other plane still counts it.
 	want := []TenantSummary{
-		{ID: "acme", ConfigDerived: &ConfigDerivedState{SilentTargets: []string{}}},
-		{ID: "bad", ConfigError: "malformed_yaml"},
+		{ID: "acme", ConfigDerived: &ConfigDerivedState{SilentTargets: []string{}}, ManagedBy: "api"},
+		{ID: "bad", ConfigError: "malformed_yaml", ManagedBy: "git", GitManagedReason: "not_tenant_document"},
 	}
 	if !reflect.DeepEqual(tenants, want) {
 		t.Errorf("tenants = %+v, want %+v", tenants, want)

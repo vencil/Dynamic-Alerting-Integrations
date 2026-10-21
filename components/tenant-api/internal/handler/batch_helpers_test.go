@@ -88,8 +88,30 @@ func seedGitTree(t *testing.T, files map[string]string) string {
 			t.Skipf("git %v: %v\n%s", args, err, out)
 		}
 	}
+	addBareOrigin(t, configDir)
 	return configDir
 }
+
+// addBareOrigin points dir's "origin" at a fresh, empty bare repository and
+// returns its path, so a PR-mode write's push succeeds: a failed push fails
+// the write (#1724). Nothing is pushed to it here — the base fetch finds no
+// origin/<base> and the writer branches from the local base.
+func addBareOrigin(t *testing.T, dir string) string {
+	t.Helper()
+	bare := t.TempDir()
+	for _, args := range [][]string{{"init", "--bare", "-q", bare}, {"-C", dir, "remote", "add", "origin", bare}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Skipf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return bare
+}
+
+// prBranchRef is where a test reads a PR branch after the write: the
+// writer drops the local branch once it is pushed (#641), and fails the
+// write when it is not (#1724), so the copy left in the repo is the
+// remote-tracking ref the push updated.
+func prBranchRef(branch string) string { return "refs/remotes/origin/" + branch }
 
 func gitHead(t *testing.T, dir string) string {
 	t.Helper()
@@ -144,7 +166,7 @@ func runOffBatch(t *testing.T, mode WriteMode, disk, ops string) ([]BatchResult,
 	if head == "" {
 		return resp.Results, ""
 	}
-	out, err := exec.Command("git", "-C", configDir, "show", head+":t-off.yaml").CombinedOutput()
+	out, err := exec.Command("git", "-C", configDir, "show", prBranchRef(head)+":t-off.yaml").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git show %s:t-off.yaml: %v\n%s", head, err, out)
 	}
@@ -225,7 +247,7 @@ func putReceiverDoc(t *testing.T, body string, pr bool) (int, string, string) {
 	wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 
 	var written strings.Builder
-	refs, err := exec.Command("git", "-C", dir, "for-each-ref", "--format=%(refname:short)", "refs/heads").Output()
+	refs, err := exec.Command("git", "-C", dir, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes").Output()
 	if err != nil {
 		t.Fatalf("list branches: %v", err)
 	}

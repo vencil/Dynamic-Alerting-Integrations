@@ -896,7 +896,13 @@ type ChainDefaults struct {
 // ComputeMergedHashFromChain. A syntax error is kept, not returned: it becomes
 // the tenant's merge error (`parse defaults[i]: …`, i being the file's index
 // in THAT tenant's chain) only when a chain containing the file is merged.
+//
+// parse-tree's verdict first (ADR-036 step 6, #3206; parse_verdict.go): a file
+// it refuses keeps the *UnreadableFileError as that syntax error is kept.
 func ParseChainDefaults(b []byte) ChainDefaults {
+	if err := judgeConfFile(b); err != nil {
+		return ChainDefaults{err: err}
+	}
 	var raw any
 	if err := yaml.Unmarshal(b, &raw); err != nil {
 		return ChainDefaults{err: err}
@@ -964,7 +970,13 @@ type TenantDoc struct {
 
 // ParseTenantDoc parses one tenant file's bytes for the *Doc merge entry
 // points (ComputeMergedHashDoc, ComputeMergedHashFromChainDoc).
+//
+// parse-tree's verdict first (ADR-036 step 6, #3206; parse_verdict.go): a file
+// it refuses is a TenantDoc whose every tenant gets the *UnreadableFileError.
 func ParseTenantDoc(b []byte) *TenantDoc {
+	if err := judgeConfFile(b); err != nil {
+		return &TenantDoc{err: err}
+	}
 	doc, err := decodeTenantFile(b)
 	if err != nil {
 		return &TenantDoc{err: err}
@@ -1024,6 +1036,8 @@ func (d *TenantDoc) TenantRaw(tenantID string) (map[string]any, error) {
 // a file with a non-string key re-decodes each tenant's body from its own
 // node, so two keys the generic decode collapses (`010` and `8` are both
 // int 8) keep their own bodies, as they do on the flat plane.
+//
+// It does NOT ask parse-tree; ParseTenantDoc, its one caller, does first.
 func decodeTenantFile(b []byte) (any, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(b, &root); err != nil {

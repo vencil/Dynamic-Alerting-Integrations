@@ -90,8 +90,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/internal/scrape"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -107,6 +107,7 @@ type configMetrics struct {
 	reloadTriggers     *prometheus.CounterVec
 	defaultsNoop       prometheus.Counter
 	parseFailures      *prometheus.CounterVec   // v2.8.0 A-8d: per-file YAML parse failures
+	parseRefused       *prometheus.CounterVec   // #3206: the parse failures that are parse-tree's refusal, by kind
 	defaultsShadowed   prometheus.Counter       // v2.8.0 Issue #61: shadowed defaults change (split from defaultsNoop)
 	blastRadius        *prometheus.HistogramVec // v2.8.0 Issue #61: per-tick (reason,scope,effect) tenants-affected distribution
 	reloadDuration     prometheus.Histogram     // v2.8.0 B-3: end-to-end diffAndReload elapsed (debounce window → atomic swap done)
@@ -332,6 +333,7 @@ func newConfigMetrics() *configMetrics {
 		reloadTriggers:              s.ReloadTriggers,
 		defaultsNoop:                s.DefaultsNoop,
 		parseFailures:               s.ParseFailures,
+		parseRefused:                s.ParseRefused,
 		defaultsShadowed:            s.DefaultsShadowed,
 		blastRadius:                 s.BlastRadius,
 		reloadDuration:              s.ReloadDuration,
@@ -426,6 +428,23 @@ func (cm *configMetrics) IncParseFailure(fileBasename string) {
 	c, err := cm.parseFailures.GetMetricWithLabelValues(strings.ToValidUTF8(fileBasename, "\uFFFD"))
 	if err != nil {
 		log.Printf("WARN: da_config_parse_failure_total not incremented for file %q: %v", fileBasename, err)
+		return
+	}
+	c.Inc()
+}
+
+// IncParseRefused bumps da_config_parse_refused_total for a parse failure
+// that is parse-tree's refusal (ADR-036 step 6, #3206), labelled by the file
+// basename and the parsetree.Kind. Every caller has just called
+// IncParseFailure for the same file, so the unit is that counter's.
+// Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) IncParseRefused(fileBasename, kind string) {
+	if cm == nil {
+		return
+	}
+	c, err := cm.parseRefused.GetMetricWithLabelValues(strings.ToValidUTF8(fileBasename, "\uFFFD"), kind)
+	if err != nil {
+		log.Printf("WARN: da_config_parse_refused_total not incremented for file %q: %v", fileBasename, err)
 		return
 	}
 	c.Inc()

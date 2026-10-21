@@ -105,6 +105,16 @@ jobs:
         with:
           python-version: '3.13'
 
+      # `make bench-e2e` builds .build/da-guard (go build): the synthetic
+      # fixture generator confirms every file it writes through
+      # `da-guard parse-tree` (ADR-036 §2, #2906). Go comes from go.mod, as
+      # in the other bench workflows, not from whatever the runner image has.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
       - name: Verify Docker Compose available
         run: docker compose version
 

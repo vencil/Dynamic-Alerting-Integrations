@@ -6,7 +6,7 @@
 四個位置沿用 `test_served_values_readers_matrix.POSITIONS`：同一個值
 （`custom_mysql_slow: 5`）只寫在根 `defaults:`、平台檔 `tenants:`、租戶檔、子樹
 `_defaults.yaml` 其中之一；tenant-b 是對照組（7，永遠寫在自己的租戶檔）。舊讀取端
-（`_lib_io.load_tenant_configs`）只讀根目錄租戶檔本身，所以 `custom_mysql_slow lte 3` 只在
+（已刪除的 Python 共用讀取函式）只讀根目錄租戶檔本身，所以 `custom_mysql_slow lte 3` 只在
 「租戶檔」那格對 tenant-a FAIL（子樹那格整個租戶消失）。
 
 裁決（#2115 (c)）：閾值看 exporter 實際發出的數字、排程閾值每個時段都要過；保留鍵看

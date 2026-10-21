@@ -87,9 +87,9 @@ class TestColdParsePerformance:
             write_yaml(config_dir, f"{tenant}.yaml",
                        make_tenant_yaml(tenant, keys={"metric_a": str(i * 10)},
                                         routing=routing))
-        from generate_alertmanager_routes import load_tenant_configs
+        from generate_alertmanager_routes import load_tenant_tree
         start = time.monotonic()
-        load_tenant_configs(config_dir)
+        load_tenant_tree(config_dir)
         elapsed_ms = (time.monotonic() - start) * 1000
         assert elapsed_ms < 200 * _SCALE, f"10 tenants parse took {elapsed_ms:.0f}ms (limit: {200 * _SCALE}ms)"
 
@@ -102,9 +102,9 @@ class TestColdParsePerformance:
                        make_tenant_yaml(tenant,
                                         keys={f"metric_{j}": str(j) for j in range(5)},
                                         routing=routing))
-        from generate_alertmanager_routes import load_tenant_configs
+        from generate_alertmanager_routes import load_tenant_tree
         start = time.monotonic()
-        load_tenant_configs(config_dir)
+        load_tenant_tree(config_dir)
         elapsed_ms = (time.monotonic() - start) * 1000
         assert elapsed_ms < 500 * _SCALE, f"50 tenants parse took {elapsed_ms:.0f}ms (limit: {500 * _SCALE}ms)"
 
@@ -115,8 +115,8 @@ class TestColdParsePerformance:
             routing = {"receiver": make_receiver()}
             write_yaml(config_dir, f"{tenant}.yaml",
                        make_tenant_yaml(tenant, routing=routing))
-        from generate_alertmanager_routes import load_tenant_configs, generate_routes
-        routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
+        from generate_alertmanager_routes import load_tenant_tree, generate_routes
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         start = time.monotonic()
         generate_routes(routing_configs, tenants=())
         elapsed_ms = (time.monotonic() - start) * 1000

@@ -386,6 +386,137 @@ def test_unreadable_state_block_is_not_treated_as_clean() -> None:
     )
 
 
+# ── (c2) the diagnosis must follow the evidence, not default to isolation ────
+#
+# #3177: a package `-timeout` expiry on #2977 was narrated as "a repeat-run /
+# test-isolation failure" with "bisect -count" as step 2, directly under a
+# warning that said the cause was NOT attributed. These cases pin each prose
+# block to the evidence that licenses it.
+
+# The two phrases that ARE the isolation diagnosis. Asserted as phrases, not
+# as the word "isolation": the timeout prose legitimately says it is NOT one.
+ISOLATION_CLAIM = "This is a repeat-run / test-isolation failure"
+ISOLATION_STEP = "Bisect the repetition count"
+
+
+def _timeout_frag() -> dict:
+    """A fragment produced by the REAL parser from the real timeout fixture."""
+    from parse_go_test_json import parse_stream  # noqa: PLC0415
+
+    fixture = ROOT / "tests" / "ops" / "fixtures" / "go_test_json_package_timeout.jsonl"
+    parsed = parse_stream(fixture.read_text(encoding="utf-8").splitlines(), go_exit_code=1)
+    return _frag(**parsed, module="threshold-exporter")
+
+
+def _section(body: str, heading: str) -> str:
+    """The text under `## <heading>` up to the next `## `."""
+    m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", body, flags=re.S | re.M)
+    return m.group(1) if m else ""
+
+
+def _body(frag: dict, green: bool = False) -> str:
+    return _strip_state_blocks(compose_body(
+        frag=frag, state=_state(tests=frag.get("failed_tests") or []),
+        run_url="https://gh/runs/999", date="2026-10-14", baseline_readable=True,
+        degraded="", green=green,
+    ))
+
+
+def test_package_timeout_gets_its_own_verdict_and_triage(tmp_path: Path) -> None:
+    frag = _timeout_frag()
+    body = _body(frag)
+    problems = []
+    if "package timeout" not in file_race_report.verdict_suffix(frag, False, "d"):
+        problems.append("the verdict does not say `package timeout`")
+    what = _section(body, "What this is")
+    if "Package timeout" not in what:
+        problems.append("`What this is` does not describe the timeout")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP):
+        if phrase in body:
+            problems.append(f"a timeout body still contains {phrase!r}")
+    if "-timeout" not in _section(body, "Triage"):
+        problems.append("Triage does not point at the package's time budget (`-timeout`)")
+    for name in frag["timeout_running_tests"]:
+        if name not in _section(body, "Package timeout"):
+            problems.append(f"running-at-deadline test {name!r} is not listed")
+    if "github.com/vencil/threshold-exporter/cmd/da-guard" not in body:
+        problems.append("the timed-out package is not named")
+    title_out = _run_report(tmp_path, frag, {}).stdout
+    if "— package timeout" not in title_out:
+        problems.append("the filed title does not carry the timeout verdict")
+    assert not problems, (
+        "a package timeout is still reported as something else:\n  "
+        + "\n  ".join(problems) + f"\n--- body ---\n{body}"
+    )
+
+
+def test_unattributed_failure_does_not_assert_a_cause() -> None:
+    """The prose must say what the warning says: we do not know."""
+    body = _body(_frag(failed_tests=[], fail_events=1, unattributed_failure=True))
+    what = _section(body, "What this is")
+    problems = []
+    if "Cause NOT attributed" not in what:
+        problems.append("`What this is` does not say the cause is unattributed")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP):
+        if phrase in body:
+            problems.append(f"an unattributed body still asserts {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_isolation_narrative_appears_only_with_failed_tests() -> None:
+    shapes = {
+        "failed tests": (_frag(), False),
+        "green": (_frag(failed=False, failed_tests=[], go_exit_code=0), True),
+        "build failure": (_frag(failed_tests=[], build_failed=True), False),
+        "data race": (_frag(had_data_race=True, race_tests=["TestR"],
+                            failed_tests=["TestR"]), False),
+        "timeout": (_timeout_frag(), False),
+        "unattributed": (_frag(failed_tests=[], unattributed_failure=True), False),
+        "missing fragment": (file_race_report.load_fragment(Path("/nonexistent"),
+                                                           "tenant-api")[0], False),
+    }
+    problems = []
+    for name, (frag, green) in shapes.items():
+        body = _body(frag, green=green)
+        has = ISOLATION_CLAIM in body or ISOLATION_STEP in body
+        want = name == "failed tests"
+        if has != want:
+            problems.append(f"{name}: isolation narrative present={has}, expected {want}")
+    assert not problems, (
+        "the isolation diagnosis is not gated on failing tests:\n  " + "\n  ".join(problems)
+    )
+
+
+def test_timeout_with_failed_tests_does_not_contradict_itself() -> None:
+    """One package can hit `-timeout` while a test fails elsewhere. The body
+    then carries both diagnoses, so the timeout one must not deny the other."""
+    frag = {**_timeout_frag(), "failed_tests": ["TestElsewhere"]}
+    body = _body(frag)
+    problems = []
+    if ISOLATION_STEP not in body:
+        problems.append("the failing test lost its isolation triage step")
+    for phrase in ("Do not bisect", "No test reported a failure"):
+        if phrase in body:
+            problems.append(f"the timeout paragraph still says {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_timed_out_round_trips_and_old_blocks_still_parse() -> None:
+    restored = parse_state(render_state(_state(timed_out=1)))
+    assert restored is not None and restored["timed_out"] == 1
+    # A block written before `timed_out` existed must stay readable — an
+    # unreadable baseline re-stamps first-seen.
+    old = ("<!-- race-state: module=tenant-api first_seen=2026-07-24 "
+           "first_run=https://gh/runs/1 last_run=https://gh/runs/2 last_green=none "
+           "streak=3 had_data_race=0 build_failed=0 unattributed=1 tests_truncated=0 "
+           "tests=[] -->")
+    old_state = parse_state(old)
+    assert old_state is not None
+    assert old_state["timed_out"] == 0
+    assert old_state["first_seen"] == "2026-07-24"
+    assert old_state["unattributed"] == 1
+
+
 def test_missing_fragment_reads_as_worse_not_clean(tmp_path: Path) -> None:
     """A leg that never uploaded has proven nothing."""
     proc = _run_report(tmp_path, None, {})
@@ -733,4 +864,111 @@ def test_raw_stream_is_uploaded_for_human_triage() -> None:
         f"the raw `go test -json` stream is no longer uploaded (artifacts: {names}). "
         "The parsed fragment is lossy by design; without the raw stream a human has "
         "no race report, panic, or build error to read."
+    )
+
+
+# ---------------------------------------------------------------------------
+# -short split between nightly and PR CI (#2977 option A, #3180)
+# ---------------------------------------------------------------------------
+# cmd/da-guard's exhaustive matrices honour testing.Short(). Nightly runs them
+# reduced (otherwise -count=10 blows the 30m per-package timeout); PR CI runs
+# them in full, once per PR. Both halves are pinned here, because each half
+# alone is a silent regression: nightly losing -short times out again, and PR
+# CI gaining -short drops the full matrix from EVERY gate with nothing red.
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+EXPORTER_WORKDIR = "components/threshold-exporter/app"
+_SHORT_FLAG_RE = re.compile(r"^--?short(?:=(.*))?$")
+
+
+def _go_test_commands(run: str) -> list[list[str]]:
+    """Every `go test ...` invocation in a run block, as whitespace tokens.
+
+    Backslash continuations are joined first so a flag on a continuation line
+    still belongs to its command; a command ends at a newline, `|`, `;` or `&&`.
+    """
+    joined = re.sub(r"\\\n", " ", run)
+    cmds = []
+    for line in joined.splitlines():
+        for segment in re.split(r"\|\|?|;|&&", line):
+            tokens = segment.split()
+            for i in range(len(tokens) - 1):
+                if tokens[i] == "go" and tokens[i + 1] == "test":
+                    cmds.append(tokens[i + 2:])
+                    break
+    return cmds
+
+
+# Package patterns that include cmd/da-guard, where the exhaustive matrices
+# live. A narrower scope (`./internal/...`) keeps the step green while the
+# matrices silently stop running in PR CI.
+_DA_GUARD_PACKAGES = ("./...", "./cmd/...", "./cmd/da-guard", "./cmd/da-guard/...")
+
+
+def _covers_da_guard(tokens: list[str]) -> bool:
+    return any(tok in _DA_GUARD_PACKAGES for tok in tokens if tok.startswith("./"))
+
+
+def _has_short(tokens: list[str]) -> bool:
+    for tok in tokens:
+        m = _SHORT_FLAG_RE.match(tok)
+        if m and (m.group(1) is None or m.group(1).lower() in ("1", "t", "true")):
+            return True
+    return False
+
+
+def _load_workflow(path: Path) -> dict:
+    """Parse a workflow; unreadable means unmeasured, never clean."""
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise AssertionError(f"cannot parse {path.relative_to(ROOT)}: {exc}") from exc
+    assert isinstance(doc, dict) and isinstance(doc.get("jobs"), dict), (
+        f"{path.relative_to(ROOT)} has no `jobs:` mapping — cannot locate the go test step"
+    )
+    return doc
+
+
+def test_nightly_go_test_runs_with_short() -> None:
+    steps = (_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
+    cmds = [c for s in steps for c in _go_test_commands(str(s.get("run") or ""))]
+    assert cmds, "no `go test` command found in nightly-race.yaml's race job"
+    missing = [" ".join(c) for c in cmds if not _has_short(c)]
+    assert not missing, (
+        "nightly go test lost -short (#2977). Without it cmd/da-guard's exhaustive "
+        "matrices run in full x10 and hit the 30m per-package timeout:\n  "
+        + "\n  ".join(missing)
+    )
+
+
+def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
+    """#2977 acceptance 3: PR CI keeps the exhaustive matrix (no -short)."""
+    jobs = _load_workflow(CI_WORKFLOW)["jobs"]
+    found, shorted, narrowed = [], [], []
+    for job_id, job in jobs.items():
+        for step in (job or {}).get("steps") or []:
+            if str(step.get("working-directory") or "").rstrip("/") != EXPORTER_WORKDIR:
+                continue
+            for cmd in _go_test_commands(str(step.get("run") or "")):
+                if "-race" not in cmd:
+                    continue
+                where = f"{job_id} / {step.get('name')!r}"
+                found.append(where)
+                if _has_short(cmd):
+                    shorted.append(f"{where}: go test {' '.join(cmd)}")
+                if not _covers_da_guard(cmd):
+                    narrowed.append(f"{where}: go test {' '.join(cmd)}")
+    assert found, (
+        f"no `go test ... -race` step with working-directory {EXPORTER_WORKDIR} in "
+        "ci.yml — the step moved or was renamed; re-anchor this guard, do not delete it"
+    )
+    assert not shorted, (
+        "PR CI's threshold-exporter race step runs with -short, so the exhaustive "
+        "cmd/da-guard matrices are reduced in EVERY gate (#2977 acceptance 3; make "
+        "them cheaper instead, #3180):\n  " + "\n  ".join(shorted)
+    )
+    assert not narrowed, (
+        "PR CI's threshold-exporter race step no longer includes cmd/da-guard, so "
+        "its exhaustive matrices run in no gate at all (#2977 acceptance 3):\n  "
+        + "\n  ".join(narrowed)
     )

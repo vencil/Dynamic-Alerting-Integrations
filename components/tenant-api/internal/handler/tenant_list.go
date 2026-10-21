@@ -17,6 +17,7 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // TenantSummary is the list-view representation of a single tenant.
@@ -53,8 +54,32 @@ type TenantSummary struct {
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
 
-	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), or the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
+	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them), or the file is git-managed and does not declare the row's id (git_managed_reason id_mismatch, or any other git-managed file whose decoded tenants leave the row's id out; the metadata fields are then empty). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
 	MetadataIncomplete bool `json:"metadata_incomplete,omitempty"`
+
+	// ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file
+	// (confd.TenantFileManagement on the file the row's id names), with the same values — "api" for an API-shaped file,
+	// "git" for any other (git_managed_reason says why; every write to it is refused with 409 TENANT_GIT_MANAGED).
+	// Absent on a row whose file cannot be read at all (config_error unreadable or not_regular_file), for which GET
+	// answers no tenant either.
+	ManagedBy string `json:"managed_by,omitempty" enums:"api,git"`
+	// GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:
+	// not_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,
+	// tenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's
+	// other fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:
+	// it names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id
+	// (always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.
+	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`
+}
+
+// setManagement marks row with confd.TenantFileManagement's verdict on its
+// file (gitReason "" = API-shaped), as GET /tenants/{id} reports it.
+func (t *TenantSummary) setManagement(gitReason string) {
+	if gitReason == "" {
+		t.ManagedBy = managedByAPI
+		return
+	}
+	t.ManagedBy, t.GitManagedReason = managedByGit, gitReason
 }
 
 // metadataIsUnknown reports whether the row's environment/domain (and the
@@ -94,6 +119,12 @@ func (t TenantSummary) metadataIsUnknown() bool {
 // @Description When the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`
 // @Description values and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.
 // @Description A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
+// @Description Each row carries `managed_by` (api | git) and, for git, `git_managed_reason` — the verdict and codes
+// @Description GET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file
+// @Description that declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,
+// @Description marked `metadata_incomplete` and with no other field: the declared id is not shown. Any git-managed row
+// @Description whose file does not declare the row's id is marked `metadata_incomplete` the same way; its visibility is
+// @Description that of a degraded row.
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
@@ -201,19 +232,26 @@ func tenantConfigError(data []byte) string {
 // reads the missing list as []) would write its partial view back over the
 // real one. The whole-file PUT /tenants/{id} does not go through here.
 //
-// The message names the whole-file PUT as the repair path, which holds for
-// every file this refusal reaches: since #3064 a git-managed file (one that is
-// not YAML, say) is refused first with TENANT_GIT_MANAGED and repaired in git,
-// so only an API-shaped file gets here. That PUT replaces rather than merges;
-// when its end-of-life guard cannot decode the current file's tenants: block,
-// a caller with write permission on all tenants may replace it, the file
-// counted as having no end-of-life usage (#2405) — a body adding an
-// end-of-life recipe is still refused, as is one failing any other check —
-// and any other caller is refused with 400. Pinned by
-// TestPutTenant_RepairsFileExporterRejects.
+// The message says who can repair the file through the API, which is not
+// every caller: since #3064 a git-managed file (one that is not YAML, say) is
+// refused first with TENANT_GIT_MANAGED and repaired in git, so only an
+// API-shaped file gets here, and the whole-file PUT replaces rather than
+// merges — but when that PUT's end-of-life guard cannot read the current
+// file, only a caller with write permission on all tenants may replace it,
+// the file counted as having no end-of-life usage (#2405), and any other
+// caller is refused with 400. A file parse-tree refuses is always such a file
+// (#3206: eolGuardErrs judges the base first), so for it the message says so
+// outright and names the kind (Kind); for another unloadable file it says
+// the PUT replaces it unless that guard refuses, and what to do then
+// (gitops.MsgPlatformWriteRepair, the same text the guard's 400 gives).
+// Pinned by TestPutTenant_RepairsFileExporterRejects and
+// TestTenantFileNotLoadable_SaysWhoCanRepair.
 type tenantFileNotLoadableError struct {
 	TenantID string
 	Reason   string
+	// Kind is parse-tree's kind when parse-tree refuses the file ("" when
+	// it reads it and only the typed decode fails).
+	Kind parsetree.Kind
 	// Detail (configErrorNotRoundTrippable only): where the merged file
 	// first differs from the base with the edit applied — a path in the
 	// tenant's own block, never another tenant's (verifyPartialWrite).
@@ -227,10 +265,15 @@ func (e *tenantFileNotLoadableError) Error() string {
 			"written. Rewrite the tenant file in plain form (a whole-file PUT /api/v1/tenants/{id} replaces it)",
 			e.TenantID, e.Reason, e.Detail)
 	}
-	return fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s), "+
-		"so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first "+
-		"(a whole-file PUT /api/v1/tenants/{id} replaces it)",
+	head := fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s",
 		e.TenantID, e.Reason)
+	if e.Kind != "" {
+		return fmt.Sprintf("%s; parse-tree kind %s), so threshold-exporter skips it and a partial update is "+
+			"refused; nothing was written. Repair the tenant file first: %s", head, e.Kind, gitops.MsgPlatformWriteRepair)
+	}
+	return fmt.Sprintf("%s), so threshold-exporter skips it and a partial update is refused; nothing was "+
+		"written. Repair the tenant file first: a whole-file PUT /api/v1/tenants/{id} replaces it, unless its "+
+		"end-of-life check cannot read the current file — then %s", head, gitops.MsgPlatformWriteRepair)
 }
 
 // Unwrap lets package gitops recognise the refusal (errors.Is) without
@@ -244,19 +287,25 @@ func (e *tenantFileNotLoadableError) Unwrap() error { return gitops.ErrMergeBase
 // it, on its result: verifyPartialWrite, #2903.)
 func checkPartialWriteBase(tenantID string, existing []byte) error {
 	if reason := tenantConfigError(existing); reason != "" {
-		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
+		kind, _ := cfg.UnreadableKindOf(confd.Judge(existing))
+		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason, Kind: kind}
 	}
 	return nil
 }
 
 // writeTenantFileNotLoadable answers a refused partial write: 409 with its own
-// code (not CONFLICT: a refresh-and-retry cannot succeed), naming the tenant
-// and the config_error.
+// code (not CONFLICT: a refresh-and-retry cannot succeed), naming the tenant,
+// the config_error and, when parse-tree refuses the file, its kind
+// (parse_tree_kind, #3206).
 func writeTenantFileNotLoadable(w http.ResponseWriter, r *http.Request, e *tenantFileNotLoadableError) {
+	extra := map[string]any{"tenant_id": e.TenantID, "config_error": e.Reason}
+	if e.Kind != "" {
+		extra["parse_tree_kind"] = string(e.Kind)
+	}
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: e.Error(),
 		Code:  CodeTenantConfigNotLoadable,
-		Extra: map[string]any{"tenant_id": e.TenantID, "config_error": e.Reason},
+		Extra: extra,
 	})
 }
 
@@ -315,17 +364,39 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 
 		data, problem := confd.ReadTenantFile(configDir, name)
 		if problem != confd.ProblemNone {
-			summaries = append(summaries, TenantSummary{ID: tenantID, ConfigError: string(problem)})
+			row := TenantSummary{ID: tenantID, ConfigError: string(problem)}
+			if problem == confd.ProblemMalformedYAML {
+				// #3157: bytes that are not YAML are git-managed
+				// (not_tenant_document) — ReadTenantFile does not hand
+				// them back, and TenantFileManagement's YAML walk fails
+				// on them exactly where this syntax check did. Pinned
+				// against GET by TestListTenants_ManagementMatchesGet.
+				row.setManagement(confd.GitManagedNotTenantDocument)
+			}
+			summaries = append(summaries, row)
 			continue
 		}
 
 		partial, err := cfg.ParseTenantFile(data)
+
+		// #3157: the list says who manages the tenant, as GET /tenants/{id}
+		// does — the one predicate, on the same bytes, handed the typed
+		// decode just made. It is asked of every file: a file that
+		// declares only stem can still be git-managed (several documents,
+		// an anchor or merge key at the top level), which the typed decode
+		// cannot see. One more YAML node walk per file, paid on the
+		// snapshot rebuild only (tenantSnapshotCache), not per request.
+		gitReason := confd.TenantFileManagementParsed(data, tenantID, partial, err)
+
 		if err != nil {
-			summaries = append(summaries, TenantSummary{ID: tenantID, ConfigError: configErrorInvalidConfig})
+			row := TenantSummary{ID: tenantID, ConfigError: configErrorInvalidConfig}
+			row.setManagement(gitReason)
+			summaries = append(summaries, row)
 			continue
 		}
 
 		summary := TenantSummary{ID: tenantID}
+		summary.setManagement(gitReason)
 		if overrides, ok := partial.Tenants[tenantID]; ok {
 			if sv, exists := overrides["_silent_mode"]; exists {
 				summary.SilentMode = sv.Default
@@ -345,12 +416,22 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// fields (as on /metrics) and is marked metadata_incomplete, like an
 		// unreadable root platform layer.
 		decoded := true
-		if overrides, ok := partial.Tenants[tenantID]; ok {
+		overrides, declared := partial.Tenants[tenantID]
+		if declared {
 			var meta cfg.ResolvedMetadata
 			meta, decoded = metadata.Resolve(tenantID, overrides)
 			setMetadata(&summary, meta)
 		}
-		summary.MetadataIncomplete = !platformKnown || !decoded
+		// #3157: a git-managed file that does not declare the row's id
+		// (id_mismatch; tenant_count, several_documents or yaml_indirection
+		// whose decoded tenants leave this id out) holds metadata — but
+		// another id's, not this one's. The empty fields are then unknown,
+		// not unlabeled: the row is decided as a degraded row is
+		// (ScopeAllowedUnknownMetadata), so an environment- or
+		// domain-restricted caller does not see it in shadow mode either.
+		// An API-shaped file declaring no tenant yet (a shell) stays as it
+		// was: nothing in it belongs to anyone else.
+		summary.MetadataIncomplete = !platformKnown || !decoded || (gitReason != "" && !declared)
 
 		summaries = append(summaries, summary)
 	}

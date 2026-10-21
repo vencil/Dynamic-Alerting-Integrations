@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vencil/threshold-exporter/internal/parsetree"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // TestRenderedBy_Locations: the table at a glance. The oracle is the renders

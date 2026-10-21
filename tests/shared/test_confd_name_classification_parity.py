@@ -28,14 +28,11 @@ file list: the enumerators do not share a scope (one recurses, one is
 flat with the reserved filter as a parameter, one is per-name, one routes
 ``_defaults.*`` into the inheritance chain), so a single expected-list column
 would be a lie. Each consumer asserts only the projection it implements. The
-two implemented here:
+ones implemented here:
 
-  * ``_lib_confd._is_config``       == yaml_extension AND NOT hidden
-  * ``_lib_io.iter_yaml_files``     == yaml_extension AND NOT reserved_prefix
-    (``skip_reserved=True``)           AND NOT hidden
-  * ``_lib_io.iter_yaml_files``     == yaml_extension
-    (``skip_reserved=False``)          — the parameter gates BOTH prefixes,
-                                         so dotfiles come back; measured.
+  * ``_lib_confd._is_config``         == yaml_extension AND NOT hidden
+  * ``_lib_confd.iter_config_files``  == the same, end to end on a tree
+  * the public predicates             == one matrix column each
 """
 
 from __future__ import annotations
@@ -60,7 +57,6 @@ from _lib_confd import (  # noqa: E402
     is_reserved_name,
     iter_config_files,
 )
-from _lib_io import iter_yaml_files  # noqa: E402
 
 ROWS = json.loads(MATRIX.read_text(encoding="utf-8"))["rows"]
 
@@ -215,7 +211,7 @@ def test_public_predicates_match_the_matrix(row: dict) -> None:
     exporter about `upper.YAML`. The remedy was to give them something to
     call (`_lib_confd.has_yaml_extension` and friends). That only helps if
     the shared answer is itself pinned to the same table the exporter's
-    scanner, tenant-api's `TenantIDFromFile` and `_lib_io.iter_yaml_files`
+    scanner, Go's `confdname.TenantNamedBy` and `iter_config_files`
     assert — otherwise the tools would agree with each other and, together,
     be wrong.
 
@@ -313,33 +309,3 @@ def test_iter_config_files_matches_the_matrix(materialised: pathlib.Path) -> Non
         f"  extra   (enumerator read, matrix says skip):    {sorted(got - want)}"
     )
 
-
-def test_iter_yaml_files_skip_reserved_matches_the_matrix(
-    materialised: pathlib.Path,
-) -> None:
-    """Default mode: yaml_extension AND NOT reserved_prefix AND NOT hidden."""
-    got = {n for n, _ in iter_yaml_files(str(materialised))}
-    want = {r["name"] for r in ROWS if _carrier(r)}
-    assert got == want, (
-        f"iter_yaml_files(skip_reserved=True) disagrees with the matrix\n"
-        f"  missing: {sorted(want - got)}\n"
-        f"  extra:   {sorted(got - want)}"
-    )
-
-
-def test_iter_yaml_files_without_skip_reserved_matches_the_matrix(
-    materialised: pathlib.Path,
-) -> None:
-    """`skip_reserved=False` drops the WHOLE prefix filter — dotfiles included.
-
-    Asserted rather than assumed: the parameter reads as if it were about
-    reserved control files only, and a reader who believed that would use it
-    on a tree containing `.hidden.yaml` and get a file the exporter skips.
-    """
-    got = {n for n, _ in iter_yaml_files(str(materialised), skip_reserved=False)}
-    want = {r["name"] for r in ROWS if r["yaml_extension"]}
-    assert got == want, (
-        f"iter_yaml_files(skip_reserved=False) disagrees with the matrix\n"
-        f"  missing: {sorted(want - got)}\n"
-        f"  extra:   {sorted(got - want)}"
-    )

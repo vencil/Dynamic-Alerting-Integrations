@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/customalerts"
 )
 
 // #2405: the eol-expansion guard reads the file a write replaces to learn how
@@ -97,28 +99,43 @@ func TestEolGuard_UnparseableBaseNeedsPlatformWrite(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, false, fakeEolViolations)
-			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) {
 				t.Errorf("broken base without the bit: errs = %q, want the platform-write refusal", errs)
 			}
 		})
 	}
 }
 
-// Control for the line between "cannot parse" and "cannot be loaded as a
-// tenant config": a file that is invalid_config only because it also
-// declares a non-UTF-8 tenant id still parses for the eol guard, so its
-// baseline is the ACTUAL usage — keeping the existing eol alert passes,
-// growing it is refused against a baseline of one, not zero.
-func TestEolGuard_NonUTF8SiblingBaseKeepsActualBaseline(t *testing.T) {
+// A base parse-tree refuses is a base that does not parse (#3206, ADR-036
+// §7 step 7), even where Extract's one-document decode would read its first
+// document: a declared non-UTF-8 sibling id (`!!binary`, which used to keep
+// the ACTUAL baseline here), a trailing `---`, a `!` tag. Without the
+// platform-write bit the write is refused; with it the baseline is zero.
+func TestEolGuard_ParseTreeRefusedBaseIsUnparseable(t *testing.T) {
 	t.Parallel()
-	base := []byte("tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
-		strings.TrimPrefix(eolBody("a"), "tenants:\n"))
-	if errs := eolGuardErrs(base, nil, eolBody("a-renamed"), eolTestTenant, false, fakeEolViolations); len(errs) > 0 {
-		t.Errorf("keeping the one existing eol alert over a non-UTF-8 sibling base refused: %q", errs)
-	}
-	errs := eolGuardErrs(base, nil, eolBody("a", "b"), eolTestTenant, false, fakeEolViolations)
-	if len(errs) != 1 || !strings.Contains(errs[0], "have 1, write requests 2") {
-		t.Errorf("growing eol usage over a non-UTF-8 sibling base: errs = %q, want one violation against have 1", errs)
+	for _, c := range []struct{ name, base, kind string }{
+		{"binary sibling id", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
+			strings.TrimPrefix(eolBody("a"), "tenants:\n"), "tag_not_allowed"},
+		{"trailing empty document", eolBody("a") + "---\n", "multiple_documents"},
+		{"second document", eolBody("a") + "---\ntenants: {}\n", "multiple_documents"},
+		{"non-specific tag", eolBody("a") + "x: ! \"y\"\n", "non_specific_tag"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			base := []byte(c.base)
+			if _, err := customalerts.Extract(c.base, eolTestTenant); err != nil {
+				t.Fatalf("Extract refuses this base itself (%v): the row tests nothing parse-tree adds", err)
+			}
+			errs := eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, false, fakeEolViolations)
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) ||
+				!strings.Contains(errs[0], "refused by parse-tree (kind "+c.kind+")") {
+				t.Errorf("without the bit: errs = %q, want the platform-write refusal naming kind %s", errs, c.kind)
+			}
+			errs = eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, true, fakeEolViolations)
+			if len(errs) != 1 || !strings.Contains(errs[0], eolTestRecipe) {
+				t.Errorf("with the bit, keeping the one eol alert: errs = %q, want a violation against a zero baseline", errs)
+			}
+		})
 	}
 }
 
@@ -169,9 +186,44 @@ func TestValidate_BrokenBaseDoesNotBlockReplacement(t *testing.T) {
 				t.Errorf("validate refused a valid replacement of a broken file: %q", errs)
 			}
 			errs, _ := validate(dir, eolTestTenant, path, eolBody())
-			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) {
 				t.Errorf("validate without the bit over a broken file: errs = %q, want the platform-write refusal", errs)
 			}
 		})
+	}
+}
+
+// The refusal says why the base cannot be read and how to repair it (#3206):
+// parse-tree's kind when parse-tree refuses the file — often valid YAML, so
+// "cannot be parsed" would point at a syntax error that is not there — else
+// that the custom-alerts decode failed; and in both, who may replace the file
+// through the API and what everyone else does.
+func TestEolGuard_RefusalNamesKindAndRepair(t *testing.T) {
+	t.Parallel()
+	kinds := map[string]string{
+		"unclosed_flow": "syntax_error", "not_yaml": "syntax_error", "top_level_list": "top_level_not_mapping",
+		"duplicate_tenants_key": "duplicate_key", "tenants_scalar": "", "tenants_list": "",
+	}
+	for _, c := range brokenTenantFiles {
+		kind, ok := kinds[c.name]
+		if !ok {
+			t.Fatalf("%s: no expected kind for this row", c.name)
+		}
+		errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, false, fakeEolViolations)
+		if len(errs) != 1 {
+			t.Fatalf("%s: errs = %q, want one refusal", c.name, errs)
+		}
+		msg := errs[0]
+		for _, want := range []string{"write permission on all tenants", "whole-file PUT", "repair the file in git", "ask a caller"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: %q lacks the repair guidance %q", c.name, msg, want)
+			}
+		}
+		if kind != "" && !strings.Contains(msg, "refused by parse-tree (kind "+kind+")") {
+			t.Errorf("%s: %q does not name parse-tree's kind %s", c.name, msg, kind)
+		}
+		if kind == "" && (strings.Contains(msg, "parse-tree") || !strings.Contains(msg, "cannot be decoded for the end-of-life check")) {
+			t.Errorf("%s: %q, want the custom-alerts decode reason, not parse-tree's", c.name, msg)
+		}
 	}
 }

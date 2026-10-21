@@ -18,6 +18,7 @@ import yaml
 import da_assembler  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import OutputWriteError  # noqa: E402  (#1789)
+from _da_guard_build import go_build_env  # noqa: E402  #3174: 與出貨同形，CGO_ENABLED=0
 from da_assembler import (  # noqa: E402
     _content_sha256,
     _is_dns1123_label,
@@ -1018,7 +1019,7 @@ def da_guard(tmp_path_factory):
             "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
         return None
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    env = {**os.environ}
+    env = go_build_env()
     env.setdefault("GOTOOLCHAIN", "auto")
     repo = Path(__file__).resolve().parents[2]
     subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),

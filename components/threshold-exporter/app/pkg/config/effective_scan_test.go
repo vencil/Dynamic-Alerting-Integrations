@@ -85,12 +85,13 @@ func effectiveScanCorpus() map[string]map[string]string {
 			"_defaults.yaml": "pg_connections: 100\n",
 			"t1.yaml":        "tenants:\n  t1: {}\n",
 		},
-		// A resolve error: a root `_defaults.yaml` the exporter's build
-		// reads (its typed decode skips `extra`) and the merge's generic
-		// decode refuses (the repeated key). A tenant file of that shape no
-		// longer reaches the merge — the walker refuses it the same way
-		// (#3063) — and a nested `_defaults.yaml` of it is one the build
-		// drops (chain parse failed), so the root carrier is what is left.
+		// Was a resolve error: a root `_defaults.yaml` the exporter's build
+		// read (its typed decode skips `extra`) and the merge's generic
+		// decode refused (the repeated key). Since ADR-036 step 6 (#3206)
+		// the build and the merge both ask parse-tree first, which refuses
+		// the repeated key (duplicate_key), so the build drops the file and
+		// the chain reads it as empty (chain parse failed): no file content
+		// reaches a resolve error any more (see the coverage list below).
 		"root defaults only the merge refuses": {
 			"_defaults.yaml": "defaults:\n  mysql_connections: 80\nextra:\n  k: 1\n  k: 2\n",
 			"t1.yaml":        "tenants:\n  t1: {}\n",
@@ -333,7 +334,10 @@ func TestResolveEffectiveFromScan_CorpusCoversEveryField(t *testing.T) {
 			}
 		}
 	}
-	for _, k := range []string{"404", "409", "error", "chain_parse_failed", "platform_overlay", "profile_overlay",
+	// No "error": a resolve error came from a file the build read and the
+	// merge refused, and since ADR-036 step 6 (#3206) both refuse exactly
+	// what parse-tree refuses — TestResolveEffective_NoFileTheBuildReadsFailsTheMerge.
+	for _, k := range []string{"404", "409", "chain_parse_failed", "platform_overlay", "profile_overlay",
 		NotServedParseFailed, NotServedRootDefaultsUnwrapped, NotServedValueRejected, NotServedValueUnparsed,
 		NotServedWindowInvalid, NotServedUndeliverable, NotServedRootNullUndeclared} {
 		if !seen[k] {

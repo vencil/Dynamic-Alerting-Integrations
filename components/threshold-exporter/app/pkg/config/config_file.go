@@ -57,13 +57,23 @@ import (
 // that is not valid UTF-8, and a document only the typed decode accepts
 // (#3063). A `_`-prefixed platform file keeps both (see ParseTenantFile);
 // a file that DECLARES tenants must not.
+//
+// ⛔ parse-tree's verdict first (ADR-036 step 6, #3206; parse_verdict.go): a
+// file parsetree.Parse refuses is refused here, before either decode, with an
+// *UnreadableFileError naming its kind — so its error text is parse-tree's,
+// also for what yaml.v3 refuses on its own (a syntax error, a repeated key).
+// parseConfigFile below is the decode alone, for tests that need it.
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
+	if err := judgeConfFile(data); err != nil {
+		return ThresholdConfig{}, err
+	}
 	return parseConfigFile(data, false)
 }
 
 // parseConfigFile is ParseConfigFile; generic additionally requires the
 // generic decode of the same parsed node to succeed (ParseTenantFile, #3063),
 // before the post-decode steps run.
+// It does NOT ask parse-tree (ParseConfigFile and ParseTenantFile do, first).
 func parseConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	// Through a yaml.Node rather than straight into cfg: yaml.Unmarshal builds
@@ -251,7 +261,24 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 // and WARNed as an orphan (reportPlatformOrphans). Rejecting the whole
 // platform file instead dropped every tenant's defaults with it (#2266
 // blind review, F1).
+//
+// ⛔ parse-tree's verdict first, as in ParseConfigFile (ADR-036 step 6,
+// #3206). It refuses everything the generic decode refuses (parse-tree decodes
+// the whole document into `any` too) and more — a second document, a tag
+// outside its allowed set (`!custom` included, which both decodes read as a
+// string), a byte order mark past the start, a null key — so the #3063 decode
+// below now refuses nothing parse-tree lets through; it stays as the decode
+// this function's verdict was built on.
 func ParseTenantFile(data []byte) (ThresholdConfig, error) {
+	if err := judgeConfFile(data); err != nil {
+		return ThresholdConfig{}, err
+	}
+	return parseTenantFileDecode(data)
+}
+
+// parseTenantFileDecode is ParseTenantFile without parse-tree's verdict: the
+// typed and generic decodes and the non-UTF-8 id rejection. For tests.
+func parseTenantFileDecode(data []byte) (ThresholdConfig, error) {
 	cfg, err := parseConfigFile(data, true)
 	if err != nil {
 		return cfg, err
@@ -536,10 +563,14 @@ func hasMergeKey(m *yaml.Node) bool {
 }
 
 // isMergeKey reports whether k is a YAML merge key: yaml.v3's isMerge
-// (decode.go), restated because it is unexported.
+// (decode.go), restated because it is unexported — without its Tag "!" arm,
+// which no parsed node reaches: yaml.v3 drops the non-specific tag when it
+// builds the node, so `! "<<"` is the literal key "<<" (Tag !!str) here as in
+// the typed decode. A file that writes `!` is refused by parse-tree before
+// any decode anyway (non_specific_tag; ADR-036 step 8, #3206).
 func isMergeKey(k *yaml.Node) bool {
 	return k.Kind == yaml.ScalarNode && k.Value == "<<" &&
-		(k.Tag == "" || k.Tag == "!" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
+		(k.Tag == "" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
 }
 
 func derefAlias(n *yaml.Node) *yaml.Node {

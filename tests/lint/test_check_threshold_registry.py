@@ -223,22 +223,17 @@ def test_main_ci_passes_when_clean(monkeypatch):
 
 
 def test_regen_writes_registry_and_surfaces(monkeypatch, tmp_path):
-    """--regen delegates to the lib writer AND the surface splicer; pin the
-    wiring, not the content."""
+    """--regen delegates to the lib's all-or-none `regen` (registry AND
+    surfaces); pin the wiring, not the content."""
     calls = {}
 
-    def fake_write():
-        calls["write"] = True
-        return {"path": str(tmp_path / "r.yaml"), "packs": 1, "keys": 2}
+    def fake_regen():
+        calls["regen"] = True
+        return {"path": str(tmp_path / "r.yaml"), "packs": 1, "keys": 2}, []
 
-    def fake_surfaces():
-        calls["surfaces"] = True
-        return []
-
-    monkeypatch.setattr(gate.registry_lib, "write_registry", fake_write)
-    monkeypatch.setattr(gate.registry_lib, "regen_surfaces", fake_surfaces)
+    monkeypatch.setattr(gate.registry_lib, "regen", fake_regen)
     assert gate.main(["--regen"]) == gate.EXIT_OK
-    assert calls.get("write") and calls.get("surfaces")
+    assert calls.get("regen")
 
 
 def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
@@ -247,8 +242,10 @@ def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
 
     ⛔ HERMETIC, and that is load-bearing rather than tidy. This test used to
     call `regen_surfaces` on the REAL registry with only one pack's
-    `rule_pack_file` poisoned. `regen_surfaces` writes each surface as it goes
-    and only raises when it reaches the bad one, so the earlier surfaces —
+    `rule_pack_file` poisoned. `regen_surfaces` then wrote each surface as it
+    went and only raised when it reached the bad one (it now splices all in
+    memory and writes none on a refusal — this test still keeps the real
+    files out of reach rather than lean on that), so the earlier surfaces —
     helm values and the dev `conf.d/_defaults.yaml` — were rewritten to a
     freshly regenerated state BEFORE the expected ValueError. In a whole-suite
     run `tests/lint` goes first, so it silently repaired the working tree and

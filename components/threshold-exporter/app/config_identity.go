@@ -16,7 +16,7 @@ package main
 //   - config_hash is lastHash: in directory mode the walker's composite
 //     (pkg/config/tree_scan.go: the SHA-256 of the per-file SHA-256 hex
 //     digests concatenated in sorted root-relative key order, over every
-//     file IsScannedFileName keeps); in single-file mode the SHA-256 of that
+//     file confdname.IsScanned keeps); in single-file mode the SHA-256 of that
 //     file's bytes. tests/shared/config_identity_golden.json pins the
 //     directory rule for both the exporter and patch-config.
 //   - parse_failed is the root-relative keys, sorted, of the files the

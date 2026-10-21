@@ -54,8 +54,9 @@ def test_analyze_gaps_explicit_dictionary_that_is_missing_is_a_caller_error(tmp_
     assert "--metric-dictionary" in proc.stderr
 
 
-def test_analyze_gaps_finds_the_default_dictionary_in_the_repo_layout(tmp_path):
-    """正控制：同一個 key，有字典時是 exact，沒字典時只剩 prefix。"""
+def test_analyze_gaps_finds_the_default_dictionary_in_the_repo_layout(tmp_path, da_guard_env):
+    """正控制：同一個 key，有字典時是 exact，沒字典時只剩 prefix。
+    （`--tenant-config` 經 `da-guard parse-tree` 讀，#2906。）"""
     tenant = tmp_path / "t.yaml"
     tenant.write_text(
         "tenants:\n  t1:\n    custom_mysql_global_status_threads_connected: '150'\n",
@@ -85,7 +86,7 @@ def test_find_metric_dictionary_covers_both_layouts(tmp_path):
     assert find_metric_dictionary(str(tmp_path / "none")) is None
 
 
-def test_analyze_gaps_warns_when_no_dictionary_is_found(tmp_path):
+def test_analyze_gaps_warns_when_no_dictionary_is_found(tmp_path, da_guard_env):
     """兩個位置都找不到時要出聲：沒有字典時的結果只剩前綴猜測。"""
     lonely = tmp_path / "ops"
     lonely.mkdir()

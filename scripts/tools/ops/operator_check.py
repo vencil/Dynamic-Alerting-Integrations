@@ -328,11 +328,6 @@ def main():
         help="Directory with rule pack YAML files (default: rule-packs/)",
     )
     parser.add_argument(
-        "--config-dir",
-        default="conf.d/",
-        help="Directory with tenant config files (default: conf.d/)",
-    )
-    parser.add_argument(
         "--prometheus",
         help="Prometheus API URL for target health check (optional)",
     )

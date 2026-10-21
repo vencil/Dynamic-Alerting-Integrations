@@ -126,7 +126,7 @@ VALID_OPERATORS = frozenset({
 VALID_SEVERITIES = frozenset({"error", "warning"})
 
 # #2114: keys whose list items are tenant ids — read as source text, the way
-# `load_tenant_configs` reads the tenant keys they are compared with.
+# the exporter reads the tenant keys they are compared with.
 POLICY_TENANT_LISTS = frozenset({"exclude_tenants"})
 
 #: The parse-tree conversion of a conf.d file holding `_policies`: every

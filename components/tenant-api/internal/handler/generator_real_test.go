@@ -83,6 +83,12 @@ func daGuardBinary(t *testing.T) string {
 		out := filepath.Join(dir, "da-guard")
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", out, "./cmd/da-guard")
 		cmd.Dir = filepath.Join(root, "components", "threshold-exporter", "app")
+		// #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
+		// A cgo build gives every OS thread an RLIMIT_STACK-sized pthread
+		// stack that counts against the judgement's RLIMIT_DATA, so the
+		// generator's memory limit would measure thread count, not the
+		// judgement (tests/_da_guard_build.py).
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if b, err := cmd.CombinedOutput(); err != nil {
 			daGuardErr = "go build da-guard: " + err.Error() + ": " + strings.TrimSpace(string(b))
 			return

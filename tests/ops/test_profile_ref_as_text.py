@@ -32,6 +32,7 @@ TOOLS = REPO_ROOT / "scripts" / "tools"
 import _lib_tenant_values  # noqa: E402
 import diagnose  # noqa: E402
 import validate_config  # noqa: E402
+from _da_guard_build import go_build_env  # noqa: E402  #3174: 與出貨同形，CGO_ENABLED=0
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -61,7 +62,7 @@ def da_guard(tmp_path_factory):
             "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
         return None
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    env = {**os.environ}
+    env = go_build_env()
     env.setdefault("GOTOOLCHAIN", "auto")
     subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
                     "./cmd/da-guard"],

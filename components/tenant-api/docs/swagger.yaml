@@ -1034,6 +1034,23 @@ definitions:
           additionalProperties: {}
           type: object
         type: array
+      declared_elsewhere:
+        description: |-
+          DeclaredElsewhere is true when, in the tree this server reads now, a
+          conf.d file other than the tenant's own declares the tenant id (#3172)
+          — the condition the #2078 write guard (409 TENANT_DECLARED_ELSEWHERE)
+          checks, judged as /diff judges it, on /diff's walk. It is not a promise
+          of a write's answer: a write can be refused earlier for another reason,
+          and a PR-mode write judges the latest base branch. Two cases: a
+          duplicate (the own file declares the id too), which threshold-exporter
+          refuses — the whole tree stays on its last good load; or declared only
+          elsewhere (the own file declares nothing for the id), which the
+          exporter loads from the other file. One bit only: it names no file and
+          no other tenant — /effective's 409 already gives a caller with read
+          permission the duplicate case. Absent when it could not be judged (the
+          conf.d walk failed or timed out; see the server log) — absent is not
+          false.
+        type: boolean
       git_managed_reason:
         description: |-
           GitManagedReason says why the tenant is git-managed (managed_by: git):
@@ -1240,6 +1257,21 @@ definitions:
         type: string
       environment:
         type: string
+      git_managed_reason:
+        description: |-
+          GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:
+          not_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,
+          tenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's
+          other fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:
+          it names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id
+          (always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.
+        enum:
+        - not_tenant_document
+        - several_documents
+        - yaml_indirection
+        - tenant_count
+        - id_mismatch
+        type: string
       groups:
         items:
           type: string
@@ -1251,14 +1283,28 @@ definitions:
           not the tenant's state (see config_derived); omitted when config_derived
           cannot be derived.
         type: string
+      managed_by:
+        description: |-
+          ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file
+          (confd.TenantFileManagement on the file the row's id names), with the same values — "api" for an API-shaped file,
+          "git" for any other (git_managed_reason says why; every write to it is refused with 409 TENANT_GIT_MANAGED).
+          Absent on a row whose file cannot be read at all (config_error unreadable or not_regular_file), for which GET
+          answers no tenant either.
+        enum:
+        - api
+        - git
+        type: string
       metadata_incomplete:
         description: 'Set when the row''s metadata is unknown: the conf.d root platform
           files could not be read (the metadata fields then carry only the tenant
-          file''s own `_metadata` values), or the tenant''s `_metadata` does not decode
-          (the metadata fields are then empty, as threshold-exporter reads them).
-          The row''s visibility is that of a degraded row (only callers whose matching
-          RBAC rule does not restrict environments or domains see it); the search
-          metadata filters do not match it. Absent otherwise.'
+          file''s own `_metadata` values), the tenant''s `_metadata` does not decode
+          (the metadata fields are then empty, as threshold-exporter reads them),
+          or the file is git-managed and does not declare the row''s id (git_managed_reason
+          id_mismatch, or any other git-managed file whose decoded tenants leave the
+          row''s id out; the metadata fields are then empty). The row''s visibility
+          is that of a degraded row (only callers whose matching RBAC rule does not
+          restrict environments or domains see it); the search metadata filters do
+          not match it. Absent otherwise.'
         type: boolean
       owner:
         type: string
@@ -1536,8 +1582,8 @@ paths:
   /api/v1/federation/accounts/backfill:
     post:
       description: Assigns a monotonic account_id (ADR-021) to every conf.d tenant
-        lacking one, in one committed registry write. Idempotent. Requires platform
-        admin.
+        lacking one, in one committed registry write. Idempotent. Requires a non-org-scoped
+        platform admin (an org-scoped "*" admin rule is refused).
       produces:
       - application/json
       responses:
@@ -2008,11 +2054,18 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before a synchronous batch finished: unlike the cases above
-            it may already be committed (a git command that hits its own deadline
-            may already have moved the ref), so refresh to see whether it was before
-            retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            batch branch to the config repository failed, a timeout included: the
+            whole batch fails, no PR/MR opened, Retry-After (the branch may be left
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when
+            a synchronous batch was stopped before anything of it was committed: the
+            request was cancelled or reached its deadline, or a git command hit its
+            own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back
+            unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with
+            another message when updating the branch failed and the server could not
+            read the branch back: unlike the cases above the batch may already be
+            committed, so refresh to see whether it was before retrying (an async
+            task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2076,6 +2129,12 @@ paths:
         When the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`
         values and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.
         A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
+        Each row carries `managed_by` (api | git) and, for git, `git_managed_reason` — the verdict and codes
+        GET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file
+        that declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,
+        marked `metadata_incomplete` and with no other field: the declared id is not shown. Any git-managed row
+        whose file does not declare the row's id is marked `metadata_incomplete` the same way; its visibility is
+        that of a degraded row.
       produces:
       - application/json
       responses:
@@ -2119,6 +2178,13 @@ paths:
         source_hash empty (masked: true);
         or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
         (inside the tenant's own section: anywhere else makes the tenant git-managed).
+        declared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file
+        other than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged
+        as /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and
+        a PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),
+        threshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the
+        exporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk
+        behind it could not run.
       parameters:
       - description: Tenant ID
         in: path
@@ -2203,12 +2269,18 @@ paths:
             is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
             a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
             with a letter or digit (ADR-035; the route generator refuses a tree that
-            declares any other id; nothing written). Also 400 when the body is not
-            API-shaped (#3064): it declares a tenant besides {id}, several documents,
-            or an anchor, alias, merge key or tagged key at the top level or directly
-            under tenants: (nothing written). Also 400 when the current tenant file''s
-            tenants: block cannot be decoded for the end-of-life check and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            declares any other id; nothing written). Also 400 when parse-tree refuses
+            the body, the error naming its kind (#3206, ADR-036): more than one YAML
+            document (an empty trailing --- included), a tag outside !!str !!int !!float
+            !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific
+            ! tags included), a null or non-scalar key, a repeated key, a byte order
+            mark past the start, or a syntax or decode error (nothing written). Also
+            400 when the body is not API-shaped (#3064): it declares a tenant besides
+            {id}, several documents, or an anchor, alias, merge key or tagged key
+            at the top level or directly under tenants: (nothing written). Also 400
+            when the current tenant file''s tenants: block cannot be decoded for the
+            end-of-life check and the caller lacks write permission on all tenants
+            (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2306,10 +2378,17 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            feature branch to the config repository failed, a timeout included: no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped
+            before anything of it was committed: the request was cancelled or reached
+            its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2362,9 +2441,11 @@ paths:
         base_hash (409 on drift). Empty array deletes the key.
         409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
         409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
-        tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-        whole-file PUT /api/v1/tenants/{id}, which replaces it (an API-shaped file only: one that is not YAML, or
-        is shared with other tenants, is git-managed and repaired in git). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+        tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A
+        whole-file PUT /api/v1/tenants/{id} replaces it (an API-shaped file only: one that is not YAML, or
+        is shared with other tenants, is git-managed and repaired in git); when parse-tree refuses the file (its kind
+        is in parse_tree_kind, #3206) or that PUT's end-of-life check cannot read it, the PUT needs write permission on
+        all tenants, and any other caller asks one who has it or repairs the file in git. Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
         not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
         whole-file PUT refuses it too, so replace it with a regular file in git.
         409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
@@ -2489,10 +2570,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before
+            anything of it was committed: the request was cancelled or reached its
+            deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
@@ -2962,11 +3047,18 @@ paths:
             container cannot judge (reason unreachable, bad_response, amtool_missing,
             generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment
             policy file is unusable (reason policy_unusable, or policy_unreadable
-            for tenant-api''s own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR
-            (#1535) when the request was cancelled or reached its deadline before
-            a synchronous batch finished: unlike the cases above it may already be
-            committed (a git command that hits its own deadline may already have moved
-            the ref), so refresh to see whether it was before retrying'
+            for tenant-api''s own copy); Retry-After; nothing written. In PR/MR write-back
+            mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
+            config repository failed, a timeout included: the whole batch fails, no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch
+            was stopped before anything of it was committed: the request was cancelled
+            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above the batch may already be committed, so refresh to see whether
+            it was before retrying (an async task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
@@ -3041,7 +3133,10 @@ paths:
       - tenants
   /api/v1/views:
     get:
-      description: Returns all saved filter views defined in _views.yaml.
+      description: |-
+        Returns all saved filter views defined in _views.yaml.
+        Requires read on "*" from a rule with no org-scope (open mode
+        reads them too).
       produces:
       - application/json
       responses:
@@ -3051,6 +3146,10 @@ paths:
             items:
               $ref: '#/definitions/internal_handler.ViewResponse'
             type: array
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: List all saved views
       tags:
       - views
@@ -3073,6 +3172,10 @@ paths:
             type: object
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: Forbidden
           schema:
             $ref: '#/definitions/ErrorResponse'
         "404":
@@ -3116,6 +3219,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         "404":
           description: Not Found
           schema:
@@ -3149,6 +3256,10 @@ paths:
             type: object
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: Forbidden
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":

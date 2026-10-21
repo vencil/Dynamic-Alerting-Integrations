@@ -109,6 +109,16 @@ SWAGGER_JSON = TENANT_API_DIR / "docs" / "swagger.json"
 GENERATOR_SERVICE = REPO_ROOT / "scripts" / "tools" / "ops" / "generator_service.py"
 
 
+def _da_guard_go_build_env() -> dict:
+    """#3174: the shipped shape (CGO_ENABLED=0) — tests/_da_guard_build.py says why."""
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    try:
+        from _da_guard_build import go_build_env
+    finally:
+        sys.path.pop(0)
+    return go_build_env()
+
+
 def find_free_port() -> int:
     """Pick an unused TCP port for the test server."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -346,6 +356,7 @@ def build_da_guard(workdir: Path) -> str:
         cwd=DA_GUARD_DIR,
         check=True,
         timeout=180,
+        env=_da_guard_go_build_env(),
     )
     return str(binary)
 
@@ -462,6 +473,13 @@ def main() -> int:
             "TA_RATE_LIMIT_PER_MIN": "0",
             # #2903: every write asks the generator started above.
             "TA_GENERATOR_SOCKET": generator_sock,
+            # #3175: tenant-api refuses to start when its git config names
+            # a filter / diff / merge driver, and a host with git-lfs
+            # installed has filter.lfs.* in its system or global config.
+            # The fixture repo needs neither file (its identity is
+            # repo-local, see init_git_repo).
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
         }
         print(f"[contract] starting tenant-api on {addr} (config={config_dir})")
         # Server output goes to a FILE, not subprocess.PIPE: nothing drains a

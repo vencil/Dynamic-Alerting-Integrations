@@ -1,6 +1,8 @@
 package fedpolicy
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -249,4 +251,40 @@ func stringIndex(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// TestParse_ParseTreeRefusal (ADR-036 §7 step 7, #3206): whitelist and subset
+// records yaml.v3 alone reads (the first document; a `!!binary` or `!` value
+// as a string) are parse errors — the whitelist watcher keeps its last good
+// list, the subset read errors — never the first document's metrics.
+func TestParse_ParseTreeRefusal(t *testing.T) {
+	for _, c := range []struct{ name, whitelist, subset, kind string }{
+		{"second document",
+			"whitelist:\n  - metric: m1\n---\nwhitelist:\n  - metric: m2\n",
+			"metrics:\n  - m1\n---\nmetrics:\n  - m2\n", "multiple_documents"},
+		{"trailing empty document", "whitelist:\n  - metric: m1\n---\n", "metrics:\n  - m1\n---\n", "multiple_documents"},
+		{"!!binary value", "whitelist:\n  - metric: !!binary bTE=\n", "metrics:\n  - !!binary bTE=\n", "tag_not_allowed"},
+		{"non-specific tag", "whitelist:\n  - metric: ! \"m1\"\n", "metrics:\n  - ! \"m1\"\n", "non_specific_tag"},
+	} {
+		if cfg, err := parsePolicyConfig([]byte(c.whitelist)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+			t.Errorf("%s: parsePolicyConfig = %+v, %v; want a refusal of kind %s", c.name, cfg, err, c.kind)
+		}
+		if s, err := ParseSubset([]byte(c.subset)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+			t.Errorf("%s: ParseSubset = %+v, %v; want a refusal of kind %s", c.name, s, err, c.kind)
+		}
+	}
+}
+
+// At startup a refused whitelist record is the initial-load failure it
+// always was: logged, and the manager starts from the empty whitelist — no
+// metric of the refused record's first document is federatable.
+func TestNewManager_ParseTreeRefusalStartsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "_federation_policy.yaml"),
+		[]byte("whitelist:\n  - metric: m1\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if NewDirManager(dir).IsWhitelisted("m1") {
+		t.Fatal("m1 of a refused whitelist record is federatable")
+	}
 }

@@ -101,6 +101,10 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 // The reads are of the serving worktree; that the tenant file there is
 // what the judged base holds is checkTenantFileClean's, run right after
 // this sample and before the read.
+//
+// The #3175 git driver re-check is not here but earlier, in
+// lockTreeRecovered: in PR mode this sample comes after the checkout and the
+// fetch, and a batch never takes it — both already ran git on files.
 func (w *Writer) sampleJudgedBase() (string, error) {
 	base, err := w.currentHEAD()
 	if err != nil {

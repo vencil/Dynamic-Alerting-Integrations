@@ -10,6 +10,8 @@ package gitops
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -41,6 +43,10 @@ type PRWriteResult struct {
 // The ordering is load-bearing (branch -D refuses to delete the branch we
 // are still on / with dirty state). Errors are intentionally ignored —
 // callers are already returning the primary failure. Callers hold w.mu.
+//
+// #3175: if base's git config names a driver, checkoutBaseClean refuses
+// after its move (HEAD is on base); the branch -D that follows only
+// deletes a ref and runs no driver.
 func (w *Writer) abortFeatureBranch(base, branchName string) {
 	_ = w.checkoutBaseClean(base)
 	_ = w.gitExec("branch", "-D", branchName)
@@ -71,6 +77,20 @@ func (w *Writer) restoreBase(base, branch string, pushed bool) error {
 			w.beforeBaseRestore(attempt)
 		}
 		if err = w.checkoutBaseClean(base); err == nil {
+			return nil
+		}
+		if errors.Is(err, ErrGitDriverConfigured) {
+			// #3175: the tree IS on base; base's git config names a driver
+			// (checkoutBaseClean's check after the move). Base was checked
+			// when this write anchored on it (Step 3), so the key appeared
+			// mid-write. No retry — its reset would run under base's config
+			// — and no failure: the branch is committed (and pushed, if
+			// pushed), the tree is on base, and what is left (Step 8's
+			// branch -D) touches no file. Failing here would make a client
+			// retry a pushed write (see ErrBaseRestore). The next write's
+			// check under the lock refuses.
+			slog.Error("gitops: back on base, whose git config now names a driver; the next write will be refused (#3175)",
+				"base", base, "branch", branch, "pushed", pushed, "error", err)
 			return nil
 		}
 		if attempt < baseRestoreAttempts {
@@ -112,6 +132,63 @@ func (e *BaseRestoreError) Unwrap() error { return ErrBaseRestore }
 // branch that may be on origin with no PR/MR for it.
 func (e *BaseRestoreError) Summary() string {
 	return fmt.Sprintf("%v (branch %q, pushed to origin: %t)", ErrBaseRestore, e.Branch, e.Pushed)
+}
+
+// ErrPushFailed is what a PR-mode write returns (as *PushError) when pushing
+// its feature branch to origin failed — for any reason, a timeout included
+// (#1724). No PR/MR may be opened: the forge would open it on whatever
+// origin holds under that name, which is not this write's commit. The local
+// branch is deleted and the worktree returned to base, so a retry starts
+// clean and cuts a new branch (prBranchName); the commit is rebuilt from the
+// request, so nothing is lost by dropping it.
+var ErrPushFailed = errors.New("push of the PR-mode feature branch to origin failed; no PR/MR opened")
+
+// PushError is the error a PR-mode write returns when its push failed. It
+// unwraps to ErrPushFailed ONLY — like BaseRestoreError, the git error is
+// kept in Cause and rendered with %v, never wrapped: a push that timed out
+// wraps ErrGitTimeout (#3173) and one that met index.lock contention wraps
+// ErrWriteOverloaded, and either would make a handler answer the generic
+// cancelled / overloaded 503 instead of the push-failed one. Its text carries
+// the remote's output, so it goes to the log, not the client.
+type PushError struct {
+	Branch string
+	Cause  error
+}
+
+func (e *PushError) Error() string {
+	return fmt.Sprintf("%v (branch %q): %v", ErrPushFailed, e.Branch, e.Cause)
+}
+
+// Unwrap makes errors.Is(err, ErrPushFailed) hold, and nothing else.
+func (e *PushError) Unwrap() error { return ErrPushFailed }
+
+// prBranchSuffixBytes is the random part of a PR-mode branch name, in bytes
+// (hex-encoded: twice as many characters). The timestamp alone resolved to
+// the second, so two writes in one second — a batch of other tenants, a
+// retry right after a refusal — cut the same branch, and the second push was
+// rejected or reused the first one's branch (#1724).
+const prBranchSuffixBytes = 6
+
+// prBranchName names a PR-mode feature branch: prefix, the UTC time to the
+// second, and a random suffix ("<prefix><yyyymmdd-hhmmss>-<12 hex>").
+// platform.TenantIDFromBranch reads only the segment after the branch
+// prefix, so the suffix does not change which tenant a branch names.
+func (w *Writer) prBranchName(prefix string) (string, error) {
+	now := time.Now
+	if w.prBranchClock != nil {
+		now = w.prBranchClock
+	}
+	var suffix string
+	if w.prBranchSuffix != nil {
+		suffix = w.prBranchSuffix()
+	} else {
+		b := make([]byte, prBranchSuffixBytes)
+		if _, err := rand.Read(b); err != nil {
+			return "", fmt.Errorf("generate branch suffix: %w", err)
+		}
+		suffix = hex.EncodeToString(b)
+	}
+	return prefix + now().UTC().Format("20060102-150405") + "-" + suffix, nil
 }
 
 // WritePR validates and writes a tenant config to a feature branch for PR creation.
@@ -175,14 +252,16 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	defer w.releaseWrite()
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
 
-	// Step 2: generate branch name
-	ts := time.Now().UTC().Format("20060102-150405")
-	branchName := platform.BranchPrefix + tenantID + "/" + ts
+	// Step 2: generate branch name (unique per write, #1724)
+	branchName, err := w.prBranchName(platform.BranchPrefix + tenantID + "/")
+	if err != nil {
+		return nil, err
+	}
 
 	// Step 3: anchor on a clean base, THEN branch from it. Always checking out the
 	// base first (rather than branching from "current HEAD" and returning via the
@@ -190,6 +269,9 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// a prior write left the tree on some feature branch, this re-establishes the
 	// base every time (#638). Abort if the base is unreachable — branching from an
 	// unknown ref is exactly the bug we're preventing.
+	// checkoutBaseClean re-checks the git config on base (#3175): the check
+	// under the lock ran on whatever branch HEAD was on then, and the
+	// `checkout -b` below runs under base's config.
 	base := w.base()
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
@@ -205,6 +287,25 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
+	}
+	// #3175: on the feature branch an `includeIf "onbranch:…"` the check on
+	// base (checkoutBaseClean, just above) could not see may apply. Checked
+	// before anything is written, staged or committed on it. The way back
+	// must not run git on files under the branch's config: HEAD is pointed
+	// at base first (no file touched), and only then is the tree checked out
+	// — under base's config, which checkoutBaseClean checked after its move.
+	if err := w.checkGitDriversIn(w.gitDir); err != nil {
+		// If HEAD cannot be pointed back at base, the abort's reset and
+		// checkout would run under the branch's config — skip it. HEAD stays
+		// on the feature branch, so the next write's check under the lock
+		// sees the same driver and refuses before any git runs on files.
+		if serr := w.gitExec("symbolic-ref", "HEAD", "refs/heads/"+base); serr != nil {
+			slog.Error("PR-mode write: driver found on the feature branch and HEAD could not be pointed back at base; leaving the branch for the operator",
+				"branch", branchName, "base", base, "error", serr)
+			return nil, err
+		}
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
 	}
 
 	// Step 3b–3c: resolve the tenant's file, run the caller's check and the
@@ -271,14 +372,16 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		return &PRWriteResult{Notices: notices}, ErrNoChanges
 	}
 
-	// Step 6: push branch to origin
-	pushed := true
+	// Step 6: push branch to origin. A failed push — rejected, unreachable,
+	// timed out — FAILS the write (*PushError, #1724): the handler must not
+	// open a PR/MR on a head origin does not hold as this commit.
+	var pushErr error
 	if err := w.gitExec("push", "origin", branchName); err != nil {
-		pushed = false
-		slog.Warn("gitops: push branch failed",
-			"branch", branchName, "error", err, "note", "PR creation will fail")
-		// Don't delete the branch — the commit is valuable even if push fails
+		slog.Warn("gitops: push branch failed — no PR/MR will be opened",
+			"branch", branchName, "error", err)
+		pushErr = &PushError{Branch: branchName, Cause: err}
 	}
+	pushed := pushErr == nil
 
 	// Step 7: return to a clean base branch, retrying once (#2070). If both
 	// attempts fail the tree is still on the feature branch — every conf.d
@@ -292,19 +395,21 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		return nil, err
 	}
 
-	// Step 8: drop the local feature branch after a CONFIRMED push (#641). The
-	// commit is now safely on origin and the PR is created from origin/<branch> —
-	// the local ref is no longer needed. Without this, every WritePR leaks a local
-	// `tenant-api/<tenant>/<ts>` ref forever (the deployment runs one long-lived
-	// replica, so this is the only thing bounding the loose-ref accumulation).
-	// On push failure we KEEP the branch (the only copy of the commit) — same as
-	// before. Must run AFTER step 7 (can't -D the currently-checked-out branch),
-	// and only runs when step 7 succeeded — a failed step 7 returns above.
-	if pushed {
-		if err := w.gitExec("branch", "-D", branchName); err != nil {
-			slog.Warn("gitops: failed to delete local feature branch after push",
-				"branch", branchName, "error", err)
-		}
+	// Step 8: drop the local feature branch, pushed or not. After a push
+	// (#641) the commit is on origin and the PR is created from
+	// origin/<branch>; without this every WritePR leaks a local ref forever
+	// (one long-lived replica). After a FAILED push it goes too (#1724):
+	// #641 kept it as "the only copy of the commit", but a retry rebuilds the
+	// commit from the request, and the kept branch was what a later write of
+	// the same name collided with (`checkout -b` → 500). Must run AFTER step 7
+	// (can't -D the checked-out branch), and only when step 7 succeeded — a
+	// failed step 7 returns above.
+	if err := w.gitExec("branch", "-D", branchName); err != nil {
+		slog.Warn("gitops: failed to delete local feature branch",
+			"branch", branchName, "pushed", pushed, "error", err)
+	}
+	if pushErr != nil {
+		return nil, pushErr
 	}
 
 	slog.Info("gitops: PR branch created",
@@ -562,17 +667,21 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
 
-	ts := time.Now().UTC().Format("20060102-150405")
-	branchName := platform.BatchBranchPrefix + ts
+	branchName, err := w.prBranchName(platform.BatchBranchPrefix) // unique per batch, #1724
+	if err != nil {
+		return nil, err
+	}
 
 	// Anchor the serving tree on a clean base (#638 — see WritePR Step 3):
 	// the PR-mode invariant between writes. The batch itself never touches
-	// the serving tree (#2900).
+	// the serving tree (#2900). checkoutBaseClean re-checks the git config
+	// on base (#3175); a driver there refuses the batch, as it refuses every
+	// write once the tree is on base.
 	base := w.base()
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
@@ -596,12 +705,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	if err != nil {
 		return nil, err
 	}
-	pushed := false
 	defer func() {
 		w.closeStaging(st)
-		// The local branch only outlives the batch as the one copy of a
-		// commit whose push failed (#641).
-		if pushed || st.branchUnneeded {
+		// The local branch never outlives the batch: pushed, it is on origin
+		// (#641); not pushed, a retry rebuilds the commit (#1724).
+		if st.branchUnneeded {
 			if err := w.gitExec("branch", "-D", branchName); err != nil {
 				slog.Warn("gitops: failed to delete local batch branch", "branch", branchName, "error", err)
 			}
@@ -646,11 +754,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		return nil, err
 	}
 
+	// A failed push fails the batch (#1724, as WritePRChecked's Step 6): no
+	// PR/MR, and the deferred cleanup drops the local branch.
 	if err := w.gitIn(st.root, "push", "origin", branchName); err != nil {
-		slog.Warn("gitops: push batch branch failed", "branch", branchName, "error", err)
-		st.branchUnneeded = false // keep the only copy of the commit
-	} else {
-		pushed = true
+		slog.Warn("gitops: push batch branch failed — no PR/MR will be opened", "branch", branchName, "error", err)
+		return nil, &PushError{Branch: branchName, Cause: err}
 	}
 
 	slog.Info("gitops: PR batch branch created",

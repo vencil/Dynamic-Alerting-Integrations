@@ -26,7 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS = REPO_ROOT / "scripts" / "tools"
 
 import _grar_parse  # noqa: E402
-import _lib_io  # noqa: E402
 import _lib_tenant_values  # noqa: E402
 import _lib_yaml_keys  # noqa: E402
 import check_routing_profiles as crp  # noqa: E402
@@ -93,8 +92,8 @@ def test_a_domain_policy_tenant_list_meets_the_text_ids(tmp_path):
             "domain_policies:\n  p:\n    tenants: [010]\n"
             "    constraints:\n      forbidden_receiver_types: [webhook]\n"),
         "t.yaml": "tenants:\n  010:\n" + _ROUTING})
-    _r, _d, warnings, _e, _m = _grar_parse.load_tenant_configs(
-        str(d), strict_policies=True)
+    warnings = _grar_parse.load_tenant_tree(
+        str(d), strict_policies=True).schema_warnings
     hits = [w for w in warnings if "tenant '010'" in w and "forbidden" in w]
     assert hits, warnings
 
@@ -142,17 +141,6 @@ def test_exclude_tenants_from_a_standalone_policy_file(tmp_path, capsys):
 
 
 # ── shared readers ───────────────────────────────────────────────────
-
-def test_load_tenant_configs_keys_are_the_source_text(tmp_path):
-    """``123:`` in one file and ``"123":`` in another are ONE tenant, as in
-    the exporter; ``010`` / ``yes`` keep their spelling; ids are ``str``."""
-    d = _tree(tmp_path, {
-        "a.yaml": "tenants:\n  123:\n    x: 1\n  010:\n    x: 2\n",
-        "b.yaml": 'tenants:\n  "123":\n    x: 3\n  yes:\n    x: 4\n'})
-    got = _lib_io.load_tenant_configs(str(d))
-    assert got == {"123": {"x": 3}, "010": {"x": 2}, "yes": {"x": 4}}, got
-    assert all(isinstance(k, str) for k in got)
-
 
 def test_declared_tenant_ids_are_the_source_text(tmp_path):
     d = _tree(tmp_path, {
@@ -205,15 +193,6 @@ def test_check_routing_profiles_reads_text_ids(tmp_path):
     assert data["platform_orphans"] == [], data["platform_orphans"]
     msgs = crp.validate(data, strict=True)
     assert not [m for m in msgs if "not found" in m], msgs
-
-
-def test_a_python_object_tag_in_a_tenant_file_is_still_refused(tmp_path):
-    """The readers switched loaders; the refusal must have come along
-    (``load_tenant_configs`` → YamlFileError, a yaml.YAMLError)."""
-    _tree(tmp_path, {"t.yaml": "tenants:\n  t: !!python/object/apply:os.system ['echo x']\n"})
-    with pytest.raises(_lib_io.YamlFileError) as ei:
-        _lib_io.load_tenant_configs(str(tmp_path))
-    assert "python/object/apply" in str(ei.value) and "t.yaml" in str(ei.value), ei.value
 
 
 # ── #2114 review: error shape and parser are what the readers had ────

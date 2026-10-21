@@ -54,7 +54,8 @@ SHAPES = [
     ("map-padded", "{default: ' 010 '}", 10),
     ("map-with-overrides", "{default: '010', overrides: []}", 10),
     ("map-with-expiry", "{default: '010', expires: '2099-01-01T00:00:00Z', reason: x}", 10),
-    ("map-binary-default", "{default: !!binary MDEw}", 10),
+    # `{default: !!binary MDEw}` was a row (bound "010"): since ADR-036 step 6
+    # (#3206) parse-tree refuses `!!binary` and the exporter drops the file.
     ("map-date-default", "{default: 2026-12-31}", 80),
     ("map-bool-default", "{default: true}", 80),
     ("map-float-default", "{default: 1.50}", 80),

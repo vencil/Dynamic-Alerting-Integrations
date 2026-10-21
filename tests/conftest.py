@@ -35,6 +35,7 @@ if _DA_TOOLS_DIR not in sys.path:
 
 # ── Local imports (factories helper) ──────────────────────────────────
 from factories import populate_routing_dir  # noqa: E402
+from _da_guard_build import go_build_env  # noqa: E402  (#3174: 與出貨同形，CGO_ENABLED=0)
 
 # ── Runtime encoding gate (#2005): see tests/_encoding_gate.py ─────────
 pytest_plugins = ["_encoding_gate"]
@@ -210,7 +211,7 @@ def da_guard_binary(tmp_path_factory):
         [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
         cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -486,10 +487,19 @@ def _provide_session_da_guard() -> None:
         [go, "build", "-buildvcs=false", "-o", out, "./cmd/da-guard"],
         cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         shutil.rmtree(d, ignore_errors=True)
         return  # da_guard_binary fails with go's message where it is asked for
+    # #3178: tests that run as root drop to `nobody` (`setpriv --reuid=65534`)
+    # so a chmod-000 directory really is unreadable, and the tool they run
+    # reaches this da-guard. `mkdtemp` makes the directory 0700 and `go build`
+    # follows the umask, so `nobody` could not execute it and the child died
+    # with PermissionError before reading conf.d. Open both to read + execute
+    # for every uid — never write: in /tmp that would let another uid swap
+    # the binary the whole session executes.
+    os.chmod(d, 0o755)
+    os.chmod(out, 0o755)
     _SESSION_DA_GUARD_DIR = d
     os.environ[_SESSION_DA_GUARD_ENV] = out
     os.environ["DA_GUARD_BINARY"] = out

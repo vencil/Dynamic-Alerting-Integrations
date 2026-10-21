@@ -32,6 +32,7 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	"github.com/vencil/tenant-api/internal/platform"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
@@ -82,13 +83,31 @@ func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
 // file another tenant already merged remotely — the whole TRK-318 hazard).
 var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
 
+// MsgPlatformWriteRepair is how a caller is told who may replace a current
+// tenant file the end-of-life guard cannot read, and what everyone else does
+// (#2405, #3206). Shared by MsgUnparseableBaseNeedsPlatformWrite and the
+// handler's 409 TENANT_CONFIG_NOT_LOADABLE text, so the two never disagree.
+const MsgPlatformWriteRepair = "replacing it through the API (a whole-file PUT /api/v1/tenants/{id}) " +
+	"requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] and no org-scope, " +
+	"environments or domains); without it, ask a caller who has that permission to replace it, " +
+	"or repair the file in git"
+
 // MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
-// whole-file write over a current tenant file that cannot be parsed, by a
-// caller without platform-wide write permission (#2405; see eolGuardErrs).
-const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be parsed; " +
-	"replacing it through the API requires write permission on all tenants " +
-	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
-	"otherwise repair the file in git"
+// whole-file write over a current tenant file the end-of-life guard cannot
+// read, by a caller without platform-wide write permission (#2405; see
+// eolGuardErrs). err is why it cannot: parse-tree's refusal — named with its
+// kind, since such a file is often valid YAML (a trailing `---`, a `!!binary`
+// value) and "cannot be parsed" would send the reader looking for a syntax
+// error — or the custom-alerts decode of a file parse-tree reads.
+func MsgUnparseableBaseNeedsPlatformWrite(err error) string {
+	if kind, ok := cfg.UnreadableKindOf(err); ok {
+		return "the current tenant file is refused by parse-tree (kind " + string(kind) +
+			"), so threshold-exporter and the route generator read none of it and its " +
+			"end-of-life usage is unknown; " + MsgPlatformWriteRepair
+	}
+	return "the current tenant file's tenants: block cannot be decoded for the end-of-life check; " +
+		MsgPlatformWriteRepair
+}
 
 // msgBodyNotAPIShaped (with the tenant id) refuses a write body that is not
 // API-shaped (#3064, confd.TenantFileManagement).
@@ -300,118 +319,6 @@ func yamlDecodeMessage(what string, err error) string {
 
 var yamlErrorLine = regexp.MustCompile(`\bline (\d+)\b`)
 
-// yamlDocumentShapeErrors is the whole-body YAML gate behind validateShape
-// (#1681, #1721). It exists because Write commits the body VERBATIM while the
-// struct yaml.Unmarshal in validateShape reads only the FIRST document and only
-// the fields ThresholdConfig names — so any byte the struct decode skips is a
-// byte that reaches git unjudged, and the exporter reads it.
-//
-// It walks every document as a yaml.Node and refuses, in this order:
-//
-//  1. Any decode error, in ANY document. The struct Unmarshal does not own
-//     these: it stops after the first document, so a parse error behind an
-//     end-of-document marker (`...`) is invisible to it. A gate that treated
-//     that error as end-of-stream accepted the unparseable tail, and the
-//     unparseable tail is where the smuggled section sat (#1721).
-//  2. In the FIRST document only, a root key the struct decode and
-//     cfg.CheckTenantRootKeys can both look past (see rootKeyShapeError):
-//     a merge key (`<<`, checked first, with its own message), or any key
-//     that is not a plain string scalar — null (`~`, `null`, an empty `? `),
-//     int, bool, an alias, a complex key, a custom tag. CheckTenantRootKeys
-//     decodes into map[string]any, fails on such a key and then reports
-//     NOTHING, while a generic decode falls back to map[any]any and succeeds,
-//     so the key's value — a `tenants:` section, a `defaults:` block — would
-//     be committed unjudged. A string key other than `tenants` is NOT refused
-//     here: CheckTenantRootKeys owns that and names the key. Merge keys and
-//     aliases INSIDE a tenant section are ordinary YAML and stay legal.
-//  3. A document that does not decode generically (`node.Decode(&any)`). The
-//     struct decode never visits a root key ThresholdConfig lacks, so a bad
-//     tag under one passes it, and CheckTenantRootKeys returns no errors when
-//     its own decode fails. This also refuses an unconstructable tagged value
-//     inside the body's own tenant section (`!!int "abc"`), which the struct
-//     decode reads as a string — deliberately: those bytes would be committed.
-//  4. Content after the first document — anything after it would be written
-//     but never validated. An empty trailer (a bare `---`, a lone `...`, a
-//     comment-only or `~` document) carries nothing and stays legal, so this
-//     counts content rather than documents.
-//
-// Messages go to API callers: they name the rule, never a server path.
-func yamlDocumentShapeErrors(yamlContent string) []string {
-	dec := yaml.NewDecoder(strings.NewReader(yamlContent))
-	extra := 0
-	for i := 0; ; i++ {
-		var node yaml.Node
-		if err := dec.Decode(&node); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
-		}
-		// Before the generic decode: a complex root key makes that decode fail
-		// with a message about the key's value, not about the rule it broke.
-		if i == 0 {
-			if msg := rootKeyShapeError(&node); msg != "" {
-				return []string{msg}
-			}
-		}
-		var doc any
-		if err := node.Decode(&doc); err != nil {
-			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
-		}
-		if i > 0 && doc != nil {
-			extra++
-		}
-	}
-	if extra > 0 {
-		return []string{fmt.Sprintf(
-			"YAML has %d document(s) with content after the first — a tenant config "+
-				"is a single document; anything after it would be written but never "+
-				"validated", extra)}
-	}
-	return nil
-}
-
-// rootKeyShapeError returns the refusal for the first root key of a decoded
-// document that is not a plain string, or "" when every root key is one. A
-// merge key (`<<` in any form — a mapping, an alias, or a sequence of either)
-// is looked for across ALL root keys first, so it always gets its dedicated
-// message whatever else the root holds.
-func rootKeyShapeError(doc *yaml.Node) string {
-	root := doc
-	if root.Kind == yaml.DocumentNode {
-		if len(root.Content) == 0 {
-			return ""
-		}
-		root = root.Content[0]
-	}
-	if root.Kind != yaml.MappingNode {
-		return ""
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].ShortTag() == "!!merge" {
-			return "YAML uses a merge key (<<) at the root — a tenant config " +
-				"may only contain a literal top-level 'tenants' block; merge keys are " +
-				"allowed inside a tenant section, not at the root"
-		}
-	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		key := root.Content[i]
-		if key.Kind == yaml.ScalarNode && key.ShortTag() == "!!str" {
-			continue
-		}
-		found := key.ShortTag()
-		switch key.Kind {
-		case yaml.AliasNode:
-			found = "alias"
-		case yaml.MappingNode, yaml.SequenceNode:
-			found = "complex " + found
-		}
-		return fmt.Sprintf("YAML root keys must be plain strings — found a %s key; "+
-			"a tenant config may only contain a top-level 'tenants' block", found)
-	}
-	return ""
-}
-
 // guardTenantID rejects an id whose {id}.yaml would not be a tenant config
 // file. It is the writer-side second enforcement of the same confd predicate
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
@@ -456,6 +363,7 @@ type Writer struct {
 	gitTimeout     time.Duration // per-git-command wall-clock deadline (#630); 0 → defaultGitTimeout
 	gitWaitDelay   time.Duration // cmd.WaitDelay grace after a deadline kill (#630); 0 → defaultGitKillGrace
 	gitBinary      string        // git executable; "git" in prod, overridden in tests (timeout seam)
+	gitTestEnv     []string      // TEST-ONLY (#3175): added to every git command's environment, after the process's; nil in prod
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
@@ -542,6 +450,14 @@ type Writer struct {
 	// production.
 	afterBaseSample func()
 	afterTenantRead func()
+
+	// prBranchClock and prBranchSuffix are TEST-ONLY seams (#1724):
+	// prBranchName takes the time from prBranchClock and the random suffix
+	// from prBranchSuffix when they are non-nil, so a test can put two writes
+	// in the same second, or give them the same name. Always nil in
+	// production (time.Now, crypto/rand).
+	prBranchClock  func() time.Time
+	prBranchSuffix func() string
 
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
@@ -655,12 +571,25 @@ func (w *Writer) lockTreeOnBase() error {
 	return nil
 }
 
-// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900): a
-// batch publish interrupted between the branch update and the worktree
-// update is finished before this write reads anything. On error the lock is
-// already released.
+// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900,
+// #3173): a publish the marker records as unfinished — a batch interrupted
+// between the branch update and the worktree update, or a write whose
+// outcome was unknown — is settled before this write reads anything. On
+// error the lock is already released.
+//
+// #3175: before the recovery, the git config is checked again for a filter, diff
+// or merge driver (CheckGitDrivers) — the first thing every write does
+// under the lock, before any git command of it can run one. Startup
+// checked it already; this catches a driver added since (an init container
+// or a sidecar editing .git/config, a replaced global config). It checks
+// the context HEAD is in now; a write that then moves HEAD to base checks
+// again there (checkoutBaseClean).
 func (w *Writer) lockTreeRecovered() error {
 	w.lockTree()
+	if err := w.CheckGitDrivers(); err != nil {
+		w.unlockTree()
+		return err
+	}
 	if err := w.RecoverBatchPublish(); err != nil {
 		w.unlockTree()
 		return err
@@ -707,7 +636,7 @@ var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
 // TryWithTreeLock); it only reads, so it is also harmless outside it.
 //
 // What counts as a change: any tracked modification, and an untracked OR
-// gitignored file the loader would read (config.IsScannedPath relative to
+// gitignored file the loader would read (confdname.IsScannedPath relative to
 // configDir — a gitignored *.yaml in conf.d is still read by the loader).
 // Other files — a crashed writeFileAtomic's hidden temp file, anything
 // outside conf.d — do not change what the loader builds.
@@ -721,6 +650,10 @@ var ErrTreeNotOnBase = errors.New("config worktree is not on the base branch")
 // a reader, it took no lock, and a lock present in .git belongs to someone
 // else. #638's stale-lock sweep is for the writer's own killed commands only.
 func (w *Writer) TreeOnBase() error {
+	// #3175: the status below would run a clean filter the config names.
+	if err := w.CheckGitDrivers(); err != nil {
+		return fmt.Errorf("%w: %w", ErrTreeNotOnBase, err)
+	}
 	out, err := w.gitOutput(w.gitDir, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil { // detached HEAD exits non-zero, as does a timeout
 		return fmt.Errorf("%w: %v", ErrTreeNotOnBase, err)
@@ -776,14 +709,14 @@ func loaderReads(confAbs, abs string) (string, bool) {
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || !fi.IsDir() {
-		return rel, rel != "." && cfg.IsScannedPath(rel)
+		return rel, rel != "." && confdname.IsScannedPath(rel)
 	}
 	var found string
 	_ = filepath.WalkDir(abs, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || found != "" {
 			return nil
 		}
-		if r, rerr := filepath.Rel(confAbs, p); rerr == nil && !strings.HasPrefix(r, "..") && cfg.IsScannedPath(r) {
+		if r, rerr := filepath.Rel(confAbs, p); rerr == nil && !strings.HasPrefix(r, "..") && confdname.IsScannedPath(r) {
 			found = r
 			return fs.SkipAll
 		}
@@ -1089,6 +1022,54 @@ func (w *Writer) JudgeWrite(tenantID string) error {
 	}
 	_, err := w.previewTenantFilePath(tenantID)
 	return err
+}
+
+// DeclaredElsewhere reports whether, in the tree this server reads now, a
+// conf.d file other than tenantID's own top-level file declares tenantID
+// (#3172) — the #2078 guard's condition (ErrTenantDeclaredElsewhere). GET
+// /tenants/{id} carries it so that a reader can see that condition without
+// a 409.
+//
+// It is NOT a promise of what a write answers: a write may be refused
+// earlier in its sequence for another reason (write scope, the body, a
+// tenant file that is not a regular file), and a PR-mode write judges the
+// latest base branch, which can differ from the tree read here.
+//
+// Same judgement, same walk as the previews: ensureNotDeclaredElsewhereIn on
+// scanTreeForRead (the shared read walk on the prior, no lock), against the
+// file a write would land on (confd.TenantFilePathForWrite). It is NOT a
+// second scan: a GET joins a read walk already in flight, and an unchanged
+// file is not read again (#2153). Only this one guard is asked —
+// placement and the whole-tree verdict (resolveTenantFilePath's other
+// checks) are not, so an unreadable entry elsewhere does not make this an
+// error.
+//
+// ⚠️ Two cases, only one a duplicate. A true duplicate (the own file and
+// another both declare the id) is /effective's 409, and threshold-exporter
+// refuses to reload the whole tree. Declared only elsewhere (the own file
+// declares nothing for the id — a `tenants: {}` shell, a file the walker
+// cannot decode — and one other file does) is no duplicate: the exporter
+// loads it and /effective serves the other file's declaration; this is true
+// all the same, since the #2078 guard refuses a write into the own file.
+//
+// A walk that cannot run (ErrTenantTreeScan, wrapped) is returned as an
+// error: the answer is unknown, not false.
+func (w *Writer) DeclaredElsewhere(tenantID string) (bool, error) {
+	if err := guardTenantID(tenantID); err != nil {
+		return false, err
+	}
+	target, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
+	if err != nil {
+		return false, err
+	}
+	err = w.ensureNotDeclaredElsewhereIn(w.scanTreeForRead, tenantID, target)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, ErrTenantDeclaredElsewhere):
+		return true, nil
+	}
+	return false, err
 }
 
 // resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath
@@ -1611,7 +1592,11 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 		}
 	}
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", diffCurrentFile, diffProposedFile)
+	// #3175: --no-ext-diff keeps diff.external / GIT_EXTERNAL_DIFF (a
+	// program named only by config or the environment, which the driver
+	// check does not cover) from running for a preview; --no-textconv is a
+	// second layer behind that check's refusal of diff.*.textconv.
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--no-ext-diff", "--no-textconv", "--", diffCurrentFile, diffProposedFile)
 	defer cancel()
 	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error
@@ -1727,7 +1712,13 @@ func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) erro
 // exactly content (checkStagedAsValidated); when git attributes rewrote
 // it, the write is refused. Whatever stops a write after its file was
 // written, the serving file is put back as HEAD has it (restoreFromHEAD);
-// the real index is gitCommitOnto's to keep (see there).
+// the real index is gitCommitOnto's to keep (see there). The publish
+// marker (#3173) is written before the file and lives until the file is
+// back in a known state: gitCommitOnto removes it once published, this
+// function when nothing changed or once that restore succeeded — never on
+// an unknown outcome (*WriteOutcomeUnknownError: HEAD may hold the
+// commit). A marker left behind settles the file and its index entry on
+// the next write or at startup (RecoverBatchPublish).
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, judgedBase string, trailer ...string) error {
 	if judgedBase == "" {
 		return fmt.Errorf("%w: no judged base for %s", ErrNoValidator, commitTag)
@@ -1754,7 +1745,22 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return ErrConflict
 	}
 
+	// #3173: the publish marker, before the serving file is written: from
+	// here until the file is seen back in a known state (published, equal
+	// to HEAD, or put back by restoreFromHEAD) it is the record that lets
+	// RecoverBatchPublish put it back on the next write or at startup. It
+	// has no commit yet; gitCommitOnto replaces it with one. Not recorded:
+	// nothing is written.
+	idxPath, err := w.indexPath(filePath)
+	if err != nil {
+		return err
+	}
+	if err := w.writePublishMarker("", []string{idxPath}, true); err != nil {
+		return fmt.Errorf("record the write: %w", err)
+	}
 	if err := writeFileAtomic(filePath, content, 0644); err != nil {
+		// writeFileAtomic renames into place last: the file is untouched.
+		w.removePublishMarker()
 		return fmt.Errorf("write file: %w", err)
 	}
 
@@ -1763,9 +1769,15 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		// A judged write that did not commit leaves nothing behind (ADR-036
 		// §4: only a pass is written) — whatever stopped it: the refusals
 		// below, or git failing (index.lock, a timeout, update-ref).
+		var unknown *WriteOutcomeUnknownError
 		if rerr := w.restoreFromHEAD(filePath); rerr != nil {
-			slog.Error("gitops: could not put back a write that did not commit",
+			slog.Error("gitops: could not put back a write that did not commit; the publish marker (if any) is kept for the next write",
 				"commit_tag", commitTag, "error", rerr)
+		} else if !errors.As(err, &unknown) {
+			// The serving file is HEAD's again: nothing left to recover —
+			// unless the real index still holds the unpublished blob
+			// (removeRestoredMarker keeps the marker then).
+			w.removeRestoredMarker(filePath)
 		}
 		if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
 			return err
@@ -1778,6 +1790,8 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	// repository holds, so the caller's desired state is committed and no
 	// commit was created: an idempotent re-write, a success.
 	if !committed {
+		// git found the file equal to judgedBase (HEAD): nothing pending.
+		w.removePublishMarker()
 		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
 		return nil
 	}
@@ -1969,8 +1983,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
-	// caller below parses yamlContent four times (Unmarshal here,
-	// CheckTenantRootKeys, yamlDocumentShapeErrors,
+	// caller below parses yamlContent several times (parse-tree's verdict,
+	// Unmarshal here, CheckTenantRootKeys, TenantFileManagement,
 	// TenantWritesStringMetadata).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
@@ -1984,6 +1998,22 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	if errs := CheckTenantDocSize(yamlContent); len(errs) > 0 {
 		return tcfg, errs
 	}
+	// ⛔ PARSE-TREE'S VERDICT BEFORE ANY DECODE (ADR-036 §7 step 7, #3206;
+	// confd.Judge). Write commits yamlContent VERBATIM, and every check below
+	// reads less than that: the struct Unmarshal and CheckTenantRootKeys
+	// decode ONE document, the struct decode skips root keys
+	// ThresholdConfig lacks, both resolve a root merge key away, and
+	// CheckTenantRootKeys reports nothing for a root key that is not a string
+	// (#1681, #1721). parse-tree reads the whole text — every document, every
+	// node, every tag — and refuses what the exporter and the route generator
+	// refuse, so from here on each decode sees bytes all three read the same
+	// way. It replaces tenant-api's own whole-body shape gate, whose rules
+	// differed from parse-tree's (it let an empty trailing document, a local
+	// tag `!foo`, `!!binary` and `!!set` through).
+	if err := confd.Judge([]byte(yamlContent)); err != nil {
+		slog.Warn("tenant config is refused by parse-tree", "tenant", tenantID, "error", err)
+		return tcfg, []string{confd.UnreadableForCaller("the YAML document", err)}
+	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return tcfg, []string{yamlDecodeMessage("invalid YAML", err)}
 	}
@@ -1993,19 +2023,6 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	}
 	if _, ok := tcfg.Tenants[tenantID]; !ok {
 		return tcfg, []string{fmt.Sprintf("YAML must contain tenants.%s section", tenantID)}
-	}
-	// The write path commits yamlContent VERBATIM, but the Unmarshal and
-	// CheckTenantRootKeys above each see less than that: both decode ONE
-	// document, the struct decode skips root keys ThresholdConfig lacks, both
-	// resolve a root merge key (`<<`) away, and CheckTenantRootKeys reports
-	// nothing for a root key that is not a string (`~:`). So a second document,
-	// a parse error behind `...`, a bad tag under an unknown root key, a root
-	// merge key or a non-string root key could each carry a `tenants:` section
-	// straight into git past every gate in this function (#1681, #1721). A successful Unmarshal above does
-	// NOT mean the rest of the body parses — it stopped reading after the first
-	// document — so this gate owns every decode error it meets.
-	if shapeErrs := yamlDocumentShapeErrors(yamlContent); len(shapeErrs) > 0 {
-		return tcfg, shapeErrs
 	}
 	// The write plane addresses a file by tenant id, but the exporter takes
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
@@ -2228,6 +2245,10 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 // launder new eol usage in. Pinned by
 // TestEolGuard_UnparseableBaseForbidsEveryEolRecipe.
 //
+// "Would not parse" is parse-tree's verdict first (confd.Judge, #3206), then
+// Extract's decode: a file parse-tree refuses takes this path even when its
+// first document alone would decode.
+//
 // Only a PARSE failure takes that path. A file that exists but cannot be READ
 // (permissions, I/O) still refuses the write: nothing about it is known, and
 // the write would land on the same unreadable path.
@@ -2236,12 +2257,20 @@ func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, r
 	var oldAlerts []map[string]any
 	switch {
 	case baseErr == nil:
-		cur, err := customalerts.Extract(string(baseRaw), tenantID)
+		// #3206 (ADR-036 §7 step 7): a current file parse-tree refuses is one
+		// that does not parse — the exporter serves none of it — even where
+		// Extract's one-document decode would read its first document (a
+		// second document, a `!!binary` value). Its baseline is unknown.
+		err := confd.Judge(baseRaw)
+		var cur []map[string]any
+		if err == nil {
+			cur, err = customalerts.Extract(string(baseRaw), tenantID)
+		}
 		switch {
 		case err == nil:
 			oldAlerts = cur
 		case !replaceUnparseable:
-			return []string{MsgUnparseableBaseNeedsPlatformWrite}
+			return []string{MsgUnparseableBaseNeedsPlatformWrite(err)}
 		}
 		// err != nil with the bit: baseline unknown ⇒ oldAlerts stays empty.
 	case !os.IsNotExist(baseErr):

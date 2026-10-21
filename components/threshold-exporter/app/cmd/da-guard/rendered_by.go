@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
-	"github.com/vencil/threshold-exporter/internal/parsetree"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // renderedByKeys are the platform carriers rendered_by answers for (#2962):
