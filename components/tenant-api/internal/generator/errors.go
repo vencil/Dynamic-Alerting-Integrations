@@ -3,6 +3,8 @@ package generator
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // Results of a verdict (the service's `result`).
@@ -153,4 +155,25 @@ func ClientReason(reason string) string {
 		}
 	}
 	return ReasonUnknown
+}
+
+// ErrorKind is errkind.GeneratorFindings.
+func (e *FindingsError) ErrorKind() errkind.Kind { return errkind.GeneratorFindings }
+
+// ErrorKind splits on Retryable: a reason a resend may get past is
+// errkind.GeneratorRejectedRetryable, the rest errkind.GeneratorRejected.
+func (e *RejectedError) ErrorKind() errkind.Kind {
+	if Retryable(e.Reason) {
+		return errkind.GeneratorRejectedRetryable
+	}
+	return errkind.GeneratorRejected
+}
+
+// ErrorKind is errkind.PolicyUnavailable for CodePolicyUnavailable and
+// errkind.ValidatorUnavailable for every other code.
+func (e *UnavailableError) ErrorKind() errkind.Kind {
+	if e.Code == CodePolicyUnavailable {
+		return errkind.PolicyUnavailable
+	}
+	return errkind.ValidatorUnavailable
 }

@@ -99,6 +99,13 @@ linters:
       # layer must not depend on the HTTP handler layer. Keeps the core verifiable,
       # testable, and regenerable independently of the volatile HTTP boundary.
       # Currently satisfied — this pins it so an AI rewrite cannot silently invert it.
+      #
+      # ⛔ internal/rbac/import_direction_test.go reads domain-no-handler's
+      # `files:` from THIS file (the one list; #3226) and runs the same check
+      # without golangci-lint, so dropping depguard from `linters.enable` does
+      # not retire the rule. Each entry must stay of the form
+      # "**/internal/<dir>/**" — the test fails on any other shape rather than
+      # guess what it covers.
       rules:
         domain-no-handler:
           list-mode: lax
@@ -107,9 +114,36 @@ linters:
             - "**/internal/customalerts/**"
             - "**/internal/groups/**"
             - "**/internal/views/**"
+            - "**/internal/gitops/**"
+            - "**/internal/statestore/**"
+            - "**/internal/confd/**"
+            - "**/internal/generator/**"
+            - "**/internal/platform/**"
+            # Not internal/federation/orphan: its external test package
+            # (enumerator_parity_test.go, #1680) imports handler on purpose to
+            # compare GET /tenants with the orphan scans. Its non-test code
+            # cannot import handler anyway — handler imports orphan, so that is
+            # an import cycle the compiler rejects.
+            - "**/internal/federation/account/**"
+            - "**/internal/federation/fedpolicy/**"
+            - "**/internal/federation/token/**"
           deny:
             - pkg: github.com/vencil/tenant-api/internal/handler
               desc: domain packages must not import the HTTP handler layer
+        # #3226: errkind names the kinds of failure for both sides of the
+        # boundary — the domain errors say which they are, the handler's table
+        # answers them. It stays a leaf: nothing of this module (a cycle with
+        # every domain package waiting to happen) and not net/http (a status
+        # code belongs in the handler's table, not in the names).
+        errkind-leaf:
+          list-mode: lax
+          files:
+            - "**/internal/errkind/**"
+          deny:
+            - pkg: github.com/vencil/tenant-api/internal
+              desc: errkind is a leaf — it imports nothing of tenant-api (#3226)
+            - pkg: net/http
+              desc: errkind holds names only; statuses and codes are the handler's kindTable (#3226)
   exclusions:
     rules:
       - path: _test\.go

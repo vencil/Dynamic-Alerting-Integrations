@@ -152,6 +152,13 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("ErrValidation %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrNoChanges))
 	add("freshBaseScopeError %w ErrNoChanges", fmt.Errorf("%w: %w", &freshBaseScopeError{TenantID: goldenTenant, Put: true}, gitops.ErrNoChanges))
 	add("ErrMergeFailed %w merge error", fmt.Errorf("%w for %s: %w", gitops.ErrMergeFailed, goldenTenant, errors.New("yaml: line 3: mapping values are not allowed")))
+	// Two kinds the entries judge in different orders (#3226: errCtx.stages):
+	// a conf.d scan or a stranded tree wrapping the git error that stopped it
+	// (gitops' prResolveOnBase, ensureNotDeclaredElsewhereIn, leavePRBranch).
+	add("ErrTenantTreeScan %w ErrWriteOverloaded", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrWriteOverloaded))
+	add("ErrTenantTreeScan %w ErrGitTimeout", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrGitTimeout))
+	add("ErrTenantTreeScan %w ErrTreeNotOnBase", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrTreeNotOnBase))
+	add("ErrTreeNotOnBase %w ErrWriteOverloaded", fmt.Errorf("%w: %w", gitops.ErrTreeNotOnBase, gitops.ErrWriteOverloaded))
 
 	// Typed errors.
 	add("PreconditionError{Current=API file hash}", &gitops.PreconditionError{TenantID: goldenTenant, Expected: "0123456789abcdef", Current: apiHash})

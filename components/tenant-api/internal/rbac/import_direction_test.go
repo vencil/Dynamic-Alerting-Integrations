@@ -4,13 +4,15 @@ package rbac
 // rule declares in .golangci.yml: the domain packages must not import the HTTP
 // handler layer (#1870).
 //
-// Where it bites: handler already depends on all five packages below, so a
-// non-test file in one of them importing handler is an import cycle the
-// compiler rejects on its own. What depguard and this test add is the rest —
-// a new subpackage under a domain directory, and an external `_test` package.
+// Where it bites: handler already depends on most of the packages the rule
+// names, so a non-test file in one of them importing handler is an import
+// cycle the compiler rejects on its own. What depguard and this test add is
+// the rest — a new subpackage under a domain directory, an external `_test`
+// package, and a domain package handler does not (yet) import.
 //
-// depguard enforces the same rule in the Go Lint job. This test does not read
-// the lint config, so dropping depguard from `linters.enable` (measured: the
+// depguard enforces the same rule in the Go Lint job. This test runs it
+// without golangci-lint: it reads the rule out of .golangci.yml (settings, not
+// `linters.enable`), so dropping depguard from `linters.enable` (measured: the
 // violation then passes golangci and fails here) does not retire the rule.
 //
 // Parity with depguard on golangci-lint 2.12.2, measured, so this test is not
@@ -22,13 +24,17 @@ package rbac
 //     subdirectories, `testdata`, and `.`/`_`-prefixed directories are
 //     skipped, as `./...` skips them.
 //
-// ⛔ Two enforcers, two package lists, deliberately independent: each covers
-// what it names, so a package is unguarded only when BOTH omit it. A new
-// domain package goes into both. ⚠️ NOT GUARDED: deleting this file together
-// with the depguard rule; and the exporter carries a byte-identical copy of
-// scanDeniedImports that nothing keeps in step.
+// #3226: ONE package list — the rule's `files:` in .golangci.yml, read here
+// (it used to be copied by hand, and the copy's prose had already drifted).
+// Every entry must be "**/internal/<dir>/**"; any other shape fails the test
+// instead of being guessed at, and the rule missing or empty fails it too.
+// ⚠️ NOT GUARDED: deleting a package from that one list unguards it for
+// both enforcers at once (the price of one list); deleting this file
+// together with the depguard rule; and the exporter carries a byte-identical
+// copy of scanDeniedImports that nothing keeps in step.
 
 import (
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -37,38 +43,134 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
-// Module-relative directories that make up the domain layer. Same set as the
-// depguard rule's `files:` globs.
-var domainPackages = []string{
-	"internal/customalerts",
-	"internal/groups",
-	"internal/rbac",
-	"internal/views",
+const handlerImportPath = "github.com/vencil/tenant-api/internal/handler"
+
+// domainRuleName is the depguard rule whose `files:` names the domain layer.
+const domainRuleName = "domain-no-handler"
+
+// domainPackages reads the module-relative directories of depguard's
+// domain-no-handler rule from root's .golangci.yml, and checks that the rule
+// denies handlerImportPath.
+func domainPackages(t *testing.T, root string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, ".golangci.yml"))
+	if err != nil {
+		t.Fatalf("read .golangci.yml: %v", err)
+	}
+	pkgs, err := parseDomainRule(raw)
+	if err != nil {
+		t.Fatalf(".golangci.yml: %v", err)
+	}
+	return pkgs
 }
 
-const handlerImportPath = "github.com/vencil/tenant-api/internal/handler"
+// parseDomainRule is domainPackages on the file's bytes.
+func parseDomainRule(raw []byte) ([]string, error) {
+	var cfg struct {
+		Linters struct {
+			Settings struct {
+				Depguard struct {
+					Rules map[string]struct {
+						Files []string `yaml:"files"`
+						Deny  []struct {
+							Pkg string `yaml:"pkg"`
+						} `yaml:"deny"`
+					} `yaml:"rules"`
+				} `yaml:"depguard"`
+			} `yaml:"settings"`
+		} `yaml:"linters"`
+	}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	rule, ok := cfg.Linters.Settings.Depguard.Rules[domainRuleName]
+	if !ok {
+		return nil, fmt.Errorf("no depguard rule %q under linters.settings.depguard.rules", domainRuleName)
+	}
+	denies := false
+	for _, d := range rule.Deny {
+		denies = denies || d.Pkg == handlerImportPath
+	}
+	if !denies {
+		return nil, fmt.Errorf("depguard rule %q does not deny %s", domainRuleName, handlerImportPath)
+	}
+	if len(rule.Files) == 0 {
+		return nil, fmt.Errorf("depguard rule %q names no files", domainRuleName)
+	}
+	var out []string
+	for _, f := range rule.Files {
+		dir, ok := strings.CutPrefix(f, "**/")
+		if ok {
+			dir, ok = strings.CutSuffix(dir, "/**")
+		}
+		if !ok || !strings.HasPrefix(dir, "internal/") || strings.ContainsAny(dir, "*?[!{") {
+			return nil, fmt.Errorf("depguard rule %q: files entry %q is not \"**/internal/<dir>/**\"; "+
+				"this guard reads only that shape", domainRuleName, f)
+		}
+		out = append(out, dir)
+	}
+	return out, nil
+}
 
 func TestDomainPackagesDoNotImportHandler(t *testing.T) {
 	t.Parallel()
 
 	root := moduleRootForGuard(t)
-	violations, scanned, err := scanDeniedImports(root, domainPackages, handlerImportPath)
+	scopes := domainPackages(t, root)
+	violations, scanned, err := scanDeniedImports(root, scopes, handlerImportPath)
 	if err != nil {
 		t.Fatalf("scanning domain packages: %v", err)
 	}
 	// A renamed or emptied package would otherwise make this pass on nothing.
-	for _, scope := range domainPackages {
+	for _, scope := range scopes {
 		if scanned[scope] == 0 {
-			t.Fatalf("%s holds no .go file this guard reads; update domainPackages "+
-				"(and depguard's `files:`) rather than letting the scope go empty", scope)
+			t.Fatalf("%s holds no .go file this guard reads; update depguard's `files:` "+
+				"rather than letting the scope go empty", scope)
 		}
 	}
 	if len(violations) > 0 {
 		t.Errorf("domain package imports the HTTP handler layer (%s); move the shared "+
 			"piece into the domain side, or mirror it by value as middleware.go does:\n  %s",
 			handlerImportPath, strings.Join(violations, "\n  "))
+	}
+}
+
+// The rule reader against synthetic configs, both directions: a reader that
+// returns nothing would pass the main test's scan just as well.
+func TestParseDomainRule(t *testing.T) {
+	t.Parallel()
+	const head = "linters:\n  settings:\n    depguard:\n      rules:\n"
+	deny := "          deny:\n            - pkg: " + handlerImportPath + "\n"
+	cases := []struct {
+		name string
+		yml  string
+		want []string // nil: an error
+	}{
+		{"two dirs", head + "        domain-no-handler:\n          files:\n            - \"**/internal/a/**\"\n" +
+			"            - \"**/internal/b/c/**\"\n" + deny, []string{"internal/a", "internal/b/c"}},
+		{"rule missing", head + "        other:\n          files:\n            - \"**/internal/a/**\"\n" + deny, nil},
+		{"no files", head + "        domain-no-handler:\n" + deny, nil},
+		{"does not deny handler", head + "        domain-no-handler:\n          files:\n            - \"**/internal/a/**\"\n" +
+			"          deny:\n            - pkg: net/http\n", nil},
+		{"negated entry", head + "        domain-no-handler:\n          files:\n            - \"!**/internal/a/x_test.go\"\n" + deny, nil},
+		{"glob inside", head + "        domain-no-handler:\n          files:\n            - \"**/internal/a*/**\"\n" + deny, nil},
+		{"outside internal", head + "        domain-no-handler:\n          files:\n            - \"**/cmd/**\"\n" + deny, nil},
+	}
+	for _, tc := range cases {
+		got, err := parseDomainRule([]byte(tc.yml))
+		if tc.want == nil {
+			if err == nil {
+				t.Errorf("%s: no error, got %v", tc.name, got)
+			}
+			continue
+		}
+		if err != nil || strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: got %v, %v; want %v", tc.name, got, err, tc.want)
+		}
 	}
 }
 
