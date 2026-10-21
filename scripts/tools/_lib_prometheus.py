@@ -13,6 +13,41 @@ import urllib.request
 from typing import Any, Optional
 
 from _lib_constants import _ALLOWED_SCHEMES
+# No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
+from _lib_exitcodes import CallerError
+
+
+class QueryError(CallerError):
+    """A query a tool asked for and did not get a usable answer to (#3133).
+
+    Raised for every way the source can fail to answer: no connection, an
+    HTTP error, ``status`` other than ``success``, and a ``success`` body
+    whose shape is not what the query returns (``malformed <source>
+    response: …``). Each of these used to come back as an empty result
+    somewhere, which reads as "no data" — a measurement that never happened.
+
+    It is a named caller error: uncaught, it ends the process at rc 2 with
+    one ``ERROR: <source> query failed: <message>`` line on stderr and, in
+    ``--json`` mode, a ``caller_error`` envelope whose ``reason`` is
+    ``<source>_query_error`` (``prometheus_query_error`` /
+    ``alertmanager_query_error``). A tool that tolerates a failed query
+    must say so with an explicit ``except QueryError``.
+
+    The message is the error text as received (or the shape defect);
+    *source* (``"Prometheus"`` / ``"Alertmanager"``) names who failed.
+    """
+
+    reason = "prometheus_query_error"
+
+    def __init__(self, message: str, reason: Optional[str] = None, *,
+                 source: str = "Prometheus") -> None:
+        super().__init__(message, reason if reason is not None
+                         else f"{source.lower()}_query_error")
+        self.source = source
+
+    @property
+    def error_line(self) -> str:
+        return f"ERROR: {self.source} query failed: {self}"
 
 
 def _validate_url_scheme(url: str) -> Optional[str]:
@@ -290,15 +325,8 @@ def query_prometheus_range(
         :func:`query_prometheus_instant`, including the literal
         ``"Unknown Prometheus error"`` fallback).
     """
-    url: str = f"{prom_url}/api/v1/query_range"
-    params: str = urllib.parse.urlencode({
-        "query": promql,
-        "start": f"{start:.0f}",
-        "end": f"{end:.0f}",
-        "step": step,
-    })
-    full_url: str = f"{url}?{params}"
-    data, err = http_get_json(full_url, timeout=timeout)
+    data, err = http_get_json(_range_url(prom_url, promql, start, end, step),
+                              timeout=timeout)
     # Guard non-dict JSON bodies ("null" / "[]" / "0" from a misrouted
     # endpoint): http_get_json parses them fine, but .get() would raise.
     if err or not isinstance(data, dict):
@@ -306,3 +334,139 @@ def query_prometheus_range(
     if data.get("status") != "success":
         return None, data.get("error", "Unknown Prometheus error")
     return data.get("data", {}).get("result", []), None
+
+
+def _range_url(prom_url: str, promql: str, start: float, end: float, step: Any) -> str:
+    params: str = urllib.parse.urlencode({
+        "query": promql,
+        "start": f"{start:.0f}",
+        "end": f"{end:.0f}",
+        "step": step,
+    })
+    return f"{prom_url}/api/v1/query_range?{params}"
+
+
+def _malformed(source: str, defect: str) -> QueryError:
+    return QueryError(f"malformed {source} response: {defect}", source=source)
+
+
+def _matrix_rows(body: Any) -> list[dict[str, Any]]:
+    """The rows of a ``query_range`` answer, or ``QueryError``.
+
+    A ``success`` body must hold ``data`` (an object) with ``resultType:
+    matrix`` and ``result`` a list whose every row is an object with a
+    ``values`` and/or ``histograms`` list of ``[timestamp, sample]`` pairs
+    (and, when present, a ``metric`` object). One row that is not counts for the whole answer:
+    a tool reading the rows that are fine would report the others as
+    absent (#3074).
+    """
+    if not isinstance(body, dict):
+        raise _malformed("Prometheus", "body is not a JSON object")
+    if body.get("status") != "success":
+        raise QueryError(str(body.get("error", "Unknown Prometheus error")))
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise _malformed("Prometheus", "'data' is missing or not an object")
+    if data.get("resultType") != "matrix":
+        raise _malformed("Prometheus",
+                         f"resultType is {data.get('resultType')!r}, expected 'matrix'")
+    rows = data.get("result")
+    if not isinstance(rows, list):
+        raise _malformed("Prometheus", "'data.result' is missing or not a list")
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise _malformed("Prometheus", f"result[{i}] is not an object")
+        if not isinstance(row.get("metric", {}), dict):
+            raise _malformed("Prometheus", f"result[{i}].metric is not an object")
+        # A matrix row carries float samples (`values`), native-histogram
+        # samples (`histograms`), or both: the API omits the one it has none
+        # of. The tools read only `values` and skip a row without it, so a
+        # histogram-only row is a real, answered row — not a defect.
+        present = [k for k in ("values", "histograms") if k in row]
+        if not present:
+            raise _malformed("Prometheus",
+                             f"result[{i}] has neither 'values' nor 'histograms'")
+        for key in present:
+            samples = row[key]
+            if not isinstance(samples, list):
+                raise _malformed("Prometheus", f"result[{i}].{key} is not a list")
+            for sample in samples:
+                if not (isinstance(sample, list) and len(sample) == 2):
+                    raise _malformed("Prometheus",
+                                     f"result[{i}].{key} holds {sample!r:.40}, "
+                                     "expected [timestamp, sample]")
+    return rows
+
+
+def prometheus_range(
+    prom_url: str,
+    promql: str,
+    start: float,
+    end: float,
+    step: Any,
+    *,
+    timeout: int = 30,
+) -> list[dict[str, Any]]:
+    """Execute a Prometheus range query; return its rows or raise.
+
+    Same request as :func:`query_prometheus_range` (one percent-encoding
+    point, #1112), but a query that was not answered is never a value.
+
+    Returns:
+        The matrix rows — each a dict with ``values`` (a list of
+        ``[timestamp, value]``) and/or ``histograms`` (native-histogram
+        samples), and usually ``metric``. A caller reading float samples
+        uses ``row.get("values", [])``: a histogram-only row has none. ``[]`` only when
+        Prometheus answered with an empty matrix.
+
+    Raises:
+        QueryError: no connection, an HTTP error, ``status`` other than
+            ``success`` (the message is Prometheus's ``error``), or a
+            ``success`` body of the wrong shape (``malformed Prometheus
+            response: …``, see :func:`_matrix_rows`).
+    """
+    data, err = http_get_json(_range_url(prom_url, promql, start, end, step),
+                              timeout=timeout)
+    if err:
+        raise QueryError(err)
+    return _matrix_rows(data)
+
+
+def alertmanager_alerts(
+    am_url: str,
+    *,
+    filters: tuple[str, ...] = (),
+    timeout: int = 15,
+) -> list[dict[str, Any]]:
+    """Alertmanager's ``/api/v2/alerts``; return the alerts or raise.
+
+    Args:
+        am_url: Alertmanager base URL.
+        filters: label matchers (``'tenant=db-a'``), each sent as one
+            ``filter`` parameter, percent-encoded here.
+        timeout: socket timeout in seconds.
+
+    Returns:
+        The alerts, each a dict (``labels``, when present, an object).
+        ``[]`` only when Alertmanager answered with an empty list.
+
+    Raises:
+        QueryError: (``source="Alertmanager"``, reason
+            ``alertmanager_query_error``) no connection, an HTTP error, or
+            a body that is not a list of alert objects — an Alertmanager
+            that did not answer is not "no alerts" (#3073).
+    """
+    url = f"{am_url}/api/v2/alerts"
+    if filters:
+        url += "?" + urllib.parse.urlencode([("filter", f) for f in filters])
+    data, err = http_get_json(url, timeout=timeout)
+    if err:
+        raise QueryError(err, source="Alertmanager")
+    if not isinstance(data, list):
+        raise _malformed("Alertmanager", "body is not a JSON array")
+    for i, alert in enumerate(data):
+        if not isinstance(alert, dict):
+            raise _malformed("Alertmanager", f"alert[{i}] is not an object")
+        if not isinstance(alert.get("labels", {}), dict):
+            raise _malformed("Alertmanager", f"alert[{i}].labels is not an object")
+    return data

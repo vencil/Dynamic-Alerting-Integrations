@@ -23,7 +23,6 @@ import sys
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
-from urllib.parse import quote
 
 # ---------------------------------------------------------------------------
 # Imports from shared library
@@ -31,10 +30,11 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
+    QueryError,
+    alertmanager_alerts,
     format_json_report,
-    http_get_json,
     parse_duration_seconds,
-    query_prometheus_range,
+    prometheus_range,
     safe_label,
 )
 
@@ -46,7 +46,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope)
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
+    disarm_crash_envelope)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
@@ -63,14 +64,6 @@ GRADE_GOOD = "GOOD"
 GRADE_WARN = "WARN"
 GRADE_BAD = "BAD"
 
-
-
-class PrometheusQueryError(RuntimeError):
-    """ALERTS range query 失敗（#3065）。
-
-    以前這裡收斂成 ``[]``，與「期間內沒有任何 firing」分不開：報告全 GOOD、
-    ``--ci`` rc 0。現在往上拋，由 :func:`main` 轉成 ``EXIT_CALLER_ERROR``。
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +142,10 @@ def query_prometheus_alerts(
         Prometheus range query 結果清單。
 
     Raises:
-        PrometheusQueryError: 查詢失敗（連線、HTTP 非 2xx、``status`` 非
-            success）。訊息是錯誤原文（#3065）。
+        QueryError: 查詢沒量成（連線、HTTP 非 2xx、``status`` 非 success、
+            成功回應但形狀不對）。訊息是錯誤原文（#3065、#3133）。
+        CallerError: ``tenant`` 不合法（#3073：以前回 ``[]``，讀起來像
+            「沒有 firing」）。
     """
     end_ts = time.time()
     start_ts = end_ts - period_seconds
@@ -158,21 +153,23 @@ def query_prometheus_alerts(
 
     label_filter = '{alertstate="firing"}'
     if tenant:
-        if not is_valid_tenant_id(tenant):
-            return []
+        _require_valid_tenant(tenant)
         label_filter = f'{{alertstate="firing",tenant="{tenant}"}}'
 
     query = f"{metric}{label_filter}"
-    # Fetch core delegated to _lib_prometheus.query_prometheus_range (ROI r3
-    # W1): the lib percent-encodes the whole param set — the raw PromQL
-    # carries `{`, `}` and `"`, which must not be interpolated into a URL
-    # unescaped (#1112 InvalidURL bug-class). #3065: an error is raised, not
-    # collapsed into [] — an empty result reads as "nothing fired".
-    result, err = query_prometheus_range(
-        prom_url, query, start_ts, end_ts, step, timeout=timeout)
-    if err:
-        raise PrometheusQueryError(err)
-    return result
+    # Fetch core and response-shape check live in _lib_prometheus (ROI r3
+    # W1, #3133): the lib percent-encodes the whole param set — the raw
+    # PromQL carries `{`, `}` and `"` (#1112 InvalidURL bug-class) — and
+    # raises QueryError for a query it did not get an answer to, so it is
+    # never collapsed into [] (#3065) — an empty result reads as "nothing fired".
+    return prometheus_range(prom_url, query, start_ts, end_ts, step, timeout=timeout)
+
+
+def _require_valid_tenant(tenant: str) -> None:
+    """``tenant`` goes into a PromQL / Alertmanager matcher: an invalid one
+    is a caller error, not an empty result (#3073)."""
+    if not is_valid_tenant_id(tenant):
+        raise CallerError(f"invalid tenant name '{tenant}' ({tenant_id_rule()[1]})")
 
 
 def query_alertmanager_alerts(
@@ -192,40 +189,20 @@ def query_alertmanager_alerts(
 
     Returns:
         Alert 清單。
+
+    Raises:
+        QueryError: Alertmanager 沒回答（連線、HTTP 錯誤、回應不是 alert
+            物件的 list），reason ``alertmanager_query_error``（#3073：以前
+            回 ``[]``，讀起來像「沒有被抑制的告警」）。
+        CallerError: ``tenant`` 不合法。
     """
-    params = []
+    filters: list[str] = []
     if state:
-        params.append(f"filter=alertstate%3D{quote(state)}")
+        filters.append(f"alertstate={state}")
     if tenant:
-        if not is_valid_tenant_id(tenant):
-            return []
-        params.append(f"filter=tenant%3D{quote(tenant)}")
-
-    url = f"{am_url}/api/v2/alerts"
-    if params:
-        url += "?" + "&".join(params)
-
-    data, err = http_get_json(url, timeout=timeout)
-    if err or not data:
-        return []
-    if isinstance(data, list):
-        return data
-    return []
-
-
-def query_alertmanager_silences(
-    am_url: str,
-    *,
-    timeout: int = 15,
-) -> list[dict[str, Any]]:
-    """查詢 Alertmanager 活躍的 silence 規則。"""
-    url = f"{am_url}/api/v2/silences"
-    data, err = http_get_json(url, timeout=timeout)
-    if err or not data:
-        return []
-    if isinstance(data, list):
-        return [s for s in data if s.get("status", {}).get("state") == "active"]
-    return []
+        _require_valid_tenant(tenant)
+        filters.append(f"tenant={tenant}")
+    return alertmanager_alerts(am_url, filters=tuple(filters), timeout=timeout)
 
 
 def compute_noise_score(fire_count: int, period_days: int) -> tuple[int, str]:
@@ -733,13 +710,15 @@ def main() -> None:
             tenant=args.tenant,
             am_url=args.alertmanager,
         )
-    except PrometheusQueryError as exc:
-        # #3065: 查詢失敗不是「沒有警報」— 不出報告、不走 CI gate。
-        print(f"Error: Prometheus query failed: {safe_label(str(exc))}",
+    except QueryError as exc:
+        # #3065 / #3073: 有要求的來源（Prometheus，或給了 --alertmanager 時的
+        # Alertmanager）沒量成，不是「沒有警報」／「沒有被抑制」— 不出報告、
+        # 不走 CI gate。
+        print(f"Error: {exc.source} query failed: {safe_label(str(exc))}",
               file=sys.stderr)
         if args.json_output:
             print(format_json_report(empty_report(
-                args.period, "caller_error", "prometheus_query_error", str(exc))))
+                args.period, "caller_error", exc.reason, str(exc))))
         sys.exit(EXIT_CALLER_ERROR)
 
     # 產生報告

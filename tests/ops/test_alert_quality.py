@@ -325,9 +325,9 @@ class TestPrintTextReport:
 
 # ── Prometheus query mock ──────────────────────────────────────
 # W1: query_prometheus_alerts 的 fetch core 收斂進
-# _lib_prometheus.query_prometheus_range，HTTP seam 改 patch
-# _lib_prometheus.http_get_json（Alertmanager 路徑仍走 aq.http_get_json，
-# 那些測試不變）。
+# _lib_prometheus.prometheus_range，HTTP seam 改 patch
+# _lib_prometheus.http_get_json。#3133 起 Alertmanager 路徑也走 lib
+# （_lib_prometheus.alertmanager_alerts），同一個 seam。
 
 class TestQueryPrometheusAlerts:
     """Prometheus 查詢 mock 測試。"""
@@ -337,7 +337,7 @@ class TestQueryPrometheusAlerts:
         def mock_get(url, timeout=10):
             return {
                 "status": "success",
-                "data": {"result": [{"metric": {"alertname": "X"}, "values": [[1, "1"]]}]},
+                "data": {"resultType": "matrix", "result": [{"metric": {"alertname": "X"}, "values": [[1, "1"]]}]},
             }, None
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
@@ -347,7 +347,7 @@ class TestQueryPrometheusAlerts:
         """HTTP 錯誤往上拋、帶錯誤原文（#3065：以前收斂成空清單）。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=10: (None, "refused"))
-        with pytest.raises(aq.PrometheusQueryError, match="refused"):
+        with pytest.raises(aq.QueryError, match="refused"):
             aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
 
     def test_api_error_raises(self, monkeypatch):
@@ -355,7 +355,7 @@ class TestQueryPrometheusAlerts:
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=10: ({"status": "error",
                                                       "error": "bad query"}, None))
-        with pytest.raises(aq.PrometheusQueryError, match="bad query"):
+        with pytest.raises(aq.QueryError, match="bad query"):
             aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
 
 
@@ -365,34 +365,34 @@ class TestQueryAlertmanagerAlerts:
     """Alertmanager 查詢 mock 測試。"""
 
     def test_success(self, monkeypatch):
-        """成功查詢回傳清單。"""
-        monkeypatch.setattr(aq, "http_get_json",
-                            lambda url, timeout=15: ([{"labels": {"alertname": "X"}}], None))
-        result = aq.query_alertmanager_alerts("http://am")
+        """成功查詢回傳清單；state／tenant 各成一個 filter 參數。"""
+        seen = []
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=15: (seen.append(url) or
+                                                     ([{"labels": {"alertname": "X"}}], None)))
+        result = aq.query_alertmanager_alerts("http://am", tenant="db-x", state="suppressed")
         assert len(result) == 1
+        assert seen == ["http://am/api/v2/alerts"
+                        "?filter=alertstate%3Dsuppressed&filter=tenant%3Ddb-x"]
 
-    def test_error_returns_empty(self, monkeypatch):
-        """錯誤回傳空清單。"""
-        monkeypatch.setattr(aq, "http_get_json",
-                            lambda url, timeout=15: (None, "refused"))
-        result = aq.query_alertmanager_alerts("http://am")
-        assert result == []
+    def test_empty_list_is_empty(self, monkeypatch):
+        """control：Alertmanager 回空 list 才是「沒有告警」。"""
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=15: ([], None))
+        assert aq.query_alertmanager_alerts("http://am") == []
 
-
-class TestQueryAlertmanagerSilences:
-    """Alertmanager silence 查詢測試。"""
-
-    def test_filters_active_only(self, monkeypatch):
-        """只回傳 active 狀態的 silence。"""
-        silences = [
-            {"id": "1", "status": {"state": "active"}},
-            {"id": "2", "status": {"state": "expired"}},
-        ]
-        monkeypatch.setattr(aq, "http_get_json",
-                            lambda url, timeout=15: (silences, None))
-        result = aq.query_alertmanager_silences("http://am")
-        assert len(result) == 1
-        assert result[0]["id"] == "1"
+    @pytest.mark.parametrize("answer", [
+        (None, "refused"), ({}, None), ({"alerts": []}, None), (["x"], None),
+    ], ids=["error", "empty-body", "object-body", "item-not-object"])
+    def test_not_answered_raises(self, monkeypatch, answer):
+        """#3073：錯誤或不是 alert 物件的 list → QueryError（以前回 []，
+        讀成「沒有被抑制的告警」）。"""
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=15: answer)
+        with pytest.raises(aq.QueryError) as exc:
+            aq.query_alertmanager_alerts("http://am")
+        assert (exc.value.source, exc.value.reason) == ("Alertmanager",
+                                                         "alertmanager_query_error")
 
 
 # ── analyze_from_prometheus ────────────────────────────────────
@@ -409,7 +409,7 @@ class TestAnalyzeFromPrometheus:
         ]
         result_data = {
             "status": "success",
-            "data": {"result": [{
+            "data": {"resultType": "matrix", "result": [{
                 "metric": {"alertname": "HighConn", "tenant": "db-a"},
                 "values": values,
             }]},
@@ -426,7 +426,7 @@ class TestAnalyzeFromPrometheus:
         """查詢成功但無資料 → 空清單。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
-                                                      "data": {"result": []}}, None))
+                                                      "data": {"resultType": "matrix", "result": []}}, None))
         metrics = aq.analyze_from_prometheus("http://prom", 86400)
         assert metrics == []
 
@@ -434,7 +434,7 @@ class TestAnalyzeFromPrometheus:
         """查詢失敗不再被當成無資料（#3065）。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (None, "refused"))
-        with pytest.raises(aq.PrometheusQueryError):
+        with pytest.raises(aq.QueryError):
             aq.analyze_from_prometheus("http://prom", 86400)
 
 
@@ -482,7 +482,7 @@ class TestMain:
         """--json 輸出有效 JSON。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
-                                                      "data": {"result": []}}, None))
+                                                      "data": {"resultType": "matrix", "result": []}}, None))
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--json",
         ])
@@ -496,7 +496,7 @@ class TestMain:
         """--markdown 輸出包含表格。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
-                                                      "data": {"result": []}}, None))
+                                                      "data": {"resultType": "matrix", "result": []}}, None))
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--markdown",
         ])
@@ -508,7 +508,7 @@ class TestMain:
         """CI 模式：無 BAD 時 exit code 0。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
-                                                      "data": {"result": []}}, None))
+                                                      "data": {"resultType": "matrix", "result": []}}, None))
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--ci",
         ])
@@ -524,7 +524,7 @@ class TestMain:
             values.append([now - (100 - i) * 60, str(i % 2)])  # 交替 0/1
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: ({"status": "success",
-                                                      "data": {"result": [{
+                                                      "data": {"resultType": "matrix", "result": [{
                                                           "metric": {"alertname": "Noisy", "tenant": "t"},
                                                           "values": values,
                                                       }]}}, None))
@@ -550,7 +550,7 @@ class TestMain:
 
         def mock_get(url, timeout=30):
             queries_made.append(url)
-            return {"status": "success", "data": {"result": []}}, None
+            return {"status": "success", "data": {"resultType": "matrix", "result": []}}, None
 
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         monkeypatch.setattr("sys.argv", [
@@ -572,23 +572,34 @@ class TestTenantWhitelistRejectsTrailingNewline:
     Three call sites, one gate: each is pinned with the same probe and an
     accept control so a gate that rejects everything cannot pass."""
 
+    # #3073: a rejected tenant is a caller error, not an empty result.
+    @staticmethod
+    def _call(fn, tenant):
+        try:
+            fn(tenant)
+        except aq.CallerError as exc:
+            assert not isinstance(exc, aq.QueryError), exc
+            assert "invalid tenant name" in str(exc), exc
+            return False
+        return True
+
     @pytest.mark.parametrize("tenant,accepted", [("alpha", True), ("alpha\n", False)])
     def test_prometheus_query_gate(self, monkeypatch, tenant, accepted):
         seen = []
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (seen.append(url) or
-                                                     ({"status": "success", "data": {"result": []}}, None)))
-        aq.query_prometheus_alerts("http://prom", "ALERTS", 3600, tenant=tenant)
-        assert bool(seen) is accepted, seen
+                                                     ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)))
+        ran = self._call(lambda t: aq.query_prometheus_alerts(
+            "http://prom", "ALERTS", 3600, tenant=t), tenant)
+        assert ran is accepted and bool(seen) is accepted, seen
 
     @pytest.mark.parametrize("tenant,accepted", [("alpha", True), ("alpha\n", False)])
     def test_alertmanager_query_gate(self, monkeypatch, tenant, accepted):
         seen = []
-        # imported by name into the module, so patch the module's binding
-        monkeypatch.setattr(aq, "http_get_json",
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (seen.append(url) or ([], None)))
-        aq.query_alertmanager_alerts("http://am", tenant=tenant)
-        assert bool(seen) is accepted, seen
+        ran = self._call(lambda t: aq.query_alertmanager_alerts("http://am", tenant=t), tenant)
+        assert ran is accepted and bool(seen) is accepted, seen
 
     # ADR-035: the whitelist is the one tenant-id rule now. `Team_A` passed
     # the tool's own `^[a-zA-Z0-9_-]+$`; the shared DNS-1123 rule refuses it.
@@ -597,8 +608,9 @@ class TestTenantWhitelistRejectsTrailingNewline:
         seen = []
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=30: (seen.append(url) or
-                                                     ({"status": "success", "data": {"result": []}}, None)))
-        aq.query_prometheus_alerts("http://prom", "ALERTS", 3600, tenant=tenant)
+                                                     ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)))
+        assert not self._call(lambda t: aq.query_prometheus_alerts(
+            "http://prom", "ALERTS", 3600, tenant=t), tenant)
         assert not seen, seen
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--tenant", tenant,
@@ -690,7 +702,7 @@ def _run_aq(url, *extra):
         capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
 
 
-class TestPrometheusQueryErrorIsCallerError:
+class TestQueryErrorIsCallerError:
     """#3065：query_range 失敗以前被收斂成「沒有警報」— 報告全 GOOD、
     `--ci` rc 0。現在 rc 2，stderr 帶錯誤原文，`--json` 吐 caller_error envelope。"""
 
