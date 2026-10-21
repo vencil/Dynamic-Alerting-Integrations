@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -51,44 +50,102 @@ func runPT(t *testing.T, stdin string, args ...string) (int, map[string]any, str
 	return code, doc, errOut.String()
 }
 
+// entriesByPath is the document's "entries", keyed by path; a path listed
+// twice fails the test.
+func entriesByPath(t *testing.T, doc map[string]any) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, raw := range doc["entries"].([]any) {
+		e := raw.(map[string]any)
+		p := e["path"].(string)
+		if _, dup := out[p]; dup {
+			t.Fatalf("%s: listed twice", p)
+		}
+		out[p] = e
+	}
+	return out
+}
+
+func stringsOf(v any) []string {
+	out := []string{}
+	for _, r := range v.([]any) {
+		out = append(out, r.(string))
+	}
+	return out
+}
+
+// readersOf is who reads each path a reader tries — every path with content
+// in "files" or a "problem" (what v1 called "selected").
 func readersOf(doc map[string]any) map[string][]string {
 	out := map[string][]string{}
-	for p, rs := range doc["selected"].(map[string]any) {
-		out[p] = []string{}
-		for _, r := range rs.([]any) {
-			out[p] = append(out[p], r.(string))
+	files := doc["files"].(map[string]any)
+	for _, raw := range doc["entries"].([]any) {
+		e := raw.(map[string]any)
+		p := e["path"].(string)
+		if _, ok := files[p]; ok || e["problem"] != nil {
+			out[p] = stringsOf(e["readers"])
 		}
 	}
 	return out
 }
 
+// unreadableKinds is path → problem kind, for every entry with a problem.
 func unreadableKinds(doc map[string]any) map[string]string {
 	out := map[string]string{}
-	for _, u := range doc["unreadable"].([]any) {
-		m := u.(map[string]any)
-		out[m["file"].(string)] = m["kind"].(string)
+	for _, raw := range doc["entries"].([]any) {
+		e := raw.(map[string]any)
+		if pr, ok := e["problem"].(map[string]any); ok {
+			out[e["path"].(string)] = pr["kind"].(string)
+		}
 	}
 	return out
 }
 
-// checkSelectedInvariant: the keys of "selected" are the keys of "files" plus
-// the files of "unreadable", and the two do not overlap.
+// notReadOf is every entry no reader reads, as {file, reason}, in path order.
+func notReadOf(doc map[string]any) []any {
+	out := []any{}
+	for _, raw := range doc["entries"].([]any) {
+		e := raw.(map[string]any)
+		if r, ok := e["not_read"].(string); ok {
+			out = append(out, map[string]any{"file": e["path"], "reason": r})
+		}
+	}
+	return out
+}
+
+// checkSelectedInvariant: every entry carries every field; a config entry
+// with readers has its content in "files" or a problem, never both; every
+// path in "files" is an entry's; an entry with no reader says why.
 func checkSelectedInvariant(t *testing.T, doc map[string]any) {
 	t.Helper()
-	var sel, got []string
-	for p := range doc["selected"].(map[string]any) {
-		sel = append(sel, p)
+	files := doc["files"].(map[string]any)
+	byPath := entriesByPath(t, doc)
+	for p := range files {
+		if _, ok := byPath[p]; !ok {
+			t.Errorf("files[%s]: no entry", p)
+		}
 	}
-	for p := range doc["files"].(map[string]any) {
-		got = append(got, p)
-	}
-	for p := range unreadableKinds(doc) {
-		got = append(got, p)
-	}
-	sort.Strings(sel)
-	sort.Strings(got)
-	if !reflect.DeepEqual(sel, got) {
-		t.Fatalf("selected %v, files+unreadable %v", sel, got)
+	for p, e := range byPath {
+		for _, k := range []string{"path", "depth", "class", "tenant_named", "defaults_document",
+			"readers", "not_read", "role", "problem"} {
+			if _, ok := e[k]; !ok {
+				t.Errorf("%s: no %q", p, k)
+			}
+		}
+		if len(e) != 9 {
+			t.Errorf("%s: %d fields, want 9: %v", p, len(e), e)
+		}
+		_, hasContent := files[p]
+		readers := stringsOf(e["readers"])
+		if (len(readers) == 0) != (e["not_read"] != nil) {
+			t.Errorf("%s: readers %v, not_read %v", p, readers, e["not_read"])
+		}
+		if hasContent && e["problem"] != nil {
+			t.Errorf("%s: content and a problem", p)
+		}
+		if doc["mode"] == "tree" && e["role"] == "config" && len(readers) > 0 && !hasContent && e["problem"] == nil {
+			t.Errorf("%s: a config file a reader reads, with neither content nor a problem", p)
+		}
 	}
 }
 
@@ -142,7 +199,7 @@ func TestParseTree_Readers(t *testing.T) {
 	// (the generator names it and reads only the selected one) — so a broken
 	// one is not reported unreadable.
 	unsel := func(f string) any { return map[string]any{"file": f, "reason": notReadUnselectedCarrier} }
-	if got := doc["not_read"]; !reflect.DeepEqual(got, []any{
+	if got := notReadOf(doc); !reflect.DeepEqual(got, []any{
 		unsel("_defaults.yml"), unsel("multi/_defaults.YAML"), unsel("multi/_defaults.yml"), unsel("team/_defaults.yml")}) {
 		t.Fatalf("not_read %v", got)
 	}
@@ -235,7 +292,7 @@ func TestParseTree_FileMode(t *testing.T) {
 		if got := readersOf(doc)[tc.path]; !reflect.DeepEqual(got, tc.readers) {
 			t.Errorf("%s: readers %v, want %v", tc.path, got, tc.readers)
 		}
-		nr := doc["not_read"].([]any)
+		nr := notReadOf(doc)
 		if (tc.notRead == "") != (len(nr) == 0) || tc.notRead != "" && nr[0].(map[string]any)["reason"] != tc.notRead {
 			t.Errorf("%s: not_read %v, want %q", tc.path, nr, tc.notRead)
 		}
@@ -271,7 +328,7 @@ func TestParseTree_ExitCodes(t *testing.T) {
 	if code := run([]string{parseTreeCmd, "-h"}, &out, &errOut); code != exitOK {
 		t.Fatalf("-h: exit %d", code)
 	}
-	for _, kind := range []string{"non_specific_tag", "decode_error", "da-guard.parse-tree/v1"} {
+	for _, kind := range []string{"non_specific_tag", "decode_error", "da-guard.parse-tree/v2", "unlistable_dir", "not_a_file"} {
 		if !strings.Contains(errOut.String(), kind) {
 			t.Errorf("-h does not document %q", kind)
 		}
@@ -331,12 +388,7 @@ func TestParseTree_FileModeOnDisk(t *testing.T) {
 		}
 	}
 	_, tree, _ := runPT(t, "", "--config-dir", root)
-	treeUnreadable := map[string]map[string]any{}
-	for _, u := range tree["unreadable"].([]any) {
-		m := u.(map[string]any)
-		treeUnreadable[m["file"].(string)] = m
-	}
-	treeReaders := readersOf(tree)
+	treeEntries := entriesByPath(t, tree)
 	both := []string{"exporter", "generator"}
 	for _, tc := range []struct{ path, notRead, kind string }{
 		{"extlink/a.yaml", notReadParentNotWalked, ""},
@@ -353,26 +405,26 @@ func TestParseTree_FileModeOnDisk(t *testing.T) {
 	} {
 		_, doc, _ := runPT(t, "a: 1\n", "--config-dir", root, "--path", tc.path, "--input", "-")
 		readers := readersOf(doc)[tc.path]
-		nr := doc["not_read"].([]any)
+		nr := notReadOf(doc)
+		checkSelectedInvariant(t, doc)
 		switch {
 		case tc.notRead != "":
 			if len(readers) != 0 || len(nr) != 1 || nr[0].(map[string]any)["reason"] != tc.notRead {
 				t.Errorf("%s: readers %v, not_read %v; want %s", tc.path, readers, nr, tc.notRead)
 			}
 		case tc.kind != "":
-			// The same entry, readers and message as tree mode's.
-			got := doc["unreadable"].([]any)
-			want := treeUnreadable[tc.path]
+			// The same entry as tree mode's, every field.
+			got := doc["entries"].([]any)
+			want := treeEntries[tc.path]
 			if len(got) != 1 || want == nil || !reflect.DeepEqual(got[0], any(want)) ||
-				want["kind"] != tc.kind || !reflect.DeepEqual(readers, treeReaders[tc.path]) || len(nr) != 0 {
-				t.Errorf("%s: unreadable %v readers %v; tree mode %v readers %v; want kind %s",
-					tc.path, got, readers, want, treeReaders[tc.path], tc.kind)
+				want["problem"].(map[string]any)["kind"] != tc.kind {
+				t.Errorf("%s: entries %v; tree mode %v; want kind %s", tc.path, got, want, tc.kind)
 			}
 			if len(doc["files"].(map[string]any)) != 0 {
 				t.Errorf("%s: the text was read", tc.path)
 			}
 		default:
-			if len(nr) != 0 || !reflect.DeepEqual(readers, both) || len(doc["unreadable"].([]any)) != 0 {
+			if len(nr) != 0 || !reflect.DeepEqual(readers, both) || len(unreadableKinds(doc)) != 0 {
 				t.Errorf("%s: readers %v, not_read %v; want read by both", tc.path, readers, nr)
 			}
 		}

@@ -126,6 +126,23 @@ func IsDefaults(base string) bool {
 	return lower == "_defaults.yaml" || lower == "_defaults.yml"
 }
 
+// IsDefaultsDocument reports whether `base` names a platform-defaults
+// DOCUMENT: a scanned name that starts with `_defaults`, in any case —
+// `_defaults.yaml`, `_DEFAULTS.YML`, and `_defaults-multidb.yaml` too. It is
+// the answer to "which schema is this file held to" (the platform-defaults
+// schema, docs/schemas/platform-defaults.schema.json, with the schema lint and
+// validate-config's schema rows), not to "does a chain merge it": that is
+// IsDefaults, an exact match, and `_defaults-multidb.yaml` is a document no
+// chain reads.
+//
+// ⛔ A prefix on purpose, and kept beside IsDefaults so the two questions
+// stay one decision each (#1588 collapsed them once and measured the damage).
+// `da-guard parse-tree` writes it on every entry (`defaults_document`), so a
+// Python schema reader reads it there instead of keeping a copy (#3206).
+func IsDefaultsDocument(base string) bool {
+	return IsScanned(base) && strings.HasPrefix(strings.ToLower(base), "_defaults")
+}
+
 // IsHidden reports whether the exporter's walker skips `base` outright: a
 // `.`-prefixed file is not read, a `.`-prefixed directory is pruned whole.
 //

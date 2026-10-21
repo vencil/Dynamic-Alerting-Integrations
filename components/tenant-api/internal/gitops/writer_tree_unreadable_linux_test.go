@@ -204,7 +204,7 @@ func TestTreeUnreadable_StoreFaultWinsOverDanglingLink(t *testing.T) {
 			w := newTestWriter(dir, dir)
 			err := treeVerdictVia(t, mode, w, "mx-t")
 			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{
-				{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError},
+				{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError, Missing: true},
 				{RelKey: "stuck.yaml", Reason: cfg.UnreadableSpecialFile},
 			}, true)
 			if mode == "WriteBatch" { // treeVerdictVia unwraps a per-op refusal; ask the batch itself
