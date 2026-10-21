@@ -395,7 +395,8 @@ func TestUnreadable_GuardScope_UnlistableDirBelowScopeBesideReadableTenant(t *te
 // walk cannot list follows the directory rule only: a `_`-named directory
 // beside the scope does not bear on it. Neither is exit 3 — but the route
 // generator reads the whole tree and cannot read either, so since #2904 the
-// scoped run is undetermined (exit 4, generator_unreadable), never 0.
+// scoped run is undetermined (exit 4; unreadable_outside_run since ADR-036
+// step 6, #3206), never 0.
 func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 	t.Parallel()
 	t.Run("unlistable _ directory beside the scope", func(t *testing.T) {
@@ -486,13 +487,14 @@ func TestUnreadable_CleanTree_EffectiveListsEmpty(t *testing.T) {
 	}
 }
 
-// A chain file the resolve's decode rejects stops the resolve (no tenant);
-// the path the walk could not read is still named, by effective and the
-// guard. The root `_defaults.yaml` here is one the exporter reads (its typed
-// decode skips the unknown `x`) but the defaults-chain merge does not — a
-// chain file the exporter drops for a syntax error no longer stops effective
-// (#2296, TestEffective_ChainFileTheResolveRejects_ExitsThree).
-func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
+// A root `_defaults.yaml` the exporter's typed decode read (it skips the
+// unknown `x`) and the defaults-chain merge refused used to stop the resolve
+// (no tenant). Since ADR-036 step 6 (#3206) both ask parse-tree first, which
+// refuses `!!int abc` (decode_error): the exporter drops the file and the
+// chain reads it as empty (#2296, TestEffective_ChainFileTheResolveRejects_ExitsThree),
+// so the tenants are resolved — and the path the walk could not read is
+// still named, by effective and the guard.
+func TestUnreadable_DroppedChainFileStillNamesUnreadable(t *testing.T) {
 	t.Parallel()
 	files := unreadableBase()
 	files["_defaults.yaml"] = "defaults:\n  mysql_connections: 80\nx: !!int abc\n"
@@ -508,8 +510,8 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 		t.Errorf("effective parse_failed = %v unreadable = %v, want [_defaults.yaml] %v",
 			doc.ParseFailed, doc.Unreadable, want)
 	}
-	if len(doc.Tenants) != 0 {
-		t.Errorf("effective tenants = %v, want none: the resolve stopped", keysOf(doc.Tenants))
+	if len(doc.Tenants) == 0 {
+		t.Errorf("effective tenants = none, want them resolved without the dropped file")
 	}
 
 	gcode, gdoc, gstderr := guardJSON(t, dir)
@@ -524,7 +526,7 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	}
 	_, md, _ := runOnce(t, "--config-dir", dir)
 	if !strings.Contains(md, "`tenant-c.yaml` (stat_error)") {
-		t.Errorf("md decode-stop report does not name the unreadable path:\n%s", md)
+		t.Errorf("md report does not name the unreadable path:\n%s", md)
 	}
 }
 
@@ -885,16 +887,17 @@ func TestUnreadable_GuardScope_StatDeniedIsUnreadable(t *testing.T) {
 	})
 }
 
-// mustUndetermined: exit 4, with file named generator_unreadable (#2904).
+// mustUndetermined: exit 4, with file named unreadable_outside_run (#2904;
+// generator_unreadable until ADR-036 step 6, #3206).
 func mustUndetermined(t *testing.T, code int, doc guardUnreadableOut, stderr, file string) {
 	t.Helper()
 	if code != exitUndetermined {
 		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitUndetermined, stderr)
 	}
 	for _, it := range doc.Undetermined {
-		if it.File == file && it.Reason == undeterminedGeneratorUnreadable {
+		if it.File == file && it.Reason == undeterminedUnreadableOutsideRun {
 			return
 		}
 	}
-	t.Errorf("undetermined = %v, want %s as %s", doc.Undetermined, file, undeterminedGeneratorUnreadable)
+	t.Errorf("undetermined = %v, want %s as %s", doc.Undetermined, file, undeterminedUnreadableOutsideRun)
 }

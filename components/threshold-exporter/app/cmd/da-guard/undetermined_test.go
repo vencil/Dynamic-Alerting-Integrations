@@ -335,10 +335,8 @@ func TestUndetermined_EveryReason(t *testing.T) {
 			[]string{"team/_domain_policy.yml  domain_policy"}},
 		{"routing profiles file", base(map[string]string{"team/_routing_profiles.yaml": "routing_profiles: {}\n"}),
 			[]string{"team/_routing_profiles.yaml  routing_profiles_file"}},
-		// A nested `_` file the exporter does not read (a syntax error there
-		// would be its exit 3), with a shape parse-tree refuses.
-		{"a file the generator cannot read", base(map[string]string{"team/_notes.yaml": "note: ! 1\n"}),
-			[]string{"team/_notes.yaml non_specific_tag generator_unreadable"}},
+		// A file parse-tree refuses is exit 3 since ADR-036 step 6 (#3206),
+		// not evidence: TestUndetermined_UnreadableOutsideRun.
 		{"an invalid tenant id", base(map[string]string{"tx.yaml": "tenants:\n  Tx_1:\n    mysql_connections: \"50\"\n"}),
 			[]string{"tx.yaml tenants.Tx_1 invalid_tenant_id"}},
 	}
@@ -370,6 +368,38 @@ func TestUndetermined_ScopeSeesTheWholeTree(t *testing.T) {
 	got := runJudged(t, files, "a")
 	if got.code != exitUndetermined || !reflect.DeepEqual(reasonsOf(got.undetermined), []string{"b/ty.yaml tenants.ty._routing routing_key"}) {
 		t.Errorf("exit %d, undetermined %v; want 4 naming b/ty.yaml", got.code, got.undetermined)
+	}
+}
+
+// ADR-036 step 6 (#3206): a file parse-tree refuses is one the exporter
+// drops, so a run it bears on names it under exit 3 and lists no evidence
+// for it (`generator_unreadable` is gone). Outside --scope exit 3 does not
+// name it while the route generator refuses the whole tree on it, so it is
+// evidence there (unreadable_outside_run, exit 4), never the vacuous 0. The
+// same holds for the root `_` file a scope does see: exit 3 (bears on it).
+func TestUndetermined_UnreadableOutsideRun(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml":   udDefaults,
+		"a/tx.yaml":        udTenant,
+		"team/_notes.yaml": "note: ! 1\n",
+		"empty/":           "",
+	}
+	whole := runJudged(t, files, "")
+	if whole.code != exitParseFailed || len(whole.undetermined) != 0 {
+		t.Errorf("whole tree: exit %d, undetermined %v; want 3 and no evidence", whole.code, whole.undetermined)
+	}
+	for _, scope := range []string{"team"} {
+		if got := runJudged(t, files, scope); got.code != exitParseFailed || len(got.undetermined) != 0 {
+			t.Errorf("scope %s: exit %d, undetermined %v; want 3 and no evidence", scope, got.code, got.undetermined)
+		}
+	}
+	for _, scope := range []string{"a", "empty"} {
+		got := runJudged(t, files, scope)
+		want := []string{"team/_notes.yaml non_specific_tag unreadable_outside_run"}
+		if got.code != exitUndetermined || !reflect.DeepEqual(reasonsOf(got.undetermined), want) {
+			t.Errorf("scope %s: exit %d, undetermined %q; want 4 and %q", scope, got.code, reasonsOf(got.undetermined), want)
+		}
 	}
 }
 
@@ -504,7 +534,9 @@ func TestUndetermined_ParityMatrixTreesAreNotJudged(t *testing.T) {
 					t.Errorf("routing finding %q", f)
 				}
 			}
-			if got.code != exitCallerErr && len(got.undetermined) == 0 {
+			// exit 3 (a file the exporter drops — since ADR-036 step 6,
+			// #3206, every file parse-tree refuses) is no all-clear either.
+			if got.code != exitCallerErr && got.code != exitParseFailed && len(got.undetermined) == 0 {
 				t.Errorf("the tree holds routing but the CLI run is not undetermined (exit %d)", got.code)
 			}
 		})
@@ -558,12 +590,12 @@ func TestUndetermined_EvidenceOrderIsPinned(t *testing.T) {
 		"b/tx.yaml tenants.tx duplicate_tenant",
 		"b/tx.yaml tenants.tx._routing routing_key",
 		"b/tx.yaml tenants.tx._severity_dedup routing_key",
-		"team/_notes.yaml non_specific_tag generator_unreadable",
+		"team/_notes.yaml non_specific_tag unreadable_outside_run",
 		"team/_routing_profiles.yaml  routing_profiles_file",
 	}
 	for run := 0; run < 20; run++ {
 		var errOut bytes.Buffer
-		got := reasonsOf(undeterminedEvidence(tmp, false, &errOut))
+		got := reasonsOf(undeterminedEvidence(tmp, false, nil, &errOut))
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("run %d: evidence\n%q\nwant\n%q", run, got, want)
 		}
@@ -573,14 +605,15 @@ func TestUndetermined_EvidenceOrderIsPinned(t *testing.T) {
 	}
 }
 
-// A tree the walk cannot scan at all is one generator_unreadable item for
-// ".", never an empty list (fail toward undetermined), the reason on stderr.
+// A tree the walk cannot scan at all is one unreadable_outside_run item for
+// ".", never an empty list (fail toward undetermined), the reason on stderr —
+// unless the run already names "." under exit 3.
 func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "missing")
 	var errOut bytes.Buffer
-	got := undeterminedEvidence(root, false, &errOut)
-	want := []undeterminedItem{{File: ".", Field: "read_failure", Reason: undeterminedGeneratorUnreadable}}
+	got := undeterminedEvidence(root, false, nil, &errOut)
+	want := []undeterminedItem{{File: ".", Field: "read_failure", Reason: undeterminedUnreadableOutsideRun}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("evidence %+v, want %+v", got, want)
 	}
@@ -590,7 +623,7 @@ func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
 	// The root the exporter's walk already reported: same evidence, the
 	// reason not printed a second time (#2627: named once).
 	var again bytes.Buffer
-	if got := undeterminedEvidence(root, true, &again); !reflect.DeepEqual(got, want) {
+	if got := undeterminedEvidence(root, true, nil, &again); !reflect.DeepEqual(got, want) {
 		t.Errorf("rootReported: evidence %+v, want %+v", got, want)
 	}
 	if again.Len() != 0 {

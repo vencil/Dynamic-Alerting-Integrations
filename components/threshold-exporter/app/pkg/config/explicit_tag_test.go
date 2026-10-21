@@ -15,6 +15,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // mismatchedTagFiles are tenant files the typed decode alone accepts and the
@@ -41,9 +43,15 @@ var satisfiedTagFiles = map[string]struct{ file, want string }{
 	"!!float 1.5":    {"tenants:\n  tx:\n    mysql_connections: !!float 1.5\n", "1.5"},
 	"!!float 5":      {"tenants:\n  tx:\n    mysql_connections: !!float 5\n", "5"},
 	"!!bool true":    {"tenants:\n  tx:\n    _silent_mode: !!bool true\n", "true"},
-	"local tag":      {"tenants:\n  tx:\n    mysql_connections: !custom zzleak42\n", "zzleak42"},
 	"no tag at all":  {"tenants:\n  tx:\n    mysql_connections: zzleak42\n", "zzleak42"},
 	"!!str over int": {"tenants:\n  tx:\n    mysql_connections: !!str 0x1F\n", "0x1F"},
+}
+
+// parseTreeOnlyFiles carry a tag both decodes accept and parse-tree refuses
+// (tag_not_allowed): since ADR-036 step 6 (#3206) ParseTenantFile refuses
+// them too, by parse-tree's verdict. Before it, the scalar's text was kept.
+var parseTreeOnlyFiles = map[string]string{
+	"local tag": "tenants:\n  tx:\n    mysql_connections: !custom zzleak42\n",
 }
 
 // genericOnlyFiles are the rest of what the rule rejects: the criterion is the
@@ -76,9 +84,15 @@ func assertGenericOnlyRejected(t *testing.T, files map[string]string) {
 	for name, file := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// The shape this is about: the typed decode alone accepts it.
-			if _, err := ParseConfigFile([]byte(file)); err != nil {
-				t.Fatalf("precondition: ParseConfigFile rejects it already (%v); not the #3063 shape", err)
+			// The shape this is about: the typed decode alone accepts it
+			// (parseConfigFile without the generic decode — and without
+			// parse-tree's verdict, which since ADR-036 step 6 refuses every
+			// one of these files before either decode runs).
+			if _, err := parseConfigFile([]byte(file), false); err != nil {
+				t.Fatalf("precondition: the typed decode rejects it already (%v); not the #3063 shape", err)
+			}
+			if _, err := parseConfigFile([]byte(file), true); err == nil {
+				t.Fatalf("precondition: the #3063 generic decode accepts it")
 			}
 			if _, err := decodeTenantFile([]byte(file)); err == nil {
 				t.Fatalf("precondition: the generic decode accepts it")
@@ -117,8 +131,24 @@ func TestParseTenantFile_AcceptsAnExplicitTagItsTextSatisfies(t *testing.T) {
 	}
 }
 
+// parse-tree's verdict is the stricter one: a tag both decodes accept is
+// refused when parse-tree refuses it.
+func TestParseTenantFile_RefusesWhatOnlyParseTreeRefuses(t *testing.T) {
+	t.Parallel()
+	for name, file := range parseTreeOnlyFiles {
+		if _, err := decodeTenantFile([]byte(file)); err != nil {
+			t.Fatalf("%s: precondition: the generic decode refuses it: %v", name, err)
+		}
+		cfg, err := ParseTenantFile([]byte(file))
+		if kind, ok := UnreadableKindOf(err); !ok || kind != parsetree.KindTagNotAllowed {
+			t.Errorf("%s: ParseTenantFile = tenants %v, err %v; want parse-tree's tag_not_allowed", name, keysOfTenants(cfg), err)
+		}
+	}
+}
+
 // The rule is "the generic decode's verdict", not a list of tags: over every
-// file above, both directions agree with decodeTenantFile.
+// file above but parseTreeOnlyFiles, both directions agree with
+// decodeTenantFile.
 func TestParseTenantFile_AgreesWithTheGenericDecode(t *testing.T) {
 	t.Parallel()
 	all := map[string]string{}

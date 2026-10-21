@@ -278,7 +278,9 @@ func TestGetTenantEffective_SourceHashOnlyForAPIManaged(t *testing.T) {
 	}{
 		{"api-shaped", own, true},
 		{"anchor at the top level", "x: &a {y: 1}\n" + own, false},
-		{"several documents", own + "---\nx: 1\n", false},
+		// "several documents" was a row: since ADR-036 step 6 (#3206) the
+		// exporter refuses such a file whole (404 here, see the tenant list).
+		{"anchor on tenants", strings.Replace(own, "tenants:\n", "tenants: &t\n", 1), false},
 		{"!!str tenants key", "!!str " + own, false},
 	} {
 		for _, role := range []string{"writer", "unrestricted"} {
@@ -301,13 +303,15 @@ func TestGetTenantEffective_SourceHashOnlyForAPIManaged(t *testing.T) {
 }
 
 // A yaml.v3 type error in the other tenant's block quotes its value; the
-// writer of this tenant gets a fixed text instead.
+// writer of this tenant must not get it.
 //
 // Since #3063 a TENANT file of that shape never reaches the decode:
 // ParseTenantFile refuses it whole, so /effective answers 404 and carries
-// nothing of the file. The root `_defaults.yaml` is the file that still gets
-// there — its `tenants:` block can name the other tenant — so the withheld
-// text is pinned on it.
+// nothing of the file. The root `_defaults.yaml` used to be the file that got
+// there (a 500 with the decoder's text, withheld from the writer). Since
+// ADR-036 step 6 (#3206) parse-tree refuses `!!int <text>` (decode_error)
+// before either decode, so the exporter drops the root file and /effective
+// answers 200 with it in chain_parse_failed — and no decoder text at all.
 func TestGetTenantEffective_DecodeErrorWithheld(t *testing.T) {
 	t.Parallel()
 	file := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
@@ -325,13 +329,13 @@ func TestGetTenantEffective_DecodeErrorWithheld(t *testing.T) {
 		orgEnfTenantIn + ".yaml": "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n",
 	})
 	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) {
-		t.Fatalf("root defaults: %d %s, want 500 %s", w.Code, w.Body.String(), CodeConfigDecode)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"chain_parse_failed":["_defaults.yaml"]`) {
+		t.Fatalf("root defaults: %d %s, want 200 naming _defaults.yaml in chain_parse_failed", w.Code, w.Body.String())
 	}
-	assertNoOtherTenant(t, "effective decode error", w.Body.Bytes(), root)
+	assertNoOtherTenant(t, "effective, dropped root defaults", w.Body.Bytes(), root)
 	makeOutReadable(f)
 	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
-	if !strings.Contains(w.Body.String(), wOutOwner) {
-		t.Errorf("readable: %s, want the decoder's message as today", w.Body.String())
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), wOutOwner) {
+		t.Errorf("readable: %d %s, want 200 without the other tenant's value", w.Code, w.Body.String())
 	}
 }

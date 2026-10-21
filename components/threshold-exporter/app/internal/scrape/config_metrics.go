@@ -74,6 +74,12 @@ type ConfigMetrics struct {
 	// profiles of the committed config write. The exporter does not apply
 	// them.
 	ProfileRoutingKeys prometheus.Gauge
+	// #3206 (ADR-036 step 6): the parse failures that are parse-tree's
+	// refusal, by file_basename and parse-tree kind. Every one is also a
+	// da_config_parse_failure_total increment; a counter of its own so that
+	// series keeps its one label (alert rules and patch-config key it by
+	// file_basename alone).
+	ParseRefused *prometheus.CounterVec
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -103,6 +109,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_parse_failure_total",
 			Help: "Count of per-file YAML parse failures during hierarchical scan (v2.8.0 A-8d). Label 'file_basename' lets ops pin down which tenant or defaults file is broken. Alert: >5/h for any single basename = page ops.",
 		}, []string{"file_basename"}),
+		ParseRefused: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "da_config_parse_refused_total",
+			Help: "Count of the parse failures (da_config_parse_failure_total, same unit) that are da-guard parse-tree's verdict that the file cannot be read (#3206, ADR-036 §2): a shape YAML readers may read differently, such as a second document, a tag outside the allowed set (!!binary, !!set, the non-specific !), a byte order mark past the start of the file or a null key. Labels: file_basename, and kind — parse-tree's closed set (multiple_documents, tag_not_allowed, non_specific_tag, bom_not_at_start, null_key, ...). Each such increment also moves da_config_parse_failure_total for the same file. Fix the file; `da-guard --config-dir <dir>` names it (exit 3).",
+		}, []string{"file_basename", "kind"}),
 		DefaultsShadowed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "da_config_defaults_shadowed_total",
 			Help: "Count of dependent tenants for whom a defaults change was effectively blocked because every changed key is overridden by that tenant's source YAML (v2.8.0 Issue #61, ADR-017 inheritance). Distinct from da_config_defaults_change_noop_total which counts cosmetic edits with no semantic key movement.",
@@ -219,5 +229,6 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.ValuesNotServed,
 		s.MetadataStringForm,
 		s.ProfileRoutingKeys,
+		s.ParseRefused,
 	}
 }

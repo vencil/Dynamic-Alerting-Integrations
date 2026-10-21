@@ -124,7 +124,11 @@ func TestGetTenantEffective_WriterAnswersAsAColdWalk(t *testing.T) {
 }
 
 // The corpus above reaches every status /effective answers with a tenant
-// id that validates: 200, 404, 409 and 500 (a decode error).
+// id that validates: 200, 404 and 409. 500 (a decode error) is no longer
+// reachable from file content: since ADR-036 step 6 (#3206) a file the merge
+// would refuse is one the exporter drops first (pkg/config
+// TestResolveEffective_NoFileTheBuildReadsFailsTheMerge), answered 200 with
+// chain_parse_failed.
 func TestGetTenantEffective_WarmCorpusReachesEveryStatus(t *testing.T) {
 	t.Parallel()
 	seen := map[int]bool{}
@@ -139,7 +143,7 @@ func TestGetTenantEffective_WarmCorpusReachesEveryStatus(t *testing.T) {
 			seen[code] = true
 		}
 	}
-	for _, c := range []int{http.StatusOK, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError} {
+	for _, c := range []int{http.StatusOK, http.StatusNotFound, http.StatusConflict} {
 		if !seen[c] {
 			t.Errorf("no tree answers %d", c)
 		}

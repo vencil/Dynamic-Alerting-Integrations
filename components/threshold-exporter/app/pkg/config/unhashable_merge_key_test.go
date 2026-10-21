@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,20 +78,36 @@ func TestVendoredYAMLUnhashableMergeKeyIsAnError(t *testing.T) {
 }
 
 // ParseTenantFile — what the exporter's reload and tenant-api's validation
-// call — answers an error, as for any other file that does not parse.
+// call — answers an error, as for any other file that does not parse. Since
+// ADR-036 step 6 (#3206) that error is parse-tree's non_scalar_key, given
+// before any typed decode runs; the typed decode alone (parseConfigFile, which
+// skips the verdict) still answers the vendored fix's "unhashable" error
+// rather than a panic.
 func TestParseTenantFileUnhashableMergeKeyIsAnError(t *testing.T) {
 	t.Parallel()
 	for name, doc := range unhashableMergeKeyDocs {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for _, parse := range []struct {
-				name string
-				fn   func([]byte) (ThresholdConfig, error)
-			}{{"ParseTenantFile", ParseTenantFile}, {"ParseConfigFile", ParseConfigFile}} {
+				name    string
+				fn      func([]byte) (ThresholdConfig, error)
+				verdict bool // parse-tree judges first
+			}{
+				{"ParseTenantFile", ParseTenantFile, true},
+				{"ParseConfigFile", ParseConfigFile, true},
+				{"typed decode alone", func(b []byte) (ThresholdConfig, error) { return parseConfigFile(b, false) }, false},
+				{"typed + generic decode alone", func(b []byte) (ThresholdConfig, error) { return parseConfigFile(b, true) }, false},
+			} {
 				err := noPanic(t, parse.name, func() error {
 					_, err := parse.fn([]byte(doc))
 					return err
 				})
+				if parse.verdict {
+					if kind, ok := UnreadableKindOf(err); !ok || kind != parsetree.KindNonScalarKey {
+						t.Errorf("%s: err = %v, want parse-tree's non_scalar_key", parse.name, err)
+					}
+					continue
+				}
 				if err == nil || !strings.Contains(err.Error(), "unhashable") {
 					t.Errorf("%s: err = %v, want an error naming the unhashable key", parse.name, err)
 				}

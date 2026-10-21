@@ -1109,6 +1109,25 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 		}, `parse_failed[0]: "b\xfe.yaml"`},
 	} {
 		t.Run(name, func(t *testing.T) {
+			// ADR-036 step 6 (#3206): a `!!binary` spelling of such a string
+			// makes parse-tree refuse its file (tag_not_allowed), so the
+			// exporter drops that file before any string of it is read: exit
+			// 3 naming the file, not exit 2. Only a file NAME can still carry
+			// the bytes into the output.
+			if name != "parse_failed file name" {
+				code, doc, _, stderr := served(t, tc.files, "")
+				broken := "tenant-a.yaml"
+				if _, ok := tc.files["tenant-a.yaml"]; ok && !strings.Contains(tc.files["tenant-a.yaml"], "!!binary") {
+					broken = "_defaults.yaml"
+				}
+				if code != exitParseFailed || !reflect.DeepEqual(doc.ParseFailed, []string{broken}) ||
+					!strings.Contains(stderr, "(kind tag_not_allowed)") {
+					t.Fatalf("exit = %d, parse_failed %v, want %d naming %s refused as tag_not_allowed; stderr=%q",
+						code, doc.ParseFailed, exitParseFailed, broken, stderr)
+				}
+				_ = tc.want // what exit 2 named before step 6
+				return
+			}
 			// Several runs: where two strings are bad, the one named must be
 			// the first in key order every time, not whichever map
 			// iteration happens to reach first.
@@ -1162,9 +1181,11 @@ func TestServedValues_SameEventReasonText_Serves(t *testing.T) {
 	wantValue(t, doc, "tenant-a", "container_cpu", 75) // expired: the platform default
 }
 
-// A non-UTF-8 name in optional_overrides reaches no output string while no
-// tenant sets it, and /metrics serves the tree: so must this, with no U+FFFD.
-func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
+// A non-UTF-8 name in optional_overrides reached no output string while no
+// tenant set it, and /metrics served the tree. Since ADR-036 step 6 (#3206)
+// the `!!binary` that spells it makes parse-tree refuse `_defaults.yaml`, so
+// the exporter drops the file (exit 3) — still with no U+FFFD in the output.
+func TestServedValues_NonUTF8DeclaredKeyNobodySets_DropsTheFile(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
@@ -1172,7 +1193,9 @@ func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 3\n",
 	})
 	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", filepath.Join(tmp, "conf.d"))
-	mustOK(t, code, stderr)
+	if code != exitParseFailed || !strings.Contains(stderr, "(kind tag_not_allowed)") {
+		t.Fatalf("exit = %d, want %d with parse-tree's tag_not_allowed; stderr=%q", code, exitParseFailed, stderr)
+	}
 	if strings.Contains(stdout, "\ufffd") || strings.Contains(stdout, `\ufffd`) {
 		t.Errorf("output carries U+FFFD:\n%s", stdout)
 	}
