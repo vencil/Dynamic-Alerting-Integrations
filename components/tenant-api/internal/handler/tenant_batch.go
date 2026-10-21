@@ -519,12 +519,14 @@ func writePRBatchError(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 	// ErrNoChanges, the cancellation after it, as it always was. Anything
 	// else is an unexpected git failure → generic 500 (its text stays in the
 	// log — WriteErrorEnvelope, #1700).
-	written, _ = writeErr(rw, r, d, err, errCtx{
-		stages:   []kindSet{kindsWriteFlow.with(errkind.GitPushFailed), kindsOf(errkind.NoChanges), kindsOutcome},
-		fallback: fallbackInternal,
-		prefix:   "PR/MR batch write failed: ",
-	})
-	return written
+	if h, _ := writeErr(rw, r, d, err, errCtx{accept: kindsWriteFlow.with(errkind.GitPushFailed)}); h {
+		return true
+	}
+	if isNoChanges(err) {
+		return false
+	}
+	writeErr(rw, r, d, err, errCtx{accept: kindsOutcome, fallback: fallbackInternal, prefix: "PR/MR batch write failed: "})
+	return true
 }
 
 // prBatchSummary renders runBatchPR's summary line from its status and the
@@ -957,7 +959,7 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 	// (refresh first), but says what is true; a conflict says nothing was
 	// written (errCtx.batch).
 	writeErr(rw, r, d, err, errCtx{
-		stages:   []kindSet{kindsWriteFlow, kindsOutcome.with(errkind.BatchCommitted, errkind.TreeNotOnBase, errkind.Conflict)},
+		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.BatchCommitted, errkind.TreeNotOnBase, errkind.Conflict),
 		fallback: fallbackInternal,
 		batch:    true,
 	})

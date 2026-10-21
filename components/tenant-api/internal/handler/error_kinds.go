@@ -23,9 +23,8 @@ import (
 //   - kindRules: which Kind an error is, in precedence order — the typed
 //     errors that say their own kind (errkind.Kinded), the sentinels of the
 //     domain packages, and two function rules. An error that matches several
-//     rules is answered as the first one its entry answers (errCtx.stages:
-//     an entry may judge some kinds before others; within a stage, and
-//     everywhere else, this order decides).
+//     rules is answered as the first of them its entry answers
+//     (errCtx.accept) — one order for every entry.
 //
 // The client text and the per-kind body fields (renderKind) need the error
 // itself and the request (who may see conf.d entry names, which hash GET
@@ -176,18 +175,20 @@ func sentinelKind(k errkind.Kind, sentinels ...error) kindRule {
 // of them its entry answers, so the order IS the answer for a multi-wrapped
 // error; the golden's precedence section pins every adjacent pair.
 //
-// The order is the one every per-entry helper chain this table replaced
-// judged in (#3226), merged: no two kinds an entry answers in the same stage
-// are in another order here than that entry's chain had them. The refusals
-// that carry their own data first (fresh base, generator, placement), then
-// the write-flow sentinels, the request's own errors, the state store's and
-// the forge's, and last the two outcome rules — a write that stopped is
-// answered as what stopped it when that is named (a tree left on a PR branch
-// is TreeNotOnBase even when the git command that failed to leave it timed
-// out). Where two entries' chains disagreed (a direct write judged a full
-// write plane before the placement guards, a PR-mode write after them), the
-// entry that differs says so with a stage (kindsDirectFirst) instead of
-// one order changing the other's answer. A typed error with no sentinel listed (TreeUnreadableError,
+// ONE order for every entry (#3226). It is the order of the PR-mode and batch
+// helper chains this table replaced: the refusals that carry their own data
+// first (fresh base, generator, placement), then the write-flow sentinels,
+// the request's own errors, the state store's and the forge's, and last the
+// two outcome rules — a write that stopped is answered as what stopped it
+// when that is named (a tree left on a PR branch is TreeNotOnBase even when
+// the git command that failed to leave it timed out). ⛔ Placement before
+// WriteOverloaded is load-bearing: gitops' prResolveOnBase wraps a git error
+// in ErrTenantTreeScan only when conf.d itself cannot be reached, and relies
+// on that being a 500, not the overload 503. The direct writes used to judge
+// overload, TreeNotOnBase, precondition and conflict before the placement
+// guards; the only errors that order decided are a TreeScan wrapping one of
+// those, which no direct write path produces (its scan is a file-system walk
+// whose errors carry no gitops sentinel). A typed error with no sentinel listed (TreeUnreadableError,
 // PreconditionError, PushError, …) is its kind only as the typed error: its
 // bare sentinel carries none of the fields the answer needs.
 var kindRules = []kindRule{
@@ -208,11 +209,11 @@ var kindRules = []kindRule{
 	sentinelKind(errkind.InvalidTenantID, gitops.ErrInvalidTenantID),
 	sentinelKind(errkind.WriteOverloaded, gitops.ErrWriteOverloaded),
 	sentinelKind(errkind.ForgeDegraded, gitops.ErrForgeDegraded),
+	sentinelKind(errkind.AmbiguousTenantFile, confd.ErrAmbiguousTenantFile),
 	typedKind(errkind.BatchCommitted),
 	sentinelKind(errkind.TreeNotOnBase, gitops.ErrTreeNotOnBase),
 	typedKind(errkind.PreconditionFailed),
 	sentinelKind(errkind.Conflict, gitops.ErrConflict),
-	sentinelKind(errkind.AmbiguousTenantFile, confd.ErrAmbiguousTenantFile),
 	typedKind(errkind.GitPushFailed),
 	typedKind(errkind.Validation, gitops.ErrValidation),
 	typedKind(errkind.BaseRestoreFailed),
@@ -257,7 +258,7 @@ func carriesKind(err error, k errkind.Kind) bool {
 	return false
 }
 
-// kindSet is kinds one entry answers itself (a stage of errCtx.stages).
+// kindSet is the kinds one entry answers itself (errCtx.accept).
 type kindSet map[errkind.Kind]bool
 
 func kindsOf(ks ...errkind.Kind) kindSet {
@@ -303,6 +304,17 @@ func firstKind(err error, accept kindSet) (errkind.Kind, bool) {
 		}
 	}
 	return "", false
+}
+
+// isNoChanges reports whether err is errkind.NoChanges: the write changes
+// nothing, which the PR-mode entries answer as a success of their own. Where
+// they judge it among the failures is theirs (writePRPutError: before every
+// failure but the fresh-base refusals; writePRBatchError: after the
+// write-flow refusals and the push failure) — the PR-1 golden pins both, and
+// no single place in kindRules satisfies them together.
+func isNoChanges(err error) bool {
+	_, ok := firstKind(err, kindsOf(errkind.NoChanges))
+	return ok
 }
 
 // isClientError reports whether any kind err is says the failure is about
@@ -357,17 +369,10 @@ var (
 	// WritePRBatch / WriteBatch answers alike.
 	kindsWriteFlow = kindsGenerator.union(kindsPlacement).with(errkind.InvalidTenantID,
 		errkind.WriteOverloaded, errkind.ForgeDegraded, errkind.AmbiguousTenantFile)
-	// kindsDirectFirst: what a direct-mode single-tenant write (PUT, custom
-	// alerts) answers before its placement guards (kindsPlacement): the
-	// generator, a full write plane, a tree left on a PR branch, a moved base.
-	// The PR-mode and batch writes judge the placement guards first
-	// (kindsWriteFlow) — the two orders differ, and each entry keeps its own
-	// as a stage (errCtx.stages) rather than one changing the other's answer
-	// to an error that is both (a conf.d scan failure wrapping index.lock
-	// contention is 503 WRITE_OVERLOADED on a direct write, 500 on a PR-mode
-	// one — gitops' prResolveOnBase relies on the latter).
-	kindsDirectFirst = kindsGenerator.with(errkind.WriteOverloaded, errkind.TreeNotOnBase,
-		errkind.PreconditionFailed, errkind.Conflict)
+	// kindsDirectWrite: a direct-mode single-tenant write (custom alerts; PUT
+	// adds AmbiguousTenantFile), judged in kindRules' order like every entry.
+	kindsDirectWrite = kindsGenerator.union(kindsPlacement, kindsOutcome).with(errkind.WriteOverloaded,
+		errkind.TreeNotOnBase, errkind.PreconditionFailed, errkind.Conflict)
 	// kindsState: tenant-api's state store (#2856).
 	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)
 )

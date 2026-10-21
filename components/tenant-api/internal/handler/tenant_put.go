@@ -335,16 +335,18 @@ func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error
 	// ErrMergeFailed: WritePRChecked writes the body whole and never merges.
 	// Anything else is an unexpected git failure → generic 500 (its text
 	// stays in the log — WriteErrorEnvelope, #1700).
-	written, _ = writeErr(rw, r, d, err, errCtx{
-		stages: []kindSet{
-			kindsFreshBase,
-			kindsOf(errkind.NoChanges),
-			kindsWriteFlow.union(kindsOutcome).with(errkind.GitPushFailed, errkind.Validation, errkind.BaseRestoreFailed),
-		},
+	if h, _ := writeErr(rw, r, d, err, errCtx{accept: kindsFreshBase}); h {
+		return true
+	}
+	if isNoChanges(err) {
+		return false
+	}
+	writeErr(rw, r, d, err, errCtx{
+		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.GitPushFailed, errkind.Validation, errkind.BaseRestoreFailed),
 		fallback: fallbackInternal,
 		prefix:   "PR write failed: ",
 	})
-	return written
+	return true
 }
 
 // BaseHashHeader is the request header carrying the optimistic-concurrency

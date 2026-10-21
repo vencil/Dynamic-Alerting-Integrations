@@ -550,7 +550,7 @@ func writeErrorIsForClient(err error) bool {
 // tenant file — is the server's, a 500 INTERNAL_ERROR with msgWriteFailed and
 // the detail in the log under the request_id (fallbackWrite).
 func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) (fault bool) {
-	_, fault = writeErr(w, r, nil, err, errCtx{stages: []kindSet{kindsOutcome}, fallback: fallbackWrite})
+	_, fault = writeErr(w, r, nil, err, errCtx{accept: kindsOutcome, fallback: fallbackWrite})
 	return fault
 }
 
@@ -772,7 +772,7 @@ const msgGitPushFailed = "pushing the change to the config repository failed; no
 // for the views/groups writers — do not route the tenant write paths through
 // it.
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
-	writeErr(w, r, nil, err, errCtx{stages: []kindSet{kindsState.with(errkind.ConfigFileParse)}, fallback: fallbackInternal})
+	writeErr(w, r, nil, err, errCtx{accept: kindsState.with(errkind.ConfigFileParse), fallback: fallbackInternal})
 }
 
 // configFileParseError marks parseGroupsFile / parseViewsFile failing on the
@@ -804,7 +804,7 @@ func (e *configFileParseError) ErrorKind() errkind.Kind { return errkind.ConfigF
 //     APIError but we don't surface even its method/path/status).
 func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
 	writeErr(w, r, nil, err, errCtx{
-		stages:   []kindSet{kindsOf(errkind.ForgeForbidden, errkind.ForgeCircuitOpen)},
+		accept:   kindsOf(errkind.ForgeForbidden, errkind.ForgeCircuitOpen),
 		fallback: fallbackForge,
 		provider: provider,
 	})

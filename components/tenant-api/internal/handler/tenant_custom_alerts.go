@@ -199,7 +199,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// under the lock.
 		if d.Writer != nil {
 			if err := d.Writer.JudgeWrite(tenantID); err != nil {
-				if h, _ := writeErr(w, r, d, err, errCtx{stages: []kindSet{kindsPlacement}}); !h {
+				if h, _ := writeErr(w, r, d, err, errCtx{accept: kindsPlacement}); !h {
 					WriteJSONError(w, r, http.StatusInternalServerError, writeErrorText(r, err))
 				}
 				return
@@ -235,7 +235,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// based on them — and the conflict answer below would hand out the
 		// hash of a file GET does not show. Before the loadability check: a
 		// file that is not YAML is git-managed (its shape cannot be told).
-		if h, _ := writeErr(w, r, d, gitops.CheckAPIManaged(tenantID, raw), errCtx{stages: []kindSet{kindsOf(errkind.TenantGitManaged)}}); h {
+		if h, _ := writeErr(w, r, d, gitops.CheckAPIManaged(tenantID, raw), errCtx{accept: kindsOf(errkind.TenantGitManaged)}); h {
 			return
 		}
 		var notLoadable *tenantFileNotLoadableError
@@ -384,7 +384,7 @@ func writeCustomAlertsWriteError(w http.ResponseWriter, r *http.Request, d *Deps
 	// PutTenant's — 400 with the error's own text only when it is about the
 	// request, else the server's 500 (#3054: counted as an error).
 	_, fault = writeErr(w, r, d, err, errCtx{
-		stages:   []kindSet{kindsDirectFirst, kindsPlacement.union(kindsOutcome)},
+		accept:   kindsDirectWrite,
 		fallback: fallbackWrite,
 		tenantID: tenantID,
 	})

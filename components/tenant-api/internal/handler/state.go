@@ -131,6 +131,6 @@ func (d *Deps) MutateState(ctx context.Context, key, entity, author string, tran
 // The bodies are fixed strings: err names the ConfigMap (namespace/name)
 // and its byte counts, which are for the operator's log, not the caller.
 func WriteStateError(w http.ResponseWriter, r *http.Request, err error) bool {
-	handled, _ := writeErr(w, r, nil, err, errCtx{stages: []kindSet{kindsState}})
+	handled, _ := writeErr(w, r, nil, err, errCtx{accept: kindsState})
 	return handled
 }

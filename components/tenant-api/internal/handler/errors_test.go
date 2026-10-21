@@ -209,7 +209,7 @@ func TestRateLimit_EnvelopeShape(t *testing.T) {
 func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrForgeDegraded, errCtx{stages: []kindSet{kindsWriteFlow}})
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrForgeDegraded, errCtx{accept: kindsWriteFlow})
 	forgeDegradedRetryAfterS := kindSpecOf(errkind.ForgeDegraded).RetryAfterS
 	if forgeDegradedRetryAfterS <= 0 {
 		t.Fatal("kindTable gives ForgeDegraded no Retry-After")
@@ -249,7 +249,7 @@ func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 func TestWriteOverloaded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrWriteOverloaded, errCtx{stages: []kindSet{kindsWriteFlow}})
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrWriteOverloaded, errCtx{accept: kindsWriteFlow})
 	writeOverloadedRetryAfterS := kindSpecOf(errkind.WriteOverloaded).RetryAfterS
 	if writeOverloadedRetryAfterS <= 0 {
 		t.Fatal("kindTable gives WriteOverloaded no Retry-After")

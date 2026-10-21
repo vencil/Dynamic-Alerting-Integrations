@@ -38,16 +38,11 @@ const (
 )
 
 // errCtx is what one entry adds to the tables: the kinds it answers itself,
-// in stages, its fallback, and the request's own context that some answers
-// name.
+// its fallback, and the request's own context that some answers name. It
+// says nothing about order: an error that is several kinds the entry answers
+// is answered as the first of them in kindRules, for every entry alike.
 type errCtx struct {
-	// stages: the kinds the entry answers, in the order it judges them. An
-	// error is answered as the first stage that holds one of its kinds, and
-	// within a stage as the first of them in kindRules — so a stage is an
-	// entry saying "these before those", and kindRules alone orders the rest.
-	// A stage that matches errkind.NoChanges first answers nothing (writeErr
-	// reports false): the entry answers a success of its own.
-	stages   []kindSet
+	accept   kindSet
 	fallback errFallback
 	// prefix: the text before the error's own in a fallbackInternal answer,
 	// and before a BaseRestoreError's summary ("PR write failed: ").
@@ -76,26 +71,15 @@ type retryAfterer interface {
 // msgPreconditionRefresh is the advice of a PreconditionFailed answer.
 const msgPreconditionRefresh = "the tenant configuration was updated by someone else; refresh and retry"
 
-// writeErr answers err for one entry (#3226): the first kind err is, by
-// ec.stages then kindRules, rendered from kindTable — status, code,
+// writeErr answers err for one entry (#3226): the first kind of kindRules
+// that err is and ec.accept holds, rendered from kindTable — status, code,
 // Retry-After header and retry_after_s together — with the text and the
 // body fields renderKind gives it; else ec.fallback. handled reports whether
-// it wrote an answer (false for errkind.NoChanges, and for an unanswered
-// error with no fallback); fault, whether that answer is the server's
-// failure (KindSpec.Fault — also marked on w, markWriteFault).
+// it wrote an answer (false for an unanswered error with no fallback);
+// fault, whether that answer is the server's failure (KindSpec.Fault — also
+// marked on w, markWriteFault).
 func writeErr(w http.ResponseWriter, r *http.Request, d *Deps, err error, ec errCtx) (handled, fault bool) {
-	var (
-		k  errkind.Kind
-		ok bool
-	)
-	for _, stage := range ec.stages {
-		if k, ok = firstKind(err, stage); ok {
-			break
-		}
-	}
-	if ok && k == errkind.NoChanges {
-		return false, false
-	}
+	k, ok := firstKind(err, ec.accept)
 	if !ok {
 		if err == nil {
 			return false, false
@@ -323,7 +307,7 @@ func requestIDOf(r *http.Request) string {
 // internalPrefix and err's, goes to the log only (#1700). It reports whether
 // it wrote an answer.
 func WriteKindError(w http.ResponseWriter, r *http.Request, err error, internalPrefix string, kinds ...errkind.Kind) bool {
-	ec := errCtx{stages: []kindSet{kindsOf(kinds...)}, prefix: internalPrefix}
+	ec := errCtx{accept: kindsOf(kinds...), prefix: internalPrefix}
 	if internalPrefix != "" {
 		ec.fallback = fallbackInternal
 	}

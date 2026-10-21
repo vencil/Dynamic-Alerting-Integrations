@@ -187,7 +187,7 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 	// fallback. A PreconditionError carries the refresh advice under
 	// "message" (preconditionMessage).
 	_, fault = writeErr(rw, r, d, err, errCtx{
-		stages:              []kindSet{kindsDirectFirst.with(errkind.AmbiguousTenantFile), kindsPlacement.union(kindsOutcome)},
+		accept:              kindsDirectWrite.with(errkind.AmbiguousTenantFile),
 		fallback:            fallbackWrite,
 		tenantID:            tenantID,
 		preconditionMessage: true,

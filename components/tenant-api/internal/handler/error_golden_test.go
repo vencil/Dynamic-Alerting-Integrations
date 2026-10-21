@@ -155,9 +155,9 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("ErrValidation %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrNoChanges))
 	add("freshBaseScopeError %w ErrNoChanges", fmt.Errorf("%w: %w", &freshBaseScopeError{TenantID: goldenTenant, Put: true}, gitops.ErrNoChanges))
 	add("ErrMergeFailed %w merge error", fmt.Errorf("%w for %s: %w", gitops.ErrMergeFailed, goldenTenant, errors.New("yaml: line 3: mapping values are not allowed")))
-	// Two kinds the entries judge in different orders (#3226: errCtx.stages):
-	// a conf.d scan or a stranded tree wrapping the git error that stopped it
-	// (gitops' prResolveOnBase, ensureNotDeclaredElsewhereIn, leavePRBranch).
+	// A conf.d scan or a stranded tree wrapping the git error that stopped it
+	// (gitops' prResolveOnBase, TreeOnBase, leavePRBranch): the order of the
+	// placement guards against the write-flow sentinels (#3226 kindRules).
 	add("ErrTenantTreeScan %w ErrWriteOverloaded", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrWriteOverloaded))
 	add("ErrTenantTreeScan %w ErrGitTimeout", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrGitTimeout))
 	add("ErrTenantTreeScan %w ErrTreeNotOnBase", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrTreeNotOnBase))
@@ -250,13 +250,13 @@ func goldenEntries() []goldenEntry {
 			return written(writePRBatchError(w, r, d, err))
 		}},
 		{"writeErr(kindsWriteFlow)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, d, err, errCtx{stages: []kindSet{kindsWriteFlow}}))
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsWriteFlow}))
 		}},
 		{"writeErr(kindsPlacement)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, d, err, errCtx{stages: []kindSet{kindsPlacement}}))
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsPlacement}))
 		}},
 		{"writeErr(kindsGenerator)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, d, err, errCtx{stages: []kindSet{kindsGenerator}}))
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsGenerator}))
 		}},
 		{"writeForgeCreateError(GitHub)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
 			writeForgeCreateError(w, r, "GitHub", err)
@@ -273,19 +273,19 @@ func goldenEntries() []goldenEntry {
 			return fault(writeTenantWriteFailure(w, r, err))
 		}},
 		{"writeErr(kindsOutcome)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, nil, err, errCtx{stages: []kindSet{kindsOutcome}}))
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOutcome}))
 		}},
 		{"writeErr(git_push_failed)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, nil, err, errCtx{stages: []kindSet{kindsOf(errkind.GitPushFailed)}}))
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.GitPushFailed)}))
 		}},
 		{"writeErr(base_restore_failed, prefix \"PR write failed: \")", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, nil, err, errCtx{stages: []kindSet{kindsOf(errkind.BaseRestoreFailed)}, prefix: "PR write failed: "}))
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.BaseRestoreFailed), prefix: "PR write failed: "}))
 		}},
 		{"writeErr(tenant_file_unreadable)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, nil, err, errCtx{stages: []kindSet{kindsOf(errkind.TenantFileUnreadable)}}))
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.TenantFileUnreadable)}))
 		}},
 		{"writeErr(tenant_git_managed)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeErrHandled(w, r, nil, err, errCtx{stages: []kindSet{kindsOf(errkind.TenantGitManaged)}}))
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.TenantGitManaged)}))
 		}},
 	}
 }

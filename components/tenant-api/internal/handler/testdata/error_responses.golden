@@ -49,9 +49,9 @@ generatorRejectedText(not_a_known_reason) = "the route generator could not judge
 fault=true | 500 INTERNAL_ERROR counted=error error=msgWriteFailed
   <- BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, ErrForgeDegraded fetch timeout, ErrPushFailed %w ErrNoChanges, GitDriverError, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitDriverConfigured ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, plain error (server path in text), platform.APIError{403, RateLimited}, platform.APIError{403}, platform.ErrCircuitOpen ≡ %w, platform.ErrForbidden ≡ %w, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError
 fault=false | 503 WRITE_OVERLOADED counted=error Retry-After=1 retry_after_s=1 error="write plane is busy — please retry shortly"
-  <- ErrTenantTreeScan %w ErrWriteOverloaded, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, gitops.ErrWriteOverloaded ≡ %w
+  <- ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, gitops.ErrWriteOverloaded ≡ %w
 fault=false | 503 TREE_NOT_ON_BASE counted=error Retry-After=1 retry_after_s=1 error="config worktree was not on the base branch; nothing was written — please retry shortly"
-  <- ErrTenantTreeScan %w ErrTreeNotOnBase, gitops.ErrTreeNotOnBase ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, retry)
+  <- gitops.ErrTreeNotOnBase ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, retry)
 fault=false | 409 CONFLICT counted=conflict error="conflict: repository was updated concurrently, please refresh and retry"
   <- gitops.ErrConflict
 fault=false | 409 CONFLICT counted=conflict error="op ctx: conflict: repository was updated concurrently, please refresh and retry"
@@ -71,7 +71,7 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="op ctx: invalid tenant id
 fault=false | 409 TENANT_DECLARED_ELSEWHERE counted=conflict error=msgTenantDeclaredElsewhere
   <- gitops.ErrTenantDeclaredElsewhere ≡ %w
 fault=false | 500 INTERNAL_ERROR counted=error error=msgTenantTreeScan
-  <- ErrTenantTreeScan %w ErrGitTimeout, gitops.ErrTenantTreeScan ≡ %w
+  <- ErrTenantTreeScan %w ErrGitTimeout, ErrTenantTreeScan %w ErrTreeNotOnBase, ErrTenantTreeScan %w ErrWriteOverloaded, gitops.ErrTenantTreeScan ≡ %w
 fault=false | 400 BAD_REQUEST counted=uncounted error="merge tenant config"
   <- gitops.ErrMergeFailed
 fault=false | 400 BAD_REQUEST counted=uncounted error="op ctx: merge tenant config"
@@ -260,9 +260,9 @@ no response (written=false): ErrNoChanges %w context.Canceled, ErrPushFailed %w 
 fault=true | 500 INTERNAL_ERROR counted=error error=msgWriteFailed
   <- BaseRestoreError{Pushed: false}, BaseRestoreError{Pushed: true}, ErrForgeDegraded fetch timeout, ErrPushFailed %w ErrNoChanges, GitDriverError, PushError %w ErrNoChanges, PushError{Cause: ErrGitTimeout}, PushError{Cause: remote rejected}, confd.ErrTenantFileNotFound ≡ %w, confd.ErrUnsafeTenantID ≡ %w, configFileParseError, freshBaseOrgsError, freshBaseScopeError %w ErrNoChanges, freshBaseScopeError{Op: 2, PreState}, freshBaseScopeError{Op: 2}, freshBaseScopeError{Put, PreState}, freshBaseScopeError{Put}, gitops.ErrBaseRestore ≡ %w, gitops.ErrBatchRejected ≡ %w, gitops.ErrContentNormalized ≡ %w, gitops.ErrForgeDegraded ≡ %w, gitops.ErrGitDriverConfigured ≡ %w, gitops.ErrMergeBaseNotLoadable ≡ %w, gitops.ErrMergeNoOp ≡ %w, gitops.ErrNoChanges ≡ %w, gitops.ErrNoValidator ≡ %w, gitops.ErrPendingPR ≡ %w, gitops.ErrPrecondition ≡ %w, gitops.ErrPushFailed ≡ %w, gitops.ErrTenantFileUnreadable ≡ %w, gitops.ErrTenantStoreFault ≡ %w, gitops.ErrTenantTreeUnreadable ≡ %w, plain error (server path in text), platform.APIError{403, RateLimited}, platform.APIError{403}, platform.ErrCircuitOpen ≡ %w, platform.ErrForbidden ≡ %w, statestore.ErrConflict ≡ %w, statestore.ErrTooLarge ≡ %w, statestore.ErrUnavailable ≡ %w, tenantFileNotLoadableError
 fault=false | 503 WRITE_OVERLOADED counted=error Retry-After=1 retry_after_s=1 error="write plane is busy — please retry shortly"
-  <- ErrTenantTreeScan %w ErrWriteOverloaded, ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, gitops.ErrWriteOverloaded ≡ %w
+  <- ErrTreeNotOnBase %w ErrWriteOverloaded, ErrWriteOverloaded %w ErrNoChanges, gitops.ErrWriteOverloaded ≡ %w
 fault=false | 503 TREE_NOT_ON_BASE counted=error Retry-After=1 retry_after_s=1 error="config worktree was not on the base branch; nothing was written — please retry shortly"
-  <- ErrTenantTreeScan %w ErrTreeNotOnBase, gitops.ErrTreeNotOnBase ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, retry)
+  <- gitops.ErrTreeNotOnBase ≡ %w, leavePRBranch(ErrTreeNotOnBase %w ErrGitTimeout), leavePRBranch(ErrTreeNotOnBase %w checkout err), leavePRBranch(back on base, retry)
 fault=false | 409 CONFLICT counted=conflict error="conflict: repository was updated concurrently, please refresh and retry"
   <- gitops.ErrConflict
 fault=false | 409 CONFLICT counted=conflict error="op ctx: conflict: repository was updated concurrently, please refresh and retry"
@@ -282,7 +282,7 @@ fault=false | 400 BAD_REQUEST counted=uncounted error="op ctx: invalid tenant id
 fault=false | 409 TENANT_DECLARED_ELSEWHERE counted=conflict error=msgTenantDeclaredElsewhere
   <- gitops.ErrTenantDeclaredElsewhere ≡ %w
 fault=false | 500 INTERNAL_ERROR counted=error error=msgTenantTreeScan
-  <- ErrTenantTreeScan %w ErrGitTimeout, gitops.ErrTenantTreeScan ≡ %w
+  <- ErrTenantTreeScan %w ErrGitTimeout, ErrTenantTreeScan %w ErrTreeNotOnBase, ErrTenantTreeScan %w ErrWriteOverloaded, gitops.ErrTenantTreeScan ≡ %w
 fault=false | 400 BAD_REQUEST counted=uncounted error="merge tenant config"
   <- gitops.ErrMergeFailed
 fault=false | 400 BAD_REQUEST counted=uncounted error="op ctx: merge tenant config"
@@ -1241,12 +1241,12 @@ tenant_tree_scan > tenant_file_dirty => tenant_tree_scan
 tenant_file_dirty > invalid_tenant_id => tenant_file_dirty
 invalid_tenant_id > write_overloaded => invalid_tenant_id
 write_overloaded > forge_degraded => write_overloaded
-forge_degraded > batch_committed => forge_degraded
+forge_degraded > ambiguous_tenant_file => forge_degraded
+ambiguous_tenant_file > batch_committed => ambiguous_tenant_file
 batch_committed > tree_not_on_base => batch_committed
 tree_not_on_base > precondition_failed => tree_not_on_base
 precondition_failed > conflict => precondition_failed
-conflict > ambiguous_tenant_file => conflict
-ambiguous_tenant_file > git_push_failed => ambiguous_tenant_file
+conflict > git_push_failed => conflict
 git_push_failed > validation => git_push_failed
 validation > base_restore_failed => validation
 base_restore_failed > reserved_tenant_id => base_restore_failed
