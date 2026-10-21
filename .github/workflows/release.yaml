@@ -180,9 +180,6 @@ jobs:
       # in GHCR + captures digest for the release audit trail. For
       # threshold-exporter, appVersion==chart-version==tag-version, so
       # this is effectively "confirm what we just promoted is queryable".
-      # For other components where appVersion ≠ chart-version (e.g.
-      # tenant-api at chart 2.8.0 + appVersion 2.7.0), this verifies the
-      # chart's claimed binary version still has a corresponding image.
       # Runs after promotion because it probes the formal `:v<version>` tag.
       # See docs/internal/secret-leak-remediation-sop.md for the full
       # L0/L1/L2/L3 framing.
@@ -892,6 +889,21 @@ jobs:
             exit 1
           fi
 
+      # #3228: one version for the chart, the image and the tag. The image
+      # below is built from this commit and pushed as `:v<tag>`, and the
+      # chart's default image is `:v<appVersion>`, so an appVersion that
+      # differs from the tag ships a chart pointing at some other binary.
+      - name: Verify Chart.yaml appVersion matches version and tag
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          APP_VER=$(grep '^appVersion:' helm/tenant-api/Chart.yaml | awk '{print $2}' | tr -d "\"'")
+          if [ "$APP_VER" != "$VERSION" ]; then
+            echo "ERROR: helm/tenant-api/Chart.yaml appVersion ($APP_VER) != version/tag ($VERSION)"
+            echo "Run: make bump-docs TENANT_API=$VERSION"
+            exit 1
+          fi
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -975,14 +987,8 @@ jobs:
           done
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # ⚠️ tenant-api intentionally has Chart.yaml appVersion ≠ version
-      # (chart 2.8.0 wraps appVersion 2.7.0 — chart-template changes can
-      # decouple from binary changes). The verification therefore probes
-      # BOTH `:v${VERSION}` (the tag just promoted) and `:v${appVersion}`
-      # (the chart's claimed binary version). This catches "chart claims a
-      # binary version with no corresponding published image" while
-      # permitting the legitimate decoupling. After promotion: it probes
-      # formal tags.
+      # appVersion == version == tag (gated above), so this confirms the
+      # image we just promoted is queryable in GHCR.
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
