@@ -236,10 +236,18 @@ def _legacy_refs(tenant, state, config_dir):
     if config_dir is None:
         return refs
     base = Path(config_dir)
-    tree = _reader(config_dir).tree()
+    reader = _reader(config_dir)
+    tree = reader.tree()
+
+    def config_file(rel):
+        # #3206 m6: whether *rel* is a config file is the entry's role in the
+        # reader's one listing, never `is_file()` (False for a file whose
+        # stat is refused, which is then a file read and failing loudly).
+        e = reader.entry(rel)
+        return e is not None and e.config_file
     for name in LEGACY_STATE_FILES:
         path = base / name
-        if name == "_account_registry.yaml" or name in state.records or not path.is_file():
+        if name == "_account_registry.yaml" or name in state.records or not config_file(name):
             continue
         if name in tree.unreadable:
             kind, message = tree.unreadable[name]
@@ -255,7 +263,7 @@ def _legacy_refs(tenant, state, config_dir):
     if subset_key(tenant) not in state.records:
         for ext in (".yaml", ".yml"):
             path = base / "_federation" / f"{tenant}{ext}"
-            if path.is_file():
+            if config_file(f"_federation/{tenant}{ext}"):
                 refs.append((f"conf.d 的 _federation/{safe_label(path.name)}（tenant-api 下次開機會匯入為子集紀錄）",
                              f"刪除 {safe_label(str(path))}"))
     return refs

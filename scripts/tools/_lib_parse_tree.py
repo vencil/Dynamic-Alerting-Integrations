@@ -45,8 +45,17 @@ Every mode's document carries `entries`, read here into `Entry` objects:
 `classify_names` for names that are not on a disk. ⛔ An entry's `role` is
 the verdict — `config` (a config file; its readers fail loudly on a
 `problem`), `dir` (a directory the walk enters: every one has an entry, so
-no reader lists directories itself), `not_a_file`, `unlistable_dir` — and
-nothing here composes one of its own from the other fields. `Tree.selected` / `unreadable` / `not_read`
+no reader lists directories itself; read by no reader, `readers` []),
+`not_a_file`, `unlistable_dir` — and nothing here composes one of its own
+from the other fields. `not_a_file` and `unlistable_dir` always carry a
+`problem` (a document without one is refused); a `dir` carries one only
+when its name is a config file's (`x.yaml/`). `Entry.flagged` is exactly
+those three cases.
+
+"Which files can declare a tenant" is ONE answer with two halves
+(`tenant_scope`): the tenant files, and the entries that leave the set
+unknown (a directory Go could not list, a link it does not follow, …). A
+reader of the tenant set takes both or neither. `Tree.selected` / `unreadable` / `not_read`
 are computed from the entries, for the readers written against them.
 
 A document of another schema (v1 included: a da-guard older than this tool),
@@ -357,13 +366,22 @@ class Entry:
 
     @property
     def flagged(self) -> bool:
-        """Not a config file, and Go names a problem with it: what every
-        reader names instead of passing over — a symlink to a directory the
-        walk does not follow, a special file, a dangling link (`not_a_file`),
-        a directory it could not list (`unlistable_dir`), a directory with a
-        file's name (`dir` with a problem). The fact is Go's; this composes
-        nothing beyond reading it."""
-        return not self.config_file and self.problem is not None
+        """What every reader names instead of passing over: role
+        `not_a_file` (a symlink to a directory the walk does not follow, a
+        special file, a dangling link), role `unlistable_dir` (a directory it
+        could not list) — each always carries a `problem` (`_entry_of`
+        refuses one without) — and role `dir` WITH a problem (a directory
+        with a file's name; a `dir` without one is a plain directory). The
+        fact is Go's role and problem; this composes nothing beyond them."""
+        return (self.role in ("not_a_file", "unlistable_dir")
+                or (self.role == "dir" and self.problem is not None))
+
+    @property
+    def dir_link(self) -> bool:
+        """A link to a directory the walk does not follow: role `not_a_file`
+        of class `directory` (Go's two fields; no stat here). What is under
+        it is not loaded."""
+        return self.role == "not_a_file" and self.cls == "directory"
 
     @property
     def not_a_file(self) -> bool:
@@ -425,6 +443,10 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
                 raise ValueError(f"{where}: a dir with readers {readers!r} / not_read {not_read!r}")
         elif (not_read is None) == (not readers):
             raise ValueError(f"{where}: readers {readers!r} with not_read {not_read!r}")
+    if role in ("not_a_file", "unlistable_dir") and bad is None:
+        # Go always says why a path is no file it reads: one without the why
+        # is a document this reader does not understand.
+        raise ValueError(f"{where}: role {role} with no problem")
     problem = None
     if bad is not None:
         kind = bad.get("kind") if isinstance(bad, dict) else None
@@ -704,6 +726,62 @@ def to_python_text_sequences(node: Any, keys: "frozenset[str] | tuple[str, ...]"
     the exporter keys tenant 010 by, never the integer 8. Any other item of
     such a sequence is converted as `to_python` converts it."""
     return to_python(node, text_sequences=frozenset(keys))
+
+
+# ── the tenant set's scope (#3206) ──────────────────────────────────
+
+@dataclass(frozen=True)
+class TenantScope:
+    """Where a tree's tenants can be declared, as ONE answer.
+
+    *files*: every tenant file (role `config`, class `tenant`, read), sorted,
+    root-relative — readable or not (a reader names one it cannot read).
+    *unknown*: every entry that may be — or hide — a tenant file, as a
+    `FileUnreadable` with Go's problem: a directory Go could not list and a
+    link to a directory the walk does not follow, whatever their names (what
+    is under them is unknown / not loaded); any other flagged entry (a
+    dangling link, a special file, a directory with a config file's name)
+    unless Go classes its name a platform (`_`) one, read for no tenant.
+
+    ⛔ The halves are one answer: a tenant set computed from *files* alone
+    over a tree with *unknown* entries is a set that was not measured. Every
+    reader of "which tenants does this tree declare" takes this, never a
+    file list of its own."""
+    files: "tuple[str, ...]"
+    unknown: "tuple[FileUnreadable, ...]"
+
+
+def tenant_file_paths(entries: "Iterable[Entry]") -> "tuple[str, ...]":
+    """`TenantScope.files` alone: role `config`, class `tenant`, read; sorted.
+    ⛔ Half an answer — see `TenantScope`; only `tenant_scope` and the
+    callers `_lib_parse_cache.tenant_files` names use it."""
+    return tuple(sorted(e.path for e in entries
+                        if e.config_file and e.cls == "tenant" and e.readers))
+
+
+def tenant_scope(entries: "Iterable[Entry]", binary: Optional[str] = None,
+                 timeout: Optional[float] = None, *,
+                 exclude: "Optional[Callable[[str], bool]]" = None) -> TenantScope:
+    """The `TenantScope` of a listing's or a tree's *entries* (one snapshot).
+    *exclude*: a root-relative path to leave out of both halves. A flagged
+    directory's name is classed by Go (`classify_names`, one names run for
+    all of them; *binary* / *timeout* as there). Raises ParseTreeError."""
+    entries = [e for e in entries if exclude is None or not exclude(e.path)]
+    flagged = [e for e in entries if e.flagged]
+    dirs = sorted({e.name for e in flagged if e.is_dir})
+    named = classify_names(dirs, binary, timeout) if dirs else {}
+    files = tenant_file_paths(entries)
+    unknown = []
+    for e in flagged:
+        if e.unlistable_dir or e.dir_link:
+            hides = True
+        elif e.is_dir:
+            hides = not named[e.name].reserved
+        else:
+            hides = not e.reserved
+        if hides:
+            unknown.append(FileUnreadable(e.path, *e.problem))
+    return TenantScope(files, tuple(unknown))
 
 
 # ── list API: `parse-tree --list-only` (ADR-036 §7 step 9, #3206) ───────

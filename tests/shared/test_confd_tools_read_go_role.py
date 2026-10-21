@@ -528,6 +528,10 @@ def _entry_change(**kv):
     (_entry_change(not_read=""), "not_read is not a reason"),
     (_entry_change(not_read="unselected_defaults_carrier"), "with not_read"),
     (_entry_change(problem={"kind": "read_failure"}), "problem is not"),
+    # m1: Go always says why a path is no file it reads.
+    (_entry_change(role="not_a_file", readers=["generator"]), "role not_a_file with no problem"),
+    (_entry_change(role="unlistable_dir", **{"class": "directory"}, tenant_named=None),
+     "role unlistable_dir with no problem"),
     (lambda d: d.update(mode="other"), "mode 'other'"),
     (lambda d: d.update(entries={}), "'entries' missing or not a list"),
 ])
@@ -589,8 +593,8 @@ _CONFD = {
 
 
 def _counting_da_guard(tmp: pathlib.Path, real: str) -> tuple[str, pathlib.Path]:
-    """A da-guard that logs `<parent command>\\t<args>` per run, then runs the
-    real one."""
+    """A da-guard that logs `<parent pid>\t<parent command>\t<args>` per
+    run, then runs the real one."""
     from _platform_fs import require_shebang_scripts
     require_shebang_scripts()
     if not os.path.isdir("/proc/self"):
@@ -600,25 +604,34 @@ def _counting_da_guard(tmp: pathlib.Path, real: str) -> tuple[str, pathlib.Path]
     exe.write_text(
         "#!/bin/sh\n"
         "p=$(tr '\\0' ' ' < /proc/$PPID/cmdline 2>/dev/null)\n"
-        f"printf '%s\\t%s\\n' \"$p\" \"$*\" >> '{log}'\n"
+        f"printf '%s\\t%s\\t%s\\n' \"$PPID\" \"$p\" \"$*\" >> '{log}'\n"
         f"exec '{real}' \"$@\"\n", encoding="utf-8")
     exe.chmod(0o755)
     return str(exe), log
 
 
-def _tree_indexes(log: pathlib.Path, confd: pathlib.Path) -> list[str]:
+def _tree_indexes(log: pathlib.Path, confd: pathlib.Path) -> "tuple[list[str], dict[str, list[str]]]":
     """The parse-tree runs that index *confd* whole (tree or list mode; file
-    and names mode index no tree), but those the route generator's own
-    process makes when a tool renders through it (a separate product run)."""
-    out = []
+    and names mode index no tree), the directory compared by its real path
+    (a `--config-dir` spelled another way is the same conf.d): `(the tool's
+    own, {route generator child pid: its runs})` — a tool that renders
+    through the route generator starts a separate product run, which reads
+    the tree itself; it is counted apart, not left out."""
+    own: list[str] = []
+    children: dict[str, list[str]] = {}
+    want = os.path.realpath(confd)
     for line in log.read_text(encoding="utf-8").splitlines() if log.exists() else []:
-        parent, _, args = line.partition("\t")
+        pid, parent, args = line.split("\t", 2)
         a = args.split()
-        if (a[:1] == ["parse-tree"] and "--path" not in a and "--names" not in a
-                and "--config-dir" in a and a[a.index("--config-dir") + 1] == str(confd)
-                and "generate_alertmanager_routes" not in parent):
-            out.append(args)
-    return out
+        if not (a[:1] == ["parse-tree"] and "--path" not in a and "--names" not in a
+                and "--config-dir" in a
+                and os.path.realpath(a[a.index("--config-dir") + 1]) == want):
+            continue
+        if "generate_alertmanager_routes" in parent:
+            children.setdefault(pid, []).append(args)
+        else:
+            own.append(args)
+    return own, children
 
 
 @pytest.mark.parametrize("tool, argv", [
@@ -631,11 +644,13 @@ def _tree_indexes(log: pathlib.Path, confd: pathlib.Path) -> list[str]:
 ])
 def test_a_tool_run_indexes_each_conf_d_once(tool, argv, tmp_path, da_guard_binary) -> None:
     """Counted at the da-guard boundary, for the whole CLI run: every
-    parse-tree run that indexes a conf.d is logged, and each conf.d is
-    indexed ONCE — a second index is a second snapshot, and a file in one and
-    not the other vanishes silently. (`deprecate_rule`'s scratch copy is
-    another directory; the route generator `config_diff` renders through is
-    its own product run.)"""
+    parse-tree run that indexes a conf.d is logged, and the tool's own
+    process indexes each conf.d ONCE — a second index is a second snapshot,
+    and a file in one and not the other vanishes silently. (`deprecate_rule`'s
+    scratch copy is another directory.) A route generator child that
+    `config_diff` renders through is its own product run reading its own
+    snapshot: counted per child, at most once each — "one index per conf.d"
+    holds inside the tool and inside each child, not across them."""
     exe, log = _counting_da_guard(tmp_path, da_guard_binary)
     d = _write(tmp_path / "conf.d", _CONFD)
     d2 = _write(tmp_path / "conf2.d", {**_CONFD, "db-a.yaml": "tenants:\n  db-a:\n    "
@@ -647,9 +662,31 @@ def test_a_tool_run_indexes_each_conf_d_once(tool, argv, tmp_path, da_guard_bina
                        timeout=600, check=False, env=env, cwd=tmp_path)
     assert "Traceback" not in r.stderr, r.stderr[-3000:]
     for root in ([d, d2] if "--new-dir" in argv else [d]):
-        runs = _tree_indexes(log, root)
-        assert len(runs) == 1, (f"{tool} indexed {root} {len(runs)} times: {runs}\n"
-                                f"rc {r.returncode}\n{r.stderr[-1500:]}")
+        own, children = _tree_indexes(log, root)
+        assert len(own) == 1, (f"{tool} indexed {root} {len(own)} times: {own}\n"
+                               f"rc {r.returncode}\n{r.stderr[-1500:]}")
+        assert all(len(runs) == 1 for runs in children.values()), (tool, root, children)
+        assert bool(children) == (tool == "ops/config_diff.py"), (tool, root, children)
+
+
+def test_config_diff_fails_when_a_side_has_no_document(tmp_path, da_guard_binary) -> None:
+    """N-4: a side parse-tree gives no document for is no answer for the run:
+    rc 2 naming it, and no second listing of either side to ask "is there
+    any config" of instead (one parse-tree run in all: the PR side's)."""
+    exe, log = _counting_da_guard(tmp_path, str(tmp_path / "failing"))
+    (tmp_path / "failing").write_text("#!/bin/sh\necho 'boom' >&2\nexit 3\n", encoding="utf-8")
+    (tmp_path / "failing").chmod(0o755)
+    d = _write(tmp_path / "conf.d", _CONFD)
+    d2 = _write(tmp_path / "conf2.d", _CONFD)
+    r = subprocess.run([sys.executable, "-X", "utf8", str(TOOLS / "ops" / "config_diff.py"),
+                        "--old-dir", str(d), "--new-dir", str(d2)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=600, check=False, env=dict(os.environ, DA_GUARD_BINARY=exe),
+                       cwd=tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr and "not computed: PR side" in r.stderr, r.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 1, calls
 
 
 # ── round 2: the index is complete; nothing is judged by name or stat ────
@@ -665,6 +702,9 @@ def test_migrate_conf_d_plans_only_what_the_walk_enters(tmp_path, da_guard_env) 
     r = _run_tool(TOOLS / "dx" / "migrate_conf_d.py", "--conf-d", str(conf), "--dry-run")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Skip (nested):      2" in r.stdout, r.stdout
+    # m2: the config-named one is named with Go's problem; the plain one not.
+    assert "x.yaml/: the exporter enters it, but its name looks like a file's" in r.stdout
+    assert "team/:" not in r.stdout, r.stdout
     outside = tmp_path / "outside"
     outside.mkdir()
     for link in ("link.yaml", "team-link"):
@@ -777,3 +817,97 @@ def test_migrate_conf_d_refuses_an_unlistable_directory_as_nobody(name) -> None:
                  "--conf-d", str(conf), "--dry-run"])
         assert r.returncode == 2, r.stdout + r.stderr
         assert name in r.stderr and "Traceback" not in r.stderr, r.stderr
+
+
+# ── the tenant set: one answer, both halves (#3206 round 3, M-A) ───────
+
+def _hidden_tenant_tree(tmp: pathlib.Path) -> pathlib.Path:
+    """`a.yaml` declares a; `team` is a link to a directory the walk does not
+    follow, holding a tenant file — so the tree's tenant set is unknown."""
+    root = _write(tmp / "conf.d", {"a.yaml": "tenants:\n  a:\n    _metadata: {db_type: mysql}\n"})
+    _write(tmp / "outside", {"o.yaml": "tenants:\n  o: {}\n"})
+    symlink_or_skip("../outside", root / "team", target_is_directory=True)
+    return root
+
+
+def test_the_scope_is_one_answer_with_both_halves(tmp_path, da_guard_binary) -> None:
+    root = _hidden_tenant_tree(tmp_path)
+    reader = _lib_parse_cache.ConfdReader(root, binary=da_guard_binary)
+    scope = _lib_parse_cache.tenant_scope(reader)
+    assert scope.files == ("a.yaml",)
+    assert [(u.file, u.kind) for u in scope.unknown] == [("team", "not_regular_file")]
+    declared, unknown = _lib_parse_cache.declared_tenants(reader)
+    assert set(declared) == {"a"} and [u.file for u in unknown] == ["team"]
+    # A platform (`_`) name hides no tenant file: a dangling `_x.yaml` is no
+    # part of the scope; a dangling `x.yaml` is.
+    symlink_or_skip("nowhere", root / "_x.yaml")
+    symlink_or_skip("nowhere", root / "x.yaml")
+    scope = _lib_parse_cache.tenant_scope(_lib_parse_cache.ConfdReader(root, binary=da_guard_binary))
+    assert [u.file for u in scope.unknown] == ["team", "x.yaml"]
+    assert _lib_parse_cache.tenant_scope(
+        _lib_parse_cache.ConfdReader(root, binary=da_guard_binary),
+        exclude=lambda rel: rel == "team").unknown[0].file == "x.yaml"
+
+
+@pytest.mark.parametrize("reader_name", [
+    "tree_tenants", "tenant_declarations", "generate_tenant_mapping_rules",
+    "check_retire_drift", "validate_config.check_tenant_uniqueness",
+    "validate_config.check_tenant_file_name"])
+def test_every_tenant_set_reader_names_what_hides_a_tenant(reader_name, tmp_path,
+                                                          da_guard_env) -> None:
+    """M-A: each reader of "which tenants does this tree declare" refuses or
+    names a link to a directory the walk does not follow — none takes the
+    tenant-file half alone and answers {a} as if measured."""
+    root = _hidden_tenant_tree(tmp_path)
+    from _lib_io import YamlFileError
+    if reader_name == "tree_tenants":
+        with pytest.raises(_lib_confd.TenantSetUnknown, match=r"\bteam \(not_regular_file"):
+            _lib_confd.tree_tenants(root)
+    elif reader_name == "tenant_declarations":
+        declared, unreadable = _lib_confd.tenant_declarations(root)
+        assert set(declared) == {"a"} and unreadable == ["team"]
+    elif reader_name == "generate_tenant_mapping_rules":
+        import generate_tenant_mapping_rules as g
+        with pytest.raises(YamlFileError, match="team"):
+            g.collect_tenant_ids_from_config_dir(str(root))
+    elif reader_name == "check_retire_drift":
+        import check_retire_drift as c
+        with pytest.raises(YamlFileError, match="team"):
+            c.conf_d_declared_db_type_tenants(root)
+    else:
+        import validate_config as v
+        row = getattr(v, reader_name.split(".")[1])(str(root))
+        text = json.dumps(row, ensure_ascii=False, default=str)
+        assert "team" in text and row["status"] != "pass", row
+
+
+def test_check_retire_drift_refuses_a_hidden_tenant_as_nobody() -> None:
+    """M-A end to end: `team -> ../outside` beside a tenant declaring a
+    db_type — rc 2 naming `team` (it was rc 0, reading the tenant files
+    alone, after round 2)."""
+    with unprivileged_sandbox(str(REPO)) as (box, run):
+        box = pathlib.Path(box)
+        root = _hidden_tenant_tree(box)
+        for top in (root, box / "outside"):
+            for p in [top, *top.rglob("*")]:
+                if not p.is_symlink():
+                    p.chmod(0o755 if p.is_dir() else 0o644)
+        r = run([sys.executable, str(box / "scripts" / "tools" / "lint" / "check_retire_drift.py"),
+                 "--config-dir", str(root), "--helm-dir", str(box),
+                 "--namespaces-file", str(box / "none.yaml"), "--ci"])
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "team" in r.stderr and "Traceback" not in r.stderr, r.stderr
+
+
+def test_flagged_is_the_role_and_the_problem() -> None:
+    """m1: `flagged` is role `not_a_file` / `unlistable_dir` (each always with
+    a problem), or role `dir` WITH a problem; a plain `dir` and any `config`
+    entry — a config file whose read fails included — are not."""
+    bad = ("not_regular_file", "x")
+    def e(role, problem):
+        return pt.Entry(path="x", depth=0, cls="directory", tenant_named=None,
+                        defaults_document=False, readers=(), not_read=None,
+                        role=role, problem=problem)
+    assert [e(r, p).flagged for r, p in (
+        ("not_a_file", bad), ("unlistable_dir", ("read_failure", "x")), ("dir", bad),
+        ("dir", None), ("config", bad), ("config", None))] == [True, True, True, False, False, False]

@@ -132,7 +132,6 @@ from _lib_confd import (  # noqa: E402
     config_stem,
     duplicate_declarations,
     tenant_declarations,
-    is_dir_symlink,
     iter_config_files,
     list_config_tree,
     observe_flat_reads,
@@ -473,12 +472,12 @@ def _unusable_consequence(bad: Path, listing) -> str:
     # printed just before it. Neither this scan nor the exporter enters it.
     # The reason already says "NOT loaded", so the clause here is the remedy
     # only — repeating the loss read as a stutter (#1972 blind review N3).
-    if is_dir_symlink(bad):
+    entry = unusable_entry(bad, listing)
+    if entry is not None and entry.dir_link:
         return ("project those files as flat ConfigMap keys (no `/` in "
                 "`items[].path`), or copy them into conf.d")
     # #3206: Go's structured verdict (role `unlistable_dir`, class
     # `directory`), never a prefix of the wording `unusable_reason` prints.
-    entry = unusable_entry(bad, listing)
     if entry is not None and entry.unlistable_dir:
         return ("so THIS REPORT IS INCOMPLETE: fix the permissions and "
                 "re-run before trusting it")
@@ -1529,7 +1528,10 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         defaults_path = str(chosen)
     # #2725: a carrier that is there but cannot be opened (a dangling
     # symlink) is not "no carrier" — that line told the operator to create one.
-    if os.path.isfile(defaults_path):
+    # #3206: both answers are the reader's listing — a carrier Go selects is a
+    # config file (read, failing loudly), an entry at the carrier's path that
+    # is none (a dangling link) is "unreadable"; no `isfile` / `lexists` here.
+    if chosen is not None:
         scope["root_carrier"] = True
         # #2961: the customer's tree — a tree finding (FAIL, rc 1), as the
         # comment at the --policy-dsl read below says.
@@ -1542,7 +1544,7 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
                                 [f"{os.path.basename(defaults_path)}: {p}" for p in exc.problems],
                                 hint=_POLICY_DSL_INVALID_RULE_HINT)
     else:
-        scope["root_carrier"] = "unreadable" if os.path.lexists(defaults_path) else False
+        scope["root_carrier"] = "unreadable" if reader.entry(defaults_path) is not None else False
 
     # From standalone policy DSL file.
     # ⛔ The same collapse as --policy, written in the mirror form

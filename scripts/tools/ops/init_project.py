@@ -54,7 +54,6 @@ from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     configmap_key_problem,
     is_defaults_name,
-    is_reserved_name,
     printable_name,
     unusable_reason,
     warn_nested,
@@ -3594,6 +3593,13 @@ class _ConfdTree:
         """Every file parse-tree selects, conf.d-relative, sorted."""
         return sorted(self.tree.selected) if self.tree is not None else []
 
+    def tenant_scope(self) -> "_lib_parse_tree.TenantScope":
+        """The tenant files and what may hide one, from this document's
+        entries (`_lib_parse_tree.tenant_scope`); empty for an absent conf.d."""
+        if self.tree is None:
+            return _lib_parse_tree.TenantScope((), ())
+        return _lib_parse_tree.tenant_scope(self.tree.entries, None, _PARSE_TREE_TIMEOUT_S)
+
     def root_defaults(self) -> list[str]:
         """The root's defaults carriers in every spelling parse-tree saw —
         the one it selects and any it does not (`not_read`)."""
@@ -3757,10 +3763,13 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     One `da-guard parse-tree` document of conf.d (`_ConfdTree`, ADR-036 §2):
     the files a reader selects — the exporter's walk (both spellings, any
     case, dot-entries skipped, subdirectories included) — so a file in
-    `conf.d/prod/` counts as the exporter counts it. `_`-prefixed files are
-    control files and declare no tenant (`is_reserved_name`, the exporter's
-    `strings.HasPrefix(name, "_")`). What each tenant file declares is its
-    `tenants:` keys as parse-tree reads them; a file it cannot read is (d).
+    `conf.d/prod/` counts as the exporter counts it. Which files are tenant
+    files, and which entries may hide one, is Go's (`_lib_parse_tree.
+    TenantScope`, #3206): a `_` file is a control file and declares no
+    tenant; a directory Go could not list or a link it does not follow is
+    named whatever its name. What each tenant file declares is its
+    `tenants:` keys as parse-tree reads them; a file it cannot read, and an
+    entry that may hide one, is (d).
 
     ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
     `db-c.yaml`. And because the two ARE one file on a case-insensitive
@@ -3805,9 +3814,13 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         return _rel(conf_dir / f'{t}.yaml')
 
     root_defaults = [conf_dir / n for n in confd.root_defaults()]
-    for rel in confd.files():
-        if is_reserved_name(rel.rsplit('/', 1)[-1]):
-            continue
+    # #3206: the tenant files AND what may hide one — both halves of Go's
+    # answer (`_lib_parse_tree.TenantScope`), never a `_` name rule here. A
+    # directory Go could not list is named whatever it is called (`_arch/`
+    # too: the exporter descends `_` directories): what is under it is
+    # unknown, so it counts as a (d) mention of every requested tenant.
+    scope = confd.tenant_scope()
+    for rel in scope.files:
         f = _rel(conf_dir / rel)
         tenant_files.append(f)
         declared, why = confd.declared(rel)
@@ -3815,6 +3828,11 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         if why:
             blanket[f] = why
             mentions[f] = set(requested)
+    for u in scope.unknown:
+        f = _rel(conf_dir / u.file)
+        tenant_files.append(f)
+        mentions[f] = set(requested)
+        blanket[f] = f"da-guard parse-tree cannot read it ({u.kind}: {u.message})"
 
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}

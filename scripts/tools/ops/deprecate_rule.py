@@ -348,14 +348,21 @@ def _in_subtree(name, plane):
     return "/" in name or plane == "subtree"
 
 
-def _nested_ignored(name, plane="root"):
-    """子樹裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。"""
-    base = _base_of(name)
-    return (_in_subtree(name, plane) and base.startswith("_")
-            and not is_defaults_name(base))
+def _reserved(reader, rel):
+    """*rel* 是不是平台（`_` 前綴）檔：Go 的 class（`Entry.reserved`），取自
+    *reader* 那一份索引；索引裡沒有的路徑不是（#3206：不以名稱自己判）。"""
+    e = reader.entry(rel)
+    return e is not None and e.reserved
 
 
-def section_owner(name, section, plane="root"):
+def _nested_ignored(name, plane="root", *, reserved):
+    """子樹裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。
+    *reserved*：這個檔是不是平台檔（Go 的 class，`_reserved`）。"""
+    return (_in_subtree(name, plane) and reserved
+            and not is_defaults_name(_base_of(name)))
+
+
+def section_owner(name, section, plane="root", *, reserved):
     """掃描結果的 `[section]` 在檔 `name` 裡由誰清: 本工具／手動／exporter 丟棄。
 
     root 層的規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）:
@@ -364,8 +371,9 @@ def section_owner(name, section, plane="root"):
     讀；本工具只寫載體的平台區塊與非 `_` 檔的 `tenants:`。子樹裡 exporter 只讀
     `_defaults.yaml` 的 `defaults:`（`parseDefaultsBytes`），其他 `_` 檔不讀；
     本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡是「手動」（對該子樹跑）。
+    *reserved*：`name` 是不是平台（`_` 前綴）檔，Go 的 class（`_reserved`）。
     """
-    if _nested_ignored(name, plane):
+    if _nested_ignored(name, plane, reserved=reserved):
         return OWNER_EXPORTER
     if section == "unreadable":
         return OWNER_MANUAL
@@ -377,37 +385,35 @@ def section_owner(name, section, plane="root"):
             return OWNER_MANUAL if nested else OWNER_TOOL
         # #1676: 非載體（`_` 前綴或租戶檔）的這兩個區塊 exporter 都剝除。
         return OWNER_EXPORTER
-    if base.startswith("_"):
+    if reserved:
         return OWNER_EXPORTER if _in_subtree(name, plane) else OWNER_MANUAL
     if block == "profiles":
         return OWNER_EXPORTER
     return OWNER_MANUAL if nested else OWNER_TOOL
 
 
-def exporter_drop_reason(name, section, plane="root"):
-    """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。"""
-    if _nested_ignored(name, plane):
+def exporter_drop_reason(name, section, plane="root", *, reserved):
+    """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。*reserved* 同 `section_owner`。"""
+    if _nested_ignored(name, plane, reserved=reserved):
         return ("exporter 不讀子目錄裡 `_defaults` 以外的 `_` 前綴檔"
                 "（isNestedPlatformFile），本工具不寫入")
     block = section.split(".", 1)[0]
-    if _in_subtree(name, plane) and _base_of(name).startswith("_"):
+    if _in_subtree(name, plane) and reserved:
         return (f"的 {block} 區塊 exporter 不讀（子樹 `_defaults.yaml` 只讀 "
                 f"defaults 區塊），本工具不寫入")
-    if block in ("defaults", "optional_overrides") and _base_of(name).startswith("_"):
+    if block in ("defaults", "optional_overrides") and reserved:
         return (f"的 {block} 區塊 exporter 會丟棄（只從 defaults 載體讀，#1676；"
                 f"exporter 會 WARN），本工具不寫入")
     return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
-def manual_reason(name, section, key, val, config_dir):
-    """`OWNER_MANUAL` 殘留的那一句話（預覽與執行同一句）。"""
+def manual_reason(name, section, key, val, config_dir, *, reserved):
+    """`OWNER_MANUAL` 殘留的那一句話（預覽與執行同一句）。*reserved* 同 `section_owner`。"""
     where = f"[{section}] {key}: {val}"
     if section == "unreadable":
         return f"無法讀取（{val}），本工具無法判定"
-    base = _base_of(name)
     block = section.split(".", 1)[0]
-    if "/" in name and (block in ("defaults", "optional_overrides")
-                        or not base.startswith("_")):
+    if "/" in name and (block in ("defaults", "optional_overrides") or not reserved):
         subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
                 f"`--config-dir {subtree} --plane subtree`：{where}")
@@ -431,7 +437,7 @@ def unclearable_occurrences(metric_key, findings, *, predict, plane="root",
     for f in findings:
         name = f["filename"]
         for section, key, val in f["occurrences"]:
-            owner = section_owner(name, section, plane)
+            owner = section_owner(name, section, plane, reserved=f["reserved"])
             if owner == OWNER_EXPORTER:
                 continue
             if owner == OWNER_TOOL and name in skip:
@@ -508,6 +514,7 @@ def scan_for_metric(metric_key, config_dir, spellings=(), *, reader=None):
                 "filename": filename,
                 "path": str(config_base / filename),
                 "occurrences": occurrences,
+                "reserved": _reserved(reader, filename),
             })
     return findings
 
@@ -530,7 +537,7 @@ def nested_residue(metric_key, config_dir, spellings=(), *, reader=None):
                        else _occurrences_in(data, metric_key, spellings))
         if occurrences:
             out.append({"filename": rel, "path": str(base / rel),
-                        "occurrences": occurrences})
+                        "occurrences": occurrences, "reserved": _reserved(reader, rel)})
     return out
 
 
@@ -700,9 +707,9 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False, spellings=(), *
     """
     defaults_path = Path(defaults_path)
     name = defaults_path.name
-    if not defaults_path.exists():
-        return False, f"{name} 不存在", []
     reader = _reader(defaults_path.parent)
+    if reader.entry(name) is None:  # #3206: the listing, not `exists()`
+        return False, f"{name} 不存在", []
     tree = reader.tree()
     pattern_keys = metric_pattern_keys(metric_key, spellings)
     if name in tree.not_read:
@@ -798,7 +805,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
     warn_nested(config_base, tool="deprecate_rule", reader=reader)
     writes = []
     for filename in _top_files(config_dir, reader):
-        if filename.startswith('_') or filename in skip:
+        if _reserved(reader, filename) or filename in skip:
             continue
         try:
             node = reader.node(filename)  # 讀不了的檔 `scan_for_metric` 已具名
@@ -841,7 +848,7 @@ def plan_rewrites(config_dir, metrics, spellings, *, skip=frozenset()):
     def belongs(k):
         return any(tenant_key_belongs_to_metric(k, m, spellings[m]) for m in metrics)
     for filename in _top_files(config_dir, reader):
-        if filename.startswith('_') or filename in skip:
+        if _reserved(reader, filename) or filename in skip:
             continue
         try:
             node = reader.node(filename)
@@ -1063,7 +1070,7 @@ def _main():
     for e in (base / n for n in _top_files(base, reader)):
         items = carrier_health_at(e)
         name = safe_label(e.name)
-        if e.name.startswith("_"):
+        if _reserved(reader, e.name):
             if args.plane != "root":
                 # 子樹載體的字串值合法；本工具自己讀不了／讀不到的仍要擋寫入。
                 if is_defaults_name(e.name):
@@ -1111,7 +1118,7 @@ def _main():
     # 當 root 判，子樹載體的值形狀規則不同。
     if oracle is not None:
         for name in oracle.parse_failed:
-            if ("/" in name or name.startswith("_") or name in tenant_bad
+            if ("/" in name or _reserved(reader, name) or name in tenant_bad
                     or name not in reader.tree().selected
                     or _tree_read(reader, name)[1] is not None):
                 continue                       # 讀不了的 `scan_for_metric` 會具名
@@ -1133,7 +1140,8 @@ def _main():
                 dropped += [(n, "現況在 parse_failed；寫入後的體檢問不到")
                             for n in oracle.parse_failed]
         for name, why in dropped:
-            if "/" in name or name == "." or not name.startswith("_") or name in blocked:
+            if ("/" in name or name == "." or not _reserved(reader, name)
+                    or name in blocked):
                 continue
             if args.plane != "root":
                 continue
@@ -1206,14 +1214,15 @@ def _main():
         warned = set()
         for f in findings + nested:
             for section, _key, _val in f["occurrences"]:
-                if section_owner(f["filename"], section, args.plane) != OWNER_EXPORTER:
+                if section_owner(f["filename"], section, args.plane,
+                                 reserved=f["reserved"]) != OWNER_EXPORTER:
                     continue
                 block = section.split(".", 1)[0]
                 if (f["filename"], block) in warned:
                     continue
                 warned.add((f["filename"], block))
                 print(f"  ⚠️  {safe_label(f['filename'])} "
-                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane))}")
+                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane, reserved=f['reserved']))}")
 
         # Step 1 (as printed): 從每個 defaults 載體移除相關 key
         if args.plane != "root" and not carriers_here:
@@ -1270,6 +1279,7 @@ def _main():
                                     reader=after)
                     if write else findings_by_metric[metric])
         findings = findings + nested_by_metric[metric]
+        reserved = {f["filename"] for f in findings if f["reserved"]}
         for name, section, key, val, designed in unclearable_occurrences(
                 metric, findings, predict=not write, plane=args.plane,
                 skip=tenant_bad):
@@ -1279,7 +1289,8 @@ def _main():
                 reason = (f"租戶檔 exporter 讀不進去（{tenant_bad[name]}），本工具"
                           f"不改寫，請先修檔：[{section}] {key}: {val}")
             elif designed:
-                reason = manual_reason(name, section, key, val, args.config_dir)
+                reason = manual_reason(name, section, key, val, args.config_dir,
+                                       reserved=name in reserved)
             else:
                 reason = f"重掃仍有引用：[{section}] {key}: {val}"
             incomplete.append((metric, name, reason))

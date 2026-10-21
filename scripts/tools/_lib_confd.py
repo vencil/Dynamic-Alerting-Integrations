@@ -347,7 +347,7 @@ def warn_dir_symlink_once(link: Path, reason: str) -> None:
     Keyed by the LINK's own absolute path (not its target, which is what
     two different links may share). *reason* is the caller's wording of it
     from the snapshot it listed the link in (`unusable_reason(link,
-    listing)` / `unusable_text(kind, message, link)`)."""
+    listing)` / `unusable_text(kind, message, dir_link=True)`)."""
     key = os.path.abspath(link)
     if key in _DIR_LINK_WARNED:
         return
@@ -608,18 +608,19 @@ def unusable_reason(p: Path, listing: Any) -> str:
     e = unusable_entry(p, listing)
     if e is None or e.problem is None:
         return "is not a config file the exporter's walk reads"
-    return unusable_text(*e.problem, path=p)
+    return unusable_text(*e.problem, dir_link=e.dir_link)
 
 
-def unusable_text(kind: str, message: str, path: "str | os.PathLike[str] | None" = None) -> str:
+def unusable_text(kind: str, message: str, *, dir_link: bool = False) -> str:
     """`unusable_reason`'s clause for da-guard's problem *kind* and
     *message* — also for a reader that holds them from a tree-mode document,
     so both word it alike. For a DIRECTORY SYMLINK the walk does not follow
-    (#1972; *path* given, kind `not_regular_file`) the clause adds what that
-    costs — the files under it are not loaded — because "a symlink to a
-    directory" alone reads as harmless."""
+    (#1972; *dir_link*: the entry's `Entry.dir_link`, Go's role and class —
+    #3206, no stat here) the clause adds what that costs — the files under
+    it are not loaded — because "a symlink to a directory" alone reads as
+    harmless."""
     text = f"cannot be read as a config file ({kind}): {' '.join(message.split())}"
-    if kind == "not_regular_file" and path is not None and is_dir_symlink(Path(path)):
+    if kind == "not_regular_file" and dir_link:
         text += " — the config files under it are NOT loaded"
     return text
 
@@ -1107,14 +1108,14 @@ def tree_tenants(
     Fail-closed, raising `TenantSetUnknown`, when the set cannot be
     answered:
 
-    * a tenant file parse-tree cannot read — every one is named with its
-      kind; a file whose top level is not a mapping declares nothing and is
-      not one of them;
-    * an entry that may be — or hide — a tenant file: a directory Go could
-      not list, a link to a directory it does not follow, a dangling link, a
-      special file, a directory with a config file's name, unless Go classes
-      the name a platform one (`_tenant_set_blockers`) — named with its
-      problem;
+    * an entry that may be — or hide — a tenant file (a directory Go
+      could not list, a link to a directory it does not follow, a dangling
+      link, a special file, a directory with a config file's name, unless Go
+      classes the name a platform one), and a tenant file parse-tree cannot
+      read — both halves of `_lib_parse_cache.declared_tenants`' one
+      `unknown` list (#3206: `_lib_parse_tree.TenantScope`), each named with
+      its kind; a file whose top level is not a mapping declares nothing and
+      is not one of them;
     * an id declared by two or more files (`duplicate_declarations`): the
       exporter rejects such a tree (`DuplicateTenantError`), so emitting one
       tenant from it would describe a state the exporter refuses.
@@ -1127,28 +1128,18 @@ def tree_tenants(
     """
     from _lib_parse_cache import declared_tenants
     reader = _reader_of(config_dir, reader)
-    flagged = _tenant_set_blockers(config_dir, reader) if Path(config_dir).is_dir() else []
-    if flagged:
-        shown = "; ".join(f"{printable_name(e.path)} ({printable_name(e.problem[0])}: "
-                          f"{printable_name(' '.join(e.problem[1].split()))})"
-                          for e in flagged[:WARN_LIMIT])
-        more = f" (+{len(flagged) - WARN_LIMIT} more)" if len(flagged) > WARN_LIMIT else ""
-        raise TenantSetUnknown(
-            f"cannot tell which tenants {printable_name(os.fspath(config_dir))} "
-            f"declares: {len(flagged)} entr(y/ies) da-guard parse-tree cannot read as "
-            f"config files: {shown}{more}")
-    declared, unreadable = declared_tenants(reader)
-    if unreadable:
+    declared, unknown = declared_tenants(reader)
+    if unknown:
         shown = "; ".join(
             f"{printable_name(u.file)} ({printable_name(u.kind)}: "
             f"{printable_name(' '.join(u.message.split()))})"
-            for u in unreadable[:WARN_LIMIT])
-        more = (f" (+{len(unreadable) - WARN_LIMIT} more)"
-                if len(unreadable) > WARN_LIMIT else "")
+            for u in unknown[:WARN_LIMIT])
+        more = (f" (+{len(unknown) - WARN_LIMIT} more)"
+                if len(unknown) > WARN_LIMIT else "")
         raise TenantSetUnknown(
             f"cannot tell which tenants {printable_name(os.fspath(config_dir))} "
-            f"declares: da-guard parse-tree cannot read {len(unreadable)} "
-            f"tenant file(s): {shown}{more}")
+            f"declares: da-guard parse-tree cannot read {len(unknown)} "
+            f"path(s) that are or may hide a tenant file: {shown}{more}")
     duplicates = duplicate_declarations(declared)
     if duplicates:
         shown = "; ".join(
@@ -1163,39 +1154,6 @@ def tree_tenants(
     for tenant in sorted(declared):
         (tenants if validate is None or validate(tenant) else invalid).append(tenant)
     return TreeTenants(tenants, invalid)
-
-
-def _tenant_set_blockers(config_dir: "str | os.PathLike[str]", reader: Any) -> list:
-    """The entries that make a tree's tenant set unknown (#3206), from the
-    reader's listing — Go's role, class and problem, and for a directory
-    Go's class of its NAME (`classify_names`), never a name rule here:
-
-    * a directory it could not list, whatever its name — what is under it
-      is unknown;
-    * a link to a directory the walk does not follow, whatever its name —
-      nothing under it is loaded;
-    * any other entry Go flags (a dangling link, a special file, a directory
-      with a config file's name) unless Go classes the name a platform one
-      (`_`, read for no tenant: naming it would report a loss that did not
-      happen)."""
-    from _lib_parse_tree import classify_names  # lazy: see the walk section
-    listing = config_listing(config_dir, reader=reader)
-    if listing is None:
-        return []
-    cand = [e for e in listing.entries if e.flagged]
-    dirs = {e.name for e in cand if e.is_dir}
-    named = classify_names(sorted(dirs), getattr(reader, "binary", None),
-                           getattr(reader, "timeout", None)) if dirs else {}
-    out = []
-    for e in cand:
-        if e.unlistable_dir or (e.not_a_file and e.cls == "directory"):
-            out.append(e)
-        elif e.is_dir:
-            if not named[e.name].reserved:
-                out.append(e)
-        elif not e.reserved:
-            out.append(e)
-    return out
 
 
 def _reader_of(config_dir: "str | os.PathLike[str]", reader: Any) -> Any:
@@ -1269,21 +1227,23 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     ``tenants:`` in a file `da-guard parse-tree` reads (*reader*, as for
     ``declared_tenant_ids``), keyed by its source text. A label is the
     root-relative POSIX path (the file name when it is not under the root).
-    *unreadable* lists the labels of the files parse-tree could not read, in
-    walk order — a limit on the answer, which the caller must name — but a
-    file whose top level is not a mapping, which declares nothing.
+    *unreadable* lists, as one list (#3206: both halves of
+    `_lib_parse_tree.TenantScope`), the labels of the paths that are or may
+    hide a tenant file (a directory Go could not list, a link it does not
+    follow, …), then of the tenant files parse-tree could not read, in walk
+    order — a limit on the answer, which the caller must name — but a file
+    whose top level is not a mapping, which declares nothing.
     Raises `_lib_parse_tree.ParseTreeError` as ``declared_tenant_ids`` does.
     """
     from _lib_parse_tree import FileUnreadable
+    from _lib_parse_cache import tenant_scope
     reader = _reader_of(config_dir, reader)
     root = Path(config_dir)
     declared: dict[str, set[str]] = {}
-    unreadable: list[str] = []
-    listing = config_listing(root, reader=reader)
-    for e in ([] if listing is None else listing.config_files()):
-        if e.reserved:
-            continue
-        path, label = root / e.path, e.path
+    scope = tenant_scope(reader) if config_listing(root, reader=reader) is not None else None
+    unreadable: list[str] = [] if scope is None else [u.file for u in scope.unknown]
+    for rel in ([] if scope is None else scope.files):
+        path, label = root / rel, rel
         try:
             data = reader.read(path)
         except FileUnreadable as e:  # `yaml_syntax` owns naming the reason

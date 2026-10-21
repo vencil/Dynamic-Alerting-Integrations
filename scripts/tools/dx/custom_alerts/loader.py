@@ -25,8 +25,8 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402
-    is_dir_symlink,
     list_config_tree,
+    unusable_entry,
     unusable_reason,
     warn_dir_symlink_once,
 )
@@ -231,7 +231,9 @@ def collect_instances(config_dir: Path, reader=None,
         # Named on stderr, in `describe_tenant`'s wording, once per process
         # (describe_tenant names it too), and not counted.
         reason = unusable_reason(bad, listing.listing)
-        if is_dir_symlink(bad):
+        # #3206 m4: Go's role and class (`Entry.dir_link`), not a stat.
+        entry = unusable_entry(bad, listing.listing)
+        if entry is not None and entry.dir_link:
             warn_dir_symlink_once(bad, reason)
             continue
         rel = bad.relative_to(config_dir).as_posix() if bad != config_dir else "."

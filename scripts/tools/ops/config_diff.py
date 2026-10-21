@@ -245,13 +245,18 @@ def _has_config_file(doc):
 
 
 def _platform_files(doc):
-    return {rel: content for rel, content in doc["files"].items()
-            if PurePosixPath(rel).name.startswith("_")}
+    """The `_` (platform) files with content, by Go's class (#3206)."""
+    reserved = {e.path for e in _lib_parse_tree.entries_of(doc) if e.reserved}
+    return {rel: content for rel, content in doc["files"].items() if rel in reserved}
 
 
 def _unreadable_platform_files(doc):
+    """The `_` (platform) config files parse-tree cannot read, by Go's class
+    (#3206). An entry that is no config file (a link not followed, a
+    directory it could not list) is no platform file: the served view names
+    it (`_render_diff`)."""
     return {e.path: e.problem[0] for e in _lib_parse_tree.entries_of(doc)
-            if e.problem is not None and e.name.startswith("_")}
+            if e.problem is not None and e.reserved}
 
 
 def _setting_row(rel, key, change, status, note, views=()):
@@ -295,14 +300,17 @@ def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
     defaults carrier: `_defaults.yml` beside `_defaults.yaml`), when its
     bytes differ between the sides or it is on one side only."""
     reasons = {}
+    present = []
     for doc in (old_doc, new_doc):
-        for e in _lib_parse_tree.entries_of(doc):
-            if e.not_read is not None and e.name.startswith("_"):
+        entries = _lib_parse_tree.entries_of(doc)
+        present.append({e.path for e in entries if e.config_file})
+        for e in entries:
+            if e.not_read is not None and e.reserved:
                 reasons.setdefault(e.path, e.not_read)
     rows = []
     for rel in sorted(reasons):
-        old = _read_bytes(old_dir, rel)
-        new = _read_bytes(new_dir, rel)
+        old = _read_bytes(old_dir, rel, rel in present[0])
+        new = _read_bytes(new_dir, rel, rel in present[1])
         if old == new:
             continue
         change = "added" if old is None else "removed" if new is None else "modified"
@@ -311,11 +319,13 @@ def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
     return rows
 
 
-def _read_bytes(root, rel):
-    """The file's bytes, or None when it is not there. Bytes only: nothing
-    here parses it (ADR-036)."""
-    path = Path(root) / rel
-    return path.read_bytes() if path.is_file() else None
+def _read_bytes(root, rel, present):
+    """The file's bytes, or None when it is not there — *present*: whether
+    that side's document lists *rel* as a config file (Go's role, #3206; not
+    `is_file()`, which answers False for a file whose stat is refused).
+    Bytes only: nothing here parses it (ADR-036). A read that fails raises
+    OSError: the caller compares nothing it could not read."""
+    return (Path(root) / rel).read_bytes() if present else None
 
 
 def _classify(rel, key, change, stem, doc, changed_views, view_status):
@@ -1642,8 +1652,17 @@ def _run(args):
     # settings read it, and whether a side has any config file is asked of
     # its entries, not of a second listing.
     platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT)
-    _view, old_doc, new_doc = platform
-    has = None if old_doc is None else (_has_config_file(old_doc), _has_config_file(new_doc))
+    view, old_doc, new_doc = platform
+    if old_doc is None:
+        # #3206 N-4: no document for a side is no answer for the run — never a
+        # second listing to ask "is there any config" of instead.
+        die_caller_error(
+            f"ERROR: cannot compare configs (--old-dir {args.old_dir} --new-dir "
+            f"{args.new_dir}): {VIEW_TITLES[VIEW_PLATFORM]}: not computed: "
+            f"{printable_name(view.reason)}",
+            reason="compare_failed",
+        )
+    has = (_has_config_file(old_doc), _has_config_file(new_doc))
     diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections, has=has)
     report = build_report(diff, args.old_dir, args.new_dir, platform=platform)
     code = report_exit_code(diff, report)

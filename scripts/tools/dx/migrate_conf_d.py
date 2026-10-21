@@ -132,13 +132,20 @@ def plan_migration(conf_d: Path, reader: "_lib_parse_cache.ConfdReader | None" =
     for e in top_entries:
         if not e.is_dir:
             continue
-        actions.append({
+        action = {
             "source": e.path + "/",
             "target": e.path + "/",
             "tenant_id": None,
             "metadata": None,
             "status": "skip_already_nested",
-        })
+        }
+        if e.problem is not None:
+            # A directory with a config file's name (`x.yaml/`): Go's problem
+            # on a `dir` entry. The exporter enters it, but the name says
+            # "file" — named in the summary, not silently counted.
+            action["reason"] = (f"the exporter enters it, but its name looks like a "
+                                f"file's ({e.problem[0]}: {' '.join(e.problem[1].split())})")
+        actions.append(action)
 
     reserved = {e.path for e in top_entries if e.reserved}
     for name in top:
@@ -340,6 +347,9 @@ def main() -> None:
     print(f"   Skip (unplaceable): {len(skipped_unplaceable)}")
     for a in skipped_unplaceable:
         print(f"     {a['source']}: {a['reason']} — move it by hand")
+    for a in skipped_nested:
+        if a.get("reason"):
+            print(f"     {a['source']}: {a['reason']}")
     print()
 
     if args.output_plan:

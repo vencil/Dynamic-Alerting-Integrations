@@ -6571,3 +6571,25 @@ def test_a_path_that_cannot_be_made_relative_never_fails_the_run(
     else:
         monkeypatch.setattr(ip.os.path, "relpath", boom)
     assert ip._as_typed_here("/abs/out", "conf.d/") == "/abs/out/conf.d/"
+
+
+@pytest.mark.parametrize("name", ["_arch", "arch"])
+def test_an_unlistable_directory_is_a_possible_declarer_whatever_its_name(
+        name, tmp_path, unlistable_dir):
+    """#3206 M-B: a directory Go could not list holds tenant files nobody can
+    see — the exporter descends `_` directories too — so it is named, a (d)
+    mention of every requested tenant, and init does not write a second
+    declaration of a tenant it may already declare. It was skipped by a `_`
+    name rule for `_arch/`, and init wrote `conf.d/db-a.yaml` beside it."""
+    conf = tmp_path / "conf.d"
+    (conf / name).mkdir(parents=True)
+    (conf / name / "db-a.yaml").write_text("tenants:\n  db-a: {}\n", encoding="utf-8")
+    (conf / "db-b.yaml").write_text("tenants:\n  db-b: {}\n", encoding="utf-8")
+    unlistable_dir(conf, conf / name)
+    plan = ip._plan_confd(
+        {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
+         "tenants": ["db-a", "db-c"], "namespace": "monitoring",
+         "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
+    assert plan.generate == [], plan
+    assert plan.skipped == {"db-a": [f"conf.d/{name}"], "db-c": [f"conf.d/{name}"]}, plan
+    assert plan.mentions[f"conf.d/{name}"] == ["db-a", "db-c"], plan

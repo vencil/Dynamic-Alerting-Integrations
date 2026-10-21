@@ -47,12 +47,12 @@ from _lib_confd import (  # noqa: E402
     config_listing,
     has_yaml_extension,
     is_defaults_name,
-    is_dir_symlink,
     is_hidden_name,
     iter_config_files,
     list_config_tree,
     select_defaults_carrier,
     unusable_config_entries,
+    unusable_entry,
     unusable_reason,
     warn_nested,
 )
@@ -678,7 +678,8 @@ def main() -> int:
         unreadable_files = [p for p in out_tree.unusable if p not in blind]
         for p in sorted(unreadable_files):
             # A directory link's reason already says what the exporter does.
-            tail = ("" if is_dir_symlink(p)
+            entry = unusable_entry(p, out_tree.listing)
+            tail = ("" if entry is not None and entry.dir_link
                     else " — the exporter cannot read it either")
             print(f"WARN: {p} {unusable_reason(p, out_tree.listing)}{tail}", file=sys.stderr)
         if blind:

@@ -179,6 +179,8 @@ def _collect_data(config_dir: str) -> dict:
         "profile_refs": profile_refs,
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
+        # #3206: which of them is a platform (`_`) file is Go's class.
+        "reserved_files": sorted(reserved),
         "not_read": not_read,
         # #2326: directory scope of profiles / policies / tenants.
         "profiles_by_dir": profiles_by_dir,
@@ -223,8 +225,11 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     unreadable_files = list(data.get("unreadable_files", []))
     profiles_unreadable = [f for f in unreadable_files
                            if os.path.basename(f) in _PROFILE_FILES]
-    tenants_unreadable = [f for f in unreadable_files
-                          if not os.path.basename(f).startswith("_")]
+    # A platform file declares no tenant; which one is, is Go's class
+    # (`reserved_files`, #3206) — an entry that is no file (a link to a
+    # directory, `_shared` too) may hide tenant files, so it counts.
+    reserved = set(data.get("reserved_files", ()))
+    tenants_unreadable = [f for f in unreadable_files if f not in reserved]
     if profiles_unreadable:
         messages.append("INFO: profile checks skipped: "
                         f"{', '.join(profiles_unreadable)} unreadable")

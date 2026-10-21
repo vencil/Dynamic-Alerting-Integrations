@@ -504,40 +504,53 @@ def nested_defaults_carriers(tree: Tree) -> list[str]:
 
 
 def tenant_files(tree: Tree) -> list[str]:
-    """The files a tenant can be declared in: the config files (Go's
-    `role`) of class `tenant` parse-tree selects (a `_` file is a platform
-    file, read for no tenant), sorted, root-relative — readable or not
-    (`node` names why one cannot be read). #3206: Go's class and role, not a
-    name rule here. What is no config file (a link not followed, a dangling
-    link, a directory it could not list) is not a tenant file: a reader of
-    the tenant set refuses on it itself (`_lib_confd.tree_tenants`)."""
-    return sorted(e.path for e in tree.entries
-                  if e.cls == "tenant" and e.config_file and e.path in tree.selected)
+    """The tenant files of an in-memory document — a ConfigMap's keys
+    (`patch_config`), where no directory, link or special file can exist,
+    so `tenant_scope(...).unknown` is empty by construction — and of the
+    readers that name every flagged entry themselves from the same document
+    (`gitops_check`, `check_path_metadata_consistency`). ⛔ Any other reader
+    of the tenant set takes :func:`tenant_scope` (both halves); a test pins
+    who calls this (`test_confd_tools_no_python_judgement`)."""
+    return list(_lib_parse_tree.tenant_file_paths(tree.entries))
 
 
-def declared_tenants(reader: ConfdReader, files: "Iterable[str] | None" = None
+def tenant_scope(reader: ConfdReader, *, exclude: "Callable[[str], bool] | None" = None
+                 ) -> "_lib_parse_tree.TenantScope":
+    """*reader*'s `_lib_parse_tree.TenantScope` — the tenant files and the
+    entries that leave the set unknown — from its one listing. Raises
+    ParseTreeError."""
+    return _lib_parse_tree.tenant_scope(reader.listing().entries,
+                                        getattr(reader, "binary", None),
+                                        getattr(reader, "timeout", None), exclude=exclude)
+
+
+def declared_tenants(reader: ConfdReader, *, exclude: "Callable[[str], bool] | None" = None
                      ) -> "tuple[dict[str, list[str]], list[FileUnreadable]]":
-    """``({tenant id: [file, ...]}, unreadable)``: the keys of the
-    mapping-shaped ``tenants:`` of each of *files* (default: every
-    :func:`tenant_files` file), keyed by their source text as yaml.v3 keys
-    the exporter's ``map[string]``. *unreadable* is each file parse-tree
-    cannot read — its content, and so what it declares, is unknown; the
-    caller names it — but a file whose top level is not a mapping, which
-    declares nothing. Raises ParseTreeError / NotSelected."""
+    """``({tenant id: [file, ...]}, unknown)``: the keys of the
+    mapping-shaped ``tenants:`` of each tenant file (:func:`tenant_scope`;
+    *exclude* as there), keyed by their source text as yaml.v3 keys the
+    exporter's ``map[string]``. *unknown* is BOTH halves of what leaves the
+    answer open, one list a caller cannot take half of: each entry
+    `tenant_scope` names as possibly hiding a tenant file (a directory Go
+    could not list, a link it does not follow, …), then each tenant file
+    parse-tree cannot read — its content, and so what it declares, is
+    unknown — but a file whose top level is not a mapping, which declares
+    nothing. The caller names them. Raises ParseTreeError / NotSelected."""
+    scope = tenant_scope(reader, exclude=exclude)
     declared: dict[str, list[str]] = {}
-    unreadable: list[FileUnreadable] = []
-    for rel in (tenant_files(reader.tree()) if files is None else files):
+    unknown: list[FileUnreadable] = list(scope.unknown)
+    for rel in scope.files:
         try:
             data = reader.read(rel)
         except FileUnreadable as exc:
             if exc.kind != "top_level_not_mapping":
-                unreadable.append(exc)
+                unknown.append(exc)
             continue
         tenants = data.get("tenants")
         if isinstance(tenants, dict):
             for tenant in tenants:
                 declared.setdefault(tenant, []).append(rel)
-    return declared, unreadable
+    return declared, unknown
 
 
 def read_text_as(root: "str | os.PathLike[str]", rel: str, data: bytes,
