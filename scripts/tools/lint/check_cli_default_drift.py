@@ -120,6 +120,71 @@ class _Captured(BaseException):
         self.parser = parser
 
 
+class SubParserConflict(NamedTuple):
+    """A flag declared on several parsers of one command with different
+    defaults (#3139) — e.g. `--format` defaulting to `text` on one sub-command
+    and `json` on another. A flat options table has one default cell for it,
+    so there is no single value to compare: it is counted, never matched
+    against whichever value happens to agree."""
+    values: tuple[Any, ...]
+
+
+def _parser_defaults(parser: argparse.ArgumentParser) -> dict[str, Any]:
+    """{option string: default} over the parser AND every sub-parser below it.
+
+    ⛔ #3139: reading only ``parser._actions`` missed every option declared on
+    an ``add_subparsers`` child — gitops-check's options all live on
+    repo/local/sidecar, so changing its documented ``--branch`` default from
+    ``main`` to ``master`` stayed green. The walk is recursive (a sub-parser
+    can have its own sub-parsers) and visits each parser once (an alias maps
+    to the same parser object). The same option on several parsers with the
+    same default is that default; with different defaults it is a
+    ``SubParserConflict``.
+
+    The default is the one argparse applies, not ``action.default`` alone: a
+    parser's ``set_defaults(dest=...)`` overrides it, and a sub-parser's
+    ``set_defaults`` for an option declared ABOVE it is that option's default
+    whenever that sub-command runs — one more value for the option, which
+    makes it a conflict when it differs.
+    """
+    seen: dict[str, list[Any]] = {}
+    visited: set[int] = set()
+
+    def add(opt: str, value: Any) -> None:
+        values = seen.setdefault(opt, [])
+        # type-strict: `0 == False`, but `0` and `false` are different cells
+        if not any(type(v) is type(value) and v == value for v in values):
+            values.append(value)
+
+    def walk(p: argparse.ArgumentParser, above: dict[str, list[str]]) -> None:
+        if id(p) in visited:
+            return
+        visited.add(id(p))
+        overrides = getattr(p, "_defaults", {})
+        own: dict[str, list[str]] = {}
+        children: list[argparse.ArgumentParser] = []
+        for action in p._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                children.extend(action.choices.values())
+                continue
+            if action.dest == "help" or not action.option_strings:
+                continue
+            own.setdefault(action.dest, []).extend(action.option_strings)
+            for opt in action.option_strings:
+                add(opt, overrides.get(action.dest, action.default))
+        for dest, opts in above.items():
+            if dest in overrides and dest not in own:
+                for opt in opts:
+                    add(opt, overrides[dest])
+        scope = {**above, **own}
+        for child in children:
+            walk(child, scope)
+
+    walk(parser, {})
+    return {opt: values[0] if len(values) == 1 else SubParserConflict(tuple(values))
+            for opt, values in seen.items()}
+
+
 def _resolve(script: str) -> Path | None:
     for base in _SEARCH_DIRS:
         candidate = REPO_ROOT / base / script
@@ -184,12 +249,7 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
                     runpy.run_path(str(path), run_name="__main__")
                 unscoreable.append(f"{command} (no argparse parser reached)")
             except _Captured as hit:
-                captured[command] = {
-                    opt: action.default
-                    for action in hit.parser._actions
-                    for opt in action.option_strings
-                    if action.dest != "help"
-                }
+                captured[command] = _parser_defaults(hit.parser)
             except SystemExit:
                 # A repo fact, not an apparatus failure: three tools
                 # (batch-pr / guard / parser) exit before argparse is reached.
@@ -327,7 +387,8 @@ def scan(docs: tuple[Path, ...] = DOCS,
         defaults, unscoreable, blind, faults = introspect_defaults()
     findings: list[Finding] = []
     stats = {"scored": 0, "matched": 0, "doc_prose": 0,
-             "actual_not_literal": 0, "flag_undeclared": 0, "no_parser": 0}
+             "actual_not_literal": 0, "flag_undeclared": 0, "no_parser": 0,
+             "subparser_conflict": 0}
     # ⛔ blind and faults go into `errors`, NOT into the `unscoreable:`-prefixed
     # notes, because main() reads that prefix as "soft disclosure" and exits 0.
     errors: list[str] = [
@@ -399,6 +460,28 @@ def scan(docs: tuple[Path, ...] = DOCS,
             documented = _doc_literal(cells[default_col])
             if documented is None:
                 stats["doc_prose"] += 1
+                continue
+            conflict = defaults[command][flag]
+            if isinstance(conflict, SubParserConflict):
+                # One cell, several sub-command defaults. Equal to one of them:
+                # no single answer, counted. Equal to NONE of them: no
+                # sub-command has that default — drift (#3139 review F4).
+                actuals = [_actual_literal(v) for v in conflict.values]
+                if any(a is not None and a[0] == documented[0]
+                       and _same(documented[0], documented[1], a[1])
+                       for a in actuals):
+                    stats["subparser_conflict"] += 1
+                    continue
+                if any(a is None or a[0] != documented[0] for a in actuals):
+                    stats["actual_not_literal"] += 1
+                    continue
+                stats["scored"] += 1
+                by_doc[rel] = by_doc.get(rel, 0) + 1
+                if last_header is not None:
+                    by_header[last_header] = by_header.get(last_header, 0) + 1
+                findings.append(Finding(
+                    rel, number, command, flag, cells[default_col],
+                    " / ".join(repr(v) for v in conflict.values)))
                 continue
             actual = _actual_literal(defaults[command][flag])
             if actual is None or actual[0] != documented[0]:
@@ -486,7 +569,9 @@ def main() -> int:
               f"{stats['flag_undeclared']} rows whose flag the CLI does not "
               f"declare (that class belongs to #1513, not here), "
               f"{stats['no_parser']} rows under a subcommand with no argparse "
-              f"parser")
+              f"parser, {stats['subparser_conflict']} rows whose flag has "
+              f"different defaults on different sub-commands (the cell names "
+              f"one of them)")
         print("⚠️ NOT scored is a disclosure, not coverage: this check cannot "
               "see those rows.")
         if not findings and not hard_errors:
