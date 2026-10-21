@@ -68,13 +68,11 @@ dir=$(cd "$(mktemp -d)" && go mod download -json gopkg.in/yaml.v3@v3.0.1 \
 dst=components/threshold-exporter/app/third_party/yaml.v3
 rm -rf "$dst" && cp -r "$dir" "$dst" && chmod -R u+w "$dst"
 patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-uniquekeys.patch
-patch --no-backup-if-mismatch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-unhashable-merge-key.patch
+patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-unhashable-merge-key.patch
 python3 -m pytest -q tests/ops/test_vendored_yaml_v3.py
 ```
 
-`go mod download` 會先以 checksum database 驗過 v3.0.1 才給路徑。第一份 `patch` 應無 offset／fuzz 提示；
-第二份三段 hunk 各報 `offset -8 lines`（它的 `@@` 行號取自當時還套著「非特定 tag」patch 的檔案，`+`／`-` 行不受影響），
-不應有 fuzz。`--no-backup-if-mismatch` 是為了不留下 `decode.go.orig`：多一個檔，守衛的 `h1:` 比對就會紅。
+`go mod download` 會先以 checksum database 驗過 v3.0.1 才給路徑；`patch` 應無 offset／fuzz 提示。
 
 ### 上游安全修補要手動 backport
 

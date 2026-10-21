@@ -71,7 +71,7 @@ _PATCH_SHA256 = "32fd9b238124d4eb520292c97119b2eaed76b983b9d1bc2f16e6d0f429451b9
 # text (ADR-036 step 8, #3206).
 # #2913: go.yaml.in/yaml/v3 v3.0.2's decode.go change (the only semantic change
 # to that file through v3.0.5); +/- lines byte-identical to upstream's.
-_UNHASHABLE_PATCH_SHA256 = "84f5baa69149d841265e93cebdd316edff527ab0c9e0cc16cbbb550b0cb7f56e"
+_UNHASHABLE_PATCH_SHA256 = "d1faf04b486894b947ac08e9e52c607e1d3eaf0cbd1da5661cf28f1b472c5794"
 # Every allowed change, applied in this order on upstream v3.0.1: its pinned
 # sha256, and the hunks it may hold per file.
 _PATCHES = {
