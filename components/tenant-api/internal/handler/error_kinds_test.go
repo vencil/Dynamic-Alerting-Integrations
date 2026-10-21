@@ -115,6 +115,39 @@ func TestKindTable_CoversEveryKindOnce(t *testing.T) {
 	}
 }
 
+// retryableWithoutRetryAfter are the retryable 5xx kinds that deliberately
+// carry no Retry-After, each with why. Anything else retryable at 5xx must
+// say when to come back (TestKindTable_RetryableServerErrorsSayWhen).
+var retryableWithoutRetryAfter = map[errkind.Kind]string{
+	// The write stopped before it committed because ITS OWN request (or async
+	// task) was cancelled or reached its deadline, or one git command hit its
+	// own deadline — nothing on the server is busy or recovering, so there is
+	// no wait to pace: the caller may resend at once (msgWriteCancelled says
+	// it is safe to retry).
+	errkind.WriteCancelled: "the request's own cancellation or deadline; nothing server-side to wait for",
+}
+
+// TestKindTable_RetryableServerErrorsSayWhen: a retryable 5xx without
+// Retry-After leaves an automated client to guess its back-off (#3226 found
+// one: the forge PR/MR creation 503). Every Retryable row with Status >= 500
+// has RetryAfterS > 0, or is a listed exception; an exception that no longer
+// applies is reported too, so the list cannot outlive its reason.
+func TestKindTable_RetryableServerErrorsSayWhen(t *testing.T) {
+	t.Parallel()
+	for _, sp := range kindTable {
+		_, exempt := retryableWithoutRetryAfter[sp.Kind]
+		needs := sp.Retryable && sp.Status >= 500
+		switch {
+		case needs && sp.RetryAfterS <= 0 && !exempt:
+			t.Errorf("kindTable row %q: retryable %d with no RetryAfterS — give it one, or list it in "+
+				"retryableWithoutRetryAfter with the reason", sp.Kind, sp.Status)
+		case exempt && (!needs || sp.RetryAfterS > 0):
+			t.Errorf("retryableWithoutRetryAfter lists %q, which is not a retryable 5xx without "+
+				"Retry-After any more; drop the exception", sp.Kind)
+		}
+	}
+}
+
 // TestKindSpecs_IsACopy: the exported listing cannot edit the table.
 func TestKindSpecs_IsACopy(t *testing.T) {
 	t.Parallel()

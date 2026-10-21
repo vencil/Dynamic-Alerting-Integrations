@@ -109,24 +109,46 @@ linters:
       rules:
         domain-no-handler:
           list-mode: lax
+          # The list's criterion (#3226): EVERY package under internal/ is
+          # listed, except two that cannot be:
+          #   - internal/handler and its subpackages — the layer this denies;
+          #   - internal/federation/orphan — its external test package
+          #     (enumerator_parity_test.go, #1680) imports handler on purpose
+          #     to compare GET /tenants with the orphan scans. Its non-test
+          #     code cannot import handler anyway: handler imports orphan, so
+          #     that is an import cycle the compiler rejects.
+          # Most of the listed packages are also imported by handler, so a
+          # non-test file of theirs importing it is already a cycle; the rule
+          # adds their external `_test` packages and the ones handler does not
+          # import (github, gitlab, statemigrate, staterestore, testutil). A
+          # new internal package goes here unless it has a reason like
+          # orphan's — import_direction_test fails on a package directory
+          # that is neither listed nor one of those two exemptions.
           files:
-            - "**/internal/rbac/**"
-            - "**/internal/customalerts/**"
-            - "**/internal/groups/**"
-            - "**/internal/views/**"
-            - "**/internal/gitops/**"
-            - "**/internal/statestore/**"
+            - "**/internal/async/**"
+            - "**/internal/boundedcall/**"
             - "**/internal/confd/**"
-            - "**/internal/generator/**"
-            - "**/internal/platform/**"
-            # Not internal/federation/orphan: its external test package
-            # (enumerator_parity_test.go, #1680) imports handler on purpose to
-            # compare GET /tenants with the orphan scans. Its non-test code
-            # cannot import handler anyway — handler imports orphan, so that is
-            # an import cycle the compiler rejects.
+            - "**/internal/configwatcher/**"
+            - "**/internal/credmask/**"
+            - "**/internal/customalerts/**"
+            - "**/internal/errkind/**"
             - "**/internal/federation/account/**"
             - "**/internal/federation/fedpolicy/**"
             - "**/internal/federation/token/**"
+            - "**/internal/generator/**"
+            - "**/internal/github/**"
+            - "**/internal/gitlab/**"
+            - "**/internal/gitops/**"
+            - "**/internal/groups/**"
+            - "**/internal/platform/**"
+            - "**/internal/rbac/**"
+            - "**/internal/statemigrate/**"
+            - "**/internal/staterestore/**"
+            - "**/internal/statestore/**"
+            - "**/internal/tenantorg/**"
+            - "**/internal/testutil/**"
+            - "**/internal/views/**"
+            - "**/internal/ws/**"
           deny:
             - pkg: github.com/vencil/tenant-api/internal/handler
               desc: domain packages must not import the HTTP handler layer

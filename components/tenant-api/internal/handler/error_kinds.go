@@ -107,7 +107,7 @@ var kindTable = []KindSpec{
 
 	{Kind: errkind.ForgeForbidden, Status: http.StatusForbidden, Code: CodeForbidden, Fault: true},
 	{Kind: errkind.ForgeCircuitOpen, Status: http.StatusServiceUnavailable, Code: CodeForgeUnavailable, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.ForgeCreateFailed, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true},
+	{Kind: errkind.ForgeCreateFailed, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
 
 	{Kind: errkind.FederationTokenLimit, Status: http.StatusConflict, Code: CodeConflict},
 	// 60: the mint window (token.mintWindow), for the bare sentinel; the

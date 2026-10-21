@@ -798,7 +798,7 @@ func (e *configFileParseError) ErrorKind() errkind.Kind { return errkind.ConfigF
 //   - platform.ErrCircuitOpen → 503 FORGE_UNAVAILABLE + Retry-After: forge
 //     degraded and fast-failed (#632/#645); never leaks the internal "circuit
 //     breaker open".
-//   - anything else           → 503 with a FIXED provider-scoped message; the
+//   - anything else           → 503 + Retry-After with a FIXED provider-scoped message; the
 //     underlying error is logged server-side, never echoed to the client
 //     (#795 F2 — keeps the no-leak contract; err here is the already-sanitized
 //     APIError but we don't surface even its method/path/status).

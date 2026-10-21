@@ -27,12 +27,6 @@ func newMintLimiter() *mintLimiter {
 	return &mintLimiter{hits: make(map[string][]time.Time)}
 }
 
-// allow is admit without the wait.
-func (l *mintLimiter) allow(tenantID string, now time.Time) bool {
-	ok, _ := l.admit(tenantID, now)
-	return ok
-}
-
 // admit records a mint attempt for tenantID at now and reports whether
 // it is within the rate limit; when it is not, wait is how long until the
 // oldest mint in the window ages out and the next attempt is admitted. A

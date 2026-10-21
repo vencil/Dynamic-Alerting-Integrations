@@ -39,6 +39,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -136,6 +137,61 @@ func TestDomainPackagesDoNotImportHandler(t *testing.T) {
 		t.Errorf("domain package imports the HTTP handler layer (%s); move the shared "+
 			"piece into the domain side, or mirror it by value as middleware.go does:\n  %s",
 			handlerImportPath, strings.Join(violations, "\n  "))
+	}
+}
+
+// domainExempt are the internal/ package trees domain-no-handler cannot
+// list (see the rule's comment in .golangci.yml): the handler layer itself,
+// and orphan, whose external test package imports handler on purpose.
+var domainExempt = []string{"internal/handler", "internal/federation/orphan"}
+
+// TestEveryInternalPackageIsDomainOrExempt holds the list's criterion: every
+// directory under internal/ that holds a .go file is inside a listed scope
+// or an exemption, so a new package cannot be left out by forgetting it.
+func TestEveryInternalPackageIsDomainOrExempt(t *testing.T) {
+	t.Parallel()
+	root := moduleRootForGuard(t)
+	covered := append(domainPackages(t, root), domainExempt...)
+	under := func(dir string) bool {
+		for _, c := range covered {
+			if dir == c || strings.HasPrefix(dir, c+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	var missing []string
+	base := filepath.Join(root, "internal")
+	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != base && (name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, filepath.Dir(path))
+		if rerr != nil {
+			return rerr
+		}
+		if rel = filepath.ToSlash(rel); !under(rel) && !slices.Contains(missing, rel) {
+			missing = append(missing, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("internal packages neither in depguard's %s `files:` nor exempt (domainExempt): %v — "+
+			"list them in .golangci.yml, or exempt them here with the reason in the rule's comment",
+			domainRuleName, missing)
 	}
 }
 
