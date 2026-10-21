@@ -86,4 +86,7 @@ from _lib_prometheus import (  # noqa: F401
     probe_health,
     query_prometheus_instant,
     query_prometheus_range,
+    QueryError,
+    prometheus_range,
+    alertmanager_alerts,
 )

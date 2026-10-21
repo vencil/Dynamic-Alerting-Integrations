@@ -7,7 +7,7 @@
 // out before ADR-036 step 3 deleted that package with its PyYAML
 // imitation (#2905), so they outlived it.
 //
-// Why not internal/confdname: that package is restricted to the
+// Why not pkg/confdname: that package is restricted to the
 // exporter's walker's name rules, and `_domain_policy.yaml` is a name only
 // the route generator gives meaning to. Why not pkg/config: it reads the
 // exporter's effective config, which has no notion of a routing level.

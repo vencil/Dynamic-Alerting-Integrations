@@ -44,17 +44,20 @@
 //	   --cardinality-limit. The report names them (relative to
 //	   --config-dir). A DecodeError stops the run before any tenant is
 //	   checked, so only that first undecodable file is named (the
-//	   unreadable paths still are). Only files the exporter drops or the
-//	   walk cannot read: a file only the route generator refuses (a key it
-//	   counts twice that yaml.v3 lets through, a merge value it will not
-//	   merge) is not exit 3 since ADR-036 step 3 (#2905) — parse-tree names
-//	   it unreadable, so it is undetermined evidence (4, below).
+//	   unreadable paths still are). Since ADR-036 step 6 (#3206) the
+//	   exporter's load refuses every file parse-tree names unreadable (a
+//	   second document, a tag outside the allowed set, a byte order mark
+//	   past the start, a null key, a key repeated through an alias, …;
+//	   pkg/config parse_verdict.go), so those files are exit 3 here exactly
+//	   when they bear on --scope — the same files the route generator
+//	   refuses.
 //	4  undetermined (#2904, ADR-036 §9 step 2): the tree — the whole of
 //	   --config-dir, whatever --scope says — holds what only the route
 //	   generator judges (undetermined.go: a routing key at any depth, a
-//	   domain policy or routing profiles file, a file parse-tree names
-//	   unreadable, a tenant id the tenant-id rule refuses or two tenant files
-//	   declare), and this check
+//	   domain policy or routing profiles file, a tenant id the tenant-id rule
+//	   refuses or two tenant files declare, or a path parse-tree names
+//	   unreadable that this run's exit 3 does not name — outside --scope, a
+//	   config-named directory or directory symlink), and this check
 //	   no longer judges routing or domain policy: it reports no routing
 //	   finding at all. The report lists the evidence (`undetermined`, always
 //	   present in the JSON, [] when there is none); the remedy is
@@ -310,7 +313,12 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		// `_defaults.yaml` in the chain) is the author's to fix — exit 3,
 		// not 2. A tenant file no longer gets here: since #3063 the walker
 		// refuses every tenant file the merge's decode would (a ParseFailed
-		// file, also exit 3).
+		// file, also exit 3). Since ADR-036 step 6 (#3206) no file content
+		// gets here either: the build and the chain merge both ask parse-tree
+		// first, so a file the merge would refuse is one the build drops and
+		// the chain reads as empty (pkg/config
+		// TestResolveEffective_NoFileTheBuildReadsFailsTheMerge). Kept as the
+		// answer should a decode refuse what parse-tree reads.
 		var de *config.DecodeError
 		if errors.As(err, &de) {
 			// ScopeEffective returns the files the walk could not read
@@ -321,7 +329,8 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			}
 			// The evidence is the whole tree's, so the stopped run still lists
 			// it (the exit code stays 3).
-			undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadable), errOut)
+			undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadable),
+				reportedPaths([]string{de.Path}, unreadable), errOut)
 			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable, undetermined); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
@@ -338,7 +347,8 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
-	undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)), errOut)
+	undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)),
+		reportedPaths(scoped.ParseFailed, unreadableEntries(scoped.Unreadable)), errOut)
 
 	// #2043: without an explicit --cardinality-limit, predict against the cap
 	// the exporter will actually enforce for this tree, not a constant. The
@@ -970,6 +980,19 @@ func reportParseFailed(errOut io.Writer, files []string) {
 	fmt.Fprintf(errOut, "%s: %d file(s) cannot be decoded: %s — "+
 		"fix them and re-run (exit 3)\n",
 		programName, len(files), strings.Join(files, ", "))
+}
+
+// reportedPaths is the set of paths a run names under exit 3: the files it
+// lists as dropped and the paths it lists as unreadable.
+func reportedPaths(parseFailed []string, unreadable []skippedFile) map[string]bool {
+	out := make(map[string]bool, len(parseFailed)+len(unreadable))
+	for _, f := range parseFailed {
+		out[f] = true
+	}
+	for _, u := range unreadable {
+		out[u.File] = true
+	}
+	return out
 }
 
 // rootUnreadable reports whether entries name the --config-dir root itself

@@ -5,7 +5,9 @@ package config
 //
 // Two claims, over one variant corpus:
 //
-//  1. ParseConfigFile is a plain yaml.Unmarshal into ThresholdConfig — the
+//  1. ParseConfigFile is parse-tree's verdict (ADR-036 step 6, #3206: a file
+//     parsetree.Parse refuses is refused with its kind, whatever yaml.v3
+//     would answer), then a plain yaml.Unmarshal into ThresholdConfig — the
 //     flat plane's historical decode — for accept/reject AND for the decoded
 //     content, with TWO listed exceptions: a value written as null is no
 //     write (#2518 — a `defaults:` key, and a threshold key of a `tenants:` /
@@ -36,6 +38,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 	"gopkg.in/yaml.v3"
 )
 
@@ -142,6 +145,7 @@ var lighterDecodeWouldAccept = []string{
 	"defaults value is a string",
 	"duplicate metric key",
 	"max_metrics_per_tenant non-int",
+	"multi-document", // parse-tree's multiple_documents, since ADR-036 step 6 (#3206)
 	"optional_overrides is a mapping",
 	"optional_overrides is a scalar",
 	"profiles is a list",
@@ -157,6 +161,11 @@ var lighterDecodeWouldAccept = []string{
 // oracleDecode is the flat plane's historical decode, spelled out, plus the
 // listed drops (decodeDrops) for corpus row name.
 func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
+	// ADR-036 step 6 (#3206): parse-tree's verdict comes first — the
+	// package that defines it, called directly, not ParseConfigFile.
+	if _, bad := parsetree.Parse(data); bad != nil {
+		return ThresholdConfig{}, &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+	}
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
 	if err == nil {
@@ -226,11 +235,21 @@ func TestParseTenantFile_OnlyAddsTheUTF8Rejection(t *testing.T) {
 			t.Errorf("%s: ParseTenantFile = (%#v, %v), ParseConfigFile = (%#v, %v)", name, got, gotErr, want, wantErr)
 		}
 	}
+	// Since ADR-036 step 6 (#3206) both public entries refuse a `!!binary`
+	// key first (parse-tree's tag_not_allowed), so the #2266 split is the
+	// decode alone: parseConfigFile, with and without the generic decode.
 	data := []byte("tenants:\n  !!binary dP8=:\n    cpu: \"80\"\n  tx:\n    cpu: \"80\"\n")
-	if cfg, err := ParseConfigFile(data); err != nil || len(cfg.Tenants) != 2 {
-		t.Errorf("ParseConfigFile = (%d tenants, %v), want both entries accepted", len(cfg.Tenants), err)
+	for _, parse := range []func([]byte) (ThresholdConfig, error){ParseConfigFile, ParseTenantFile} {
+		if _, err := parse(data); err == nil {
+			t.Errorf("a !!binary key was accepted; want parse-tree's refusal")
+		} else if kind, _ := UnreadableKindOf(err); kind != parsetree.KindTagNotAllowed {
+			t.Errorf("err = %v, want parse-tree's tag_not_allowed", err)
+		}
 	}
-	cfg, err := ParseTenantFile(data)
+	if cfg, err := parseConfigFile(data, false); err != nil || len(cfg.Tenants) != 2 {
+		t.Errorf("the typed decode = (%d tenants, %v), want both entries accepted", len(cfg.Tenants), err)
+	}
+	cfg, err := parseTenantFileDecode(data)
 	if err == nil || err.Error() != `tenant id "t\xff" is not valid UTF-8` {
 		t.Errorf("ParseTenantFile error = %v, want the non-UTF-8 tenant id rejection", err)
 	}

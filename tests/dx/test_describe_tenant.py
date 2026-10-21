@@ -1050,8 +1050,10 @@ class TestPlatformOverlayCLI:
         res = self._run("--all", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
-        assert set(out) == {"tx", "ty", "tm"}
+        # tm: a second document — dropped since ADR-036 step 6 (#3206).
+        assert set(out) == {"tx", "ty"}
         assert "WARNING: skipped tb.yaml — " in res.stderr, res.stderr
+        assert "WARNING: skipped tm.yaml — " in res.stderr, res.stderr
         assert all(t["merged_hash"] is None for t in out.values())
 
     def test_an_unparseable_file_declares_nothing_for_the_duplicate_check(self, tmp_path):
@@ -1392,15 +1394,19 @@ DEFAULTS_SHAPES = {
 }
 DEFAULTS_DOCUMENTS = {
     'control': ('defaults:\n  mysql_connections: 80\n', '664e2553d242d345'),
-    'multi-doc': ('defaults:\n  mysql_connections: 80\n---\ndefaults:\n  mysql_connections: 90\n', '664e2553d242d345'),
-    'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', '664e2553d242d345'),
-    'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', '664e2553d242d345'),
+    # The multi-document rows, and the `!!binary` one below, hashed the first
+    # document (664e2553…) until ADR-036 step 6 (#3206): parse-tree refuses
+    # them (multiple_documents, tag_not_allowed), the exporter drops the
+    # carrier, and the hash is the empty defaults' (dc8202df…).
+    'multi-doc': ('defaults:\n  mysql_connections: 80\n---\ndefaults:\n  mysql_connections: 90\n', 'dc8202dfc4683b17'),
+    'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', 'dc8202dfc4683b17'),
+    'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', 'dc8202dfc4683b17'),
     'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
     'defaults-null': ('defaults: ~\n', 'dc8202dfc4683b17'),
     'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '664e2553d242d345'),
     'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '01fde994832c3568'),
     'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '01fde994832c3568'),
-    'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', '0ee9af955f7e7e01'),
+    'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', 'dc8202dfc4683b17'),
 }
 NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}
 
@@ -1526,9 +1532,10 @@ class TestShowsGoValuesVerbatim:
     @pytest.mark.parametrize("files", [
         {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      at: 2026-12-31T10:20:30+08:00\n"},
         {"_defaults.yaml": "defaults:\n  _x:\n    2026-12-31: v\n", "t1.yaml": "tenants:\n  t1: {}\n"},
-        {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      v: !!binary aHR0cDovL3g=\n"},
+        # A `!!binary` value was a row: since ADR-036 step 6 (#3206) the
+        # exporter drops such a file (parse-tree's tag_not_allowed).
         {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    a: .inf\n    b: .nan\n"},
-    ], ids=["datetime", "date-key", "binary", "non-finite"])
+    ], ids=["datetime", "date-key", "non-finite"])
     @pytest.mark.parametrize("mode", [
         ["t1"], ["t1", "--show-sources"], ["t1", "--format", "yaml"],
         ["--all"], ["--all", "--format", "yaml"],
@@ -1644,17 +1651,18 @@ class TestTreesGoDoesNotResolve:
         assert "Tenant 'tr' not found — the exporter's load skips" in res.stderr, res.stderr
         assert "tr.yaml" in res.stderr
 
-    def test_multi_document_what_if_reads_its_first_document(self, tmp_path):
-        """The draft is read as yaml.v3 reads that path: its first document."""
+    def test_multi_document_what_if_is_a_draft_the_exporter_drops(self, tmp_path):
+        """The draft is read as the exporter reads that path. It used to be its
+        first document; since ADR-036 step 6 (#3206) a second document makes
+        parse-tree refuse it, so the run says the exporter would skip it."""
         conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
                                    "tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
         what_if = tmp_path / "what-if.yaml"
         what_if.write_text("defaults:\n  mysql_connections: 90\n---\n: : [\n", encoding="utf-8")
         res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(what_if),
                         "--replaces", str(conf_d / "_defaults.yaml"))
-        assert res.returncode == 0, res.stderr
-        assert json.loads(res.stdout)["changed_keys"] == {
-            "mysql_connections": {"baseline": 80, "what_if": 90}}
+        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+        assert "the draft does not decode there" in res.stderr, res.stderr
 
     def test_a_root_document_not_a_mapping_leaves_custom_alerts_resolved(self, tmp_path):
         """The custom-alert walker reads the root carrier through parse-tree:

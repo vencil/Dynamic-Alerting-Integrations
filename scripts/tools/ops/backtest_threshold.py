@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import is_disabled, http_get_json, query_prometheus_range, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import is_disabled, http_get_json, prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -144,31 +144,23 @@ def prometheus_available(prom_url, timeout=5):
     return err is None
 
 
-class PrometheusQueryError(Exception):
-    """A range query Prometheus did not answer (HTTP error, timeout, an
-    ``error`` status, a body that is not a JSON object); the message is the
-    error text as received."""
-
-
 def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
     """Execute a Prometheus range_query and return result data.
 
-    Thin wrapper over ``_lib_prometheus.query_prometheus_range`` (ROI r3 W1);
+    Thin wrapper over ``_lib_prometheus.prometheus_range`` (ROI r3 W1);
     tests monkeypatch this module attribute by name — keep it.
 
-    Raises ``PrometheusQueryError`` when the query fails (#3059): a failed
+    Raises ``QueryError`` when the query was not answered (#3059) — HTTP
+    error, timeout, an ``error`` status — or was answered with a body that
+    is not a matrix (#3074: no ``data``, a row without ``values``): a failed
     query used to return ``[]`` here, so it was reported as ``no_data`` —
-    "no history" — with exit code 0. An empty result is still ``[]``.
+    "no history" — with exit code 0. An empty matrix is still ``[]``.
     """
     import time
     end = time.time()
     start = end - lookback_seconds
 
-    result, err = query_prometheus_range(
-        prom_url, query, start, end, step, timeout=30)
-    if err:
-        raise PrometheusQueryError(str(err))
-    return result
+    return prometheus_range(prom_url, query, start, end, step, timeout=30)
 
 
 def _is_nan_sample(val_str):
@@ -913,7 +905,7 @@ def backtest_change(prom_url, change, lookback_seconds):
     # `no_data` — the change was not measured, which `main` turns into rc 2.
     try:
         rows = query_range(prom_url, query, lookback_seconds)
-    except PrometheusQueryError as exc:
+    except QueryError as exc:
         text = safe_label(str(exc))
         if len(text) > _QUERY_ERROR_MAX:
             text = text[:_QUERY_ERROR_MAX] + "..."

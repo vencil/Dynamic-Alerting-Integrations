@@ -37,7 +37,7 @@ import (
 )
 
 // Kind is the fixed code of one reason a file cannot be read. The set is
-// closed: a reader may switch on it. Every Kind is listed in Kinds.
+// closed: a reader may switch on it. Every Kind is listed in Kinds().
 type Kind string
 
 const (
@@ -70,12 +70,11 @@ const (
 	KindTagNotAllowed Kind = "tag_not_allowed"
 	// KindNonSpecificTag: a node written with the non-specific tag `!`
 	// (`! "x"`, `! 1`, `! "<<": *x`), however yaml.v3 reads it. Its own
-	// kind because what it means moves under the reader: PyYAML reads
-	// `! "<<"` as a merge and `! 1` as a string; the vendored yaml.v3 keeps
-	// `!` on a quoted scalar and merges through `! "<<"`, upstream yaml.v3
-	// (once ADR-036 removes that patch) reads a literal key; `! 1` is an int
-	// to both. Reading it any one way could add or drop policy silently,
-	// and this document's meaning must not change when the patch goes.
+	// kind because what it means moves under the reader: PyYAML resolves a
+	// quoted scalar tagged `!` as if it were plain (`! "<<"` is a merge,
+	// `! "true"` a bool); yaml.v3 drops the tag and reads the quoted scalar
+	// (a literal key "<<", the string "true"). Reading it any one way could
+	// add or drop policy silently.
 	KindNonSpecificTag Kind = "non_specific_tag"
 	// KindNullKey: a mapping key that resolves to null (`~:`, `null:`, an
 	// empty key).
@@ -98,7 +97,17 @@ const (
 // is read as yaml.v3 reads it, even where today's route generator refuses
 // the file only because PyYAML does — tests/shared/parse_tree_corpus.json
 // pins both directions row by row.
-var Kinds = []Kind{
+//
+// ⛔ A FRESH COPY EACH CALL. The list is read by more than one module
+// (da-guard prints it, tenant-api judges with this package, #3206), and a
+// package-level slice is one any importer can append to or overwrite — a
+// "closed" list that is not. Mutating the returned slice changes nothing
+// here.
+func Kinds() []Kind {
+	return append([]Kind(nil), kinds[:]...)
+}
+
+var kinds = [...]Kind{
 	KindReadFailure, KindNotRegularFile, KindInvalidUTF8, KindBOMNotAtStart,
 	KindSyntaxError, KindMultipleDocuments, KindNonSpecificTag, KindTagNotAllowed, KindNonScalarKey,
 	KindNullKey, KindDuplicateKey, KindDecodeError, KindTopLevelNotMapping,
@@ -113,7 +122,40 @@ type Unreadable struct {
 func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.Message }
 
 func fail(k Kind, format string, args ...any) *Unreadable {
-	return &Unreadable{Kind: k, Message: fmt.Sprintf(format, args...)}
+	return &Unreadable{Kind: k, Message: cutMessage(fmt.Sprintf(format, args...))}
+}
+
+// MaxMessageBytes bounds Unreadable.Message. A message quotes what it refuses
+// (a repeated key, a tag, yaml.v3's own error), and a quoted key can be as
+// long as the file — measured, a 1 MiB duplicate key made a 1,048,644-byte
+// message, which every reader then logged, kept and wrote into JSON. Cut
+// here, where every message is made, so each interface (exporter log,
+// tenant-api, da-guard's reports, the parse-tree JSON) carries the same text.
+const MaxMessageBytes = 512
+
+// messageTailBytes is how much of a cut message's end is kept: what a message
+// says last (a repeated key's "first at line M"). The head — the line number
+// and what was refused — gets the rest of MaxMessageBytes.
+const messageTailBytes = 120
+
+// cutMessage is msg itself when it fits MaxMessageBytes, else its first and
+// last bytes around "… (N bytes omitted) …", at most MaxMessageBytes in all,
+// cut at rune boundaries so a valid UTF-8 msg stays valid.
+func cutMessage(msg string) string {
+	if len(msg) <= MaxMessageBytes {
+		return msg
+	}
+	// The marker's longest form for this msg: N is below len(msg).
+	marker := len(fmt.Sprintf("… (%d bytes omitted) …", len(msg)))
+	head := MaxMessageBytes - messageTailBytes - marker
+	for head > 0 && !utf8.RuneStart(msg[head]) {
+		head--
+	}
+	tail := len(msg) - messageTailBytes
+	for tail < len(msg) && !utf8.RuneStart(msg[tail]) {
+		tail++
+	}
+	return fmt.Sprintf("%s… (%d bytes omitted) …%s", msg[:head], tail-head, msg[tail:])
 }
 
 // Scalar is one scalar of the output: its source text, the tag yaml.v3
@@ -142,6 +184,21 @@ var allowedScalarTags = map[string]bool{
 
 // Parse reads one file's bytes. Exactly one of the results is non-nil.
 func Parse(data []byte) (Content, *Unreadable) {
+	return parse(data, false)
+}
+
+// Judge is Parse's verdict alone — nil exactly when Parse reads data, else
+// the same Kind — without building the content: the readers that only need
+// to know whether a file can be read (pkg/config's decode entries, ADR-036
+// step 6) pay for the checks and the content's byte bound, not for the
+// content. TestJudgeIsParsesVerdict holds the two together over the corpora.
+func Judge(data []byte) *Unreadable {
+	_, bad := parse(data, true)
+	return bad
+}
+
+// parse is Parse; verdictOnly is Judge (the returned Content is then nil).
+func parse(data []byte, verdictOnly bool) (Content, *Unreadable) {
 	if !utf8.Valid(data) {
 		return nil, fail(KindInvalidUTF8, "not valid UTF-8 at byte %d", firstInvalidUTF8(data))
 	}
@@ -160,7 +217,7 @@ func Parse(data []byte) (Content, *Unreadable) {
 	if doc == nil {
 		return Content{}, nil // empty, or comments only
 	}
-	return judge(data, doc)
+	return judge(data, doc, verdictOnly)
 }
 
 // parseDocument parses the one document of data (nil, nil: there is none).
@@ -187,11 +244,17 @@ func parseDocument(data []byte) (*yaml.Node, *Unreadable) {
 }
 
 // judge applies the refusals to a parsed document and expands it.
-func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
+func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable) {
 	root := doc.Content[0]
 
-	c := &checker{src: newSource(data), values: map[*yaml.Node]json.RawMessage{}}
-	c.src.index(root)
+	c := &checker{values: map[*yaml.Node]json.RawMessage{}}
+	// A `!` tag token is a `!` byte in the text: without one no node can
+	// carry it, and the source map (a rune copy of every line, and every
+	// node's position) is not built.
+	if bytes.IndexByte(data, '!') >= 0 {
+		c.src = newSource(data)
+		c.src.index(root)
+	}
 	if bad := c.checkNode(root, false); bad != nil {
 		return nil, bad
 	}
@@ -200,10 +263,14 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	}
 	// The whole-document decode: what yaml.v3 refuses only when it decodes
 	// the tree as a whole — an alias that contains itself, more alias
-	// expansion than its limit allows.
-	var whole any
-	if err := decode(doc, &whole); err != nil {
-		return nil, fail(KindDecodeError, "%s", oneLine(err))
+	// expansion than its limit allows. Skipped on a tree with no alias,
+	// where neither can happen and every node's own decode has run (for
+	// Parse and Judge alike: one path).
+	if hasAlias(root) {
+		var whole any
+		if err := decode(doc, &whole); err != nil {
+			return nil, fail(KindDecodeError, "%s", oneLine(err))
+		}
 	}
 
 	switch {
@@ -213,19 +280,56 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	default:
 		return nil, fail(KindTopLevelNotMapping, "the top level is a %s, not a mapping", kindName(root))
 	}
-	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2} // the content's {}
+	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2, verdictOnly: verdictOnly} // the content's {}
 	out := Content{}
 	if err := conv.fill(out, root); err != nil {
 		return nil, err
 	}
+	if verdictOnly {
+		return nil, nil
+	}
 	return out, nil
+}
+
+// hasAlias reports whether the tree under n holds an alias node.
+func hasAlias(n *yaml.Node) bool {
+	if n.Kind == yaml.AliasNode {
+		return true
+	}
+	for _, child := range n.Content {
+		if hasAlias(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------- checks
 
 type checker struct {
-	src    *source
-	values map[*yaml.Node]json.RawMessage // every decoded scalar, by node
+	src    *source                        // nil: the text holds no `!`
+	values map[*yaml.Node]json.RawMessage // every decoded scalar but a plain string (plainString), by node
+}
+
+// plainString reports whether n is a scalar written with no tag that yaml.v3
+// resolves to !!str: its decode is its text and cannot fail, so the checker
+// does not decode it and its value is the text (plainStringValue).
+func plainString(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && n.ShortTag() == "!!str"
+}
+
+// plainStringValue is a plain string's Scalar.Value: its text as
+// json.Marshal writes it — what scalarValue gives a !!str.
+func plainStringValue(text string) json.RawMessage {
+	raw, _ := json.Marshal(text) // a string always marshals
+	return raw
+}
+
+// marshalLen is len(json.Marshal(s)) for a valid UTF-8 s, counted without
+// building it: jsonStringLen, plus json.Marshal's HTML escape of `<`, `>`
+// and `&` (`\u003c`: 6 bytes for 1). TestMarshalLenIsJSONMarshal holds it.
+func marshalLen(s string) int {
+	return jsonStringLen(s) + 5*(strings.Count(s, "<")+strings.Count(s, ">")+strings.Count(s, "&"))
 }
 
 // checkNode refuses the first shape the package does not read, in document
@@ -245,6 +349,11 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 	switch n.Kind {
 	case yaml.ScalarNode:
 		if isMergeKey {
+			return nil
+		}
+		if plainString(n) {
+			// Its decode is its text, always: not decoded, not stored; the
+			// converter takes the value from the text (plainStringValue).
 			return nil
 		}
 		raw, err := scalarValue(n)
@@ -295,15 +404,13 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 //
 // ⛔ `!` IS FOUND IN THE SOURCE TEXT, NEVER IN Node.Tag. yaml.v3 drops `!`
 // when it builds the node (parser.node: the tag becomes the resolved or the
-// default one); only the vendored patch keeps it, and only on a quoted or
-// block scalar. Reading Node.Tag == "!" would make this refusal vanish
-// with the patch (ADR-036 §11), so the token is read at the node's position
-// for every node, and TestNonSpecificTagWithoutThePatch pins that a tree
-// rewritten the way upstream yaml.v3 builds it is still refused.
+// default one), so the token is read at the node's position for every node;
+// TestNonSpecificTagReadFromTheSource pins that no node carries Tag "!" and
+// the file is still refused.
 func (c *checker) checkTag(n *yaml.Node, isMergeKey bool) *Unreadable {
 	tag := n.Tag
 	explicit := n.Style&yaml.TaggedStyle != 0
-	if !explicit && c.src.nonSpecificTag(n) {
+	if !explicit && c.src != nil && c.src.nonSpecificTag(n) {
 		return fail(KindNonSpecificTag, "line %d: the non-specific tag `!` is not read (its meaning differs between YAML readers); remove it, or write the value quoted", n.Line)
 	}
 	if !explicit {
@@ -465,6 +572,10 @@ type converter struct {
 	values map[*yaml.Node]json.RawMessage
 	active map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
 	bytes  int                 // JSON bytes of the content emitted so far (MaxContentBytes)
+	// verdictOnly (Judge): the same walk, the same charges and refusals, but
+	// no value is built — a scalar, a sequence and a mapping's values are nil;
+	// a mapping's keys are still kept, for the merge's "already set" test.
+	verdictOnly bool
 }
 
 // MaxContentBytes bounds the JSON one file's content encodes to — the
@@ -519,9 +630,18 @@ func jsonStringLen(s string) int {
 // scalarLen is the JSON length of Scalar{text, tag, raw}:
 // {"text":…,"tag":…[,"value":…]}.
 func scalarLen(text, tag string, raw json.RawMessage) int {
+	if raw == nil {
+		return scalarLenN(text, tag, -1)
+	}
+	return scalarLenN(text, tag, len(raw))
+}
+
+// scalarLenN is the one count of a Scalar's JSON length, its value valueLen
+// bytes long (-1: no value field).
+func scalarLenN(text, tag string, valueLen int) int {
 	n := len(`{"text":`) + jsonStringLen(text) + len(`,"tag":`) + jsonStringLen(tag) + len(`}`)
-	if raw != nil {
-		n += len(`,"value":`) + len(raw)
+	if valueLen >= 0 {
+		n += len(`,"value":`) + valueLen
 	}
 	return n
 }
@@ -546,8 +666,22 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		if !utf8.ValidString(s.Text) {
 			return nil, fail(KindInvalidUTF8, "line %d: a scalar is not valid UTF-8", n.Line)
 		}
-		if bad := c.charge(scalarLen(s.Text, s.Tag, s.Value), n); bad != nil {
+		size := 0
+		if plainString(n) {
+			// The value the checker did not store: the text, as JSON. Judge
+			// counts it; Parse also writes it.
+			size = scalarLenN(s.Text, s.Tag, marshalLen(s.Text))
+			if !c.verdictOnly {
+				s.Value = plainStringValue(s.Text)
+			}
+		} else {
+			size = scalarLen(s.Text, s.Tag, s.Value)
+		}
+		if bad := c.charge(size, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			return nil, nil
 		}
 		return s, nil
 	case yaml.SequenceNode:
@@ -558,6 +692,14 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		}
 		if bad := c.charge(2+sep, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			for _, child := range n.Content {
+				if _, bad := c.node(child); bad != nil {
+					return nil, bad
+				}
+			}
+			return nil, nil
 		}
 		out := make([]any, 0, len(n.Content))
 		for _, child := range n.Content {
@@ -575,6 +717,9 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		out := map[string]any{}
 		if bad := c.fill(out, n); bad != nil {
 			return nil, bad
+		}
+		if c.verdictOnly {
+			return nil, nil
 		}
 		return out, nil
 	}

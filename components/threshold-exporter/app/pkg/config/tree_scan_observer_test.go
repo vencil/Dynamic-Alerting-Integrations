@@ -22,6 +22,7 @@ type recordingObserver struct {
 	elapsed       []time.Duration
 	lastScan      []time.Time
 	parseFailures []string
+	refused       []string // "basename kind" of every IncParseRefused
 }
 
 func (r *recordingObserver) ObserveScanElapsed(d time.Duration) {
@@ -30,6 +31,9 @@ func (r *recordingObserver) ObserveScanElapsed(d time.Duration) {
 }
 func (r *recordingObserver) SetLastScanComplete(t time.Time) { r.lastScan = append(r.lastScan, t) }
 func (r *recordingObserver) IncParseFailure(b string)        { r.parseFailures = append(r.parseFailures, b) }
+func (r *recordingObserver) IncParseRefused(b, kind string) {
+	r.refused = append(r.refused, b+" "+kind)
+}
 
 // slowWriter makes every log line cost at least `delay`. The walk logs the
 // parse failure of a broken file from INSIDE the walk, so a scan over a tree

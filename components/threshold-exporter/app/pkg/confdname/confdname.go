@@ -1,35 +1,36 @@
-// Package confdname holds the ONE copy of "what does this conf.d basename
-// mean" that the exporter's Go-side write plane is allowed to have.
+// Package confdname is the ONE copy of "what does this conf.d name mean" in
+// Go (ADR-036 §2, §7 step 9; #3206). The exporter's walker
+// (pkg/config.ScanDirTree), the in-memory source behind /simulate
+// (pkg/config.ScanFromConfigSource), da-guard (parse-tree and the routing
+// evidence), the batch-PR allocator, the profile emitter and tenant-api (its
+// tenant enumerators, write paths and refusal disclosure) all ask it; none of
+// them restates a rule. It lives under pkg/ so tenant-api, a separate module,
+// can import it.
 //
-// ⛔ WHY IT EXISTS. The #1911 family is one shape repeated: a single conf.d
+// ⛔ WHY ONE COPY. The #1911 family is one shape repeated: a single conf.d
 // tree, several enumerators, each with its own hand-written name rules, quietly
 // disagreeing. #1605 measured the write plane's copy — `internal/batchpr`'s
 // allocator answered differently from the exporter's walker on eleven of the
-// shared matrix's twenty-three names, four of them silently. The moment a
-// SECOND Go component needed the same rules (`internal/profile`'s emitter, so
-// it can tell whether the carrier name it is about to write reads back as the
-// tenant it is for), writing them out a second time would have been the family
-// reproducing itself inside one binary. So the rule lives here once.
+// shared matrix's twenty-three names, four of them silently. Until #3206 there
+// were still four Go copies (this package, two in pkg/config, one in
+// tenant-api) kept equal only by each asserting the same JSON matrix.
 //
 // The authority for the NAME rules is the exporter's production hot-reload
-// walker (the tree scan ConfigManager's reload runs), which decides which
-// files are read at all. It is named by role, not by file, on purpose: it has
-// already moved once (#1568) and this sentence named the old file for a
-// release after it had gone. ⛔ Its name
-// rules are the only thing restated here: that scanner takes tenant IDENTITY
-// from the `tenants:` keys inside each document, never from a filename, so
-// nothing in this package answers "who is being served". The agreement is pinned
-// against `tests/shared/confd_name_classification_matrix.json` by
-// internal/batchpr/confd_name_classification_parity_test.go, which drives the
-// allocator that these predicates back.
+// walker, which decides which files are read at all — and that walker now
+// calls this package, so the rule and its authority are the same code.
+// ⛔ Nothing here answers "who is being served": the walker takes tenant
+// IDENTITY from the `tenants:` keys inside each document, never from a
+// filename. TenantNamedBy is the write plane's naming convention, not the
+// exporter's tenant set.
 //
-// ⛔ No function here reads another language's source text. This repo measured
-// (#1448) that a guard asserting things about another implementation's source
-// goes red on legitimate refactors and states the opposite of the truth when it
-// does. The shared matrix is the contract; every consumer asserts that.
+// A reader outside Go (the Python tools) gets these answers from
+// `da-guard parse-tree --list-only`, not from a second implementation.
 package confdname
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // yamlSuffixes are the two carrier spellings the exporter's walker accepts.
 // Both ship — `conf.d/db-b.yml` sits next to `conf.d/db-a.yaml`.
@@ -113,16 +114,57 @@ func SplitCarrier(base string) (stem string, ok bool) {
 //     only non-ASCII member of any orbit here — so the two matrix rows
 //     exercise the one character that separates the relations.
 //
-// SplitCarrier keeps EqualFold: the single-substitution search found no name
-// where its answer differs from the exporter's `HasSuffix(ToLower(name), …)`
-// (no fold-orbit search was run for it).
+// SplitCarrier keeps EqualFold, and there the two relations cannot differ:
+// no code point other than the ASCII letters themselves lowercases to, or
+// shares a fold orbit with, any byte of `.yaml` / `.yml`
+// (TestExtensionBytesHaveNoNonASCIIFoldImage sweeps the whole range). That is
+// why the walker's former `HasSuffix(ToLower(name), …)` and tenant-api's
+// former copy of it could be replaced by SplitCarrier without changing an
+// answer (#3206).
 func IsDefaults(base string) bool {
 	lower := strings.ToLower(base)
 	return lower == "_defaults.yaml" || lower == "_defaults.yml"
 }
 
-// IsHidden reports whether the exporter's walker skips `base` outright.
+// IsHidden reports whether the exporter's walker skips `base` outright: a
+// `.`-prefixed file is not read, a `.`-prefixed directory is pruned whole.
+//
+// Byte prefix, no folding: no code point's lower- or upper-case image starts
+// with '.' (or '_') unless it already is that byte, so folding could not
+// change an answer (TestPrefixesNeedNoCaseFolding sweeps the whole range).
 func IsHidden(base string) bool { return strings.HasPrefix(base, ".") }
+
+// IsScanned reports whether the walker reads a FILE with this base name: not
+// hidden, and a `.yaml` / `.yml` extension in any case. `_`-prefixed names
+// are scanned (they are platform files). Whether an entry is a file at all is
+// the caller's question — a name cannot answer it.
+func IsScanned(base string) bool {
+	_, ok := SplitCarrier(base)
+	return ok && !IsHidden(base)
+}
+
+// HasHiddenSegment reports whether a directory or file on the clean,
+// root-relative slash path `rel` is hidden — the walker prunes a hidden
+// directory with everything under it, so `.cache/deep/x.yaml` is not read
+// whatever `x.yaml` is called. A `.` segment is the current directory, not a
+// hidden name; `..` is (it also starts with '.', and a path leaving the root
+// is read by nothing). `rel == ""` (the root itself, never pruned) is false.
+func HasHiddenSegment(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if seg != "." && IsHidden(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsScannedPath reports whether the walker reads the file at `rel`, a clean
+// path relative to the conf.d root (either separator): no segment on it is
+// hidden and IsScanned holds for its base name.
+func IsScannedPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	return !HasHiddenSegment(rel) && IsScanned(rel[strings.LastIndexByte(rel, '/')+1:])
+}
 
 // IsReserved reports whether `base` uses the reserved `_` prefix. Reserved
 // names are hashed for change detection but yield no tenant; IsDefaults is the

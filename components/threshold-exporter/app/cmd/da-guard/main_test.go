@@ -417,7 +417,7 @@ func TestRun_DecodeFailureWhileResolving_ExitsThree(t *testing.T) {
 // Paired control: the broken file is OUTSIDE --scope, so it is not this
 // run's exit 3 — but the route generator refuses it whole and judges the
 // whole tree, so since #2904 the empty scope is undetermined (exit 4), never
-// the vacuous 0.
+// the vacuous 0; since ADR-036 step 6 (#3206) as unreadable_outside_run.
 func TestRun_ParseFailedFileOutsideScope_IsNotExitThree(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -430,7 +430,7 @@ func TestRun_ParseFailedFileOutsideScope_IsNotExitThree(t *testing.T) {
 		"--config-dir", filepath.Join(tmp, "conf.d"),
 		"--scope", filepath.Join(tmp, "conf.d", "empty"),
 	)
-	if code != exitUndetermined || !strings.Contains(stdout, "`other/tenant-b.yaml` `duplicate_key` (generator_unreadable)") {
+	if code != exitUndetermined || !strings.Contains(stdout, "`other/tenant-b.yaml` `duplicate_key` (unreadable_outside_run)") {
 		t.Errorf("exit = %d, want %d naming the file. stdout=%q stderr=%q", code, exitUndetermined, stdout, stderr)
 	}
 }
@@ -967,15 +967,52 @@ func routingOnlyTrees(t *testing.T) map[string]map[string]string {
 // #2904: the default check judges none of them — exit 4, no finding, the
 // evidence listed; the route generator judges them
 // (tests/ops/test_generate_alertmanager_routes.py and the parity matrix).
+// Since ADR-036 step 6 (#3206) a tree holding a file parse-tree refuses (the
+// `!!null`-tagged values with a non-null form: decode_error) is exit 3
+// instead — the exporter drops that file — still with no finding.
+//
+// The exit each tree must get is pinned here, not derived from parse-tree:
+// asking parse-tree which file it refuses would let a parse-tree regression
+// move a tree from 3 to 4 (or back) and still pass.
+var routingOnlyTreeExits = map[string]int{
+	"_routing_defaults.routes":                           exitUndetermined,
+	"adr007":                                             exitUndetermined,
+	"adr007 without the policy file":                     exitUndetermined,
+	`tagged null escalation !!null ""`:                   exitUndetermined, // "" is a null form
+	"tagged null escalation !!null [1]":                  exitParseFailed,
+	"tagged null escalation !!null x":                    exitParseFailed,
+	"tagged null escalation !!null {}":                   exitParseFailed,
+	"tagged null escalation !<tag:yaml.org,2002:null> x": exitParseFailed,
+	"tagged null outside the policy file, defaults file carrying _routing_defaults": exitParseFailed,
+	"tagged null outside the policy file, profiles file, inside a profile":          exitParseFailed,
+	"tagged null outside the policy file, profiles file, top-level key":             exitParseFailed,
+	"tenant placeholder in a receiver URL":                                          exitUndetermined,
+	"unusable policy structure":                                                     exitUndetermined,
+}
+
 func TestRun_RoutingOnlyTreesAreUndetermined(t *testing.T) {
 	t.Parallel()
-	for name, files := range routingOnlyTrees(t) {
+	trees := routingOnlyTrees(t)
+	for name := range routingOnlyTreeExits {
+		if _, ok := trees[name]; !ok {
+			t.Errorf("routingOnlyTreeExits names %q, which routingOnlyTrees no longer builds", name)
+		}
+	}
+	for name, files := range trees {
+		want, pinned := routingOnlyTreeExits[name]
+		if !pinned {
+			t.Errorf("tree %q has no pinned exit in routingOnlyTreeExits", name)
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got := runJudged(t, files, "")
-			if got.code != exitUndetermined || len(got.findings) != 0 || len(got.undetermined) == 0 {
-				t.Errorf("exit %d, findings %v, undetermined %v; want 4, none, some\nstderr=%s",
-					got.code, got.findings, got.undetermined, got.stderr)
+			if got.code != want || len(got.findings) != 0 {
+				t.Fatalf("exit %d, findings %v; want %d, none\nstderr=%s",
+					got.code, got.findings, want, got.stderr)
+			}
+			if want == exitUndetermined && len(got.undetermined) == 0 {
+				t.Errorf("exit 4 with no undetermined item\nstderr=%s", got.stderr)
 			}
 		})
 	}

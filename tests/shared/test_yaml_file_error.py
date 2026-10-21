@@ -447,9 +447,11 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
     elif label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
         # parse_failed): no Python cause class, but the exporter's own parse
-        # reason — here the byte that is not UTF-8 — is carried along.
+        # reason — here the byte that is not UTF-8 — is carried along. Since
+        # ADR-036 step 6 (#3206) that reason is parse-tree's invalid_utf8
+        # (yaml.v3's "invalid leading UTF-8 octet" before).
         assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
-        assert "invalid leading UTF-8 octet" in p.stderr, "the exporter's parse reason must reach the operator"
+        assert "not valid UTF-8 at byte" in p.stderr, "the exporter's parse reason must reach the operator"
     else:
         assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 

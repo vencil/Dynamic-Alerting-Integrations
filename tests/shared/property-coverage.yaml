@@ -158,6 +158,12 @@ modules:
       query_prometheus_instant: "I/O-bound; thin wrapper over http_get_json"
       query_prometheus_range: "I/O-bound; thin wrapper over http_get_json (r3 W1 fetch-core consolidation)"
       probe_health: "I/O-bound; thin urlopen probe over _validate_url_scheme (r3 W2 health-probe consolidation)"
+      prometheus_range: "I/O-bound; http_get_json + _matrix_rows, raises QueryError (#3133); pinned in tests/shared/test_query_error.py"
+      alertmanager_alerts: "I/O-bound; http_get_json + list-of-objects shape check, raises QueryError (#3133); pinned in tests/shared/test_query_error.py"
+      _matrix_rows: "Shape check of a query_range body; every defect pinned by example in tests/shared/test_query_error.py (finite, enumerated shapes)"
+      _range_url: "URL builder for the two range readers; exact URL pinned in tests/shared/test_query_error.py"
+      _malformed: "Message templating for QueryError"
+      QueryError.error_line: "Message templating (stderr / envelope line); exact text pinned in tests/shared/test_query_error.py"
 
   scripts/tools/_lib_godispatch.py:
     # Note: members of this module are class methods on

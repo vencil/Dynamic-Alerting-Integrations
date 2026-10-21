@@ -1845,7 +1845,7 @@ def check_tenant_file_name(config_dir: str) -> dict[str, object]:
     """A tenant file's name (stem) must be the one tenant id it declares.
 
     Two planes name a tenant from two different places: tenant-api takes the
-    id from the file NAME (``TenantIDFromFile``: `es.yaml` is tenant `es`),
+    id from the file NAME (``confdname.TenantNamedBy``: `es.yaml` is tenant `es`),
     the exporter from the keys under ``tenants:``. When they differ the same
     tenant has one id on the API (RBAC grants, audit records, portal links)
     and another on ``/metrics``, and tenant-api treats the tenant as

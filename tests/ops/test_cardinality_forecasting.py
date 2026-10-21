@@ -379,6 +379,7 @@ class TestQueryPrometheus:
         mock_get.return_value = ({
             "status": "success",
             "data": {
+                "resultType": "matrix",
                 "result": [
                     {
                         "metric": {"tenant": "db-a"},
@@ -400,13 +401,13 @@ class TestQueryPrometheus:
     def test_query_range_error_raises(self, mock_get):
         """查詢失敗往上拋、帶錯誤原文（#3065：以前收斂成空 dict）。"""
         mock_get.return_value = (None, "connection error")
-        with pytest.raises(cf.PrometheusQueryError, match="connection error"):
+        with pytest.raises(cf.QueryError, match="connection error"):
             cf.query_cardinality_range("http://prom:9090")
 
     @patch("_lib_prometheus.http_get_json")
     def test_query_range_empty(self, mock_get):
         """查詢成功但無 series → 空 dict。"""
-        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
+        mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
         result = cf.query_cardinality_range("http://prom:9090")
         assert result == {}
 
@@ -420,7 +421,7 @@ class TestQueryPrometheus:
     def test_query_range_error_status(self, mock_get):
         """查詢 status != success。"""
         mock_get.return_value = ({"status": "error", "error": "bad query"}, None)
-        with pytest.raises(cf.PrometheusQueryError, match="bad query"):
+        with pytest.raises(cf.QueryError, match="bad query"):
             cf.query_cardinality_range("http://prom:9090")
 
     @patch("_lib_prometheus.http_get_json")
@@ -429,6 +430,7 @@ class TestQueryPrometheus:
         mock_get.return_value = ({
             "status": "success",
             "data": {
+                "resultType": "vector",
                 "result": [
                     {"metric": {"tenant": "db-a"}, "value": [1000, "42"]},
                 ]
@@ -441,7 +443,7 @@ class TestQueryPrometheus:
     def test_query_scrape_series_empty(self, mock_get):
         """scrape_series_added 查詢失敗往上拋（#3065）。"""
         mock_get.return_value = (None, "connection error")
-        with pytest.raises(cf.PrometheusQueryError, match="connection error"):
+        with pytest.raises(cf.QueryError, match="connection error"):
             cf.query_scrape_series_added("http://prom:9090")
 
 
@@ -459,6 +461,7 @@ class TestCLI:
         return ({
             "status": "success",
             "data": {
+                "resultType": "matrix",
                 "result": [
                     {
                         "metric": {"tenant": "db-a"},
@@ -514,6 +517,7 @@ class TestCLI:
         mock_get.return_value = ({
             "status": "success",
             "data": {
+                "resultType": "matrix",
                 "result": [
                     {
                         "metric": {"tenant": "db-crit"},
@@ -553,7 +557,7 @@ class TestCLI:
     @patch("_lib_prometheus.http_get_json")
     def test_main_valid_lookback_still_accepted(self, mock_get, capsys):
         """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。"""
-        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
+        mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
         exit_code = cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"])
         assert exit_code == 2
         doc = json.loads(capsys.readouterr().out)   # 走到了 no_data envelope，不是 usage error
@@ -569,7 +573,7 @@ class TestCLI:
         的 generate_json_report() 一致（+ status/reason）——讓「happy path 新增
         欄位、no-data envelope 沒跟上」直接紅。
         """
-        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
+        mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
         exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
                              "--lookback", "30d"])
@@ -625,6 +629,7 @@ class TestCLI:
         mock_get.return_value = ({
             "status": "success",
             "data": {
+                "resultType": "matrix",
                 "result": [
                     {
                         "metric": {"tenant": "db-a"},

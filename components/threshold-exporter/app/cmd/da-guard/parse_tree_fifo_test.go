@@ -44,3 +44,26 @@ func TestParseTree_FIFOIsNotRead(t *testing.T) {
 		t.Fatalf("readers %v", r)
 	}
 }
+
+// TestParseTreeList_SpecialFileIsNotOpened: a FIFO in the tree is listed as
+// not_regular_file and the command returns (an open of a FIFO with no writer
+// would block). That no file is read at all is config.ScanDirTreeNames'
+// promise, pinned there (TestScanDirTreeNames_ReadsNothing).
+func TestParseTreeList_SpecialFileIsNotOpened(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"t1.yaml": "tenants: {t1: {}}\n"})
+	if err := syscall.Mkfifo(filepath.Join(root, "pipe.yaml"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	_, list, _ := runPTList(t, "", "--config-dir", root)
+	got := map[string]*parseTreeListProblem{}
+	for _, e := range list.Entries {
+		got[e.Path] = e.Unreadable
+	}
+	if p, ok := got["t1.yaml"]; !ok || p != nil {
+		t.Errorf("t1.yaml: listed %v, unreadable %v; want listed and readable", ok, p)
+	}
+	if p := got["pipe.yaml"]; p == nil || p.Kind != "not_regular_file" {
+		t.Errorf("pipe.yaml: unreadable %v, want not_regular_file", p)
+	}
+}

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-20
+updated_at: 2026-10-21
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -29,6 +29,8 @@ updated_at: 2026-10-20
 - **2026-10-16 修訂**：「未判定」的範圍擴大到樹上有只由產生器判的 `_` 鍵（§9），配合 [ADR-038](./038-unread-keys-judged-by-readers.md)。
 - **2026-10-20 修訂**：產生器已改讀 `parse-tree` 的結果，§2、§9 刪去描述它先前以 PyYAML 讀取的句子；決策不變。
 - **2026-10-20 再修訂**：Go 端也只留一個判定與一個寫者，conf.d 以外的 YAML 以它的消費者為準，刪除遷移稽核指令；細節見 §2、§3、§8、§9、§11、§12 與 §7 的順序。
+- **2026-10-21 修訂**：tenant-api 的寫入與它自己讀的管理設定改經共用判定（§7 步驟 7），§2 改寫為現況，並寫明 RBAC 設定不論放在哪裡都經判定；決策不變。
+- **2026-10-21 再修訂**：刪除 vendored yaml.v3 的「非特定 tag」patch（§7 步驟 8、§11）；§7 說明它排在步驟 8 的段落改寫為現況；決策不變。
 
 ## 摘要
 
@@ -174,13 +176,18 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 
 **外層**：`schema` 為 `"da-guard.parse-tree/v1"`，另帶 `da_guard_version`。讀取端遇到其他 `schema` 值，整份當成不可用。新增欄位不換 `schema` 值，改變讀取端依賴的形狀才換，與 `served-values`／`effective` 的慣例相同。
 
-**Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構；沒有任何 Go 讀取端略過它直接解碼 conf.d。
+**Go 端的讀取者也照這份判定**：判定哪些檔讀得了的程式是一個 Go 套件，放在 exporter、tenant-api、da-guard 都能引用的位置。三者載入 conf.d 時都先經它，再各自把讀得了的檔解碼成自己需要的結構。tenant-api 自己解碼的 YAML 也先經它：寫入的本文、整檔寫入要取代的原檔，以及它自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與各租戶子集合、AccountID 帳本）。
+
+- RBAC 設定不論放在 conf.d 內外都經判定：它只有 tenant-api 一個讀者（§12），依所在位置分兩種讀法，等於同一份檔有兩個 loader。
+- 群組、視圖、聯邦白名單、子集合與 AccountID 帳本已存在 tenant-api 的狀態儲存裡，不在 conf.d 內；內容來自升級時從 conf.d 原樣匯入的舊檔，或 tenant-api 自己寫出的文字，同樣經判定。
+- 被判為讀不了時，各讀取端照自己既有的「解析失敗」處置，不當成空檔（這些多半是授權邊界的輸入，空的 RBAC 或組織對照是另一種授權，不是「沒有設定」）：RBAC 設定與 `_tenant_orgs.yaml` 啟動失敗、熱重載時保留上一版；群組、視圖與白名單啟動時記 WARN 並從空設定開始、熱重載時保留上一版；改寫群組或視圖時回 500 `CONFIG_DECODE`，不以讀不了的紀錄為底重建；AccountID 帳本照讀不了的帳本處置（匯入時啟動失敗，配號與啟動檢查時回錯誤）。
+- 所以判定之前的解碼結果，沒有任何 Go 讀取端拿來當設定用。判定之前仍有的解碼只用來拒收或分類（例如判斷一份租戶檔是否只宣告一個租戶、要不要對呼叫端隱藏原文），結果只會讓請求被拒或內容被隱藏，不會放行。
 
 - 被判為讀不了的檔，exporter 沿用今天同類檔語法錯誤時的處置，log 與 metric 另外帶上 `kind`：
   - 租戶檔：這份檔宣告的租戶不服務，同一棵樹的其他租戶不受影響；記一行 WARN log，`da_config_parse_failure_total` 加一。
   - `_defaults` 鏈裡的檔與其他 `_` 開頭的平台檔：整份略過，記一行 ERROR log（「entire block dropped」），`da_config_parse_failure_total` 加一；合併 defaults 鏈時把它當成空檔，`da-guard effective` 在 `chain_parse_failed` 列出它。依賴它的租戶仍照常載入，只是少了這份檔提供的預設值：只靠這份檔的預設值才送出的閾值不再送出。
   - 實測（2026-10-21，head 上的 da-guard）：根目錄 `_defaults.yaml` 語法錯時，`served-values` 的 `parse_failed` 列出它，租戶 `t1` 仍在，但原本由它提供預設值的 `mysql_connections` 不再送出，`effective` 的 `chain_parse_failed` 是 `["_defaults.yaml"]`；租戶檔 `t2.yaml` 語法錯時，`t2` 不在 `tenants` 裡，`t1` 照常。兩種情況 da-guard 都回 exit 3。
-- tenant-api 的讀取面（`/effective`、租戶列表等經 `pkg/config` 讀 conf.d 的端點）與 exporter 同一步改經這份判定；tenant-api 自己的寫入形狀判定隨後改用同一份判定，不再有自己的形狀規則。
+- tenant-api 的讀取面（`/effective`、租戶列表等經 `pkg/config` 讀 conf.d 的端點）與 exporter 同一步改經這份判定。tenant-api 的寫入沒有自己的形狀規則：本文被判為讀不了時回 400，與其他本文驗證失敗相同，錯誤文字寫出 `kind` 與行號，不引用 `parse-tree` 的說明（說明會引用被拒的鍵或值，而批次 patch 驗證的是可能由多個租戶共用的整份檔）。整檔寫入要取代的原檔被判為讀不了時，視同無法解析的原檔：須有全租戶的寫入權限才能取代。
 - da-guard 對這些檔回 exit 3（§9）。
 - 所以同一份檔不會出現「exporter 照讀、產生器拒收」：產生器、exporter、da-guard、tenant-api 拒收的是同一批檔。
 
@@ -412,7 +419,7 @@ tenant-api pod
 
 **各步依序合併進 main。** 不設新舊並行期，不設切換開關，也不維護差異清單（逐筆記錄 Go 與產生器判定不同的設定檔）。為什麼不在同一個版本一次做完，見「考慮過但否決」。
 
-步驟 0 到 4 已完成，每一步合併後都可以發布；「非特定 tag」patch 不在步驟 4 刪，排在步驟 8（理由見下方）。
+步驟 0 到 8 已完成，每一步合併後都可以發布；「非特定 tag」patch 不在步驟 4 刪，排在步驟 8（理由見下方）。
 
 - **步驟 0：先發布，行為不變。** `parse-tree`（含單檔模式）與它的固定語料（§2）；遷移稽核指令（§8）；把與解析無關的小工具（例如租戶 id 檢查、判斷檔案所在的目錄層級、policy 檔名判斷）搬出要刪除的套件。
 - **步驟 1：tenant-api 寫入改問產生器容器。** 同一步刪除 tenant-api 裡所有 Go 端的路由與 policy 判定（§11），包括判斷 `_routing` 是否為「關閉路由」字串的模仿程式。不是路由判定的檢查保留：遮罩憑證的佔位字串回寫防護、以 yaml.v3 確認 exporter 讀得了寫入內容的檢查、閾值等保留鍵的值檢查。後兩者讓 tenant-api 不會因此放行 PyYAML 讀得了、yaml.v3 讀不了的檔（例如 `"x\/y"`）；過去由 Go 端模仿套件擋下的重複鍵，改由產生器自己的重複鍵拒收擋下。同一步也移除 `--policy-unavailable-open`，並刪除扁平鍵 `_routing_receiver_type`（舊版指定 receiver 種類的單層寫法），寫入它改為回 400。
@@ -428,7 +435,7 @@ tenant-api pod
 
 - **步驟 5：`parse-tree` 的判定移到共用位置。** 從 da-guard 內部移到 exporter、tenant-api、da-guard 都能引用的 Go 套件（`pkg/` 下），行為不變。
 - **步驟 6：exporter 與 da-guard 載入 conf.d 先經這份判定**（§2），tenant-api 經 `pkg/config` 的讀取面（`/effective`、租戶列表等）同一步跟著改。exporter 不服務讀不了的檔並以 metric 與 log 回報；da-guard 對這些檔回 exit 3，不再以 exit 4 列為產生器才判的證據（§9）。這是 breaking change，升級前的把關見 §8。
-- **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定。
+- **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定；tenant-api 自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本）同一步改經這份判定再解碼。這些多半是授權邊界的輸入，判為讀不了時照各自現有的「解析失敗」處置，不當成空檔（§2）。
 - **步驟 8：刪除「非特定 tag」patch。** 這時 exporter、da-guard、tenant-api 都已經經共用的判定（理由見下方）。
 - **步驟 9：檔名規則收斂。** Go 端 4 份檔名規則合併為一份；`parse-tree` 加上只列檔、不解析內容的模式；Python 端的名稱述詞與 Go／Python 名稱規則的對照表退場，需要檔案清單的工具改用只列檔模式。
 - **步驟 10：編輯原語與 da-guard 的 `edit`／`emit`**（§2）。寫 conf.d 的 Python 工具分批改為送「要改什麼」，寫入後的讀回確認移進 Go。
@@ -439,12 +446,7 @@ tenant-api pod
 
 順序的理由：步驟 6、7 要引用共用的套件，所以步驟 5 先做；步驟 6 是使用者看得到的 breaking change，先做讓它單獨發布、單獨把關；「非特定 tag」patch 要等每個 Go 讀取端都經共用的判定之後才刪（步驟 8）；步驟 11 刪除改寫層之前，所有寫 conf.d 的工具都要已經改送意圖（步驟 10）。
 
-**為什麼「非特定 tag」patch 留到步驟 8**：在 exporter 經 `parse-tree` 的判定之前，exporter 靠它維持與舊讀法相同的結果。
-
-- 以 `!` 標記的 `! "<<"`：exporter 判斷合併鍵時把帶 `!` 標記的 `"<<"` 也算進去；PyYAML 同樣把它當成合併。
-- 自訂告警 SLO 的 `objective: ! "99.9"`：exporter 因型別標記是 `!` 而拒收；PyYAML 把它讀成浮點數，Python 端因 objective 不是字串同樣拒收。
-
-在那之前刪掉它，exporter 會開始接受 `objective: ! "99.9"`，比產生器與 CI 寬鬆（`parse-tree` 對帶 `!` 的檔一律判為讀不了）。步驟 6 起 exporter、步驟 7 起 tenant-api 都只解碼 `parse-tree` 判為讀得了的檔，帶 `!` 的檔到不了它們的解碼。兩者都改完之後（步驟 8）才刪，中間就沒有任何元件以沒有這個 patch 的 yaml.v3 讀 `!`。
+**為什麼「非特定 tag」patch 留到步驟 8**：這個 patch 讓 yaml.v3 把 `!` 標記保留在引號字串的節點上，exporter 判斷合併鍵時靠它把 `! "<<"` 當成合併鍵，與 PyYAML 相同。沒有它，yaml.v3 丟掉標記，`! "<<"` 是字面上的鍵 `<<`，什麼都不合併。在 exporter 經 `parse-tree` 的判定之前刪掉它，等於靜默改變 exporter 照讀的檔。步驟 6 起 exporter、步驟 7 起 tenant-api 都只解碼 `parse-tree` 判為讀得了的檔，帶 `!` 的檔到不了它們的解碼；兩者都改完之後（步驟 8）才刪，main 上就沒有任何一個 commit 讓元件以沒有這個 patch 的 yaml.v3 讀到 `!`。
 
 **步驟 1 之前要先完成的事**：
 
@@ -481,7 +483,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
   - 報告（文字與 JSON）明示路由與 policy「未判定」，並回 exit code 4。這樣「沒判」和「判過、沒問題」可以分得開。
   - 只在樹上有只能由產生器判定的內容時才回 4：路由、policy，或只由產生器讀、以及拼錯而只有產生器會報的 `_` 鍵（判法見 [ADR-038](./038-unread-keys-judged-by-readers.md)）。沒有這類內容的樹照常回 0。
   - 同時符合多個 exit code 時，優先順序是 3 > 1 > 4（3 是有檔讀不了，1 是有錯誤等級的 finding；3 優先於 1 與現在相同）。
-  - exit 3 的範圍以 [CLI 參考的 guard 一節](../cli-reference.md#guard)為唯一定義：exporter 載入時整份丟掉的檔、合併時解碼失敗的檔（`_defaults.yaml` 鏈或租戶檔），以及讀不到的檔、子目錄或路徑。exporter 改經共用的判定之後，不服務 `parse-tree` 判為讀不了的檔（§2），所以這些檔全部以 exit 3 回報，例如檔案中段的 BOM、`!!binary` 這類型別標記、多份文件。exit 4 的未判定證據裡「`parse-tree` 判為讀不了、exporter 卻照讀」的那一類（`generator_unreadable`）不再需要，併入 exit 3：產生器與 exporter 拒收的是同一批檔。CLI 參考的對應說明由實作那一步更新。
+  - exit 3 的範圍以 [CLI 參考的 guard 一節](../cli-reference.md#guard)為唯一定義：exporter 載入時整份丟掉的檔、合併時解碼失敗的檔（`_defaults.yaml` 鏈或租戶檔），以及讀不到的檔、子目錄或路徑。exporter 改經共用的判定之後，不服務 `parse-tree` 判為讀不了的檔（§2），所以這些檔全部以 exit 3 回報，例如檔案中段的 BOM、`!!binary` 這類型別標記、多份文件。exit 4 的未判定證據裡「`parse-tree` 判為讀不了、exporter 卻照讀」的那一類（`generator_unreadable`）不再需要，併入 exit 3：產生器與 exporter 拒收的是同一批檔。只剩本次執行的 exit 3 點不到、產生器卻會整棵拒收的路徑仍列為未判定證據（`unreadable_outside_run`）：`--scope` 以外的這類檔、檔名像設定檔的目錄或指向目錄的 symlink，以及整棵樹掃不了；定義見 CLI 參考的 guard 一節。
   - exit 4 保留給路由、policy 與只由產生器判的 `_` 鍵。它的條件仍是在預測產生器會不會判；如果真實的樹幾乎都回 4，這個條件就沒有資訊量，屆時再評估是否保留。
   - 不另設旗標讓 CI 宣告「路由已由產生器判過」：`da-tools init` 產生的客戶 CI 範本本來就跑 `generate-routes --validate --strict`，不會單獨跑 da-guard。
   - 遷移方式：在 CI 原本跑 da-guard 的地方，加一步 `da-tools generate-routes --validate --strict`。
@@ -509,9 +511,9 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | vendored yaml.v3 的「只認空格」patch（拒收 TAB 縮排；只有上述 policy 解碼器會打開） | 與上列同時 | 刪除 |
 | 差異清單、它的測試與 `make pre-tag` 的到期檢查 | 與上列同時 | 刪除 |
 | Python 端讀 conf.d 用的、模仿 yaml.v3 讀法的 loader，Python 端的檔案選擇規則 | 產生器與 Python 工具改讀 JSON 時 | 刪除 |
-| da-guard 的未判定證據 `generator_unreadable` | exporter 與 da-guard 改經共用判定時 | 併入 exit 3（§9） |
+| da-guard 的未判定證據 `generator_unreadable` | exporter 與 da-guard 改經共用判定時 | 併入 exit 3；本次執行點不到的路徑改列 `unreadable_outside_run`（§9） |
 | tenant-api 自己的 conf.d 寫入形狀判定 | tenant-api 改用共用判定時 | 改用 `parse-tree` 的判定 |
-| vendored yaml.v3 的「非特定 tag」patch（YAML 的 `!` 標記，讓引號字串照未加引號的規則判型別） | exporter 與 tenant-api 都改經共用判定之後 | 刪除；那時帶 `!` 的檔到不了它們的解碼，patch 沒有作用（§7、§8） |
+| vendored yaml.v3 的「非特定 tag」patch（把 YAML 的 `!` 標記保留在引號字串的節點上，讓 `! "<<"` 成為合併鍵） | exporter 與 tenant-api 都改經共用判定之後 | 已刪除（步驟 8）：帶 `!` 的檔到不了它們的解碼，patch 沒有作用（§7、§8） |
 | vendored yaml.v3 的重複鍵檢查修改（大型 mapping 的重複鍵檢查從逐對比較的 O(n²) 改用 hash 表） | — | 保留：它防的是以大量鍵拖垮解碼的阻斷服務攻擊，不是在模仿另一個解析器 |
 | vendored yaml.v3 的 unhashable merge key 修正（合併鍵旁邊有非純量的鍵時，把執行期 panic 改成解碼錯誤） | 與其他各項平行 | 不再自己維護 patch：vendored 的基底升級為上游 `go.yaml.in/yaml/v3` v3.0.5，上游已內建同一修正；重複鍵檢查的修改改疊在新基底上。升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對新舊基底的讀法，有任何差異就維持現有的 vendored 基底，只移植這段修正 |
 | Go 端 4 份檔名規則；Python 端的名稱述詞與 Go／Python 名稱規則的對照表 | 檔名規則收斂時 | Go 合併為一份；Python 端刪除，改用只列檔模式 |
@@ -529,7 +531,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | 檔案 | 權威讀者 | Python 端怎麼取得 |
 |---|---|---|
 | Kubernetes manifest、Alertmanager 設定 | kubectl（sigs.k8s.io/yaml）、Alertmanager（yaml.v2），都採 YAML 1.1 的規則 | `da-crdecode`（以 sigs.k8s.io/yaml 解碼後輸出 JSON）通用化後解碼；要支援一個檔多份文件 |
-| tenant-api 讀的管理設定（例如 RBAC、群組、視圖） | tenant-api 的 loader | 以 tenant-api 的讀法取得；機制待定，在處理 conf.d 以外 YAML 的那一步決定（例如由 tenant-api 提供驗證子命令） |
+| tenant-api 讀的管理設定（例如 RBAC、群組、視圖） | tenant-api 的 loader（先經 `parse-tree` 的判定，再以 yaml.v3 解碼，§2） | 以 tenant-api 的讀法取得；機制待定，在處理 conf.d 以外 YAML 的那一步決定（例如由 tenant-api 提供驗證子命令） |
 | 文件裡的 conf.d 範例 | exporter 與產生器（經 `parse-tree`） | `parse-tree` 的整棵樹模式 |
 | 沒有 Go 消費者、repo 內只有 Python 在讀的檔（GitHub workflow、pre-commit 設定、mkdocs 設定、repo 內部資料） | — | 不強求，照舊 |
 
@@ -549,6 +551,8 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | 部署端 policy 檔不可用 | 所有會改變檔案內容的寫入回 503，錯誤碼 `POLICY_UNAVAILABLE` |
 | repo 裡的 policy 檔有錯 | 產生器回報 finding，照第一列拒收，不回 503 |
 | `parse-tree` 讀不了某份檔 | 該檔列在「讀不了的檔」，產生器的檢查不會通過，寫入拒收 |
+| tenant-api 寫入的本文，或整檔寫入要取代的原檔，被判為讀不了 | 本文：400，錯誤文字寫出 `kind` 與行號，不寫入；原檔：視同無法解析，沒有全租戶寫入權限的呼叫端回 400 |
+| tenant-api 自己讀的管理設定被判為讀不了 | 照各讀取端既有的解析失敗處置，不當成空檔（§2）：RBAC 設定與 `_tenant_orgs.yaml` 啟動失敗、熱重載保留上一版 |
 | exporter 載入時，某份檔被判為讀不了（exporter 改經共用判定之後） | 與今天同類檔的語法錯誤相同（租戶檔：檔內租戶不服務；`_` 平台檔：整份略過、defaults 鏈當成空檔，§2）；metric 與 log 回報檔案與 `kind`；da-guard 對同一份檔回 exit 3 |
 | da-guard `edit`／`emit` 寫出的文字，`parse-tree` 讀回來與預期不同 | 不寫入，並說明哪個值不同 |
 | 讀取端遇到不認得的 `schema` 值 | 整份當成不可用 |
@@ -567,6 +571,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 新增或仍在的風險：
 
 - **exporter 改為拒收的升級風險**：exporter 改經共用判定之後，今天照讀的檔可能整份不服務，檔內租戶的告警停止。客戶沒在升級前以新版 da-guard 驗過 conf.d 時，第一次發現是在升級之後。緩解只有 §8 的升級前把關與 metric、log；不設「照舊讀」的開關。
+- **判定成本與它的快取**：每份檔在解碼前多一次判定。exporter 以檔案內容的 SHA-256 保留判定結果（上限 8,192 筆，滿了整份清掉並記一行 DEBUG log），同一份內容不重判；冷啟動仍要逐檔判一次（實測 1000 份租戶檔的冷掃描 109 ms，全部命中時 70 ms）。一個程序遇到的不同內容多於上限時，快取一再清空、命中率趨近 0，成本退回無快取的那個數字，判定結果不受影響。讀不了的說明文字在 `parse-tree` 產生它的地方就限制在 512 bytes 以內：過長時保留開頭（行號與被拒的內容）與結尾（例如重複鍵的「first at line M」），中間省略；所以 exporter 的 log、tenant-api、da-guard 的報告與 `parse-tree` 的 JSON 是同一份文字。
 - **yaml.v3 的輸出格式改變**：寫 conf.d 的工具改由 Go 寫出後，空行、行尾註解對齊與引號樣式會變，客戶的 diff 會出現與這次修改無關的格式差異（§2）。
 - **快取的去留未定**：產生器容器要不要繼續跨請求快取解析結果，要等 `parse-tree` 串流輸出並量測後才決定（§3）。產生器以 PyYAML 讀檔時，每次從頭解析會超過 20 秒的判定期限（「成本」），這是當初採用快取的理由；在決定之前，逐檔快取的冷啟動在大型樹上仍是 O(N²)。
 - **`da-crdecode` 還不支援一個檔多份文件**：§12 的 Kubernetes manifest 常一檔多份，支援之前這類檔沒有權威讀法可問。
@@ -664,10 +669,10 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 2：da-guard 加上「未判定」狀態與 exit code 4；`guard-defaults-impact.yml` 加跑產生器。
 - 已完成，步驟 3：刪除了 Go 端模仿 PyYAML 與模仿產生器語意的程式、vendored yaml.v3 的「只認空格」patch、差異清單與 `make pre-tag` 的到期檢查。
 - 已完成，步驟 4：產生器與 Python 工具改讀解析結果 JSON；刪除 Python 端讀 conf.d 用的模仿 loader；寫 conf.d 的工具加上寫入前確認。「非特定 tag」patch 改到步驟 8 刪除。
-- 步驟 5：`parse-tree` 的判定移到 `pkg/` 下的共用套件。
-- 步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3。
-- 步驟 7：tenant-api 的寫入形狀判定改用它。
-- 步驟 8：刪除「非特定 tag」patch。
+- 已完成，步驟 5：`parse-tree` 的判定移到 `pkg/` 下的共用套件。
+- 已完成，步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
+- 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
+- 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
 - 步驟 9：Go 端檔名規則收斂為一份；`parse-tree` 只列檔模式；Python 名稱述詞與名稱規則對照表退場。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
@@ -690,7 +695,8 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 端的寫入前確認（移進 Go） | `scripts/tools/_lib_write_check.py` |
 | 編輯原語的來源（抽成共用套件） | tenant-api 的 `internal/customalerts/merge.go`（`setMapValue`、`deleteMapKey` 等）與批次 patch 的 `mergePatchYAML` |
 | `parse-tree` 的判定 | `pkg/parsetree` |
-| Go 端 4 份檔名規則（合併為一份） | `internal/confdname`；`pkg/config/source.go`；`pkg/config/tree_scan.go`；tenant-api 的 `internal/confd` 的 `TenantIDFromFile` |
+| Go 端的檔名規則（已合併為一份） | `pkg/confdname`。其他各份已刪除，原處改呼叫它：`pkg/config/source.go` 的副檔名判斷與 `hasHiddenSegment`；`pkg/config/tree_scan.go` 的 `IsScannedFileName`、`IsScannedPath` 與走訪內嵌的前綴判斷；tenant-api `internal/confd` 的 `TenantIDFromFile`、`isReservedName`；tenant-api `handler/errors.go` 的 `findingReadable` 自己寫的副檔名判斷；da-guard `parse_tree.go` 的 `hiddenPath` |
+| `parse-tree` 只列檔、不解析內容的模式 | `da-guard parse-tree --list-only`（`cmd/da-guard/parse_tree_list.go`）；走訪是 `pkg/config` 的 `ScanDirTreeNames` |
 | Python 端的名稱述詞與名稱規則對照表（退場） | `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）；`tests/shared/confd_name_classification_matrix.json` 與比對它的測試 |
 | 以 sigs.k8s.io/yaml 解碼的先例（通用化） | `cmd/da-crdecode`（目前一個檔多份文件時拒收） |
 | 遷移稽核指令（退場） | `scripts/tools/ops/migration_audit.py` |
@@ -700,13 +706,14 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`pkg/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已刪除 |
 | Go 端模仿 PyYAML 讀法的程式（已刪除） | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
 | Go 端模仿產生器語意的程式（已刪除） | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`、`IsDisabled`；da-guard 的路由檢查 `internal/guard/routing.go` 與它們的 finding kind |
-| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（exporter 與 tenant-api 改經共用判定之後刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（基底升級到上游 v3.0.5 後由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
-| 非特定 tag 影響的 exporter 讀法 | `pkg/config/config_file.go` 的 `isMergeKey`；`custom_alert.go` 的 `validateSloObjective` |
+| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（已刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（基底升級到上游 v3.0.5 後由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
+| 帶 `!` 的檔到不了 exporter 的解碼 | `pkg/config/nonspecific_tag_test.go`；合併鍵的判斷 `pkg/config/config_file.go` 的 `isMergeKey` |
 | Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（已刪除） |
 | tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |
+| tenant-api 經共用判定的入口 | `internal/confd/verdict.go` 的 `Judge`（回 `pkg/config` 的 `UnreadableFileError`）；呼叫端：`validateShape`、`eolGuardErrs`、`tenantorg`、`rbac`、`groups`、`views`、`fedpolicy`、`account` 的解析函式，以及批次的 `tenantAbsentIn` 與 `scopeBlockOnDisk` |
 | 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`）；離線差分測試 `handler/batch_patch_diff_test.go` |
 | tenant-api 裡其他的 Go 端路由與 policy 判定（已刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
-| tenant-api 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（以 yaml.v3 確認 exporter 讀得了；改用 `parse-tree` 的判定）；`handler/body_validator.go` 的保留鍵值檢查（例如 `validateSilentMode`） |
+| tenant-api 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（先經 `parse-tree` 的判定，再以 yaml.v3 確認 exporter 讀得了）；`handler/body_validator.go` 的保留鍵值檢查（例如 `validateSilentMode`） |
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
 | 刪除範圍的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
 | 只有 Go 有的 da-guard 檢查（已搬到產生器） | 產生器那一側由 `tests/shared/routing_policy_parity_matrix.json` 釘住 |

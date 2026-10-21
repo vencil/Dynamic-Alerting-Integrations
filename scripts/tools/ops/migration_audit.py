@@ -30,15 +30,9 @@ and lists, without judging any of it:
 4. ``becomes_readable``   — a file today's reader refuses whole that
    parse-tree reads (§2's closed list), with what yaml.v3 reads in it;
 
-plus ``selection`` (a file one side reads and the other does not) and
-``exporter_changes``: the two readings of the exporter itself that change
-when the vendored yaml.v3 "non-specific tag" patch is removed (§8) — a
-quoted `! "<<"` key stops being a merge key, and a custom alert's SLO
-`objective: ! "99.9"` goes from refused to accepted. parse-tree refuses
-both shapes (`non_specific_tag`), so such a file is in
-``becomes_unreadable`` too; this list says that the exporter's reading moves
-as well. ``still_unreadable`` lists the files both readers refuse; that is
-no change, so it does not set the exit code.
+plus ``selection`` (a file one side reads and the other does not).
+``still_unreadable`` lists the files both readers refuse; that is no change,
+so it does not set the exit code.
 
 Lines are 1-based and come from PyYAML's reading of the file: a value is
 reported at the line it is written on, a key at its own line. A value reached
@@ -98,7 +92,7 @@ DEFAULT_TIMEOUT = 600
 
 # The lists whose entries are differences (exit 1); `still_unreadable` is not.
 DIFFERENCE_LISTS = ("selection", "values", "keys", "becomes_unreadable",
-                    "becomes_readable", "exporter_changes")
+                    "becomes_readable")
 ALL_LISTS = DIFFERENCE_LISTS + ("still_unreadable",)
 
 _NULL_TAG = "tag:yaml.org,2002:null"
@@ -503,76 +497,6 @@ class _Walk:
         self.values.append(entry)
 
 
-# ── the exporter's own two changes (§8) ──────────────────────────────────
-
-_QUOTED_STYLES = ("'", '"', "|", ">")
-
-
-def exporter_changes(rel: str, text: str) -> list[dict]:
-    """The exporter readings that change when the vendored yaml.v3 patch is
-    removed (ADR-036 §8): a quoted or block scalar tagged `!` (the patch
-    keeps `!` only there) used as the key `<<` (a merge today, a literal key
-    after), or as a custom alert's `slo` → `objective` (refused today,
-    accepted after). Read from PyYAML's events of the first document (the
-    one yaml.v3 reads); a file PyYAML cannot parse yields nothing here."""
-    out: list[dict] = []
-    # frames: [kind, path, expecting_key, current_key, index]
-    frames: list[list] = []
-
-    def value_path() -> list:
-        if not frames:
-            return []
-        f = frames[-1]
-        return f[1] + ([f[3]] if f[0] == "map" else [f[4]])
-
-    def after_node() -> None:
-        if frames:
-            f = frames[-1]
-            if f[0] == "map":
-                f[2] = not f[2]
-            else:
-                f[4] += 1
-
-    try:
-        for ev in yaml.parse(text, Loader=yaml.SafeLoader):
-            if isinstance(ev, yaml.DocumentEndEvent):
-                break
-            if isinstance(ev, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
-                frames.pop()
-                after_node()
-                continue
-            if not isinstance(ev, (yaml.ScalarEvent, yaml.AliasEvent,
-                                   yaml.MappingStartEvent, yaml.SequenceStartEvent)):
-                continue
-            is_key = bool(frames) and frames[-1][0] == "map" and frames[-1][2]
-            tagged = (isinstance(ev, yaml.ScalarEvent) and ev.tag == "!"
-                      and ev.style in _QUOTED_STYLES)
-            line = ev.start_mark.line + 1
-            if is_key:
-                if tagged and ev.value == "<<":
-                    out.append({"file": rel, "line": line, "path": frames[-1][1], "change": "merge_key",
-                                "today": "a merge key: the mapping it names is merged in",
-                                "after": "a literal key \"<<\": nothing is merged"})
-                if isinstance(ev, yaml.ScalarEvent):
-                    frames[-1][3] = ev.value
-                    frames[-1][2] = False
-                    continue
-            path = value_path()
-            if (tagged and len(path) >= 2 and path[-1] == "objective" and path[-2] == "slo"):
-                out.append({"file": rel, "line": line, "path": path[:-1], "change": "slo_objective",
-                            "today": "refused: the exporter rejects an objective tagged `!`",
-                            "after": f"accepted: the string {json.dumps(ev.value)} (!!str)"})
-            if isinstance(ev, yaml.MappingStartEvent):
-                frames.append(["map", path, True, None, 0])
-            elif isinstance(ev, yaml.SequenceStartEvent):
-                frames.append(["seq", path, False, None, 0])
-            else:
-                after_node()
-    except (yaml.YAMLError, RecursionError):
-        pass
-    return out
-
-
 # ── the audit ────────────────────────────────────────────────────────────
 
 def empty_report() -> dict:
@@ -631,16 +555,6 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
                                      "yaml_v3": None, "rewrites": [],
                                      "suggestion": f"not compared past {MAX_NODES} nodes; "
                                                    "check this file by hand"})
-
-    # The exporter reads its files whatever parse-tree's verdict.
-    for f in sorted(after_selected):
-        if "exporter" not in doc["selected"][f]:
-            continue
-        try:
-            text = (root / f).read_bytes().decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        report["exporter_changes"].extend(exporter_changes(f, text))
 
     report["summary"] = {k: len(report[k]) for k in ALL_LISTS}
     report["summary"]["files_compared"] = len(report["files_compared"])
@@ -725,7 +639,6 @@ def render_text(report: dict) -> str:
         ("keys", "Keys only one side has"),
         ("becomes_unreadable", "Files read today that parse-tree refuses"),
         ("becomes_readable", "Files refused today that parse-tree reads"),
-        ("exporter_changes", "Exporter readings that change when the vendored yaml.v3 patch goes"),
         ("still_unreadable", "Files both refuse (no change)"),
     )
     for key, title in sections:
@@ -750,14 +663,10 @@ def render_text(report: dict) -> str:
                 lines.append(f"  {s(e['file'])}: {e['kind']} — {s(e['message'])}")
                 if key == "still_unreadable":
                     lines.append(f"    today: {s(e['pyyaml_error'])}")
-            elif key == "becomes_readable":
+            else:
                 lines.append(f"  {s(e['file'])}: today: {s(e['pyyaml_error'])}")
                 lines.append("    yaml.v3 reads:" + (" {}" if not e["yaml_v3"] else ""))
                 lines.extend(s(ln) for ln in _content_lines(e["yaml_v3"]))
-            else:
-                lines.append(f"  {s(_where(e))}  {s(_path_text(e['path']))}: {e['change']}")
-                lines.append(f"    today: {e['today']}")
-                lines.append(f"    after: {s(e['after'])}")
     lines.append("")
     n = sum(report["summary"][k] for k in DIFFERENCE_LISTS)
     lines.append(f"{n} difference(s)" if n else "No differences: both readers read this tree the same way.")

@@ -1916,8 +1916,9 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 		//
 		// ⛔ #1189: a profile may NOT fill in a declared-without-value key.
 		// `_profiles.yaml` is platform-owned by enforcement — applyBoundaryRules
-		// strips `profiles:` from tenant files, confd.isReservedName makes the
-		// file unaddressable by any tenant id, and assemble_config_dir lists it
+		// strips `profiles:` from tenant files, the reserved `_` prefix
+		// (pkg/confdname IsReserved, which tenant-api's confd composes) makes
+		// the file unaddressable by any tenant id, and assemble_config_dir lists it
 		// under PLATFORM_FILES. A tenant's `_profile: X` elects a REFERENCE, not
 		// its contents: what X expands to is decided by the platform and can
 		// change under the tenant with no action or notice on their side. So a

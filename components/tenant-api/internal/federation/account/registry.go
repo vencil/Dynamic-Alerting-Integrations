@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"gopkg.in/yaml.v3"
 )
 
@@ -88,9 +89,18 @@ func newRegistry() *Registry {
 // return an error. Allocation must never proceed from a registry it does
 // not fully trust — a wrong id is a cross-tenant data leak, not a
 // recoverable glitch.
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge): the
+// record came from conf.d/_account_registry.yaml (statemigrate imports it) or
+// from Marshal, and a document parse-tree refuses — a second document, even
+// an empty one, a `!!binary` or `!` tag, a null key — is a parse error,
+// whatever yaml.v3 makes of its first document.
 func Parse(data []byte) (*Registry, error) {
 	if isBlank(data) {
 		return newRegistry(), nil
+	}
+	if err := confd.Judge(data); err != nil {
+		return nil, fmt.Errorf("parse account registry: %w", err)
 	}
 	var reg Registry
 	if err := yaml.Unmarshal(data, &reg); err != nil {

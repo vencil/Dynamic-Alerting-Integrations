@@ -137,54 +137,49 @@ func TestTagTokenBelongsToItsOwnNode(t *testing.T) {
 	}
 }
 
-// upstreamTags rewrites a parsed tree the way upstream yaml.v3 builds it,
-// without the vendored patch that keeps the non-specific tag on a quoted or
-// block scalar: there parser.node drops `!` and the node takes its default
-// tag (!!str for a quoted or block scalar). Returns how many nodes changed.
-func upstreamTags(n *yaml.Node) int {
-	changed := 0
-	if n.Kind == yaml.ScalarNode && n.Tag == "!" {
-		n.Tag = "!!str"
-		changed++
+// nonSpecificTags counts the nodes of a parsed tree whose Tag is "!".
+func nonSpecificTags(n *yaml.Node) int {
+	c := 0
+	if n.Tag == "!" {
+		c++
 	}
-	for _, c := range n.Content {
-		changed += upstreamTags(c)
+	for _, k := range n.Content {
+		c += nonSpecificTags(k)
 	}
-	return changed
+	return c
 }
 
-// TestNonSpecificTagWithoutThePatch: the refusal of `!` does not read the
-// tag the vendored patch keeps — a tree built as upstream yaml.v3 builds it
-// (ADR-036 §11 removes the patch) is refused the same way. The quoted
-// spellings are the ones the patch changes; the rewrite must touch them
-// (else this test would not simulate anything).
-func TestNonSpecificTagWithoutThePatch(t *testing.T) {
+// TestNonSpecificTagReadFromTheSource: yaml.v3 drops `!` when it builds the
+// node (a quoted or block scalar takes !!str, a plain one its resolved tag),
+// so no node of these trees carries it, and the refusal still names it: it is
+// read from the source text. The quoted and block spellings are the ones a
+// reader keeping Tag "!" would have marked.
+func TestNonSpecificTagReadFromTheSource(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		in      string
-		patched bool // the vendored yaml.v3 keeps Tag "!" on some node
-	}{
-		{"a: ! \"x\"\n", true},
-		{"x: &b {a: 1}\ny: {! \"<<\": *b}\n", true},
-		{"slo:\n  objective: ! \"99.9\"\n", true},
-		{"a: ! |\n  x\n", true},
-		{"a: ! 1\n", false},
-		{"a: ! {b: 1}\n", false},
-		{"a: !<!> x\n", false},
+	for _, in := range []string{
+		"a: ! \"x\"\n",
+		"x: &b {a: 1}\ny: {! \"<<\": *b}\n",
+		"slo:\n  objective: ! \"99.9\"\n",
+		"a: ! |\n  x\n",
+		"a: ! 1\n",
+		"a: ! {b: 1}\n",
+		"a: !<!> x\n",
 	} {
-		data := []byte(tc.in)
+		data := []byte(in)
 		doc, bad := parseDocument(data)
 		if bad != nil || doc == nil {
-			t.Fatalf("%q: %v", tc.in, bad)
+			t.Fatalf("%q: %v", in, bad)
 		}
-		if n := upstreamTags(doc); (n > 0) != tc.patched {
-			t.Fatalf("%q: the rewrite changed %d nodes, want patched=%v", tc.in, n, tc.patched)
+		if n := nonSpecificTags(doc); n != 0 {
+			t.Fatalf("%q: %d node(s) carry Tag \"!\"; yaml.v3 drops it", in, n)
 		}
-		if _, bad := judge(data, doc); bad == nil || bad.Kind != KindNonSpecificTag {
-			t.Errorf("%q without the patch: got %v, want %s", tc.in, bad, KindNonSpecificTag)
+		for _, verdictOnly := range []bool{false, true} { // Parse's walk, and Judge's
+			if _, bad := judge(data, doc, verdictOnly); bad == nil || bad.Kind != KindNonSpecificTag {
+				t.Errorf("%q (verdictOnly %v): got %v, want %s", in, verdictOnly, bad, KindNonSpecificTag)
+			}
 		}
 		if _, bad := Parse(data); bad == nil || bad.Kind != KindNonSpecificTag {
-			t.Errorf("%q with the patch: got %v, want %s", tc.in, bad, KindNonSpecificTag)
+			t.Errorf("%q: Parse got %v, want %s", in, bad, KindNonSpecificTag)
 		}
 	}
 }

@@ -227,6 +227,18 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 	}
 	st := &stagingTree{root: root, mirror: mirror, configDir: filepath.Join(root, rel), rel: rel,
 		changed: map[string][]string{}, targets: map[string]string{}}
+	// #3175: the worktree has its own git dir (and, in PR mode, its own
+	// branch), so a conditional include the serving tree's check could not
+	// see may apply here. Checked before anything is read into its index
+	// or checked out; a refusal removes it, still empty (--force: no status
+	// is run inside it).
+	if err := w.checkGitDriversIn(root); err != nil {
+		w.closeStaging(st)
+		if branch != "" { // created above, at rev, with nothing on it
+			_ = w.gitExec("branch", "-D", branch)
+		}
+		return nil, err
+	}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
 		return nil, fmt.Errorf("populate batch worktree index: %w", err)

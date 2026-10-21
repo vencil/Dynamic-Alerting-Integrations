@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 type tenantIDSpellingMatrix struct {
@@ -64,18 +66,22 @@ func TestTenantIDSpellingMatrix_ExporterKeyIsTheDecodedKey(t *testing.T) {
 				}
 				return
 			}
+			if row.ExporterKey == nil {
+				// A null key: no tenant. Since ADR-036 step 6 (#3206) the
+				// exporter refuses the whole file (parse-tree's null_key)
+				// rather than dropping the key alone.
+				if kind, ok := UnreadableKindOf(err); !ok || kind != parsetree.KindNullKey {
+					t.Fatalf("source %q: table says no tenant; want the file refused as null_key, got tenants %v, err %v",
+						row.Source, cfg.Tenants, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ParseConfigFile(%q): %v", doc, err)
 			}
 			var got []string
 			for k := range cfg.Tenants {
 				got = append(got, k)
-			}
-			if row.ExporterKey == nil {
-				if len(got) != 0 {
-					t.Fatalf("source %q: table says the key is dropped, exporter decoded %q", row.Source, got)
-				}
-				return
 			}
 			if len(got) != 1 || got[0] != *row.ExporterKey {
 				t.Fatalf("source %q: table says %q, exporter decoded %q", row.Source, *row.ExporterKey, got)

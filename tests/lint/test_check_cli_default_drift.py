@@ -337,7 +337,7 @@ class TestBlindIsNotClean:
         drift = mod.Finding("docs/x.md", 1, "widget", "--rounds", "`5`", "10")
         clean_stats = {"scored": 1, "matched": 0, "doc_prose": 0,
                        "actual_not_literal": 0, "flag_undeclared": 0,
-                       "no_parser": 0}
+                       "no_parser": 0, "subparser_conflict": 0}
         monkeypatch.setattr(mod, "scan",
                             lambda *a, **k: ([drift], clean_stats, [], {}))
         monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--ci"])
@@ -356,7 +356,7 @@ class TestBlindIsNotClean:
             mod, "scan",
             lambda *a, **k: ([], {"scored": 0, "matched": 0, "doc_prose": 0,
                                   "actual_not_literal": 0, "flag_undeclared": 0,
-                                  "no_parser": 0},
+                                  "no_parser": 0, "subparser_conflict": 0},
                              ["could not load boom — this check saw NOTHING "
                               "for that command"], {}))
         monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--ci"])
@@ -392,3 +392,167 @@ def test_a_tool_that_sets_the_crash_code_does_not_leave_it_set(tmp_path, monkeyp
     assert "sets-crash" in captured and not blind, (captured, blind)  # the tool ran
     assert ec.get_crash_exit_code() == ec.EXIT_CALLER_ERROR
     assert ec.get_caller_error_code() == ec.EXIT_CALLER_ERROR  # #3124
+
+
+# ---------------------------------------------------------------------------
+# #3139: options declared on a sub-parser (`add_subparsers`) are compared too.
+# Before this, only the top-level parser's actions were read, so a command whose
+# options all live on sub-commands (gitops-check repo/local/sidecar) had every
+# option-table row land in `flag_undeclared` — editing the documented
+# `--branch` default from `main` to `master` stayed green.
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def real_defaults():
+    captured, _unscoreable, blind, faults = mod.introspect_defaults()
+    assert not blind and not faults, (blind, faults)
+    return captured
+
+
+def _mutated_reference(tmp_path: Path, old: str, new: str) -> Path:
+    src = REPO_ROOT / "docs" / "cli-reference.md"
+    text = src.read_text(encoding="utf-8")
+    assert text.count(old) == 1, f"fixture anchor {old!r} is not unique in {src}"
+    out = tmp_path / "cli-reference.md"
+    out.write_text(text.replace(old, new), encoding="utf-8")
+    return out
+
+
+class TestSubParserDefaults:
+
+    def test_a_sub_command_option_is_introspected(self, real_defaults):
+        assert real_defaults["gitops-check"].get("--branch") == "main", (
+            "gitops-check's `repo --branch` lives on a sub-parser; its default "
+            "is not in the introspected map, so its documented default is "
+            "never compared.")
+        # config-history: a top-level option plus sub-command ones, side by side
+        assert {"--config-dir", "--message", "--limit"} <= set(
+            real_defaults["config-history"])
+
+    @pytest.mark.parametrize("old,new,flag", [
+        ("| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |",
+         "| `--branch <BRANCH>` | `repo`：要檢查的分支 | `master` |", "--branch"),
+        ("| `--namespace <NS>` | `sidecar`：K8s namespace | `monitoring` |",
+         "| `--namespace <NS>` | `sidecar`：K8s namespace | `kube-system` |",
+         "--namespace"),
+    ])
+    def test_a_wrong_sub_command_default_in_the_real_doc_is_reported(
+            self, tmp_path, real_defaults, old, new, flag):
+        findings, _stats, _n, _b = mod.scan(
+            (_mutated_reference(tmp_path, old, new),), real_defaults)
+        assert [(f.command, f.flag) for f in findings] == [("gitops-check", flag)], (
+            f"changed the documented default of gitops-check {flag} and the "
+            f"check did not report it: {findings}")
+
+    def test_the_unmutated_copy_is_clean(self, tmp_path, real_defaults):
+        """Control for the test above: the copy itself is not what goes red."""
+        anchor = "| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |"
+        findings, _s, _n, _b = mod.scan(
+            (_mutated_reference(tmp_path, anchor, anchor),), real_defaults)
+        assert findings == []
+
+
+def _nested_parser():
+    import argparse
+    p = argparse.ArgumentParser(prog="widget")
+    p.add_argument("--top", default="t")
+    sub = p.add_subparsers(dest="action")
+    a = sub.add_parser("alpha", aliases=["al"])
+    a.add_argument("--same", default=3)
+    a.add_argument("--differs", default="x")
+    a.add_argument("--only-alpha", default="a")
+    b = sub.add_parser("beta")
+    b.add_argument("--same", default=3)
+    b.add_argument("--differs", default="y")
+    inner = b.add_subparsers(dest="inner").add_parser("deep")
+    inner.add_argument("--deep-opt", default=7)
+    return p
+
+
+class TestSubParserWalk:
+
+    def test_every_level_is_read(self):
+        got = mod._parser_defaults(_nested_parser())
+        assert got["--top"] == "t"
+        assert got["--only-alpha"] == "a"
+        assert got["--same"] == 3
+        assert got["--deep-opt"] == 7, "a nested sub-parser was not walked"
+        assert "-h" not in got and "--help" not in got
+
+    @pytest.mark.parametrize("cell", ["`x`", "`y`"])
+    def test_a_cell_naming_one_of_differing_defaults_is_counted_not_scored(
+            self, tmp_path, cell):
+        """A flag declared on two sub-commands with different defaults has no
+        single answer for a flat options table: a cell naming ONE of them is
+        disclosed, never matched as if it were the answer."""
+        got = mod._parser_defaults(_nested_parser())
+        assert isinstance(got["--differs"], mod.SubParserConflict)
+        assert got["--differs"].values == ("x", "y")
+        row = f"| `--differs <V>` | d | {cell} |\n"
+        findings, stats, _n, _b = mod.scan((_doc(tmp_path, row),), {"widget": got})
+        assert findings == [] and stats["scored"] == 0, (cell, findings)
+        assert stats["subparser_conflict"] == 1, stats
+        # counted once, in its own bucket — not also as a non-literal
+        assert stats["actual_not_literal"] == 0 and stats["doc_prose"] == 0, stats
+
+    def test_a_cell_naming_none_of_differing_defaults_is_drift(self, tmp_path):
+        """No sub-command defaults to `z`: that is a wrong cell, not an
+        ambiguous one (#3139 review F4 — the first revision skipped it)."""
+        got = mod._parser_defaults(_nested_parser())
+        row = "| `--differs <V>` | d | `z` |\n"
+        findings, stats, _n, _b = mod.scan((_doc(tmp_path, row),), {"widget": got})
+        assert [f.flag for f in findings] == ["--differs"], (findings, stats)
+        assert stats["subparser_conflict"] == 0
+
+    def test_a_wrong_nested_default_is_reported(self, tmp_path):
+        row = "| `--deep-opt <N>` | d | `8` |\n"
+        findings, _s, _n, _b = mod.scan(
+            (_doc(tmp_path, row),), {"widget": mod._parser_defaults(_nested_parser())})
+        assert [f.flag for f in findings] == ["--deep-opt"]
+
+
+class TestSetDefaultsIsTheDefault:
+    """argparse applies a parser's `set_defaults(dest=...)` over the action's
+    own default (#3139 review F5); the introspected value must be that one."""
+
+    def test_a_sub_parser_override_of_its_own_option(self):
+        import argparse
+        p = argparse.ArgumentParser()
+        s = p.add_subparsers(dest="action").add_parser("run")
+        s.add_argument("--fmt", default="text")
+        s.set_defaults(fmt="json")
+        assert mod._parser_defaults(p)["--fmt"] == "json"
+        assert s.parse_args([]).fmt == "json"   # what argparse really does
+
+    def test_a_sub_parser_override_of_an_option_from_parents(self):
+        import argparse
+        common = argparse.ArgumentParser(add_help=False)
+        common.add_argument("--fmt", default="text")
+        p = argparse.ArgumentParser()
+        sub = p.add_subparsers(dest="action")
+        a = sub.add_parser("a", parents=[common])
+        a.set_defaults(fmt="json")
+        sub.add_parser("b", parents=[common])
+        # `parents=` shares the action object and `set_defaults` writes the
+        # matching action's default, so argparse gives json on BOTH — the
+        # introspected value must follow argparse, not the declaration.
+        assert (p.parse_args(["a"]).fmt, p.parse_args(["b"]).fmt) == ("json", "json")
+        assert mod._parser_defaults(p)["--fmt"] == "json"
+
+    def test_a_sub_parser_override_of_an_option_declared_above_it(self):
+        import argparse
+        p = argparse.ArgumentParser()
+        p.add_argument("--fmt", default="text")
+        sub = p.add_subparsers(dest="action")
+        sub.add_parser("a").set_defaults(fmt="json")
+        assert p.parse_args(["a"]).fmt == "json"   # what argparse really does
+        got = mod._parser_defaults(p)["--fmt"]
+        assert isinstance(got, mod.SubParserConflict), got
+        assert set(got.values) == {"text", "json"}
+
+    def test_zero_and_false_are_different_defaults(self):
+        import argparse
+        p = argparse.ArgumentParser()
+        sub = p.add_subparsers(dest="action")
+        sub.add_parser("a").add_argument("--n", default=0)
+        sub.add_parser("b").add_argument("--n", default=False)
+        assert isinstance(mod._parser_defaults(p)["--n"], mod.SubParserConflict)

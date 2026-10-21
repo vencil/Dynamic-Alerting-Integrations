@@ -7,7 +7,8 @@ package handler
 // current file (checkPartialWriteBase → ParseTenantFile), and in an async
 // batch that ran on a task-manager worker with no recover, so tenant-api
 // died. The vendored yaml.v3 now answers an error, so both are ordinary
-// refusals: PUT answers 400 "invalid YAML", a batch op answers its
+// refusals: PUT answers 400 — since #3206 parse-tree's non_scalar_key, judged
+// before any typed decode —, a batch op answers its
 // TENANT_CONFIG_NOT_LOADABLE error, and nothing is written.
 
 import (
@@ -61,8 +62,8 @@ func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 				failOnPanic(t, fmt.Sprintf("%s (pr=%v) PUT", name, pr), func() {
 					code, resp, written = putReceiverDoc(t, doc, pr)
 				})
-				if code != http.StatusBadRequest || written != "" || !strings.Contains(resp, "invalid YAML") {
-					t.Errorf("%s (pr=%v): status %d, written %q; want 400 invalid YAML, no write; body: %s",
+				if code != http.StatusBadRequest || written != "" || !strings.Contains(resp, "kind non_scalar_key") {
+					t.Errorf("%s (pr=%v): status %d, written %q; want 400 non_scalar_key, no write; body: %s",
 						name, pr, code, written, resp)
 				}
 			}
@@ -81,8 +82,8 @@ func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 			failOnPanic(t, name+" (domain policy present) PUT", func() {
 				wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 			})
-			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid YAML") {
-				t.Errorf("%s (domain policy present): status %d; want 400 invalid YAML; body: %s", name, w.Code, w.Body.String())
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "kind non_scalar_key") {
+				t.Errorf("%s (domain policy present): status %d; want 400 non_scalar_key; body: %s", name, w.Code, w.Body.String())
 			}
 			if _, err := os.Stat(filepath.Join(dir, unhashableTenant+".yaml")); !os.IsNotExist(err) {
 				t.Errorf("%s (domain policy present): the tenant file was written (stat err %v)", name, err)

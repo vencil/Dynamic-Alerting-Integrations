@@ -324,7 +324,10 @@ def test_several_files_dropped_each_reason_shown_below_one_error_line(script, ex
     head, below = lines[err[0]], lines[err[0] + 1:]
     assert "x1.yaml, x2.yaml, x3.yaml" in head and "defaults found" not in head, head
     assert all(ln.startswith(_P) for ln in below), below
-    for reason in ("did not find expected", "invalid leading UTF-8 octet",
+    # "not valid UTF-8 at byte": parse-tree's invalid_utf8, which the
+    # exporter's load reports since ADR-036 step 6 (#3206; it was yaml.v3's
+    # "invalid leading UTF-8 octet").
+    for reason in ("did not find expected", "not valid UTF-8 at byte",
                    _P + "  line 2: cannot unmarshal !!seq", "defaults found in td.yaml"):
         assert any(reason in ln for ln in below), (reason, below)
 
