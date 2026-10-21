@@ -116,7 +116,11 @@ func driverFreeConfigCopy(dir string) (string, error) {
 			continue // command (GIT_CONFIG_COUNT …) stays in the environment
 		}
 		key, value, hasValue := strings.Cut(rest, "\n")
-		if gitDriverKey.MatchString(key) {
+		// --includes listed what the includes pulled in already; copying
+		// the include keys too would make git follow them again from the
+		// copy and bring the dropped driver keys back.
+		if gitDriverKey.MatchString(key) || key == "include.path" ||
+			(strings.HasPrefix(key, "includeif.") && strings.HasSuffix(key, ".path")) {
 			continue
 		}
 		section, sub, name, ok := splitConfigKey(key)

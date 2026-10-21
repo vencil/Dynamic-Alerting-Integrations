@@ -305,3 +305,26 @@ func TestDisableGitAutoMaintenance_CopyDropsDriverKeysOnly(t *testing.T) {
 	}
 	wantAllOff(t, "with driver keys in the global config", func(k string) string { return gitGet(t, dir, k) })
 }
+
+// TestDisableGitAutoMaintenance_CopyDropsIncludedDriverKeys: a driver key
+// that reaches the global config through an include (unconditional or
+// includeIf) is dropped too — the copy carries the included entries, not
+// the include keys, so git cannot follow them back to the driver.
+func TestDisableGitAutoMaintenance_CopyDropsIncludedDriverKeys(t *testing.T) {
+	home := isolateGit(t)
+	inc := filepath.Join(home, "lfs.inc")
+	writeFile(t, inc, "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n[user]\n\temail = inc@example.invalid\n")
+	writeFile(t, filepath.Join(home, ".gitconfig"), "[include]\n\tpath = "+inc+"\n"+
+		"[includeIf \"gitdir:/\"]\n\tpath = "+inc+"\n")
+	disable(t)
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	if got := gitGet(t, dir, "filter.lfs.clean"); got != "" {
+		t.Errorf("filter.lfs.clean = %q: the included driver key came back", got)
+	}
+	for k, want := range map[string]string{"filter.lfs.required": "true", "user.email": "inc@example.invalid"} {
+		if got := gitGet(t, dir, k); got != want {
+			t.Errorf("%s = %q, want %q (the included entries are kept)", k, got, want)
+		}
+	}
+}
