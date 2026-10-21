@@ -82,13 +82,31 @@ func (e *PreconditionError) Unwrap() error { return ErrPrecondition }
 // file another tenant already merged remotely — the whole TRK-318 hazard).
 var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — write lock released")
 
+// MsgPlatformWriteRepair is how a caller is told who may replace a current
+// tenant file the end-of-life guard cannot read, and what everyone else does
+// (#2405, #3206). Shared by MsgUnparseableBaseNeedsPlatformWrite and the
+// handler's 409 TENANT_CONFIG_NOT_LOADABLE text, so the two never disagree.
+const MsgPlatformWriteRepair = "replacing it through the API (a whole-file PUT /api/v1/tenants/{id}) " +
+	"requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] and no org-scope, " +
+	"environments or domains); without it, ask a caller who has that permission to replace it, " +
+	"or repair the file in git"
+
 // MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
-// whole-file write over a current tenant file that cannot be parsed, by a
-// caller without platform-wide write permission (#2405; see eolGuardErrs).
-const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be parsed; " +
-	"replacing it through the API requires write permission on all tenants " +
-	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
-	"otherwise repair the file in git"
+// whole-file write over a current tenant file the end-of-life guard cannot
+// read, by a caller without platform-wide write permission (#2405; see
+// eolGuardErrs). err is why it cannot: parse-tree's refusal — named with its
+// kind, since such a file is often valid YAML (a trailing `---`, a `!!binary`
+// value) and "cannot be parsed" would send the reader looking for a syntax
+// error — or the custom-alerts decode of a file parse-tree reads.
+func MsgUnparseableBaseNeedsPlatformWrite(err error) string {
+	if kind, ok := cfg.UnreadableKindOf(err); ok {
+		return "the current tenant file is refused by parse-tree (kind " + string(kind) +
+			"), so threshold-exporter and the route generator read none of it and its " +
+			"end-of-life usage is unknown; " + MsgPlatformWriteRepair
+	}
+	return "the current tenant file's tenants: block cannot be decoded for the end-of-life check; " +
+		MsgPlatformWriteRepair
+}
 
 // msgBodyNotAPIShaped (with the tenant id) refuses a write body that is not
 // API-shaped (#3064, confd.TenantFileManagement).
@@ -2251,7 +2269,7 @@ func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, r
 		case err == nil:
 			oldAlerts = cur
 		case !replaceUnparseable:
-			return []string{MsgUnparseableBaseNeedsPlatformWrite}
+			return []string{MsgUnparseableBaseNeedsPlatformWrite(err)}
 		}
 		// err != nil with the bit: baseline unknown ⇒ oldAlerts stays empty.
 	case !os.IsNotExist(baseErr):

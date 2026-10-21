@@ -72,9 +72,11 @@ type PutCustomAlertsResponse struct {
 // @Description base_hash (409 on drift). Empty array deletes the key.
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
-// @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-// @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (an API-shaped file only: one that is not YAML, or
-// @Description is shared with other tenants, is git-managed and repaired in git). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+// @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A
+// @Description whole-file PUT /api/v1/tenants/{id} replaces it (an API-shaped file only: one that is not YAML, or
+// @Description is shared with other tenants, is git-managed and repaired in git); when parse-tree refuses the file (its kind
+// @Description is in parse_tree_kind, #3206) or that PUT's end-of-life check cannot read it, the PUT needs write permission on
+// @Description all tenants, and any other caller asks one who has it or repairs the file in git. Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
 // @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
 // @Description whole-file PUT refuses it too, so replace it with a regular file in git.
 // @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other

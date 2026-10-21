@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,5 +75,62 @@ func TestScopeBlockOnDisk_ParseTreeRefusedFileIsNoBase(t *testing.T) {
 	}
 	if block := scopeBlockOnDisk(dir, "t1"); block["_metadata"] == nil {
 		t.Errorf("control: scope base = %v, want the file's _metadata", block)
+	}
+}
+
+// The 409 TENANT_CONFIG_NOT_LOADABLE text says who can repair the file
+// through the API (#3206): for a file parse-tree refuses — whose whole-file
+// PUT needs write permission on every tenant, since the end-of-life guard
+// cannot read it — it names the kind and that permission, and what anyone
+// else does; it does not promise any caller that a whole-file PUT replaces
+// it. The envelope carries the kind as parse_tree_kind.
+func TestTenantFileNotLoadable_SaysWhoCanRepair(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, base, reason, kind string }{
+		{"trailing empty document", "tenants:\n  t1:\n    _silent_mode: warning\n---\n", "invalid_config", "multiple_documents"},
+		{"!!binary value", "tenants:\n  t1:\n    _silent_mode: !!binary d2FybmluZw==\n", "invalid_config", "tag_not_allowed"},
+		{"syntax error", "tenants:\n  t1: [unclosed\n", "malformed_yaml", "syntax_error"},
+		// parse-tree reads it; only the typed decode refuses it.
+		{"typed decode only", "tenants:\n  t1: oops\n", "invalid_config", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var e *tenantFileNotLoadableError
+			if err := checkPartialWriteBase("t1", []byte(c.base)); !errors.As(err, &e) {
+				t.Fatalf("checkPartialWriteBase = %v, want a tenantFileNotLoadableError", err)
+			}
+			if e.Reason != c.reason || string(e.Kind) != c.kind {
+				t.Fatalf("reason %q kind %q, want %q %q", e.Reason, e.Kind, c.reason, c.kind)
+			}
+			msg := e.Error()
+			for _, want := range []string{"write permission on all tenants", "ask a caller", "repair the file in git"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("%q lacks %q", msg, want)
+				}
+			}
+			if c.kind != "" {
+				if !strings.Contains(msg, "parse-tree kind "+c.kind) {
+					t.Errorf("%q does not name kind %s", msg, c.kind)
+				}
+				if strings.Contains(msg, "replaces it, unless") {
+					t.Errorf("%q promises a whole-file PUT to every caller", msg)
+				}
+			} else if strings.Contains(msg, "parse-tree") || !strings.Contains(msg, "replaces it, unless") {
+				t.Errorf("%q, want the conditional whole-file PUT guidance and no parse-tree kind", msg)
+			}
+
+			w := httptest.NewRecorder()
+			writeTenantFileNotLoadable(w, httptest.NewRequest("PUT", "/", nil), e)
+			var env map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusConflict || env["code"] != CodeTenantConfigNotLoadable {
+				t.Fatalf("status %d body %s", w.Code, w.Body.String())
+			}
+			if got, _ := env["parse_tree_kind"].(string); got != c.kind {
+				t.Errorf("parse_tree_kind = %q, want %q (body %s)", got, c.kind, w.Body.String())
+			}
+		})
 	}
 }

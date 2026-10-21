@@ -99,7 +99,7 @@ func TestEolGuard_UnparseableBaseNeedsPlatformWrite(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, false, fakeEolViolations)
-			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) {
 				t.Errorf("broken base without the bit: errs = %q, want the platform-write refusal", errs)
 			}
 		})
@@ -113,12 +113,12 @@ func TestEolGuard_UnparseableBaseNeedsPlatformWrite(t *testing.T) {
 // platform-write bit the write is refused; with it the baseline is zero.
 func TestEolGuard_ParseTreeRefusedBaseIsUnparseable(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ name, base string }{
+	for _, c := range []struct{ name, base, kind string }{
 		{"binary sibling id", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n" +
-			strings.TrimPrefix(eolBody("a"), "tenants:\n")},
-		{"trailing empty document", eolBody("a") + "---\n"},
-		{"second document", eolBody("a") + "---\ntenants: {}\n"},
-		{"non-specific tag", eolBody("a") + "x: ! \"y\"\n"},
+			strings.TrimPrefix(eolBody("a"), "tenants:\n"), "tag_not_allowed"},
+		{"trailing empty document", eolBody("a") + "---\n", "multiple_documents"},
+		{"second document", eolBody("a") + "---\ntenants: {}\n", "multiple_documents"},
+		{"non-specific tag", eolBody("a") + "x: ! \"y\"\n", "non_specific_tag"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -127,8 +127,9 @@ func TestEolGuard_ParseTreeRefusedBaseIsUnparseable(t *testing.T) {
 				t.Fatalf("Extract refuses this base itself (%v): the row tests nothing parse-tree adds", err)
 			}
 			errs := eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, false, fakeEolViolations)
-			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
-				t.Errorf("without the bit: errs = %q, want the platform-write refusal", errs)
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) ||
+				!strings.Contains(errs[0], "refused by parse-tree (kind "+c.kind+")") {
+				t.Errorf("without the bit: errs = %q, want the platform-write refusal naming kind %s", errs, c.kind)
 			}
 			errs = eolGuardErrs(base, nil, eolBody("a"), eolTestTenant, true, fakeEolViolations)
 			if len(errs) != 1 || !strings.Contains(errs[0], eolTestRecipe) {
@@ -185,9 +186,44 @@ func TestValidate_BrokenBaseDoesNotBlockReplacement(t *testing.T) {
 				t.Errorf("validate refused a valid replacement of a broken file: %q", errs)
 			}
 			errs, _ := validate(dir, eolTestTenant, path, eolBody())
-			if len(errs) != 1 || errs[0] != MsgUnparseableBaseNeedsPlatformWrite {
+			if len(errs) != 1 || !strings.Contains(errs[0], MsgPlatformWriteRepair) {
 				t.Errorf("validate without the bit over a broken file: errs = %q, want the platform-write refusal", errs)
 			}
 		})
+	}
+}
+
+// The refusal says why the base cannot be read and how to repair it (#3206):
+// parse-tree's kind when parse-tree refuses the file — often valid YAML, so
+// "cannot be parsed" would point at a syntax error that is not there — else
+// that the custom-alerts decode failed; and in both, who may replace the file
+// through the API and what everyone else does.
+func TestEolGuard_RefusalNamesKindAndRepair(t *testing.T) {
+	t.Parallel()
+	kinds := map[string]string{
+		"unclosed_flow": "syntax_error", "not_yaml": "syntax_error", "top_level_list": "top_level_not_mapping",
+		"duplicate_tenants_key": "duplicate_key", "tenants_scalar": "", "tenants_list": "",
+	}
+	for _, c := range brokenTenantFiles {
+		kind, ok := kinds[c.name]
+		if !ok {
+			t.Fatalf("%s: no expected kind for this row", c.name)
+		}
+		errs := eolGuardErrs([]byte(c.body), nil, eolBody(), eolTestTenant, false, fakeEolViolations)
+		if len(errs) != 1 {
+			t.Fatalf("%s: errs = %q, want one refusal", c.name, errs)
+		}
+		msg := errs[0]
+		for _, want := range []string{"write permission on all tenants", "whole-file PUT", "repair the file in git", "ask a caller"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: %q lacks the repair guidance %q", c.name, msg, want)
+			}
+		}
+		if kind != "" && !strings.Contains(msg, "refused by parse-tree (kind "+kind+")") {
+			t.Errorf("%s: %q does not name parse-tree's kind %s", c.name, msg, kind)
+		}
+		if kind == "" && (strings.Contains(msg, "parse-tree") || !strings.Contains(msg, "cannot be decoded for the end-of-life check")) {
+			t.Errorf("%s: %q, want the custom-alerts decode reason, not parse-tree's", c.name, msg)
+		}
 	}
 }

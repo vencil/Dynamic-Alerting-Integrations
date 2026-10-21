@@ -156,6 +156,13 @@ func scopeBlockOnDisk(configDir, tenantID string) map[string]any {
 		} else if err := confd.Judge(data); err != nil {
 			// #3206: a file parse-tree refuses is not read either — its first
 			// document is not the tenant's metadata (nothing serves it).
+			// ⚠️ Visible effect: a caller restricted on environments/domains
+			// whose scope the first document's metadata would have failed
+			// (an op-level FORBIDDEN scope refusal before) now passes this pre-check and is
+			// refused by the write itself with TENANT_CONFIG_NOT_LOADABLE
+			// (the op's code; the batch is rejected) — nothing is written
+			// either way, and that refusal names only the tenant the caller
+			// addressed, its config_error and parse-tree's kind.
 			slog.Warn("batch scope check: tenant file refused by parse-tree, judging the patch alone",
 				"tenant", tenantID, "error", err)
 			data = nil
