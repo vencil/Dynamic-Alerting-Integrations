@@ -21,13 +21,12 @@ updated_at: 2026-10-20
 ✅ **Accepted**（2026-10-09 起草；以下各次修訂都經 owner 核可或由 owner 決定）。
 
 - **2026-10-11 修訂**：YAML 語法層也只留一個解析器，凡是用來判定設定內容的讀取都讀 Go 解析出的 JSON；寫入後整棵樹通過產生器檢查才寫入；不輸出整理好的設定 JSON；移除 `--policy-unavailable-open`；git 為必要。
-- **2026-10-11 再修訂**：訂定 `parse-tree` 的輸出外層、封閉的「讀不了」清單與固定語料（§2）、產生器容器不可用時的錯誤碼（§5）、da-guard「未判定」的 exit code（§9）。當時訂的「依序合併五步」已由 2026-10-20 再修訂取代（§7）。
+- **2026-10-11 再修訂**：訂定 `parse-tree` 的輸出外層、封閉的「讀不了」清單與固定語料（§2）、產生器容器不可用時的錯誤碼（§5）、da-guard「未判定」的 exit code（§9）。
 - **2026-10-12 修訂**：產生器容器跨請求快取解析結果，每次判定在有記憶體與時間上限的獨立程序裡跑，並訂定逾時與「拒收該筆」和「容器不可用」的分界（§3）；批次改為全有全無，在暫存的 git worktree 裡判定與 commit（§4）。
 - **2026-10-14 修訂**：解析快取的 key 改用檔案內容的 SHA-256，不再用 git 的 blob SHA（§3）。
 - **2026-10-15 修訂**：從 git 物件取檔時，不是一般檔的項目（symlink、gitlink 等）一律判為 `not_regular_file`（§3）。
 - **2026-10-15 修訂**：批次 patch 與 custom-alerts 的合併改以合併後的不變式把關：編輯以外的部分，合併結果的節點寫出來要與原檔逐一相同（§4）。
 - **2026-10-16 修訂**：「未判定」的範圍擴大到樹上有只由產生器判的 `_` 鍵（§9），配合 [ADR-038](./038-unread-keys-judged-by-readers.md)。
-- **2026-10-16 修訂**：`parse-tree` 判為讀不了、exporter 照讀的檔列為未判定證據（exit 4）。已由 2026-10-20 再修訂取代（§9）。
 - **2026-10-20 修訂**：產生器已改讀 `parse-tree` 的結果，§2、§9 刪去描述它先前以 PyYAML 讀取的句子；決策不變。
 - **2026-10-20 再修訂**：Go 端也只留一個判定與一個寫者，conf.d 以外的 YAML 以它的消費者為準，刪除遷移稽核指令；細節見 §2、§3、§8、§9、§11、§12 與 §7 的順序。
 
@@ -198,7 +197,7 @@ tenants:
     mysql_connections: "90"
 ```
 
-- 今天：`parse-tree` 把這份檔判為 `multiple_documents`（「a second document starts at line 4; only one document per file is read」），exporter 照讀第一份文件，服務 `t1`，`t2` 被靜默丟掉（`da-guard served-values` 的 `tenants` 只有 `t1`）；單獨執行的 da-guard 回 exit 4，把這份檔列為產生器才判的證據。
+- 修訂時（2026-10-21）的 main：`parse-tree` 把這份檔判為 `multiple_documents`（「a second document starts at line 4; only one document per file is read」），exporter 照讀第一份文件，服務 `t1`，`t2` 被靜默丟掉（`da-guard served-values` 的 `tenants` 只有 `t1`）；單獨執行的 da-guard 回 exit 4，把這份檔列為產生器才判的證據。
 - 之後：exporter 不服務 `t1`、`t2`，並以 metric 與 log 回報這份檔與 `multiple_documents`；da-guard 回 exit 3。修法是把第二份文件拆成另一個檔。
 
 **「讀不了」是封閉清單**：只有上面列的 13 種情況算讀不了。它們是仍在的讀取端可能讀出不同意思的寫法；這些讀取端是 `parse-tree` 的判定本身、Go 端各讀取者在判定之後以 yaml.v3 解碼進有型別結構的那一步、寫入用的 Go 編輯指令（見本節「寫 conf.d 檔」），以及 portal 以 js-yaml 做的預覽（不作為放行依據）。清單以外的一律照 yaml.v3 讀，包括過去產生器只因 PyYAML 的限制而拒收的檔，例如：
@@ -616,20 +615,15 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 其中 PyYAML 讀檔所佔 | 約四分之三 |
 | `da-guard parse-tree` 讀同一棵 1000 租戶的樹 | 不到 1 秒 |
 | 5000 份檔的解析結果留在程序裡 | 常駐記憶體約多 25 MB |
-| 5000 個租戶，產生器峰值記憶體 | 約 117 MiB |
-| 5000 個租戶，amtool 檢查產生出的 2.3 MB 設定 | 約 104 MiB |
 
 這是 §3 採用常駐程序加解析快取的依據；產生器改讀 `parse-tree` 後是否保留，由 §3「快取的去留」的量測決定。
 
-語法層（`parse-tree`，2026-10-11 實測；1000 份各含一個租戶的檔，每份約 20 行、含 `_routing`、`_metadata` 與排程閾值）：
+語法層（`parse-tree`，2026-10-20 實測樣本；合成樹，1000 份檔、每份一個租戶）：
 
 | 項目 | 量測 |
 |---|---|
-| 以實驗程式逐份用 yaml.v3 解析成節點並轉成 JSON（只輸出原文與型別，沒有 `value`、也沒有展開合併） | 約 0.11 秒，累計配置 29 MB，輸出 795 KB |
-| Python 讀這份 JSON | 0.024 秒 |
-| 對照：PyYAML 讀同樣 1000 份檔 | 1.22 秒 |
-
-改讀 JSON 後，Python 端的解析成本大約降到原本的十分之一以下；加上 `value` 與展開後，輸出會略大。
+| `da-guard parse-tree` 讀整棵樹一次 | 約 0.12 秒，輸出約 858 KB |
+| Python 讀這份 JSON | 約 0.04 秒 |
 
 ## 考慮過但否決
 

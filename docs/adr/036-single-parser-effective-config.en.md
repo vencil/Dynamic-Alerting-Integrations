@@ -15,13 +15,12 @@ lang: en
 ✅ **Accepted** (drafted 2026-10-09; every revision below was approved or decided by the owner).
 
 - **Revised 2026-10-11**: the YAML syntax layer also keeps a single parser, and every read used to judge config content reads the JSON parsed by Go; a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; `--policy-unavailable-open` is removed; git is required.
-- **Revised again 2026-10-11**: sets the `parse-tree` output envelope, its closed "unreadable" list and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9). The "five steps merged in order" set then is superseded by the further revision of 2026-10-20 (§7).
+- **Revised again 2026-10-11**: sets the `parse-tree` output envelope, its closed "unreadable" list and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9).
 - **Revised 2026-10-12**: the generator container caches parse results across requests and runs each judgement in a separate process with memory and time limits, and sets the timeouts and the line between "refuse this write" and "container unavailable" (§3); batches become all-or-nothing and are judged and committed in a temporary git worktree (§4).
 - **Revised 2026-10-14**: the parse cache key uses the SHA-256 of the file's content instead of git's blob SHA (§3).
 - **Revised 2026-10-15**: when files are read from git objects, every entry that is not a regular file (a symlink, a gitlink, …) is judged `not_regular_file` (§3).
 - **Revised 2026-10-15**: merges of batch patches and custom-alerts are guarded by an invariant on the result: outside the edit, every node of the result must be written exactly as in the original (§4).
 - **Revised 2026-10-16**: "not judged" now also covers a tree with `_` keys that only the generator judges (§9), to go with [ADR-038](./038-unread-keys-judged-by-readers.en.md).
-- **Revised 2026-10-16**: a file `parse-tree` treats as unreadable while the exporter reads it is listed as "not judged" evidence (exit 4). Superseded by the further revision of 2026-10-20 (§9).
 - **Revised 2026-10-20**: the generator now reads `parse-tree`'s result, so §2 and §9 drop the sentences describing its earlier PyYAML read; the decisions are unchanged.
 - **Further revision 2026-10-20**: the Go side also keeps one judgement and one writer, YAML outside conf.d follows its consumer, and the migration audit command is deleted; details in §2, §3, §8, §9, §11, §12 and the order in §7.
 
@@ -192,7 +191,7 @@ tenants:
     mysql_connections: "90"
 ```
 
-- Today: `parse-tree` judges this file `multiple_documents` ("a second document starts at line 4; only one document per file is read"); the exporter reads the first document and serves `t1`, and `t2` is silently dropped (the `tenants` of `da-guard served-values` holds only `t1`); da-guard run alone returns exit 4 and lists the file as evidence only the generator judges.
+- On main at the time of this revision (2026-10-21): `parse-tree` judges this file `multiple_documents` ("a second document starts at line 4; only one document per file is read"); the exporter reads the first document and serves `t1`, and `t2` is silently dropped (the `tenants` of `da-guard served-values` holds only `t1`); da-guard run alone returns exit 4 and lists the file as evidence only the generator judges.
 - Afterwards: the exporter serves neither `t1` nor `t2`, and a metric and a log name the file and `multiple_documents`; da-guard returns exit 3. The fix is to move the second document into a file of its own.
 
 **"Unreadable" is a closed list**: only the 13 cases listed above are unreadable. They are the forms the remaining readers could read with different meanings; those readers are `parse-tree`'s judgement itself, the step in which each Go reader, after that judgement, decodes into typed structures with yaml.v3, the Go edit commands used for writing (see "Writing conf.d files" in this section), and the portal's js-yaml previews (never a basis for letting anything through). Everything else is read per yaml.v3, including files the generator used to refuse only because of PyYAML's limits, for example:
@@ -612,20 +611,15 @@ Scale of write judging (measured 2026-10-11; a synthetic tree, one file per tena
 | Share spent reading files with PyYAML | about three quarters |
 | `da-guard parse-tree` reading the same 1000-tenant tree | under 1 s |
 | Keeping the parse results of 5000 files in the process | about 25 MB more resident memory |
-| 5000 tenants, generator peak memory | about 117 MiB |
-| 5000 tenants, amtool checking the generated 2.3 MB config | about 104 MiB |
 
 This is the basis for §3's long-running process with a parse cache; whether it stays now that the generator reads `parse-tree` is decided by the measurement in §3, "Whether the cache stays".
 
-Syntax layer (`parse-tree`, measured 2026-10-11; 1000 files with one tenant each, about 20 lines per file including `_routing`, `_metadata` and a scheduled threshold):
+Syntax layer (`parse-tree`, sample measured 2026-10-20; a synthetic tree of 1000 files with one tenant each):
 
 | Item | Measurement |
 |---|---|
-| An experimental program parsing each file with yaml.v3 into nodes and converting to JSON (it outputs only text and type, with no `value` and no merge expansion) | about 0.11 s, 29 MB allocated in total, 795 KB of output |
-| Python reading that JSON | 0.024 s |
-| For comparison: PyYAML reading the same 1000 files | 1.22 s |
-
-After switching to the JSON, the Python side's parsing cost falls to roughly a tenth or less of what it was; with `value` and expansion the output grows somewhat.
+| `da-guard parse-tree` reading the whole tree once | about 0.12 s, about 858 KB of output |
+| Python reading that JSON | about 0.04 s |
 
 ## Considered and rejected
 
