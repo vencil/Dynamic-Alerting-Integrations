@@ -797,8 +797,8 @@
     "secretRef": {
       "type": "object",
       "title": "Kubernetes Secret Reference",
-      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value. The Secret is created by the operator or ExternalSecrets, not by this config; the generator is to render the reference instead of copying the value: as the matching Alertmanager `*_file` path to the mounted Secret (ConfigMap output), or as a SecretKeySelector (Prometheus Operator AlertmanagerConfig output). Not wired to any field yet: a credential field accepts this shape only once the generator renders it (#1560). Distinct from the upstream `*_ref` / `*_file` fields of http_config (e.g. httpBasicAuth.password_ref), which keep their prometheus/common meaning.",
-      "$comment": "#1560: name is a DNS-1123 subdomain (Kubernetes object name); key follows the Secret data key rule (Kubernetes IsConfigMapKey: [-._a-zA-Z0-9]+, at most 253, not '.' and not starting with '..'). The `secret` / `key` children are the Secret's coordinates, not the credential value: the field that holds a secretRef is the one on the redaction list, and it is masked whole. tests/ops/test_config_diff.py skips this definition by name for that reason.",
+      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value. The Secret is created by the operator or ExternalSecrets, not by this config; the generator is to render the reference instead of copying the value: as the matching Alertmanager `*_file` path to the mounted Secret (ConfigMap output), or as a SecretKeySelector (Prometheus Operator AlertmanagerConfig output). Not wired to any field yet: a credential field accepts this shape only once the generator renders it (#1560). Of the nine `x-credential` fields, seven can take it (url, api_url, webhook_url, service_key, routing_key, auth_password each have an Alertmanager `*_file` counterpart); email `headers` and webhook `http_config` have none, so a reference there would go on an inner field instead. A SecretKeySelector is the flat `{name, key}`: the renderer unwraps `.secret` rather than copying this object. Distinct from the upstream `*_ref` / `*_file` fields of http_config (e.g. httpBasicAuth.password_ref), which keep their prometheus/common meaning.",
+      "$comment": "#1560: name is a DNS-1123 subdomain (Kubernetes object name); key follows the Secret data key rule (Kubernetes IsConfigMapKey: [-._a-zA-Z0-9]+, at most 253, not '.' and not starting with '..'). Both reject a newline: Python's re `$` also matches before a trailing newline, so the pattern alone would let `name\n` through (same guard as definitions.duration). The `secret` / `key` children are the Secret's coordinates, not the credential value: the field that holds a secretRef is the one on the redaction list, and it is masked whole. tests/ops/test_config_diff.py skips this definition by name for that reason.",
       "required": ["secret"],
       "properties": {
         "secret": {
@@ -811,6 +811,7 @@
               "description": "Name of the Secret (DNS-1123 subdomain).",
               "maxLength": 253,
               "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+              "not": { "pattern": "\\n" },
               "examples": ["alerting-receivers"]
             },
             "key": {
@@ -819,7 +820,7 @@
               "description": "Key within the Secret's data.",
               "maxLength": 253,
               "pattern": "^[-._a-zA-Z0-9]+$",
-              "not": { "anyOf": [{ "const": "." }, { "pattern": "^\\.\\." }] },
+              "not": { "anyOf": [{ "const": "." }, { "pattern": "^\\.\\." }, { "pattern": "\\n" }] },
               "examples": ["slack-api-url"]
             }
           },

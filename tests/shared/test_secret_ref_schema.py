@@ -55,12 +55,14 @@ def test_valid_references_are_accepted(validator, doc):
     _ref(name="-alerting"),             # 以 - 開頭
     _ref(name="alerting-"),             # 以 - 結尾
     _ref(name=""),
+    _ref(name="alerting\n"),           # 結尾換行（Python re 的 $ 會放行）
     _ref(key="."),
     _ref(key=".."),
     _ref(key="..x"),
     _ref(key="a/b"),                    # 含 /
     _ref(key=""),
     _ref(key="k" * 254),
+    _ref(key="k\n"),                   # 結尾換行
     {"secret": {"name": "a", "key": "k", "namespace": "x"}},   # 多餘屬性
     {"secret": {"name": "a", "key": "k"}, "optional": True},  # 外層多餘屬性
     {"secret": {"name": "a"}},          # 缺 key

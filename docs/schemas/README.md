@@ -198,7 +198,7 @@ tenants:
             routing_key: "xxxxx/xxxxx/xxxxx"
 ```
 
-receiver 的憑證欄位（webhook／Rocket.Chat 的 `url`、`http_config`、email 的 `auth_password`／`headers`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`）在 schema 上帶擴充關鍵字 `"x-credential": true`；這類欄位名必須都在 tenant-api 的遮罩名單內（[§3.7](../api/tenant-api-hardening.md)，由 `tests/ops/test_lib_redact.py` 守）。`definitions.secretRef`（`{secret: {name, key}}`，Kubernetes Secret 參照）已定義但**尚未接到任何欄位**（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。
+receiver 的憑證欄位（webhook 的 `url`／`http_config`、Rocket.Chat 的 `url`、email 的 `auth_password`／`headers`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`）在 schema 上帶擴充關鍵字 `"x-credential": true`；這類欄位名必須都在 tenant-api 的遮罩名單內（[§3.7](../api/tenant-api-hardening.md)，由 `tests/ops/test_lib_redact.py` 守）。`definitions.secretRef`（`{secret: {name, key}}`，Kubernetes Secret 參照）已定義但**尚未接到任何欄位**（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。
 
 ### Tenant Profiles (v1.12.0+)
 
