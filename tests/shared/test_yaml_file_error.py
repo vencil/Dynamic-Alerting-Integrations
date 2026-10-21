@@ -195,14 +195,6 @@ class TestLoadYamlFileContentEncoding:
         finally:
             p.chmod(0o600)
 
-    def test_load_tenant_configs_propagates_the_named_error(self, tmp_path):
-        """The hub six tools read through: it must not fail OPEN either."""
-        (tmp_path / "alpha.yaml").write_bytes(XFF_DOC)
-        (tmp_path / "beta.yaml").write_bytes(b"tenants:\n  beta:\n    cpu_usage: 85\n")
-        with pytest.raises(lio.YamlFileError) as ei:
-            lio.load_tenant_configs(str(tmp_path))
-        assert "alpha.yaml" in str(ei.value)
-
 
 class TestExitOnYamlFileErrorWrapper:
     def test_maps_to_caller_error_naming_the_path(self, capsys):
@@ -565,8 +557,8 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # ---------------------------------------------------------------------------
 # `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
 # owe the same guard; so do the #2114 exporter-key siblings of both.
-_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs",
-              "load_yaml_file_exporter_keys", "load_yaml_file_strict_exporter_keys",
+_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict",
+              "load_yaml_file_exporter_keys",
               # #2115: raises YamlFileError for a file the exporter's load skips.
               "load_served_tree", "load_served_values"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",
@@ -603,7 +595,7 @@ def _handler_names(h: ast.ExceptHandler) -> list[str]:
 
 
 def _lib_aliases(tree: ast.Module) -> dict[str, str]:
-    """Local names bound to the lib's load_yaml_file / load_tenant_configs."""
+    """Local names bound to the lib's load helpers (`_LIB_ROOTS`)."""
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in _LIB_MODULES:
@@ -631,8 +623,9 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
 
 def _module_reexports_lib_root(modname: str, attr: str) -> bool:
     """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
-    defined locally)? ``arg.load_tenant_configs`` is analyze_rule_pack_gaps's own function;
-    ``pe.load_yaml_file`` is the lib's, re-exported."""
+    defined locally)? ``deprecate_rule.load_yaml_file`` is that tool's own
+    function; ``generate_tenant_mapping_rules.load_yaml_file`` is the lib's,
+    re-exported."""
     for d in (TOOLS, OPS, LINT):
         p = d / f"{modname}.py"
         if p.is_file():
@@ -838,8 +831,9 @@ def test_scanner_sees_reexport_through_a_tool_module():
     assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib
-    assert not _sites_of("from analyze_rule_pack_gaps import load_tenant_configs\n"
-                         "def f(p):\n    return load_tenant_configs(p)\n")
+    # (deprecate_rule defines its own parse-tree `load_yaml_file`)
+    assert not _sites_of("from deprecate_rule import load_yaml_file\n"
+                         "def f(p):\n    return load_yaml_file(p)\n")
 
 
 # ── per-file isolation kept where the tool already had it (blind review) ──

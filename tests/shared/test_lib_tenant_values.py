@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from _platform_fs import require_file_name, require_shebang_scripts, symlink_or_skip  # noqa: E402
 
-import _lib_io
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError
 
@@ -65,17 +64,6 @@ def test_value_is_read_wherever_it_is_written(where, tmp_path, da_guard):
     assert got["tenant-a"].values["mysql_connections"] == 55
     assert got["tenant-a"].severities["mysql_connections"] == "warning"
     assert got["tenant-b"].values["mysql_connections"] == 80  # 對照組不變
-
-
-def test_the_old_root_only_reader_misses_the_first_two(tmp_path):
-    """對照：load_tenant_configs 只讀根目錄租戶檔，前兩種樹看不到 55，第三種看得到。
-    這支測試釘住「為什麼需要這支 lib」；哪天它轉紅，代表舊 reader 已被修正。"""
-    seen = {}
-    for where in sorted(_WHERE):
-        conf_d = _tree(tmp_path / where, _WHERE[where])
-        seen[where] = _lib_io.load_tenant_configs(str(conf_d)).get("tenant-a", {}).get("mysql_connections")
-    assert seen["defaults"] != 55 and seen["platform-tenants"] != 55, seen
-    assert str(seen["tenant-file"]) == "55", seen
 
 
 def test_at_is_passed_through(tmp_path, da_guard):

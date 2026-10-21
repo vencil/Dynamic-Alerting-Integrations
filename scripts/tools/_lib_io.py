@@ -19,7 +19,6 @@ from typing import Any, Callable, Iterator, Optional, TypeVar
 
 import yaml
 
-from _lib_confd import warn_nested
 from _lib_constants import ONBOARD_HINTS_FILENAME
 # Leaf module (yaml + stdlib only), so no import cycle (#2114).
 from _lib_yaml_keys import (ExporterKeyLoader, KeepPlainScalarText,
@@ -156,9 +155,10 @@ def load_yaml_file_exporter_keys(
     names the keys whose scalar value names a key (``_profile``, #2216).
 
     ⚠️ NOT strict: a duplicate key keeps the last value, like
-    :func:`load_yaml_file`. The strict sibling is
-    :func:`load_yaml_file_strict_exporter_keys`; pick by what the caller
-    read with before (#2123 decided which readers are strict).
+    :func:`load_yaml_file`. A reader that must refuse a duplicate key reads
+    the text with :func:`strict_load_exporter_keys` (#2123 decided which
+    readers are strict); a conf.d reader goes through da-guard parse-tree
+    instead (ADR-036).
 
     ⚠️ A sibling rather than a flag on :func:`load_yaml_file`: that helper
     has dozens of callers reading files that hold no tenant id, and changing
@@ -517,45 +517,6 @@ def strict_load_for_rewrite(stream: Any) -> Any:
     return strict_safe_load(stream, loader=StrictRewriteLoader)
 
 
-def strict_load_all_exporter_keys(stream: Any, *,
-                                  raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
-                                  raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()
-                                  ) -> Iterator[Any]:
-    """:func:`strict_safe_load_all` with exporter keys; lazy, so
-    ``next(...)`` reads — and checks — the first document only.
-    *raw_text_scalars* as in :func:`strict_load_exporter_keys`."""
-    return strict_safe_load_all(stream, loader=_strict_exporter_key_class(
-        frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
-
-
-def load_yaml_file_strict_exporter_keys(
-    path: Optional[str],
-    default: Any = None,
-    *,
-    raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
-) -> Any:
-    """:func:`load_yaml_file_strict` whose mapping keys are raw text (#2114).
-
-    Same contract as :func:`load_yaml_file_strict` — same pure parser, same
-    UTF-8 decode, *default* for a missing or empty file, and a duplicate
-    key (by the exporter's identity: ``123`` and ``"123"`` are one key)
-    raises the same :class:`YamlFileError` a syntax error does.
-    """
-    # Spelled apart from its siblings: the mutation catalogue anchors on
-    # their lines being unique in the file.
-    if not path or not os.path.isfile(path):
-        return default
-    try:
-        text = Path(path).read_bytes().decode("utf-8")
-        named = io.StringIO(text)
-        named.name = str(path)
-        data = strict_load_exporter_keys(
-            named, raw_text_sequences=raw_text_sequences)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
-    return default if data is None else data
-
-
 # ── #2164 → ADR-036 step 4 (#2906): a scalar in a STRING field that yaml.v3
 # reads as something else
 #
@@ -898,132 +859,6 @@ def find_metric_dictionary(tool_dir: str) -> "str | None":
         if os.path.isfile(candidate):
             return candidate
     return None
-
-
-def iter_yaml_files(
-    config_dir: str,
-    *,
-    skip_reserved: bool = True,
-) -> list[tuple[str, str]]:
-    """List YAML files in *config_dir*, sorted deterministically.
-
-    The extension test is CASE-INSENSITIVE (#1537): the exporter lowercases
-    the entry name before testing ``.yaml`` / ``.yml``, so it reads
-    ``upper.YAML`` and merges it into the config it serves. An exact-suffix
-    test here made that file invisible — not reported, simply absent — which
-    is #1911's divergence with the extension as the axis rather than
-    directory depth. Nothing here greps the Go source (#1448 measured that a
-    Python guard asserting things about Go source text goes red on
-    legitimate Go refactors while stating the opposite of the truth); the
-    shared conf.d name classification matrix under ``tests/shared/`` is what
-    keeps this side and the exporter's side pinned to one rule.
-
-    Args:
-        config_dir: Path to the configuration directory.
-        skip_reserved: If ``True`` (default), skip files whose names
-                       start with ``_`` or ``.`` (reserved / dotfiles).
-                       ⚠️ It gates BOTH prefixes, so ``skip_reserved=False``
-                       also stops hiding dotfiles — measured, ``.hidden.yaml``
-                       comes back. That differs from ``_lib_confd``, whose
-                       hidden filter is unconditional; a caller that wants
-                       "reserved control files too, but still no dotfiles"
-                       has to filter for itself.
-
-    Returns:
-        List of ``(filename, full_path)`` tuples, sorted by filename.
-    """
-    if not config_dir:
-        return []
-    base = Path(config_dir)
-    if not base.is_dir():
-        return []
-    # #1911: flat read — a hierarchical conf.d must not look empty.
-    # tool= omitted on purpose: this helper is reached from several
-    # entry points, so the message should name the command the
-    # operator ran, not this function.
-    warn_nested(base)
-    result: list[tuple[str, str]] = []
-    for entry in sorted(base.iterdir(), key=lambda p: p.name):
-        fname = entry.name
-        lower = fname.lower()
-        if not (lower.endswith(".yaml") or lower.endswith(".yml")):
-            continue
-        if skip_reserved and (fname.startswith("_") or fname.startswith(".")):
-            continue
-        if entry.is_file():
-            result.append((fname, str(entry)))
-    return result
-
-
-def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
-    """Load all tenant configurations from a config directory.
-
-    Handles both the ``{tenants: {name: {...}}}`` wrapper format
-    (used in ``conf.d/``) and the flat single-tenant format.
-    Files starting with ``_`` or ``.`` are skipped.
-
-    Args:
-        config_dir: Path to the configuration directory.
-
-    Returns:
-        Dict mapping ``tenant_name`` → ``config_dict``.  Empty dict when
-        *config_dir* is missing or holds no eligible files.
-
-        Tenant names are always ``str``: the key's source text, which is
-        what the exporter serves (#2114) — an unquoted ``010:`` is ``"010"``
-        and ``yes:`` is ``"yes"`` (PyYAML's own typing made them ``8`` and
-        ``True``). Mapping keys inside a config are text too; values keep
-        PyYAML's types. Same pure-Python parser as :func:`load_yaml_file`.
-        ⚠️ This is true of THIS helper's callers; tools that read tenant ids
-        some other way may still use PyYAML's typing (tracked in #2115).
-
-        ⚠️ A document that parses to a non-mapping is skipped, but an EMPTY
-        file is not: ``load_yaml_file`` turns it into the ``{}`` default, so
-        the file registers a tenant named after it with no thresholds. Same
-        for a comments-only file. Measured, and load-bearing for every caller
-        that counts tenants.
-
-    Raises:
-        Anything raised while listing the directory or reading a file
-        propagates. :class:`YamlFileError` (bad syntax, a duplicate mapping
-        key — #2123 — OR non-UTF-8 content, naming the file — #1654; it is a
-        ``yaml.YAMLError``) and ``OSError``
-        are the common ones, but this is deliberately NOT a closed list — a
-        deeply nested document raises ``RecursionError``, which is a sibling
-        of none of them, and an unreadable *directory* raises from
-        :func:`iter_yaml_files` rather than from :func:`load_yaml_file`.
-        Callers that need a CLI exit code should catch broadly at their entry
-        point rather than name types here.
-
-    ⛔ This previously documented itself as returning an "empty dict on any
-    error", which was never true — the exceptions above have always
-    propagated. The wording mattered because it invites callers to treat a
-    malformed config directory as an empty one, i.e. to fail OPEN on exactly
-    the input that should be loudest. Callers that need a CLI exit code
-    should map these to ``EXIT_CALLER_ERROR`` at their own entry point (see
-    ``scripts/tools/ops/policy_engine.py:main``); swallowing them *here* would
-    silently turn "your config is broken" into "you have no tenants" for
-    every one of this helper's callers at once.
-    """
-    configs: dict[str, dict[str, Any]] = {}
-    for fname, fpath in iter_yaml_files(config_dir):
-        # Strict (#2123): a file holding a key twice is one the exporter
-        # rejects, so it raises YamlFileError here like any unreadable file
-        # instead of registering whichever value PyYAML kept last.
-        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
-        # them (`010:` is "010", not 8) — and `123:` / `"123":` in one
-        # mapping are that duplicate.
-        raw = load_yaml_file_strict_exporter_keys(fpath, default={})
-        if not isinstance(raw, dict):
-            continue
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            for t_name, t_data in raw["tenants"].items():
-                if isinstance(t_data, dict):
-                    configs[t_name] = t_data
-        else:
-            tenant = fname.rsplit(".", 1)[0]
-            configs[tenant] = raw
-    return configs
 
 
 class OutputWriteError(OSError):

@@ -218,8 +218,6 @@ def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected)
 
 from _lib_io import (  # noqa: E402
     StrictExporterKeyLoader,
-    load_yaml_file_strict_exporter_keys,
-    strict_load_all_exporter_keys,
     strict_load_exporter_keys,
 )
 from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys  # noqa: E402
@@ -228,11 +226,8 @@ _EXPORTER_KEY_ENTRIES = {
     "strict_load_exporter_keys": lambda d: strict_load_exporter_keys(d),
     "strict_load_exporter_keys+raw_text_sequences":
         lambda d: strict_load_exporter_keys(d, raw_text_sequences=("x",)),
-    "strict_load_all_exporter_keys": lambda d: next(strict_load_all_exporter_keys(d)),
     "strict_load_exporter_keys+raw_text_scalars":
         lambda d: strict_load_exporter_keys(d, raw_text_scalars=("_profile",)),
-    "strict_load_all_exporter_keys+raw_text_scalars":
-        lambda d: next(strict_load_all_exporter_keys(d, raw_text_scalars=("_profile",))),
 }
 
 
@@ -271,14 +266,11 @@ _PROFILE_SRC = ("tenants:\n  a:\n    _profile: 010\n    cpu: 010\n"
                 "exclude_tenants: [010]\n")
 
 
-@pytest.mark.parametrize("load", [
-    strict_load_exporter_keys,
-    lambda s, **kw: next(strict_load_all_exporter_keys(s, **kw)),
-], ids=["strict_load_exporter_keys", "strict_load_all_exporter_keys"])
-def test_strict_raw_text_scalars_matches_the_lenient_loader(load):
+def test_strict_raw_text_scalars_matches_the_lenient_loader():
     """#2216 / #2237: `raw_text_scalars` means what `_lib_yaml_keys`'s
     parameter of the same name means — only the opted-in key's scalar value
     is source text, a null stays None, every other value keeps its type."""
+    load = strict_load_exporter_keys
     got = load(_PROFILE_SRC, raw_text_scalars=("_profile",))
     assert got["tenants"] == {"a": {"_profile": "010", "cpu": 8},
                               "b": {"_profile": None},
@@ -300,25 +292,3 @@ def test_strict_raw_text_scalars_is_still_strict():
         strict_load_exporter_keys('a:\n  _profile: 010\n  _profile: "010"\n',
                                   raw_text_scalars=("_profile",))
 
-
-def test_load_yaml_file_strict_exporter_keys_keeps_the_strict_readers_contract(tmp_path):
-    assert load_yaml_file_strict_exporter_keys(None, default={}) == {}
-    assert load_yaml_file_strict_exporter_keys(str(tmp_path / "missing.yaml"), default=[]) == []
-    empty = tmp_path / "e.yaml"
-    empty.write_text("# nothing\n", encoding="utf-8")
-    assert load_yaml_file_strict_exporter_keys(str(empty), default={}) == {}
-    clean = tmp_path / "c.yaml"
-    clean.write_text("tenants:\n  010: {}\n  yes: {}\n", encoding="utf-8")
-    assert load_yaml_file_strict_exporter_keys(str(clean)) == {
-        "tenants": {"010": {}, "yes": {}}}
-    bad_utf8 = tmp_path / "b.yaml"
-    bad_utf8.write_bytes(b"a: \xff\n")
-    with pytest.raises(YamlFileError) as exc:
-        load_yaml_file_strict_exporter_keys(str(bad_utf8))
-    assert isinstance(exc.value.cause, UnicodeDecodeError)
-    dup = tmp_path / "d.yaml"
-    dup.write_text('tenants:\n  123: {a: 1}\n  "123": {b: 2}\n', encoding="utf-8")
-    with pytest.raises(YamlFileError) as exc:
-        load_yaml_file_strict_exporter_keys(str(dup))
-    assert isinstance(exc.value.cause, DuplicateKeyError)
-    assert exc.value.cause.key == "123" and str(dup) in str(exc.value)

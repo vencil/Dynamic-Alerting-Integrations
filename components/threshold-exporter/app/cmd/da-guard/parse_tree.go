@@ -477,15 +477,11 @@ func parentsOnDisk(root, rel string) string {
 //
 // ⛔ The generator's half is `_grar_parse._parse_config_files`: it reads
 // every file the walk lists except a carrier its directory does not select,
-// which it names as ignored (warn_multi_carrier). Below the root it still
-// opens such a file for one question — does it write `_routing_enforced`
-// (_enforced_in_unread_file) — and ignores the file when it does not parse;
-// it is not a file the generator reads, so it is "not_read" here, and that
-// probe has no counterpart in this document (an open question for the
-// switch, #2897). The exporter reads tenant files, the root's `_` files but
-// an unselected carrier (isRootPlatformKey), and each directory's selected
-// carrier; another `_` file below the root it only probes for syntax
-// (isNestedPlatformFile).
+// which it names as ignored (an `unselected_defaults_carrier` finding) and
+// does not open, whatever it holds — so it is "not_read" here. The exporter
+// reads tenant files, the root's `_` files but an unselected carrier
+// (isRootPlatformKey), and each directory's selected carrier; another `_`
+// file below the root it only probes for syntax (isNestedPlatformFile).
 func readersFor(rel string, selectedCarrier bool) []string {
 	nested := strings.Contains(rel, "/")
 	base := path.Base(rel)

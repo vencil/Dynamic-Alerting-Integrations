@@ -69,9 +69,8 @@ _YAML_LENIENT = {"safe_load", "safe_load_all", "load", "load_all", "full_load",
                  "unsafe_load", "full_load_all", "unsafe_load_all"}
 # #2114: the exporter-key readers (`_lib_yaml_keys` and `_lib_io`'s file
 # sibling) keep the last value of a repeated key too — lenient in exactly
-# this sense, so they are named here; their strict counterparts
-# (`strict_load_exporter_keys`, `strict_load_all_exporter_keys`,
-# `load_yaml_file_strict_exporter_keys`) are not.
+# this sense, so they are named here; their strict counterpart
+# (`strict_load_exporter_keys`) is not.
 _LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
                 "load_first_document_exporter_keys", "load_all_exporter_keys",
                 "load_yaml_file_exporter_keys"}
@@ -194,7 +193,7 @@ def _flagged() -> dict[str, list[str]]:
 def test_the_enumerator_derivation_is_alive():
     """Anti-vacuity: if the derivation stops finding the shared enumerators,
     every loop looks like a non-conf.d loop and the gate goes quiet."""
-    assert {"iter_config_files", "iter_yaml_files", "list_config_tree"} <= _lib_enumerators()
+    assert {"iter_config_files", "list_config_tree"} <= _lib_enumerators()
 
 
 def test_every_lenient_confd_reader_is_migrated_or_pinned():

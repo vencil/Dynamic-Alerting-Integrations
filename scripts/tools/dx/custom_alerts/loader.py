@@ -117,7 +117,8 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
             if why is None:
                 chosen_list.append(p)
             elif os.path.abspath(p) not in _NOT_READ_WARNED:
-                # Once per file per process, as `warn_multi_carrier`.
+                # Once per file per process: describe_tenant runs this
+                # loader over the tree it also reads (#1674 blind review).
                 _NOT_READ_WARNED.add(os.path.abspath(p))
                 print(f"WARN: {p.relative_to(config_dir).as_posix()} is ignored on every "
                       f"plane (#1674): da-guard parse-tree does not read it ({why}), "
