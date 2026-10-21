@@ -36,9 +36,9 @@ package main
 //
 // ⚠️ NOT GUARDED: a use that does not go through an import — reflection, a
 // copy of the code pasted elsewhere, a generated file written at build time;
-// and whether code relies on yaml.v3 keeping Tag "!" (the nonspecific-tag
-// patch): the table records which packages are believed reliant, nothing here
-// proves it. A row is a directory × test-or-not, so a listed user that adds
+// and whether code relies on an always-on patch's behaviour: for a
+// delete-when-unrelied patch the table records which packages are believed
+// reliant, nothing here proves it. A row is a directory × test-or-not, so a listed user that adds
 // another file importing the package stays green: this lists users, not how
 // much each uses.
 //

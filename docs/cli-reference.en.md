@@ -1569,7 +1569,6 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 | `becomes_unreadable` | Files read today that `parse-tree` refuses, with the `kind` (one of the closed list of 13) |
 | `becomes_readable` | Files refused today that `parse-tree` reads, with today's error and what yaml.v3 reads |
 | `selection` | Files only one side reads |
-| `exporter_changes` | The two exporter readings that change when the vendored yaml.v3 "non-specific tag" patch is removed: `! "<<"` stops being a merge key, and an SLO `objective: ! "99.9"` goes from refused to accepted. `parse-tree` refuses both shapes (`non_specific_tag`), so such files are in `becomes_unreadable` too |
 | `still_unreadable` | Files both refuse (no change; does not set the exit code) |
 | `files_compared` | Files both read and compared value by value (the text output names them on its second line), so "no difference" and "nothing compared" read apart |
 

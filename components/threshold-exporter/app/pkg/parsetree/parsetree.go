@@ -70,12 +70,11 @@ const (
 	KindTagNotAllowed Kind = "tag_not_allowed"
 	// KindNonSpecificTag: a node written with the non-specific tag `!`
 	// (`! "x"`, `! 1`, `! "<<": *x`), however yaml.v3 reads it. Its own
-	// kind because what it means moves under the reader: PyYAML reads
-	// `! "<<"` as a merge and `! 1` as a string; the vendored yaml.v3 keeps
-	// `!` on a quoted scalar and merges through `! "<<"`, upstream yaml.v3
-	// (once ADR-036 removes that patch) reads a literal key; `! 1` is an int
-	// to both. Reading it any one way could add or drop policy silently,
-	// and this document's meaning must not change when the patch goes.
+	// kind because what it means moves under the reader: PyYAML resolves a
+	// quoted scalar tagged `!` as if it were plain (`! "<<"` is a merge,
+	// `! "true"` a bool); yaml.v3 drops the tag and reads the quoted scalar
+	// (a literal key "<<", the string "true"). Reading it any one way could
+	// add or drop policy silently.
 	KindNonSpecificTag Kind = "non_specific_tag"
 	// KindNullKey: a mapping key that resolves to null (`~:`, `null:`, an
 	// empty key).
@@ -405,11 +404,9 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 //
 // ⛔ `!` IS FOUND IN THE SOURCE TEXT, NEVER IN Node.Tag. yaml.v3 drops `!`
 // when it builds the node (parser.node: the tag becomes the resolved or the
-// default one); only the vendored patch keeps it, and only on a quoted or
-// block scalar. Reading Node.Tag == "!" would make this refusal vanish
-// with the patch (ADR-036 §11), so the token is read at the node's position
-// for every node, and TestNonSpecificTagWithoutThePatch pins that a tree
-// rewritten the way upstream yaml.v3 builds it is still refused.
+// default one), so the token is read at the node's position for every node;
+// TestNonSpecificTagReadFromTheSource pins that no node carries Tag "!" and
+// the file is still refused.
 func (c *checker) checkTag(n *yaml.Node, isMergeKey bool) *Unreadable {
 	tag := n.Tag
 	explicit := n.Style&yaml.TaggedStyle != 0
