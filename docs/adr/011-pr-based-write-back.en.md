@@ -17,6 +17,8 @@ lang: en
 
 2026-10-10: corrected how the write-back mode is configured: it is `--write-mode` / `TA_WRITE_MODE`, not a `_write_mode` setting in conf.d.
 
+2026-10-21: `pr` is no longer a legal input; GitHub PR mode is always written `pr-github`, and `TA_WRITE_MODE=pr` makes tenant-api refuse to start. The Helm chart only ever wired `pr-github`, so keeping the alias meant the binary and its only deployment source accepted different sets ([#1594](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1594)). The text below is updated to match.
+
 2026-10-11: groups (`_groups.yaml`), saved views (`_views.yaml`), the federation whitelist and subsets, and the AccountID registry moved out of conf.d/ into tenant-api's state store (the `tenant-api-state` ConfigMap on Kubernetes); their writes produce no commit and open no PR ([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)). "Known limitations" and "Why not split `_groups.yaml` into several files?" below are updated to match.
 
 2026-10-20: branch names carry a random suffix after the UTC time, so two writes in the same second no longer collide; a write whose push fails answers 503 `GIT_PUSH_FAILED` and opens no PR ([#1724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1724)). The examples and "Known limitations" below are updated to match.
@@ -54,7 +56,7 @@ The direct write-back of [ADR-009](009-tenant-manager-crud-api.md) (UI → tenan
 | `--write-mode` | Behavior |
 |------|------|
 | `direct` (default) | Commit directly (ADR-009 behavior) |
-| `pr` or `pr-github` | Open a GitHub PR |
+| `pr-github` | Open a GitHub PR |
 | `pr-gitlab` | Open a GitLab MR |
 
 GitHub and GitLab implement the same provider-agnostic interfaces (create a PR, track pending PRs), so the handlers do not need to know which platform is behind them.
@@ -62,7 +64,7 @@ GitHub and GitLab implement the same provider-agnostic interfaces (create a PR, 
 ### Example: turning on PR mode
 
 ```bash
-TA_WRITE_MODE=pr
+TA_WRITE_MODE=pr-github
 TA_GITHUB_REPO=org/repo          # or --github-repo
 TA_GITHUB_TOKEN=<token>          # injected from a Kubernetes Secret
 # optional: TA_GITHUB_BASE_BRANCH, defaults to main
@@ -143,7 +145,7 @@ A batch operation is consolidated into **one PR** (one PR holding several tenant
 
 ### Token permissions and secret management
 
-**GitHub** (`--write-mode pr` or `pr-github`):
+**GitHub** (`--write-mode pr-github`):
 
 | Item | Specification |
 |------|---------------|
@@ -254,7 +256,7 @@ Group definitions do not go through a PR (see "Known limitations"), and concurre
 
 | Layer | File | Content |
 |---|------|------|
-| **Config** | `cmd/server/main.go` | `--write-mode` flag (`direct` / `pr` / `pr-github` / `pr-gitlab`) and its environment variables |
+| **Config** | `cmd/server/main.go` | `--write-mode` flag (`direct` / `pr-github` / `pr-gitlab`) and its environment variables |
 | **Platform interface** | `internal/platform/platform.go` | Provider-agnostic `Client` and `Tracker` interfaces |
 | **Writer** | `internal/gitops/writer_pr.go` | `WritePR()`: create branch → commit → push |
 | **GitHub** | `internal/github/client.go`, `internal/github/tracker.go` | Wraps the GitHub REST API; caches pending PRs and syncs them periodically |

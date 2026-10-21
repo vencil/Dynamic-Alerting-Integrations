@@ -23,6 +23,8 @@ updated_at: 2026-10-20
 
 2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
 
+2026-10-21：`pr` 不再是合法的輸入值，GitHub PR 模式一律寫 `pr-github`；`TA_WRITE_MODE=pr` 會讓 tenant-api 拒絕啟動。Helm chart 從來只接線 `pr-github`，保留這個別名等於讓 binary 與唯一的部署來源各認一套值（[#1594](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1594)）。下文已照此更新。
+
 2026-10-11：群組（`_groups.yaml`）、saved views（`_views.yaml`）、federation 白名單與子集、AccountID 帳本移出 conf.d/，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），寫入不產生 commit 也不開 PR（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。下文「已知限制」與「為何不把 `_groups.yaml` 拆成多個檔案」已照此更新。
 
 2026-10-20：分支名在 UTC 時間之後多一段亂數，同一秒的兩次寫入不再撞名；push 失敗的寫入回 503 `GIT_PUSH_FAILED`、不開 PR（[#1724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1724)）。下文範例與「已知限制」已照此更新。
@@ -60,7 +62,7 @@ updated_at: 2026-10-20
 | `--write-mode` | 行為 |
 |------|------|
 | `direct`（預設） | 直接 commit（ADR-009 的行為） |
-| `pr` 或 `pr-github` | 開 GitHub PR |
+| `pr-github` | 開 GitHub PR |
 | `pr-gitlab` | 開 GitLab MR |
 
 GitHub 與 GitLab 實作同一組平台無關的介面（建立 PR、追蹤待審核的 PR），handler 不必知道背後是哪一個平台。
@@ -68,7 +70,7 @@ GitHub 與 GitLab 實作同一組平台無關的介面（建立 PR、追蹤待�
 ### 範例：開啟 PR 模式
 
 ```bash
-TA_WRITE_MODE=pr
+TA_WRITE_MODE=pr-github
 TA_GITHUB_REPO=org/repo          # 也可用 --github-repo
 TA_GITHUB_TOKEN=<token>          # 從 Kubernetes Secret 注入
 # 選填：TA_GITHUB_BASE_BRANCH，預設 main
@@ -149,7 +151,7 @@ PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label（GitLab 則�
 
 ### Token 權限與 Secret 管理
 
-**GitHub**（`--write-mode pr` 或 `pr-github`）：
+**GitHub**（`--write-mode pr-github`）：
 
 | 項目 | 規格 |
 |------|------|
@@ -260,7 +262,7 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 
 | 層 | 檔案 | 內容 |
 |---|------|------|
-| **設定** | `cmd/server/main.go` | `--write-mode` flag（`direct` / `pr` / `pr-github` / `pr-gitlab`）與對應的環境變數 |
+| **設定** | `cmd/server/main.go` | `--write-mode` flag（`direct` / `pr-github` / `pr-gitlab`）與對應的環境變數 |
 | **平台介面** | `internal/platform/platform.go` | 平台無關的 `Client` 與 `Tracker` 介面 |
 | **Writer** | `internal/gitops/writer_pr.go` | `WritePR()`：開分支 → commit → push |
 | **GitHub** | `internal/github/client.go`、`internal/github/tracker.go` | 封裝 GitHub REST API；待審核 PR 的快取與定期同步 |

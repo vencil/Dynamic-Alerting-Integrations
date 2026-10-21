@@ -44,7 +44,7 @@ WHAT THIS DOES **NOT** CHECK (deliberately):
     allow-list (`_TARGETS`), not a glob.
   - `writeMode`. ADR-023's original layer-1 spec gated the guard on
     `writeMode != read-only`, but the binary has NO read-only mode
-    (`--write-mode` ∈ {direct, pr, pr-github, pr-gitlab}) and values.yaml has no
+    (`--write-mode` ∈ {direct, pr-github, pr-gitlab}) and values.yaml has no
     such field — writes are ALWAYS on, so the guard is unconditional on
     replicaCount. (This lint codifies the corrected invariant; the ADR §A
     校正 records the same.)

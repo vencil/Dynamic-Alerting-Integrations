@@ -31,7 +31,7 @@
       "additionalProperties": false,
       "properties": {
         "mode": {
-          "description": "tenant-api --write-mode. \"\" is the shipped default and means unset: the render fails with the writeBack guard's explanation. The non-empty values are the binary's legal --write-mode values minus the `pr` alias of pr-github, which the chart does not wire (its forge flags are keyed on pr-github / pr-gitlab). Pinned to the binary by components/tenant-api/cmd/server/chart_schema_test.go.",
+          "description": "tenant-api --write-mode. \"\" is the shipped default and means unset: the render fails with the writeBack guard's explanation. The non-empty values are exactly the binary's legal --write-mode inputs (`pr` was retired as an input in #1594). Pinned by components/tenant-api/cmd/server/chart_schema_test.go.",
           "type": "string",
           "enum": [
             "",
