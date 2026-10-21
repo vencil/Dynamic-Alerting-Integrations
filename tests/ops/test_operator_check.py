@@ -452,3 +452,63 @@ class TestMain:
         with pytest.raises(SystemExit) as exc:
             oc.main()
         assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# #3137 — `--config-dir` was removed (it was declared but never read). Every
+# spelling of it is now an argparse caller error, and removing it changed
+# what the `--c` abbreviation resolves to.
+# ---------------------------------------------------------------------------
+_OPERATOR_CHECK = os.path.join(_TOOLS_DIR, "operator_check.py")
+
+
+def _never_check(self):
+    raise AssertionError("a rejected argv must not reach the checks")
+
+
+class TestConfigDirRemoved:
+    @pytest.mark.parametrize("argv, unrecognized", [
+        (["--config-dir", "X"], "--config-dir X"),
+        (["--config-dir=X"], "--config-dir=X"),
+        # Prefixes that used to abbreviate --config-dir match nothing now.
+        (["--co", "X"], "--co X"),
+        (["--config", "X"], "--config X"),
+    ])
+    def test_every_spelling_is_an_argparse_caller_error(
+        self, monkeypatch, cli_argv, capsys, argv, unrecognized,
+    ):
+        monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", _never_check)
+        cli_argv("operator_check.py", *argv)
+        with pytest.raises(SystemExit) as exc:
+            oc.main()
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert f"unrecognized arguments: {unrecognized}" in err
+
+    def test_json_mode_rejects_before_any_envelope(self, tmp_path):
+        # Through the real entry point: argparse refuses before --json arms
+        # the crash envelope, so stdout stays empty (no JSON on stdout).
+        proc = subprocess.run(
+            [sys.executable, _OPERATOR_CHECK, "--json", "--config-dir", "X"],
+            capture_output=True, text=True, encoding="utf-8",
+            timeout=60, cwd=tmp_path,
+        )
+        assert proc.returncode == 2, proc.stderr
+        assert proc.stdout == ""
+        assert "unrecognized arguments: --config-dir X" in proc.stderr
+
+    @pytest.mark.parametrize("argv, rc", [
+        (["--c"], 1),   # --c is now an unambiguous prefix of --ci
+        ([], 0),        # control: same failing check without --ci
+    ])
+    def test_c_abbreviation_now_resolves_to_ci(
+        self, monkeypatch, cli_argv, argv, rc,
+    ):
+        def one_failure(self):
+            self.checks = [oc.CheckResult("X", "fail")]
+        monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", one_failure)
+        monkeypatch.setattr(oc.OperatorChecker, "print_human_report", lambda self: None)
+        cli_argv("operator_check.py", *argv)
+        with pytest.raises(SystemExit) as exc:
+            oc.main()
+        assert exc.value.code == rc
