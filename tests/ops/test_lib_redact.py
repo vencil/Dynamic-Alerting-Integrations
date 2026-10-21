@@ -439,6 +439,8 @@ def test_the_inclusion_check_reports_a_marked_field_off_the_list():
         "off": {"type": "string", "x-credential": False},
         "nested": {"type": "object", "properties": {
             "Deep_Secret": {"x-credential": True}}},
-    }}}}
-    assert credential_marked_fields(schema) == {"url", "sms_token_x", "Deep_Secret"}
-    assert unmasked_credential_fields(schema) == {"sms_token_x", "Deep_Secret"}
+    }, "oneOf": [{"properties": {"branch_tok": {"x-credential": True}}}]}}}
+    assert credential_marked_fields(schema) == {
+        "url", "sms_token_x", "Deep_Secret", "branch_tok"}
+    assert unmasked_credential_fields(schema) == {
+        "sms_token_x", "Deep_Secret", "branch_tok"}
