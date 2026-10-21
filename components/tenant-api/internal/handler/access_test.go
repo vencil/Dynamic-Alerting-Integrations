@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -95,18 +96,16 @@ func TestCheckTenantAccess_Forbidden(t *testing.T) {
 		t.Errorf("status = %d, want %d, body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
 	// Unified-envelope alignment pin (depguard forbids rbac → handler, so the
-	// rbac middleware mirrors the envelope shape/codes BY VALUE — this test,
+	// rbac middleware mirrors the envelope SHAPE by value — this test,
 	// running the REAL middleware from the allowed direction, is what keeps
 	// the copy honest): the 403 key set is pinned EXACTLY (see
-	// assertExactEnvelopeKeys) and must carry the canonical error/code plus
-	// the pre-envelope help/action operator guidance.
+	// assertExactEnvelopeKeys) and must carry the pre-envelope help/action
+	// operator guidance. The code is not a copy any more: both sides name
+	// internal/errcode's constant (#3202).
 	assertExactEnvelopeKeys(t, w.Body.Bytes(), "error", "code", "request_id", "help", "action")
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode 403 body: %v", err)
-	}
-	if resp["code"] != CodeForbidden {
-		t.Errorf("403 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeForbidden)
 	}
 	if e, _ := resp["error"].(string); e == "" {
 		t.Error("403 error message missing")
@@ -136,15 +135,11 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 	// Envelope alignment pin for the middleware's 401 (see the 403 sibling
-	// above): exact key set + canonical code + unchanged human-readable
-	// message.
+	// above): exact key set + unchanged human-readable message.
 	assertExactEnvelopeKeys(t, w.Body.Bytes(), "error", "code", "request_id")
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode 401 body: %v", err)
-	}
-	if resp["code"] != CodeUnauthorized {
-		t.Errorf("401 code = %q, want %q (rbac middleware drifted from handler.ErrorResponse)", resp["code"], CodeUnauthorized)
 	}
 	if resp["error"] != "missing identity: X-Forwarded-Email header required" {
 		t.Errorf("401 error = %q, want the pre-envelope message unchanged", resp["error"])
@@ -213,8 +208,8 @@ func TestCheckTenantAccess_EmptyID_FailsClosed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode 400 body: %v", err)
 	}
-	if resp["code"] != CodeBadRequest {
-		t.Errorf("400 code = %q, want %q", resp["code"], CodeBadRequest)
+	if resp["code"] != string(errcode.BadRequest) {
+		t.Errorf("400 code = %q, want %q", resp["code"], errcode.BadRequest)
 	}
 	if e, _ := resp["error"].(string); e == "" {
 		t.Error("400 error message missing")

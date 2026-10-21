@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -229,8 +230,8 @@ func TestMetadataWriteEnforce_EndToEnd_PreStateDenied(t *testing.T) {
 				t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
 			}
 			code, errText := decodeEnvelope(t, w)
-			if code != string(CodeForbidden) {
-				t.Errorf("code = %q, want %q", code, CodeForbidden)
+			if code != string(errcode.Forbidden) {
+				t.Errorf("code = %q, want %q", code, errcode.Forbidden)
 			}
 			if !strings.Contains(errText, metaEnfHandlerPreStateFrag) {
 				t.Errorf("error = %q, want the handler's own denial (containing %q) — a bare "+
@@ -339,8 +340,8 @@ func TestMetadataWriteEnforce_EndToEnd_RelabelOutOfScopeDenied(t *testing.T) {
 				t.Fatalf("relabel: status = %d, want 403; body=%s", w.Code, w.Body.String())
 			}
 			code, errText := decodeEnvelope(t, w)
-			if code != string(CodeForbidden) {
-				t.Errorf("code = %q, want %q", code, CodeForbidden)
+			if code != string(errcode.Forbidden) {
+				t.Errorf("code = %q, want %q", code, errcode.Forbidden)
 			}
 			if want := "the environment/domain in the body places tenant " + metaEnfTenantIn +
 				" outside your scope"; !strings.Contains(errText, want) {

@@ -391,7 +391,7 @@ func renderBatchResult(res BatchResult) string {
 	if res.Status != "error" {
 		head += "status=" + res.Status + " "
 	}
-	return fmt.Sprintf("%scode=%s message=%s", head, orDash(res.Code), goldenText(res.Message))
+	return fmt.Sprintf("%scode=%s message=%s", head, orDash(string(res.Code)), goldenText(res.Message))
 }
 
 // goldenTexts are the fixed client texts the golden names instead of
@@ -664,7 +664,7 @@ func buildErrorGolden(t *testing.T) string {
 	b.WriteString("\n## Part 3: the error kind table and its precedence (#3226)\n")
 	b.WriteString("\n### kindTable (kind => status code, then the attributes that are set)\n")
 	for _, sp := range kindTable {
-		line := fmt.Sprintf("%s => %d %s", sp.Kind, sp.Status, orDash(sp.Code))
+		line := fmt.Sprintf("%s => %d %s", sp.Kind, sp.Status, orDash(string(sp.Code)))
 		if sp.Retryable {
 			line += " retryable"
 		}

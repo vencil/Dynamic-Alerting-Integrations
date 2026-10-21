@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -129,7 +130,7 @@ func TestGeneratorGate_EveryWritePathIsRefused(t *testing.T) {
 				t.Fatal("the write never asked the generator")
 			}
 			if strings.HasSuffix(p.name, "async") {
-				if len(results) == 0 || results[0].Code != CodeGeneratorFindings || !strings.Contains(results[0].Message, "refused by the fake") {
+				if len(results) == 0 || results[0].Code != errcode.GeneratorFindings || !strings.Contains(results[0].Message, "refused by the fake") {
 					t.Errorf("async results = %+v, want GENERATOR_FINDINGS with the related finding", results)
 				}
 			} else if code != http.StatusUnprocessableEntity {
@@ -231,7 +232,7 @@ func TestGeneratorGate_FindingsResponse(t *testing.T) {
 		f, _ := generatorDirectFixture(t, answer)
 		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
 		m := genEnvelope(t, w)
-		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorFindings || m["findings_compared_with_base"] != true {
+		if w.Code != http.StatusUnprocessableEntity || m["code"] != string(errcode.GeneratorFindings) || m["findings_compared_with_base"] != true {
 			t.Fatalf("status %d body %s", w.Code, w.Body.String())
 		}
 		fs := m["findings"].([]any)
@@ -273,22 +274,22 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 		retryAfter bool
 		text       string
 	}{
-		{"busy", rejectWith("busy"), 429, CodeGeneratorRejected, "busy", true, "retry"},
-		{"deadline", rejectWith("deadline"), 429, CodeGeneratorRejected, "deadline", true, ""},
-		{"git_read", rejectWith("git_read"), 429, CodeGeneratorRejected, "git_read", true, ""},
-		{"memory", rejectWith("memory"), 422, CodeGeneratorRejected, "memory", false, ""},
-		{"incomplete", rejectWith("incomplete"), 422, CodeGeneratorRejected, "incomplete", false, ""},
+		{"busy", rejectWith("busy"), 429, string(errcode.GeneratorBusy), "busy", true, "retry"},
+		{"deadline", rejectWith("deadline"), 429, string(errcode.GeneratorBusy), "deadline", true, ""},
+		{"git_read", rejectWith("git_read"), 429, string(errcode.GeneratorBusy), "git_read", true, ""},
+		{"memory", rejectWith("memory"), 422, string(errcode.GeneratorRejected), "memory", false, ""},
+		{"incomplete", rejectWith("incomplete"), 422, string(errcode.GeneratorRejected), "incomplete", false, ""},
 		{"413", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 413, map[string]any{"error": "PAYLOAD_TOO_LARGE", "message": "big"}
-		}, 422, CodeGeneratorRejected, "too_large", false, "split the batch"},
+		}, 422, string(errcode.GeneratorRejected), "too_large", false, "split the batch"},
 		{"mismatch twice", func(_ int, req testutil.FakeValidateRequest) (int, any) {
 			v := testutil.PassVerdict(req, nil)
 			v["validated"].(map[string]any)["base_commit"] = strings.Repeat("0", 40)
 			return 200, v
-		}, 429, CodeGeneratorRejected, "mismatch", true, ""},
+		}, 429, string(errcode.GeneratorBusy), "mismatch", true, ""},
 		{"validator unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "amtool_missing", "message": "amtool is not on PATH"}
-		}, 503, CodeValidatorUnavailable, "amtool_missing", true, "server log"},
+		}, 503, string(errcode.ValidatorUnavailable), "amtool_missing", true, "server log"},
 		{"policy unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "--policy: bad"}
 		}, 503, generator.CodePolicyUnavailable, "policy_unusable", true, "server log"},
@@ -362,7 +363,7 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 		f.deps.Writer.SetValidator(generator.NewGate(generator.NewClient(sock), ""))
 		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
 		m := genEnvelope(t, w)
-		if w.Code != 503 || m["code"] != CodeValidatorUnavailable || m["reason"] != "unreachable" ||
+		if w.Code != 503 || m["code"] != string(errcode.ValidatorUnavailable) || m["reason"] != "unreachable" ||
 			strings.Contains(w.Body.String(), sock) {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
 		}
@@ -413,7 +414,7 @@ func TestGeneratorGate_FlatReceiverTypeIs400(t *testing.T) {
 	// One source: the tenant key validation (gitops, cfg.ValidateTenantKeys)
 	// — code BAD_REQUEST with its "unknown routing key" text, not a handler
 	// INVALID_BODY violation.
-	if m := genEnvelope(t, w); w.Code != http.StatusBadRequest || m["code"] != CodeBadRequest ||
+	if m := genEnvelope(t, w); w.Code != http.StatusBadRequest || m["code"] != string(errcode.BadRequest) ||
 		!strings.Contains(w.Body.String(), `unknown routing key \"_routing_receiver_type\"`) ||
 		!strings.Contains(w.Body.String(), "_routing.receiver.type") {
 		t.Errorf("PUT: status %d body %s", w.Code, w.Body.String())
@@ -459,7 +460,7 @@ func TestGeneratorGate_BatchRefusalShape(t *testing.T) {
 				t.Fatalf("code %d results %+v", code, results)
 			}
 			for _, r := range results {
-				if r.Status != "error" || r.Code != CodeGeneratorFindings {
+				if r.Status != "error" || r.Code != errcode.GeneratorFindings {
 					t.Errorf("result %+v", r)
 				}
 				if names := strings.Contains(r.Message, "t-b is wrong"); names != (r.TenantID == "t-b") {
@@ -483,7 +484,7 @@ func TestGeneratorGate_BatchRefusalShape(t *testing.T) {
 		t.Parallel()
 		f, _ := generatorDirectFixture(t, rejectWith("busy"))
 		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}}]`)
-		if m := genEnvelope(t, w); w.Code != http.StatusTooManyRequests || m["code"] != CodeGeneratorRejected || m["reason"] != "busy" {
+		if m := genEnvelope(t, w); w.Code != http.StatusTooManyRequests || m["code"] != string(errcode.GeneratorBusy) || m["reason"] != "busy" {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
 		}
 	})
@@ -520,8 +521,8 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 					t.Errorf("async task has no results")
 				}
 				for _, r := range results {
-					if r.Status != "error" || r.Code != CodeGitDriverConfigured {
-						t.Errorf("async result %+v, want %s", r, CodeGitDriverConfigured)
+					if r.Status != "error" || r.Code != errcode.GitDriverConfigured {
+						t.Errorf("async result %+v, want %s", r, errcode.GitDriverConfigured)
 					}
 				}
 			} else if code != http.StatusInternalServerError {
@@ -548,7 +549,7 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 		f.git(t, "commit", "-q", "-m", "attributes")
 		w := putTenantAs(t, f.deps, "t-a", strings.ReplaceAll(tAPut, "\n", "\r\n"), "admins", nil)
 		m := genEnvelope(t, w)
-		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorRejected || m["reason"] != generator.ReasonNormalized ||
+		if w.Code != http.StatusUnprocessableEntity || m["code"] != string(errcode.GeneratorRejected) || m["reason"] != generator.ReasonNormalized ||
 			w.Header().Get("Retry-After") != "" || strings.Contains(m["error"].(string), "t-a.yaml") {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
 		}
@@ -610,8 +611,8 @@ func TestGeneratorGate_GroupBatchRefusalShowsOnlyVisibleMembers(t *testing.T) {
 			if w.Code != http.StatusUnprocessableEntity || strings.Contains(body, orgEnfTenantOut) || strings.Contains(body, "hidden-") {
 				t.Errorf("status %d; the response names a member the caller cannot read: %s", w.Code, body)
 			}
-			if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Code != CodeGeneratorFindings {
-				t.Errorf("results = %+v, want only %s refused with %s", resp.Results, orgEnfTenantIn, CodeGeneratorFindings)
+			if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Code != errcode.GeneratorFindings {
+				t.Errorf("results = %+v, want only %s refused with %s", resp.Results, orgEnfTenantIn, errcode.GeneratorFindings)
 			}
 			if len(resp.Findings) != 1 || resp.Findings[0].Message != "refused by the fake" || resp.UnrelatedFindingsWithheld != 2 {
 				t.Errorf("findings = %+v, withheld %d; want only the readable member's, 2 withheld", resp.Findings, resp.UnrelatedFindingsWithheld)
@@ -636,6 +637,7 @@ func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
 		answer func(int, testutil.FakeValidateRequest) (int, any)
 		absent []string
 		reason string
+		code   errcode.Code
 	}{
 		{"mismatch", func(_ int, req testutil.FakeValidateRequest) (int, any) {
 			v := testutil.PassVerdict(req, nil)
@@ -643,15 +645,15 @@ func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
 				files[0]["sha256"] = "00"
 			}
 			return 200, v
-		}, []string{"judged with other content", ".yaml"}, "mismatch"},
+		}, []string{"judged with other content", ".yaml"}, "mismatch", errcode.GeneratorBusy},
 		{"invalid_request", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 400, map[string]any{"error": "INVALID_REQUEST", "message": "ValueError('/" + secret + "/x')"}
-		}, []string{secret, "ValueError"}, "invalid_request"},
+		}, []string{secret, "ValueError"}, "invalid_request", errcode.GeneratorRejected},
 		{"unknown reason", func(int, testutil.FakeValidateRequest) (int, any) {
 			v := testutil.RejectedVerdict("/" + secret + "/reason")
 			v["message"] = "detail from /" + secret
 			return 200, v
-		}, []string{secret}, "unknown"},
+		}, []string{secret}, "unknown", errcode.GeneratorRejected},
 	} {
 		for _, p := range gatePaths() {
 			t.Run(tc.name+"/"+p.name, func(t *testing.T) {
@@ -675,8 +677,8 @@ func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
 					t.Errorf("the response does not name reason %q: %s", tc.reason, f.lastBody)
 				}
 				for _, r := range results {
-					if r.Code != CodeGeneratorRejected {
-						t.Errorf("result %+v, want %s", r, CodeGeneratorRejected)
+					if r.Code != tc.code {
+						t.Errorf("result %+v, want %s", r, tc.code)
 					}
 				}
 			})

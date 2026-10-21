@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -77,8 +78,8 @@ func assertDeclaredElsewhere409(t *testing.T, w *httptest.ResponseRecorder) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, w.Body.String())
 	}
-	if env.Code != CodeTenantDeclaredElsewhere {
-		t.Errorf("code = %q, want %q", env.Code, CodeTenantDeclaredElsewhere)
+	if env.Code != string(errcode.TenantDeclaredElsewhere) {
+		t.Errorf("code = %q, want %q", env.Code, errcode.TenantDeclaredElsewhere)
 	}
 	assertNoOtherFileLeak(t, w.Body.String())
 }
@@ -151,8 +152,8 @@ func TestPutTenant_TreeScanFailureIsInternalError(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, w.Body.String())
 	}
-	if env.Code != CodeInternal || env.Error != msgTenantTreeScan {
-		t.Errorf("envelope = %+v, want code %s with the fixed scan-failure message", env, CodeInternal)
+	if env.Code != string(errcode.Internal) || env.Error != msgTenantTreeScan {
+		t.Errorf("envelope = %+v, want code %s with the fixed scan-failure message", env, errcode.Internal)
 	}
 	if strings.Contains(w.Body.String(), dir) {
 		t.Errorf("response leaks the server path %q:\n%s", dir, w.Body.String())
@@ -182,8 +183,8 @@ func TestPutCustomAlerts_DeclaredElsewhereIsConflict(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), CodeTenantDeclaredElsewhere) {
-		t.Errorf("body lacks code %s: %s", CodeTenantDeclaredElsewhere, w.Body.String())
+	if !strings.Contains(w.Body.String(), string(errcode.TenantDeclaredElsewhere)) {
+		t.Errorf("body lacks code %s: %s", errcode.TenantDeclaredElsewhere, w.Body.String())
 	}
 	for _, leak := range []string{elsewhereDirName, "db-a-owner"} {
 		if strings.Contains(w.Body.String(), leak) {
@@ -199,11 +200,11 @@ func TestPutCustomAlerts_DeclaredElsewhereIsConflict(t *testing.T) {
 // code as the sync response.
 func TestToTaskResults_CarriesCode(t *testing.T) {
 	got := toTaskResults([]BatchResult{
-		{TenantID: elsewhereTenant, Status: "error", Message: msgTenantDeclaredElsewhere, Code: CodeTenantDeclaredElsewhere},
+		{TenantID: elsewhereTenant, Status: "error", Message: msgTenantDeclaredElsewhere, Code: errcode.TenantDeclaredElsewhere},
 		{TenantID: "ok-t", Status: "ok"},
 	})
-	if got[0].Code != CodeTenantDeclaredElsewhere || got[1].Code != "" {
-		t.Errorf("task result codes = %q, %q; want %q, \"\"", got[0].Code, got[1].Code, CodeTenantDeclaredElsewhere)
+	if got[0].Code != errcode.TenantDeclaredElsewhere || got[1].Code != "" {
+		t.Errorf("task result codes = %q, %q; want %q, \"\"", got[0].Code, got[1].Code, errcode.TenantDeclaredElsewhere)
 	}
 }
 
@@ -234,8 +235,8 @@ func TestBatchTenants_DeclaredElsewhere(t *testing.T) {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if len(resp.Results) != 1 || resp.Results[0].Status != "error" ||
-			resp.Results[0].Code != CodeTenantDeclaredElsewhere {
-			t.Fatalf("results = %+v, want one error with code %s", resp.Results, CodeTenantDeclaredElsewhere)
+			resp.Results[0].Code != errcode.TenantDeclaredElsewhere {
+			t.Fatalf("results = %+v, want one error with code %s", resp.Results, errcode.TenantDeclaredElsewhere)
 		}
 		assertNoOtherFileLeak(t, w.Body.String())
 		assertNoTopLevelFile(t, dir)
@@ -254,7 +255,7 @@ func TestBatchTenants_DeclaredElsewhere(t *testing.T) {
 		w := serve(t, &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rbacMgr,
 			WriteMode: WriteModePR, PRClient: gh, PRTracker: &mockPlatformTracker{}}, rbacMgr)
 		// #2900 F4: refused per op on the fresh base, the batch rejected.
-		assertRejectedOp(t, w, 0, elsewhereTenant, CodeTenantDeclaredElsewhere, msgTenantDeclaredElsewhere)
+		assertRejectedOp(t, w, 0, elsewhereTenant, string(errcode.TenantDeclaredElsewhere), msgTenantDeclaredElsewhere)
 		assertNoOtherFileLeak(t, w.Body.String())
 		assertNoTopLevelFile(t, dir)
 	})

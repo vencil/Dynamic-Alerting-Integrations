@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/views"
@@ -34,14 +35,14 @@ func requireViewsAccess(w http.ResponseWriter, r *http.Request, d *Deps, want rb
 		if readsViews(d.RBAC, p) {
 			return true
 		}
-		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+		WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 			"platform read permission (non-org-scoped) required to read saved views")
 		return false
 	}
 	if d.RBAC.PlatformNonOrgScoped(p, want) {
 		return true
 	}
-	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 		"platform write permission (non-org-scoped) required to edit saved views")
 	return false
 }

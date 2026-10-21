@@ -40,6 +40,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -90,7 +91,7 @@ func GetTenantAccessReport(d *Deps) http.HandlerFunc {
 		// non-(non-org-scoped-platform-admin) caller, byte-identical no matter
 		// what {id} carries.
 		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
-			WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, auditReverseForbiddenMsg)
+			WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden, auditReverseForbiddenMsg)
 			return
 		}
 

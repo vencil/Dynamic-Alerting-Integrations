@@ -17,6 +17,8 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/credmask"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -227,7 +229,7 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Success     200  {object} TenantDetail
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
-// @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file, or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file)"
+// @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file (code TENANT_FILE_AMBIGUOUS), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file)"
 // @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id} [get]
 func GetTenant(d *Deps) http.HandlerFunc {
@@ -247,7 +249,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		case errors.Is(err, confd.ErrAmbiguousTenantFile):
-			WriteJSONError(w, r, http.StatusConflict, err.Error())
+			WriteKind(w, r, errkind.AmbiguousTenantFile, err.Error())
 			return
 		case err != nil:
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
@@ -313,7 +315,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		merged, err := d.loadMergedConfig(tenantID, data)
 		if err != nil {
 			slog.Error("tenant GET: conf.d root platform read failed", "tenant", tenantID, "error", err)
-			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgRootPlatformRead)
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.Internal, msgRootPlatformRead)
 			return
 		}
 
@@ -407,7 +409,7 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 	merged, err := d.loadMergedConfig(tenantID, data)
 	if err != nil {
 		slog.Error("tenant GET: conf.d root platform read failed", "tenant", tenantID, "error", err)
-		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgRootPlatformRead)
+		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.Internal, msgRootPlatformRead)
 		return
 	}
 	// #3039: the file may declare other tenants; messages about those the

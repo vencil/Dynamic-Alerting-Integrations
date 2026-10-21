@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -37,7 +38,11 @@ import (
 type KindSpec struct {
 	Kind   errkind.Kind
 	Status int
-	Code   string
+	// Code is one of internal/errcode's. One code, one meaning (#3202):
+	// every kind with this code agrees on Retryable, and that agrees with
+	// the code's errcode.Remedy (TestKindTable_OneCodeOneMeaning). A kind
+	// that needs another remedy needs another code.
+	Code errcode.Code
 	// Retryable: resending the same request may succeed (after Retry-After
 	// when there is one). Informational: the contract lists it; the renderer
 	// does not read it.
@@ -46,7 +51,10 @@ type KindSpec struct {
 	// for the caller (writeErrorIsForClient), and a write entry with no more
 	// specific answer for it answers 400 with that text (errkind.BadRequest).
 	// It is not "the text is shown": CONFLICT shows its text and is not the
-	// client's error.
+	// client's error. Nor is it part of the client contract: it decides how
+	// tenant-api renders an error, not what the client can do about it, so
+	// kinds sharing a code may differ in it (TENANT_CONFIG_NOT_LOADABLE's
+	// not-a-regular-file text is shown, the unloadable file's is rendered).
 	ClientError bool
 	// RetryAfterS, when > 0, is sent both as the Retry-After header and as the
 	// envelope's retry_after_s — the one source of either (an error that
@@ -60,85 +68,83 @@ type KindSpec struct {
 // kindTable is the answer to every Kind. Read it through kindSpecOf, or
 // KindSpecs to list it.
 var kindTable = []KindSpec{
-	{Kind: errkind.FreshBaseScope, Status: http.StatusForbidden, Code: CodeForbidden},
-	{Kind: errkind.FreshBaseOrgs, Status: http.StatusInternalServerError, Code: CodeConfigDecode},
+	{Kind: errkind.FreshBaseScope, Status: http.StatusForbidden, Code: errcode.Forbidden},
+	{Kind: errkind.FreshBaseOrgs, Status: http.StatusInternalServerError, Code: errcode.ConfigDecode},
 
-	{Kind: errkind.GeneratorFindings, Status: http.StatusUnprocessableEntity, Code: CodeGeneratorFindings},
-	{Kind: errkind.GeneratorRejectedRetryable, Status: http.StatusTooManyRequests, Code: CodeGeneratorRejected, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.GeneratorRejected, Status: http.StatusUnprocessableEntity, Code: CodeGeneratorRejected},
-	{Kind: errkind.ValidatorUnavailable, Status: http.StatusServiceUnavailable, Code: CodeValidatorUnavailable, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.PolicyUnavailable, Status: http.StatusServiceUnavailable, Code: CodePolicyUnavailable, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.GeneratorFindings, Status: http.StatusUnprocessableEntity, Code: errcode.GeneratorFindings},
+	{Kind: errkind.GeneratorRejectedRetryable, Status: http.StatusTooManyRequests, Code: errcode.GeneratorBusy, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.GeneratorRejected, Status: http.StatusUnprocessableEntity, Code: errcode.GeneratorRejected},
+	{Kind: errkind.ValidatorUnavailable, Status: http.StatusServiceUnavailable, Code: errcode.ValidatorUnavailable, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.PolicyUnavailable, Status: http.StatusServiceUnavailable, Code: errcode.PolicyUnavailable, Retryable: true, RetryAfterS: 5},
 
-	{Kind: errkind.TenantTreeUnreadable, Status: http.StatusConflict, Code: CodeTenantTreeUnreadable},
-	{Kind: errkind.TenantStoreFault, Status: http.StatusInternalServerError, Code: CodeTenantStoreFault},
-	{Kind: errkind.TenantFileUnreadable, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable},
-	{Kind: errkind.TenantGitManaged, Status: http.StatusConflict, Code: CodeTenantGitManaged, ClientError: true},
-	{Kind: errkind.TenantGitManagedUnnamed, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
-	{Kind: errkind.TenantDeclaredElsewhere, Status: http.StatusConflict, Code: CodeTenantDeclaredElsewhere},
-	{Kind: errkind.TenantTreeScan, Status: http.StatusInternalServerError, Code: CodeInternal},
-	{Kind: errkind.TenantFileDirty, Status: http.StatusConflict, Code: CodeTenantFileDirty},
+	{Kind: errkind.TenantTreeUnreadable, Status: http.StatusConflict, Code: errcode.TenantTreeUnreadable},
+	{Kind: errkind.TenantStoreFault, Status: http.StatusInternalServerError, Code: errcode.TenantStoreFault},
+	{Kind: errkind.TenantFileUnreadable, Status: http.StatusConflict, Code: errcode.TenantConfigNotLoadable},
+	{Kind: errkind.TenantGitManaged, Status: http.StatusConflict, Code: errcode.TenantGitManaged, ClientError: true},
+	{Kind: errkind.TenantGitManagedUnnamed, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.TenantDeclaredElsewhere, Status: http.StatusConflict, Code: errcode.TenantDeclaredElsewhere},
+	{Kind: errkind.TenantTreeScan, Status: http.StatusInternalServerError, Code: errcode.Internal},
+	{Kind: errkind.TenantFileDirty, Status: http.StatusConflict, Code: errcode.TenantFileDirty},
 	// 409 TENANT_CONFIG_NOT_LOADABLE, as the handler's own early refusal of
 	// the same file (writeTenantFileNotRegular) and the Writer's
 	// (TargetUnreadableError, special_file) answer it: the operator must
 	// replace the entry in git, a resend cannot pass (#2477, #2939). Its text
 	// names the base name only, so it may be shown (ClientError).
-	{Kind: errkind.TenantFileNotRegular, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable, ClientError: true},
-	{Kind: errkind.TenantConfigNotLoadable, Status: http.StatusConflict, Code: CodeTenantConfigNotLoadable},
-	{Kind: errkind.AmbiguousTenantFile, Status: http.StatusConflict, Code: CodeConflict, ClientError: true},
+	{Kind: errkind.TenantFileNotRegular, Status: http.StatusConflict, Code: errcode.TenantConfigNotLoadable, ClientError: true},
+	{Kind: errkind.TenantConfigNotLoadable, Status: http.StatusConflict, Code: errcode.TenantConfigNotLoadable},
+	{Kind: errkind.AmbiguousTenantFile, Status: http.StatusConflict, Code: errcode.TenantFileAmbiguous, ClientError: true},
 
-	{Kind: errkind.PreconditionFailed, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
-	{Kind: errkind.Conflict, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
-	{Kind: errkind.BatchCommitted, Status: http.StatusConflict, Code: CodeConflict},
-	{Kind: errkind.GitPushFailed, Status: http.StatusServiceUnavailable, Code: CodeGitPushFailed, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.BaseRestoreFailed, Status: http.StatusInternalServerError, Code: CodeBaseRestoreFailed},
-	{Kind: errkind.TreeNotOnBase, Status: http.StatusServiceUnavailable, Code: CodeTreeNotOnBase, Retryable: true, RetryAfterS: 1},
-	{Kind: errkind.WriteOverloaded, Status: http.StatusServiceUnavailable, Code: CodeWriteOverloaded, Retryable: true, RetryAfterS: 1},
-	{Kind: errkind.ForgeDegraded, Status: http.StatusServiceUnavailable, Code: CodeForgeUnavailable, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.WriteOutcomeUnknown, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
-	{Kind: errkind.WriteCancelled, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true},
-	{Kind: errkind.GitDriverConfigured, Status: http.StatusInternalServerError, Code: CodeGitDriverConfigured, Fault: true},
-	// UPSTREAM_ERROR for now: #3202 rearranges the codes.
-	{Kind: errkind.GitConfigUnreadable, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.PreconditionFailed, Status: http.StatusConflict, Code: errcode.Conflict, Retryable: true},
+	{Kind: errkind.Conflict, Status: http.StatusConflict, Code: errcode.Conflict, Retryable: true},
+	{Kind: errkind.BatchCommitted, Status: http.StatusConflict, Code: errcode.BatchCommitted},
+	{Kind: errkind.GitPushFailed, Status: http.StatusServiceUnavailable, Code: errcode.GitPushFailed, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.BaseRestoreFailed, Status: http.StatusInternalServerError, Code: errcode.BaseRestoreFailed},
+	{Kind: errkind.TreeNotOnBase, Status: http.StatusServiceUnavailable, Code: errcode.TreeNotOnBase, Retryable: true, RetryAfterS: 1},
+	{Kind: errkind.WriteOverloaded, Status: http.StatusServiceUnavailable, Code: errcode.WriteOverloaded, Retryable: true, RetryAfterS: 1},
+	{Kind: errkind.ForgeDegraded, Status: http.StatusServiceUnavailable, Code: errcode.ForgeUnavailable, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.WriteOutcomeUnknown, Status: http.StatusServiceUnavailable, Code: errcode.WriteOutcomeUnknown},
+	{Kind: errkind.WriteCancelled, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true},
+	{Kind: errkind.GitDriverConfigured, Status: http.StatusInternalServerError, Code: errcode.GitDriverConfigured, Fault: true},
+	{Kind: errkind.GitConfigUnreadable, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true, RetryAfterS: 5},
 	// NoChanges is not a failure: every entry that meets it answers a 2xx
 	// of its own and never renders this row. It is here so the table lists
 	// every Kind.
 	{Kind: errkind.NoChanges, Status: http.StatusOK},
 
-	{Kind: errkind.Validation, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
-	{Kind: errkind.InvalidTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
-	{Kind: errkind.ReservedTenantID, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
-	{Kind: errkind.MergeFailed, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
-	{Kind: errkind.Forbidden, Status: http.StatusForbidden, Code: CodeForbidden},
-	{Kind: errkind.BadRequest, Status: http.StatusBadRequest, Code: CodeBadRequest, ClientError: true},
+	{Kind: errkind.Validation, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.InvalidTenantID, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.ReservedTenantID, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.MergeFailed, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.Forbidden, Status: http.StatusForbidden, Code: errcode.Forbidden},
+	{Kind: errkind.BadRequest, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
 
-	{Kind: errkind.StateConflict, Status: http.StatusConflict, Code: CodeConflict, Retryable: true},
-	{Kind: errkind.StateUnavailable, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.StateFull, Status: http.StatusInsufficientStorage, Code: CodeStateFull},
-	{Kind: errkind.ConfigFileParse, Status: http.StatusInternalServerError, Code: CodeConfigDecode},
+	{Kind: errkind.StateConflict, Status: http.StatusConflict, Code: errcode.Conflict, Retryable: true},
+	{Kind: errkind.StateUnavailable, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.StateFull, Status: http.StatusInsufficientStorage, Code: errcode.StateFull},
+	{Kind: errkind.ConfigFileParse, Status: http.StatusInternalServerError, Code: errcode.ConfigDecode},
 
-	{Kind: errkind.ForgeForbidden, Status: http.StatusForbidden, Code: CodeForbidden, Fault: true},
-	{Kind: errkind.ForgeCircuitOpen, Status: http.StatusServiceUnavailable, Code: CodeForgeUnavailable, Retryable: true, RetryAfterS: 5},
-	{Kind: errkind.ForgeCreateFailed, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.ForgeForbidden, Status: http.StatusForbidden, Code: errcode.ForgeForbidden, Fault: true},
+	{Kind: errkind.ForgeCircuitOpen, Status: http.StatusServiceUnavailable, Code: errcode.ForgeUnavailable, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.ForgeCreateFailed, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true, RetryAfterS: 5},
 
-	{Kind: errkind.FederationTokenLimit, Status: http.StatusConflict, Code: CodeConflict},
+	{Kind: errkind.FederationTokenLimit, Status: http.StatusConflict, Code: errcode.TokenLimitReached},
 	// 60: the mint window (token.mintWindow), for the bare sentinel; the
 	// typed refusal says when the next mint is admitted.
-	{Kind: errkind.FederationMintRateLimited, Status: http.StatusTooManyRequests, Code: CodeRateLimited, Retryable: true, RetryAfterS: 60},
+	{Kind: errkind.FederationMintRateLimited, Status: http.StatusTooManyRequests, Code: errcode.RateLimited, Retryable: true, RetryAfterS: 60},
 
 	// A deployment setting: no retry finds it configured, so no Retry-After.
-	{Kind: errkind.FederationNotConfigured, Status: http.StatusServiceUnavailable, Code: CodeUpstream},
+	{Kind: errkind.FederationNotConfigured, Status: http.StatusServiceUnavailable, Code: errcode.FederationNotConfigured},
 
-	// The router's and the middleware chain's own answers (#3226). The codes
-	// are the existing ones for the status (#3202 rearranges the codes).
-	{Kind: errkind.RouteNotFound, Status: http.StatusNotFound, Code: CodeNotFound, ClientError: true},
-	{Kind: errkind.MethodNotAllowed, Status: http.StatusMethodNotAllowed, Code: CodeBadRequest, ClientError: true},
+	// The router's and the middleware chain's own answers (#3226).
+	{Kind: errkind.RouteNotFound, Status: http.StatusNotFound, Code: errcode.NotFound, ClientError: true},
+	{Kind: errkind.MethodNotAllowed, Status: http.StatusMethodNotAllowed, Code: errcode.MethodNotAllowed, ClientError: true},
 	// Not retryable: the handler did not answer, so whether a write it ran
 	// took effect is not known here.
-	{Kind: errkind.RequestTimeout, Status: http.StatusGatewayTimeout, Code: CodeUpstream},
-	{Kind: errkind.StreamUnsupported, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
-	{Kind: errkind.ServerShuttingDown, Status: http.StatusServiceUnavailable, Code: CodeUpstream, Retryable: true, RetryAfterS: 1},
+	{Kind: errkind.RequestTimeout, Status: http.StatusGatewayTimeout, Code: errcode.RequestTimeout},
+	{Kind: errkind.StreamUnsupported, Status: http.StatusInternalServerError, Code: errcode.Internal, Fault: true},
+	{Kind: errkind.ServerShuttingDown, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true, RetryAfterS: 1},
 
-	{Kind: errkind.Internal, Status: http.StatusInternalServerError, Code: CodeInternal, Fault: true},
+	{Kind: errkind.Internal, Status: http.StatusInternalServerError, Code: errcode.Internal, Fault: true},
 }
 
 // KindSpecs lists the error kind table: one row per errkind.Kind, in table

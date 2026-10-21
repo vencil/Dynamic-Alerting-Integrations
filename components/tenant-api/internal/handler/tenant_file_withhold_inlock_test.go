@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -134,11 +135,11 @@ func TestPutTenantCustomAlerts_InLockGitManaged(t *testing.T) {
 			w := <-bDone
 
 			d := decodeDetail(t, w)
-			wantCode := CodeConflict
+			wantCode := errcode.Conflict
 			if !c.wantHash {
-				wantCode = CodeTenantGitManaged
+				wantCode = errcode.TenantGitManaged
 			}
-			if w.Code != 409 || d["code"] != wantCode {
+			if w.Code != 409 || d["code"] != string(wantCode) {
 				t.Fatalf("%d %s, want the in-lock 409 %s", w.Code, w.Body.String(), wantCode)
 			}
 			got, has := d["current_source_hash"]

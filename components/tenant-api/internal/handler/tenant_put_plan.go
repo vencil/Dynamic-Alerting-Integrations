@@ -58,6 +58,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -111,7 +112,7 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 	p.gatePre, allowed = orgWriteAt(r, d, tenantID)
 	if !allowed {
 		if ep != endpointDiff {
-			WriteJSONErrorWithCode(verdict, r, http.StatusForbidden, CodeForbidden, orgWriteDeniedText(tenantID))
+			WriteJSONErrorWithCode(verdict, r, http.StatusForbidden, errcode.Forbidden, orgWriteDeniedText(tenantID))
 			return nil, false
 		}
 		p.masked = true // #1560: canSeeCredentials is this very predicate

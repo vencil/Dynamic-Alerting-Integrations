@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/statestore"
 )
 
@@ -23,9 +24,9 @@ func TestWriteConfigFileError_StateStoreErrors(t *testing.T) {
 		code       string
 		retryAfter bool
 	}{
-		{fmt.Errorf("%w (%s)", statestore.ErrConflict, backing), http.StatusConflict, CodeConflict, false},
-		{fmt.Errorf("%w: get %s: timeout", statestore.ErrUnavailable, backing), http.StatusServiceUnavailable, CodeUpstream, true},
-		{fmt.Errorf("%w: %s would hold 950000 bytes (budget 921600)", statestore.ErrTooLarge, backing), http.StatusInsufficientStorage, CodeStateFull, false},
+		{fmt.Errorf("%w (%s)", statestore.ErrConflict, backing), http.StatusConflict, string(errcode.Conflict), false},
+		{fmt.Errorf("%w: get %s: timeout", statestore.ErrUnavailable, backing), http.StatusServiceUnavailable, string(errcode.Upstream), true},
+		{fmt.Errorf("%w: %s would hold 950000 bytes (budget 921600)", statestore.ErrTooLarge, backing), http.StatusInsufficientStorage, string(errcode.StateFull), false},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			t.Parallel()
@@ -38,7 +39,7 @@ func TestWriteConfigFileError_StateStoreErrors(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if body.Code != tc.code {
+			if string(body.Code) != tc.code {
 				t.Errorf("code = %q, want %q", body.Code, tc.code)
 			}
 			if got := w.Header().Get("Retry-After") != ""; got != tc.retryAfter {

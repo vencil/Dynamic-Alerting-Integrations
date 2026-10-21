@@ -761,7 +761,7 @@
                         }
                     },
                     "409": {
-                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
+                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. Code BATCH_COMMITTED (#3202), with committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -779,7 +779,7 @@
                         }
                     },
                     "429": {
-                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "description": "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -791,7 +791,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -939,7 +939,7 @@
                         }
                     },
                     "409": {
-                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
+                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. Code BATCH_COMMITTED (#3202), with committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -957,7 +957,7 @@
                         }
                     },
                     "429": {
-                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "description": "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -969,7 +969,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1110,7 +1110,7 @@
                         }
                     },
                     "409": {
-                        "description": "Conflict: ambiguous tenant file, or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file)",
+                        "description": "Conflict: ambiguous tenant file (code TENANT_FILE_AMBIGUOUS), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1203,7 +1203,7 @@
                         }
                     },
                     "429": {
-                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "description": "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1221,7 +1221,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the feature branch to the config repository failed, a timeout included: no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the feature branch to the config repository failed, a timeout included: no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1351,7 +1351,7 @@
                         }
                     },
                     "429": {
-                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "description": "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1369,7 +1369,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1428,7 +1428,7 @@
                         }
                     },
                     "409": {
-                        "description": "Conflict: the PUT this previews would be refused — code TENANT_GIT_MANAGED when the tenant is git-managed (#3064; as PUT's 409, for every caller), ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry",
+                        "description": "Conflict: the PUT this previews would be refused — code TENANT_GIT_MANAGED when the tenant is git-managed (#3064; as PUT's 409, for every caller), ambiguous tenant file (TENANT_FILE_AMBIGUOUS), TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1493,7 +1493,7 @@
                         }
                     },
                     "409": {
-                        "description": "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file",
+                        "description": "Conflict: code TENANT_FILE_AMBIGUOUS when the tenant's own top-level spellings (\u003cid\u003e.yaml and \u003cid\u003e.yml) both exist, or TENANT_DECLARED_ELSEWHERE when it is declared by more than one conf.d file otherwise",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1971,6 +1971,99 @@
         }
     },
     "definitions": {
+        "ErrorCode": {
+            "type": "string",
+            "enum": [
+                "INVALID_BODY",
+                "RATE_LIMITED",
+                "PENDING_PR_EXISTS",
+                "TASK_NOT_FOUND",
+                "UNAUTHORIZED",
+                "FORBIDDEN",
+                "NOT_FOUND",
+                "METHOD_NOT_ALLOWED",
+                "CONFLICT",
+                "BAD_REQUEST",
+                "PAYLOAD_TOO_LARGE",
+                "CANDIDATE_INVALID",
+                "INTERNAL_ERROR",
+                "CONFIG_DECODE_ERROR",
+                "BASE_RESTORE_FAILED",
+                "STATE_FULL",
+                "GROUP_ID_UNAVAILABLE",
+                "UPSTREAM_ERROR",
+                "NOT_IMPLEMENTED",
+                "FORGE_UNAVAILABLE",
+                "FORGE_FORBIDDEN",
+                "WRITE_OVERLOADED",
+                "TREE_NOT_ON_BASE",
+                "GIT_PUSH_FAILED",
+                "TENANT_DECLARED_ELSEWHERE",
+                "TENANT_FILE_AMBIGUOUS",
+                "TENANT_CONFIG_NOT_LOADABLE",
+                "TENANT_TREE_UNREADABLE",
+                "TENANT_STORE_FAULT",
+                "MASKED_PREVIEW_UNAVAILABLE",
+                "TENANT_GIT_MANAGED",
+                "TENANT_FILE_DIRTY",
+                "GENERATOR_FINDINGS",
+                "GENERATOR_REJECTED",
+                "GENERATOR_BUSY",
+                "VALIDATOR_UNAVAILABLE",
+                "POLICY_UNAVAILABLE",
+                "GIT_DRIVER_CONFIGURED",
+                "BATCH_COMMITTED",
+                "WRITE_OUTCOME_UNKNOWN",
+                "REQUEST_TIMEOUT",
+                "TOKEN_LIMIT_REACHED",
+                "FEDERATION_NOT_CONFIGURED"
+            ],
+            "x-enum-varnames": [
+                "InvalidBody",
+                "RateLimited",
+                "PendingPR",
+                "TaskNotFound",
+                "Unauthorized",
+                "Forbidden",
+                "NotFound",
+                "MethodNotAllowed",
+                "Conflict",
+                "BadRequest",
+                "PayloadTooLarge",
+                "CandidateInvalid",
+                "Internal",
+                "ConfigDecode",
+                "BaseRestoreFailed",
+                "StateFull",
+                "GroupIDUnavailable",
+                "Upstream",
+                "NotImplemented",
+                "ForgeUnavailable",
+                "ForgeForbidden",
+                "WriteOverloaded",
+                "TreeNotOnBase",
+                "GitPushFailed",
+                "TenantDeclaredElsewhere",
+                "TenantFileAmbiguous",
+                "TenantConfigNotLoadable",
+                "TenantTreeUnreadable",
+                "TenantStoreFault",
+                "MaskedPreviewUnavailable",
+                "TenantGitManaged",
+                "TenantFileDirty",
+                "GeneratorFindings",
+                "GeneratorRejected",
+                "GeneratorBusy",
+                "ValidatorUnavailable",
+                "PolicyUnavailable",
+                "GitDriverConfigured",
+                "BatchCommitted",
+                "WriteOutcomeUnknown",
+                "RequestTimeout",
+                "TokenLimitReached",
+                "FederationNotConfigured"
+            ]
+        },
         "ErrorResponse": {
             "type": "object",
             "required": [
@@ -1982,7 +2075,7 @@
                     "type": "string"
                 },
                 "code": {
-                    "type": "string"
+                    "$ref": "#/definitions/ErrorCode"
                 },
                 "error": {
                     "type": "string"
@@ -2637,8 +2730,12 @@
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is the machine-readable error code of a FAILED op (\"error\"), set on\nevery one (#3226) and empty for every other status. It is the code the\nsame failure gets as a whole-request error envelope (the error kind\ntable): the op's own refusals — BAD_REQUEST (invalid or reserved\ntenant id, validation, merge), FORBIDDEN (write permission or metadata\nscope, ADR-027), TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE\n(the tenant file cannot be loaded as a tenant config or is not a\nregular file, #2373), TENANT_GIT_MANAGED (#3064), TENANT_FILE_DIRTY,\nTENANT_TREE_UNREADABLE, CONFLICT (two files claim the tenant) — and\nthe failures of the batch as a whole, which every op reports:\nCONFLICT (the serving branch moved, or the batch IS committed but did\nnot finish cleanly), WRITE_OVERLOADED, TREE_NOT_ON_BASE,\nFORGE_UNAVAILABLE, UPSTREAM_ERROR (cancelled, outcome unknown, the git\nconfig unreadable), GIT_DRIVER_CONFIGURED (#3175), TENANT_STORE_FAULT,\nINTERNAL_ERROR, the route generator's codes (GENERATOR_FINDINGS,\nGENERATOR_REJECTED, VALIDATOR_UNAVAILABLE, POLICY_UNAVAILABLE; #2903),\nand — PR mode, judged on the latest base branch — FORBIDDEN and\nCONFIG_DECODE_ERROR (the base's _tenant_orgs.yaml cannot be read).",
-                    "type": "string"
+                    "description": "Code is the machine-readable error code of a FAILED op (\"error\"), set on\nevery one (#3226) and empty for every other status. It is the code the\nsame failure gets as a whole-request error envelope (the error kind\ntable): the op's own refusals — BAD_REQUEST (invalid or reserved\ntenant id, validation, merge), FORBIDDEN (write permission or metadata\nscope, ADR-027), TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE\n(the tenant file cannot be loaded as a tenant config or is not a\nregular file, #2373), TENANT_GIT_MANAGED (#3064), TENANT_FILE_DIRTY,\nTENANT_TREE_UNREADABLE, TENANT_FILE_AMBIGUOUS (two files claim the\ntenant) — and the failures of the batch as a whole, which every op\nreports: CONFLICT (the serving branch moved), BATCH_COMMITTED (the\nbatch IS committed but did not finish cleanly), WRITE_OVERLOADED,\nTREE_NOT_ON_BASE, FORGE_UNAVAILABLE, UPSTREAM_ERROR (cancelled, the git\nconfig unreadable), WRITE_OUTCOME_UNKNOWN, GIT_DRIVER_CONFIGURED\n(#3175), TENANT_STORE_FAULT, INTERNAL_ERROR, the route generator's\ncodes (GENERATOR_FINDINGS, GENERATOR_REJECTED, GENERATOR_BUSY,\nVALIDATOR_UNAVAILABLE, POLICY_UNAVAILABLE; #2903, #3202),\nand — PR mode, judged on the latest base branch — FORBIDDEN and\nCONFIG_DECODE_ERROR (the base's _tenant_orgs.yaml cannot be read).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/ErrorCode"
+                        }
+                    ]
                 },
                 "message": {
                     "type": "string"

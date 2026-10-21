@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 )
 
@@ -15,10 +16,11 @@ const (
 )
 
 // The service's 503 codes, passed through to the HTTP client as they are
-// (ADR-036 §5).
+// (ADR-036 §5). The strings are internal/errcode's (#3202): the service and
+// tenant-api name these two failures alike, so they are not a second copy.
 const (
-	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
-	CodePolicyUnavailable    = "POLICY_UNAVAILABLE"
+	CodeValidatorUnavailable = string(errcode.ValidatorUnavailable)
+	CodePolicyUnavailable    = string(errcode.PolicyUnavailable)
 )
 
 // Reasons of a *RejectedError. The first five are the service's own

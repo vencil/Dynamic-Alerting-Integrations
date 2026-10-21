@@ -27,8 +27,8 @@ wrapped(gitops.ErrConflict) => 500 INTERNAL_ERROR error="internal error; the ser
 
 # writeIssueError (a federation token mint Issue / IssueLogs refused)
 plain error (server path in text) => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
-token.ErrTokenLimitReached => 409 CONFLICT error="federation: tenant federation-token limit reached"
-wrapped(token.ErrTokenLimitReached) => 409 CONFLICT error="op ctx: federation: tenant federation-token limit reached"
+token.ErrTokenLimitReached => 409 TOKEN_LIMIT_REACHED error="federation: tenant federation-token limit reached"
+wrapped(token.ErrTokenLimitReached) => 409 TOKEN_LIMIT_REACHED error="op ctx: federation: tenant federation-token limit reached"
 token.ErrMintRateLimited (bare: the table's Retry-After) => 429 RATE_LIMITED Retry-After=60 retry_after_s=60 error="federation: token mint rate limit exceeded"
 MintRateLimitedError{Wait: 42.001s} (rounded up) => 429 RATE_LIMITED Retry-After=43 retry_after_s=43 error="federation: token mint rate limit exceeded"
 MintRateLimitedError{Wait: 0} (at least 1s) => 429 RATE_LIMITED Retry-After=1 retry_after_s=1 error="federation: token mint rate limit exceeded"

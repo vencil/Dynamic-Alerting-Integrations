@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/credmask"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -98,11 +99,11 @@ func parityCases() []parityCase {
 		// answer it as PUT does. In PR mode PUT judges it on the fresh base,
 		// which /validate does not reach (tree).
 		{name: "git_managed_shared", file: parityShared,
-			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantGitManaged), tree: true},
 		{name: "git_managed_shared_writer_of_both", file: parityShared,
-			groups: "both-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+			groups: "both-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantGitManaged), tree: true},
 		{name: "git_managed_shared_platform_writer", file: parityShared,
-			groups: "platform", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+			groups: "platform", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantGitManaged), tree: true},
 		{name: "git_managed_anchor_on_tenants", file: "tenants: &t\n" + paritySec(parityIn, "warning"),
 			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: "yaml_indirection", tree: true},
 		{name: "git_managed_merge_key", file: "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n",
@@ -110,7 +111,7 @@ func parityCases() []parityCase {
 		{name: "git_managed_id_mismatch", file: "tenants:\n" + paritySec(parityOut, "warning"),
 			groups: "both-team", body: parityBodyIn, want: http.StatusConflict, wantText: "id_mismatch", tree: true},
 		{name: "git_managed_reader_of_id", file: parityShared, groups: "in-readers", body: parityBodyIn,
-			want: http.StatusForbidden, maskedDiff: true, maskedRefusal: CodeTenantGitManaged},
+			want: http.StatusForbidden, maskedDiff: true, maskedRefusal: string(errcode.TenantGitManaged)},
 		// The body must be API-shaped (step 2's body-only pre-flight, which
 		// /validate runs in PR mode too).
 		{name: "body_declares_another_tenant", file: parityOwn, groups: "both-team",
@@ -124,7 +125,7 @@ func parityCases() []parityCase {
 			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n",
 			want: http.StatusForbidden},
 		{name: "declared_elsewhere", file: parityOwn, extra: map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
-			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantDeclaredElsewhere, tree: true},
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantDeclaredElsewhere), tree: true},
 		{name: "invalid_body", file: parityOwn, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", want: http.StatusBadRequest, tree: true},
 		{name: "accepted", file: parityOwn, groups: "in-team",
@@ -164,12 +165,12 @@ func parityCases() []parityCase {
 		// (400).
 		{name: "git_managed_and_invalid_body", file: parityShared, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n",
-			want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+			want: http.StatusConflict, wantText: string(errcode.TenantGitManaged), tree: true},
 		// The tenant file's resolution (409, another file declares {id})
 		// before the git-managed verdict (409, its own code).
 		{name: "declared_elsewhere_and_git_managed", file: parityShared,
 			extra:  map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
-			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantDeclaredElsewhere, tree: true},
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantDeclaredElsewhere), tree: true},
 	}
 }
 
@@ -324,7 +325,7 @@ func runParityCases(t *testing.T, cases []parityCase) {
 					t.Errorf("/validate answered valid=%v %q, want PUT's %q", vr.Valid, vr.Warnings, parityValidateText(want))
 				}
 				// #3064: the git-managed verdict carries its code.
-				if gm := want["code"] == CodeTenantGitManaged; gm != (vr.Code == CodeTenantGitManaged) {
+				if gm := want["code"] == string(errcode.TenantGitManaged); gm != (vr.Code == string(errcode.TenantGitManaged)) {
 					t.Errorf("/validate code = %q, PUT's code %v", vr.Code, want["code"])
 				}
 			})

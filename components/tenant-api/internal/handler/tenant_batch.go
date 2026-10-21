@@ -14,6 +14,7 @@ import (
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -74,17 +75,18 @@ type BatchResult struct {
 	// scope, ADR-027), TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE
 	// (the tenant file cannot be loaded as a tenant config or is not a
 	// regular file, #2373), TENANT_GIT_MANAGED (#3064), TENANT_FILE_DIRTY,
-	// TENANT_TREE_UNREADABLE, CONFLICT (two files claim the tenant) — and
-	// the failures of the batch as a whole, which every op reports:
-	// CONFLICT (the serving branch moved, or the batch IS committed but did
-	// not finish cleanly), WRITE_OVERLOADED, TREE_NOT_ON_BASE,
-	// FORGE_UNAVAILABLE, UPSTREAM_ERROR (cancelled, outcome unknown, the git
-	// config unreadable), GIT_DRIVER_CONFIGURED (#3175), TENANT_STORE_FAULT,
-	// INTERNAL_ERROR, the route generator's codes (GENERATOR_FINDINGS,
-	// GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE, POLICY_UNAVAILABLE; #2903),
+	// TENANT_TREE_UNREADABLE, TENANT_FILE_AMBIGUOUS (two files claim the
+	// tenant) — and the failures of the batch as a whole, which every op
+	// reports: CONFLICT (the serving branch moved), BATCH_COMMITTED (the
+	// batch IS committed but did not finish cleanly), WRITE_OVERLOADED,
+	// TREE_NOT_ON_BASE, FORGE_UNAVAILABLE, UPSTREAM_ERROR (cancelled, the git
+	// config unreadable), WRITE_OUTCOME_UNKNOWN, GIT_DRIVER_CONFIGURED
+	// (#3175), TENANT_STORE_FAULT, INTERNAL_ERROR, the route generator's
+	// codes (GENERATOR_FINDINGS, GENERATOR_REJECTED, GENERATOR_BUSY,
+	// VALIDATOR_UNAVAILABLE, POLICY_UNAVAILABLE; #2903, #3202),
 	// and — PR mode, judged on the latest base branch — FORBIDDEN and
 	// CONFIG_DECODE_ERROR (the base's _tenant_orgs.yaml cannot be read).
-	Code string `json:"code,omitempty"`
+	Code errcode.Code `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// (#1231 deprecated-key alias notices from the direct write path).
 	// Error results never carry warnings — Message owns the failure text.
@@ -151,12 +153,12 @@ type BatchResponse struct {
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
 // @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (An operation refused by the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
-// @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
+// @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. Code BATCH_COMMITTED (#3202), with committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413  {object} ErrorResponse
 // @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_FILE_DIRTY (direct mode, #1535: the operation's tenant file differs from HEAD in tenant-api's copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
-// @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
+// @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500  {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
-// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)"
+// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)"
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {

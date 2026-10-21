@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -309,7 +310,7 @@ func writeTenantFileNotLoadable(w http.ResponseWriter, r *http.Request, e *tenan
 	}
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: e.Error(),
-		Code:  CodeTenantConfigNotLoadable,
+		Code:  errcode.TenantConfigNotLoadable,
 		Extra: extra,
 	})
 }

@@ -20,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // TaskStatus represents the lifecycle state of an async task.
@@ -48,7 +50,7 @@ type TaskResult struct {
 	// Code mirrors handler.BatchResult.Code (#2078): the machine-readable
 	// failure code (e.g. TENANT_DECLARED_ELSEWHERE) of an "error" result
 	// (always set since #3226), empty for a result that is not one.
-	Code string `json:"code,omitempty"`
+	Code errcode.Code `json:"code,omitempty"`
 	// Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking
 	// deprecation advisories for an op that succeeded, so the async polling
 	// path (?async=true → GET /tasks/{id}) carries the same author-facing

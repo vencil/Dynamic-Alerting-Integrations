@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // parityFIFO replaces {id}'s committed file with a FIFO.
@@ -33,7 +35,7 @@ func TestPutPlan_OrderRowsOnANonRegularFile(t *testing.T) {
 		// step is the 409.
 		{name: "id_write_scope_and_not_regular", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "prod-ops", metaEnforce: true,
 			setup: parityFIFO, body: parityBodyIn, want: http.StatusForbidden, wantText: "ADR-027",
-			maskedDiff: true, maskedRefusal: CodeTenantConfigNotLoadable},
+			maskedDiff: true, maskedRefusal: string(errcode.TenantConfigNotLoadable)},
 		// The file that is not regular (409) before the body's size (413).
 		{name: "not_regular_and_body_too_large", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "in-team",
 			setup: parityFIFO, maxBody: 64,

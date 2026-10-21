@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/ws"
 )
 
@@ -38,8 +39,8 @@ func TestRecoverer_AnswersAPanicInTheEnvelope(t *testing.T) {
 
 	w := serve(func(http.ResponseWriter, *http.Request) { panic("boom /srv/secret") })
 	env := exitEnvelope(t, "panic", w, http.StatusInternalServerError)
-	if env.Code != CodeInternal || env.Error != msgInternal || env.RequestID == "" {
-		t.Errorf("panic: envelope %+v, want %s, msgInternal and a request_id", env, CodeInternal)
+	if env.Code != errcode.Internal || env.Error != msgInternal || env.RequestID == "" {
+		t.Errorf("panic: envelope %+v, want %s, msgInternal and a request_id", env, errcode.Internal)
 	}
 
 	// A panic after the answer began aborts the connection: the panic that
@@ -94,9 +95,9 @@ func TestTimeout_EnvelopeOnlyWhenUnanswered(t *testing.T) {
 
 	w := serve(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	env := exitEnvelope(t, "unanswered", w, http.StatusGatewayTimeout)
-	if env.Code != CodeUpstream || env.Error != msgRequestTimeout || env.RequestID == "" || w.Header().Get("Retry-After") != "" {
+	if env.Code != errcode.RequestTimeout || env.Error != msgRequestTimeout || env.RequestID == "" || w.Header().Get("Retry-After") != "" {
 		t.Errorf("unanswered: envelope %+v Retry-After %q, want %s, msgRequestTimeout, no Retry-After",
-			env, w.Header().Get("Retry-After"), CodeUpstream)
+			env, w.Header().Get("Retry-After"), errcode.RequestTimeout)
 	}
 
 	w = serve(func(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +131,8 @@ func TestMethodNotAllowedEnvelope(t *testing.T) {
 		_, _ = w.Write(nil)
 	})
 	env := exitEnvelope(t, "bare 405", w, http.StatusMethodNotAllowed)
-	if env.Code != CodeBadRequest || env.RequestID == "" || len(w.Header().Values("Allow")) != 2 {
-		t.Errorf("bare 405: envelope %+v Allow %q, want %s and both Allow values", env, w.Header().Values("Allow"), CodeBadRequest)
+	if env.Code != errcode.MethodNotAllowed || env.RequestID == "" || len(w.Header().Values("Allow")) != 2 {
+		t.Errorf("bare 405: envelope %+v Allow %q, want %s and both Allow values", env, w.Header().Values("Allow"), errcode.MethodNotAllowed)
 	}
 
 	w = serve(func(w http.ResponseWriter, r *http.Request) {
@@ -154,13 +155,13 @@ func TestRefuseEventStream(t *testing.T) {
 		return w
 	}
 	env := exitEnvelope(t, "no flusher", serve(ws.ErrStreamingUnsupported), http.StatusInternalServerError)
-	if env.Code != CodeInternal || env.Error != msgStreamingUnsupported {
-		t.Errorf("no flusher: %+v, want %s with msgStreamingUnsupported shown", env, CodeInternal)
+	if env.Code != errcode.Internal || env.Error != msgStreamingUnsupported {
+		t.Errorf("no flusher: %+v, want %s with msgStreamingUnsupported shown", env, errcode.Internal)
 	}
 	w := serve(ws.ErrShuttingDown)
 	env = exitEnvelope(t, "shutting down", w, http.StatusServiceUnavailable)
-	if env.Code != CodeUpstream || env.RetryAfterS != 1 || w.Header().Get("Retry-After") != "1" {
-		t.Errorf("shutting down: %+v Retry-After %q, want %s with Retry-After 1", env, w.Header().Get("Retry-After"), CodeUpstream)
+	if env.Code != errcode.Upstream || env.RetryAfterS != 1 || w.Header().Get("Retry-After") != "1" {
+		t.Errorf("shutting down: %+v Retry-After %q, want %s with Retry-After 1", env, w.Header().Get("Retry-After"), errcode.Upstream)
 	}
 }
 

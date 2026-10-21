@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -104,7 +105,7 @@ func TestGetTenant_DeclaredElsewhereAgreesWithEffectiveAndDiff(t *testing.T) {
 			dw := httptest.NewRecorder()
 			DiffTenant(d)(dw, newRequestWithChiParam("POST", "/api/v1/tenants/"+deSubject+"/diff", "id", deSubject,
 				bytes.NewBufferString(deOwnBody())))
-			refused := dw.Code == http.StatusConflict && strings.Contains(dw.Body.String(), CodeTenantDeclaredElsewhere)
+			refused := dw.Code == http.StatusConflict && strings.Contains(dw.Body.String(), string(errcode.TenantDeclaredElsewhere))
 			if refused != *got {
 				t.Errorf("/diff = %d %s while GET declared_elsewhere = %v", dw.Code, dw.Body.String(), *got)
 			}
@@ -129,8 +130,8 @@ func TestGetTenant_DeclaredElsewhereWhenOwnFileIsAShell(t *testing.T) {
 	dw := httptest.NewRecorder()
 	DiffTenant(d)(dw, newRequestWithChiParam("POST", "/api/v1/tenants/"+deSubject+"/diff", "id", deSubject,
 		bytes.NewBufferString(deOwnBody())))
-	if dw.Code != http.StatusConflict || !strings.Contains(dw.Body.String(), CodeTenantDeclaredElsewhere) {
-		t.Errorf("/diff = %d %s, want 409 %s", dw.Code, dw.Body.String(), CodeTenantDeclaredElsewhere)
+	if dw.Code != http.StatusConflict || !strings.Contains(dw.Body.String(), string(errcode.TenantDeclaredElsewhere)) {
+		t.Errorf("/diff = %d %s, want 409 %s", dw.Code, dw.Body.String(), errcode.TenantDeclaredElsewhere)
 	}
 }
 
@@ -202,8 +203,8 @@ func TestGetTenant_DeclaredElsewhereReaderSeesOnlyTheBit(t *testing.T) {
 	wrapWithRBACMiddleware(DiffTenant(d), mgr, rbac.PermRead, TenantIDFromPath).ServeHTTP(dw,
 		as(newRequestWithChiParam("POST", "/api/v1/tenants/"+deSubject+"/diff", "id", deSubject,
 			bytes.NewBufferString(deOwnBody()))))
-	if dw.Code != http.StatusConflict || !strings.Contains(dw.Body.String(), CodeTenantDeclaredElsewhere) {
-		t.Errorf("/diff as the reader = %d %s, want 409 %s", dw.Code, dw.Body.String(), CodeTenantDeclaredElsewhere)
+	if dw.Code != http.StatusConflict || !strings.Contains(dw.Body.String(), string(errcode.TenantDeclaredElsewhere)) {
+		t.Errorf("/diff as the reader = %d %s, want 409 %s", dw.Code, dw.Body.String(), errcode.TenantDeclaredElsewhere)
 	}
 
 	// Control: the caller really cannot read the neighbour.

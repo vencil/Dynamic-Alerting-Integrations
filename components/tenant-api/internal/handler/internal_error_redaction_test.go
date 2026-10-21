@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
@@ -33,7 +34,7 @@ import (
 
 const leakyText = "read federation subset: read /srv/conf.d/_federation/t.yaml: is a directory"
 
-func envelopeBody(t *testing.T, status int, code, msg string) ErrorResponse {
+func envelopeBody(t *testing.T, status int, code errcode.Code, msg string) ErrorResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
 	WriteErrorEnvelope(w, httptest.NewRequest("GET", "/x", nil), status, ErrorResponse{Error: msg, Code: code})
@@ -46,9 +47,9 @@ func envelopeBody(t *testing.T, status int, code, msg string) ErrorResponse {
 
 func TestWriteErrorEnvelope_WithholdsInternalErrorText(t *testing.T) {
 	t.Parallel()
-	got := envelopeBody(t, http.StatusInternalServerError, CodeInternal, leakyText)
-	if got.Error != msgInternal || got.Code != CodeInternal {
-		t.Errorf("envelope = %+v, want code %s with %q", got, CodeInternal, msgInternal)
+	got := envelopeBody(t, http.StatusInternalServerError, errcode.Internal, leakyText)
+	if got.Error != msgInternal || got.Code != errcode.Internal {
+		t.Errorf("envelope = %+v, want code %s with %q", got, errcode.Internal, msgInternal)
 	}
 	// WriteJSONError infers INTERNAL_ERROR from the status — the shape of
 	// every one of the 21 call sites #1700 counted.
@@ -66,19 +67,19 @@ func TestWriteErrorEnvelope_WithholdsInternalErrorText(t *testing.T) {
 func TestWriteErrorEnvelope_KeepsWhatIsMeantForTheClient(t *testing.T) {
 	t.Parallel()
 	for msg := range publicInternalMessages {
-		if got := envelopeBody(t, http.StatusInternalServerError, CodeInternal, msg); got.Error != msg {
+		if got := envelopeBody(t, http.StatusInternalServerError, errcode.Internal, msg); got.Error != msg {
 			t.Errorf("public INTERNAL_ERROR text %q became %q", msg, got.Error)
 		}
 	}
 	for _, c := range []struct {
 		status int
-		code   string
+		code   errcode.Code
 	}{
-		{http.StatusServiceUnavailable, CodeWriteOverloaded},
-		{http.StatusServiceUnavailable, CodeUpstream},
-		{http.StatusBadRequest, CodeBadRequest},
-		{http.StatusInternalServerError, CodeConfigDecode},
-		{http.StatusInternalServerError, CodeBaseRestoreFailed},
+		{http.StatusServiceUnavailable, errcode.WriteOverloaded},
+		{http.StatusServiceUnavailable, errcode.Upstream},
+		{http.StatusBadRequest, errcode.BadRequest},
+		{http.StatusInternalServerError, errcode.ConfigDecode},
+		{http.StatusInternalServerError, errcode.BaseRestoreFailed},
 	} {
 		if got := envelopeBody(t, c.status, c.code, leakyText); got.Error != leakyText {
 			t.Errorf("%d %s: text became %q, want it unchanged", c.status, c.code, got.Error)
@@ -236,10 +237,10 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	if got := batchErrorResult("db-a", serverSide, true); got.Message != msgBatchOpFailed || strings.Contains(got.Message, configDir) {
 		t.Errorf("server-side op failure = %+v, want %q", got, msgBatchOpFailed)
 	}
-	if got := byTenant["db-a"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-a.yaml") {
-		t.Errorf("db-a (unreadable tenant file) = %+v, want %s naming db-a.yaml", got, CodeTenantConfigNotLoadable)
+	if got := byTenant["db-a"]; got.Status != "error" || got.Code != errcode.TenantConfigNotLoadable || !strings.Contains(got.Message, "db-a.yaml") {
+		t.Errorf("db-a (unreadable tenant file) = %+v, want %s naming db-a.yaml", got, errcode.TenantConfigNotLoadable)
 	}
-	if got := byTenant["db-b"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-b") {
+	if got := byTenant["db-b"]; got.Status != "error" || got.Code != errcode.TenantConfigNotLoadable || !strings.Contains(got.Message, "db-b") {
 		t.Errorf("db-b (client-facing failure) = %+v, want its own not-loadable text", got)
 	}
 	if got := byTenant["db-c"]; got.Status != "error" || !strings.Contains(got.Message, "is claimed by") {
@@ -247,8 +248,8 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	}
 	// #3226: the text PUT's 409 gives the same file (notRegularText), which
 	// names the tenant and the config_error, no path.
-	if got := byTenant["db-d"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || got.Message != notRegularText("db-d") {
-		t.Errorf("db-d (its file is a directory) = %+v, want %s with notRegularText", got, CodeTenantConfigNotLoadable)
+	if got := byTenant["db-d"]; got.Status != "error" || got.Code != errcode.TenantConfigNotLoadable || got.Message != notRegularText("db-d") {
+		t.Errorf("db-d (its file is a directory) = %+v, want %s with notRegularText", got, errcode.TenantConfigNotLoadable)
 	}
 }
 
@@ -275,8 +276,8 @@ func TestPutTenant_ServerSideWriteFailureNamesNoServerPath(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Error != msgWriteFailed || got.Code != CodeInternal {
-		t.Errorf("error = %q code = %q, want %q %s (git's own text stays in the log)", got.Error, got.Code, msgWriteFailed, CodeInternal)
+	if got.Error != msgWriteFailed || got.Code != errcode.Internal {
+		t.Errorf("error = %q code = %q, want %q %s (git's own text stays in the log)", got.Error, got.Code, msgWriteFailed, errcode.Internal)
 	}
 }
 
@@ -318,8 +319,8 @@ func TestPutGroup_UnparseableGroupsFileIsConfigDecodeError(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", w.Body.String(), err)
 	}
-	if w.Code != http.StatusInternalServerError || got.Code != CodeConfigDecode || !strings.Contains(got.Error, "_groups.yaml") {
-		t.Errorf("= %d %+v, want 500 %s naming _groups.yaml", w.Code, got, CodeConfigDecode)
+	if w.Code != http.StatusInternalServerError || got.Code != errcode.ConfigDecode || !strings.Contains(got.Error, "_groups.yaml") {
+		t.Errorf("= %d %+v, want 500 %s naming _groups.yaml", w.Code, got, errcode.ConfigDecode)
 	}
 	if strings.Contains(w.Body.String(), configDir) {
 		t.Errorf("body carries conf.d's path: %s", w.Body.String())

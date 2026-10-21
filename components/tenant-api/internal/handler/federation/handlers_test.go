@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -365,7 +366,7 @@ func TestCreateFederationToken_RateLimited(t *testing.T) {
 	if err := json.Unmarshal(last.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["code"] != handler.CodeRateLimited || body["retry_after_s"] != float64(ra) {
-		t.Errorf("body = %v, want code %s and retry_after_s %d", body, handler.CodeRateLimited, ra)
+	if body["code"] != string(errcode.RateLimited) || body["retry_after_s"] != float64(ra) {
+		t.Errorf("body = %v, want code %s and retry_after_s %d", body, errcode.RateLimited, ra)
 	}
 }

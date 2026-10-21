@@ -33,6 +33,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // msgDiscoveryUpstream is the 502 text when the upstream Prometheus query
@@ -92,7 +93,7 @@ func DiscoverMetrics(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Discovery disabled when --federation-prometheus-url is unset.
 		if d.MetricDiscoverer == nil {
-			WriteJSONError(w, r, http.StatusServiceUnavailable,
+			WriteKind(w, r, errkind.FederationNotConfigured,
 				"metric discovery is disabled — set --federation-prometheus-url to enable")
 			return
 		}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -348,10 +349,10 @@ func TestLogsFederationNotConfigured_IsNotRetryable(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if env.Code != handler.CodeUpstream || env.RetryAfterS != 0 || w.Header().Get("Retry-After") != "" ||
+		if env.Code != errcode.FederationNotConfigured || env.RetryAfterS != 0 || w.Header().Get("Retry-After") != "" ||
 			env.Error != "logs federation is not configured on this server" {
 			t.Errorf("%s: envelope %+v Retry-After %q, want %s with no Retry-After",
-				name, env, w.Header().Get("Retry-After"), handler.CodeUpstream)
+				name, env, w.Header().Get("Retry-After"), errcode.FederationNotConfigured)
 		}
 	}
 }

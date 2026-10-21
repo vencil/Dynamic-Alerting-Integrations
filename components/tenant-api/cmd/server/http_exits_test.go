@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/handler"
 )
 
@@ -45,16 +46,16 @@ func TestRouter_NoRouteAndNoMethodAreEnvelopes(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/no-such-route", nil))
-	if env := envelopeOf(t, "no route", w, http.StatusNotFound); env.Code != handler.CodeNotFound {
-		t.Errorf("no route: code %q, want %s", env.Code, handler.CodeNotFound)
+	if env := envelopeOf(t, "no route", w, http.StatusNotFound); env.Code != errcode.NotFound {
+		t.Errorf("no route: code %q, want %s", env.Code, errcode.NotFound)
 	}
 
 	// /api/v1/tenants/{id} serves GET and PUT. The method is refused by the
 	// router itself, before the route's RBAC middleware.
 	w = httptest.NewRecorder()
 	f.router.ServeHTTP(w, httptest.NewRequest(http.MethodPatch, "/api/v1/tenants/alpha-one", nil))
-	if env := envelopeOf(t, "no method", w, http.StatusMethodNotAllowed); env.Code != handler.CodeBadRequest {
-		t.Errorf("no method: code %q, want %s", env.Code, handler.CodeBadRequest)
+	if env := envelopeOf(t, "no method", w, http.StatusMethodNotAllowed); env.Code != errcode.MethodNotAllowed {
+		t.Errorf("no method: code %q, want %s", env.Code, errcode.MethodNotAllowed)
 	}
 	// chi's own Allow, one header line per method.
 	if got := allowOf(w); got != "GET PUT" {
@@ -99,8 +100,8 @@ func TestTimeoutExceptStream_DeadlineIsAnEnvelope(t *testing.T) {
 	}
 
 	env := envelopeOf(t, "silent handler", serve(waitThen(false), "/api/v1/tenants"), http.StatusGatewayTimeout)
-	if env.Code != handler.CodeUpstream || env.Error == "" {
-		t.Errorf("silent handler: envelope %+v, want %s with a text", env, handler.CodeUpstream)
+	if env.Code != errcode.RequestTimeout || env.Error == "" {
+		t.Errorf("silent handler: envelope %+v, want %s with a text", env, errcode.RequestTimeout)
 	}
 
 	env = envelopeOf(t, "answering handler", serve(waitThen(true), "/api/v1/tenants"), http.StatusServiceUnavailable)
@@ -155,8 +156,8 @@ func TestEvents_RefusedWhileShuttingDownIsAnEnvelope(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, req)
 	env := envelopeOf(t, "shutting down", w, http.StatusServiceUnavailable)
-	if env.Code != handler.CodeUpstream || env.RetryAfterS != 1 || w.Header().Get("Retry-After") != "1" {
+	if env.Code != errcode.Upstream || env.RetryAfterS != 1 || w.Header().Get("Retry-After") != "1" {
 		t.Errorf("shutting down: envelope %+v Retry-After %q, want %s with Retry-After 1",
-			env, w.Header().Get("Retry-After"), handler.CodeUpstream)
+			env, w.Header().Get("Retry-After"), errcode.Upstream)
 	}
 }

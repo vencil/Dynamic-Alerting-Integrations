@@ -12,7 +12,7 @@ package handler
 //     The name is kept (an alert reads it); its meaning is ADR-036 §5's, no
 //     longer "a usable or last good _domain_policy.yaml".
 //   - tenant_api_generator_rejections_total{reason} — writes refused without
-//     a verdict (GENERATOR_REJECTED), by reason.
+//     a verdict (GENERATOR_REJECTED, GENERATOR_BUSY), by reason.
 //   - tenant_api_generator_scrape_success — whether the container's own
 //     /metrics was read and appended below (its da_generator_* families,
 //     da_generator_build_info among them) on this scrape.
@@ -61,7 +61,7 @@ func writeGeneratorMetrics(ctx context.Context, w io.Writer) {
 	if g != nil {
 		counts = g.Rejections()
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_generator_rejections_total Writes the generator container gave no verdict on (GENERATOR_REJECTED), by reason; nothing of them was written.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_generator_rejections_total Writes the generator container gave no verdict on (GENERATOR_REJECTED, GENERATOR_BUSY), by reason; nothing of them was written.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_generator_rejections_total counter\n")
 	for _, reason := range generator.RejectionReasons {
 		_, _ = fmt.Fprintf(w, "tenant_api_generator_rejections_total{reason=%q} %d\n", reason, counts[reason])

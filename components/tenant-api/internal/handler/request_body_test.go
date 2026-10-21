@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 const truncTenantID = "trunc-t"
@@ -119,8 +121,8 @@ func TestReadLimitedBody_Boundary(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("413 body is not JSON: %v: %s", err, w.Body.String())
 			}
-			if resp["code"] != CodePayloadTooLarge {
-				t.Errorf("413 code = %v, want %q", resp["code"], CodePayloadTooLarge)
+			if resp["code"] != string(errcode.PayloadTooLarge) {
+				t.Errorf("413 code = %v, want %q", resp["code"], errcode.PayloadTooLarge)
 			}
 			msg, _ := resp["error"].(string)
 			if !strings.Contains(msg, "TA_MAX_BODY_BYTES") {
