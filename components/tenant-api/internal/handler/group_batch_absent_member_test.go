@@ -120,6 +120,13 @@ func TestTenantAbsentIn(t *testing.T) {
 		// Left to mergePatchYAML, which refuses these rather than writing.
 		{"not yaml", "tenants: [\n", false},
 		{"no tenants mapping", "other: 1\n", false},
+		// #3206: parse-tree refuses these, so they are not read as absent
+		// (the first document alone has no t-x section) — mergePatchYAML
+		// refuses them as it refuses the rows above.
+		{"t-x after a second document", "tenants:\n  t-other: {}\n---\ntenants:\n  t-x: {}\n", false},
+		{"trailing empty document", "tenants:\n  t-other: {}\n---\n", false},
+		{"!!binary value", "tenants:\n  t-other:\n    k: !!binary dg==\n", false},
+		{"non-specific tag", "tenants:\n  t-other:\n    k: ! \"v\"\n", false},
 	} {
 		if got := tenantAbsentIn([]byte(c.existing), "t-x"); got != c.want {
 			t.Errorf("%s: tenantAbsentIn = %v, want %v", c.name, got, c.want)

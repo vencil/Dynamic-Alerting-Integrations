@@ -3,6 +3,7 @@ package tenantorg
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,5 +179,58 @@ func TestNewForTest(t *testing.T) {
 	m := NewForTest(&Config{TenantOrgs: map[string][]string{"db-a": {"ORG-1"}}})
 	if orgs, known := m.OrgsForTenant("db-a"); !known || !reflect.DeepEqual(orgs, []string{"ORG-1"}) {
 		t.Errorf("NewForTest OrgsForTenant(db-a) = (%v, %v)", orgs, known)
+	}
+}
+
+// parseTreeRefused are _tenant_orgs.yaml texts yaml.v3's strict decode reads
+// (the first document; a `!!binary` or `!` value as a string) and parse-tree
+// refuses (ADR-036 §7 step 7, #3206). The org boundary is not read from them:
+// each is a load error, never a mapping that lost or changed orgs.
+var parseTreeRefused = []struct{ name, yaml, kind string }{
+	{"second document", "tenant_orgs:\n  t1: [ORG-1]\n---\ntenant_orgs:\n  t2: [ORG-2]\n", "multiple_documents"},
+	{"trailing empty document", "tenant_orgs:\n  t1: [ORG-1]\n---\n", "multiple_documents"},
+	{"!!binary org", "tenant_orgs:\n  t1: [!!binary T1JHLTE=]\n", "tag_not_allowed"},
+	{"non-specific tag", "tenant_orgs:\n  t1: [! \"ORG-1\"]\n", "non_specific_tag"},
+}
+
+// The initial load fails (main.go: FATAL) and the tree read errors; neither
+// is the empty mapping.
+func TestNewManager_ParseTreeRefusalIsALoadError(t *testing.T) {
+	t.Parallel()
+	for _, c := range parseTreeRefused {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir, _ := testutil.MkTempYAML(t, "_tenant_orgs.yaml", c.yaml)
+			if _, err := NewManager(dir); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+				t.Fatalf("NewManager error = %v, want a load error of kind %s", err, c.kind)
+			}
+			if orgs, err := OrgsInTree(dir, "t1"); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+				t.Fatalf("OrgsInTree = %v, %v; want an error of kind %s", orgs, err, c.kind)
+			}
+		})
+	}
+}
+
+// A hot reload onto such a file keeps the last good mapping.
+func TestReload_ParseTreeRefusalKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	for _, c := range parseTreeRefused {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir, path := testutil.MkTempYAML(t, "_tenant_orgs.yaml", "tenant_orgs:\n  t1: [ORG-9]\n")
+			m, err := NewManager(dir)
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(c.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Reload(); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+				t.Fatalf("Reload = %v, want an error of kind %s", err, c.kind)
+			}
+			if orgs, _ := m.OrgsForTenant("t1"); !reflect.DeepEqual(orgs, []string{"ORG-9"}) {
+				t.Errorf("after the refused reload t1's orgs = %v, want the last good [ORG-9]", orgs)
+			}
+		})
 	}
 }

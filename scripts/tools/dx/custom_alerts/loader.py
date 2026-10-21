@@ -219,7 +219,7 @@ def collect_instances(config_dir: Path, reader=None,
     #
     # ⛔ #2086: the tree is `list_config_tree`, NOT `rglob("*")`. `rglob`
     # descends `.`-prefixed directories, which the exporter's walker
-    # (`pkg/config.ScanDirTree` / `IsScannedFileName`) prunes. Measured on
+    # (`pkg/config.ScanDirTree` / `confdname.IsScanned`) prunes. Measured on
     # `main` 42db84e4: a `.snap/acme.yaml` declaring a recipe compiled one
     # extra shape (2 vs 1) for a file the exporter never serves, and a
     # ConfigMap mount (`..<ts>/acme.yaml` + the `acme.yaml` symlink into it)

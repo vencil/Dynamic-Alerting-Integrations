@@ -49,7 +49,7 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // AllocateFiles distributes the global emit Files map into per-

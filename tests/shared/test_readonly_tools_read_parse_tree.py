@@ -158,15 +158,17 @@ def test_diagnose_parses_no_yaml(tmp_path, no_yaml_parse):
     assert dg.resolve_inheritance_chain("tx", str(_write(tmp_path, _DIAG)))["declared"]
 
 
-def test_diagnose_names_a_carrier_parse_tree_refuses(tmp_path, capsys):
-    """The exporter reads a `!!set` mapping, parse-tree refuses the tag: the
-    declared list is left empty and the reason named."""
+def test_diagnose_names_a_carrier_parse_tree_refuses(tmp_path):
+    """The exporter used to read a `!!set` mapping that parse-tree refuses
+    (the declared list was then left empty, the reason named). Since ADR-036
+    step 6 (#3206) the exporter drops that carrier too, so diagnose fails
+    closed on the exporter's own verdict, naming the file."""
     dg = _tool("diagnose")
     d = _write(tmp_path, {**_DIAG, "_defaults.yaml":
                           "defaults: !!set {cpu}\noptional_overrides: [x]\n"})
-    assert dg.resolve_inheritance_chain("tx", str(d))["declared"] == []
-    assert "optional_overrides not read (declared left empty): tag_not_allowed" in \
-        capsys.readouterr().err
+    with pytest.raises(Exception, match="_defaults.yaml") as exc:
+        dg.resolve_inheritance_chain("tx", str(d))
+    assert type(exc.value).__name__ == "ParseFailedError", exc.value
 
 
 def test_diagnose_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):

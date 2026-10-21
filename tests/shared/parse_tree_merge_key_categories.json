@@ -1,5 +1,5 @@
 {
-  "_comment": "parse-tree's category for each merge_key_policy_corpus.json row (by id). Written by internal/parsetree's TestMergeKeyCorpusCategories with UPDATE_PARSE_TREE_CATEGORIES=1; checked against the generator verdict by tests/shared/test_parse_tree_corpus.py. Never edit by hand.",
+  "_comment": "parse-tree's category for each merge_key_policy_corpus.json row (by id). Written by pkg/parsetree's TestMergeKeyCorpusCategories with UPDATE_PARSE_TREE_CATEGORIES=1; checked against the generator verdict by tests/shared/test_parse_tree_corpus.py. Never edit by hand.",
   "categories": {
     "0043c6be3fd0b2fb": "unreadable:tag_not_allowed",
     "00694ce8d73202b1": "both_read",

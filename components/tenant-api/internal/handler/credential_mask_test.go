@@ -313,23 +313,23 @@ func TestCredentialMask_HTTPConfigMaskedWhole(t *testing.T) {
 }
 
 // A yaml.v3 type error quotes the value it could not decode, and that value
-// can be a credential: the viewer gets a fixed text instead.
+// can be a credential: the viewer got a fixed text instead of the 500's
+// message. Since ADR-036 step 6 (#3206) parse-tree refuses `!!int <text>`
+// (decode_error) before either decode, so the root file is dropped and
+// /effective answers 200 for both readers, quoting the value to neither.
 func TestCredentialMask_EffectiveDecodeErrorText(t *testing.T) {
 	t.Parallel()
 	f := newMaskFixture(t, maskTenantYAML)
 	writeFile(t, filepath.Join(f.dir, "_defaults.yaml"), "defaults:\n  cpu: 70\nx: !!int CANARY-DECODE\n")
 	path := "/api/v1/tenants/" + maskTenantID + "/effective"
-
-	w := f.call(t, GetTenantEffective(f.d), rbac.PermRead, "GET", path, "writers", "")
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "CANARY-DECODE") {
-		t.Fatalf("writer /effective: %d %s — want the 500 quoting the value (else this test proves nothing)", w.Code, w.Body.String())
-	}
-	w = f.call(t, GetTenantEffective(f.d), rbac.PermRead, "GET", path, "viewers", "")
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) {
-		t.Fatalf("viewer /effective: %d %s, want 500 %s", w.Code, w.Body.String(), CodeConfigDecode)
-	}
-	if strings.Contains(w.Body.String(), "CANARY") {
-		t.Errorf("viewer /effective decode error quotes the value: %s", w.Body.String())
+	for _, who := range []string{"writers", "viewers"} {
+		w := f.call(t, GetTenantEffective(f.d), rbac.PermRead, "GET", path, who, "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"chain_parse_failed":["_defaults.yaml"]`) {
+			t.Fatalf("%s /effective: %d %s, want 200 naming the dropped _defaults.yaml", who, w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "CANARY-DECODE") {
+			t.Errorf("%s /effective quotes the value: %s", who, w.Body.String())
+		}
 	}
 }
 

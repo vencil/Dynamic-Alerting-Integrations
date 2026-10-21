@@ -43,6 +43,7 @@ import (
 	"sort"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
 	"github.com/vencil/tenant-api/internal/confd"
@@ -281,7 +282,7 @@ func topLevelTenantFileName(configDir, tenantID, path string) (string, bool) {
 			continue
 		}
 		name := filepath.Base(path)
-		if id, ok := confd.TenantIDFromFile(name); ok && id == tenantID {
+		if id, ok := confdname.TenantNamedBy(name); ok && id == tenantID {
 			return name, true
 		}
 		return "", false

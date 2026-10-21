@@ -22,6 +22,8 @@
     "{effective_config, platform_overlay}; platform_overlay null = the field is omitted;",
     "walker null = tenant not found. Go asserts metric/exporter_dedup/silent_mode and",
     "walker (and that walker agrees with those three); Python dedup/group_wait and walker.",
+    "A tenant file with a second document declares nothing on either side since ADR-036 step 6",
+    "(#3206: parse-tree's multiple_documents; before, the exporter read the first document).",
     "A tenant file whose FIRST document does not parse declares nothing on either",
     "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
     "#2326: the routing plane reads the whole tree (ADR-017 Decision 9), so a tenant",
@@ -474,37 +476,20 @@
       }
     },
     {
-      "name": "existence-from-the-first-document-of-a-multi-document-tenant-file",
+      "name": "a-multi-document-tenant-file-declares-nothing",
       "files": {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n    _silent_mode: warning\n",
         "sub/tx.yaml": "tenants:\n  tx: {}\n---\nfoo: 1\n"
       },
       "expect": {
         "tx": {
-          "metric": 60,
+          "metric": null,
           "tenant_api": null,
           "dedup": null,
           "group_wait": null,
-          "exporter_dedup": "disable",
-          "silent_mode": "warning",
-          "walker": {
-            "effective_config": {
-              "mysql_connections": "60",
-              "_severity_dedup": "disable",
-              "_silent_mode": "warning"
-            },
-            "platform_overlay": [
-              {
-                "file": "_defaults.yaml",
-                "keys": [
-                  "_severity_dedup",
-                  "_silent_mode",
-                  "mysql_connections"
-                ]
-              }
-            ],
-            "profile_overlay": null
-          }
+          "exporter_dedup": null,
+          "silent_mode": null,
+          "walker": null
         }
       }
     },

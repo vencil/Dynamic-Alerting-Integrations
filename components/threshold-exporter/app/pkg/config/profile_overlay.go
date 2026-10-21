@@ -43,7 +43,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // ProfileOverlaySource is one entry of EffectiveConfig.ProfileOverlay: the

@@ -95,7 +95,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vencil/threshold-exporter/internal/confdname"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // TreeScanMtimeGuard is the safety window for coarse-mtime filesystems: a
@@ -161,32 +161,10 @@ type ScanObserver interface {
 	// IncParseFailure counts one tenant-declaration parse failure, labelled
 	// by file basename.
 	IncParseFailure(fileBasename string)
-}
-
-// IsScannedFileName reports whether the conf.d walker reads a file with this
-// base name: not hidden, and a `.yaml` / `.yml` extension in any case. It is
-// the walker's own test (ScanDirTree), exported so a reader outside this
-// package can ask "would the loader read this file" without restating it.
-func IsScannedFileName(name string) bool {
-	if strings.HasPrefix(name, ".") {
-		return false
-	}
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml")
-}
-
-// IsScannedPath reports whether the walker reads the file at rel, a path
-// relative to the conf.d root (either separator): no directory on the way is
-// hidden (the walker skips those whole) and IsScannedFileName holds for the
-// base name.
-func IsScannedPath(rel string) bool {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, dir := range parts[:len(parts)-1] {
-		if strings.HasPrefix(dir, ".") && dir != "." {
-			return false
-		}
-	}
-	return IsScannedFileName(parts[len(parts)-1])
+	// IncParseRefused counts one parse failure that is parse-tree's refusal
+	// (ADR-036 step 6, #3206), by file basename and parsetree.Kind; it is
+	// always called right after IncParseFailure for the same file.
+	IncParseRefused(fileBasename, kind string)
 }
 
 // TreeFile is one YAML file the walk kept.
@@ -554,6 +532,11 @@ const (
 	// the only mode that refused a special file; since #2939 every mode
 	// does, by the same IsSpecialFile.)
 	walkListOnly
+	// walkNamesOnly is walkListOnly without reading any file: each kept
+	// entry is opened (OpenConfFile, which also refuses a directory or a
+	// special file) and closed, never read or hashed. For ScanDirTreeNames
+	// (`da-guard parse-tree --list-only`, #3206) only.
+	walkNamesOnly
 )
 
 // ScanDirTreeFiles is the walk of ScanDirTree — the same files, the same
@@ -567,6 +550,24 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 		logger = log.Default()
 	}
 	return walkDirTree(root, nil, nil, logger, walkListOnly, nil)
+}
+
+// ScanDirTreeNames is ScanDirTreeFiles without reading a byte (#3206): the
+// same walk, the same files, unreadable entries, defaults carriers and
+// NotFiles, but each kept file is only opened and closed (OpenConfFile), so
+// no TreeFile has Data or a Hash and Composite means nothing. It answers
+// "which files are there and which can be opened" for a reader that wants no
+// content — `da-guard parse-tree --list-only`.
+//
+// ⚠️ One difference from ScanDirTreeFiles, by construction: a file that opens
+// but whose read then fails (an I/O error mid-file) is kept here and is an
+// UnreadableReadError there. A defaults carrier in that state is therefore a
+// selection candidate here and not there.
+func ScanDirTreeNames(root string, logger *log.Logger) (*TreeScan, error) {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return walkDirTree(root, nil, nil, logger, walkNamesOnly, nil)
 }
 
 // scanRootDefaults is the root-only, carriers-only mode of the ONE walker
@@ -632,12 +633,8 @@ func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
 	if rel == "." {
 		return true
 	}
-	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
-		if strings.HasPrefix(seg, ".") { // also catches ".." (outside the root)
-			return false
-		}
-	}
-	return true
+	// `..` (outside the root) is a hidden segment too.
+	return !confdname.HasHiddenSegment(filepath.ToSlash(rel))
 }
 
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
@@ -671,7 +668,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	var notFiles []NotFile
 	var rootWalkErr error
 	// fullTree: the modes that walk the whole tree (walkFull's rules).
-	fullTree := mode == walkFull || mode == walkListOnly
+	fullTree := mode == walkFull || mode == walkListOnly || mode == walkNamesOnly
 	relKey := func(path string) string {
 		if r, err := filepath.Rel(absRoot, path); err == nil {
 			return filepath.ToSlash(r)
@@ -700,16 +697,16 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != absRoot && (!fullTree || strings.HasPrefix(name, ".")) {
+			if path != absRoot && (!fullTree || confdname.IsHidden(name)) {
 				return fs.SkipDir
 			}
 			// Descended like any directory; recorded only (TreeScan.NotFiles).
-			if path != absRoot && IsScannedFileName(name) {
+			if path != absRoot && confdname.IsScanned(name) {
 				notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirectory})
 			}
 			return nil
 		}
-		if !IsScannedFileName(name) {
+		if !confdname.IsScanned(name) {
 			// ⛔ A DIRECTORY SYMLINK IS NOT FOLLOWED — SAY SO (#1972).
 			// WalkDir lstat's every entry, so a symlink to a directory is a
 			// non-dir leaf here and, lacking a config name, used to be dropped
@@ -734,7 +731,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			// pays it once per such key on every tick. Only a directory link
 			// additionally pays EvalSymlinks. Repeats on every tick while the
 			// link exists, the same cadence as the dangling-target WARN below.
-			if fullTree && d.Type()&fs.ModeSymlink != 0 && !strings.HasPrefix(name, ".") {
+			if fullTree && d.Type()&fs.ModeSymlink != 0 && !confdname.IsHidden(name) {
 				if ti, terr := os.Stat(path); terr == nil && ti.IsDir() && !dirLinkTargetIsWalked(absRoot, path) {
 					logger.Printf("WARN: %s is a symlink to a directory and is not followed; config files under it are NOT loaded", path)
 					notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirLink})
@@ -745,7 +742,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if mode == walkRootCarriers && !confdname.IsDefaults(name) {
 			return nil
 		}
-		if mode == walkRootPlatform && !strings.HasPrefix(name, "_") {
+		if mode == walkRootPlatform && !confdname.IsReserved(name) {
 			return nil
 		}
 		// ⛔ A SYMLINKED FILE IS JUDGED BY ITS LINK *AND* ITS TARGET (#1969).
@@ -914,9 +911,17 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			// since phase 1 judged it is refused here without blocking.
 			var data []byte
 			var rerr error
-			if i == overlayAt {
+			switch {
+			case i == overlayAt:
 				data = append(make([]byte, 0, len(overlay.Data)), overlay.Data...) // never nil: Data marks "cached"
-			} else {
+			case mode == walkNamesOnly:
+				// Opened, judged (a directory or a special file is refused
+				// on the fd) and closed; never read.
+				var fh *os.File
+				if fh, _, rerr = OpenConfFile(e.abs); rerr == nil {
+					_ = fh.Close() // read-only fd, nothing read
+				}
+			default:
 				data, rerr = ReadConfFile(e.abs)
 			}
 			if rerr != nil {
@@ -934,29 +939,33 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				}
 				continue
 			}
-			f.Hash = fmt.Sprintf("%x", sha256.Sum256(data))
-			if pf == nil || pf.Hash != f.Hash {
-				f.Data = data
-			}
-			switch {
-			case strings.HasPrefix(name, "_"), mode == walkListOnly:
-				// Never parsed for tenants (ScanDirTreeFiles parses nothing).
-			case pf != nil && pf.Hash == f.Hash && !pf.ParseFailed:
-				// Same bytes as the prior: the declarations cannot differ, so
-				// carry them instead of parsing again. A prior that failed to
-				// parse is excluded on purpose — it must be re-parsed (and
-				// re-counted) every scan, see ParseFailed. Shared, not copied
-				// (immutable once built).
-				f.TenantIDs = pf.TenantIDs
-			default:
-				var partial ThresholdConfig
-				f.TenantIDs, partial, f.ParseFailed = parseTenantDecls(e.abs, data, obs, logger)
-				f.Parsed = true
-				if !f.ParseFailed {
-					if scan.Partials == nil {
-						scan.Partials = make(map[string]ThresholdConfig)
+			// ScanDirTreeNames opened and closed the file, never read it: no
+			// hash, no bytes, no declarations.
+			if mode != walkNamesOnly {
+				f.Hash = fmt.Sprintf("%x", sha256.Sum256(data))
+				if pf == nil || pf.Hash != f.Hash {
+					f.Data = data
+				}
+				switch {
+				case confdname.IsReserved(name), mode == walkListOnly:
+					// Never parsed for tenants (ScanDirTreeFiles parses nothing).
+				case pf != nil && pf.Hash == f.Hash && !pf.ParseFailed:
+					// Same bytes as the prior: the declarations cannot differ, so
+					// carry them instead of parsing again. A prior that failed to
+					// parse is excluded on purpose — it must be re-parsed (and
+					// re-counted) every scan, see ParseFailed. Shared, not copied
+					// (immutable once built).
+					f.TenantIDs = pf.TenantIDs
+				default:
+					var partial ThresholdConfig
+					f.TenantIDs, partial, f.ParseFailed = parseTenantDecls(e.abs, data, obs, logger)
+					f.Parsed = true
+					if !f.ParseFailed {
+						if scan.Partials == nil {
+							scan.Partials = make(map[string]ThresholdConfig)
+						}
+						scan.Partials[e.rel] = partial
 					}
-					scan.Partials[e.rel] = partial
 				}
 			}
 		}
@@ -1097,10 +1106,8 @@ func parseTenantDecls(absPath string, data []byte, obs ScanObserver, logger *log
 	cfg, perr := ParseTenantFile(data)
 	if perr != nil {
 		logger.Printf("WARN: skip unparseable file %q: %v", absPath, perr)
-		if obs != nil {
-			// Basename, not full path, to cap label cardinality (A-8d).
-			obs.IncParseFailure(filepath.Base(absPath))
-		}
+		// Basename, not full path, to cap label cardinality (A-8d).
+		observeParseFailure(obs, filepath.Base(absPath), perr)
 		return nil, ThresholdConfig{}, true
 	}
 	if len(cfg.Tenants) == 0 {
@@ -1227,7 +1234,7 @@ func overlayPlace(absRoot, rel string, n int, relOf func(int) string, unreadable
 	if path.Clean(rel) != rel || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "\\") {
 		return refuse("must be a clean path inside the config dir (no '..', no '.' segment, '/' only)")
 	}
-	if !IsScannedPath(rel) {
+	if !confdname.IsScannedPath(rel) {
 		return refuse("is not a name the walk reads (a hidden segment, or not a .yaml / .yml file)")
 	}
 	for i := 0; i < n; i++ {

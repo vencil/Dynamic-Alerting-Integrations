@@ -207,8 +207,9 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 // A write its own request's context stopped — the client went away, or the
 // request reached its deadline — is not the body's fault. PUT and
 // custom-alerts answer it as a direct batch does (writeWriteCancelled): 503
-// with msgWriteCancelled. Here the context is done before the write starts,
-// so the tree is unchanged; in general it need not be (msgWriteCancelled).
+// with msgWriteCancelled. The writer polls the request's context at
+// checkpoints only and never kills git with it, so a write stopped this way
+// has written nothing (#3173) — here the tree is checked to be unchanged.
 func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
 	t.Parallel()
 	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
@@ -266,29 +267,41 @@ func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
 	}
 }
 
-// msgWriteCancelled must not promise that nothing was written: a git command
-// that hit its own deadline (TENANT_API_GIT_TIMEOUT) wraps
-// context.DeadlineExceeded too and may already have moved the ref, so the
-// commit may have landed (#1535 review). It tells the caller to refresh first.
-func TestMsgWriteCancelled_DoesNotClaimNothingWritten(t *testing.T) {
+// #3173: the two 503 texts say opposite things, and each must say its own.
+// msgWriteCancelled answers only a write the writer knows is not committed
+// (its context stopped it at a checkpoint, or a git timeout it read the
+// branch back unmoved for): nothing written, safe to retry.
+// msgWriteOutcomeUnknown answers a ref update whose branch could not be read
+// back: it must not promise nothing was written, and tells the caller to
+// refresh first. (Before #3173 one text served both, so it could promise
+// neither.)
+func TestMsgWriteCancelledAndUnknown_SayTheirOwnOutcome(t *testing.T) {
 	t.Parallel()
 	lower := strings.ToLower(msgWriteCancelled)
-	for _, claim := range []string{"nothing was written", "nothing written", "not written", "before it was committed"} {
-		if strings.Contains(lower, claim) {
-			t.Errorf("msgWriteCancelled = %q claims %q, which a git command timed out after moving the ref would make false", msgWriteCancelled, claim)
+	for _, claim := range []string{"nothing was written", "safe to retry"} {
+		if !strings.Contains(lower, claim) {
+			t.Errorf("msgWriteCancelled = %q does not say %q", msgWriteCancelled, claim)
 		}
 	}
-	if !strings.Contains(lower, "refresh") {
-		t.Errorf("msgWriteCancelled = %q does not tell the caller to refresh before retrying", msgWriteCancelled)
+	lower = strings.ToLower(msgWriteOutcomeUnknown)
+	for _, claim := range []string{"nothing was written", "nothing written", "not written", "safe to retry"} {
+		if strings.Contains(lower, claim) {
+			t.Errorf("msgWriteOutcomeUnknown = %q claims %q, which a ref that did move would make false", msgWriteOutcomeUnknown, claim)
+		}
+	}
+	if !strings.Contains(lower, "refresh") || !strings.Contains(lower, "may have been committed") {
+		t.Errorf("msgWriteOutcomeUnknown = %q does not say it may be committed and to refresh before retrying", msgWriteOutcomeUnknown)
 	}
 }
 
 // The batch answers a cancelled or timed-out run with msgWriteCancelled, sync
-// (503) and per op alike, wrapped or not.
+// (503) and per op alike, wrapped or not — a git timeout (ErrGitTimeout) the
+// writer returned unwrapped from an unknown outcome is one it read the
+// branch back unmoved for (#3173).
 func TestBatch_CancelledAnswers(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
-		fmt.Errorf("git update-ref: %w", context.DeadlineExceeded)} {
+		fmt.Errorf("advance the serving branch: git update-ref: %w", gitops.ErrGitTimeout)} {
 		w := httptest.NewRecorder()
 		writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, err)
 		var got ErrorResponse
@@ -306,23 +319,25 @@ func TestBatch_CancelledAnswers(t *testing.T) {
 
 // A batch the writer saw committed is never the cancelled answer. Two
 // separate guarantees, one subtest each:
-//   - ordering: writeBatchFailure (sync) and batchTaskError (async) match the
-//     committed case before the cancelled one, so an error that IS both — a
-//     *gitops.BatchCommittedError joined with a context error — gets the 409 /
-//     task text saying it WAS committed. Moving the cancelled case first turns
-//     this subtest red.
+//   - an error that IS both — a *gitops.BatchCommittedError joined with a
+//     context error — gets the 409 / task text saying it WAS committed. Since
+//     #3173 isWriteCancelled itself refuses it (gitops.OutcomeOf is
+//     committed), and writeBatchFailure / batchTaskError also match the
+//     committed case first.
 //   - contract: gitops.BatchCommittedError unwraps to ErrConflict only, not to
 //     its Cause, so a committed batch whose cause is the context's is not
-//     isWriteCancelled at all. This subtest does not exercise the ordering:
-//     such an error could never reach the cancelled case whatever the order.
+//     isWriteCancelled at all.
 func TestBatch_CommittedWinsOverCancelled(t *testing.T) {
 	t.Parallel()
-	t.Run("ordering: an error both committed and cancelled answers committed", func(t *testing.T) {
+	t.Run("an error both committed and cancelled answers committed", func(t *testing.T) {
 		t.Parallel()
 		both := errors.Join(&gitops.BatchCommittedError{Commit: "abc123", Cause: errors.New("sync failed")}, context.DeadlineExceeded)
 		var committed *gitops.BatchCommittedError
-		if !errors.As(both, &committed) || !isWriteCancelled(both) {
-			t.Fatalf("precondition: %v must match both the committed and the cancelled case", both)
+		if !errors.As(both, &committed) || !errors.Is(both, context.DeadlineExceeded) {
+			t.Fatalf("precondition: %v must carry both the committed batch and the context error", both)
+		}
+		if isWriteCancelled(both) {
+			t.Errorf("isWriteCancelled(%v) = true for a committed batch", both)
 		}
 		w := httptest.NewRecorder()
 		writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, both)
@@ -347,20 +362,29 @@ func TestBatch_CommittedWinsOverCancelled(t *testing.T) {
 	})
 }
 
-// #1535 round 2: an async batch's Task.Error says nothing was written only
-// when that is what its error means. Cancelled or timed out, it is
-// msgWriteCancelled alone (as the sync 503 and the per-op results) — a git
-// command that hit its own deadline may already have moved the ref. Any
-// other failure keeps the "nothing was written" prefix (end to end on a
-// conflict: TestBatchConflict_SyncAndAsyncSayNothingWasWritten).
-func TestBatchTaskError_CancelledDoesNotClaimNothingWritten(t *testing.T) {
+// #1535 round 2, #3173: an async batch's Task.Error says nothing was written
+// only when that is what its error means. Cancelled, or a git timeout the
+// writer read the branch back unmoved for, it is msgWriteCancelled alone (as
+// the sync 503 and the per-op results). An unknown outcome is
+// msgWriteOutcomeUnknown alone, whatever its cause — never "nothing was
+// written". Any other failure keeps the "nothing was written" prefix (end to
+// end on a conflict: TestBatchConflict_SyncAndAsyncSayNothingWasWritten).
+func TestBatchTaskError_SaysWhatTheOutcomeIs(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
-		fmt.Errorf("git update-ref: %w", context.DeadlineExceeded)} {
+		fmt.Errorf("advance the serving branch: %w", gitops.ErrGitTimeout)} {
 		res := batchErrorResult("t-a", err, true)
 		te := batchTaskError(directBatchRun{Results: []BatchResult{res}, Err: err})
-		if te == nil || te.Error() != msgWriteCancelled || strings.Contains(te.Error(), "nothing was written") {
+		if te == nil || te.Error() != msgWriteCancelled {
 			t.Errorf("%v: task error = %v, want exactly %q", err, te, msgWriteCancelled)
+		}
+	}
+	for _, cause := range []error{gitops.ErrGitTimeout, errors.New("exit status 1"), gitops.ErrWriteOverloaded} {
+		err := &gitops.WriteOutcomeUnknownError{Commit: "abc123", Cause: fmt.Errorf("advance the serving branch: %w", cause)}
+		res := batchErrorResult("t-a", err, true)
+		te := batchTaskError(directBatchRun{Results: []BatchResult{res}, Err: err})
+		if te == nil || te.Error() != msgWriteOutcomeUnknown || res.Message != msgWriteOutcomeUnknown {
+			t.Errorf("unknown (%v): task error = %v, op message = %q, want exactly %q", cause, te, res.Message, msgWriteOutcomeUnknown)
 		}
 	}
 	other := errors.New("git commit: exit status 1")
@@ -371,7 +395,8 @@ func TestBatchTaskError_CancelledDoesNotClaimNothingWritten(t *testing.T) {
 }
 
 // End to end: an async batch whose own deadline (WriteTimeout) is already
-// over when it runs fails with msgWriteCancelled, not "nothing was written".
+// over when it runs stops at a checkpoint and fails with msgWriteCancelled
+// alone, not the generic "batch failed" text.
 func TestAsyncBatch_TimedOutTaskSaysWriteCancelled(t *testing.T) {
 	t.Parallel()
 	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
@@ -394,7 +419,7 @@ func TestAsyncBatch_TimedOutTaskSaysWriteCancelled(t *testing.T) {
 		t.Fatalf("no task id: %d %s", w.Code, w.Body.String())
 	}
 	task := pollUntilTerminal(t, tasks, acc.TaskID, 20*time.Second)
-	if task.Status != async.TaskFailed || task.Error != msgWriteCancelled || strings.Contains(task.Error, "nothing was written") {
+	if task.Status != async.TaskFailed || task.Error != msgWriteCancelled {
 		t.Errorf("task = status %q error %q, want failed with exactly %q", task.Status, task.Error, msgWriteCancelled)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, "t-a.yaml")); string(got) != tenantYAML {
