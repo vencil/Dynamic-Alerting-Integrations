@@ -214,7 +214,11 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"file's content. With --config-dir, or with --names.")
 	fs.StringVar(&f.names, "names", "",
 		"Names mode (with --list-only, without --config-dir): classify the base names in\n"+
-			"this file ('-' = stdin), a JSON array of strings, by name alone.")
+			"this file ('-' = stdin), a JSON array of strings, by name alone. Known limit: a\n"+
+			"lone UTF-16 surrogate escape in a string (\"\\ud800\") is read as U+FFFD, as\n"+
+			"encoding/json reads it, so the entry answers for that other name (exit 0); a\n"+
+			"caller that may hold such a name refuses it before asking (no ConfigMap key or\n"+
+			"file name can hold one).")
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --path <rel> --input <file|->\n", programName, parseTreeCmd)
@@ -251,8 +255,10 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"  config          a config file. Readers read it; a \"problem\" says their read fails\n"+
 			"                  (a stat or open refused for any reason but the ones below, EIO, a\n"+
 			"                  content kind in tree and file mode).\n"+
-			"  not_a_file      the exporter's walk cannot reach a regular file there: a config-named\n"+
-			"                  directory, a symlink to a directory, a FIFO / socket / device (or a\n"+
+			"  dir             a directory the walk goes into and lists — every one has an entry;\n"+
+			"                  a config-named one (x.yaml/) too, with a not_regular_file problem.\n"+
+			"  not_a_file      the exporter's walk cannot reach a regular file there and does not\n"+
+			"                  go into it: a symlink to a directory, a FIFO / socket / device (or a\n"+
 			"                  link to one), a stat that finds nothing (a dangling link, a looping\n"+
 			"                  link, a chain of more than 40 links even when it ends at a file).\n"+
 			"  unlistable_dir  a directory whose contents could not be listed (\".\" for the root):\n"+
@@ -509,7 +515,11 @@ func notFileEntry(rel, reason string) ([]string, string) {
 	case config.NotFileDirLink:
 		return []string{readerGenerator}, "a symlink to a directory the walk does not follow"
 	}
-	return []string{readerGenerator}, "a directory with a config file name"
+	// A config-named directory: the walk descends it like any directory
+	// (role dir), so both readers go into it; the problem says only that its
+	// name looks like a file's.
+	return []string{readerExporter, readerGenerator},
+		"a directory with a config file name (the walk descends it; its files are read)"
 }
 
 // fileOnDisk is the tree-mode entry of an existing rel that is not a regular

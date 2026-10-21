@@ -235,7 +235,7 @@ func TestParseTree_PathKinds(t *testing.T) {
 	if got := unreadableKinds(doc); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unreadable\n got %v\nwant %v", got, want)
 	}
-	if r := readersOf(doc)["dir.yaml"]; !reflect.DeepEqual(r, []string{"generator"}) {
+	if r := readersOf(doc)["dir.yaml"]; !reflect.DeepEqual(r, []string{"exporter", "generator"}) {
 		t.Fatalf("dir.yaml readers %v", r)
 	}
 	if _, ok := doc["files"].(map[string]any)["dir.yaml/x.yaml"]; !ok {

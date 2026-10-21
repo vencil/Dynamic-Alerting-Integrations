@@ -97,7 +97,7 @@ func withRole(e parseTreeEntry, role config.Role) parseTreeEntry {
 	if role != config.RoleConfig {
 		e.DefaultsDocument = false
 	}
-	if role == config.RoleUnlistableDir {
+	if role == config.RoleUnlistableDir || role == config.RoleDir {
 		e.Class, e.TenantNamed = classDirectory, ""
 	}
 	return e
@@ -167,7 +167,22 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 	for _, nf := range scan.NotFiles {
 		idx.Entries = append(idx.Entries, notFileAsEntry(nf))
 	}
+	for _, d := range scan.Dirs {
+		e := withRole(nameEntry(d), config.RoleDir)
+		e.Readers = []string{readerExporter, readerGenerator}
+		idx.Entries = append(idx.Entries, e)
+	}
 	sort.SliceStable(idx.Entries, func(i, j int) bool { return idx.Entries[i].Path < idx.Entries[j].Path })
+	// One entry per path is the document's contract (a reader refuses a
+	// document that breaks it). The walk keeps it at its source; checked
+	// here too, so a walk that breaks it fails HERE, naming the path,
+	// instead of in a reader that can only refuse the whole document.
+	for i := 1; i < len(idx.Entries); i++ {
+		if idx.Entries[i].Path == idx.Entries[i-1].Path {
+			return fmt.Errorf("the walk recorded %q twice; the index holds one entry "+
+				"per path (a da-guard defect, not the tree's)", idx.Entries[i].Path)
+		}
+	}
 	return nil
 }
 

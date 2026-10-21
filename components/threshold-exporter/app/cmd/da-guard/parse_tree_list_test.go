@@ -187,9 +187,11 @@ func TestParseTree_ListEntriesAreTreeEntries(t *testing.T) {
 		{"team/_domain_policy.yaml", classPlatform, "", 1, false, cfg, ""},
 		{"team/sub/t3.yml", classTenant, "t3", 2, false, cfg, ""},
 		{"broken.yaml", classTenant, "broken", 0, false, cfg, ""}, // list mode reads nothing
-		{"notes.yaml", classDirectory, "", 0, false, naf, "not_regular_file"},
+		// A config-named directory is descended (role dir); its problem says
+		// its name looks like a file's.
+		{"notes.yaml", classDirectory, "", 0, false, "dir", "not_regular_file"},
 		// A directory is no document, whatever its name.
-		{"_defaults-x.yaml", classDirectory, "", 0, false, naf, "not_regular_file"},
+		{"_defaults-x.yaml", classDirectory, "", 0, false, "dir", "not_regular_file"},
 		{"notes.yaml/inner.yaml", classTenant, "inner", 1, false, cfg, ""},
 		{"elsewhere", classDirectory, "", 0, false, naf, "not_regular_file"},
 		// A stat that found nothing (ENOENT, ELOOP): provably no file.
@@ -253,7 +255,7 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 	}
 	want := map[string]string{
 		"locked.yaml": "config", "denied.yaml": "config", "_defaults.yaml": "config", "future.yaml": "config",
-		"gone.yaml": "not_a_file", "queue.yaml": "not_a_file", "d.yaml": "not_a_file", "l.yaml": "not_a_file",
+		"gone.yaml": "not_a_file", "queue.yaml": "not_a_file", "d.yaml": "dir", "l.yaml": "not_a_file",
 		"sub": "unlistable_dir", ".": "unlistable_dir",
 	}
 	list, err := parseTreeListOf(scan)
@@ -341,6 +343,80 @@ func TestParseTreeList_CallerErrors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bad, "t\xff.yaml"), []byte("a: 1\n"), 0o600); err == nil {
 		if code, _, msg := runPTList(t, "", "--config-dir", bad); code != exitCallerErr || !strings.Contains(msg, "UTF-8") {
 			t.Errorf("non-UTF-8 name: exit %d, %q", code, msg)
+		}
+	}
+}
+
+// TestWalkEntries_RefusesAPathRecordedTwice: one entry per path is the
+// document's contract. A walk that records a path twice (as one once did for
+// a config-named directory it could not list) fails here, naming the path,
+// in every mode — instead of writing a document every reader refuses whole.
+func TestWalkEntries_RefusesAPathRecordedTwice(t *testing.T) {
+	scan := &config.TreeScan{
+		AbsRoot:  t.TempDir(),
+		Keys:     []string{"a.yaml"},
+		NotFiles: []config.NotFile{{RelKey: "a.yaml", Reason: config.NotFileDirectory}},
+	}
+	if _, err := parseTreeListOf(scan); err == nil || !strings.Contains(err.Error(), `"a.yaml" twice`) {
+		t.Fatalf("list mode: err = %v, want the path named as recorded twice", err)
+	}
+	if _, err := parseTreeOf(scan); err == nil || !strings.Contains(err.Error(), `"a.yaml" twice`) {
+		t.Fatalf("tree mode: err = %v, want the path named as recorded twice", err)
+	}
+	scan.NotFiles = nil
+	if _, err := parseTreeListOf(scan); err != nil {
+		t.Fatalf("control, one record per path: %v", err)
+	}
+}
+
+// TestParseTree_EveryEnteredDirectoryHasAnEntry: the index is complete
+// (#3206) — every directory the walk enters is an entry of role "dir", in
+// list and tree mode alike: a plain one with no problem, a config-named one
+// (`x.yaml/`, descended, its files read) with a not_regular_file problem. A
+// symlink to a directory is never entered: not_a_file. A hidden directory is
+// not walked, so not listed. Without this a reader had to list directories
+// itself and judge them, and judged a skipped link "already nested".
+func TestParseTree_EveryEnteredDirectoryHasAnEntry(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, d := range []string{"team/sub", "x.yaml", ".git", "outside"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for p, body := range map[string]string{"team/sub/t.yaml": "tenants: {t: {}}\n",
+		"x.yaml/i.yaml": "tenants: {i: {}}\n", ".git/h.yaml": "x: 1\n"} {
+		if err := os.WriteFile(filepath.Join(root, p), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	want := map[string][2]string{ // path → role, problem kind
+		"team": {"dir", ""}, "team/sub": {"dir", ""}, "outside": {"dir", ""},
+		"x.yaml": {"dir", "not_regular_file"}, "link": {"not_a_file", "not_regular_file"},
+		"team/sub/t.yaml": {"config", ""}, "x.yaml/i.yaml": {"config", ""},
+	}
+	for _, mode := range [][]string{nil, {"--list-only"}} {
+		code, doc, msg := runPT(t, "", append(mode, "--config-dir", root)...)
+		if code != exitOK {
+			t.Fatalf("%v: exit %d: %s", mode, code, msg)
+		}
+		got := map[string][2]string{}
+		for p, e := range entriesByPath(t, doc) {
+			kind := ""
+			if pr, ok := e["problem"].(map[string]any); ok {
+				kind = pr["kind"].(string)
+			}
+			got[p] = [2]string{e["role"].(string), kind}
+			if e["role"] == "dir" && (e["class"] != classDirectory || len(e["readers"].([]any)) != 2) {
+				t.Errorf("%v %s: a dir entry %v", mode, p, e)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: entries\n got  %v\n want %v", mode, got, want)
 		}
 	}
 }
