@@ -15,8 +15,10 @@ import { render, screen, waitFor, renderHook, within, fireEvent } from '@testing
 import TenantManager from '../src/interactive/tools/tenant-manager.jsx';
 import { useTenantData } from '../src/interactive/tools/tenant-manager/hooks/useTenantData.js';
 import { TenantCard } from '../src/interactive/tools/tenant-manager/components/TenantCard.jsx';
+import { apiFixture } from './helpers/api-fixture';
 
-const searchBody = {
+// GET /api/v1/tenants/search's body, held to the swagger spec (#2833).
+const searchBody = apiFixture('SearchResponse', {
   items: [
     { id: 't-broken', config_error: 'malformed_yaml' },
     { id: 't-healthy', environment: 'prod', domain: 'finance',
@@ -26,9 +28,10 @@ const searchBody = {
   total_matched: 3,
   page_size: 500,
   next_offset: null,
-};
+});
 
 function stubSearch(body: unknown) {
+  apiFixture('SearchResponse', body);
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     if (String(url).startsWith('/api/v1/tenants/search')) {
       return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(body) });

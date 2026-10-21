@@ -15,8 +15,10 @@ import {
   operationalModeFromSummary,
   derivationNoticeFromSearch,
 } from '../src/interactive/tools/tenant-manager/utils/operational-mode.js';
+import { apiFixture } from './helpers/api-fixture';
 
-const searchBody = {
+// GET /api/v1/tenants/search's body, held to the swagger spec (#2833).
+const searchBody = apiFixture('SearchResponse', {
   items: [
     // raw `disable` is non-empty: must NOT read as maintenance
     { id: 't-maint-off', environment: 'prod', maintenance: 'disable',
@@ -37,7 +39,7 @@ const searchBody = {
     config_loaded_at: '2099-01-01T00:00:00Z',
     parse_failed_files: ['t-broken.yaml'],
   },
-};
+});
 
 describe('operationalModeFromSummary', () => {
   it('maintenance: "disable" with maintenance_active=false is not maintenance', () => {

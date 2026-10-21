@@ -7,6 +7,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { TenantCard } from '../src/interactive/tools/tenant-manager/components/TenantCard.jsx';
+import { apiFixture } from './helpers/api-fixture';
+
+// A pending PR exactly as GET /api/v1/prs sends it (PRInfo, #2833): the link
+// is `web_url`. apiFixture rejects any field the API does not send, so the
+// old hand-written `html_url` shape can no longer pass here.
+const pendingPR = apiFixture('PRInfo', {
+  number: 42,
+  title: 'tenant config update',
+  head_ref: 'tenant-api/update-t-1',
+  tenant_id: 't-1',
+  state: 'open',
+  mergeable: '',
+  created_at: '2099-01-01T00:00:00Z',
+  web_url: 'https://git.example.com/org/repo/pull/42',
+});
 
 const tenantData = {
   environment: 'production',
@@ -54,14 +69,15 @@ describe('TenantCard', () => {
         data={tenantData}
         isSelected={false}
         isHovered={false}
-        pendingPR={{ html_url: 'https://github.com/org/repo/pull/42', number: 42 }}
+        pendingPR={pendingPR}
         modeColors={modeColors}
         {...noopHandlers}
       />,
     );
     const link = screen.getByText(/PR #42/);
     expect(link).toBeInTheDocument();
-    expect(link.closest('a')?.getAttribute('href')).toBe('https://github.com/org/repo/pull/42');
+    // #2833: the href is the API's web_url, not a field the API never sends.
+    expect(link.closest('a')?.getAttribute('href')).toBe(pendingPR.web_url);
   });
 
   it('omits pending-PR badge when pendingPR is null', () => {

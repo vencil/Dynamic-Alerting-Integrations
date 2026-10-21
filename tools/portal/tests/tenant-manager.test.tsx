@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import TenantManager from '../src/interactive/tools/tenant-manager.jsx';
 import { DEMO_TENANTS, DEMO_GROUPS } from '../src/interactive/tools/tenant-manager/fixtures/demo-tenants.js';
+import { apiFixture } from './helpers/api-fixture';
 
 // useTenantData ESM-imports DEMO_TENANTS / DEMO_GROUPS (TRK-230z Wave 2 — the
 // former window.__DEMO_* registration is gone). Mock the fixtures module so the
@@ -213,6 +214,7 @@ describe('TenantManager — LD-7 IdentityStrip', () => {
   // Build a fetch stub that returns `meBody` (200) for /api/v1/me and
   // rejects everything else (→ DEMO fixtures + no pending PRs).
   function stubFetchWithMe(meBody: any) {
+    apiFixture('MeResponse', meBody); // #2833: a /me body the API can actually send
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
@@ -330,6 +332,7 @@ describe('TenantManager — LD-6 P7 org badges / access scope / callout', () => 
   const SCOPE_CALLOUT_KEY = 'da_tm_scope_callout_v1';
 
   function stubFetchWithMe(meBody: any) {
+    apiFixture('MeResponse', meBody); // #2833: a /me body the API can actually send
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
@@ -666,5 +669,53 @@ describe('TenantManager — P7c /me access posture (#962 follow-up #6)', () => {
     // …and the demo default canWrite=true keeps the write affordances live.
     const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
     expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * #2833: the pending-PR links read the URL field GET /api/v1/prs actually
+ * sends (PRInfo.web_url). The body goes through apiFixture, so it can only
+ * carry fields the swagger spec declares — the old `html_url` reading had
+ * no API field behind it and rendered `href` absent.
+ */
+describe('TenantManager — pending PRs link to web_url (#2833)', () => {
+  const tenant = Object.keys(DEMO_TENANTS)[0];
+  const PRS = apiFixture('PRListResponse', {
+    pending_prs: [
+      {
+        number: 101,
+        title: 'tenant config update',
+        head_ref: `tenant-api/update-${tenant}`,
+        tenant_id: tenant,
+        state: 'open',
+        mergeable: '',
+        created_at: '2099-01-01T00:00:00Z',
+        web_url: 'https://git.example.com/org/repo/pull/101',
+      },
+    ],
+    count: 1,
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (String(url).includes('/api/v1/prs')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(PRS) } as any);
+        }
+        return Promise.reject(new Error('offline test'));
+      }),
+    );
+  });
+
+  it('the banner link and the tenant card badge both point at web_url', async () => {
+    await renderAndSettle();
+    const banner = await screen.findByText(/1 pending PR — config changes awaiting review/);
+    const bannerBox = banner.closest('[role="status"]') as HTMLElement;
+    const bannerLink = within(bannerBox).getByText('#101').closest('a');
+    expect(bannerLink?.getAttribute('href')).toBe(PRS.pending_prs[0].web_url);
+
+    const badge = await screen.findByText(/PR #101/);
+    expect(badge.closest('a')?.getAttribute('href')).toBe(PRS.pending_prs[0].web_url);
   });
 });
