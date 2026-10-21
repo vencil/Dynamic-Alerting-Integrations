@@ -599,25 +599,10 @@ def s_yaml_date():
 """)
 
 
-# Scenario 18: `!!binary` values: the payload's UTF-8 text (ASCII and CJK).
-# ⛔ An INVALID UTF-8 byte cannot be a golden row: golden.json stores
-# effective_config as JSON text, which cannot hold that byte, so the Go
-# EffectiveConfig / ResolveEffective legs would compare the exporter's
-# six-character escape (backslash, `ufffd`) with a real U+FFFD and go red
-# on a correct pair. That
-# shape's Go rendering is pinned in tests/dx/test_describe_tenant.py.
-def s_yaml_binary():
-    d = reset("mixed-mode") / "yaml-binary"
-    write(d / "tenants.yaml", """tenants:
-  tenant-binary:
-    _routing:
-      receiver:
-        type: "webhook"
-        url: !!binary aHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS9hbGVydHM=
-    _silent_mode:
-      target: "warning"
-      reason: !!binary 5Lit5paH
-""")
+# Scenario 18 was `!!binary` values (their UTF-8 text, #2371). Since ADR-036
+# step 6 (#3206) every plane refuses a file holding `!!binary` (parse-tree's
+# tag_not_allowed), so there is no value to describe; the scenario is gone
+# (pkg/config parse_verdict_test.go pins the refusal).
 
 
 # Scenario 19: non-string mapping KEYS below the tenant id (#2371). yaml.v3
@@ -691,7 +676,6 @@ SCENARIOS = [
     ("served-root", "tenant-served-root", None),
     ("served-disable", "tenant-served-disable", s_served_disable),
     ("yaml-date", "tenant-date", s_yaml_date),
-    ("yaml-binary", "tenant-binary", s_yaml_binary),
     ("yaml-keys", "tenant-keys", s_yaml_keys),
     ("yaml-numbers", "tenant-numbers", s_yaml_numbers),
 ]
@@ -759,7 +743,6 @@ def main() -> int:
         "served-root": "served-chain",
         "served-disable": "served-disable",
         "yaml-date": "mixed-mode",
-        "yaml-binary": "mixed-mode",
         "yaml-keys": "mixed-mode",
         "yaml-numbers": "mixed-mode",
     }

@@ -17,15 +17,17 @@ import (
 // document happened to read. Each body below keeps a well-formed own section
 // (URL id db-a) and smuggles a db-shared section past that decode.
 //
-// want is a substring of the refusal, so each case proves the NEW gate refused
-// it rather than some unrelated later check.
+// want is a substring of the refusal, so each case proves which gate refused
+// it. Since #3206 that is parse-tree's verdict (validateShape, confd.Judge)
+// for every shape it refuses; a root merge key parse-tree reads (it expands
+// it) is refused by the #3064 API-shape rule (TenantFileManagement).
 var yamlShapeBypasses = []struct{ name, body, want string }{
 	{
 		// The end-of-document marker closes the first document; the second one
 		// is a parse error, which the old extra-document count read as EOF.
 		"end marker then an unparseable document",
 		ownOnly + "...\ntenants:\n  db-shared:\n    _silent_mode: \"critical\"\n",
-		"invalid YAML in document 2",
+		"kind syntax_error",
 	},
 	{
 		// The struct decode never walks zzz, so the bad tag in it goes unseen;
@@ -33,50 +35,51 @@ var yamlShapeBypasses = []struct{ name, body, want string }{
 		// the extra-document count.
 		"unknown root key hiding a bad tag",
 		ownOnly + "zzz: !!int \"abc\"\n---\ntenants:\n  db-shared:\n    _silent_mode: \"critical\"\n",
-		"invalid YAML in document 1",
+		"kind multiple_documents",
 	},
 	{
 		"root merge key before the own section",
 		"<<: &x\n  tenants:\n    db-shared:\n      _silent_mode: \"critical\"\n" + ownOnly,
-		"merge key (<<) at the root",
+		"no other tenant",
 	},
 	{
 		"root merge key after the own section",
 		ownOnly + "<<:\n  tenants:\n    db-shared:\n      _silent_mode: \"critical\"\n",
-		"merge key (<<) at the root",
+		"no other tenant",
 	},
 	{
 		"root merge key in sequence form",
 		"<<: [&a {tenants: {db-shared: {_silent_mode: \"critical\"}}}]\n" + ownOnly,
-		"merge key (<<) at the root",
+		"no other tenant",
 	},
 	// A root key that is not a string makes CheckTenantRootKeys' map[string]any
 	// decode fail (it then reports nothing), while the generic decode falls back
 	// to map[any]any and succeeds — so neither saw the extra root content.
+	// parse-tree refuses a null key outright (null_key), before either decode.
 	{
 		"null root key (~)",
 		ownOnly + "~: {tenants: {db-shared: {_silent_mode: critical}}, defaults: {cpu_critical: 1}}\n",
-		"YAML root keys must be plain strings",
+		"kind null_key",
 	},
 	{
 		"null root key (null)",
 		ownOnly + "null: {tenants: {db-shared: {_silent_mode: critical}}}\n",
-		"YAML root keys must be plain strings",
+		"kind null_key",
 	},
 	{
 		"null root key (NULL)",
 		ownOnly + "NULL: {tenants: {db-shared: {_silent_mode: critical}}}\n",
-		"YAML root keys must be plain strings",
+		"kind null_key",
 	},
 	{
 		"empty explicit root key",
 		ownOnly + "? \n: {tenants: {db-shared: {_silent_mode: critical}}}\n",
-		"YAML root keys must be plain strings",
+		"kind null_key",
 	},
 	{
 		"null key in a flow root",
 		"{tenants: {db-a: {_silent_mode: warning}}, ~: {tenants: {db-shared: {_silent_mode: critical}}}}\n",
-		"YAML root keys must be plain strings",
+		"kind null_key",
 	},
 }
 
@@ -147,11 +150,10 @@ func TestWriteAcceptsLegalYAMLShapes(t *testing.T) {
 		{"CRLF line endings", strings.ReplaceAll(own, "\n", "\r\n")},
 		{"UTF-8 BOM", "\ufeff" + own},
 		{"leading document marker", "---\n" + own},
-		{"trailing empty document", own + "---\n"},
 		{"end-of-document marker alone", own + "...\n"},
 		{"end-of-document marker then a comment", own + "...\n# trailing note\n"},
-		{"trailing comment-only document", own + "---\n# nothing here\n"},
-		{"trailing null document", own + "---\n~\n"},
+		// A trailing `---` (empty, comment-only or `~`) is refused since
+		// #3206: TestValidateShape_ParseTreeVerdict.
 		{"TAG directive", "%TAG !e! tag:example.com,2000:\n---\n" + own},
 		{"YAML 1.1 directive", "%YAML 1.1\n---\n" + own},
 		{"no trailing newline", strings.TrimSuffix(own, "\n")},

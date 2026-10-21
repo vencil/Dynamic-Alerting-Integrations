@@ -71,7 +71,18 @@ var invalidConfigTable = []struct {
 	{"tenant pattern: one bad entry among good ones", tenantPatternYAML(`"db-a-*", "**"`), "invalid tenant pattern"},
 	// Unparseable YAML.
 	{"malformed YAML", "{{not valid yaml", ""},
+	// parse-tree's verdict (ADR-036 §7 step 7, #3206): yaml.v3 alone reads
+	// each of these — the first document, a `!!binary` or `!` value as a
+	// string — so before the verdict they loaded, the rules after a `---`
+	// silently gone. Now each is a load error like the rows above.
+	{"parse-tree: second document", parseTreeRuleR + "---\ngroups:\n  - name: w\n    tenants: [\"*\"]\n    permissions: [write]\n", "kind multiple_documents"},
+	{"parse-tree: trailing empty document", parseTreeRuleR + "---\n", "kind multiple_documents"},
+	{"parse-tree: !!binary rule name", "groups:\n  - name: !!binary cg==\n    tenants: [\"*\"]\n    permissions: [read]\n", "kind tag_not_allowed"},
+	{"parse-tree: non-specific tag", "groups:\n  - name: r\n    tenants: [\"*\"]\n    permissions: [! read]\n", "kind non_specific_tag"},
 }
+
+// parseTreeRuleR is a valid one-rule config the parse-tree rows extend.
+const parseTreeRuleR = "groups:\n  - name: r\n    tenants: [\"*\"]\n    permissions: [read]\n"
 
 // Initial-load failures = NewManager error (main.go treats it as FATAL: the
 // rbac gate is the only enforcement layer, an unparseable/invalid policy is

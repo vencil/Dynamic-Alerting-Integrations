@@ -124,6 +124,11 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 // failure: those errors (e.g. the resolver's ReadDir) carry server paths.
 const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf.d; see the server log"
 
+// msgGitDriverConfigured is the fixed text for a dry-run refused because
+// the server's git config names a filter, diff or merge driver (#3175):
+// every write is refused for it too, as a 500 INTERNAL_ERROR.
+const msgGitDriverConfigured = "the server cannot check or write tenant files: its git configuration is refused; see the server log"
+
 // dryRunRefusalMessage turns a refusal that would come BEFORE validation into
 // Warnings text. This route needs only read permission, so only two errors
 // pass through verbatim — the reserved-id and invalid-id refusals (the latter
@@ -166,6 +171,11 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	case errors.Is(err, gitops.ErrTenantFileDirty):
 		slog.Warn("tenant dry-run: tenant file differs from HEAD", "error", err)
 		return msgTenantFileDirty
+	case errors.Is(err, gitops.ErrGitDriverConfigured):
+		// #3175: the server's git config, not the request: fixed text, the
+		// keys in the log.
+		slog.Error("tenant dry-run: refused, git config names a driver program", "error", err)
+		return msgGitDriverConfigured
 	default:
 		slog.Error("tenant dry-run: cannot resolve tenant file", "error", err)
 		return msgTenantFileUnresolved

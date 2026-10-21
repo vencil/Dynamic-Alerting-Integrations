@@ -347,27 +347,6 @@
     "tenant_id": "tenant-date"
   },
   {
-    "defaults_chain": [],
-    "effective_config": {
-      "_routing": {
-        "receiver": {
-          "type": "webhook",
-          "url": "https://hooks.example.com/alerts"
-        }
-      },
-      "_silent_mode": {
-        "reason": "\u4e2d\u6587",
-        "target": "warning"
-      }
-    },
-    "fixture_dir": "mixed-mode",
-    "merged_hash": "955ff9d9f97759d3",
-    "scenario": "yaml-binary",
-    "source_file": "yaml-binary/tenants.yaml",
-    "source_hash": "a1f71016aed84237",
-    "tenant_id": "tenant-binary"
-  },
-  {
     "defaults_chain": [
       "yaml-keys/_defaults.yaml"
     ],

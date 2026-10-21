@@ -62,8 +62,8 @@ func TestValidate_InvalidYAML(t *testing.T) {
 	if len(errs) == 0 {
 		t.Error("expected errors for invalid YAML")
 	}
-	if !strings.Contains(errs[0], "invalid YAML") {
-		t.Errorf("expected 'invalid YAML' in error, got: %s", errs[0])
+	if !strings.Contains(errs[0], "kind syntax_error") {
+		t.Errorf("expected parse-tree's syntax_error in error, got: %s", errs[0])
 	}
 }
 

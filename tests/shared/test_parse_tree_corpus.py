@@ -1,7 +1,7 @@
 """Python half of tests/shared/parse_tree_corpus.json (#2897, ADR-036 §2).
 
 `da-guard parse-tree` refuses a CLOSED LIST of shapes — the ones whose
-meaning is ambiguous between YAML readers (the kinds of internal/parsetree;
+meaning is ambiguous between YAML readers (the kinds of pkg/parsetree;
 owner decision on ADR-036 §2, option B). Everything else it reads as yaml.v3
 reads it, including files today's route generator refuses only because
 PyYAML does (a TAB separator, a duplicate anchor, deep nesting, …); the
@@ -38,7 +38,7 @@ Rows:
   here against the generator verdict.
 
 The Go half
-(components/threshold-exporter/app/internal/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
+(components/threshold-exporter/app/pkg/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
 
 Regenerate (never edit by hand):
 
@@ -75,7 +75,7 @@ MERGE_KEY_CATEGORIES_PATH = Path(__file__).parent / "parse_tree_merge_key_catego
 STRICTER = "stricter than today"
 
 # The closed list: every kind parse-tree refuses a file for
-# (internal/parsetree Kinds; the Go test asserts the two are one set), and
+# (pkg/parsetree Kinds; the Go test asserts the two are one set), and
 # the subset it can give a text (the other two are about the path, covered
 # by da-guard's own tests).
 CLOSED_LIST = ("read_failure", "not_regular_file", "invalid_utf8", "bom_not_at_start",
@@ -217,18 +217,18 @@ _ROWS: tuple[tuple, ...] = (
      None, None),
     # ── non_specific_tag ──
     ("nonspecific-plain", "t.yaml", "tenants:\n  t1:\n    a: ! 123\n", None, "unreadable:non_specific_tag",
-     "stricter than today: PyYAML reads `! 123` as a string, yaml.v3 as an int", "ADR-036 §8"),
+     "stricter than today: PyYAML and yaml.v3 both read the int 123", "ADR-036 §8"),
     ("nonspecific-quoted", "t.yaml", "tenants:\n  t1:\n    a: ! \"x\"\n", None,
      "unreadable:non_specific_tag",
-     "stricter than today: the vendored patch keeps `!`, upstream yaml.v3 drops it", "ADR-036 §8"),
+     "stricter than today: PyYAML and yaml.v3 both read the string \"x\"", "ADR-036 §8"),
     ("nonspecific-merge-key-alias", "t.yaml",
      "x-b: &b {cpu: 1}\ntenants:\n  t1: {! \"<<\": *b}\n", None, "unreadable:non_specific_tag",
-     "stricter than today: PyYAML and the vendored yaml.v3 merge, upstream yaml.v3 reads a key \"<<\"",
+     "stricter than today: PyYAML merges, yaml.v3 reads a key \"<<\"",
      "ADR-036 §8"),
     ("nonspecific-slo-objective", "t.yaml",
      "tenants:\n  t1:\n    _custom_alerts:\n    - name: x\n      slo:\n        objective: ! \"99.9\"\n",
      None, "unreadable:non_specific_tag",
-     "stricter than today: the exporter refuses the objective today, upstream yaml.v3 would accept it", "ADR-036 §8"),
+     "stricter than today: PyYAML reads the float 99.9, yaml.v3 the string \"99.9\"", "ADR-036 §8"),
     ("nonspecific-mapping", "t.yaml", "tenants: !\n  t1: {a: 1}\n", None, "unreadable:non_specific_tag",
      "stricter than today: `!` on a mapping", None),
     ("nonspecific-verbatim", "t.yaml", "tenants:\n  t1:\n    a: !<!> x\n", None,
@@ -393,7 +393,7 @@ def _render() -> str:
         "file is that corpus's `doc`, as `_domain_policy.yaml`); their categories",
         "are in parse_tree_merge_key_categories.json. `id`: the first 16 hex",
         "digits of the sha256 of the file. Go half:",
-        "components/threshold-exporter/app/internal/parsetree/corpus_test.go.",
+        "components/threshold-exporter/app/pkg/parsetree/corpus_test.go.",
     ]
     doc = {"_comment": comment, "pyyaml": yaml.__version__, "closed_list": list(CLOSED_LIST),
            "text_kinds": list(TEXT_KINDS)}
@@ -607,25 +607,20 @@ def test_oracle_cap_fails_loudly(monkeypatch) -> None:
 
 
 
-# The ADR-036 §9 window that step 4 (#2906) closed: files only PyYAML
-# refuses, in a tenant file of a tree with no routing key. da-guard's default
-# run passes such a tree (exit 0, nothing undetermined); before step 4 the
-# generator (PyYAML) refused the whole file, so CI had to run both. The rows
-# are defined by the corpus, not by a hand-copied list: category pyyaml_only
-# and a file name not starting with `_` (an `_` file the generator reads is
-# undetermined evidence by name). The Go half,
-# TestPyYAMLOnlyRows_PassDaGuardDefaultRun in
-# components/threshold-exporter/app/cmd/da-guard/pyyaml_only_window_test.go,
-# MEASURES the rows da-guard passes and asserts they are exactly this set;
-# this half asserts the generator, reading parse-tree's JSON since step 4,
-# now reads each of them too — the two agree, so the window is gone.
-_WINDOW_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
-_WINDOW_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
+# Files only PyYAML refuses (corpus category `pyyaml_only`), as a tenant file
+# of a tree with no routing key: the route generator reads conf.d through
+# da-guard parse-tree (ADR-036), so it must read each of them as yaml.v3
+# does, not refuse it the way a PyYAML read would. The rows are defined by
+# the corpus, not by a hand-copied list: category pyyaml_only and a file
+# name not starting with `_` (an `_` file the generator reads is
+# undetermined evidence by name, so it cannot stand for "a tenant file").
+_PYYAML_ONLY_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_PYYAML_ONLY_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
 _GENERATE_ROUTES = REPO_ROOT / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 
 
-def in_pyyaml_only_window(row: dict) -> bool:
-    """The corpus's definition of the window (same predicate as the Go half)."""
+def is_pyyaml_only_tenant_file(row: dict) -> bool:
+    """A corpus row only PyYAML refuses, written as a tenant file."""
     return row["category"] == "pyyaml_only" and not row["file"].startswith("_")
 
 
@@ -633,8 +628,8 @@ def _generate_routes_strict(extra: dict[str, bytes] | None) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as d:
         confd = Path(d) / "conf.d"
         confd.mkdir()
-        (confd / "_defaults.yaml").write_text(_WINDOW_DEFAULTS, encoding="utf-8")
-        (confd / "tenant-x.yaml").write_text(_WINDOW_TENANT, encoding="utf-8")
+        (confd / "_defaults.yaml").write_text(_PYYAML_ONLY_DEFAULTS, encoding="utf-8")
+        (confd / "tenant-x.yaml").write_text(_PYYAML_ONLY_TENANT, encoding="utf-8")
         for name, data in (extra or {}).items():
             (confd / name).write_bytes(data)
         p = subprocess.run([sys.executable, str(_GENERATE_ROUTES), "--config-dir", str(confd),
@@ -643,18 +638,23 @@ def _generate_routes_strict(extra: dict[str, bytes] | None) -> tuple[int, str]:
         return p.returncode, p.stdout + p.stderr
 
 
-def test_pyyaml_only_rows_are_read_by_generate_routes() -> None:
+def test_generate_routes_reads_files_only_pyyaml_refuses() -> None:
+    """`generate-routes --validate --strict` accepts every pyyaml_only
+    tenant-file row: what it reads is parse-tree's, so a file yaml.v3 reads
+    is a file it reads. A PyYAML read slipping back into the generator's
+    conf.d path turns these rows red."""
     rows = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
-    window = [r for r in rows if in_pyyaml_only_window(r)]
+    pyyaml_only = [r for r in rows if is_pyyaml_only_tenant_file(r)]
     # Known members, so an emptied or renamed set cannot pass vacuously.
-    assert {"duplicate-anchor", "tab-after-colon"} <= {r["name"] for r in window}
+    assert {"duplicate-anchor", "tab-after-colon"} <= {r["name"] for r in pyyaml_only}
     code, out = _generate_routes_strict(None)
     assert code == 0, f"control tree (no corpus file) refused, rc {code}:\n{out}"
-    for r in window:
-        # Frozen: the generator before step 4 refused it (PyYAML).
+    for r in pyyaml_only:
+        # The corpus's frozen verdict: a PyYAML read refuses this file, so
+        # the row does measure "not read the PyYAML way".
         assert r["generator"] == "rejected", r["name"]
         assert r["file"] not in ("_defaults.yaml", "tenant-x.yaml"), r["name"]
         code, out = _generate_routes_strict({r["file"]: _encode(r["doc"], r.get("encoding"))})
         assert code == 0, (f"{r['name']}: generate-routes --validate --strict refuses a file "
-                           f"da-guard's run passes (rc {code}) — the generator does not read "
+                           f"only PyYAML refuses (rc {code}) — the generator does not read "
                            f"what parse-tree reads:\n{out}")

@@ -2,7 +2,8 @@ package config
 
 // #2433 — a `_profile` scalar that YAML types as something other than a
 // plain string. /metrics (ScheduledValue) reads the scalar's TEXT: bare
-// `010` elects profile "010", `!!binary MDEw` elects "MDEw" (unknown). The
+// `010` elects profile "010", `!!binary MDEw` elected "MDEw" (unknown) until
+// ADR-036 step 6 refused `!!binary` (#3206). The
 // walker plane (/effective, tenant-api, da-guard, merged_hash) read the
 // generic decode instead — int 8 (no profile) and "010" (profile bound) —
 // so each disagreed with what /metrics serves. The oracle is the flat plane.
@@ -54,9 +55,12 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 		{name: "control-platform-quoted", profile: "'010'", platform: true, wantName: "010", want: 11},
 		// The bug: the generic decode's value is not the scalar's text.
 		{name: "bare-octal", profile: "010", wantName: "010", want: 11},
-		{name: "binary", profile: "!!binary MDEw", wantName: "MDEw", want: 80},
 		{name: "platform-bare-octal", profile: "010", platform: true, wantName: "010", want: 11},
-		{name: "platform-binary", profile: "!!binary MDEw", platform: true, wantName: "MDEw", want: 80},
+		// `!!binary MDEw` (text "MDEw", decoded "010") was a row here, in the
+		// tenant file and in the platform file. Since ADR-036 step 6 (#3206)
+		// parse-tree refuses `!!binary` (tag_not_allowed), so the file is
+		// dropped whole on every plane and the election never runs
+		// (parse_verdict_test.go pins the refusal).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

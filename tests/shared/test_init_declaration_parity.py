@@ -116,11 +116,15 @@ def test_the_coverage_of_these_rows_is_concrete_not_a_blanket(tree, tmp_path):
     "tree", [t for t in MATRIX["trees"] if t["name"] == "R2-utf16le-with-bom"],
     ids=lambda t: t["name"])
 def test_a_utf16_file_is_a_blanket_by_design(tree, tmp_path):
+    """Since ADR-036 step 6 (#3206) the exporter rejects a UTF-16 file too
+    (parse-tree's invalid_utf8), so the row declares nothing; init still
+    treats it as possibly naming every tenant asked about."""
     conf = _build(tree, tmp_path)
-    for rel, go_ids in tree["declarations"].items():
-        got, why = ip._mentions(conf / rel, sorted(go_ids))
+    assert tree["declarations"] == {} and tree["rejected"] == list(tree["files_base64"]), tree
+    for rel in tree["files_base64"]:
+        got, why = ip._mentions(conf / rel, ["t-any"])
         assert "invalid_utf8" in why, (rel, why)
-        assert set(go_ids) <= got, (rel, go_ids, got)
+        assert {"t-any"} <= got, (rel, got)
 
 
 def test_every_concrete_required_row_exists() -> None:

@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"gopkg.in/yaml.v3"
 )
@@ -108,7 +109,16 @@ func emptyConfig() *Config {
 // key — a typo in this authorization-boundary file must fail loud. An empty or
 // comment-only file decodes to the empty config (the strict decoder surfaces
 // io.EOF where a lenient Unmarshal would return a zero struct).
+//
+// ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge): a
+// file it refuses — a second document, even an empty one, a `!!binary` or
+// `!` tag, a null key — is a load error like any other, never the empty
+// mapping. yaml.v3 alone reads the first document and ignores the rest, so a
+// mapping split over two documents silently lost every org of the second.
 func parseConfig(data []byte) (*Config, error) {
+	if err := confd.Judge(data); err != nil {
+		return nil, err
+	}
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

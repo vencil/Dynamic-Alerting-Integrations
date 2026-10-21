@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// Regression tests for #1673: the enumerating plane (confd.TenantIDFromFile)
+// Regression tests for #1673: the enumerating plane (confdname.TenantNamedBy, via confd.ListTenantFiles)
 // accepts `.yaml` and `.yml` in any case, while every per-tenant site used to
 // join a hardcoded `<id>.yaml`. The two planes therefore disagreed about which
 // file — or whether any file — is a given tenant's.
@@ -380,16 +380,14 @@ func TestGetTenantEffective_InternalErrorNamesNoServerPath(t *testing.T) {
 	}
 }
 
-// A *cfg.DecodeError keeps its own text in the body: it is the decoder's
-// message (`parse defaults[i]: …`), which names no path. Measured here so the
-// pass-through cannot start leaking if that text ever changes.
-//
-// The fixture is a root `_defaults.yaml` the exporter reads (its typed decode
-// skips the unknown top-level `x`) while the defaults-chain merge cannot
-// decode it (`!!int abc`). A chain file with a plain syntax error is no
-// longer one (#2296): the exporter drops it, and so does /effective — 200,
-// named in chain_parse_failed (TestGetTenantEffective_ChainSyntaxErrorIs200).
-func TestGetTenantEffective_DecodeErrorTextNamesNoServerPath(t *testing.T) {
+// A root `_defaults.yaml` the exporter's typed decode read (it skips the
+// unknown top-level `x`) while the defaults-chain merge could not decode it
+// (`!!int abc`) was a 500 carrying the decoder's own text. Since ADR-036 step
+// 6 (#3206) parse-tree refuses it first (decode_error), the exporter drops it,
+// and /effective answers 200 naming it in chain_parse_failed — as for a
+// syntax error (TestGetTenantEffective_ChainSyntaxErrorIs200) — with no
+// server path anywhere in the body.
+func TestGetTenantEffective_ChainFileParseTreeRefusesIs200(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu: 70\nx: !!int abc\n")
@@ -399,15 +397,15 @@ func TestGetTenantEffective_DecodeErrorTextNamesNoServerPath(t *testing.T) {
 	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
 		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
 	if strings.Contains(body, dir) {
 		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, body)
 	}
-	if !strings.Contains(body, "parse defaults") {
-		t.Errorf("body lost the decode error's own text: %s", body)
+	if !strings.Contains(body, `"chain_parse_failed":["_defaults.yaml"]`) {
+		t.Errorf("body does not name the dropped file: %s", body)
 	}
 }
 

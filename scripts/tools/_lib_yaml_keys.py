@@ -236,7 +236,7 @@ def load_all_exporter_keys(stream: Any, *,
     stream))`` with the exporter's tenant ids (#2216).
 
     NOT strict (a repeated key keeps the last value), like the two entries
-    above; the strict sibling is ``_lib_io.strict_load_all_exporter_keys``.
+    above; a strict read of one document is ``_lib_io.strict_load_exporter_keys``.
     Eager, so the loader is disposed before this returns; an error in ANY
     document raises, as ``list(yaml.safe_load_all(...))`` did. Longhand for
     the reason given in ``load_exporter_keys``. *raw_text_sequences* /

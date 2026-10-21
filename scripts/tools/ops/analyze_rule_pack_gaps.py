@@ -133,14 +133,14 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
     if tenant_config:
         data = _read_tenant_file(tenant_config)
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
-            # Multi-tenant wrapper format (mirrors _lib_io.load_tenant_configs)
+            # Multi-tenant wrapper format: one entry per mapping under `tenants:`
             for t_name, t_data in data["tenants"].items():
                 if isinstance(t_data, dict):
                     configs[t_name] = t_data
         else:
             name = os.path.splitext(os.path.basename(tenant_config))[0]
-            # Non-dict yaml (list/scalar) → {}, matching the dir branch
-            # (_lib_io skips non-dict); extract_custom_metrics needs .items().
+            # Non-dict yaml (list/scalar) → {}: extract_custom_metrics
+            # needs .items().
             configs[name] = data if isinstance(data, dict) else {}
     elif config_dir:
         tree = load_served_tree(config_dir)

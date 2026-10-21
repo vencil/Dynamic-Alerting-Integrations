@@ -1,9 +1,12 @@
 package testutil
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -13,6 +16,11 @@ var gitAutoMaintenanceOff = [][2]string{
 	{"gc.auto", "0"},
 	{"receive.autogc", "false"},
 }
+
+// gitDriverKey matches the git config keys tenant-api refuses to run with
+// (#3175; gitops.gitDriverKeyPattern — not imported: gitops's tests import
+// this package). git reports them with section and variable lower-cased.
+var gitDriverKey = regexp.MustCompile(`^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|merge\..+\.driver)$`)
 
 // DisableGitAutoMaintenance turns off git's automatic maintenance for every
 // git process this test binary starts, directly or through the code under
@@ -33,28 +41,37 @@ var gitAutoMaintenanceOff = [][2]string{
 // GIT_CONFIG_GLOBAL. GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n would not do: git
 // strips those from the environment when it spawns receive-pack or
 // upload-pack in the other repository of a local-transport push or fetch, so
-// the bare remote's auto gc still ran. GIT_CONFIG_GLOBAL is not stripped. The
-// file first includes whatever global config git read before, so a
-// developer's or CI's own settings (user.*, safe.directory, ...) keep working;
-// the settings above come after the include and win.
+// the bare remote's auto gc still ran. GIT_CONFIG_GLOBAL is not stripped.
+//
+// The file first holds a copy of the system and global config git read
+// before (includes resolved), so a developer's or CI's own settings
+// (user.*, safe.directory, ...) keep working; the settings above come after
+// the copy and win. GIT_CONFIG_NOSYSTEM is set, so the system file is read
+// only through the copy.
+//
+// The copy leaves out the filter / diff / merge driver keys tenant-api
+// refuses to start with (#3175): a host with git-lfs installed has
+// filter.lfs.* in its system or global config, and every Writer a test
+// builds would otherwise refuse every write. A test about those keys sets
+// them itself.
 func DisableGitAutoMaintenance() (cleanup func(), err error) {
-	var b strings.Builder
-	for _, p := range effectiveGlobalConfigs() {
-		if strings.ContainsAny(p, "\n\r") {
-			return nil, fmt.Errorf("global git config path %q contains a newline", p)
-		}
-		fmt.Fprintf(&b, "[include]\n\tpath = %s\n", quoteConfigValue(p))
-	}
-	for _, kv := range gitAutoMaintenanceOff {
-		section, key, _ := strings.Cut(kv[0], ".")
-		fmt.Fprintf(&b, "[%s]\n\t%s = %s\n", section, key, kv[1])
-	}
-
 	dir, err := os.MkdirTemp("", "tenant-api-gitconfig-")
 	if err != nil {
 		return nil, err
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
+
+	copied, err := driverFreeConfigCopy(dir)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	var b strings.Builder
+	b.WriteString(copied)
+	for _, kv := range gitAutoMaintenanceOff {
+		section, key, _ := strings.Cut(kv[0], ".")
+		fmt.Fprintf(&b, "[%s]\n\t%s = %s\n", section, key, kv[1])
+	}
 	file := filepath.Join(dir, "gitconfig")
 	if err := os.WriteFile(file, []byte(b.String()), 0o600); err != nil {
 		cleanup()
@@ -64,44 +81,86 @@ func DisableGitAutoMaintenance() (cleanup func(), err error) {
 		cleanup()
 		return nil, err
 	}
+	if err := os.Setenv("GIT_CONFIG_NOSYSTEM", "1"); err != nil {
+		cleanup()
+		return nil, err
+	}
 	return cleanup, nil
 }
 
-// effectiveGlobalConfigs returns the global config files git reads when
-// GIT_CONFIG_GLOBAL is left as it is, in the order git reads them (later
-// wins). A set GIT_CONFIG_GLOBAL replaces both defaults; set to the empty
-// string, git reads no global config at all. A listed file that does not
-// exist is harmless: git skips an include whose target is missing.
-func effectiveGlobalConfigs() []string {
-	if v, ok := os.LookupEnv("GIT_CONFIG_GLOBAL"); ok {
-		if v == "" {
-			return nil
+// driverFreeConfigCopy renders, as config file text, every system and
+// global entry git reads now — in the order it reads them, includes
+// resolved — except the driver keys (gitDriverKey). git lists them from
+// outside any repository (dir, with discovery stopped above it), so no
+// repository's own config is copied; GIT_CONFIG_GLOBAL, an empty one
+// included, and GIT_CONFIG_NOSYSTEM are honoured as git honours them.
+func driverFreeConfigCopy(dir string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "config", "--show-scope", "--includes", "-z", "--list")
+	cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("list the git config to copy: %v: %s", err, stderr.String())
+	}
+	// -z with --show-scope: "<scope>\0<key>\n<value>\0", or
+	// "<scope>\0<key>\0" for a key written without "=".
+	fields := strings.Split(string(out), "\x00")
+	if len(fields)%2 != 1 || fields[len(fields)-1] != "" {
+		return "", fmt.Errorf("unexpected git config listing %q", out)
+	}
+	var b strings.Builder
+	for i := 0; i+1 < len(fields); i += 2 {
+		scope, rest := fields[i], fields[i+1]
+		if scope != "system" && scope != "global" {
+			continue // command (GIT_CONFIG_COUNT …) stays in the environment
 		}
-		// git resolves a relative GIT_CONFIG_GLOBAL against its working
-		// directory, but an include path against the including file.
-		if !filepath.IsAbs(v) && !strings.HasPrefix(v, "~") {
-			if abs, err := filepath.Abs(v); err == nil {
-				v = abs
-			}
+		key, value, hasValue := strings.Cut(rest, "\n")
+		// --includes listed what the includes pulled in already; copying
+		// the include keys too would make git follow them again from the
+		// copy and bring the dropped driver keys back.
+		if gitDriverKey.MatchString(key) || key == "include.path" ||
+			(strings.HasPrefix(key, "includeif.") && strings.HasSuffix(key, ".path")) {
+			continue
 		}
-		return []string{v}
+		section, sub, name, ok := splitConfigKey(key)
+		if !ok {
+			return "", fmt.Errorf("unexpected git config key %q", key)
+		}
+		if sub != "" {
+			fmt.Fprintf(&b, "[%s %s]\n", section, quoteConfigValue(sub))
+		} else {
+			fmt.Fprintf(&b, "[%s]\n", section)
+		}
+		if hasValue {
+			fmt.Fprintf(&b, "\t%s = %s\n", name, quoteConfigValue(value))
+		} else {
+			fmt.Fprintf(&b, "\t%s\n", name) // a key without "=": boolean true
+		}
 	}
-	var paths []string
-	home := os.Getenv("HOME")
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		paths = append(paths, filepath.Join(xdg, "git", "config"))
-	} else if home != "" {
-		paths = append(paths, filepath.Join(home, ".config", "git", "config"))
-	}
-	if home != "" {
-		paths = append(paths, filepath.Join(home, ".gitconfig"))
-	}
-	return paths
+	return b.String(), nil
 }
 
-// quoteConfigValue renders s as a double-quoted git config value.
+// splitConfigKey splits a canonical git config key into its section, its
+// subsection ("" when none; it may hold dots) and its variable name.
+func splitConfigKey(key string) (section, sub, name string, ok bool) {
+	first, last := strings.Index(key, "."), strings.LastIndex(key, ".")
+	if first <= 0 || last == len(key)-1 {
+		return "", "", "", false
+	}
+	section, name = key[:first], key[last+1:]
+	if last > first {
+		sub = key[first+1 : last]
+	}
+	return section, sub, name, true
+}
+
+// quoteConfigValue renders s as a double-quoted git config value (or
+// subsection name).
 func quoteConfigValue(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
 	return `"` + s + `"`
 }

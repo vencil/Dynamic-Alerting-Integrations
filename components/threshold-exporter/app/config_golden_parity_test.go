@@ -49,9 +49,6 @@ package main
 //   yaml-date         — an unquoted date inherited from _defaults.yaml and a
 //                       tenant datetime with fraction + offset: yaml.v3's
 //                       time.Time as encoding/json writes it (#2371)
-//   yaml-binary       — `!!binary` values as their UTF-8 text (#2371); an
-//                       invalid byte cannot be a row (golden.json is JSON
-//                       text), see tests/dx/test_describe_tenant.py
 //   yaml-keys         — non-string mapping keys spelled with `%v` (a date key
 //                       is time.Time.String()); a date key in both files is
 //                       one key, so the bodies merge (#2371)

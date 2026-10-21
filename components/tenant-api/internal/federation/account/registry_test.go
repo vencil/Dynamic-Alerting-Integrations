@@ -271,3 +271,26 @@ func allocationKeyOrder(t *testing.T, root *yaml.Node) []string {
 	}
 	return nil
 }
+
+// TestParse_ParseTreeRefusal (ADR-036 §7 step 7, #3206): each text decodes
+// into Registry with yaml.v3 alone — the control below holds that, so the
+// rows test the verdict and nothing else — and Parse refuses each, failing
+// closed as for any registry it cannot read.
+func TestParse_ParseTreeRefusal(t *testing.T) {
+	t.Parallel()
+	const reg = "schema_version: v1\nnext_account_id: 1010\nallocations:\n  t1: 1005\n"
+	for _, c := range []struct{ name, text, kind string }{
+		{"second document", reg + "---\nnext_account_id: 1000\n", "multiple_documents"},
+		{"trailing empty document", reg + "---\n", "multiple_documents"},
+		{"!!binary value", "schema_version: !!binary djE=\nnext_account_id: 1010\nallocations:\n  t1: 1005\n", "tag_not_allowed"},
+		{"non-specific tag", "schema_version: ! \"v1\"\nnext_account_id: 1010\nallocations:\n  t1: 1005\n", "non_specific_tag"},
+	} {
+		var plain Registry
+		if err := yaml.Unmarshal([]byte(c.text), &plain); err != nil || plain.SchemaVersion != "v1" {
+			t.Fatalf("%s: control: yaml.v3 alone reads %+v, %v; the row tests nothing the verdict adds", c.name, plain, err)
+		}
+		if r, err := Parse([]byte(c.text)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+			t.Errorf("%s: Parse = %+v, %v; want a refusal of kind %s", c.name, r, err, c.kind)
+		}
+	}
+}

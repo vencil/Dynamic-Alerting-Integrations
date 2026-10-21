@@ -117,7 +117,8 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
             if why is None:
                 chosen_list.append(p)
             elif os.path.abspath(p) not in _NOT_READ_WARNED:
-                # Once per file per process, as `warn_multi_carrier`.
+                # Once per file per process: describe_tenant runs this
+                # loader over the tree it also reads (#1674 blind review).
                 _NOT_READ_WARNED.add(os.path.abspath(p))
                 print(f"WARN: {p.relative_to(config_dir).as_posix()} is ignored on every "
                       f"plane (#1674): da-guard parse-tree does not read it ({why}), "
@@ -218,7 +219,7 @@ def collect_instances(config_dir: Path, reader=None,
     #
     # ⛔ #2086: the tree is `list_config_tree`, NOT `rglob("*")`. `rglob`
     # descends `.`-prefixed directories, which the exporter's walker
-    # (`pkg/config.ScanDirTree` / `IsScannedFileName`) prunes. Measured on
+    # (`pkg/config.ScanDirTree` / `confdname.IsScanned`) prunes. Measured on
     # `main` 42db84e4: a `.snap/acme.yaml` declaring a recipe compiled one
     # extra shape (2 vs 1) for a file the exporter never serves, and a
     # ConfigMap mount (`..<ts>/acme.yaml` + the `acme.yaml` symlink into it)

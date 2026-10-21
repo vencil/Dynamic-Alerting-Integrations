@@ -137,16 +137,6 @@ def _list_config_tree(root):
     return _names(got.files + got.unusable, root)
 
 
-def _iter_yaml_files(root):
-    import _lib_io
-    return [name for name, _ in _lib_io.iter_yaml_files(str(root))]
-
-
-def _load_tenant_configs(root):
-    import _lib_io
-    return sorted(_lib_io.load_tenant_configs(str(root)))
-
-
 def _operator_generate(root):
     import operator_generate
     # stderr too: the pre-#2067 leak here was a `Skipping invalid tenant
@@ -303,8 +293,6 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "declared_tenant_ids": ("_lib_confd.py", _declared_tenant_ids),
     "iter_config_files": ("_lib_confd.py", _iter_config_files),
     "list_config_tree": ("_lib_confd.py", _list_config_tree),
-    "iter_yaml_files": ("_lib_io.py", _iter_yaml_files),
-    "load_tenant_configs": ("_lib_io.py", _load_tenant_configs),
     "operator_generate": ("ops/operator_generate.py", _operator_generate),
     "migrate_to_operator": ("ops/migrate_to_operator.py",
                             _migrate_to_operator),

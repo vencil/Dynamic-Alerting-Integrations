@@ -489,21 +489,22 @@ func TestGeneratorGate_BatchRefusalShape(t *testing.T) {
 	})
 }
 
-// ADR-036 §4 "驗的和寫的必須是同一份": a .gitattributes clean filter that
-// rewrites a tenant file as it is staged makes the commit other bytes than
-// the ones judged — every path refuses it (422 GENERATOR_REJECTED reason
-// normalized, async: the task's results) and leaves the repository as it
-// was. (Package gitops covers `text eol=lf` with a CRLF body.)
+// ADR-036 §4 "驗的和寫的必須是同一份": git attributes that rewrite a
+// tenant file as it is staged make the commit other bytes than the ones
+// judged — refused with 422 GENERATOR_REJECTED reason normalized. Since
+// #3175 a clean filter cannot get that far: a filter driver in the git
+// config refuses every path before the generator is asked (500, nothing
+// written, no PR/MR), so the rewrite here is `text eol=lf` on a CRLF PUT
+// body. (Package gitops covers the normalized refusal of Write and
+// WriteBatch under `text eol=lf`, writer_validator_bind_test.go.)
 func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, p := range gatePaths() {
-		t.Run(p.name, func(t *testing.T) {
+		t.Run("filter driver refuses "+p.name, func(t *testing.T) {
 			t.Parallel()
 			f := newAONFixture(t, p.mode)
 			fake := withFakeGenerator(t, f)
-			// Rewrites exactly what each path's request writes, nothing the
-			// seeded files hold (their checkout stays clean).
-			f.git(t, "config", "filter.shout.clean", `sed -e s/warning/WARNING/ -e s/critical/CRITICAL/ -e s/queue_high/QUEUE_HIGH/ -e s/72/73/`)
+			f.git(t, "config", "filter.shout.clean", `sed -e s/warning/WARNING/`)
 			if err := os.WriteFile(filepath.Join(f.dir, ".gitattributes"), []byte("t-*.yaml filter=shout\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -511,21 +512,23 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 			f.git(t, "commit", "-q", "-m", "attributes")
 			before := repoState(t, f)
 			code, results := p.run(t, f)
-			if len(fake.Requests()) != 1 {
-				t.Fatalf("the generator was asked %d time(s), want 1 (it passes)", len(fake.Requests()))
+			if n := len(fake.Requests()); n != 0 {
+				t.Errorf("the generator was asked %d time(s), want 0: the git config refuses first", n)
 			}
-			if strings.HasSuffix(p.name, "async") || len(results) > 0 {
+			if strings.HasSuffix(p.name, "async") {
 				if len(results) == 0 {
-					t.Fatalf("status %d, no results", code)
+					t.Errorf("async task has no results")
 				}
 				for _, r := range results {
-					if r.Status != "error" || r.Code != CodeGeneratorRejected || !strings.Contains(r.Message, "(normalized)") {
-						t.Errorf("result %+v, want GENERATOR_REJECTED normalized", r)
+					if r.Status != "error" || r.Code != CodeInternal {
+						t.Errorf("async result %+v, want INTERNAL_ERROR", r)
 					}
 				}
+			} else if code != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500 (body %s)", code, f.lastBody)
 			}
-			if !strings.HasSuffix(p.name, "async") && code != http.StatusUnprocessableEntity {
-				t.Errorf("status = %d, want 422", code)
+			if strings.Contains(f.lastBody, "filter.shout") {
+				t.Errorf("the answer names the git config key: %s", f.lastBody)
 			}
 			if after := repoState(t, f); after != before {
 				t.Errorf("the repository changed:\nbefore %s\nafter  %s", before, after)
@@ -537,18 +540,20 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 	}
 	t.Run("PUT envelope", func(t *testing.T) {
 		t.Parallel()
-		f, _ := generatorDirectFixture(t, nil)
-		f.git(t, "config", "filter.shout.clean", "sed -e s/72/73/")
-		if err := os.WriteFile(filepath.Join(f.dir, ".gitattributes"), []byte("t-*.yaml filter=shout\n"), 0o644); err != nil {
+		f, fake := generatorDirectFixture(t, nil)
+		if err := os.WriteFile(filepath.Join(f.dir, ".gitattributes"), []byte("t-*.yaml text eol=lf\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		f.git(t, "add", ".gitattributes")
 		f.git(t, "commit", "-q", "-m", "attributes")
-		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
+		w := putTenantAs(t, f.deps, "t-a", strings.ReplaceAll(tAPut, "\n", "\r\n"), "admins", nil)
 		m := genEnvelope(t, w)
 		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorRejected || m["reason"] != generator.ReasonNormalized ||
 			w.Header().Get("Retry-After") != "" || strings.Contains(m["error"].(string), "t-a.yaml") {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
+		}
+		if n := len(fake.Requests()); n != 1 {
+			t.Errorf("the generator was asked %d time(s), want 1 (it passes)", n)
 		}
 	})
 }

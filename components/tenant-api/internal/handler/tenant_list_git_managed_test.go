@@ -234,7 +234,10 @@ func TestLoadAllTenants_GitManagedMetadataIncomplete(t *testing.T) {
 		{"tenant_count, own id declared", "tenants:\n  " + id + ": {}\n  " + lgCoTenant + ": {}\n", "tenant_count", false},
 		{"tenant_count, own id not declared", "tenants:\n  " + lgDeclared + ": {}\n  " + lgCoTenant + ": {}\n", "tenant_count", true},
 		{"several_documents, own id in the first", "tenants:\n  " + id + ": {}\n---\ntenants:\n  " + lgCoTenant + ": {}\n", "several_documents", false},
-		{"several_documents, own id only in the second", "tenants:\n  " + lgCoTenant + ": {}\n---\ntenants:\n  " + id + ": {}\n", "several_documents", true},
+		// Since ADR-036 step 6 (#3206) the exporter refuses a second
+		// document whole (config_error invalid_config), so the row carries
+		// no metadata to be incomplete about.
+		{"several_documents, own id only in the second", "tenants:\n  " + lgCoTenant + ": {}\n---\ntenants:\n  " + id + ": {}\n", "several_documents", false},
 		{"yaml_indirection, own id declared", "base: &b\n  x: 1\n<<: *b\ntenants:\n  " + id + ": {}\n", "yaml_indirection", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -52,6 +52,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
@@ -657,8 +658,9 @@ func writeErrorIsForClient(err error) bool {
 // mapping claimed, and reports whether the failure is the server's (#3054).
 // The status follows the same line as the text (#1535): an error that is about
 // the request (writeErrorIsForClient) is the caller's 400 with its own text;
-// a write the request's context cancelled or timed out is the 503 a batch
-// answers for it (writeWriteCancelled); anything else — the commit stage
+// a write stopped before it committed, or whose outcome the writer could not
+// determine (#3173), is the 503 a batch answers for it (writeWriteCancelled);
+// anything else — the commit stage
 // failing, the temp file, reading the tenant file — is the server's, a 500
 // INTERNAL_ERROR with msgWriteFailed and the detail in the log under the
 // request_id. It used to be a 400 for all of them, so a client whose body was
@@ -676,41 +678,62 @@ func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 // msgWriteCancelled is the text of a write — one tenant or a whole batch —
-// stopped by its request's (or async task's) context before it finished
-// (#1535). It does NOT say nothing was written, because that cannot be known
-// here. The request's context never kills git: the writer only polls it at
-// checkpoints, and a write it stops there has written nothing. But each git
-// command runs under its own deadline (TENANT_API_GIT_TIMEOUT), and when
-// `git commit` or `git update-ref` hits that deadline the error wraps
-// context.DeadlineExceeded too — and the ref may already have moved. This
-// handler cannot tell the two apart, so the text tells the caller to look
-// before retrying.
-//
-// A batch whose commit the writer DID see land is never this text:
-// gitops.BatchCommittedError unwraps to ErrConflict only (not to its cause),
-// so isWriteCancelled is false for it, and writeBatchFailure matches it
-// before the cancelled case anyway — it gets msgBatchCommittedIncomplete.
-// What is left for this text is the window the writer cannot see.
-const msgWriteCancelled = "the write was cancelled or timed out before it finished; refresh to see whether it was committed before retrying"
+// stopped before anything of it was committed (#1535, #3173): its request's
+// (or async task's) context was cancelled or reached its deadline, or a git
+// command hit its own deadline (TENANT_API_GIT_TIMEOUT) at a step the writer
+// knows moved nothing. The request's context never kills git: the writer
+// only polls it at checkpoints, and a write it stops there has written
+// nothing. A git timeout at the ref update is decided by the writer reading
+// the branch back (gitops.OutcomeOf): only one it saw unmoved reaches this
+// text, so it may say nothing was written and that a retry is safe.
+const msgWriteCancelled = "the write was cancelled or timed out before it was committed; nothing was written, so it is safe to retry"
 
-// isWriteCancelled reports whether a write failed because its context was
-// cancelled or reached its deadline: not the body's fault. It does not mean
-// nothing was written — a git command that hit its own deadline
-// (TENANT_API_GIT_TIMEOUT) also wraps context.DeadlineExceeded, possibly
-// after it moved the ref (msgWriteCancelled) — so the answer asks the caller
-// to refresh rather than promising a clean retry.
+// msgWriteOutcomeUnknown is the text of a write whose ref update failed and
+// whose branch the writer could not read back (#3173,
+// gitops.WriteOutcomeUnknownError): it may have been committed. Same 503 as
+// msgWriteCancelled, but it tells the caller to look before retrying.
+const msgWriteOutcomeUnknown = "the write failed while it was being committed and the server cannot tell whether it was; " +
+	"it may have been committed — refresh to see whether it was before retrying"
+
+// isWriteCancelled reports whether a write was stopped before anything of it
+// was committed by its context — cancelled, or past its deadline — or by a
+// git command past its own deadline (gitops.ErrGitTimeout): not the body's
+// fault, and safe to retry. An error whose outcome the writer could not
+// determine (gitops.WriteUnknown) is never this, whatever its cause.
 func isWriteCancelled(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-// writeWriteCancelled answers a cancelled write (isWriteCancelled) with 503
-// and msgWriteCancelled, and reports whether err was one. The single-tenant
-// writes and the direct batch share it (#1535).
-func writeWriteCancelled(w http.ResponseWriter, r *http.Request, err error) bool {
-	if !isWriteCancelled(err) {
+	if gitops.OutcomeOf(err) != gitops.WriteNotCommitted {
 		return false
 	}
-	WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteCancelled)
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, gitops.ErrGitTimeout)
+}
+
+// isWriteOutcomeUnknown reports whether the writer could not tell whether
+// the write was committed (gitops.WriteOutcomeUnknownError).
+func isWriteOutcomeUnknown(err error) bool {
+	return gitops.OutcomeOf(err) == gitops.WriteUnknown
+}
+
+// writeWriteCancelled answers a write stopped before it committed
+// (isWriteCancelled) with 503 msgWriteCancelled, and one whose outcome is
+// unknown (isWriteOutcomeUnknown) with 503 msgWriteOutcomeUnknown, and
+// reports whether err was either. The single-tenant writes and the batches,
+// direct and PR mode, share it (#1535, #3173).
+func writeWriteCancelled(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case isWriteOutcomeUnknown(err):
+		var reqID string
+		if r != nil {
+			reqID = middleware.GetReqID(r.Context())
+		}
+		slog.Error("write outcome unknown: the ref update failed and the branch could not be read back",
+			"request_id", reqID, "error", err)
+		WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteOutcomeUnknown)
+	case isWriteCancelled(err):
+		WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteCancelled)
+	default:
+		return false
+	}
 	return true
 }
 
@@ -1236,15 +1259,29 @@ func disclosedFindings(d *Deps, r *http.Request, all []generator.Finding) ([]gen
 }
 
 // findingReadable reports whether f names nothing names withholds: its
-// tenant, and the tenant its file is named after (<id>.yaml / <id>.yml —
-// a file-only finding names its tenant that way).
+// tenant, and the tenant its file is named after (a file-only finding names
+// its tenant that way). It is asked only for a caller who may not see the
+// whole tree (disclosedFindings shows everything to the rest).
+//
+// The file's tenant is confdname.TenantNamedBy, the one name rule the
+// exporter and da-guard use (#3206): `<id>.YAML` names `<id>`, and
+// `a.yml.yaml` names `a.yml` (only the last extension is stripped).
+//
+// ⛔ A file that names NO tenant by that rule — a `_` platform file, a hidden
+// or empty-stem name (`.yaml`, `.x.yaml`), anything without a YAML
+// extension — is withheld. Such a file can hold any tenant's settings, so
+// nothing here can say the caller may read what the finding quotes from it;
+// only a caller who sees the whole tree gets it. (The hand-written rule this
+// replaced passed some of these, `_defaults.yaml` among them, and withheld
+// others by deriving a tenant like `.x` from them — fail-safe now means
+// never passing what it could not attribute.)
 func findingReadable(names gitops.TenantNames, f generator.Finding) bool {
 	if f.Tenant != nil && *f.Tenant != "" && !names.Shown(*f.Tenant) {
 		return false
 	}
 	if f.File != nil {
 		base := path.Base(filepath.ToSlash(*f.File))
-		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !names.Shown(id) {
+		if id, ok := confdname.TenantNamedBy(base); !ok || !names.Shown(id) {
 			return false
 		}
 	}

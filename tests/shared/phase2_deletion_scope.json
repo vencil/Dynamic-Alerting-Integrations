@@ -4,6 +4,7 @@
     "section 11 and its implementation map; #2766, #2486). Phase 2 may delete a package or a vendored",
     "yaml.v3 patch only once its users below are gone or rewritten. ADR-036 step 3 (#2905) deleted",
     "pkg/pyyamlcompat, pkg/routingpolicy, the judging part of pkg/receiverspec and the spaces-only patch;",
+    "step 8 (#3206) deleted the non-specific-tag patch once every Go reader asks parse-tree first.",
     "a deleted package stays here as a row with no importers, so a new import of it is red.",
     "Reader: components/threshold-exporter/app/phase2_deletion_scope_test.go, which lists the users",
     "from the source of BOTH Go modules (components/threshold-exporter/app, components/tenant-api)",
@@ -44,12 +45,6 @@
     }
   ],
   "patches": [
-    {
-      "file": "yaml.v3-nonspecific-tag.patch",
-      "disposition": "delete-when-unrelied",
-      "reason": "Always on (decode.go keeps Tag \"!\" on a non-plain scalar), so no call site shows who depends on it. The exporter relies on it (ADR-036 section 7: isMergeKey in config_file.go takes a `! \"<<\"` key as a merge, validateSloObjective in custom_alert.go refuses `! \"99.9\"`); it is deleted in ADR-036 step 4 together with the generator's switch to parse-tree. NOT mechanically proven: removing an import does not prove the behaviour unused.",
-      "believed_reliant": ["pkg/config"]
-    },
     {
       "file": "yaml.v3-unhashable-merge-key.patch",
       "disposition": "keep",

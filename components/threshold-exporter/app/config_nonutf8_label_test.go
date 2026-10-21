@@ -12,8 +12,14 @@ package main
 //
 // The tree tests drive the real ConfigManager.Load and the real /metrics
 // handler, so the first two fail (the binary panics) on a tree without the
-// fix. The rest pin the fix's edges: the rejection is the TENANT file's
-// verdict only, and no log line carries a file name's raw bytes.
+// fix. The rest pin the fix's edges, and that no log line carries a file
+// name's raw bytes.
+//
+// ⚠️ Since ADR-036 step 6 (#3206) no conf.d file can spell a non-UTF-8 tenant
+// id any more: parse-tree refuses `!!binary` (tag_not_allowed) and raw bytes
+// that are not UTF-8 (invalid_utf8) before any decode, for a tenant file and a
+// `_` platform file alike. The #2266 rejection (pkg/config's
+// parseTenantFileDecode, pinned there) and the scrape backstop stay.
 
 import (
 	"bytes"
@@ -62,8 +68,9 @@ func loadAndScrapeNonUTF8(t *testing.T, dir string) (*configMetrics, string, str
 	return fresh, rec.Body.String(), logBuf.String()
 }
 
-// Tree A: a non-UTF-8 tenant id rejects its whole file, like any other
-// decode failure; another file's tenant is served as usual.
+// Tree A: a file spelling a non-UTF-8 tenant id is rejected whole, like any
+// other file that cannot be read (since step 6 by parse-tree's
+// tag_not_allowed); another file's tenant is served as usual.
 func TestNonUTF8TenantID_RejectsTheFile_ScrapeSurvives(t *testing.T) {
 	t.Parallel()
 	dir := writeNonUTF8Tree(t, map[string]string{
@@ -79,9 +86,12 @@ func TestNonUTF8TenantID_RejectsTheFile_ScrapeSurvives(t *testing.T) {
 	if strings.Contains(body, `tenant="tb"`) {
 		t.Errorf("tenant tb served, but a.yaml declares a non-UTF-8 tenant id and must be skipped whole")
 	}
-	assertLogLineWith(t, logs, "WARN: skip unparseable file", `a.yaml"`, `tenant id "t\xff" is not valid UTF-8`)
+	assertLogLineWith(t, logs, "WARN: skip unparseable file", `a.yaml"`, "(kind tag_not_allowed)")
 	if got := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("a.yaml")); got != 1 {
 		t.Errorf("da_config_parse_failure_total{file_basename=a.yaml} = %v, want 1", got)
+	}
+	if got := promtest.ToFloat64(fresh.parseRefused.WithLabelValues("a.yaml", "tag_not_allowed")); got != 1 {
+		t.Errorf("da_config_parse_refused_total{a.yaml,tag_not_allowed} = %v, want 1", got)
 	}
 }
 
@@ -137,10 +147,13 @@ func TestScrape_NonUTF8TenantInConfig_Skipped(t *testing.T) {
 }
 
 // A `_` platform file's `tenants:` entry never declares a tenant, so a
-// non-UTF-8 key there cannot reach a label: it is dropped as an orphan with a
-// %q-quoted WARN, and the rest of the file — every tenant's defaults — still
-// applies. Rejecting the whole file dropped them all (#2266 blind review, F1).
-func TestNonUTF8TenantEntryInPlatformFile_DroppedNotTheFile(t *testing.T) {
+// non-UTF-8 key there cannot reach a label. #2266 (blind review, F1) dropped
+// it as an orphan and kept the rest of the file. Since ADR-036 step 6 (#3206)
+// the `!!binary` that spells it makes parse-tree refuse the file
+// (tag_not_allowed), and a `_` platform file parse-tree refuses is dropped
+// whole, as for a syntax error (ADR-036 §2): counted with its kind,
+// ERROR-logged; another file's tenant is still served.
+func TestNonUTF8TenantEntryInPlatformFile_DropsTheFile(t *testing.T) {
 	t.Parallel()
 	for name, tree := range map[string]map[string]string{
 		"_defaults.yaml carries it": {
@@ -156,17 +169,27 @@ func TestNonUTF8TenantEntryInPlatformFile_DroppedNotTheFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fresh, body, logs := loadAndScrapeNonUTF8(t, writeNonUTF8Tree(t, tree))
-			want := `user_threshold{component="mysql",metric="slow_queries",severity="warning",tenant="tc"} 7`
+			broken := "_defaults.yaml"
 			if _, platform := tree["_platform.yaml"]; platform {
-				want = `user_threshold{component="mysql",metric="slow_queries",severity="warning",tenant="tc"} 9`
+				broken = "_platform.yaml"
 			}
-			if !strings.Contains(body, want) {
-				t.Errorf("platform-supplied value missing from /metrics, want line %s", want)
+			if !strings.Contains(body, `tenant="tc"`) {
+				t.Errorf("tenant tc (declared by b.yaml) missing from /metrics")
 			}
-			if got := promtest.CollectAndCount(fresh.parseFailures); got != 0 {
-				t.Errorf("da_config_parse_failure_total has %d series, want 0 — the platform file is not broken", got)
+			// The dropped file's value is not served: with _defaults.yaml
+			// dropped no slow_queries row at all; with _platform.yaml
+			// dropped the root default 7, not its 9.
+			slow := `user_threshold{component="mysql",metric="slow_queries",severity="warning",tenant="tc"}`
+			if broken == "_defaults.yaml" && strings.Contains(body, slow) {
+				t.Errorf("a value of the dropped %s is still served", broken)
 			}
-			assertLogLineWith(t, logs, "WARN: tenants entry", `"t\xff"`, "_", "not valid UTF-8")
+			if broken == "_platform.yaml" && !strings.Contains(body, slow+" 7") {
+				t.Errorf("want the root default 7 for tc, the dropped %s's 9 not applied", broken)
+			}
+			if got := promtest.ToFloat64(fresh.parseRefused.WithLabelValues(broken, "tag_not_allowed")); got < 1 {
+				t.Errorf("da_config_parse_refused_total{%s,tag_not_allowed} = %v, want the file counted", broken, got)
+			}
+			assertLogLineWith(t, logs, "ERROR: skip unparseable defaults/profiles file", broken, "(kind tag_not_allowed)")
 			if strings.Contains(logs, "\xff") {
 				t.Errorf("raw non-UTF-8 bytes written to the log")
 			}
@@ -195,7 +218,7 @@ func TestNonUTF8BrokenPlatformFileName_NoRawBytesInLog(t *testing.T) {
 		"nested platform file with a tenants: block": {
 			"_defaults.yaml":       "defaults:\n  mysql_connections: 80\n",
 			"_x.yaml":              "defaults: [80\n", // keeps the "reported" anchor below
-			"s\xff/_defaults.yaml": "defaults:\n  mysql_connections: 70\ntenants:\n  !!binary dP8=:\n    mysql_connections: \"1\"\n  tc:\n    mysql_connections: \"2\"\n",
+			"s\xff/_defaults.yaml": "defaults:\n  mysql_connections: 70\ntenants:\n  tx:\n    mysql_connections: \"1\"\n  tc:\n    mysql_connections: \"2\"\n",
 			"s\xff/b.yaml":         "tenants:\n  tc:\n    mysql_connections: \"50\"\n",
 		},
 	} {
@@ -209,7 +232,7 @@ func TestNonUTF8BrokenPlatformFileName_NoRawBytesInLog(t *testing.T) {
 				t.Fatalf("the broken file was not reported; log:\n%q", logs)
 			}
 			if strings.Contains(name, "tenants:") {
-				assertLogLineWith(t, logs, "tenants: block in nested platform file", `"t\xff"`, `\xff/_defaults.yaml"`)
+				assertLogLineWith(t, logs, "tenants: block in nested platform file", `\xff/_defaults.yaml"`)
 			}
 			for _, l := range strings.Split(logs, "\n") {
 				if strings.Contains(l, "\xff") {
@@ -217,26 +240,6 @@ func TestNonUTF8BrokenPlatformFileName_NoRawBytesInLog(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Several non-UTF-8 ids in one tenant file: the rejection names all of them,
-// sorted, so the line is the same on every load (map order is random).
-func TestNonUTF8TenantIDs_AllNamedInAStableOrder(t *testing.T) {
-	t.Parallel()
-	dir := writeNonUTF8Tree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		// !!binary: "c\xff", "a\xff", "b\xff"
-		"a.yaml": "tenants:\n  !!binary Y/8=:\n    mysql_connections: \"1\"\n  !!binary Yf8=:\n    mysql_connections: \"2\"\n  !!binary Yv8=:\n    mysql_connections: \"3\"\n",
-		"b.yaml": "tenants:\n  tc:\n    mysql_connections: \"50\"\n",
-	})
-	const want = `tenant ids ["a\xff" "b\xff" "c\xff"] are not valid UTF-8`
-	for i := 0; i < 20; i++ {
-		_, _, logs := loadAndScrapeNonUTF8(t, dir)
-		lines := logLinesWith(logs, "WARN: skip unparseable file")
-		if len(lines) != 1 || !strings.Contains(lines[0], want) {
-			t.Fatalf("load %d: rejection line = %q, want one line containing %s", i, lines, want)
-		}
 	}
 }
 
@@ -287,7 +290,7 @@ func TestNonUTF8TenantID_SingleFileMode_LoadFails(t *testing.T) {
 	mgr.SetMetrics(newConfigMetrics())
 	mgr.SetLogger(log.New(io.Discard, "", 0))
 	err := mgr.Load()
-	if err == nil || !strings.Contains(err.Error(), `tenant id "t\xff" is not valid UTF-8`) {
-		t.Fatalf("Load() = %v, want the non-UTF-8 tenant id rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "(kind tag_not_allowed)") {
+		t.Fatalf("Load() = %v, want the file refused (parse-tree's tag_not_allowed, #3206)", err)
 	}
 }

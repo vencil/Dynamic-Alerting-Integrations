@@ -11,10 +11,9 @@ from *empty because the command that built it failed*:
     .github/workflows/guard-defaults-impact.yml
         `Run da-guard`                    -> steps.guard.outputs.exit
 
-An empty baseline is not a neutral value. `scripts/tools/_lib_io.py`
-(`load_tenant_configs`, and its docstring says so explicitly) turns a
-zero-byte `db-a.yaml` into a tenant with no thresholds, so every threshold in
-the PR reads as newly added; a `{}` effective-config baseline does the same
+An empty baseline is not a neutral value. Against an empty conf.d baseline
+every threshold in the PR reads as newly added; a `{}` effective-config
+baseline does the same
 for blast radius; and a missing `steps.guard.outputs.exit` used to take the
 whole verdict step with it, so the job went green having validated nothing.
 All three are reports a human reads to decide whether a config change is
