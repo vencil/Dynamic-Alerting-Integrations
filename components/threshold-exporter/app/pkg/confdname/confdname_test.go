@@ -34,6 +34,10 @@ func TestNameRuleTable(t *testing.T) {
 		{"db-a", false, ""},
 		{"db-a.json", false, ""},
 		{"db-a.yaml.bak", false, ""},
+		// The last extension is the one stripped: `a.yml.yaml` is tenant
+		// `a.yml`, never `a` (tenant-api's findingReadable relies on it).
+		{"a.yml.yaml", true, "a.yml"},
+		{"a.yaml.yml", true, "a.yaml"},
 	} {
 		if got := IsScanned(tc.name); got != tc.scanned {
 			t.Errorf("IsScanned(%q) = %v, want %v", tc.name, got, tc.scanned)
