@@ -205,7 +205,7 @@ func parseDocument(data []byte) (*yaml.Node, *Unreadable) {
 func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable) {
 	root := doc.Content[0]
 
-	c := &checker{values: map[*yaml.Node]json.RawMessage{}, verdictOnly: verdictOnly}
+	c := &checker{values: map[*yaml.Node]json.RawMessage{}}
 	// A `!` tag token is a `!` byte in the text: without one no node can
 	// carry it, and the source map (a rune copy of every line, and every
 	// node's position) is not built.
@@ -221,9 +221,10 @@ func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable)
 	}
 	// The whole-document decode: what yaml.v3 refuses only when it decodes
 	// the tree as a whole — an alias that contains itself, more alias
-	// expansion than its limit allows. Judge skips it on a tree with no
-	// alias, where neither can happen and every node's own decode has run.
-	if !verdictOnly || hasAlias(root) {
+	// expansion than its limit allows. Skipped on a tree with no alias,
+	// where neither can happen and every node's own decode has run (for
+	// Parse and Judge alike: one path).
+	if hasAlias(root) {
 		var whole any
 		if err := decode(doc, &whole); err != nil {
 			return nil, fail(KindDecodeError, "%s", oneLine(err))
@@ -265,33 +266,28 @@ func hasAlias(n *yaml.Node) bool {
 
 type checker struct {
 	src    *source                        // nil: the text holds no `!`
-	values map[*yaml.Node]json.RawMessage // every decoded scalar, by node
-	// verdictOnly (Judge): a plain string scalar is not decoded or stored
-	// (plainString); everything else is as for Parse.
-	verdictOnly bool
+	values map[*yaml.Node]json.RawMessage // every decoded scalar but a plain string (plainString), by node
 }
 
 // plainString reports whether n is a scalar written with no tag that yaml.v3
-// resolves to !!str: its decode is its text and cannot fail.
+// resolves to !!str: its decode is its text and cannot fail, so the checker
+// does not decode it and its value is the text (plainStringValue).
 func plainString(n *yaml.Node) bool {
 	return n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && n.ShortTag() == "!!str"
 }
 
+// plainStringValue is a plain string's Scalar.Value: its text as
+// json.Marshal writes it — what scalarValue gives a !!str.
+func plainStringValue(text string) json.RawMessage {
+	raw, _ := json.Marshal(text) // a string always marshals
+	return raw
+}
+
 // marshalLen is len(json.Marshal(s)) for a valid UTF-8 s, counted without
-// building it (TestMarshalLenIsJSONMarshal holds the two together).
+// building it: jsonStringLen, plus json.Marshal's HTML escape of `<`, `>`
+// and `&` (`\u003c`: 6 bytes for 1). TestMarshalLenIsJSONMarshal holds it.
 func marshalLen(s string) int {
-	n := 2
-	for _, r := range s {
-		switch {
-		case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t' || r == '\b' || r == '\f':
-			n += 2
-		case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029':
-			n += 6
-		default:
-			n += utf8.RuneLen(r)
-		}
-	}
-	return n
+	return jsonStringLen(s) + 5*(strings.Count(s, "<")+strings.Count(s, ">")+strings.Count(s, "&"))
 }
 
 // checkNode refuses the first shape the package does not read, in document
@@ -313,10 +309,9 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 		if isMergeKey {
 			return nil
 		}
-		if c.verdictOnly && plainString(n) {
-			// Judge: an untagged scalar yaml.v3 resolves to !!str decodes to
-			// its text, always; its value is that text as JSON, whose length
-			// the converter counts from the text (marshalLen). Nothing stored.
+		if plainString(n) {
+			// Its decode is its text, always: not decoded, not stored; the
+			// converter takes the value from the text (plainStringValue).
 			return nil
 		}
 		raw, err := scalarValue(n)
@@ -595,9 +590,18 @@ func jsonStringLen(s string) int {
 // scalarLen is the JSON length of Scalar{text, tag, raw}:
 // {"text":…,"tag":…[,"value":…]}.
 func scalarLen(text, tag string, raw json.RawMessage) int {
+	if raw == nil {
+		return scalarLenN(text, tag, -1)
+	}
+	return scalarLenN(text, tag, len(raw))
+}
+
+// scalarLenN is the one count of a Scalar's JSON length, its value valueLen
+// bytes long (-1: no value field).
+func scalarLenN(text, tag string, valueLen int) int {
 	n := len(`{"text":`) + jsonStringLen(text) + len(`,"tag":`) + jsonStringLen(tag) + len(`}`)
-	if raw != nil {
-		n += len(`,"value":`) + len(raw)
+	if valueLen >= 0 {
+		n += len(`,"value":`) + valueLen
 	}
 	return n
 }
@@ -623,10 +627,13 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 			return nil, fail(KindInvalidUTF8, "line %d: a scalar is not valid UTF-8", n.Line)
 		}
 		size := 0
-		if c.verdictOnly && plainString(n) {
-			// The value checker did not store: the text, as JSON.
-			size = len(`{"text":`) + jsonStringLen(s.Text) + len(`,"tag":`) + jsonStringLen(s.Tag) +
-				len(`,"value":`) + marshalLen(s.Text) + len(`}`)
+		if plainString(n) {
+			// The value the checker did not store: the text, as JSON. Judge
+			// counts it; Parse also writes it.
+			size = scalarLenN(s.Text, s.Tag, marshalLen(s.Text))
+			if !c.verdictOnly {
+				s.Value = plainStringValue(s.Text)
+			}
 		} else {
 			size = scalarLen(s.Text, s.Tag, s.Value)
 		}

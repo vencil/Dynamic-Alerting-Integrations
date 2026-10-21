@@ -7,6 +7,7 @@ package parsetree
 // refuses exactly what Parse refuses, with the same kind and message.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -84,4 +85,90 @@ func TestMarshalLenIsJSONMarshal(t *testing.T) {
 	for _, s := range []string{"", "😀", "\U0010FFFF", "�", "<a href=\"x\">&amp;</a>", "line sep "} {
 		check(s)
 	}
+}
+
+// The byte bound on plain strings (no tag, resolved !!str): Parse and Judge
+// both count their value from the text (marshalLen, scalarLenN), so the file
+// whose content is exactly MaxContentBytes of JSON reads and the one a byte
+// longer is refused, alike, for text whose JSON escapes differ from its
+// bytes — `<`, `>`, `&` (json.Marshal's HTML escape in the value) and a
+// newline (`\n` in both). The boundary is found with Judge (cheap) and then
+// held on Parse, one byte at a time either side.
+func TestPlainStringByteBoundary(t *testing.T) {
+	t.Parallel()
+	for _, payload := range []string{"<", "&>", `\n<`} {
+		build := func(k, n int) []byte {
+			return []byte(fmt.Sprintf("k: \"%s\"\ntail: \"%s\"\n", strings.Repeat(payload, k), strings.Repeat("t", n)))
+		}
+		least := func(f func(int) bool, hi int) int { // the least x in [0, hi] with f(x)
+			lo := 0
+			for lo < hi {
+				m := (lo + hi) / 2
+				if f(m) {
+					hi = m
+				} else {
+					lo = m + 1
+				}
+			}
+			return lo
+		}
+		refused := func(data []byte) bool { return Judge(data) != nil }
+		k := least(func(k int) bool { return refused(build(k, 0)) }, MaxContentBytes) - 1
+		room := least(func(n int) bool { return refused(build(k, n)) }, MaxContentBytes) - 1
+		if k < 1 || room < 0 {
+			t.Fatalf("%q: no boundary found (k=%d room=%d)", payload, k, room)
+		}
+		// The independent half: the content of the last file that reads,
+		// written as `da-guard parse-tree` writes it, is exactly the bound.
+		content, bad := Parse(build(k, room))
+		if bad != nil {
+			t.Fatalf("%q k=%d tail=%d: %v", payload, k, room, bad)
+		}
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(content); err != nil {
+			t.Fatal(err)
+		}
+		if got := buf.Len() - 1; got != MaxContentBytes { // Encode adds a newline
+			t.Errorf("%q: the last content that reads encodes to %d bytes, want exactly %d", payload, got, MaxContentBytes)
+		}
+		for _, n := range []int{room - 1, room, room + 1, room + 2} {
+			if n < 0 {
+				continue
+			}
+			data := build(k, n)
+			_, bad := Parse(data)
+			if wantRefused := n > room; (bad != nil) != wantRefused {
+				t.Errorf("%q k=%d tail=%d: Parse refused=%v, want %v", payload, k, n, bad != nil, wantRefused)
+			}
+			if bad != nil && bad.Kind != KindDecodeError {
+				t.Errorf("%q k=%d tail=%d: refused as %s, want the byte bound", payload, k, n, bad.Kind)
+			}
+			assertJudgeIsParse(t, fmt.Sprintf("%q k=%d tail=%d", payload, k, n), data)
+		}
+	}
+}
+
+// FuzzParseJudgeSameVerdict: on any bytes Judge and Parse give the same
+// verdict. CI runs the seed corpus; `go test -fuzz FuzzParseJudgeSameVerdict`
+// explores.
+func FuzzParseJudgeSameVerdict(f *testing.F) {
+	scalars := []string{"a", "1", "01", "0x1f", ".inf", "~", "null", "true", "yes", "<<", `"<<"`, `"\xff"`,
+		`"a&b<>"`, "2001-13-45", "!!str 1", "!!int x", "!!binary aGk=", "! a", "!foo a", `"\t"`, `" "`,
+		"| \n  x", "''", "&q v", "*q", "&a [1]", "[a, b]", "{p: 1}", "{<<: *b}", "? [x]", "=", "<", "&"}
+	for _, s := range scalars {
+		f.Add([]byte("a: " + s + "\n"))
+		f.Add([]byte("a: &a x\nb:\n  <<: {c: " + s + "}\n  c: 1\n"))
+	}
+	f.Add([]byte("a: &a [x]\nb: *a\n"))
+	f.Add([]byte("---\n~\n"))
+	f.Add([]byte("tenants:\n  t1:\n    x: \"80\"\n---\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, want := Parse(data)
+		got := Judge(data)
+		if (want == nil) != (got == nil) || (want != nil && got.Kind != want.Kind) {
+			t.Errorf("%q: Judge %v, Parse %v", data, got, want)
+		}
+	})
 }

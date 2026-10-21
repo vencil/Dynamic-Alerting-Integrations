@@ -46,9 +46,9 @@ func benchScanVerdict(b *testing.B, cached bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !cached {
-			verdictCache.mu.Lock()
-			verdictCache.m = make(map[[sha256.Size]byte]*UnreadableFileError)
-			verdictCache.mu.Unlock()
+			defaultVerdictCache.mu.Lock()
+			defaultVerdictCache.m = make(map[[sha256.Size]byte]*UnreadableFileError)
+			defaultVerdictCache.mu.Unlock()
 		}
 		if _, err := ScanDirTree(dir, nil, nil, discard); err != nil {
 			b.Fatal(err)

@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
@@ -49,47 +51,103 @@ func (e *UnreadableFileError) Error() string {
 // judgeConfFile is the verdict: nil for bytes parsetree.Parse reads, an
 // *UnreadableFileError otherwise. parsetree.Judge gives that verdict without
 // building the content no reader here uses.
-//
-// ⚠️ CACHED BY CONTENT. One load asks it more than once for the same bytes
-// (the walker, then the chain merge for every defaults carrier and the tenant
-// merge; every reload re-reads the unchanged carriers), and the verdict is a
-// pure function of the bytes, so it is kept by their SHA-256 — measured
-// cheaper than a second judgement by two orders of magnitude on a conf.d
-// file. The set is bounded (verdictCacheMax): when full it is dropped whole,
-// which costs a re-judgement, never a different answer.
 func judgeConfFile(data []byte) error {
+	return defaultVerdictCache.judge(data)
+}
+
+// unreadableFileError is the error for parse-tree's refusal bad, its message
+// cut to maxUnreadableMessage bytes. One rule, applied before a verdict is
+// kept, so a reader sees the same text whether the verdict was judged now or
+// taken from the cache.
+func unreadableFileError(bad *parsetree.Unreadable) *UnreadableFileError {
+	return &UnreadableFileError{Kind: bad.Kind, Message: cutMessage(bad.Message)}
+}
+
+// maxUnreadableMessage bounds an *UnreadableFileError's Message. parse-tree
+// quotes what it refuses (a repeated key, a tag), and a quoted key can be as
+// long as the file: measured, a 1 MiB duplicate key made a 1,048,644-byte
+// message. The kind is a field of its own and the line number leads the
+// message ("line N: …"), so both survive the cut.
+const maxUnreadableMessage = 512
+
+// cutMessage is msg cut to maxUnreadableMessage bytes at a rune boundary,
+// with how much was cut; msg itself when it fits.
+func cutMessage(msg string) string {
+	if len(msg) <= maxUnreadableMessage {
+		return msg
+	}
+	cut := maxUnreadableMessage
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s… (%d more bytes)", msg[:cut], len(msg)-cut)
+}
+
+// verdictCache keeps verdicts by content SHA-256 (a nil value: the file can
+// be read).
+//
+// ⚠️ WHY. One load asks for the same bytes more than once (the walker, then
+// the chain merge for every defaults carrier and the tenant merge; every
+// reload re-reads the unchanged carriers), and the verdict is a pure function
+// of the bytes. Measured (#3206): a 1000-file cold scan 109 ms judging every
+// file, 70 ms with every verdict kept.
+//
+// ⚠️ BOUNDED, AND WHAT THAT COSTS. At max entries the set is dropped whole
+// (logged once at DEBUG on logf) — a re-judgement, never a different answer.
+// A process that meets more distinct contents than max between two drops
+// (a tree of more than max files, or one rewritten that often) keeps
+// dropping it, and every judgement then costs what it costs uncached (the
+// 109 ms above per 1000 files); nothing else changes. ADR-036 "已知限制".
+// The *UnreadableFileError values are shared and never written.
+type verdictCache struct {
+	max  int
+	logf func(format string, args ...any)
+
+	mu sync.Mutex
+	m  map[[sha256.Size]byte]*UnreadableFileError
+}
+
+// verdictCacheMax is the process cache's bound: above the largest tree
+// measured (5,000 files, ScanDirTree_Hierarchical_5000_Cold), so one load
+// keeps every verdict; an entry is a key and a pointer (messages are cut,
+// cutMessage).
+const verdictCacheMax = 8192
+
+// defaultVerdictCache is judgeConfFile's. Its log goes to log.Default(): the
+// decode entries take no logger, and the one line is a DEBUG note, not a
+// verdict.
+var defaultVerdictCache = newVerdictCache(verdictCacheMax, log.Printf)
+
+func newVerdictCache(max int, logf func(string, ...any)) *verdictCache {
+	return &verdictCache{max: max, logf: logf, m: make(map[[sha256.Size]byte]*UnreadableFileError)}
+}
+
+// judge is judgeConfFile over this cache.
+func (c *verdictCache) judge(data []byte) error {
 	key := sha256.Sum256(data)
-	verdictCache.mu.Lock()
-	v, hit := verdictCache.m[key]
-	verdictCache.mu.Unlock()
+	c.mu.Lock()
+	v, hit := c.m[key]
+	c.mu.Unlock()
 	if !hit {
 		if bad := parsetree.Judge(data); bad != nil {
-			v = &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+			v = unreadableFileError(bad)
 		}
-		verdictCache.mu.Lock()
-		if len(verdictCache.m) >= verdictCacheMax {
-			verdictCache.m = make(map[[sha256.Size]byte]*UnreadableFileError)
+		c.mu.Lock()
+		if len(c.m) >= c.max {
+			c.m = make(map[[sha256.Size]byte]*UnreadableFileError)
+			if c.logf != nil {
+				c.logf("DEBUG: parse-tree verdict cache reached %d entries and was cleared; "+
+					"files are judged again (more distinct conf.d contents than the cache holds)", c.max)
+			}
 		}
-		verdictCache.m[key] = v
-		verdictCache.mu.Unlock()
+		c.m[key] = v
+		c.mu.Unlock()
 	}
 	if v == nil {
 		return nil // not a typed nil in the error interface
 	}
 	return v
 }
-
-// verdictCacheMax bounds verdictCache: past it the set is dropped whole.
-// Above the largest tree measured (5,000 files, ScanDirTree_Hierarchical_5000)
-// so one load keeps every verdict; each entry is a key and a pointer.
-const verdictCacheMax = 8192
-
-// verdictCache is judgeConfFile's verdicts by content SHA-256 (nil = the file
-// can be read). The *UnreadableFileError values are shared and never written.
-var verdictCache = struct {
-	mu sync.Mutex
-	m  map[[sha256.Size]byte]*UnreadableFileError
-}{m: make(map[[sha256.Size]byte]*UnreadableFileError)}
 
 // UnreadableKindOf is the parsetree.Kind of err when a decode entry failed
 // because parsetree.Parse refuses the file (anywhere in err's chain), and
