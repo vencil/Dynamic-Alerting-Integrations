@@ -75,7 +75,6 @@
       "Bash(go build:*)",
       "Bash(go test:*)",
       "Bash(go vet:*)",
-      "Bash(wc -l /workspaces/vibe-k8s-lab/k8s/04-tenant-api/*.yaml)",
       "Bash(wc -l /workspaces/vibe-k8s-lab/components/tenant-api/internal/handler/*.go /workspaces/vibe-k8s-lab/components/tenant-api/internal/gitops/*.go /workspaces/vibe-k8s-lab/components/tenant-api/internal/rbac/*.go /workspaces/vibe-k8s-lab/components/tenant-api/cmd/server/main.go)",
       "Bash(grep -c \"test_\" tests/test_*.py)",
       "Bash(bc)",

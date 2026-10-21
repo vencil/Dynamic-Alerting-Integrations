@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "tenant-api chart values — top-level keys + writeBack",
+  "description": "Catches a misspelled key at `helm template` / `helm install` instead of letting it be silently ignored (#1594). Constrains the TOP-LEVEL key set and the whole writeBack block (additionalProperties:false); every other block is left open. Semantic checks stay in the templates' {{ fail }} guards on purpose, because their messages explain WHY a value is refused: writeBack.mode=\"\" (unset) and every cross-field requirement of the PR modes are refused by tenant-api.writeBackGuard in templates/_helpers.tpl, so the schema admits \"\" and does not type directAcknowledgeNotDelivered (the guard accepts only the boolean true, and says so). Only the KEY sets and writeBack.mode's values are constrained; the other leaves are deliberately untyped (a numeric GitLab project id, an unquoted numeric branch name are legal and the templates handle them).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "description": "Helm's own key, present when this chart is used as a subchart. Not read by any template.",
+      "type": "object"
+    },
+    "replicaCount": {
+      "description": "MUST stay 1 (ADR-023 single writer) — enforced by the fail guard in templates/deployment.yaml, not here.",
+      "type": "integer"
+    },
+    "image": {
+      "type": "object"
+    },
+    "oauth2Proxy": {
+      "type": "object"
+    },
+    "tenantApi": {
+      "type": "object"
+    },
+    "confDir": {
+      "type": "object"
+    },
+    "gitRepoUrl": {},
+    "writeBack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "tenant-api --write-mode. \"\" is the shipped default and means unset: the render fails with the writeBack guard's explanation. The non-empty values are the binary's legal --write-mode values minus the `pr` alias of pr-github, which the chart does not wire (its forge flags are keyed on pr-github / pr-gitlab). Pinned to the binary by components/tenant-api/cmd/server/chart_schema_test.go.",
+          "type": "string",
+          "enum": [
+            "",
+            "pr-github",
+            "pr-gitlab",
+            "direct"
+          ]
+        },
+        "directAcknowledgeNotDelivered": {
+          "description": "Only the boolean true acknowledges direct mode; the writeBack guard refuses anything else, including the string \"true\"."
+        },
+        "baseBranch": {},
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repo": {},
+            "targetBranch": {},
+            "apiUrl": {}
+          }
+        },
+        "gitlab": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "project": {
+              "description": "group/project path or numeric project id — a number is legal, the template renders it as an integer."
+            },
+            "targetBranch": {},
+            "apiUrl": {}
+          }
+        },
+        "token": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": {},
+            "secretKey": {}
+          }
+        }
+      }
+    },
+    "rbac": {
+      "type": "object"
+    },
+    "state": {
+      "type": "object"
+    },
+    "federation": {
+      "type": "object"
+    },
+    "machineIdentity": {
+      "type": "object"
+    },
+    "identity": {
+      "type": "object"
+    },
+    "humanSocket": {
+      "type": "object"
+    },
+    "generator": {
+      "type": "object"
+    },
+    "service": {
+      "type": "object"
+    },
+    "ingress": {
+      "type": "object"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "networkPolicy": {
+      "type": "object"
+    },
+    "podAnnotations": {
+      "type": "object"
+    }
+  }
+}

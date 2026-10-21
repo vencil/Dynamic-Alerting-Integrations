@@ -171,6 +171,10 @@ jobs:
               #     skipped the leg that would catch the drift. Found by
               #     go_test_reads.py's first measurement (#1399).
               - "helm/tenant-api/values.yaml"
+              #   - helm/tenant-api/values.schema.json — TestChartSchemaWriteModesMatchTheBinary
+              #     (tenant-api cmd/server) pins its writeBack.mode enum to the
+              #     binary's --write-mode set (#1594).
+              - "helm/tenant-api/values.schema.json"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
               #   - the #1399 read check the Go legs run after their tests,

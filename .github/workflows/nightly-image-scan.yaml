@@ -291,7 +291,7 @@ jobs:
             # (this was the nightly "1 unscanned" in #1243). Reported as "no
             # inventory", never as clean.
             no_inventory: true
-          - name: alpine-git # k8s/04-tenant-api/deployment.yaml (gitops sidecar)
+          - name: alpine-git # helm/tenant-api/templates/deployment.yaml (git-clone / git-gc-off init containers, hardcoded in the template)
             ref: "alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f"
           # try-local demo stack ONLY (#1337 ①) — README points prospective customers
           # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/

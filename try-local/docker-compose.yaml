@@ -327,9 +327,9 @@ services:
     # dependency → Mode 0 stays minimal. Directory mount (not single-file) to
     # avoid the WSL2 single-file bind-mount landmine.
     # Release tag, deliberately WITHOUT a digest (#1337 ①). The deploy surface
-    # pins this same image by digest (k8s/04-tenant-api/deployment.yaml,
-    # helm/tenant-api/templates/deployment.yaml, and the nightly scan matrix) —
-    # ⛔ do not copy that here. Those three are covered by Renovate's
+    # pins this same image by digest (helm/tenant-api/templates/deployment.yaml
+    # and the nightly scan matrix) —
+    # ⛔ do not copy that here. Those two are covered by Renovate's
     # managerFilePatterns and move together; `try-local/**` matches none of them,
     # so a digest here would be the one copy nothing ever bumps. Since alpine/git
     # is rebuilt weekly and its CVE remediation is precisely a digest refresh

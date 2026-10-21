@@ -76,7 +76,10 @@ def test_values_ship_no_default_mode():
 @_needs_helm
 @pytest.mark.parametrize("args, needle", [
     ((), "writeBack.mode must be pr-github, pr-gitlab or direct"),
-    (("writeBack.mode=pr",), "writeBack.mode must be pr-github, pr-gitlab or direct"),
+    # A non-empty unknown mode is refused by values.schema.json's enum before the
+    # template guard runs (#1594); "" (unset) is left to the guard's message.
+    (("writeBack.mode=pr",), "/writeBack/mode"),
+    (("writeBack.mode=pr-guthub",), "/writeBack/mode"),
     (("writeBack.mode=direct",), "directAcknowledgeNotDelivered"),
     (tuple(a for a in _GITHUB if not a.startswith("gitRepoUrl")), "needs gitRepoUrl"),
     (tuple(a for a in _GITHUB if not a.startswith("writeBack.token")), "needs writeBack.token.secretName"),
@@ -94,6 +97,21 @@ def test_render_refuses(args, needle):
     assert res.returncode != 0, f"render with {args} should fail"
     assert needle in res.stderr, res.stderr
     assert _FAKE_PASSWORD not in res.stderr + res.stdout  # a URL password is never echoed
+
+
+@_needs_helm
+@pytest.mark.parametrize("args, needle", [
+    # #1594: a misspelled key used to be silently ignored — the chart rendered
+    # with the default and the operator's setting never took effect.
+    (_GITHUB + ["writeBack.mdoe=pr-gitlab"], "'mdoe' not allowed"),
+    (_GITHUB + ["writeBack.github.rep=acme/other"], "'rep' not allowed"),
+    (_GITHUB + ["writeBack.token.secretname=other"], "'secretname' not allowed"),
+    (_GITHUB + ["writeback.mode=direct"], "'writeback' not allowed"),
+])
+def test_schema_refuses_misspelled_keys(args, needle):
+    res = _render(*args)
+    assert res.returncode != 0, f"render with {args} should fail"
+    assert needle in res.stderr, res.stderr
 
 
 @_needs_helm

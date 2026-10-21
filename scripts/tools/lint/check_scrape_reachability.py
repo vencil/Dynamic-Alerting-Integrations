@@ -24,8 +24,9 @@ k8s/**. Each leaf is classified:
                           target is a REPO ARTIFACT (a k8s/** Service doc or a
                           static_configs job), so SD namespace + annotation keep
                           + __name__ filter are all evaluated against it.
-                        * `helm-service` families (vector_, and the
-                          threshold-exporter families below) — no repo manifest
+                        * `helm-service` families (vector_, tenant_api_ /
+                          da_generator_, and the threshold-exporter families
+                          below) — no repo manifest
                           pins the target, so only the JOB side is checked: that
                           some annotation-keep job's SD face covers the pinned
                           namespace, and that no __name__ filter rejects the
@@ -178,6 +179,15 @@ VECTOR_NAMESPACE = "vector"
 # the family is judged, not ledgered as unknown-source.
 THRESHOLD_EXPORTER_NAMESPACE = "monitoring"
 
+# tenant-api's install namespace (#1004 canonical namespace). Like Vector's it
+# is pinned operationally — the chart's Service renders into
+# Release.Namespace — and the Namespace manifest is repo-pinned
+# (k8s/00-namespaces/namespace-tenant-api.yaml). Until #1594 the family was a
+# `service` row resolved against the raw tenant-api Service under k8s/; those
+# raw manifests are gone (helm/tenant-api is the only deployment source), so the
+# chart face is pinned by rendering, like every other helm-service family.
+TENANT_API_NAMESPACE = "tenant-api"
+
 # ── metric-family → expected source (declarative, longest-prefix wins) ──────
 # kind:
 #   static           scraped by a static_configs self-job (value = job name)
@@ -193,7 +203,7 @@ THRESHOLD_EXPORTER_NAMESPACE = "monitoring"
 _FAMILY_TABLE: list[tuple[str, str, object]] = [
     ("prometheus_", "static", "prometheus"),
     ("alertmanager_", "service", ("monitoring", "alertmanager")),
-    ("tenant_api_", "service", ("tenant-api", "tenant-api")),
+    ("tenant_api_", "helm-service", TENANT_API_NAMESPACE),
     # NOTE `kubelet_` before `kube_` is load-bearing — longest-prefix matching
     # protects it, but keep the order human-readable too (substring trap).
     ("kubelet_", "name-filtered", "kubelet-volume-stats"),
@@ -211,7 +221,7 @@ _FAMILY_TABLE: list[tuple[str, str, object]] = [
     # series come from the tenant-api target. Longest-prefix matching routes
     # it here before `da_` above; da_generator_build_info is the generator /
     # da-guard version metric (ADR-036 §6).
-    ("da_generator_", "service", ("tenant-api", "tenant-api")),
+    ("da_generator_", "helm-service", TENANT_API_NAMESPACE),
 ]
 
 # ── EXACT-NAME families (checked before _FAMILY_TABLE) ─────────────────────

@@ -74,7 +74,13 @@ _PINNED = re.compile(r"@sha256:[0-9a-f]{64}$")
 # yield 9 of these refs and the k8s globs alone 7, so losing either glob drops
 # the total well below 15. A per-source floor would have to re-walk
 # `SOURCE_GLOBS` here, i.e. a second copy of the extractor's file selection.
-_MIN_REFS = 15
+# Lowered to 14 by #1594: the raw tenant-api Deployment under k8s/ was the only
+# extracted carrier of alpine/git, and it was deleted. The image is still
+# deployed — hardcoded in helm/tenant-api/templates/deployment.yaml, which the
+# extractor cannot parse — and its nightly-scan coverage is pinned by
+# tests/ops/test_nightly_scan_matrix_drift.py
+# (test_hardcoded_template_image_refs_are_covered_by_the_scan).
+_MIN_REFS = 14
 
 
 def _thirdparty_refs() -> set[str]:
