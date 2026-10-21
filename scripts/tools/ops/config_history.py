@@ -413,5 +413,6 @@ def main():
         cmd_diff(args.config_dir, args.id_a, args.id_b)
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

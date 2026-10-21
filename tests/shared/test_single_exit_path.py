@@ -477,6 +477,38 @@ def test_every_armed_tool_enters_through_run():
     assert not bad, "\n".join(f"{p}: {w}" for p, w in sorted(bad.items()))
 
 
+def _da_tools_scripts() -> dict[str, Path]:
+    """Every `da-tools <cmd>` script, resolved the way the CLI resolves it:
+    the population is COMMAND_MAP itself, not a list kept here."""
+    import entrypoint  # noqa: E402  (path set by conftest.py)
+    out = {}
+    for cmd, script in sorted(entrypoint.COMMAND_MAP.items()):
+        path, searched = entrypoint._resolve_script_path(script)
+        assert path is not None, f"{cmd}: {script} not found in {searched}"
+        out[cmd] = Path(path)
+    return out
+
+
+def test_every_da_tools_command_enters_through_run():
+    """#3156 (owner, 2026-10-21): every CLI tool — armed or not — ends through
+    `_lib_exitcodes.run`, the one exit that owns the last flush. The rounds
+    #3124 / #3115 / #3156 fixed edges of `run()`; a tool outside it does not
+    get those fixes. No pending list: a new command must enter through
+    `run()` from its first commit."""
+    scripts = _da_tools_scripts()
+    # anti-vacuity: the population is the CLI, Python tools in both dirs
+    assert {"guard", "tenant-verify", "alert-quality"} <= set(scripts), sorted(scripts)
+    # distinct files, not commands: a resolver that sent every command to
+    # one script would otherwise still count 50+
+    assert len(set(scripts.values())) >= 50, sorted(scripts)
+    bad = {}
+    for cmd, path in scripts.items():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if why := _guard_problem(tree):
+            bad[cmd] = f"{path.relative_to(REPO_ROOT)}: {why}"
+    assert not bad, "\n".join(f"{c}: {w}" for c, w in sorted(bad.items()))
+
+
 @pytest.mark.parametrize("src, ok", [
     ("if __name__ == '__main__':\n    import _lib_exitcodes\n    _lib_exitcodes.run(main)\n", True),
     ("if __name__ == '__main__':\n    main()\n", False),
