@@ -308,6 +308,19 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 			})
 			continue
 		}
+		// #3140: a threshold written as a non-finite number — the
+		// exporter's own predicate, the one PUT's body-only pre-flight runs
+		// (validateBodyOnly), here on the one value this patch writes.
+		// Refused before anything is written, so every batch path (direct,
+		// PR, /groups/{id}/batch) answers it with this 400; the writer's
+		// merge paths refuse it again on the merged file.
+		if msgs := cfg.NonFiniteThresholdWrites(map[string]cfg.ScheduledValue{k: {Default: v}}); len(msgs) > 0 {
+			violations = append(violations, Violation{
+				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
+				Reason: strings.TrimPrefix(msgs[0], k+": "),
+			})
+			continue
+		}
 		// Reserved-key strict validation (only for keys in the registry).
 		if validator, ok := reservedKeyValidators[k]; ok {
 			if reason := validator(v); reason != "" {

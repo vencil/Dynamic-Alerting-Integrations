@@ -32,6 +32,13 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "db-a.yaml")
+	// #3140: the root defaults declare mysql_connections, so validate refuses
+	// the non-finite row below for its value — without them it refused it
+	// as an unknown key, and the row held whether or not validate ran the
+	// predicate.
+	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte("defaults:\n  mysql_connections: 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	bodyShaped := []struct{ name, body string }{
 		{"invalid YAML", "tenants:\n  db-a:\n   - ]["},
