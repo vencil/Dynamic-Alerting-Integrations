@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -325,52 +326,25 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 // The order of the checks is the answer's: the fresh-base scope refusals
 // first (#2857), ErrNoChanges before every failure mapping.
 func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
-	// #2857: the write scope refuses it on the fresh base, or the
-	// base's org file cannot be read.
-	var freshScope *freshBaseScopeError
-	if errors.As(err, &freshScope) {
-		writeFreshBaseScopeViolation(rw, r, freshScope)
-		return true
-	}
-	var freshOrgs *freshBaseOrgsError
-	if errors.As(err, &freshOrgs) {
-		writeFreshBaseOrgsError(rw, r, freshOrgs)
-		return true
-	}
-	if errors.Is(err, gitops.ErrNoChanges) {
-		return false
-	}
-	// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-	// retry-hinting 503s (shared with the batch path).
-	if writeWriteFlowError(rw, r, d, err) {
-		return true
-	}
-	// #1724: the branch did not reach origin — 503 GIT_PUSH_FAILED, no
-	// PR/MR; the deferred ReleaseClaim frees the tenant for the retry.
-	if writePushFailed(rw, r, err) {
-		return true
-	}
-	// #795 F1: malformed body is a CLIENT error → 400 (matches the
-	// direct-write path), not a server 500.
-	if errors.Is(err, gitops.ErrValidation) {
-		WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-		return true
-	}
-	if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
-		return true
-	}
-	// No gitops.ErrMergeFailed check: WritePRChecked writes the body whole
-	// and never merges (only readMerge, behind WriteMerged / WriteBatch /
-	// WritePRBatch, returns it).
-	// #1724: cancelled, or a git command past its own deadline → the 503
-	// the direct path answers (#1535), not the generic 500.
-	if writeWriteCancelled(rw, r, err) {
-		return true
-	}
+	// #2857: the write scope refuses it on the fresh base, or the base's org
+	// file cannot be read; then ErrNoChanges; then the write-flow refusals,
+	// #1724's push failure (503 GIT_PUSH_FAILED, no PR/MR; the deferred
+	// ReleaseClaim frees the tenant for the retry), #795 F1's malformed body
+	// (a CLIENT error → 400, as the direct path), #2070's base restore, and
+	// #1724's cancellation (the 503 the direct path answers, #1535). No
+	// ErrMergeFailed: WritePRChecked writes the body whole and never merges.
 	// Anything else is an unexpected git failure → generic 500 (its text
 	// stays in the log — WriteErrorEnvelope, #1700).
-	WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
-	return true
+	written, _ = writeErr(rw, r, d, err, errCtx{
+		stages: []kindSet{
+			kindsFreshBase,
+			kindsOf(errkind.NoChanges),
+			kindsWriteFlow.union(kindsOutcome).with(errkind.GitPushFailed, errkind.Validation, errkind.BaseRestoreFailed),
+		},
+		fallback: fallbackInternal,
+		prefix:   "PR write failed: ",
+	})
+	return written
 }
 
 // BaseHashHeader is the request header carrying the optimistic-concurrency

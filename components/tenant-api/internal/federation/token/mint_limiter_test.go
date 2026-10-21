@@ -90,3 +90,26 @@ func TestMintLimiter_PerTenantIsolation(t *testing.T) {
 		t.Error("tenant-idle should have an independent window")
 	}
 }
+
+// A denied attempt says how long until the oldest mint in the window ages
+// out — the Retry-After the handler sends (#3226).
+func TestMintLimiter_DeniedSaysWhenTheNextMintIsAdmitted(t *testing.T) {
+	t.Parallel()
+	l := newMintLimiter()
+	t0 := time.Now()
+	l.admit("tenant", t0)
+	for i := 1; i < maxMintsPerWindow; i++ {
+		l.admit("tenant", t0.Add(10*time.Second))
+	}
+	at := t0.Add(20 * time.Second)
+	ok, wait := l.admit("tenant", at)
+	if ok {
+		t.Fatal("mint past the window cap was allowed")
+	}
+	if want := mintWindow - 20*time.Second; wait != want {
+		t.Errorf("wait = %v, want %v (the oldest mint ages out at t0+window)", wait, want)
+	}
+	if ok, _ := l.admit("tenant", at.Add(wait+time.Nanosecond)); !ok {
+		t.Error("mint once wait has passed was denied")
+	}
+}

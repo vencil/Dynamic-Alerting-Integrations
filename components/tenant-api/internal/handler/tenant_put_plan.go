@@ -58,6 +58,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -181,58 +182,17 @@ func validationError(errs []string) error {
 // refused, and a /diff whose preview of it was refused (the same refusal,
 // the same answer). fault reports a failure that is the server's (#3054).
 func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID string, err error) (fault bool) {
-	// #2903: the generator container refused it (422 / 429 / 503).
-	if writeGeneratorError(rw, r, d, err) {
-		return false
-	}
-	if errors.Is(err, gitops.ErrWriteOverloaded) {
-		WriteOverloaded(rw, r)
-		return false
-	}
-	// #1723: the tree was on a PR branch and nothing was written —
-	// retryable, not the fallback below.
-	if errors.Is(err, gitops.ErrTreeNotOnBase) {
-		WriteTreeNotOnBase(rw, r, err)
-		return false
-	}
-	// Same 409 + CONFLICT code as the custom-alerts base_hash check: from
-	// the caller's side both mean "the file moved under you, re-read and
-	// retry", and the current hash tells them what to re-read against.
-	var pre *gitops.PreconditionError
-	if errors.As(err, &pre) {
-		extra := map[string]any{
-			"message": "the tenant configuration was updated by someone else; refresh and retry",
-		}
-		// #3064: only the hash of a file GET /tenants/{id} shows — an
-		// API-shaped one, judged on the very bytes it hashes.
-		if pre.Current != "" && tenantFileAPIManaged(d, tenantID, pre.Current) {
-			extra["current_source_hash"] = pre.Current
-		}
-		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
-			Error: gitops.ErrPrecondition.Error(),
-			Code:  CodeConflict,
-			Extra: extra,
-		})
-		return false
-	}
-	if errors.Is(err, gitops.ErrConflict) {
-		WriteJSONError(rw, r, http.StatusConflict, err.Error())
-		return false
-	}
-	// #1673: two files claim this tenant. The request is well-formed; the
-	// on-disk state is ambiguous — 409, not the fallback.
-	if errors.Is(err, confd.ErrAmbiguousTenantFile) {
-		WriteJSONError(rw, r, http.StatusConflict, err.Error())
-		return false
-	}
-	// #2078: the id is declared by another conf.d file → 409
-	// TENANT_DECLARED_ELSEWHERE (fixed message, path only in the log).
-	if writeTenantPlacementError(rw, r, d, err) {
-		return false
-	}
-	// #1700 / #1535: about the request → 400 with its text; a file / git
-	// failure (the commit stage included) → 500, its detail in the log.
-	return writeTenantWriteFailure(rw, r, err)
+	// Custom alerts' answers, plus #1673: two files claim this tenant — the
+	// request is well-formed, the on-disk state is ambiguous: 409, not the
+	// fallback. A PreconditionError carries the refresh advice under
+	// "message" (preconditionMessage).
+	_, fault = writeErr(rw, r, d, err, errCtx{
+		stages:              []kindSet{kindsDirectFirst.with(errkind.AmbiguousTenantFile), kindsPlacement.union(kindsOutcome)},
+		fallback:            fallbackWrite,
+		tenantID:            tenantID,
+		preconditionMessage: true,
+	})
+	return fault
 }
 
 // verdictCapture is the http.ResponseWriter /validate hands planPut for its

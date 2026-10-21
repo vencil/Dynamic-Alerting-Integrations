@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // requestWithID returns a *http.Request whose context carries the
@@ -207,7 +209,11 @@ func TestRateLimit_EnvelopeShape(t *testing.T) {
 func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeForgeDegraded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrForgeDegraded, errCtx{stages: []kindSet{kindsWriteFlow}})
+	forgeDegradedRetryAfterS := kindSpecOf(errkind.ForgeDegraded).RetryAfterS
+	if forgeDegradedRetryAfterS <= 0 {
+		t.Fatal("kindTable gives ForgeDegraded no Retry-After")
+	}
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
@@ -243,7 +249,11 @@ func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 func TestWriteOverloaded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	WriteOverloaded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrWriteOverloaded, errCtx{stages: []kindSet{kindsWriteFlow}})
+	writeOverloadedRetryAfterS := kindSpecOf(errkind.WriteOverloaded).RetryAfterS
+	if writeOverloadedRetryAfterS <= 0 {
+		t.Fatal("kindTable gives WriteOverloaded no Retry-After")
+	}
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)

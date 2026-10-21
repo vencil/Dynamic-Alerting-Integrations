@@ -33,7 +33,6 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,15 +40,13 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/threshold-exporter/pkg/confdname"
@@ -258,6 +255,10 @@ const (
 	// policy_unreadable when tenant-api's own copy cannot be read) is passed
 	// through the same way with that code.
 	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
+	// CodePolicyUnavailable is CodeValidatorUnavailable's 503 when the
+	// generator's deployment policy file is unusable (generator's own
+	// POLICY_UNAVAILABLE, passed through).
+	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
 )
 
 // notRegularText is the text of a TENANT_CONFIG_NOT_LOADABLE refusal of a
@@ -341,13 +342,16 @@ func treeUnreadableText(te *gitops.TreeUnreadableError, visible bool) string {
 	return text + ": " + strings.Join(parts, ", ")
 }
 
-// treeRefusal is the fixed text, code and single-write status of te: a store
-// fault is TENANT_STORE_FAULT 500, the rest TENANT_TREE_UNREADABLE 409.
+// treeRefusal is the fixed text of te, and the code and single-write status
+// of its kind (kindTable): a store fault is TENANT_STORE_FAULT 500, the rest
+// TENANT_TREE_UNREADABLE 409.
 func treeRefusal(te *gitops.TreeUnreadableError) (head, code string, status int) {
+	spec := kindSpecOf(te.ErrorKind())
+	head = msgTenantTreeUnreadable
 	if te.StoreFault {
-		return msgTenantStoreFault, CodeTenantStoreFault, http.StatusInternalServerError
+		head = msgTenantStoreFault
 	}
-	return msgTenantTreeUnreadable, CodeTenantTreeUnreadable, http.StatusConflict
+	return head, spec.Code, spec.Status
 }
 
 // targetUnreadableText is the client text of a write refused because its own
@@ -362,107 +366,11 @@ func targetUnreadableText(e *gitops.TargetUnreadableError) string {
 		"erase content nobody can read; repair it on tenant-api's server or volume, or in git"
 }
 
-// writeTenantTargetUnreadable renders gitops.TargetUnreadableError as the
-// 409 TENANT_CONFIG_NOT_LOADABLE the not-regular-file refusal already is,
-// for every caller, and reports whether err was one.
-func writeTenantTargetUnreadable(w http.ResponseWriter, r *http.Request, err error) bool {
-	var e *gitops.TargetUnreadableError
-	if !errors.As(err, &e) {
-		return false
-	}
-	slog.Warn("tenant write refused: the tenant file cannot be read", "tenant", e.TenantID, "error", err)
-	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
-		Error: targetUnreadableText(e),
-		Code:  CodeTenantConfigNotLoadable,
-		Extra: map[string]any{"tenant_id": e.TenantID, "config_error": string(e.ConfigError())},
-	})
-	return true
-}
-
 // logTreeUnreadable writes a TENANT_TREE_UNREADABLE refusal to the server
 // log with every entry's name (#2939 D3a: the operator repairing the tree
 // needs them whoever was refused).
 func logTreeUnreadable(msg, tenantID string, err error) {
 	slog.Warn(msg, "tenant", tenantID, "error", err)
-}
-
-// writeTenantTreeUnreadable renders the single-write TENANT_TREE_UNREADABLE
-// 409 or TENANT_STORE_FAULT 500 (treeRefusal) and reports whether err was
-// one. unreadable_count is always there; unreadable (path + reason per
-// entry) only for a visible caller.
-func writeTenantTreeUnreadable(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
-	var te *gitops.TreeUnreadableError
-	if !errors.As(err, &te) {
-		return false
-	}
-	logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", chi.URLParam(r, "id"), err)
-	visible := d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
-	extra := map[string]any{"unreadable_count": len(te.Entries)}
-	if visible {
-		entries := make([]map[string]string, len(te.Entries))
-		for i, u := range te.Entries {
-			entries[i] = map[string]string{"path": u.RelKey, "reason": u.Reason}
-		}
-		extra["unreadable"] = entries
-	}
-	_, code, status := treeRefusal(te)
-	WriteErrorEnvelope(w, r, status, ErrorResponse{
-		Error: treeUnreadableText(te, visible),
-		Code:  code,
-		Extra: extra,
-	})
-	return true
-}
-
-// writeTenantGitManaged answers a write refused for a git-managed tenant
-// (#3064, gitops.GitManagedError) with 409 TENANT_GIT_MANAGED, and reports
-// whether err was one. The text names the tenant the request is about and
-// the fixed reason code — nothing else of the file.
-func writeTenantGitManaged(w http.ResponseWriter, r *http.Request, err error) bool {
-	var gm *gitops.GitManagedError
-	if !errors.As(err, &gm) {
-		return false
-	}
-	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
-		Error: gm.Error(),
-		Code:  CodeTenantGitManaged,
-		Extra: map[string]any{"tenant_id": gm.TenantID, "git_managed_reason": gm.Reason},
-	})
-	return true
-}
-
-// writeTenantPlacementError renders the #2078 write-guard outcomes and the
-// #2939 whole-tree refusal, and reports whether err was one of them. The
-// full error (with the other file's path) goes to slog only; the response
-// carries a fixed message — for TENANT_TREE_UNREADABLE, with the entries'
-// names only for a caller treePathsVisible admits (d is how it is asked).
-//
-//   - gitops.ErrTenantDeclaredElsewhere → 409 TENANT_DECLARED_ELSEWHERE
-//   - gitops.ErrTenantStoreFault        → 500 TENANT_STORE_FAULT
-//   - gitops.ErrTenantTreeUnreadable    → 409 TENANT_TREE_UNREADABLE
-//   - gitops.TargetUnreadableError      → 409 TENANT_CONFIG_NOT_LOADABLE
-//   - gitops.ErrTenantTreeScan          → 500 INTERNAL_ERROR (the conf.d walk
-//     could not run; the guard fails closed rather than risk a duplicate)
-//   - gitops.ErrTenantGitManaged        → 409 TENANT_GIT_MANAGED (#3064)
-//   - gitops.ErrTenantFileDirty         → 409 TENANT_FILE_DIRTY (#1535)
-func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
-	if writeTenantTreeUnreadable(w, r, d, err) || writeTenantTargetUnreadable(w, r, err) || writeTenantGitManaged(w, r, err) {
-		return true
-	}
-	switch {
-	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
-		slog.Warn("tenant write refused: tenant declared by another conf.d file", "error", err)
-		WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeTenantDeclaredElsewhere, msgTenantDeclaredElsewhere)
-	case errors.Is(err, gitops.ErrTenantTreeScan):
-		slog.Error("tenant write refused: conf.d scan failed", "error", err)
-		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgTenantTreeScan)
-	case errors.Is(err, gitops.ErrTenantFileDirty):
-		slog.Warn("tenant write refused: tenant file differs from HEAD", "error", err)
-		WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeTenantFileDirty, msgTenantFileDirty)
-	default:
-		return false
-	}
-	return true
 }
 
 // ErrorResponse is the canonical error envelope. All fields except
@@ -616,23 +524,6 @@ var publicInternalMessages = map[string]bool{
 // INTERNAL_ERROR may carry it (publicInternalMessages).
 const msgWriteFailed = "the write failed; the server log has the details under this request_id"
 
-// writeBaseRestoreFailed answers a PR-mode write whose branch was cut (and
-// maybe pushed) but whose worktree could not return to base (#2070), and
-// reports whether err was one. It stays a 500 with no Retry-After — a retry
-// would cut a second branch — and its text names the branch and whether it
-// reached origin, which the operator needs to find it. It leaves out the git
-// error, whose text can carry server paths (#1700); that goes to the log.
-// Its own code keeps WriteErrorEnvelope from withholding the branch.
-func writeBaseRestoreFailed(w http.ResponseWriter, r *http.Request, prefix string, err error) bool {
-	var br *gitops.BaseRestoreError
-	if !errors.As(err, &br) {
-		return false
-	}
-	slog.Error("PR-mode write: worktree left on the feature branch", "error", err)
-	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeBaseRestoreFailed, prefix+br.Summary())
-	return true
-}
-
 // msgBatchOpFailed is msgWriteFailed for one op of a batch: an async op has no
 // request_id, so its log line is found by tenant and time instead.
 const msgBatchOpFailed = "the write failed; the server log has the details"
@@ -640,41 +531,27 @@ const msgBatchOpFailed = "the write failed; the server log has the details"
 // writeErrorIsForClient reports whether a tenant-write error's own text is
 // meant for the caller: a validation verdict on the body, an unusable tenant
 // id, (batch) a merge error describing the patch against the file, or a
-// conf.d layout problem the operator must fix (two files claim the tenant, or
-// its file is not a regular file — both name basenames only). Any other error
-// out of a write is the server's — reading the file, the temp file, git — and
-// its text carries server paths (#1700).
+// conf.d layout problem the operator must fix (two files claim the tenant, its
+// file is not a regular file, or it is git-managed — all name basenames
+// only). Any other error out of a write is the server's — reading the file,
+// the temp file, git — and its text carries server paths (#1700). The kinds
+// are the ones kindTable marks ClientError.
 func writeErrorIsForClient(err error) bool {
-	return errors.Is(err, gitops.ErrValidation) ||
-		errors.Is(err, gitops.ErrReservedTenantID) ||
-		errors.Is(err, gitops.ErrInvalidTenantID) ||
-		errors.Is(err, gitops.ErrMergeFailed) ||
-		errors.Is(err, gitops.ErrTenantGitManaged) ||
-		errors.Is(err, confd.ErrAmbiguousTenantFile) ||
-		errors.Is(err, confd.ErrNotRegularFile)
+	return isClientError(err)
 }
 
 // writeTenantWriteFailure answers a tenant-write error that no more specific
 // mapping claimed, and reports whether the failure is the server's (#3054).
-// The status follows the same line as the text (#1535): an error that is about
-// the request (writeErrorIsForClient) is the caller's 400 with its own text;
-// a write stopped before it committed, or whose outcome the writer could not
-// determine (#3173), is the 503 a batch answers for it (writeWriteCancelled);
-// anything else — the commit stage
-// failing, the temp file, reading the tenant file — is the server's, a 500
-// INTERNAL_ERROR with msgWriteFailed and the detail in the log under the
-// request_id. It used to be a 400 for all of them, so a client whose body was
-// fine read a failed commit as its own mistake.
+// The status follows the same line as the text (#1535): a write stopped
+// before it committed, or whose outcome the writer could not determine
+// (#3173), is the 503 a batch answers for it (kindsOutcome); an error that is
+// about the request (writeErrorIsForClient) is the caller's 400 with its own
+// text; anything else — the commit stage failing, the temp file, reading the
+// tenant file — is the server's, a 500 INTERNAL_ERROR with msgWriteFailed and
+// the detail in the log under the request_id (fallbackWrite).
 func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) (fault bool) {
-	if writeWriteCancelled(w, r, err) {
-		return false
-	}
-	if writeErrorIsForClient(err) {
-		WriteJSONError(w, r, http.StatusBadRequest, err.Error())
-		return false
-	}
-	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, writeErrorText(r, err))
-	return true
+	_, fault = writeErr(w, r, nil, err, errCtx{stages: []kindSet{kindsOutcome}, fallback: fallbackWrite})
+	return fault
 }
 
 // msgWriteCancelled is the text of a write — one tenant or a whole batch —
@@ -694,48 +571,6 @@ const msgWriteCancelled = "the write was cancelled or timed out before it was co
 // msgWriteCancelled, but it tells the caller to look before retrying.
 const msgWriteOutcomeUnknown = "the write failed while it was being committed and the server cannot tell whether it was; " +
 	"it may have been committed — refresh to see whether it was before retrying"
-
-// isWriteCancelled reports whether a write was stopped before anything of it
-// was committed by its context — cancelled, or past its deadline — or by a
-// git command past its own deadline (gitops.ErrGitTimeout): not the body's
-// fault, and safe to retry. An error whose outcome the writer could not
-// determine (gitops.WriteUnknown) is never this, whatever its cause.
-func isWriteCancelled(err error) bool {
-	if gitops.OutcomeOf(err) != gitops.WriteNotCommitted {
-		return false
-	}
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, gitops.ErrGitTimeout)
-}
-
-// isWriteOutcomeUnknown reports whether the writer could not tell whether
-// the write was committed (gitops.WriteOutcomeUnknownError).
-func isWriteOutcomeUnknown(err error) bool {
-	return gitops.OutcomeOf(err) == gitops.WriteUnknown
-}
-
-// writeWriteCancelled answers a write stopped before it committed
-// (isWriteCancelled) with 503 msgWriteCancelled, and one whose outcome is
-// unknown (isWriteOutcomeUnknown) with 503 msgWriteOutcomeUnknown, and
-// reports whether err was either. The single-tenant writes and the batches,
-// direct and PR mode, share it (#1535, #3173).
-func writeWriteCancelled(w http.ResponseWriter, r *http.Request, err error) bool {
-	switch {
-	case isWriteOutcomeUnknown(err):
-		var reqID string
-		if r != nil {
-			reqID = middleware.GetReqID(r.Context())
-		}
-		slog.Error("write outcome unknown: the ref update failed and the branch could not be read back",
-			"request_id", reqID, "error", err)
-		WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteOutcomeUnknown)
-	case isWriteCancelled(err):
-		WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteCancelled)
-	default:
-		return false
-	}
-	return true
-}
 
 // writeErrorText is the text a tenant-write failure shows the client: its own
 // when writeErrorIsForClient, else msgWriteFailed with the original logged.
@@ -871,6 +706,9 @@ type freshBaseScopeError struct {
 	PreState bool
 }
 
+// ErrorKind is errkind.FreshBaseScope.
+func (e *freshBaseScopeError) ErrorKind() errkind.Kind { return errkind.FreshBaseScope }
+
 func (e *freshBaseScopeError) Error() string {
 	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
 	nothing := "Nothing in this batch was written and no PR/MR was opened"
@@ -895,15 +733,13 @@ func (e *freshBaseScopeError) Error() string {
 // and is for the log only.
 type freshBaseOrgsError struct{ Err error }
 
+// ErrorKind is errkind.FreshBaseOrgs.
+func (e *freshBaseOrgsError) ErrorKind() errkind.Kind { return errkind.FreshBaseOrgs }
+
 func (e *freshBaseOrgsError) Error() string {
 	return "the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, " +
 		"so this write's organization scope cannot be judged. Nothing was written and no PR/MR was opened; " +
 		"repair the file on the base branch."
-}
-
-func writeFreshBaseOrgsError(w http.ResponseWriter, r *http.Request, e *freshBaseOrgsError) {
-	slog.Error("PR write refused: _tenant_orgs.yaml on the fresh base cannot be read", "error", e.Err)
-	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, e.Error())
 }
 
 // orFreshScopeError is err when the in-lock scope check failed to run, and
@@ -915,165 +751,19 @@ func orFreshScopeError(err error, refusal error) error {
 	return refusal
 }
 
-// writeFreshBaseScopeViolation answers a freshBaseScopeError with 403
-// FORBIDDEN, as the local check's refusal is, naming the tenant and, for a
-// batch, the op.
-func writeFreshBaseScopeViolation(w http.ResponseWriter, r *http.Request, e *freshBaseScopeError) {
-	extra := map[string]any{"tenant_id": e.TenantID}
-	if !e.Put {
-		extra["operation"] = e.Op
-	}
-	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
-		Error: e.Error(),
-		Code:  CodeForbidden,
-		Extra: extra,
-	})
-}
-
-// forgeDegradedRetryAfterS is the coarse Retry-After hint (seconds) on the 503
-// returned when the in-lock base fetch times out (TRK-318 / gitops.ErrForgeDegraded).
-// It aligns with the default TA_GIT_FETCH_TIMEOUT (5s). DELIBERATELY a coarse
-// fixed hint, not a derived value: the forge's actual recovery time is unknowable,
-// so this only paces an automated retry (it doesn't promise readiness at T+5s).
-const forgeDegradedRetryAfterS = 5
-
-// gitPushFailedRetryAfterS is the Retry-After hint (seconds) on the 503 for
-// gitops.ErrPushFailed (#1724). Same coarse pacing as the forge-degraded 503:
-// what failed is a round-trip to the config repository's remote, whose
-// recovery time is unknowable.
-const gitPushFailedRetryAfterS = 5
-
 // msgGitPushFailed is the fixed text of the GIT_PUSH_FAILED 503. It names no
 // remote, branch or git output (#1700); those go to the log.
 const msgGitPushFailed = "pushing the change to the config repository failed; no PR/MR was opened — please retry"
-
-// writePushFailed answers a PR-mode write whose push failed (#1724,
-// *gitops.PushError) with 503 GIT_PUSH_FAILED + Retry-After, and reports
-// whether err was one. The git error — the remote's URL or path, its stderr —
-// goes to the log under the request_id, never to the client.
-func writePushFailed(w http.ResponseWriter, r *http.Request, err error) bool {
-	var pe *gitops.PushError
-	if !errors.As(err, &pe) {
-		return false
-	}
-	var reqID string
-	if r != nil {
-		reqID = middleware.GetReqID(r.Context())
-	}
-	slog.Error("PR-mode write: push of the feature branch failed; no PR/MR opened (#1724)",
-		"request_id", reqID, "branch", pe.Branch, "error", err)
-	w.Header().Set("Retry-After", strconv.Itoa(gitPushFailedRetryAfterS))
-	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-		Error:       msgGitPushFailed,
-		Code:        CodeGitPushFailed,
-		RetryAfterS: gitPushFailedRetryAfterS,
-	})
-	return true
-}
-
-// writeForgeDegraded renders the canonical 503 for a forge base-fetch timeout
-// (TRK-318). It mirrors the rate-limiter's machine-actionable shape — a standard
-// `Retry-After` header (RFC 7231) PLUS the `retry_after_s` envelope field — so an
-// automated GitOps controller / CI pipeline backs off instead of hammering a
-// degraded forge, while humans still get the sanitized message. The cause string
-// is kept generic (never leaks the internal git error / stale-base detail).
-func writeForgeDegraded(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Retry-After", strconv.Itoa(forgeDegradedRetryAfterS))
-	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-		Error:       "forge is currently unavailable (base sync timed out) — please retry shortly",
-		Code:        CodeForgeUnavailable,
-		RetryAfterS: forgeDegradedRetryAfterS,
-	})
-}
-
-// writeOverloadedRetryAfterS is the coarse Retry-After hint (seconds) on the 503
-// returned when the write-plane admission queue is full (TRK-320). 1s: the queue
-// drains as fast as the single in-flight write completes (sub-second for a local
-// commit, a few seconds for a PR push), so a short back-off is appropriate.
-const writeOverloadedRetryAfterS = 1
-
-// WriteOverloaded renders the canonical 503 for write-plane load shedding
-// (TRK-320 / gitops.ErrWriteOverloaded): a machine-actionable Retry-After header
-// + retry_after_s field so a client/automation backs off instead of retrying in
-// a tight loop against a saturated single-writer queue. Exported so the
-// federation sub-package handlers (a different package) can share the exact same
-// shape rather than re-deriving the header/code.
-func WriteOverloaded(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Retry-After", strconv.Itoa(writeOverloadedRetryAfterS))
-	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-		Error:       "write plane is busy — please retry shortly",
-		Code:        CodeWriteOverloaded,
-		RetryAfterS: writeOverloadedRetryAfterS,
-	})
-}
-
-// treeNotOnBaseRetryAfterS is the Retry-After hint (seconds) on the 503 for
-// gitops.ErrTreeNotOnBase. Same pacing as the overloaded 503: what blocks the
-// write is the local worktree (usually a competing index.lock), which clears on
-// the scale of one git command, not a forge round-trip.
-const treeNotOnBaseRetryAfterS = 1
-
-// WriteTreeNotOnBase renders the canonical 503 for gitops.ErrTreeNotOnBase on
-// a direct-commit write path (#1723): the worktree was on a PR feature branch,
-// and the write refused to commit there. The error names that branch — and so
-// another tenant's id — so it goes to the log only; the client gets a fixed
-// message. Exported for the federation sub-package handlers, like
-// WriteOverloaded.
-func WriteTreeNotOnBase(w http.ResponseWriter, r *http.Request, err error) {
-	slog.Warn("config write refused: worktree not on the base branch (#1723)", "error", err)
-	w.Header().Set("Retry-After", strconv.Itoa(treeNotOnBaseRetryAfterS))
-	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-		Error:       "config worktree was not on the base branch; nothing was written — please retry shortly",
-		Code:        CodeTreeNotOnBase,
-		RetryAfterS: treeNotOnBaseRetryAfterS,
-	})
-}
-
-// writeWriteFlowError maps the sentinel errors returned by Writer.WritePR /
-// WritePRBatch to their canonical retry-hinting 503s and reports whether it
-// handled the error. The single-tenant (PutTenant) and batch (BatchTenants)
-// write paths shared this dispatch verbatim; callers keep their own
-// path-specific generic 500 message for the unrecognized case (returns false).
-//
-//   - gitops.ErrWriteOverloaded    → 503 + Retry-After (admission queue full, TRK-320)
-//   - gitops.ErrForgeDegraded      → 503 + Retry-After (in-lock base fetch timeout, TRK-318)
-//   - confd.ErrAmbiguousTenantFile → 409 (#1673: two files claim one tenant, so
-//     the server cannot know which one the write should land on — the REQUEST is
-//     fine, the on-disk state is not, which is why this is not a 400)
-//   - gitops.ErrTenantDeclaredElsewhere / ErrTenantTreeUnreadable /
-//     ErrTenantTreeScan → 409 / 409 / 500 via writeTenantPlacementError
-//     (#2078, #2939)
-//   - gitops.ErrInvalidTenantID   → 400 (ADR-035: the writer's own copy of the
-//     tenant-id rule; ValidateWritableTenantID normally refuses first)
-func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
-	if writeGeneratorError(w, r, d, err) {
-		return true
-	}
-	if writeTenantPlacementError(w, r, d, err) {
-		return true
-	}
-	switch {
-	case errors.Is(err, gitops.ErrInvalidTenantID):
-		WriteJSONError(w, r, http.StatusBadRequest, err.Error())
-	case errors.Is(err, gitops.ErrWriteOverloaded):
-		WriteOverloaded(w, r)
-	case errors.Is(err, gitops.ErrForgeDegraded):
-		writeForgeDegraded(w, r)
-	case errors.Is(err, confd.ErrAmbiguousTenantFile):
-		WriteJSONError(w, r, http.StatusConflict, err.Error())
-	default:
-		return false
-	}
-	return true
-}
 
 // writeConfigFileError maps the errors the views/groups writes return to
 // their HTTP responses, for the view and group PUT/DELETE handlers. Those
 // writes go through the state store (Deps.mutateState, #2856), never the git
 // Writer, so no gitops error reaches here. It ALWAYS writes a response:
 //
-//   - a state-store error           → WriteStateError (409 / 503 + Retry-After / 507)
-//   - *configFileParseError         → 500 CONFIG_DECODE_ERROR with the decoder's text
+//   - a state-store error           → kindsState (409 / 503 + Retry-After / 507)
+//   - *configFileParseError         → 500 CONFIG_DECODE_ERROR with the decoder's
+//     text: the shared file on disk does not decode, the operator has to fix
+//     it, and the text (no path) says what is wrong
 //   - anything else                 → 500 INTERNAL_ERROR (its text goes to the log
 //     only — WriteErrorEnvelope, #1700)
 //
@@ -1082,17 +772,7 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 // for the views/groups writers — do not route the tenant write paths through
 // it.
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
-	if WriteStateError(w, r, err) {
-		return
-	}
-	// The shared file on disk does not decode: the operator has to fix it,
-	// and the decoder's text (no path) says what is wrong.
-	var parseErr *configFileParseError
-	if errors.As(err, &parseErr) {
-		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, err.Error())
-		return
-	}
-	WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+	writeErr(w, r, nil, err, errCtx{stages: []kindSet{kindsState.with(errkind.ConfigFileParse)}, fallback: fallbackInternal})
 }
 
 // configFileParseError marks parseGroupsFile / parseViewsFile failing on the
@@ -1104,100 +784,35 @@ type configFileParseError struct{ err error }
 func (e *configFileParseError) Error() string { return e.err.Error() }
 func (e *configFileParseError) Unwrap() error { return e.err }
 
+// ErrorKind is errkind.ConfigFileParse.
+func (e *configFileParseError) ErrorKind() errkind.Kind { return errkind.ConfigFileParse }
+
 // writeForgeCreateError renders the canonical response for a failure from
-// createPRAndRegister (forge PR/MR creation), unifying the dispatch PutTenant
-// and BatchTenants previously duplicated. Always writes a response.
+// createPRAndRegister (forge PR/MR creation), for PutTenant and the batches.
+// Always writes a response.
 //
-//   - platform.ErrForbidden   → 403 CodeForbidden: the token passed ValidateToken
-//     but lacks write scope; surfaced cleanly so da-portal shows a permission
-//     error, never a 500. A rate-limited 403 is excluded by APIError.Is and falls
-//     through to the 503 below (TRK-319).
-//   - platform.ErrCircuitOpen → 503 CodeForgeUnavailable: forge degraded and
-//     fast-failed (#632/#645); never leaks the internal "circuit breaker open".
+//   - platform.ErrForbidden   → 403 FORBIDDEN, a write fault: the token passed
+//     ValidateToken but lacks write scope; surfaced cleanly so da-portal shows a
+//     permission error, never a 500. A rate-limited 403 is excluded by
+//     APIError.Is and falls through to the 503 below (TRK-319).
+//   - platform.ErrCircuitOpen → 503 FORGE_UNAVAILABLE + Retry-After: forge
+//     degraded and fast-failed (#632/#645); never leaks the internal "circuit
+//     breaker open".
 //   - anything else           → 503 with a FIXED provider-scoped message; the
 //     underlying error is logged server-side, never echoed to the client
 //     (#795 F2 — keeps the no-leak contract; err here is the already-sanitized
 //     APIError but we don't surface even its method/path/status).
 func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
-	switch {
-	case errors.Is(err, platform.ErrForbidden):
-		// #3054: tenant-api's own token, not the caller, lacks the scope —
-		// the write attempt failed on the server's side.
-		markWriteFault(w)
-		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
-			fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
-	case errors.Is(err, platform.ErrCircuitOpen):
-		WriteJSONErrorWithCode(w, r, http.StatusServiceUnavailable, CodeForgeUnavailable,
-			fmt.Sprintf("%s is currently unavailable — please retry shortly", provider))
-	default:
-		slog.Warn("forge PR/MR creation failed", "provider", provider, "error", err)
-		WriteJSONError(w, r, http.StatusServiceUnavailable,
-			fmt.Sprintf("%s PR/MR creation failed — please retry shortly", provider))
-	}
+	writeErr(w, r, nil, err, errCtx{
+		stages:   []kindSet{kindsOf(errkind.ForgeForbidden, errkind.ForgeCircuitOpen)},
+		fallback: fallbackForge,
+		provider: provider,
+	})
 }
-
-// generatorRetryAfterS is the Retry-After hint (seconds) on a retryable
-// GENERATOR_REJECTED 429 and on the generator's 503s: the container judges
-// one write at a time, each in at most its judgement deadline, so a few
-// seconds paces a retry without promising anything.
-const generatorRetryAfterS = 5
 
 // msgGeneratorTooLarge is the text of GENERATOR_REJECTED reason too_large.
 const msgGeneratorTooLarge = "the files this write produces are too large for the generator to judge in one request; " +
 	"nothing was written — split the batch into smaller ones"
-
-// writeGeneratorError renders the three refusals of the generator container
-// (#2903; codes GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE
-// / POLICY_UNAVAILABLE) and reports whether err was one.
-func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
-	var (
-		found *generator.FindingsError
-		rej   *generator.RejectedError
-		unav  *generator.UnavailableError
-	)
-	switch {
-	case errors.As(err, &found):
-		findings, withheld := disclosedFindings(d, r, found.Findings)
-		extra := map[string]any{
-			"findings":                    findings,
-			"findings_compared_with_base": found.ComparedWithBase,
-		}
-		if withheld > 0 {
-			extra["unrelated_findings_withheld"] = withheld
-		}
-		msg := "the route generator refuses the configuration this write would produce; nothing was written"
-		if !found.ComparedWithBase {
-			msg += " (not compared with the configuration before the write: pre_existing is not set)"
-		}
-		WriteErrorEnvelope(w, r, http.StatusUnprocessableEntity, ErrorResponse{
-			Error: msg,
-			Code:  CodeGeneratorFindings,
-			Extra: extra,
-		})
-	case errors.As(err, &rej):
-		status, text := http.StatusUnprocessableEntity, generatorRejectedText(rej)
-		env := ErrorResponse{Error: text, Code: CodeGeneratorRejected, Extra: map[string]any{"reason": generator.ClientReason(rej.Reason)}}
-		if generator.Retryable(rej.Reason) {
-			status = http.StatusTooManyRequests
-			w.Header().Set("Retry-After", strconv.Itoa(generatorRetryAfterS))
-			env.RetryAfterS = generatorRetryAfterS
-		}
-		slog.Warn("write refused: the generator gave no verdict", "reason", rej.Reason, "error", err)
-		WriteErrorEnvelope(w, r, status, env)
-	case errors.As(err, &unav):
-		slog.Error("write refused: the generator container cannot judge", "code", unav.Code, "reason", unav.Reason, "error", err)
-		w.Header().Set("Retry-After", strconv.Itoa(generatorRetryAfterS))
-		WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-			Error:       generatorUnavailableText(unav),
-			Code:        unav.Code,
-			RetryAfterS: generatorRetryAfterS,
-			Extra:       map[string]any{"reason": generator.ClientReason(unav.Reason)},
-		})
-	default:
-		return false
-	}
-	return true
-}
 
 // disclosedFindings is what the caller of r is shown of a GENERATOR_FINDINGS
 // refusal — the one visibility rule of the single write, the tenant batch
@@ -1296,7 +911,7 @@ func nonNilFindings(f []generator.Finding) []generator.Finding {
 // batch possibly a member the caller can no longer read) and the service's
 // (internal_error is a Python repr; a rejected verdict's or a 400's message
 // is its text as written). They go to the log only, with the original
-// reason (writeGeneratorError, generatorOpResult). A list of reasons whose
+// reason (renderKind, generatorOpResult). A list of reasons whose
 // message is safe to show is a list that misses the next shape. The
 // findings of a GENERATOR_FINDINGS refusal are the judgement itself and are
 // disclosed by disclosedFindings, not here.
@@ -1327,7 +942,7 @@ func generatorUnavailableText(e *generator.UnavailableError) string {
 // that a batch answers as a REJECTED batch — 422 with the BatchResponse /
 // GroupBatchResponse shape every rejected batch has (#2900): findings, or a
 // rejection that is not retryable. The retryable ones (429) and the
-// container's 503s are ErrorResponse envelopes (writeGeneratorError).
+// container's 503s are ErrorResponse envelopes (writeErr, kindsGenerator).
 func generatorRejectsBatch(err error) bool {
 	var (
 		found *generator.FindingsError

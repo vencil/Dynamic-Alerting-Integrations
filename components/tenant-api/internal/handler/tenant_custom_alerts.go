@@ -30,6 +30,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -198,7 +199,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// under the lock.
 		if d.Writer != nil {
 			if err := d.Writer.JudgeWrite(tenantID); err != nil {
-				if !writeTenantPlacementError(w, r, d, err) {
+				if h, _ := writeErr(w, r, d, err, errCtx{stages: []kindSet{kindsPlacement}}); !h {
 					WriteJSONError(w, r, http.StatusInternalServerError, writeErrorText(r, err))
 				}
 				return
@@ -234,7 +235,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// based on them — and the conflict answer below would hand out the
 		// hash of a file GET does not show. Before the loadability check: a
 		// file that is not YAML is git-managed (its shape cannot be told).
-		if writeTenantGitManaged(w, r, gitops.CheckAPIManaged(tenantID, raw)) {
+		if h, _ := writeErr(w, r, d, gitops.CheckAPIManaged(tenantID, raw), errCtx{stages: []kindSet{kindsOf(errkind.TenantGitManaged)}}); h {
 			return
 		}
 		var notLoadable *tenantFileNotLoadableError
@@ -375,53 +376,17 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 // WriteIfUnchanged failed. It always writes the answer; fault reports a
 // failure that is the server's (#3054).
 func writeCustomAlertsWriteError(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, err error) (fault bool) {
-	// #2903: the generator container refused it (422 / 429 / 503).
-	if writeGeneratorError(w, r, d, err) {
-		return false
-	}
-	if errors.Is(err, gitops.ErrWriteOverloaded) {
-		WriteOverloaded(w, r)
-		return false
-	}
-	// #1723: the tree was on a PR branch and nothing was written —
-	// retryable, not the fallback below.
-	if errors.Is(err, gitops.ErrTreeNotOnBase) {
-		WriteTreeNotOnBase(w, r, err)
-		return false
-	}
-	// The base moved between the pre-check above and the lock. Same
-	// envelope as that pre-check so a client cannot tell which of the
-	// two rejected it — only that it must re-read and retry.
-	var pre *gitops.PreconditionError
-	if errors.As(err, &pre) {
-		extra := map[string]any{}
-		// #3064: the file changed under the lock; its new version
-		// may no longer be API-shaped, and GET shows no hash of such
-		// a file.
-		if pre.Current != "" && tenantFileAPIManaged(d, tenantID, pre.Current) {
-			extra["current_source_hash"] = pre.Current
-		}
-		WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
-			Error: "the tenant configuration was updated by someone else; refresh and retry",
-			Code:  CodeConflict,
-			Extra: extra,
-		})
-		return false
-	}
-	if errors.Is(err, gitops.ErrConflict) {
-		WriteJSONError(w, r, http.StatusConflict, err.Error())
-		return false
-	}
-	// No gitops.ErrForgeDegraded check: it comes only from the in-lock base
-	// fetch of the PR-mode writes (WritePRChecked / WritePRBatch), and this
-	// is a direct-mode WriteIfUnchanged.
-	// #2078: the id is also declared by another conf.d file (the
-	// exporter already rejects that tree) → 409, fixed message.
-	if writeTenantPlacementError(w, r, d, err) {
-		return false
-	}
-	// #1700 / #1535: as PutTenant's fallback — 400 with the error's
-	// own text only when it is about the request, else the server's
-	// 500 (#3054: counted as an error).
-	return writeTenantWriteFailure(w, r, err)
+	// The base moved between the pre-check above and the lock: the same
+	// envelope as that pre-check, so a client cannot tell which of the two
+	// rejected it — only that it must re-read and retry. No ErrForgeDegraded:
+	// it comes only from the in-lock base fetch of the PR-mode writes, and
+	// this is a direct-mode WriteIfUnchanged. #1700 / #1535: the fallback is
+	// PutTenant's — 400 with the error's own text only when it is about the
+	// request, else the server's 500 (#3054: counted as an error).
+	_, fault = writeErr(w, r, d, err, errCtx{
+		stages:   []kindSet{kindsDirectFirst, kindsPlacement.union(kindsOutcome)},
+		fallback: fallbackWrite,
+		tenantID: tenantID,
+	})
+	return fault
 }

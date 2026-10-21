@@ -98,7 +98,7 @@ curl -X POST "$TENANT_API/api/v1/federation/tokens" \
 
 - **RS256 簽章**，claim 帶 `tenant_id`（proxy 注入 label 用）、`token_id`（gateway 限流 key）、`iss=tenant-api`、`aud=tenant-federation`。
 - **TTL 預設 4h**（平台可調）。**無 sliding refresh** —— 過期前自行重新簽發。
-- 每租戶最多 **16 個**有效 token（超出回 `409`）；每分鐘簽發有上限（超出回 `429`）。
+- 每租戶最多 **16 個**有效 token（超出回 `409`）；每分鐘簽發有上限（超出回 `429`，`Retry-After` 標頭與 body 的 `retry_after_s` 是到下一次可簽發的秒數）。
 
 ### 3.2 列出 / 撤銷
 

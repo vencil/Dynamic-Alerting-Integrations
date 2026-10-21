@@ -458,7 +458,7 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 		// itself would report it. ⛔ Only then: openFreshBase also fails on
 		// git (index.lock contention is ErrWriteOverloaded, a retryable 503),
 		// and the handlers map ErrTenantTreeScan to a 500 before they look
-		// at ErrWriteOverloaded (writeWriteFlowError).
+		// at ErrWriteOverloaded (the handler's kindsWriteFlow).
 		if _, serr := os.Stat(w.configDir); serr != nil {
 			return "", "", nil, fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
 		}

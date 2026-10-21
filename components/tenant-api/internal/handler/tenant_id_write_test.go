@@ -54,8 +54,8 @@ func TestWriterTenantIDRefusalMapsTo400(t *testing.T) {
 	err := fmt.Errorf("%w %q: %s", gitops.ErrInvalidTenantID, "Team_A", tenantid.Description)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/Team_A", nil)
-	if !writeWriteFlowError(rec, req, nil, err) {
-		t.Fatal("writeWriteFlowError did not handle ErrInvalidTenantID")
+	if h, _ := writeErr(rec, req, nil, err, errCtx{stages: []kindSet{kindsWriteFlow}}); !h {
+		t.Fatal("writeErr(kindsWriteFlow) did not handle ErrInvalidTenantID")
 	}
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
