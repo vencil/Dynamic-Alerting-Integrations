@@ -446,14 +446,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			}
 			return answer(rejectedByGenerator(d, r, "", batchResults, err), http.StatusUnprocessableEntity)
 		}
-		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-		// retry-hinting 503s (shared with the single-write path).
-		if writeWriteFlowError(rw, r, d, err) {
-			return BatchResponse{}, 0, false
-		}
-		// #1724: the batch branch did not reach origin — one 503
-		// GIT_PUSH_FAILED for the whole batch, no PR/MR, no pending_review.
-		if writePushFailed(rw, r, err) {
+		if writePRBatchError(rw, r, d, err) {
 			return BatchResponse{}, 0, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
@@ -463,28 +456,17 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// no-changes 200 must keep that migration signal (the file still
 		// carries the deprecated spelling whether or not this patch changed
 		// bytes; same invariant as WriteMerged's no-op path).
-		if errors.Is(err, gitops.ErrNoChanges) {
-			var warnings []string
-			if result != nil {
-				warnings = result.Notices
-			}
-			return answer(BatchResponse{
-				Status:   "completed",
-				Results:  batchResults,
-				Summary:  prBatchSummary("completed", batchResults),
-				Message:  "No changes to apply; no PR/MR created.",
-				Warnings: warnings,
-			}, http.StatusOK)
+		var warnings []string
+		if result != nil {
+			warnings = result.Notices
 		}
-		// #1724: cancelled, or a git command past its own deadline → the 503
-		// the direct batch answers (#1535), not the generic 500.
-		if writeWriteCancelled(rw, r, err) {
-			return BatchResponse{}, 0, false
-		}
-		// Anything else is an unexpected git failure → generic 500 (its text
-		// stays in the log — WriteErrorEnvelope, #1700).
-		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
-		return BatchResponse{}, 0, false
+		return answer(BatchResponse{
+			Status:   "completed",
+			Results:  batchResults,
+			Summary:  prBatchSummary("completed", batchResults),
+			Message:  "No changes to apply; no PR/MR created.",
+			Warnings: warnings,
+		}, http.StatusOK)
 	}
 
 	// PR-6/11: shared post-write flow via createPRAndRegister.
@@ -520,6 +502,39 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(written)),
 		Warnings: result.Notices,
 	}, http.StatusOK)
+}
+
+// writePRBatchError answers a PR-mode batch whose WritePRBatch failed as a
+// whole — after the rejected-batch answers (gitops.BatchRejectedError and the
+// generator's refusals, which the caller turns into per-op results) — and
+// reports whether it wrote the answer. It reports false for exactly one
+// error, gitops.ErrNoChanges: an all-no-op batch, which the caller answers
+// 200 completed with the per-op notices. ErrNoChanges is judged after the
+// retry-hinting 503s and the push failure, before the cancellation, as it
+// always was.
+func writePRBatchError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
+	// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
+	// retry-hinting 503s (shared with the single-write path).
+	if writeWriteFlowError(rw, r, d, err) {
+		return true
+	}
+	// #1724: the batch branch did not reach origin — one 503
+	// GIT_PUSH_FAILED for the whole batch, no PR/MR, no pending_review.
+	if writePushFailed(rw, r, err) {
+		return true
+	}
+	if errors.Is(err, gitops.ErrNoChanges) {
+		return false
+	}
+	// #1724: cancelled, or a git command past its own deadline → the 503
+	// the direct batch answers (#1535), not the generic 500.
+	if writeWriteCancelled(rw, r, err) {
+		return true
+	}
+	// Anything else is an unexpected git failure → generic 500 (its text
+	// stays in the log — WriteErrorEnvelope, #1700).
+	WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+	return true
 }
 
 // prBatchSummary renders runBatchPR's summary line from its status and the

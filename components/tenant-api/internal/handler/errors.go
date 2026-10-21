@@ -1067,38 +1067,22 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 	return true
 }
 
-// writeConfigFileError maps the errors the views/groups writes return
-// (state-store errors, #2856, and the record failing to decode) to their
-// canonical HTTP responses, unifying the ladder the view and group PUT/DELETE handlers
-// duplicated verbatim across four sites. Unlike writeWriteFlowError (which
-// reports handled/unhandled and leaves the generic case to the caller), this
-// covers the config-file ladder's exact branches and ALWAYS writes a
-// response:
+// writeConfigFileError maps the errors the views/groups writes return to
+// their HTTP responses, for the view and group PUT/DELETE handlers. Those
+// writes go through the state store (Deps.mutateState, #2856), never the git
+// Writer, so no gitops error reaches here. It ALWAYS writes a response:
 //
-//   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
-//   - gitops.ErrTreeNotOnBase   → 503 + Retry-After (worktree left on a PR branch, #1723)
-//   - gitops.ErrConflict        → 409 with the error text
-//   - anything else             → 500 INTERNAL_ERROR (its text goes to the log
+//   - a state-store error           → WriteStateError (409 / 503 + Retry-After / 507)
+//   - *configFileParseError         → 500 CONFIG_DECODE_ERROR with the decoder's text
+//   - anything else                 → 500 INTERNAL_ERROR (its text goes to the log
 //     only — WriteErrorEnvelope, #1700)
 //
-// The default is 500. The tenant write paths have their own fallback,
-// writeTenantWriteFailure (400 for an error about the request, else 500,
-// #1535); this helper is ONLY for the views/groups config-file writers — do
-// not route the tenant write paths through it.
+// The tenant write paths have their own fallback, writeTenantWriteFailure
+// (400 for an error about the request, else 500, #1535); this helper is ONLY
+// for the views/groups writers — do not route the tenant write paths through
+// it.
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
 	if WriteStateError(w, r, err) {
-		return
-	}
-	if errors.Is(err, gitops.ErrWriteOverloaded) {
-		WriteOverloaded(w, r)
-		return
-	}
-	if errors.Is(err, gitops.ErrTreeNotOnBase) {
-		WriteTreeNotOnBase(w, r, err)
-		return
-	}
-	if errors.Is(err, gitops.ErrConflict) {
-		WriteJSONError(w, r, http.StatusConflict, err.Error())
 		return
 	}
 	// The shared file on disk does not decode: the operator has to fix it,
@@ -1119,18 +1103,6 @@ type configFileParseError struct{ err error }
 
 func (e *configFileParseError) Error() string { return e.err.Error() }
 func (e *configFileParseError) Unwrap() error { return e.err }
-
-// writeMergeFailed answers a PR-mode write whose merge refused the tenant's
-// file (gitops.ErrMergeFailed) and reports whether err was one. The direct
-// path shows the same error to the client; without this the PR path would
-// withhold it as an INTERNAL_ERROR (#1700).
-func writeMergeFailed(w http.ResponseWriter, r *http.Request, prefix string, err error) bool {
-	if !errors.Is(err, gitops.ErrMergeFailed) {
-		return false
-	}
-	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, prefix+err.Error())
-	return true
-}
 
 // writeForgeCreateError renders the canonical response for a failure from
 // createPRAndRegister (forge PR/MR creation), unifying the dispatch PutTenant

@@ -724,7 +724,7 @@ export default function TenantManager() {
             </div>
             <div style={{ display: 'flex', gap: 'var(--da-space-2)', flexWrap: 'wrap' }}>
               {pendingPRs.slice(0, 3).map(pr => (
-                <a key={pr.number} href={pr.html_url} target="_blank" rel="noopener noreferrer"
+                <a key={pr.number} href={pr.web_url} target="_blank" rel="noopener noreferrer"
                   style={{
                     padding: '2px 8px', borderRadius: 'var(--da-radius-sm)',
                     backgroundColor: 'var(--da-color-warning)', color: 'white',

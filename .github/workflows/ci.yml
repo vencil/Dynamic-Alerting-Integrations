@@ -415,6 +415,10 @@ jobs:
               # #2711: parseDuration.test.ts holds the portal's parser to the
               # verdicts Go writes into this table (pytest holds Python to it).
               - "tests/shared/am_duration_matrix.json"
+              # #2833: api-fixture.ts validates every tenant-api response
+              # fixture against these definitions, so a swagger regen alone
+              # must re-run the Portal leg.
+              - "components/tenant-api/docs/swagger.json"
               # The Deployment Profile Wizard's Vitest resolves every emitted
               # values key against the target chart's templates (and lists
               # helm/ to prove each target chart exists), so a chart-only PR

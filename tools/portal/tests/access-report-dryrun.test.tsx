@@ -16,6 +16,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import AccessReportDryRun from '../src/interactive/tools/access-report-dryrun.jsx';
+import { apiFixture } from './helpers/api-fixture';
 
 const CAVEATS = [
   "candidate evaluated under THIS deployment's --identity-claim-headers declaration",
@@ -37,14 +38,43 @@ const OK_DIFF = {
   caveats: CAVEATS,
 };
 
-function makeResp(status: number, body: any, opts: { json?: boolean } = {}) {
+// The JSON body each fake Response carries, so the dry-run branch below can
+// hold it against the swagger spec (#2833).
+const sentBody = new WeakMap<object, unknown>();
+
+// `offSpec: true` marks a body that is deliberately NOT what the API sends
+// (a tampered/malformed response the component must survive); it is the only
+// way past the spec check, and it is visible at the call site.
+function makeResp(status: number, body: any, opts: { json?: boolean; offSpec?: boolean } = {}) {
   const json = opts.json !== false;
-  return {
+  const resp = {
     ok: status >= 200 && status < 300,
     status,
     headers: { get: () => null },
     json: () => (json ? Promise.resolve(body) : Promise.reject(new Error('no json body'))),
   } as any;
+  if (json && !opts.offSpec) sentBody.set(resp, body);
+  return resp;
+}
+
+// Fixture bodies the API could not send. Collected rather than only thrown:
+// a throw inside the fetch promise surfaces as the component's own error
+// state, which a test of an error state could mistake for success — so
+// afterEach fails the test on any entry here as well.
+let fixtureViolations: string[] = [];
+
+// A dry-run response's body is a DryRunResponse on 2xx and an ErrorResponse
+// otherwise (the endpoint's swagger annotations).
+function checkDryRunBody(resp: any) {
+  if (sentBody.has(resp)) {
+    try {
+      apiFixture(resp.ok ? 'DryRunResponse' : 'ErrorResponse', sentBody.get(resp));
+    } catch (e) {
+      fixtureViolations.push(String((e as Error).message));
+      throw e;
+    }
+  }
+  return resp;
 }
 
 // dryRunResponder(url, opts) → a fetch-resolved Response for the POST.
@@ -55,17 +85,17 @@ function stubFetch(dryRunResponder: (u: string, o: any) => Promise<any>) {
       const u = String(url);
       if (u.includes('/api/v1/tenants/search')) {
         return Promise.resolve(
-          makeResp(200, {
+          makeResp(200, apiFixture('SearchResponse', {
             items: [{ id: 'acme', environment: 'production', tier: 'tier-1', domain: 'finance' }],
             total_matched: 1,
-          }),
+          })),
         );
       }
       if (u.includes('/api/v1/groups')) {
-        return Promise.resolve(makeResp(200, []));
+        return Promise.resolve(makeResp(200, apiFixture('GroupResponse[]', [])));
       }
       if (u.includes('/access-report/dry-run')) {
-        return dryRunResponder(u, opts);
+        return dryRunResponder(u, opts).then(checkDryRunBody);
       }
       return Promise.reject(new Error('unexpected url ' + u));
     }),
@@ -102,8 +132,11 @@ async function renderToggleRun(dryRunResponder: (u: string, o: any) => Promise<a
 }
 
 afterEach(() => {
+  const violations = fixtureViolations;
+  fixtureViolations = [];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  expect(violations).toEqual([]);
 });
 
 describe('AccessReportDryRun — dropdown gate', () => {
@@ -242,7 +275,7 @@ describe('AccessReportDryRun — POST outcomes', () => {
           // tampered/malformed 200 with a string diff bucket would crash .map on
           // render — the wrapper must degrade it to "malformed", not "ok".
           diff: { alignment: 'exact', changed: 'x', added: [], removed: [] },
-        }),
+        }, { offSpec: true }),
       ),
     );
     expect(await screen.findByText('Unexpected response shape')).toBeInTheDocument();
