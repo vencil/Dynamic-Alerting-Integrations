@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -382,3 +383,62 @@ def test_a_short_small_number_masks_only_its_own_text():
     assert r.mask_values(["1e+12", 1e12], {"1e12"})[0] == [r.REDACTED, r.REDACTED]
     assert r.mask_values(["1.2345678e+07"], {"0012345678"})[0] == [r.REDACTED]
     assert r.mask_values(["9999999.0"], {"9999999"})[0] == ["9999999.0"]
+
+
+# ── schema 的 x-credential 標註 ⊆ 遮罩名單（#1560 裁決 1） ──────────────────
+# 遮罩維持名稱制，不由 schema 推導；這裡反向守：schema 標成憑證的欄位，
+# 名字都得在名單裡（Go credmask 已被上面那支釘成同一份，等同兩邊都涵蓋）。
+
+_TENANT_SCHEMA = REPO / "docs" / "schemas" / "tenant-config.schema.json"
+
+# 正向控制：walker 壞掉時空集合不可靜默通過。
+_KNOWN_MARKED = {"url", "http_config", "auth_password", "headers", "api_url",
+                 "webhook_url", "service_key", "routing_key"}
+
+
+def credential_marked_fields(schema) -> set[str]:
+    """schema 中所有 `x-credential: true` 的 property 名（遍歷全部 properties，
+    含 definitions 與組合子分支，不跟隨 $ref）。"""
+    found: set[str] = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict):
+                for name, sub in props.items():
+                    if isinstance(sub, dict) and sub.get("x-credential") is True:
+                        found.add(name)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(schema)
+    return found
+
+
+def unmasked_credential_fields(schema, fields=r.SECRET_FIELDS) -> set[str]:
+    """標成憑證、名字卻不在遮罩名單裡的欄位（比對同 is_secret_field，不分大小寫）。"""
+    listed = {f.lower() for f in fields}
+    return {n for n in credential_marked_fields(schema) if n.lower() not in listed}
+
+
+def test_every_schema_credential_field_is_on_the_redaction_list():
+    schema = json.loads(_TENANT_SCHEMA.read_text(encoding="utf-8"))
+    marked = credential_marked_fields(schema)
+    assert _KNOWN_MARKED <= marked, _KNOWN_MARKED - marked
+    assert unmasked_credential_fields(schema) == set()
+
+
+def test_the_inclusion_check_reports_a_marked_field_off_the_list():
+    schema = {"definitions": {"r": {"properties": {
+        "url": {"type": "string", "x-credential": True},
+        "sms_token_x": {"type": "string", "x-credential": True},
+        "note": {"type": "string"},
+        "off": {"type": "string", "x-credential": False},
+        "nested": {"type": "object", "properties": {
+            "Deep_Secret": {"x-credential": True}}},
+    }}}}
+    assert credential_marked_fields(schema) == {"url", "sms_token_x", "Deep_Secret"}
+    assert unmasked_credential_fields(schema) == {"sms_token_x", "Deep_Secret"}
