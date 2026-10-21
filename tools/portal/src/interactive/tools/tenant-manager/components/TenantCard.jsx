@@ -30,7 +30,7 @@ purpose: |
     - name, data:      per-card (loop var from filtered)
     - isSelected:      bool — derived from orchestrator's `selected.has(name)`
     - isHovered:       bool — derived from `hoveredCard === name`
-    - pendingPR:       { html_url, number } | null — `prByTenant[name] || null`
+    - pendingPR:       PRInfo { web_url, number, … } | null — `prByTenant[name] || null`
     - modeColors:      { normal/silent/maintenance/unknown: cssVar } map (orchestrator-local)
     - onToggleSelect:  () => void — orchestrator's `toggleSelect(name)` curried
     - onHoverEnter:    () => void — sets `hoveredCard = name`
@@ -193,7 +193,7 @@ function TenantCard({
         )}
         {/* v2.6.0: Pending PR indicator (ADR-011) */}
         {pendingPR && (
-          <a href={pendingPR.html_url} target="_blank" rel="noopener noreferrer"
+          <a href={pendingPR.web_url} target="_blank" rel="noopener noreferrer"
             title={t('有待審核的 PR', 'Pending PR')}
             style={{
               ...styles.badge,
