@@ -15,6 +15,7 @@ import {
   grantSetIdentical,
   isEmptyDiff,
 } from './access-report-dryrun/diff-view.js';
+import { ERROR_CODES } from './_common/api/classify-error.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -92,7 +93,7 @@ async function runDryRun(tenantId, rbacYaml, view, includeOrgValues) {
   if (status === 400) {
     let body = {};
     try { body = await resp.json(); } catch (e) { body = {}; }
-    if (body && body.code === 'CANDIDATE_INVALID') {
+    if (body && body.code === ERROR_CODES.CANDIDATE_INVALID) {
       return { kind: 'candidate_invalid', error: body.error || '' };
     }
     return { kind: 'bad_request', error: (body && body.error) || '' };
