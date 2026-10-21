@@ -19,13 +19,14 @@ lang: zh
 ## 索引
 
 <!-- PLANNING_INDEX_START -->
-### in-progress (3)
+### in-progress (4)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-3180` | tech-debt | TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜 | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 ### accepted (36)
 
@@ -68,7 +69,7 @@ lang: zh
 | `ADR-037` | adr | ADR-037: config-diff 改為比較渲染結果 | platform | — | [docs/adr/037-config-diff-compares-rendered-output.md](../adr/037-config-diff-compares-rendered-output.md) |
 | `ADR-038` | adr | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 | platform | — | [docs/adr/038-unread-keys-judged-by-readers.md](../adr/038-unread-keys-judged-by-readers.md) |
 
-### proposed (17)
+### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -88,7 +89,6 @@ lang: zh
 | `TRK-016` | dx | TRK-016: CHANGELOG 計數一致性 Lint（tool count / JSX count / hook count） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-017` | dx | TRK-017: Desktop Commander 長命令 Watchdog Wrapper | ops | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-018` | dx | TRK-018: `engineering:testing-strategy` Skill 驅動的測試設計還債 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
-| `TRK-3180` | tech-debt | TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜 | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 ### done (1)
 
