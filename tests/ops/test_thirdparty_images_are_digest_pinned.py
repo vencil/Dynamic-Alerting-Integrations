@@ -46,8 +46,11 @@ digest, values + template + matrix + EXPECTED count updated but
   freeze the demo on a stale layer (`test_trylocal_compose_pins.py` docstring).
 * **Refs the extractor cannot see.** A ref hardcoded in a Helm TEMPLATE, or an
   overlay that overrides only `tag:`, is not in `discover_refs()`; those are
-  pushed INTO this set indirectly — `test_nightly_scan_matrix_drift.py` demands
-  them in the scan matrix, and the matrix must equal this set.
+  NOT checked by this rule. `test_nightly_scan_matrix_drift.py` demands them
+  in the scan matrix, and `test_renovate_config.py` keeps the matrix row's
+  digest bumped with the template's. Since #1594 removed the raw tenant-api
+  manifest, alpine/git (hardcoded in helm/tenant-api/templates/deployment.yaml)
+  is such a ref.
 * **Grafana plugins** are not images. Their version pin is a separate rule:
   `test_grafana_plugins_are_version_pinned.py` (TRK-2605, runbook §7.6 T5).
 """

@@ -13,7 +13,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr`) where writes of tenant configuration create GitHub PRs instead of direct commits
+✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr` at the time, now `pr-github`) where writes of tenant configuration create GitHub PRs instead of direct commits
 
 2026-10-10: corrected how the write-back mode is configured: it is `--write-mode` / `TA_WRITE_MODE`, not a `_write_mode` setting in conf.d.
 

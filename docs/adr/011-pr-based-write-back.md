@@ -19,7 +19,7 @@ updated_at: 2026-10-20
 
 ## 狀態
 
-✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（`--write-mode pr`），租戶設定的寫入產生 GitHub PR 而非直接 commit
+✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（當時為 `--write-mode pr`，現為 `pr-github`），租戶設定的寫入產生 GitHub PR 而非直接 commit
 
 2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
 
