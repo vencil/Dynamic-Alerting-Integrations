@@ -130,13 +130,15 @@ func undeterminedEvidence(configDir string, rootReported bool, reported map[stri
 func undeterminedFromParseTree(doc *parseTreeDoc, reported map[string]bool) []undeterminedItem {
 	out := []undeterminedItem{}
 	declared := map[string][]string{} // tenant id → tenant files, in name order
-	for _, u := range doc.Unreadable {
-		if !reported[u.File] {
-			out = append(out, undeterminedItem{File: u.File, Field: string(u.Kind), Reason: undeterminedUnreadableOutsideRun})
+	readers := map[string][]string{}
+	for _, e := range doc.Entries {
+		readers[e.Path] = e.Readers
+		if e.Problem != nil && !reported[e.Path] {
+			out = append(out, undeterminedItem{File: e.Path, Field: string(e.Problem.Kind), Reason: undeterminedUnreadableOutsideRun})
 		}
 	}
 	for rel, content := range doc.Files {
-		if !readByGenerator(doc.Selected[rel]) {
+		if !readByGenerator(readers[rel]) {
 			continue
 		}
 		base := path.Base(rel)

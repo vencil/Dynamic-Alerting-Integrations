@@ -1956,12 +1956,11 @@ class TestReleaseLineTableRows:
         assert row.group(2) == chart_version, (row.group(2), chart_version)
 
     def test_image_runtime_pins_are_left_alone(self):
-        """沒有任何規則會去動那三處刻意追 appVersion 的 image pin。"""
+        """沒有任何規則會去動那兩處刻意追 appVersion 的 image pin。"""
         chart = bump_docs.TENANT_API_CHART_YAML.read_text(encoding="utf-8")
         app_version = re.search(r'^appVersion:\s*"?([^"\s]+)"?', chart,
                                 re.MULTILINE).group(1)
-        targets = ["k8s/04-tenant-api/deployment.yaml",
-                   "docs/assets/platform-data.json",
+        targets = ["docs/assets/platform-data.json",
                    "tools/portal/src/interactive/tools/_common/data/images.js"]
         for rel in targets:
             path = bump_docs.REPO_ROOT / rel
@@ -2443,11 +2442,10 @@ class TestRoundFourSurvivors:
 
     def test_a_glob_rule_cannot_smuggle_a_rule_over_the_appversion_pins(self):
         """⛔ 反向釘只看了 `"file"` 這個 key，而 glob 規則的 `"file"` 是字面
-        字串 `"__glob__"`——所以一條掃過那三個 appVersion pin 的 glob 完全
+        字串 `"__glob__"`——所以一條掃過那兩個 appVersion pin 的 glob 完全
         繞過它。要比對的是**展開後**的檔案集合。
         """
         protected = {
-            "k8s/04-tenant-api/deployment.yaml",
             "docs/assets/platform-data.json",
             "tools/portal/src/interactive/tools/_common/data/images.js",
         }

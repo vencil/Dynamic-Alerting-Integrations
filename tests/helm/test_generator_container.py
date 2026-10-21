@@ -170,10 +170,14 @@ def test_tenant_api_reads_the_policy_file_the_generator_judges_with() -> None:
 
 
 @_needs_helm
-def test_removed_policy_escape_hatch_value_is_not_read() -> None:
-    """`policy.unavailableOpen` (#2486) is gone: setting it renders nothing."""
-    ta = _container(_pod(_render("policy.unavailableOpen=true")), "tenant-api")
-    assert not any("unavailable-open" in a for a in ta["args"])
+def test_removed_policy_escape_hatch_value_is_refused() -> None:
+    """`policy.unavailableOpen` (#2486) is gone. It used to render as if unset;
+    since values.schema.json closed the top-level key set (#1594), a values file
+    still carrying it fails the render instead of being silently ignored."""
+    out = _helm("policy.unavailableOpen=true")
+    assert out.returncode != 0, out.stdout
+    assert "'policy' not allowed" in out.stderr, out.stderr
+    assert "unavailable-open" not in out.stdout
 
 
 # ── uid ──────────────────────────────────────────────────────────────────────

@@ -133,10 +133,12 @@ def test_parse_tree_lists_the_planted_files_in_not_read(shape, tmp_path):
                        env=_env())
     assert r.returncode == 0, r.stderr
     doc = json.loads(r.stdout)
-    not_read = {e["file"]: e["reason"] for e in doc["not_read"]}
+    not_read = {e["path"]: e["not_read"] for e in doc["entries"] if e["not_read"] is not None}
     assert set(not_read) == _EXPECTED_NOT_READ[shape], not_read
     assert set(not_read.values()) == {"unselected_defaults_carrier"}
-    assert not set(not_read) & set(doc["selected"])
+    # No reader, and nothing read: a config file nobody reads is not parsed.
+    assert all(e["readers"] == [] for e in doc["entries"] if e["path"] in not_read)
+    assert not set(not_read) & set(doc["files"])
 
 
 @functools.lru_cache(maxsize=None)

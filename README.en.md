@@ -123,7 +123,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 |-----------|----------|---------------|
 | [`components/`](components/) | Component sources: `threshold-exporter` (Go), `tenant-api` (Go), `da-tools` (Python CLI), `da-portal` (frontend container) | Application logic changes |
 | [`helm/`](helm/) | Helm charts: `da-portal`, `tenant-api`, `mariadb-instance`; plus `values-db-*.yaml` | Deployment / chart templates |
-| [`k8s/`](k8s/) | Raw K8s manifests: namespaces, monitoring (Prometheus/Alertmanager/Grafana), tenant-api, CRD | Spin up the demo environment |
+| [`k8s/`](k8s/) | Raw K8s manifests: namespaces, monitoring (Prometheus/Alertmanager/Grafana), CRD (tenant-api is deployed only by [`helm/tenant-api`](helm/tenant-api/)) | Spin up the demo environment |
 | [`rule-packs/`](rule-packs/) | Rule-pack source YAMLs, one per pack (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
 | [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |

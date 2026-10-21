@@ -512,13 +512,15 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
     report["config_dir"] = str(root)
     report["da_guard_version"] = doc.get("da_guard_version")
 
-    after_selected = {f for f, readers in doc["selected"].items() if readers}
-    after_unreadable = {u["file"]: u for u in doc["unreadable"]}
+    entries = {e.path: e for e in _lib_parse_tree.entries_of(doc)}
+    after_selected = {f for f, e in entries.items() if e.readers}
+    after_unreadable = {f: {"kind": e.problem[0], "message": e.problem[1]}
+                        for f, e in entries.items() if e.problem is not None}
     today_selected = set(today_read) | set(today_refused)
 
     for f in sorted(after_selected - today_selected):
         report["selection"].append({"file": f, "read_by": "yaml_v3",
-                                    "readers": doc["selected"][f],
+                                    "readers": list(entries[f].readers),
                                     "detail": "parse-tree reads it; today's reader does not"})
     for f in sorted(today_selected - after_selected):
         report["selection"].append({"file": f, "read_by": "pyyaml",

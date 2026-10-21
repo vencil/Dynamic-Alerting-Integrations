@@ -1,0 +1,19 @@
+# Dedicated namespace for tenant-api (#1004 canonical namespace).
+#
+# tenant-api itself is deployed only by the Helm chart (helm/tenant-api) into
+# this namespace. The chart does not template a Namespace object, and
+# `helm install --create-namespace` creates one WITHOUT the PSS labels below —
+# so apply this file first. It used to live next to the raw tenant-api
+# manifests, which were removed in #1594 (the chart is the only deployment
+# source); the namespace and its PSS labels were kept here.
+#
+# PSS #1018 PR-1 soak stage: warn+audit only, NO enforce yet (flip is a
+# follow-up PR after soak) — see docs/internal/pss-enforcement-runbook.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-api
+  labels:
+    app.kubernetes.io/part-of: dynamic-alerting
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
