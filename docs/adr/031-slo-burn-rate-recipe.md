@@ -21,7 +21,7 @@ updated_at: 2026-10-21
 
 📝 **修訂（2026-10-17）**：每租戶 cap 改由 tenant-api 寫入檢查、da-guard 與 validate-config 計算，profile 的 recipe 不計；壞 recipe 由 exporter 逐條拒收、編譯器不為它產生規則（§3 護欄 1、2）。
 
-📝 **修訂（2026-10-21）**：燒錯窗口與倍數都寫在 Go 的 recipe 契約檔，編譯器也改在 Go（[ADR-024](024-version-aware-threshold-via-dimensional-label.md) §9）；下文「Python/Go lockstep」與「兩側各自加驗證」的成本在遷移完成後不再存在。
+📝 **修訂（2026-10-21）**：燒錯窗口與倍數都寫在 Go 的 recipe 契約檔，編譯器也改在 Go（[ADR-024](024-version-aware-threshold-via-dimensional-label.md) §9）。下文凡提到「Python/Go lockstep」、倍數與選窗分在兩種語言、或 objective／min_events「於 Python/Go 兩側各自加驗證」之處（§2 的代價、§5、選項 E、後果與實作順序），描述的都是遷移完成前的實作；遷移完成後只有 Go 一份，這些成本不再存在。
 
 > **決策一句話**：新增第 7 個平台自撰 recipe `slo_burn_rate`——一條宣告在編譯期展開成多窗 SLI recording rules ＋ multi-window AND 的 fast/slow burn-rate 告警；objective 走**既有** `user_threshold{severity}` 通道（exporter resolve 期算好係數）；v1 範圍＝availability/error-ratio 型 only；custom 子樹 outbound delivery 列硬前置。
 

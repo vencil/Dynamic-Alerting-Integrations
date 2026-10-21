@@ -49,7 +49,7 @@ updated_at: 2026-10-21
 
 同一套**宣告式 dimensional 機械**——dimensional-label 模型、scrape-time relabel、rule-pack normalize / 編譯層、graceful-degradation join、promtool 安全網、per-tenant 隔離——撐起兩個能力。Version-Aware 先在平台 rule pack 上證明這套機械能在 prod 安全運轉；Custom Alerts 把它開放給平台與租戶。兩者共用同一個底層引擎、同一個 tenant-api 寫入邊界、同一條 CI pipeline——這正是它們同住一份 ADR 的理由（拆開會切斷「為何地基鋪這麼重」的因果）。
 
-以下七條是構成這套引擎的關鍵決策，每條附 trade-off。
+以下九條是構成這套引擎的關鍵決策，每條附 trade-off。
 
 ### 1. 用 metric 的 dimensional `version` label 表達多版本閾值（非新 schema）
 

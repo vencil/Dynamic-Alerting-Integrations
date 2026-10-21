@@ -43,7 +43,7 @@ The whole design is bound by three existing contracts:
 
 One **declarative dimensional machine** — the dimensional-label model, scrape-time relabel, the rule-pack normalize / compile layer, graceful-degradation joins, the promtool safety net, per-tenant isolation — carries both capabilities. Version-Aware first proves the machine runs safely in prod on platform rule packs; Custom Alerts then opens it to the platform and to tenants. They share one underlying engine, one tenant-api write boundary, and one CI pipeline — which is exactly why they live in one ADR (splitting them would cut the causal link explaining why the foundation is laid this heavily).
 
-The seven decisions below make up this engine; each carries its trade-off.
+The nine decisions below make up this engine; each carries its trade-off.
 
 ### 1. Express multi-version thresholds via the metric's dimensional `version` label (not a new schema)
 
