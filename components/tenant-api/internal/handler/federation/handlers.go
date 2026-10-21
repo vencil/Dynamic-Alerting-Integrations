@@ -2,7 +2,6 @@ package federation
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -181,14 +180,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 			jwt, rec, err = d.Federation.Issue(req.TenantID, email, req.Description)
 		}
 		if err != nil {
-			switch {
-			case errors.Is(err, token.ErrTokenLimitReached):
-				handler.WriteJSONErrorWithCode(w, r, http.StatusConflict, handler.CodeConflict, err.Error())
-			case errors.Is(err, token.ErrMintRateLimited):
-				handler.WriteJSONErrorWithCode(w, r, http.StatusTooManyRequests, handler.CodeRateLimited, err.Error())
-			default:
-				handler.WriteJSONError(w, r, http.StatusInternalServerError, "issue federation token: "+err.Error())
-			}
+			writeIssueError(w, r, err)
 			return
 		}
 

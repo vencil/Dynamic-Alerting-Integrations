@@ -206,7 +206,7 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 
 // A write its own request's context stopped — the client went away, or the
 // request reached its deadline — is not the body's fault. PUT and
-// custom-alerts answer it as a direct batch does (writeWriteCancelled): 503
+// custom-alerts answer it as a direct batch does (kindsOutcome): 503
 // with msgWriteCancelled. The writer polls the request's context at
 // checkpoints only and never kills git with it, so a write stopped this way
 // has written nothing (#3173) — here the tree is checked to be unchanged.

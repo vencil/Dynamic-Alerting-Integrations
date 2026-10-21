@@ -14,6 +14,7 @@ import (
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -513,27 +514,18 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 // retry-hinting 503s and the push failure, before the cancellation, as it
 // always was.
 func writePRBatchError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
-	// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-	// retry-hinting 503s (shared with the single-write path).
-	if writeWriteFlowError(rw, r, d, err) {
+	// The write-flow refusals and the push failure (#1724: one 503
+	// GIT_PUSH_FAILED for the whole batch, no PR/MR) come before
+	// ErrNoChanges, the cancellation after it, as it always was. Anything
+	// else is an unexpected git failure → generic 500 (its text stays in the
+	// log — WriteErrorEnvelope, #1700).
+	if h, _ := writeErr(rw, r, d, err, errCtx{accept: kindsWriteFlow.with(errkind.GitPushFailed)}); h {
 		return true
 	}
-	// #1724: the batch branch did not reach origin — one 503
-	// GIT_PUSH_FAILED for the whole batch, no PR/MR, no pending_review.
-	if writePushFailed(rw, r, err) {
-		return true
-	}
-	if errors.Is(err, gitops.ErrNoChanges) {
+	if isNoChanges(err) {
 		return false
 	}
-	// #1724: cancelled, or a git command past its own deadline → the 503
-	// the direct batch answers (#1535), not the generic 500.
-	if writeWriteCancelled(rw, r, err) {
-		return true
-	}
-	// Anything else is an unexpected git failure → generic 500 (its text
-	// stays in the log — WriteErrorEnvelope, #1700).
-	WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
+	writeErr(rw, r, d, err, errCtx{accept: kindsOutcome, fallback: fallbackInternal, prefix: "PR/MR batch write failed: "})
 	return true
 }
 
@@ -963,30 +955,14 @@ func freshBaseOpResult(tenantID string, err error, treeVisible bool) BatchResult
 // cause: 503 busy / tree on a PR branch, 409 conflict, else 500 with the
 // detail withheld (#1700).
 func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err error) {
-	if writeWriteFlowError(rw, r, d, err) {
-		return
-	}
-	var committed *gitops.BatchCommittedError
-	switch {
-	case errors.As(err, &committed):
-		// F3: 409 like a conflict (refresh first), but saying what is true.
-		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
-			Error: msgBatchCommittedIncomplete,
-			Code:  CodeConflict,
-			Extra: map[string]any{"committed": true, "commit": committed.Commit},
-		})
-	case errors.Is(err, gitops.ErrTreeNotOnBase):
-		WriteTreeNotOnBase(rw, r, err)
-	case errors.Is(err, gitops.ErrConflict):
-		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
-			Error: msgBatchConflict,
-			Code:  CodeConflict,
-			Extra: map[string]any{"committed": false},
-		})
-	case writeWriteCancelled(rw, r, err):
-	default:
-		WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
-	}
+	// F3: a batch committed but not finished cleanly is 409 like a conflict
+	// (refresh first), but says what is true; a conflict says nothing was
+	// written (errCtx.batch).
+	writeErr(rw, r, d, err, errCtx{
+		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.BatchCommitted, errkind.TreeNotOnBase, errkind.Conflict),
+		fallback: fallbackInternal,
+		batch:    true,
+	})
 }
 
 // msgBatchConflict / msgBatchCommittedIncomplete are the two 409s of a

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -332,15 +333,16 @@ func TestCreateFederationToken_RateLimited(t *testing.T) {
 	d := &handler.Deps{RBAC: rbacMgr, Federation: newTestFederation(t)}
 	h := wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil)
 
+	var last *httptest.ResponseRecorder
 	post := func() int {
 		req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
 			bytes.NewBufferString(`{"tenant_id":"tenant-burst"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Forwarded-Email", "ops@example.com")
 		req.Header.Set("X-Forwarded-Groups", "fed-admins")
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
-		return w.Code
+		last = httptest.NewRecorder()
+		h.ServeHTTP(last, req)
+		return last.Code
 	}
 
 	// federation.maxMintsPerWindow is 5 (unexported); the 6th mint in
@@ -351,6 +353,19 @@ func TestCreateFederationToken_RateLimited(t *testing.T) {
 		}
 	}
 	if code := post(); code != http.StatusTooManyRequests {
-		t.Errorf("POST past rate limit: status %d, want 429", code)
+		t.Fatalf("POST past rate limit: status %d, want 429", code)
+	}
+	// #3226: when to come back — the oldest mint ages out of the one-minute
+	// window — as the Retry-After header and retry_after_s together.
+	ra, err := strconv.Atoi(last.Header().Get("Retry-After"))
+	if err != nil || ra < 1 || ra > 60 {
+		t.Fatalf("Retry-After = %q, want 1..60 seconds", last.Header().Get("Retry-After"))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(last.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != handler.CodeRateLimited || body["retry_after_s"] != float64(ra) {
+		t.Errorf("body = %v, want code %s and retry_after_s %d", body, handler.CodeRateLimited, ra)
 	}
 }

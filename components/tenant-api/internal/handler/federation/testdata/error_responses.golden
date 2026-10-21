@@ -4,8 +4,8 @@
 plain error (server path in text) => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
 statestore.ErrConflict => 409 CONFLICT error="tenant-api state changed concurrently, retry the request"
 wrapped(statestore.ErrConflict) => 409 CONFLICT error="tenant-api state changed concurrently, retry the request"
-statestore.ErrUnavailable => 503 UPSTREAM_ERROR Retry-After=5 retry_after_s=<absent> error="tenant-api state store unavailable, retry later"
-wrapped(statestore.ErrUnavailable) => 503 UPSTREAM_ERROR Retry-After=5 retry_after_s=<absent> error="tenant-api state store unavailable, retry later"
+statestore.ErrUnavailable => 503 UPSTREAM_ERROR Retry-After=5 retry_after_s=5 error="tenant-api state store unavailable, retry later"
+wrapped(statestore.ErrUnavailable) => 503 UPSTREAM_ERROR Retry-After=5 retry_after_s=5 error="tenant-api state store unavailable, retry later"
 statestore.ErrTooLarge => 507 STATE_FULL error="tenant-api state is full; nothing was written (an operator must shrink groups, views or federation settings)"
 wrapped(statestore.ErrTooLarge) => 507 STATE_FULL error="tenant-api state is full; nothing was written (an operator must shrink groups, views or federation settings)"
 account.ErrRegistryReset => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
@@ -24,3 +24,12 @@ gitops.ErrTreeNotOnBase => 500 INTERNAL_ERROR error="internal error; the server 
 wrapped(gitops.ErrTreeNotOnBase) => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
 gitops.ErrConflict => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
 wrapped(gitops.ErrConflict) => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
+
+# writeIssueError (a federation token mint Issue / IssueLogs refused)
+plain error (server path in text) => 500 INTERNAL_ERROR error="internal error; the server log has the details under this request_id"
+token.ErrTokenLimitReached => 409 CONFLICT error="federation: tenant federation-token limit reached"
+wrapped(token.ErrTokenLimitReached) => 409 CONFLICT error="op ctx: federation: tenant federation-token limit reached"
+token.ErrMintRateLimited (bare: the table's Retry-After) => 429 RATE_LIMITED Retry-After=60 retry_after_s=60 error="federation: token mint rate limit exceeded"
+MintRateLimitedError{Wait: 42.001s} (rounded up) => 429 RATE_LIMITED Retry-After=43 retry_after_s=43 error="federation: token mint rate limit exceeded"
+MintRateLimitedError{Wait: 0} (at least 1s) => 429 RATE_LIMITED Retry-After=1 retry_after_s=1 error="federation: token mint rate limit exceeded"
+wrapped(MintRateLimitedError{Wait: 7s}) => 429 RATE_LIMITED Retry-After=7 retry_after_s=7 error="op ctx: federation: token mint rate limit exceeded"
