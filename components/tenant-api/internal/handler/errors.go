@@ -32,7 +32,6 @@ package handler
 // sites.
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -461,24 +460,32 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 // /effective this way; that handler now sends it as text via
 // config.NonFiniteAsText) produced `200` with an empty body: a success a
 // client cannot parse, and nothing in the logs. Now such a value is a 500 error
-// envelope naming the encode error. The bytes of every value that encodes are
-// unchanged (same Encoder, same trailing newline).
+// envelope naming the encode error.
+//
+// The body is json.Marshal's output plus the newline json.Encoder.Encode
+// ends with: the same bytes Encode wrote (Marshal escapes HTML as an Encoder
+// does by default; TestWriteJSON_BytesAsEncoderWrote pins it). Marshal, not
+// an Encoder (#3226): its output is a JSON document by construction, which
+// CodeQL's go/reflected-xss model knows (a JSON marshaler is a sanitizer),
+// while it cannot follow an Encoder writing into a buffer — so request text
+// in an envelope reached every ResponseWriter wrapper's Write (the
+// middleware's in http_exits.go) as if it were unescaped markup.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+	body, err := json.Marshal(v)
+	if err != nil {
 		slog.Error("response encode failed", "status", status, "error", err)
-		buf.Reset()
 		// Only the two string fields are set, so this encode cannot fail;
 		// the discard keeps writeJSON free of recursion.
-		_ = json.NewEncoder(&buf).Encode(ErrorResponse{
+		body, _ = json.Marshal(ErrorResponse{
 			Error: "response encode failed: " + err.Error(),
 			Code:  CodeInternal,
 		})
 		status = http.StatusInternalServerError
 	}
+	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(body)
 }
 
 // WriteErrorEnvelope is the canonical error response writer. All
