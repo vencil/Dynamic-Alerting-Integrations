@@ -2057,11 +2057,15 @@ paths:
             In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
             batch branch to the config repository failed, a timeout included: the
             whole batch fails, no PR/MR opened, Retry-After (the branch may be left
-            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the
-            request was cancelled or reached its deadline before a synchronous batch
-            finished: unlike the cases above it may already be committed (a git command
-            that hits its own deadline may already have moved the ref), so refresh
-            to see whether it was before retrying'
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when
+            a synchronous batch was stopped before anything of it was committed: the
+            request was cancelled or reached its deadline, or a git command hit its
+            own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back
+            unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with
+            another message when updating the branch failed and the server could not
+            read the branch back: unlike the cases above the batch may already be
+            committed, so refresh to see whether it was before retrying (an async
+            task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2371,11 +2375,14 @@ paths:
             In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
             feature branch to the config repository failed, a timeout included: no
             PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
-            or reached its deadline before the write finished: unlike the cases above
-            it may already be committed (a git command that hits its own deadline
-            may already have moved the ref), so refresh to see whether it was before
-            retrying'
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped
+            before anything of it was committed: the request was cancelled or reached
+            its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2555,10 +2562,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before
+            anything of it was committed: the request was cancelled or reached its
+            deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above it may already be committed, so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
@@ -3032,11 +3043,14 @@ paths:
             mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
             config repository failed, a timeout included: the whole batch fails, no
             PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
-            or reached its deadline before a synchronous batch finished: unlike the
-            cases above it may already be committed (a git command that hits its own
-            deadline may already have moved the ref), so refresh to see whether it
-            was before retrying'
+            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch
+            was stopped before anything of it was committed: the request was cancelled
+            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            and the server read the branch back unmoved; nothing written, safe to
+            retry. And code UPSTREAM_ERROR with another message when updating the
+            branch failed and the server could not read the branch back: unlike the
+            cases above the batch may already be committed, so refresh to see whether
+            it was before retrying (an async task says the same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
