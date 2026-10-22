@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 # Add scripts/tools to path
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -529,35 +530,32 @@ def test_discover_tenant_configs_names_unusable_entries(tmp_path, capsys):
     """#2906: a directory and a dangling symlink with config names are
     entries parse-tree cannot read (`not_regular_file` / `read_failure`).
     What they declare is unknown, so the tenant set is: the discovery
-    refuses (rc 2 in `main`) and names each with its kind — neither is
-    invented as a tenant (#1607) nor dropped with only a warning."""
-    from _lib_confd import TenantSetUnknown
-
+    refuses (the shared conf.d refusal, #3206: exit 2) and names each with
+    its kind — neither is invented as a tenant (#1607) nor dropped with only
+    a warning."""
     tree = _unusable_confd(tmp_path / "conf.d")
 
-    with pytest.raises(TenantSetUnknown) as exc:
+    with refuses("broken.yaml", "notes.yaml") as err:
         og.discover_tenant_configs(tree)
-    msg = str(exc.value)
-    assert "notes.yaml (not_regular_file" in msg, msg
-    assert "broken.yaml (read_failure" in msg, msg
+    assert "(not_regular_file: " in err.getvalue(), err.getvalue()
+    assert "(read_failure: " in err.getvalue(), err.getvalue()
 
 
 def test_discover_tenant_configs_is_silent_about_reserved_entries(
         tmp_path, capsys):
-    """`_`-prefixed entries are never tenant files, whatever their shape, so
-    naming an unusable one would report a loss that did not happen here."""
-    from _lib_confd import TenantSetUnknown
-
+    """`_`-prefixed entries are never tenant files, whatever their shape —
+    but since #3206 the question is not "which tenant was lost": the tool
+    refuses a tree da-guard validation names any path on, and names every
+    path validation names, a reserved one included (a directory-shaped
+    `_defaults.yaml` is one: the route generator refuses the tree on it)."""
     tree = _unusable_confd(tmp_path / "conf.d")
     (tree / "_defaults.yaml").unlink()
     (tree / "_defaults.yaml").mkdir()
 
-    with pytest.raises(TenantSetUnknown) as exc:
+    named = go_refused(tree)
+    assert named == ["_defaults.yaml", "broken.yaml", "notes.yaml"], named
+    with refuses(*named):
         og.discover_tenant_configs(tree)
-    msg = str(exc.value)
-    assert "_defaults.yaml" not in msg, (
-        f"named a reserved entry that is no tenant file; got {msg!r}")
-    assert "notes.yaml" in msg, "non-reserved entries must still be named"
 
 
 def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
@@ -673,22 +671,19 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         administrator rights on Windows, so a symlink fixture would be
         skipped on the host most of this repo's maintainers use.
         """
-        from _lib_confd import TenantSetUnknown
-
         for ext in (".yaml", ".yml"):
             root = self._seed(tmp_path / ext.lstrip("."), ext)
             (root / f"db-broken{ext}").mkdir()
             # Same shape, but an extension this tool never reads.
             (root / "db-payload.json").mkdir()
 
-            with pytest.raises(TenantSetUnknown) as exc:
+            # #3206: the shared refusal names the unusable entry with the
+            # reason it could not be read.
+            with refuses(f"db-broken{ext}") as err:
                 og.discover_tenant_configs(root)
-            msg = str(exc.value)
+            msg = err.getvalue()
 
-            assert f"db-broken{ext} (not_regular_file" in msg, (
-                f"the unusable entry must be named with the reason it could "
-                f"not be read; got {msg!r}"
-            )
+            assert "(not_regular_file: " in msg, msg
             assert "db-payload.json" not in msg, (
                 f"an entry this tool never reads was reported; got {msg!r}"
             )
@@ -731,8 +726,10 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         (root / "db-json.json").write_text(
             '{"tenants": {"db-json": {"pg_connections": 90}}}\n',
             encoding="utf-8")
+        # A profile the exporter serves (#3206: one it cannot is a tree no
+        # conf.d tool reads, which is not this test's question).
         (root / "_profiles.yaml").write_text(
-            "profiles:\n  x: 1\n", encoding="utf-8")
+            "profiles:\n  x:\n    pg_connections: 1\n", encoding="utf-8")
         (root / ".hidden.yaml").write_text(
             "tenants:\n  hidden:\n    pg_connections: 90\n",
             encoding="utf-8")

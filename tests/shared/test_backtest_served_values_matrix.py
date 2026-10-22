@@ -38,6 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKTEST = REPO_ROOT / "scripts" / "tools" / "ops" / "backtest_threshold.py"
 sys.path.insert(0, str(BACKTEST.parent))
 import backtest_threshold as bt  # noqa: E402
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -810,7 +811,8 @@ def test_a_retired_name_with_data_is_not_backtested_against(
 def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
     """A file the exporter cannot decode, on either side: exit 2 with the
     `caller_error` envelope, even under --skip-if-unavailable (the trees are
-    read before Prometheus is asked)."""
+    read before Prometheus is asked). #3206: through the shared conf.d
+    refusal — the file named, reason `conf_d_not_servable`."""
     good = {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")}
     bad = {"_defaults.yaml": _DEFAULTS, "tx.yaml": "tenants:\n  tx: [unclosed\n"}
     b = _tree(tmp_path / "base", bad if side in ("baseline", "both") else good)
@@ -824,8 +826,8 @@ def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
     doc = json.loads(p.stdout)
     assert (doc["status"], doc["changes"]) == ("caller_error", [])
     # #3111: both trees are read by da-guard only, so every side is this reason.
-    assert doc["reason"] == "served_values_unavailable"
-    assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr
+    assert doc["reason"] == "conf_d_not_servable"
+    assert_refused(p.returncode, p.stderr, ["tx.yaml"])
 
 
 def test_a_tenant_id_promql_cannot_take_is_listed_not_queried(

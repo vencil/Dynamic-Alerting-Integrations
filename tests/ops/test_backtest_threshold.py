@@ -24,6 +24,7 @@ import pytest
 from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
 
 
 class TestParseLookback:
@@ -1711,14 +1712,6 @@ def _path_served_values(mp, tmp, prom):
     return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
 
 
-def _path_conf_unreadable(mp, tmp, prom):
-    mp.setattr(bt, "prometheus_available", _boom)
-    d = tmp / "bad-conf.d"
-    d.mkdir()
-    (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
-    return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
-
-
 def _path_query_error(mp, tmp, prom):
     p = prom(errors={"t-x": 400})
     return [*_TENANT, "--prometheus", p.url]
@@ -1746,9 +1739,8 @@ _EVERY_PATH = [
      ("Backtest not run", "baseline_missing")),
     ("served-values", _path_served_values, 2, ("caller_error", "served_values_unavailable"),
      ("Backtest not run", "served_values_unavailable")),
-    # #3111: da-guard names an undecodable file on either side.
-    ("conf-unreadable", _path_conf_unreadable, 2, ("caller_error", "served_values_unavailable"),
-     ("Backtest not run", "served_values_unavailable")),
+    # #3111's "da-guard names an undecodable file" path is the shared conf.d
+    # refusal since #3206: TestConfdRefusalWritesNothing below.
     ("query-error", _path_query_error, 2, ("partial", "query_error"),
      ("Threshold Backtest Results", "not measured")),
     ("high", _path_high, 1, None, ("Threshold Backtest Results", "HIGH")),
@@ -1800,6 +1792,36 @@ class TestOutputsOnEveryPath:
         assert "check the value given to" not in out.err   # no write error
         assert json.loads(out_json.read_text(encoding="utf-8"))["lookback"] == "7d"
         assert out_md.read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestConfdRefusalWritesNothing:
+    """#3206: a tree da-guard validation names a path on (here a file that is
+    not UTF-8) ends through the shared conf.d refusal before either tree is
+    read — rc 2, the file named, the `--json` envelope with reason
+    `conf_d_not_servable` on stdout, and neither `-o` nor `--markdown-output`
+    touched (the refusal stops before it writes anything; #3089's "every
+    path writes both" covers the paths after the trees are read)."""
+
+    def test_refusal_names_the_file_and_writes_neither_output(self, tmp_path):
+        d = tmp_path / "bad-conf.d"
+        d.mkdir()
+        (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
+        out_json, out_md = tmp_path / "r.json", tmp_path / "r.md"
+        out_json.write_text("stale\n", encoding="utf-8")
+        p = subprocess.run(
+            [sys.executable, bt.__file__, "--config-dir", str(d), "--baseline", str(d),
+             "--prometheus", "http://127.0.0.1:9", "--json",
+             "-o", str(out_json), "--markdown-output", str(out_md)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        assert_refused(p.returncode, p.stderr, ["db.yaml"])
+        assert "(invalid_utf8: " in p.stderr, p.stderr
+        doc = json.loads(p.stdout)
+        assert (doc["status"], doc["reason"], doc["changes"]) == (
+            "caller_error", "conf_d_not_servable", [])
+        assert out_json.read_text(encoding="utf-8") == "stale\n"
+        assert not out_md.exists()
 
 
 def _unwritable(tmp, shape, name):
