@@ -260,14 +260,14 @@ class TestStrictFailOpenClosures:
                 "domain_policies": {"fin": {"tenants": ["tenant-x"]}},
                 "tenants": {"tenant-x": {"cpu": "90"}},
             })
-            warnings = load_tenant_tree(
-                d, strict_policies=True).schema_warnings
-            assert any("only _domain_policy.yaml is loaded" in w
-                       and w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                       for w in warnings), warnings
-            lenient = load_tenant_tree(d).schema_warnings
-            assert not any(w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                           for w in lenient)
+            # #3126：以前只有 strict 升 ERROR、非 strict 只印 WARN；現在兩種模式
+            # 都是拒收整棵樹的 field-type error（與 #3116 的不可用 policy 檔同一條路）。
+            for strict in (True, False):
+                errs = load_tenant_tree(d, strict_policies=strict).field_type_errors
+                assert [(e.kind, e.file, e.field) for e in errs] == [
+                    ("domain_policy_unusable", "tenant-x.yaml",
+                     "domain_policies")], errs
+                assert "is not read from this file" in errs[0].message, errs
 
 
 # ============================================================
