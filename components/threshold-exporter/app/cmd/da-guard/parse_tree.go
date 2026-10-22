@@ -291,7 +291,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"not_regular_file (files are opened and closed, never read), so a file that opens but\n"+
 			"fails mid-read has no problem there.\n"+
 			"\"verdict\": what the path makes `da-guard --config-dir <dir>` (no --scope) do, a\n"+
-			"closed list, null when nothing:\n"+
+			"closed list, null when nothing. Always the whole tree's judgement: a superset of what a\n"+
+			"--scope'd run lists under parse_failed / unreadable — compare it with unscoped validation.\n"+
 			"  unservable      named under exit 3 (parse_failed or unreadable): the exporter cannot\n"+
 			"                  serve it.\n"+
 			"  tree_refused    named under exit 4 as unreadable_outside_run: the route generator\n"+
