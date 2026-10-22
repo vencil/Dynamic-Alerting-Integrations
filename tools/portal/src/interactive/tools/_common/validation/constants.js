@@ -14,23 +14,30 @@ purpose: |
 
   Public API:
     RESERVED_KEYS         Set of reserved tenant keys (_silent_mode, _metadata, ...)
-    RESERVED_PREFIXES     Array of reserved key prefixes (_state_, _routing)
+    RESERVED_PREFIXES     Array of the open key prefixes (_state_)
     RECEIVER_TYPES        Array of supported notification receiver types
     TIMING_GUARDRAILS     map of timing param to bounds {min, max, unit}
     UNSAFE_KEYS           Set of prototype-pollution keys parser must reject
     MAX_YAML_SIZE         Hard cap (100KB) on parser input length
 
-  Closure deps: none. Pure data.
+  RESERVED_KEYS / RESERVED_PREFIXES come from ../data/reserved-keys.json,
+  which scripts/tools/dx/sync_schema.py generates from the reserved-key
+  registry (components/threshold-exporter/app/pkg/config/reserved_keys.json;
+  `--check` fails CI when it is stale, #3227). They are the `_` keys a
+  tenant's config may carry — the set the tenant schema's propertyNames
+  admits — so a platform-level key (_routing_defaults, _domain_policy, ...)
+  under tenants.<id> reads as unknown.
+
+  Closure deps: ../data/reserved-keys.json (generated data). Pure data.
 
   Consumers import these directly via ESM (dev-rules §S6).
 ---
 
-const RESERVED_KEYS = new Set([
-  '_silent_mode', '_namespaces', '_metadata', '_profile',
-  '_routing_defaults', '_routing_profile', '_domain_policy', '_instance_mapping'
-]);
+import RESERVED_KEY_REGISTRY from '../data/reserved-keys.json';
 
-const RESERVED_PREFIXES = ['_state_', '_routing'];
+const RESERVED_KEYS = new Set(RESERVED_KEY_REGISTRY.reserved_keys);
+
+const RESERVED_PREFIXES = RESERVED_KEY_REGISTRY.open_prefixes;
 
 const RECEIVER_TYPES = ['webhook', 'email', 'slack', 'teams', 'rocketchat', 'pagerduty'];
 

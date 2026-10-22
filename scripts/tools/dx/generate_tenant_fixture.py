@@ -96,6 +96,10 @@ METRIC_TEMPLATES = {
 }
 
 # Routing profiles
+#: The `_silent_mode` values a generated tenant may carry: silencing targets
+#: only. tests/dx/test_generate_tenant_fixture.py keeps them within the tenant
+#: schema's silentMode enum (#3227).
+SILENT_MODE_TARGETS = ["warning", "critical", "all"]
 ROUTING_PROFILES = ["default", "high-priority", "noc-escalation", "silent-hours", "business-hours-only"]
 
 
@@ -233,7 +237,7 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
 
     # Operational modes (sparse)
     if rng.random() < 0.05:
-        config["_silent_mode"] = rng.choice(["warning", "critical", "all"])
+        config["_silent_mode"] = rng.choice(SILENT_MODE_TARGETS)
     if rng.random() < 0.03:
         config["_state_maintenance"] = {
             "target": "enable",

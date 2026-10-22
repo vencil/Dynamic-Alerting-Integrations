@@ -273,12 +273,13 @@
       "additionalProperties": false
     },
     "silentMode": {
+      "$comment": "#3227: both enums (the scalar branch and the structured branch's target) are exactly the words the exporter's reader knows: the silencing targets (pkg/config/silent_mode.go silentModeTargets) plus the words that switch a key off (pkg/config/parse.go disabledWords). TestSilentModeSchemaEnumsMatchReader pins the two sets equal in both directions, so a word added to the reader without the schema (or the reverse) fails Go tests. The schema is narrower than the reader on purpose in three places, which no enum can express: the reader lower-cases and trims the value (the enum is case-sensitive), reads an empty value as off, and accepts an unquoted YAML `false` / `off` — yaml.v3 hands the reader the text, while a YAML 1.1 loader (PyYAML, which feeds this schema in the Python tools) turns them into a boolean, which the `type: string` branch refuses.",
       "oneOf": [
         {
           "type": "string",
           "title": "Silent Mode (Scalar, Backward Compatible)",
-          "description": "Legacy scalar format: 'warning', 'critical', 'all', or 'disable'. For new configs, prefer structured format with expires/reason.",
-          "enum": ["warning", "critical", "all", "disable"],
+          "description": "Legacy scalar format: 'warning', 'critical' or 'all' silence those severities; 'disable' (or its aliases 'disabled', 'off', 'false') turns silent mode off. Write 'off' and 'false' quoted: unquoted, a YAML 1.1 loader reads them as a boolean, which this schema refuses although the exporter takes them. For new configs, prefer structured format with expires/reason.",
+          "enum": ["warning", "critical", "all", "disable", "disabled", "off", "false"],
           "examples": ["warning", "disable"]
         },
         {
@@ -290,8 +291,8 @@
             "target": {
               "type": "string",
               "title": "Target Severity",
-              "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'.",
-              "enum": ["warning", "critical", "all"]
+              "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'. 'disable' (or 'disabled', 'off', 'false', quoted) turns silent mode off, as in the scalar form; expires and reason are then unused.",
+              "enum": ["warning", "critical", "all", "disable", "disabled", "off", "false"]
             },
             "expires": {
               "type": "string",

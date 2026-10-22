@@ -508,7 +508,7 @@ tenants:
   db-d: {}                        # Normal — 預設行為
 ```
 
-可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`。未設定等同 Normal。
+可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`（關閉的別名 `disabled`／`off`／`false` 也接受；`off`／`false` 請加引號，未加引號時 YAML 1.1 讀成布林、schema 不收）。未設定等同 Normal。
 
 **自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2099-04-01T00:00:00Z"`；exporter 解析不了時印 WARN 並**忽略這筆設定**——不靜音、maintenance 不生效，告警照常發；[#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。
 

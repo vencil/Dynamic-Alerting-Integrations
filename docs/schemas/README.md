@@ -154,7 +154,7 @@ tenants:
 
 Schema distinguishes between:
 
-- **Silent Mode** (`_silent_mode`): Suppress Alertmanager notifications; alerts still fire (TSDB records exist)
+- **Silent Mode** (`_silent_mode`): Suppress Alertmanager notifications; alerts still fire (TSDB records exist). The value (or the structured form's `target`) is `warning` / `critical` / `all`, or `disable` (aliases `disabled` / `off` / `false`) to turn it off — exactly the exporter's words, pinned by `TestSilentModeSchemaEnumsMatchReader` (#3227). The schema is narrower than the exporter in one way an enum cannot express: write `off` / `false` quoted, since a YAML 1.1 loader reads them unquoted as a boolean
 - **Maintenance Mode** (`_state_maintenance`): Suppress alerts at PromQL level; no TSDB records; supports recurring schedules
 
 ```yaml
@@ -273,7 +273,7 @@ DA_GUARD_BINARY=$PWD/.build/da-guard python3 scripts/tools/lint/check_confd_sche
 To update the schema:
 
 1. **Identify the change**: New reserved key, new receiver type, changed validation rules, etc.
-2. **A top-level `_` key**: add, change or retire it in `components/threshold-exporter/app/pkg/config/reserved_keys.json` (which reader reads it, in which layer; [ADR-038](../adr/038-unread-keys-judged-by-readers.md)), then run `python3 scripts/tools/dx/sync_schema.py --update`: it writes the Python constants (`scripts/tools/_lib_constants.py`), Go's `pkg/config/reserved_keys_gen.go`, and the `_` keys of this schema and `platform-defaults.schema.json` (a new property gets a stub with the registry's description; write its body here). `tests/shared/test_reserved_key_probes.py` then checks that the readers really read it where the registry says, and nowhere else.
+2. **A top-level `_` key**: add, change or retire it in `components/threshold-exporter/app/pkg/config/reserved_keys.json` (which reader reads it, in which layer; [ADR-038](../adr/038-unread-keys-judged-by-readers.md)), then run `python3 scripts/tools/dx/sync_schema.py --update`: it writes the Python constants (`scripts/tools/_lib_constants.py`), Go's `pkg/config/reserved_keys_gen.go`, the portal's `tools/portal/src/interactive/tools/_common/data/reserved-keys.json` (the `_` keys the portal's config validator accepts in a tenant), and the `_` keys of this schema and `platform-defaults.schema.json` (a new property gets a stub with the registry's description; write its body here). `tests/shared/test_reserved_key_probes.py` then checks that the readers really read it where the registry says, and nowhere else.
 3. **Anything else** (struct definitions, receiver types): update the Go code (`pkg/config/types.go`, `pkg/config/resolve.go`) and Python (`scripts/tools/_lib_constants.py` `RECEIVER_TYPES`; re-exported via `_lib_python.py`)
 4. **Update schema**: Modify `docs/schemas/tenant-config.schema.json` to match Go/Python definitions
 5. **Update docs**: Reflect changes in relevant documentation (getting-started, architecture-and-design, CHANGELOG)

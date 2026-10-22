@@ -63,6 +63,15 @@ from _registry_lib import counterexample_for_key as _registry_counterexample_for
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
 
+#: `--silent-mode` choices: the silencing targets plus the documented off word.
+#: The exporter also takes the other off aliases (disabled / off / false);
+#: tests/ops/test_scaffold_tenant.py keeps these within the tenant schema's
+#: silentMode enum, which is pinned to the exporter's words (#3227).
+SILENT_MODE_CHOICES = ("warning", "critical", "all", "disable")
+#: The interactive menu's silent-mode picks (menu number -> target); each is
+#: written as the scalar value or as the structured form's `target`.
+INTERACTIVE_SILENT_TARGETS = {"2": "warning", "3": "critical", "4": "all"}
+
 # Bilingual help strings
 _HELP = {
     'description': {
@@ -789,7 +798,7 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     print("    3. Critical — 只靜音 critical 通知")
     print("    4. All — 靜音所有通知")
     silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
-    silent_map = {"2": "warning", "3": "critical", "4": "all"}
+    silent_map = INTERACTIVE_SILENT_TARGETS
     if silent_choice in silent_map:
         expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
         if expires_str:
@@ -1493,7 +1502,7 @@ def main() -> None:
                         help=_h('topology'))
     parser.add_argument("--mapping-instance", help=_h('mapping_instance'))
     parser.add_argument("--mapping-filter", help=_h('mapping_filter'))
-    parser.add_argument("--silent-mode", choices=["warning", "critical", "all", "disable"],
+    parser.add_argument("--silent-mode", choices=list(SILENT_MODE_CHOICES),
                         help=_h('silent_mode'))
     parser.add_argument("--severity-dedup", choices=["enable", "disable"], default="enable",
                         help=_h('severity_dedup'))

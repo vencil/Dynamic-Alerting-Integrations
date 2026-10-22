@@ -16,8 +16,9 @@ import COPY from '../src/interactive/tools/_common/data/silent-mode-schema.json'
 // Evaluates only the keywords the silentMode definition uses and throws on any
 // other assertion keyword, so a schema that grows a new keyword fails loudly
 // instead of being skipped. `format` is an annotation in draft-07 (the repo's
-// schema lints do not assert it), so it is not evaluated here.
-const ANNOTATIONS = new Set(['title', 'description', 'examples', 'format']);
+// schema lints do not assert it), so it is not evaluated here; `$comment` is
+// a note for schema authors and asserts nothing either.
+const ANNOTATIONS = new Set(['title', 'description', 'examples', 'format', '$comment']);
 function check(schema: any, v: any): boolean {
   for (const k of Object.keys(schema)) {
     if (!ANNOTATIONS.has(k) && !['oneOf', 'type', 'enum', 'required', 'properties', 'additionalProperties'].includes(k)) {

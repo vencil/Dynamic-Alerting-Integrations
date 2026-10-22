@@ -24,7 +24,7 @@ import sync_schema as ss
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TOOL = os.path.join(_REPO, "scripts", "tools", "dx", "sync_schema.py")
-_TARGETS = (ss.PY_REL, ss.GO_REL, ss.TENANT_SCHEMA_REL, ss.PLATFORM_SCHEMA_REL)
+_TARGETS = (ss.PY_REL, ss.GO_REL, ss.TENANT_SCHEMA_REL, ss.PLATFORM_SCHEMA_REL, ss.PORTAL_REL)
 
 pytestmark = pytest.mark.skipif(
     not os.path.isfile(os.path.join(_REPO, ss.REGISTRY_REL)),
@@ -37,7 +37,7 @@ def _registry():
 
 
 def _copy_tree(tmp_path, registry=None):
-    """The registry and the four generated files under *tmp_path*."""
+    """The registry and the generated files under *tmp_path*."""
     for rel in (ss.REGISTRY_REL, *_TARGETS):
         dst = tmp_path / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +83,7 @@ class TestCheckAndUpdate:
         (ss.GO_REL, '"_silent_mode",', '"_silent_mod",'),
         (ss.TENANT_SCHEMA_REL, "_routing_profile|_severity_dedup", "_routing_profile"),
         (ss.PLATFORM_SCHEMA_REL, '"^_state_"', '"^_stat_"'),
+        (ss.PORTAL_REL, '"_silent_mode"', '"_silent_mod"'),
     ])
     def test_a_hand_edit_is_stale_and_update_restores_it(self, tmp_path, rel, old, new):
         root = _copy_tree(tmp_path)
@@ -97,12 +98,13 @@ class TestCheckAndUpdate:
         assert _read(root, rel) == good
         assert _cli("--root", str(root), "--check").returncode == 0
 
-    def test_a_missing_go_file_is_written(self, tmp_path):
+    @pytest.mark.parametrize("rel", [ss.GO_REL, ss.PORTAL_REL])
+    def test_a_missing_whole_file_target_is_written(self, tmp_path, rel):
         root = _copy_tree(tmp_path)
-        (root / ss.GO_REL).unlink()
+        (root / rel).unlink()
         assert _cli("--root", str(root), "--check").returncode == 1
         assert _cli("--root", str(root), "--update").returncode == 0
-        assert _read(root, ss.GO_REL) == open(os.path.join(_REPO, ss.GO_REL), encoding="utf-8").read()
+        assert _read(root, rel) == open(os.path.join(_REPO, rel), encoding="utf-8").read()
 
     def test_without_check_stale_is_reported_but_rc_0(self, tmp_path):
         root = _copy_tree(tmp_path)
@@ -132,6 +134,7 @@ class TestANewKeyReachesEveryCopy:
         assert re.search(tenant["propertyNames"]["pattern"], "_probe_key")
         platform = json.loads(_read(root, ss.PLATFORM_SCHEMA_REL))
         assert platform["properties"]["_probe_key"] == {"description": "probe"}
+        assert "_probe_key" in json.loads(_read(root, ss.PORTAL_REL))["reserved_keys"]
 
     def test_a_platform_top_key_is_not_a_tenant_key(self, tmp_path):
         root = self._with(tmp_path, "_probe_top", {
@@ -145,6 +148,7 @@ class TestANewKeyReachesEveryCopy:
         assert "_probe_top" not in tenant["properties"]
         assert not re.search(tenant["propertyNames"]["pattern"], "_probe_top")
         assert "_probe_top" in json.loads(_read(root, ss.PLATFORM_SCHEMA_REL))["properties"]
+        assert "_probe_top" not in json.loads(_read(root, ss.PORTAL_REL))["reserved_keys"]
 
     def test_removing_a_key_removes_it_and_keeps_every_other_byte(self, tmp_path):
         reg = _registry()
@@ -169,6 +173,28 @@ class TestANewKeyReachesEveryCopy:
         snap = {rel: _read(root, rel) for rel in _TARGETS}
         assert _cli("--root", str(root), "--update").stdout.startswith("OK")
         assert {rel: _read(root, rel) for rel in _TARGETS} == snap
+
+
+class TestThePortalCopy:
+    """The portal's reserved-keys.json admits exactly what the tenant schema's
+    propertyNames admits (#3227): the portal validator and the schema judge a
+    tenant's `_` keys alike."""
+
+    def _admits_portal(self, key):
+        doc = json.loads(open(os.path.join(_REPO, ss.PORTAL_REL), encoding="utf-8").read())
+        return key in doc["reserved_keys"] or any(key.startswith(p) for p in doc["open_prefixes"])
+
+    def _admits_schema(self, key):
+        tc = json.loads(open(os.path.join(_REPO, ss.TENANT_SCHEMA_REL), encoding="utf-8").read())
+        return re.search(tc["definitions"]["tenantConfig"]["propertyNames"]["pattern"], key) is not None
+
+    def test_same_verdict_as_the_schema(self):
+        reg = _registry()
+        probes = (set(reg["keys"]) | set(reg["retired"]) | set(reg["prefixes"])
+                  | {p + "x" for p in reg["prefixes"]}
+                  | {"_domain_policy", "_instance_mapping", "_routing_x", "_silentmode"})
+        for key in sorted(probes):
+            assert self._admits_portal(key) == self._admits_schema(key), key
 
 
 class TestTheClosedUnderscoreNamespace:
