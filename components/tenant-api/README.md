@@ -180,6 +180,8 @@
 
 同步輸出 `Retry-After` header。`/health` / `/ready` / `/metrics` 永遠不限流。
 
+錯誤回應的固定欄位之外，有些碼會在同一層帶自己的欄位（例如 `PENDING_PR_EXISTS` 的 `existing_pr_url`、`pr_number`）：每個碼可帶哪些欄位與型別宣告在 `internal/errcode/extra.go`，回應只送宣告過的欄位；新增欄位要先宣告，否則 `make error-contract` 失敗（[hardening §2.7](../../docs/api/tenant-api-hardening.md)）。
+
 ### 衝突語義
 
 寫入時記錄 git HEAD;若 commit 的 parent 與寫入前 HEAD 不符(期間有外部 commit 落地)→ 回 409,呼叫者應 refresh 後重試。

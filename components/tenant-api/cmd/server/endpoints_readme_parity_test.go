@@ -8,8 +8,8 @@ package main
 // Source side: the production buildRouter with every conditional route
 // registered (buildRouterAllRoutes, shared with the org-gate manifests in
 // routes_test.go), enumerated by chi.Walk. That is what the server serves, so
-// routes without swag annotations (/health, /ready, /metrics, /tasks/{id},
-// /events) need no exemption list.
+// routes without swag annotations (/health, /ready, /metrics, /events) need
+// no exemption list.
 //
 // README side: every table row in the section. The first cell is one or more
 // backticked HTTP methods separated by spaces; the second is one backticked
