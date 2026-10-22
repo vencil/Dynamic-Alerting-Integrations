@@ -132,14 +132,12 @@ from _lib_confd import (  # noqa: E402
     config_stem,
     duplicate_declarations,
     tenant_declarations,
-    is_dir_symlink,
-    is_reserved_name,
-    is_defaults_name,
     iter_config_files,
+    list_config_tree,
     observe_flat_reads,
     printable_name,
     resolve_defaults_file,
-    unusable_config_paths,
+    unusable_entry,
     unusable_reason,
 )
 
@@ -448,7 +446,7 @@ def _make_result(
 # ============================================================
 # Check 1: YAML Syntax
 # ============================================================
-def _unusable_consequence(bad: Path) -> str:
+def _unusable_consequence(bad: Path, listing) -> str:
     """What the operator actually loses because of `bad` — one clause.
 
     ⛔ This used to be the single fixed sentence "nothing in it is loaded,
@@ -463,6 +461,9 @@ def _unusable_consequence(bad: Path) -> str:
     Saying a true thing matters more here than usual: this check is a
     required gate, and the sentence is what a customer reads when it turns
     their build red.
+
+    *listing* is the snapshot *bad* came from (#3206): what *bad* is (Go's
+    `role` and class) and what lives under it are read off it.
     """
     # ⛔ A DIRECTORY SYMLINK FIRST (#1972). `iter_config_files(bad)` would
     # walk INTO the link — it is the root of that call, and `os.walk`
@@ -471,16 +472,17 @@ def _unusable_consequence(bad: Path) -> str:
     # printed just before it. Neither this scan nor the exporter enters it.
     # The reason already says "NOT loaded", so the clause here is the remedy
     # only — repeating the loss read as a stutter (#1972 blind review N3).
-    if is_dir_symlink(bad):
+    entry = unusable_entry(bad, listing)
+    if entry is not None and entry.dir_link:
         return ("project those files as flat ConfigMap keys (no `/` in "
                 "`items[].path`), or copy them into conf.d")
-    if bad.is_symlink():
-        return "nothing in it is loaded, by this tool or by threshold-exporter"
-    reason = unusable_reason(bad)
-    if reason.startswith("is a directory that could not be read"):
+    # #3206: Go's structured verdict (role `unlistable_dir`, class
+    # `directory`), never a prefix of the wording `unusable_reason` prints.
+    if entry is not None and entry.unlistable_dir:
         return ("so THIS REPORT IS INCOMPLETE: fix the permissions and "
                 "re-run before trusting it")
-    inside = list(iter_config_files(bad)) if bad.is_dir() else []
+    inside = ([e for e in listing.config_files() if e.path.startswith(entry.path + "/")]
+              if entry is not None and entry.cls == "directory" else [])
     if inside:
         return (f"but the {len(inside)} config file(s) INSIDE it ARE "
                 f"loaded — by this scan and by threshold-exporter's "
@@ -488,6 +490,17 @@ def _unusable_consequence(bad: Path) -> str:
                 f"A `.yaml` name on a DIRECTORY is almost always an "
                 f"interrupted `mkdir` or a bad merge: rename it")
     return "nothing in it is loaded, by this tool or by threshold-exporter"
+
+
+def _has_config_file(config_dir: str) -> bool:
+    """Whether the run's listing of *config_dir* holds any config file (Go's
+    `role`). A listing that cannot be had is not "no config file": True, so
+    the caller says "cannot be read" rather than "points at nothing"."""
+    try:
+        reader = _lib_parse_cache.reader_for(config_dir)
+        return next(iter_config_files(config_dir, reader=reader), None) is not None
+    except ParseTreeError:
+        return True
 
 
 def check_yaml_syntax(config_dir: str) -> dict[str, object]:
@@ -522,9 +535,13 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     # (syntax_error, duplicate_key, invalid_utf8, top_level_not_mapping, …).
     # A file no reader reads (an unselected `_defaults` spelling, `not_read`)
     # has no content to judge; the schema row names it.
-    tree = _lib_parse_cache.reader_for(config_dir).tree()
+    reader = _lib_parse_cache.reader_for(config_dir)
+    tree = reader.tree()
     root = Path(config_dir)
-    for fpath_p in iter_config_files(config_dir):
+    # #3206: ONE listing for both halves and every reason below — the
+    # entries of that same document (Go's `role`), not a second walk.
+    listed = list_config_tree(config_dir, reader=reader)
+    for fpath_p in listed.files:
         file_count += 1
         # Relative path, not bare filename: now that the scan is recursive,
         # two levels can hold the same `_defaults.yaml`.
@@ -552,15 +569,15 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     # parser reported them, which is the two-readers-two-answers split #1469
     # is about. ⛔ The selection is NOT re-derived locally — that would make
     # a third implementation of "what is a config file".
-    for bad in unusable_config_paths(config_dir):
+    for bad in listed.unusable:
         try:
             label = bad.relative_to(Path(config_dir)).as_posix()
         except ValueError:
             label = bad.name
         if label in (".", ""):
             label = bad.name
-        errors.append(f"{label}: {unusable_reason(bad)} — "
-                      f"{_unusable_consequence(bad)}")
+        errors.append(f"{label}: {unusable_reason(bad, listed.listing)} — "
+                      f"{_unusable_consequence(bad, listed.listing)}")
         unusable.append(label)
 
     if errors:
@@ -605,30 +622,27 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
     (worse) read as quoted by `json_schema` in a file `yaml_quoting` never
     read, so nobody reports it.
     """
-    from _lib_confd import is_defaults_document_name
     # #2906 review: parse-tree's verdict on which files are read — a file it
     # lists as `not_read` (the `_defaults` spelling a directory does not
     # select) is read by no reader, so no row reads it either; the `schema`
     # row names it (`unselected_defaults_carrier`).
+    # #3206: the files are the entries of the run's tree-mode document (Go's
+    # `role`; the list `check_confd_schema.validate_dir` iterates too), and
+    # the schema a name selects is da-guard's (`defaults_document`, class).
     reader = _lib_parse_cache.reader_for(config_dir)
     out: list[tuple[Path, str, str]] = []
-    for fpath in iter_config_files(config_dir):
-        if reader.not_read(fpath) is not None:
+    for e in reader.listing().config_files():
+        if e.not_read is not None:
             continue
-        name = fpath.name
-        if is_defaults_document_name(name):
+        if e.defaults_document:
             schema_name = _PLATFORM_SCHEMA
-        elif name in _PROFILES_NAMES:
+        elif e.name in _PROFILES_NAMES:
             schema_name = _PROFILES_SCHEMA
-        elif is_reserved_name(name):
+        elif e.reserved:
             continue
         else:
             schema_name = _TENANT_SCHEMA
-        try:
-            label = fpath.relative_to(Path(config_dir)).as_posix()
-        except ValueError:
-            label = name
-        out.append((fpath, label, schema_name))
+        out.append((Path(config_dir) / e.path, e.path, schema_name))
     return out
 
 
@@ -1211,7 +1225,7 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
         # da-guard named the paths it dropped or could not read (its
         # `parse_failed` / `unreadable`) — a dangling symlink included.
         hint, caller_error = unreadable_hint, False
-    elif next(iter_config_files(config_dir), None) is None:
+    elif not _has_config_file(config_dir):
         hint = no_config_hint   # no path at all: the argv points at nothing
     else:
         hint, caller_error = unreadable_hint, False
@@ -1486,20 +1500,26 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # From _defaults.yaml
     # #2115 0-B: the tenants are read from the whole tree (below), so only
     # the nested carriers whose `_policies` this lookup skips are named.
-    defaults_path = str(resolve_defaults_file(
-        Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
     # The carrier read is the one parse-tree selects (#2906 review), not
     # `resolve_defaults_file`'s own selection: that one names the file to
-    # create when there is none, and prints the skipped-carriers note.
+    # create when there is none, and prints the skipped-carriers note. Both
+    # ask the run's reader (#3206: its listing, no second walk), so both are
+    # in the da-guard failure arm.
     try:
-        chosen = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+        reader = _lib_parse_cache.reader_for(config_dir)
+        defaults_path = str(resolve_defaults_file(
+            Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE, reader=reader))
+        chosen = reader.carrier(config_dir)
     except ParseTreeError as exc:
         return _parse_tree_failure_row("policy_dsl", exc, _POLICY_DSL_NO_DA_GUARD_HINT)
     if chosen is not None:
         defaults_path = str(chosen)
     # #2725: a carrier that is there but cannot be opened (a dangling
     # symlink) is not "no carrier" — that line told the operator to create one.
-    if os.path.isfile(defaults_path):
+    # #3206: both answers are the reader's listing — a carrier Go selects is a
+    # config file (read, failing loudly), an entry at the carrier's path that
+    # is none (a dangling link) is "unreadable"; no `isfile` / `lexists` here.
+    if chosen is not None:
         scope["root_carrier"] = True
         # #2961: the customer's tree — a tree finding (FAIL, rc 1), as the
         # comment at the --policy-dsl read below says.
@@ -1512,7 +1532,7 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
                                 [f"{os.path.basename(defaults_path)}: {p}" for p in exc.problems],
                                 hint=_POLICY_DSL_INVALID_RULE_HINT)
     else:
-        scope["root_carrier"] = "unreadable" if os.path.lexists(defaults_path) else False
+        scope["root_carrier"] = "unreadable" if reader.entry(defaults_path) is not None else False
 
     # From standalone policy DSL file.
     # ⛔ The same collapse as --policy, written in the mirror form
@@ -2231,8 +2251,11 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
     ``defaults: {}`` was added.
     """
     root = Path(config_dir)
-    carriers, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
-        p for p in iter_config_files(root) if is_defaults_name(p.name))
+    reader = _lib_parse_cache.reader_for(config_dir)
+    # #3206: the carriers are the config files of class `defaults` in the
+    # run's listing (the entries of the document read below).
+    carriers, skipped = reader.split_not_read(
+        root / e.path for e in reader.listing().config_files() if e.cls == "defaults")
     details: list[str] = []
     checked = 0
     subtree_reserved = False
@@ -2314,16 +2337,18 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
     review: reading one parse-tree does not select is rc 2).
     """
     root = Path(config_dir)
-    files, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
-        iter_config_files(root))
+    reader = _lib_parse_cache.reader_for(config_dir)
+    # #3206: the run's listing (Go's `role` and class), no second walk.
+    entries = {root / e.path: e for e in reader.listing().config_files()}
+    files, skipped = reader.split_not_read(entries)
     details: list[str] = []
     checked = 0
     for p in sorted(files):
-        reserved = is_reserved_name(p.name)
+        reserved = entries[p].reserved
         at_root = p.parent == root
         # Not in `not_read`: the directory's selected carrier (one parse-tree
         # cannot read raises below and is left to `yaml_syntax`).
-        carrier = is_defaults_name(p.name)
+        carrier = entries[p].cls == "defaults"
         if reserved and not at_root and not carrier:
             continue  # a nested `_` file: read by no plane
         try:

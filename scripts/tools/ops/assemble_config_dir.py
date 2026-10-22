@@ -29,7 +29,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -44,14 +44,15 @@ from _lib_exitcodes import (  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
+    config_listing,
     has_yaml_extension,
     is_defaults_name,
-    is_dir_symlink,
     is_hidden_name,
     iter_config_files,
+    list_config_tree,
     select_defaults_carrier,
     unusable_config_entries,
-    unusable_config_paths,
+    unusable_entry,
     unusable_reason,
     warn_nested,
 )
@@ -94,7 +95,7 @@ def is_platform_file(name: str) -> bool:
 
 # ── Source discovery ─────────────────────────────────────────────────
 
-def list_visible_config_entries(dir_path: Path) -> List[Path]:
+def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Path]:
     """Config-NAMED entries of `dir_path`, flat, minus the hidden ones —
     each of which is named on stderr before it is left out.
 
@@ -107,28 +108,47 @@ def list_visible_config_entries(dir_path: Path) -> List[Path]:
     inside a single file. So the listing, the hidden skip and its wording
     live here once; a third scan site calls this, it does not copy it.
 
-    `has_yaml_extension` and `is_hidden_name` are the exporter's own rules
-    (`config_hierarchy.go`), shared through `_lib_confd` with the sibling
-    producers. Hidden entries are NAMED, not silently dropped: excluding
-    without saying so would trade a visible error for a quiet loss.
+    #3206: the entries are the exporter's own walk — *listing*, da-guard's
+    top level — so which names it reads is Go's rule, not one of this
+    tool's. Hidden entries are NAMED, not silently dropped: excluding
+    without saying so would trade a visible error for a quiet loss; the
+    walk does not list them, so the WARN alone asks `is_hidden_name` /
+    `has_yaml_extension` of this directory's own names (wording only: it
+    selects nothing).
 
     `warn_nested` is called HERE, in the same scope as the `iterdir()`,
     because `test_confd_enumeration_contract` requires the guard to live
     where the flat scan lives. Callers must not call it again for the same
     directory (it de-duplicates, but a second call reads as a second scan).
 
-    Returns only what is config-named and not hidden; whether each entry is
-    a readable regular file is the caller's question (`unusable_config_entries`).
+    Returns every entry the walk lists at this level (any role); whether
+    each is a config file is the caller's question, asked of *listing* — the
+    caller's snapshot of `dir_path` (`config_listing(dir_path)` when None),
+    the one it also words each unusable entry from (#3206) — which the
+    nested warning reads too.
     """
+    if listing is None:
+        listing = config_listing(dir_path)
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
-    warn_nested(dir_path, tool="assemble_config_dir")
-    config_named = sorted(p for p in dir_path.iterdir()
-                          if has_yaml_extension(p.name))
-    for p in (q for q in config_named if is_hidden_name(q.name)):
-        print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
-              f"does not read it", file=sys.stderr)
-    return [p for p in config_named if not is_hidden_name(p.name)]
+    warn_nested(dir_path, tool="assemble_config_dir", listing=listing)
+    # ⚠️ WORDING ONLY: this loop selects nothing (the entries are the
+    # listing's); a directory this uid cannot list just has no hidden-entry
+    # WARN — its own failure is the listing's to report.
+    try:
+        own = sorted(dir_path.iterdir())
+    except OSError:
+        own = []
+    for p in own:
+        if has_yaml_extension(p.name) and is_hidden_name(p.name):
+            print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
+                  f"does not read it", file=sys.stderr)
+    return [] if listing is None else [dir_path / e.path for e in listing.entries
+                                       if e.depth == 0]
+
+
+class SourceUnreadable(FileNotFoundError):
+    """A source directory the exporter's walk cannot list (`main` → rc 2)."""
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
@@ -172,7 +192,14 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # learns WHICH tenant just lost its carrier instead of finding out from
     # a missing alert. The listing (and the nested-config guard) is the
     # shared one — `validate_merged` reads the artifact through it too.
-    named = list_visible_config_entries(source_dir)
+    listing = config_listing(source_dir)
+    root = None if listing is None else listing.entry(".")
+    if root is not None and root.unlistable_dir:
+        # #3206: the source itself cannot be listed — nothing of it can be
+        # merged, and an empty merge would read as "no tenants": rc 2, named.
+        raise SourceUnreadable(f"source directory cannot be listed: {source_dir} — "
+                               f"{unusable_reason(source_dir, listing)}")
+    named = list_visible_config_entries(source_dir, listing)
 
     # ⛔ A config-NAMED entry that is not a readable file (a shard's broken
     # symlink, a directory called `subteam.yaml`) is a fact about the input,
@@ -181,11 +208,19 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # it, the copy raises, and `sharded-check` answers "could not measure".
     # Named, not silently dropped — `unusable_config_entries` is the shared
     # wording so this reader phrases it like every other one.
-    unusable = set(unusable_config_entries(named))
+    unusable = set(unusable_config_entries(named, listing=listing))
     for p in sorted(unusable):
-        print(f"WARN: {p} {unusable_reason(p)} — not merged",
+        print(f"WARN: {p} {unusable_reason(p, listing)} — not merged",
               file=sys.stderr)
-    return [p for p in named if p not in unusable and p.is_file()]
+    # #3206: a config file is what Go's `role` says is one — not `is_file()`,
+    # which answers False for a file it may not stat and so dropped a tenant
+    # with no word. One it cannot read fails at the copy.
+    return [p for p in named if p not in unusable and _config_file_in(listing, p)]
+
+
+def _config_file_in(listing: Any, p: Path) -> bool:
+    e = None if listing is None else listing.entry(p.name)
+    return e is not None and e.config_file
 
 
 def _file_sha256(path: Path) -> str:
@@ -261,7 +296,7 @@ def detect_conflicts(
     return conflicts, file_map
 
 
-def carriers_already_in(output_dir: Path) -> Dict[str, Path]:
+def carriers_already_in(output_dir: Path, listing: Any = None) -> Dict[str, Path]:
     """Config carriers the exporter would read in `output_dir` right now.
 
     ⛔ `assemble()` never clears `--output`, and `make sharded-assemble`
@@ -277,11 +312,12 @@ def carriers_already_in(output_dir: Path) -> Dict[str, Path]:
 
     Keys are POSIX-relative paths, not basenames: flattening two same-named
     carriers from different subdirectories drops one out of the question.
+    *listing*: the caller's snapshot of `output_dir`, when it holds one.
     """
     if not output_dir.is_dir():
         return {}
     return {p.relative_to(output_dir).as_posix(): p
-            for p in iter_config_files(output_dir)}
+            for p in iter_config_files(output_dir, listing=listing)}
 
 
 # ── Assembly ─────────────────────────────────────────────────────────
@@ -386,23 +422,25 @@ def validate_merged(output_dir: Path) -> List[str]:
     # validated, because failing the deploy over a carrier the exporter
     # skips blocks a tree that is in fact fine. The nested-config guard
     # (#1911) rides along inside the helper, where the scan is.
-    visible = list_visible_config_entries(output_dir)
+    # ADR-036 step 4 (#2906): the artifact is read the way the exporter
+    # reads it — `da-guard parse-tree` (yaml.v3), one run over the output
+    # directory, whose entries are also the listing (#3206: no second walk).
+    # No usable da-guard raises `ParseTreeError` (exit 2 in main).
+    reader = _lib_parse_cache.ConfdReader(output_dir)
+    reader.require()
+    listing = config_listing(output_dir, reader=reader)
+    visible = list_visible_config_entries(output_dir, listing)
     # A config-NAMED entry the exporter cannot read (a directory called
     # `stale.yaml`, a dangling symlink) is a fact about the artifact, not a
     # reason to crash: `open()` on it raises outside `yaml.YAMLError`. Same
     # predicate `discover_yamls` applies to the sources, and the same
     # non-fatal wording — the exporter WARNs and serves the rest of the tree,
     # so this face must not turn that into a traceback or an ERROR.
-    unusable = set(unusable_config_entries(visible))
+    unusable = set(unusable_config_entries(visible, listing=listing))
     for p in sorted(unusable):
         issues.append(
-            f"{WARN_PREFIX}{p.name} {unusable_reason(p)} — not validated, "
+            f"{WARN_PREFIX}{p.name} {unusable_reason(p, listing)} — not validated, "
             f"the exporter cannot read it either")
-    # ADR-036 step 4 (#2906): the artifact is read the way the exporter
-    # reads it — `da-guard parse-tree` (yaml.v3), one run over the output
-    # directory. No usable da-guard raises `ParseTreeError` (exit 2 in main).
-    reader = _lib_parse_cache.ConfdReader(output_dir)
-    reader.require()
     for f in visible:
         if f in unusable:
             continue
@@ -451,6 +489,7 @@ def _has_content(path: Path) -> bool:
 # ── Main ─────────────────────────────────────────────────────────────
 
 @exit_on_output_write_error
+@_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
 def main() -> int:
     """CLI entry point: merge multiple conf.d/ sources into one config-dir."""
     try_utf8_stdout()
@@ -629,20 +668,25 @@ def main() -> int:
     # it, so nothing under it is read and nothing under it can be a second
     # declaration. It is named, like an unreadable file, and not counted
     # as "could not measure".
+    # #3206: "could not measure" is Go's `unlistable_dir` (a directory the
+    # walk could not list), not a stat of this tool's — a config-named
+    # directory the walk DID list is named, and its files are in the listing.
+    out_tree = None
     if output_dir is not None:
-        unusable_out = unusable_config_paths(output_dir)
-        blind = [p for p in unusable_out
-                 if p.is_dir() and not is_dir_symlink(p)]
-        unreadable_files = [p for p in unusable_out if p not in blind]
+        out_tree = list_config_tree(output_dir)
+        blind = list(out_tree.unscannable)
+        unreadable_files = [p for p in out_tree.unusable if p not in blind]
         for p in sorted(unreadable_files):
             # A directory link's reason already says what the exporter does.
-            tail = ("" if is_dir_symlink(p)
+            entry = unusable_entry(p, out_tree.listing)
+            tail = ("" if entry is not None and entry.dir_link
                     else " — the exporter cannot read it either")
-            print(f"WARN: {p} {unusable_reason(p)}{tail}", file=sys.stderr)
+            print(f"WARN: {p} {unusable_reason(p, out_tree.listing)}{tail}", file=sys.stderr)
         if blind:
             print(f"\n❌ cannot answer the duplicate-tenant question for "
                   f"{output_dir}: " +
-                  ", ".join(f"{p} {unusable_reason(p)}" for p in sorted(blind)),
+                  ", ".join(f"{p} {unusable_reason(p, out_tree.listing)}"
+                            for p in sorted(blind)),
                   file=sys.stderr)
             print("   This is 'could not measure', NOT 'measured clean' — a "
                   "second declaration of one of these tenants could be in "
@@ -655,7 +699,8 @@ def main() -> int:
                 }))
             return tu.EXIT_FOR[tu.UNMEASURED]
 
-    preexisting = carriers_already_in(output_dir) if output_dir else {}
+    preexisting = (carriers_already_in(output_dir, out_tree.listing)
+                   if output_dir and out_tree is not None else {})
     residue = {n: p for n, p in preexisting.items() if n not in file_map}
 
     # ⛔ #1674: a LEFTOVER root carrier beside the carrier this run produces is

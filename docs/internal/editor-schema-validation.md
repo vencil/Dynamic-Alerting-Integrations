@@ -10,7 +10,7 @@ lang: zh
 
 把 [`docs/schemas/tenant-config.schema.json`](../schemas/tenant-config.schema.json)（draft-07）接到「打字當下」的編輯器，讓直接編輯 `conf.d/` 下 YAML（`.yaml` / `.yml` 兩種拼法、不分大小寫）的人（平台工程師、領域專家、走 raw GitOps PR 的租戶）在存檔/部署前就拿到 inline 驗證 + autocomplete + hover 說明。對應 issue [#658](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/658)「Cash out tenant-config schema」。
 
-> **為什麼 schema 的綠勾值得信任**：schema 的保留鍵集合，和 Go（`pkg/config/reserved_keys_gen.go`）、Python（`scripts/tools/_lib_constants.py`）兩個執行期驗證器用的清單，都由同一份登錄表 `pkg/config/reserved_keys.json` 產生（[ADR-038](../adr/038-unread-keys-judged-by-readers.md)）。`tests/dx/test_sync_schema.py` 在 CI 重新產生後比對，任何一份手改都會轉紅，編輯器因此不會對合法設定報錯。登錄表本身是否符合讀取端的實際行為，由 `tests/shared/test_reserved_key_probes.py` 實測。
+> **為什麼 schema 的綠勾值得信任**：schema 的保留鍵集合，和 Go（`pkg/config/reserved_keys_gen.go`）、Python（`scripts/tools/_lib_constants.py`）兩個執行期驗證器用的清單，以及 portal 設定驗證器讀的 `_common/data/reserved-keys.json`，都由同一份登錄表 `pkg/config/reserved_keys.json` 產生（[ADR-038](../adr/038-unread-keys-judged-by-readers.md)）。`tests/dx/test_sync_schema.py` 在 CI 重新產生後比對，任何一份手改都會轉紅，編輯器因此不會對合法設定報錯。登錄表本身是否符合讀取端的實際行為，由 `tests/shared/test_reserved_key_probes.py` 實測。
 
 ## 適用範圍（哪些檔吃 tenant schema）
 

@@ -299,8 +299,8 @@ def test_load_all_configs_names_unusable_entries(tmp_path, capsys):
         f"unusable entries must not be loaded as configs; got {set(configs)}")
     out = capsys.readouterr().out
     assert "notes.yaml" in out and "broken.yaml" in out
-    assert "is a directory, not a config file" in out
-    assert "is a broken symlink" in out
+    assert "(not_regular_file): a directory with a config file name" in out  # #3206 R7
+    assert "(read_failure): the path cannot be statted" in out
 
 
 def test_load_all_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
@@ -348,7 +348,7 @@ def test_precheck_explains_a_tenant_whose_carrier_is_unusable(
 
     assert can_proceed is False
     assert "找不到設定檔案" in text
-    assert "is a directory, not a config file" in text, (
+    assert "(not_regular_file): a directory with a config file name" in text, (  # #3206 R7
         f"the pre-check refused without saying why.\n{text}")
 
 

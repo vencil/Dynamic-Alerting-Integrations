@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO / "tests" / "shared"))
 import migration_audit as ma  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from test_merge_key_policy_corpus import _encode  # noqa: E402
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 TOOL = REPO / "scripts" / "tools" / "ops" / "migration_audit.py"
 CORPUS = json.loads((REPO / "tests/shared/parse_tree_corpus.json").read_text(encoding="utf-8"))
@@ -276,8 +277,8 @@ def test_selection_lists_a_file_only_one_side_reads(tmp_path, da_guard_binary, m
     root = _write(tmp_path / "conf.d", {"a.yaml": b"x: 1\n", "b.yaml": b"y: 1\n"})
     real = ma.read_tree_today
 
-    def fake(r: Path):
-        read, refused = real(r)
+    def fake(r: Path, listing=None):
+        read, refused = real(r, listing)
         read.pop("a.yaml")
         read["ghost.yaml"] = {}
         return read, refused
@@ -313,6 +314,31 @@ def _cli(args: list[str], env_binary: str | None) -> subprocess.CompletedProcess
         env["DA_GUARD_BINARY"] = env_binary
     return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
                           encoding="utf-8", env=env, check=False, timeout=600)
+
+
+def _env_decoy(tmp_path: Path) -> tuple[str, Path]:
+    """A `$DA_GUARD_BINARY` that is not the flag's: it records each run and
+    fails, so any stage that falls back to the environment shows."""
+    log = tmp_path / "decoy-calls"
+    decoy = tmp_path / "decoy-da-guard"
+    decoy.write_text(f"#!/bin/sh\necho \"$*\" >> '{log}'\nexit 9\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    return str(decoy), log
+
+
+@pytest.mark.parametrize("env", ["none", "decoy"])
+def test_the_flag_binary_reads_and_lists(tmp_path, da_guard_binary, env) -> None:
+    """#3206 round 2 (M2): `--da-guard-binary` is THE da-guard of the run —
+    the conf.d listing `_lib_confd` takes on its behalf as well as the tree
+    read. With nothing else to find (no env, nothing on PATH) the run is
+    rc 0; with `$DA_GUARD_BINARY` pointing elsewhere, no stage runs it."""
+    require_shebang_scripts()
+    root = _write(tmp_path / "conf.d", {"t.yaml": b"tenants:\n  t1:\n    cpu: 80\n"})
+    decoy, log = _env_decoy(tmp_path)
+    proc = _cli(["--config-dir", str(root), "--da-guard-binary", da_guard_binary,
+                 "--timeout", "120"], decoy if env == "decoy" else None)
+    assert proc.returncode == EXIT_OK, proc.stderr
+    assert not log.exists(), log.read_text(encoding="utf-8")
 
 
 def test_cli_exit_0_on_a_tree_both_read_the_same(tmp_path, da_guard_binary) -> None:

@@ -206,16 +206,19 @@ def active() -> Optional[ParseCache]:
 class ConfdReader:
     """One conf.d tree, read through ``da-guard parse-tree``, by path.
 
-    *binary* is the da-guard to run (None: ``$DA_GUARD_BINARY``, then
-    ``$PATH`` — `guard_dispatch`'s resolution). The tree-mode document is
-    run at most once per reader."""
+    *binary* / *timeout* are the da-guard to run and its limit (None: the
+    tool's selection, `_lib_parse_tree.use_da_guard`, else
+    ``$DA_GUARD_BINARY``, then ``$PATH``, and the default timeout). The
+    tree-mode document is run at most once per reader, and so is the
+    listing (`listing`)."""
 
     def __init__(self, root: "str | os.PathLike[str]", *, binary: Optional[str] = None,
-                 timeout: float = DEFAULT_TIMEOUT) -> None:
+                 timeout: Optional[float] = None) -> None:
         self.root = Path(root)
         self.binary = binary
         self.timeout = timeout
         self._tree: Optional[Tree] = None
+        self._listing: "Optional[_lib_parse_tree.Listing]" = None
         self._verdicts: "dict[str, Optional[tuple[Optional[str], dict]]]" = {}
         self._carriers_by_dir: "Optional[dict[str, list[str]]]" = None
 
@@ -224,6 +227,25 @@ class ConfdReader:
         if self._tree is None:
             self._tree = _lib_parse_tree.load(self.root, self.binary, self.timeout)
         return self._tree
+
+    def listing(self) -> "_lib_parse_tree.Listing":
+        """Which paths the tree holds and what each one is (Go's `role`), as
+        ONE snapshot per reader: with no cache, the entries of the tree-mode
+        document this reader reads the content from (`listing_of` — no
+        second walk); under a cache (the generator container, which never
+        runs tree mode), one `parse-tree --list-only` run, kept. Raises
+        ParseTreeError."""
+        if self._listing is None:
+            if _ACTIVE is None:
+                self._listing = _lib_parse_tree.listing_of(self.tree(), self.root)
+            else:
+                self._listing = _lib_parse_tree.list_tree(self.root, self.binary, self.timeout)
+        return self._listing
+
+    def entry(self, path: "str | os.PathLike[str]") -> "Optional[_lib_parse_tree.Entry]":
+        """The `listing` entry of *path*, or None when the walk does not list
+        it (no such file, a hidden or non-config name, outside the root)."""
+        return self.listing().entry(self.rel(path))
 
     def require(self) -> None:
         """Run parse-tree now unless a cache answers reads lazily — so a run
@@ -321,24 +343,21 @@ class ConfdReader:
         return None if chosen is None else self.root / chosen
 
     def _carrier_names(self, rel: str) -> list[str]:
-        """The defaults carriers (`_lib_confd.is_defaults_name`, the
-        exporter's `confdname.IsDefaults`) the shared walk
-        (`_lib_confd.iter_config_files`: regular files, links to one
-        included, hidden entries pruned — run once per reader) finds in
-        *rel*'s directory, by name, sorted; [] unless *rel* itself is one or
-        names no file (``dir/_``)."""
-        from _lib_confd import is_defaults_name, iter_config_files  # lazy: imports this module
+        """The defaults carriers (class `defaults`, role `config`: the
+        exporter's `confdname.IsDefaults`, a file its walk reaches — an
+        unreadable one included, `_verdict` keys it as such) the reader's
+        `listing` holds in *rel*'s directory, by name, sorted; [] unless
+        *rel* itself is one or names no file (``dir/_``)."""
         parent, _, base = rel.rpartition("/")
-        if base != "_" and not is_defaults_name(base):
-            return []
         if self._carriers_by_dir is None:
             by_dir: dict[str, list[str]] = {}
-            for p in iter_config_files(self.root):
-                if is_defaults_name(p.name):
-                    d = p.parent.relative_to(self.root).as_posix()
-                    by_dir.setdefault("" if d == "." else d, []).append(p.name)
+            for e in self.listing().entries:
+                if e.cls == "defaults" and e.config_file:
+                    d, _, name = e.path.rpartition("/")
+                    by_dir.setdefault(d, []).append(name)
             self._carriers_by_dir = by_dir
-        return sorted(self._carriers_by_dir.get(parent, []))
+        names = sorted(self._carriers_by_dir.get(parent, []))
+        return names if base == "_" or base in names else []
 
     def _verdict(self, rel: str) -> "Optional[tuple[Optional[str], dict]]":
         """Under a cache: ``(not_read reason or None, defaults_carriers)`` of
@@ -485,42 +504,58 @@ def nested_defaults_carriers(tree: Tree) -> list[str]:
 
 
 def tenant_files(tree: Tree) -> list[str]:
-    """The files a tenant can be declared in: every file parse-tree selects
-    whose name has no `_` prefix (a `_` file is a platform file, read for
-    no tenant), sorted, root-relative — readable or not (`node` names an
-    unreadable one's kind)."""
-    return sorted(rel for rel in tree.selected
-                  if not rel.rsplit("/", 1)[-1].startswith("_"))
+    """The tenant files of an in-memory document — a ConfigMap's keys
+    (`patch_config`), where no directory, link or special file can exist,
+    so `tenant_scope(...).unknown` is empty by construction — and of the
+    readers that name every flagged entry themselves from the same document
+    (`gitops_check`, `check_path_metadata_consistency`). ⛔ Any other reader
+    of the tenant set takes :func:`tenant_scope` (both halves); a test pins
+    who calls this (`test_confd_tools_no_python_judgement`)."""
+    return list(_lib_parse_tree.tenant_file_paths(tree.entries))
 
 
-def declared_tenants(reader: ConfdReader, files: "Iterable[str] | None" = None
+def tenant_scope(reader: ConfdReader, *, exclude: "Callable[[str], bool] | None" = None
+                 ) -> "_lib_parse_tree.TenantScope":
+    """*reader*'s `_lib_parse_tree.TenantScope` — the tenant files and the
+    entries that leave the set unknown — from its one listing. Raises
+    ParseTreeError."""
+    return _lib_parse_tree.tenant_scope(reader.listing().entries,
+                                        getattr(reader, "binary", None),
+                                        getattr(reader, "timeout", None), exclude=exclude)
+
+
+def declared_tenants(reader: ConfdReader, *, exclude: "Callable[[str], bool] | None" = None
                      ) -> "tuple[dict[str, list[str]], list[FileUnreadable]]":
-    """``({tenant id: [file, ...]}, unreadable)``: the keys of the
-    mapping-shaped ``tenants:`` of each of *files* (default: every
-    :func:`tenant_files` file), keyed by their source text as yaml.v3 keys
-    the exporter's ``map[string]``. *unreadable* is each file parse-tree
-    cannot read — its content, and so what it declares, is unknown; the
-    caller names it — but a file whose top level is not a mapping, which
-    declares nothing. Raises ParseTreeError / NotSelected."""
+    """``({tenant id: [file, ...]}, unknown)``: the keys of the
+    mapping-shaped ``tenants:`` of each tenant file (:func:`tenant_scope`;
+    *exclude* as there), keyed by their source text as yaml.v3 keys the
+    exporter's ``map[string]``. *unknown* is BOTH halves of what leaves the
+    answer open, one list a caller cannot take half of: each entry
+    `tenant_scope` names as possibly hiding a tenant file (a directory Go
+    could not list, a link it does not follow, …), then each tenant file
+    parse-tree cannot read — its content, and so what it declares, is
+    unknown — but a file whose top level is not a mapping, which declares
+    nothing. The caller names them. Raises ParseTreeError / NotSelected."""
+    scope = tenant_scope(reader, exclude=exclude)
     declared: dict[str, list[str]] = {}
-    unreadable: list[FileUnreadable] = []
-    for rel in (tenant_files(reader.tree()) if files is None else files):
+    unknown: list[FileUnreadable] = list(scope.unknown)
+    for rel in scope.files:
         try:
             data = reader.read(rel)
         except FileUnreadable as exc:
             if exc.kind != "top_level_not_mapping":
-                unreadable.append(exc)
+                unknown.append(exc)
             continue
         tenants = data.get("tenants")
         if isinstance(tenants, dict):
             for tenant in tenants:
                 declared.setdefault(tenant, []).append(rel)
-    return declared, unreadable
+    return declared, unknown
 
 
 def read_text_as(root: "str | os.PathLike[str]", rel: str, data: bytes,
                  mode: ParseMode = VALUES, *, binary: Optional[str] = None,
-                 timeout: float = DEFAULT_TIMEOUT) -> Any:
+                 timeout: Optional[float] = None) -> Any:
     """*data* read as the file at *rel* (root-relative, '/') of the conf.d at
     *root* — parse-tree's file mode, for content that is not on disk (a
     `git show` of an earlier commit). Raises FileUnreadable (its ``file`` is
@@ -531,7 +566,7 @@ def read_text_as(root: "str | os.PathLike[str]", rel: str, data: bytes,
 
 def read_file_alone(path: "str | os.PathLike[str]", mode: ParseMode = VALUES, *,
                     binary: Optional[str] = None,
-                    timeout: float = DEFAULT_TIMEOUT) -> Any:
+                    timeout: Optional[float] = None) -> Any:
     """A YAML file that belongs to no conf.d tree (a standalone policy file
     named on the command line) as yaml.v3 reads it: parse-tree's file mode,
     its bytes judged in an empty directory, so no tree is walked. Raises

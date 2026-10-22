@@ -39,7 +39,6 @@ from _lib_confd import (  # noqa: E402
     list_config_tree,
     overlay_platform_tenants,
     tenant_declarations,
-    unusable_config_paths,
     unusable_reason,
 )
 
@@ -1124,8 +1123,16 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     # (`list_config_tree`: hidden directories pruned, directory symlinks
     # reported). Until #2326 it was flat — a tenant in a subdirectory got no
     # route at rc 0 while threshold-exporter served its thresholds. ONE walk
-    # answers both "what to read" and "what could not be read".
-    listing = list_config_tree(config_dir)
+    # answers both "what to read" and "what could not be read" — since #3206
+    # the reader's own listing (Go's per-path `role`): the entries of the
+    # document every file below is read from, never a second walk.
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
+    try:
+        reader.require()
+        listing = list_config_tree(config_dir, reader=reader)
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
 
     # #1469: name the config-named things that are not readable files (a
     # DIRECTORY called `beta.yaml`, a broken symlink, an unreadable file)
@@ -1163,7 +1170,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     root_path = Path(config_dir)
     if any(p == root_path for p in unusable):
         print(f"ERROR: config directory could not be read: {config_dir} — "
-              f"{unusable_reason(root_path)}. Nothing was scanned, so an "
+              f"{unusable_reason(root_path, listing.listing)}. Nothing was scanned, so an "
               f"empty result here would mean 'unreadable', not 'no tenants'.",
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
@@ -1173,17 +1180,10 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         # message about a flat tree reads exactly as it did before #2326.
         return p.relative_to(root_path).as_posix()
 
-    if reader is None:
-        reader = _lib_parse_cache.reader_for(config_dir)
-    try:
-        reader.require()
-    except ParseTreeError as e:
-        parse_tree_failure_exit(e, config_dir)
-
     for bad in unusable:
         rel = _rel(bad)
         _drop_unreadable_file(
-            rel, unusable_reason(bad),
+            rel, unusable_reason(bad, listing.listing),
             f"remove {rel} or replace it with a readable YAML file",
             result)
     # #2981: entries the generator service read from git as not regular files.

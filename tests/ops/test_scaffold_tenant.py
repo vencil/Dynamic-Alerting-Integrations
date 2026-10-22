@@ -2064,3 +2064,43 @@ class TestCounterexamplePrompt:
                         assert counterexample_prompt_lines(info), key
                         found += 1
         assert found >= 2, "fewer than two keys carry the field"
+
+
+# ============================================================
+# #3227: every _silent_mode value scaffold writes is one the tenant schema
+# takes (its silentMode enums are pinned to the exporter's words by
+# TestSilentModeSchemaEnumsMatchReader in pkg/config).
+# ============================================================
+def _silent_mode_schema_enums():
+    with open(os.path.join(REPO_ROOT, "docs", "schemas", "tenant-config.schema.json"),
+              encoding="utf-8") as f:
+        branches = json.load(f)["definitions"]["silentMode"]["oneOf"]
+    scalar = next(b["enum"] for b in branches if b.get("type") == "string")
+    target = next(b["properties"]["target"]["enum"] for b in branches if b.get("type") == "object")
+    return scalar, target
+
+
+class TestSilentModeChoicesWithinSchema:
+    def test_cli_choices_are_schema_words(self):
+        from scaffold_tenant import SILENT_MODE_CHOICES
+        scalar, _ = _silent_mode_schema_enums()
+        assert SILENT_MODE_CHOICES and set(SILENT_MODE_CHOICES) <= set(scalar), \
+            sorted(set(SILENT_MODE_CHOICES) - set(scalar))
+
+    def test_cli_parser_offers_exactly_those_choices(self):
+        # The constant is what --silent-mode takes, not a second copy.
+        import subprocess
+        from scaffold_tenant import SILENT_MODE_CHOICES
+        tool = os.path.join(REPO_ROOT, "scripts", "tools", "ops", "scaffold_tenant.py")
+        p = subprocess.run([sys.executable, tool, "--help"], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60, env={**os.environ, "DA_LANG": "en"})
+        assert p.returncode == 0, p.stderr
+        m = re.search(r"--silent-mode \{([^}]*)\}", p.stdout)
+        assert m, p.stdout
+        assert tuple(m.group(1).split(",")) == SILENT_MODE_CHOICES
+
+    def test_interactive_targets_are_schema_words_in_both_forms(self):
+        from scaffold_tenant import INTERACTIVE_SILENT_TARGETS
+        scalar, target = _silent_mode_schema_enums()
+        picks = set(INTERACTIVE_SILENT_TARGETS.values())
+        assert picks and picks <= set(scalar) and picks <= set(target), picks

@@ -1382,18 +1382,30 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
         calls.append(pattern)
         return real_rglob(self, pattern, *a, **kw)
 
-    # #2054: describe_tenant now lists through `_lib_confd.list_config_tree`
-    # (`os.walk`, hidden-pruned like the exporter), so a whole-tree walk is
-    # counted on BOTH mechanisms — counting only `rglob` would read zero
-    # walks as "fine". Only walks rooted AT the tree count: `unusable_reason`
-    # probes a single sub-directory with `os.walk`, which is not a listing.
+    # #2054: describe_tenant lists through `_lib_confd.list_config_tree`; since
+    # #3206 that is the entries of its reader's ONE `da-guard parse-tree`
+    # document, so a whole-tree listing is counted on every mechanism — a
+    # Python walk (`rglob`, `os.walk`) as well as any da-guard run over the
+    # tree (tree or list mode; file mode reads no tree). Only walks rooted AT
+    # the tree count.
     def counting_walk(top, *a, **kw):
         if pathlib.Path(top).resolve() == tree.resolve():
             calls.append("*")
         return real_walk(top, *a, **kw)
 
+    import _lib_parse_tree  # noqa: PLC0415
+    real_run = _lib_parse_tree._run
+
+    def counting_run(args, *a, **kw):
+        if ("--config-dir" in args and "--path" not in args
+                and pathlib.Path(args[args.index("--config-dir") + 1]).resolve()
+                == tree.resolve()):
+            calls.append("*")
+        return real_run(args, *a, **kw)
+
     monkeypatch.setattr(pathlib.Path, "rglob", counting_rglob)
     monkeypatch.setattr(os, "walk", counting_walk)
+    monkeypatch.setattr(_lib_parse_tree, "_run", counting_run)
     monkeypatch.chdir(tmp_path)
 
     sys.path.insert(0, str(TOOLS_DIR / "dx"))
@@ -1429,7 +1441,7 @@ def test_offboard_precheck_explains_a_tenant_whose_config_is_unusable(
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     text = (r.stdout.decode("utf-8", "replace")
             + r.stderr.decode("utf-8", "replace"))
-    assert "is a directory, not a config file" in text, (
+    assert "(not_regular_file): a directory with a config file name" in text, (  # #3206 R7
         f"the pre-check said the config was not found without saying WHY; an "
         f"operator reads that as 'nothing to remove'.\n{text[:800]}")
     assert "找不到設定檔案" in text, (

@@ -35,7 +35,6 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
-    is_reserved_name,
     list_config_tree,
     overlay_platform_tenants,
     unusable_reason,
@@ -73,11 +72,14 @@ def _collect_data(config_dir: str) -> dict:
     subtree_policy_origin: dict = {}         # (level, domain) → file
 
     root = Path(config_dir)
-    # #1679: the extension test is the shared, case-insensitive predicate —
-    # the walker's own (`list_config_tree`: hidden entries skipped, the
-    # extension folded). The `_`-prefixed control files matched by exact name
-    # below are what this tool exists to READ.
-    listing = list_config_tree(root)
+    # #1679 / #3206: which files there are and what each one is are the
+    # walker's own — the entries of the reader's document (Go's `role`;
+    # hidden entries skipped, the extension folded), not a second walk. The
+    # `_`-prefixed control files matched by exact name below are what this
+    # tool exists to READ.
+    listing = list_config_tree(root, reader=reader)
+    reserved = ({e.path for e in listing.listing.entries if e.reserved}
+                if listing.listing is not None else set())
 
     unreadable: list[str] = []
     unreadable_files: list[str] = []
@@ -86,7 +88,7 @@ def _collect_data(config_dir: str) -> dict:
     # follow) is one "cannot read" finding, as the flat listing made it.
     for bad in listing.unusable:
         rel = bad.relative_to(root).as_posix() if bad != root else "."
-        unreadable.append(f"{rel}: {unusable_reason(bad)}")
+        unreadable.append(f"{rel}: {unusable_reason(bad, listing.listing)}")
         unreadable_files.append(rel)
     entries: list[tuple[str, object, dict]] = []
     # The unselected carrier spelling is read by no plane (#1674); its
@@ -149,7 +151,7 @@ def _collect_data(config_dir: str) -> dict:
         # either is called; a platform file cannot create a tenant. The
         # `tenants:` block of a platform file BELOW the root is read by no
         # plane (ADR-017 Decision 5), so it is not collected either.
-        if level != ROOT_LEVEL and is_reserved_name(base):
+        if level != ROOT_LEVEL and fname in reserved:
             continue
         tenants_block = data.get("tenants", {})
         if isinstance(tenants_block, dict):
@@ -159,7 +161,7 @@ def _collect_data(config_dir: str) -> dict:
 
     tenant_dirs: dict = {}
     for fname, tenant, _o in entries:
-        if not is_reserved_name(os.path.basename(fname)):
+        if fname not in reserved:
             tenant_dirs.setdefault(tenant, Path(fname).parent.as_posix())
     merged, platform_orphans = overlay_platform_tenants(
         entries, lambda: declared_tenant_ids(config_dir, reader))
@@ -177,6 +179,8 @@ def _collect_data(config_dir: str) -> dict:
         "profile_refs": profile_refs,
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
+        # #3206: which of them is a platform (`_`) file is Go's class.
+        "reserved_files": sorted(reserved),
         "not_read": not_read,
         # #2326: directory scope of profiles / policies / tenants.
         "profiles_by_dir": profiles_by_dir,
@@ -221,8 +225,11 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     unreadable_files = list(data.get("unreadable_files", []))
     profiles_unreadable = [f for f in unreadable_files
                            if os.path.basename(f) in _PROFILE_FILES]
-    tenants_unreadable = [f for f in unreadable_files
-                          if not os.path.basename(f).startswith("_")]
+    # A platform file declares no tenant; which one is, is Go's class
+    # (`reserved_files`, #3206) — an entry that is no file (a link to a
+    # directory, `_shared` too) may hide tenant files, so it counts.
+    reserved = set(data.get("reserved_files", ()))
+    tenants_unreadable = [f for f in unreadable_files if f not in reserved]
     if profiles_unreadable:
         messages.append("INFO: profile checks skipped: "
                         f"{', '.join(profiles_unreadable)} unreadable")

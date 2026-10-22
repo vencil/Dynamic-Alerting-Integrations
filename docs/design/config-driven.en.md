@@ -531,7 +531,7 @@ tenants:
   db-d: {}                        # Normal — default behavior
 ```
 
-Available `_silent_mode` values: `warning`, `critical`, `all`, `disable`. Unset defaults to Normal mode.
+Available `_silent_mode` values: `warning`, `critical`, `all`, `disable` (the off aliases `disabled` / `off` / `false` are accepted too; quote `false`: unquoted, yaml.v3 reads it as a boolean, which the schema lint refuses and tells you to quote. An unquoted `off` is a string to yaml.v3; only a YAML 1.1 loader outside the repo reads it as a boolean). Unset defaults to Normal mode.
 
 **Auto-Expiry :** `_silent_mode` and `_state_maintenance` support structured objects (backward compatible with scalar strings) with an `expires` RFC3339 timestamp (e.g. `"2099-04-01T00:00:00Z"`; if the exporter cannot parse it, it logs a WARN and **ignores the whole setting** — nothing is silenced, maintenance does not take effect, alerts keep notifying; [#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)). The Go engine checks `time.Now().After(expires)` to stop emitting sentinel metrics, automatically restoring alerts to normal. Expiry generates a transient gauge `da_config_event{event="silence_expired"}` with `TenantConfigEvent` alert rule for notification.
 

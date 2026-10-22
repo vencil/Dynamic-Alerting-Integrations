@@ -383,3 +383,15 @@ def test_the_refusal_uses_the_registry_predicate_not_its_own_copy(fixture_module
     inlines the predicate here fails instead of silently forking it.
     """
     assert fixture_module.is_shipped_optional_key.__module__ == "_registry_lib"
+
+
+def test_generated_silent_mode_values_are_schema_words(fixture_module):
+    """#3227: a generated tenant's `_silent_mode` is one the tenant schema
+    takes (the schema's silentMode enum is pinned to the exporter's words)."""
+    import json
+    schema = json.loads((REPO_ROOT / "docs" / "schemas" / "tenant-config.schema.json")
+                        .read_text(encoding="utf-8"))
+    scalar = next(b["enum"] for b in schema["definitions"]["silentMode"]["oneOf"]
+                  if b.get("type") == "string")
+    choices = fixture_module.SILENT_MODE_TARGETS
+    assert choices and set(choices) <= set(scalar), sorted(set(choices) - set(scalar))

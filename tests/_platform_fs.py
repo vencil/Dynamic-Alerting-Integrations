@@ -190,3 +190,85 @@ DIR_WRITE_ERROR = PermissionError if os.name == "nt" else IsADirectoryError
 
 #: ``strerror`` text a tool echoes for that failure on this OS.
 DIR_WRITE_STRERROR = os.strerror(errno.EACCES if os.name == "nt" else errno.EISDIR)
+
+
+# ── running a tool where a chmod really denies (#3206) ──────────────────
+
+import contextlib  # noqa: E402
+import sys  # noqa: E402
+
+
+@contextlib.contextmanager
+def unprivileged_sandbox(repo):
+    """Yield ``(box, run)`` for a test that needs a mode bit to really deny.
+
+    Under uid 0 the mode bits do not stop a stat or a read, so ``run(argv)``
+    executes *argv* as ``nobody`` (``setpriv --reuid=65534``); as any other
+    uid it runs *argv* as is. *box* is a fresh directory under ``/var/tmp``
+    (mode 0755 — ``tmp_path`` and this checkout may sit in a 0700 directory
+    ``nobody`` cannot traverse) holding a copy of ``scripts/``,
+    ``docs/schemas/`` and the session's ``$DA_GUARD_BINARY`` (as
+    ``box/da-guard``, which ``run`` exports); the test builds its conf.d in
+    *box* too. Skips when it cannot — not POSIX, no da-guard, root without
+    ``setpriv``, an unprivileged uid that cannot import the tools'
+    dependencies — and FAILS instead when ``VIBE_REQUIRE_UNPRIVILEGED_FS`` is
+    set (CI), as the helm-gated tests do with ``VIBE_REQUIRE_HELM``: there a
+    skip would leave the permission cases unmeasured behind a green run.
+    Everything the test made unreadable is made readable again before the
+    box is removed."""
+    def _skip_or_fail(why):
+        if os.environ.get("VIBE_REQUIRE_UNPRIVILEGED_FS", ""):
+            pytest.fail(f"VIBE_REQUIRE_UNPRIVILEGED_FS is set, but {why}: the "
+                        "permission cases would go unmeasured")
+        pytest.skip(why)
+
+    if os.name == "nt" or not has_posix_modes():
+        _skip_or_fail("POSIX mode bits do not apply here")
+    da_guard = os.environ.get("DA_GUARD_BINARY", "")
+    if not da_guard or not os.path.isfile(da_guard):
+        _skip_or_fail("no session da-guard to run the tool with")
+    prefix = []
+    if os.geteuid() == 0:
+        setpriv = shutil.which("setpriv")
+        if setpriv is None:
+            _skip_or_fail("running as root and `setpriv` is not installed")
+        prefix = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups"]
+    base = "/var/tmp" if os.path.isdir("/var/tmp") else None
+    box = tempfile.mkdtemp(prefix="vibe-unpriv-", dir=base)
+    try:
+        os.chmod(box, 0o755)
+        shutil.copytree(os.path.join(repo, "scripts"), os.path.join(box, "scripts"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(os.path.join(repo, "docs", "schemas"),
+                        os.path.join(box, "docs", "schemas"))
+        shutil.copy2(da_guard, os.path.join(box, "da-guard"))
+        for dirpath, dirnames, filenames in os.walk(box):
+            for n in dirnames:
+                os.chmod(os.path.join(dirpath, n), 0o755)
+            for n in filenames:
+                p = os.path.join(dirpath, n)
+                os.chmod(p, 0o755 if n == "da-guard" else 0o644)
+        # No PYTHONPATH, and no coverage start hook: the unprivileged uid
+        # cannot write the session's coverage data, and coverage would print
+        # its own traceback into the output the tests read.
+        env = {k: v for k, v in os.environ.items()
+               if k != "PYTHONPATH" and not k.startswith("COVERAGE_")}
+        env.update(DA_GUARD_BINARY=os.path.join(box, "da-guard"), HOME=box,
+                   PYTHONDONTWRITEBYTECODE="1")
+
+        def run(argv, **kw):
+            return subprocess.run([*prefix, *argv], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", env=env,
+                                  cwd=box, timeout=300, check=False, **kw)
+
+        probe = run([sys.executable, "-c", "import yaml"])
+        if probe.returncode != 0:
+            _skip_or_fail("the unprivileged uid cannot import the tools' dependencies: "
+                          + (probe.stderr.strip().splitlines() or ["?"])[-1])
+        yield box, run
+    finally:
+        for dirpath, dirnames, _f in os.walk(box):
+            for n in dirnames:
+                with contextlib.suppress(OSError):
+                    os.chmod(os.path.join(dirpath, n), 0o755)
+        shutil.rmtree(box, ignore_errors=True)

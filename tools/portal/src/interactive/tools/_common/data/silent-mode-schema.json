@@ -1,16 +1,20 @@
 {
   "_comment": "VERBATIM copy of docs/schemas/tenant-config.schema.json :: definitions.silentMode (#1988), under `definition`. schema-explorer renders the _silent_mode entry from it. DO NOT hand-edit: tools/portal/tests/silent-mode-schema.drift.test.ts deep-equals `definition` against the live schema.",
   "definition": {
+    "$comment": "#3227: both enums (the scalar branch and the structured branch's target) are exactly the words the exporter's reader knows: the silencing targets (pkg/config/silent_mode.go silentModeTargets) plus the words that switch a key off (pkg/config/parse.go disabledWords). TestSilentModeSchemaEnumsMatchReader pins the two sets equal in both directions, so a word added to the reader without the schema (or the reverse) fails Go tests. The schema is narrower than the reader on purpose (stricter, so it fails closed) in places no enum can express: (1) the reader lower-cases and trims the value; the enum is case-sensitive. (2) The reader reads an empty, null or `~` value (and a bare `_silent_mode:`) as off, with no WARN; the schema refuses all of them. (3) The reader takes an unquoted `false` (as a scalar or as `target`) as off; the repo's schema lint reads conf.d through da-guard parse-tree (yaml.v3), which reads it as a boolean, so the `type: string` branches refuse it and the lint says to quote it. An unquoted `off` is a string to yaml.v3 and passes; only a YAML 1.1 loader outside the repo (PyYAML, for one) reads it as a boolean.",
     "oneOf": [
       {
         "type": "string",
         "title": "Silent Mode (Scalar, Backward Compatible)",
-        "description": "Legacy scalar format: 'warning', 'critical', 'all', or 'disable'. For new configs, prefer structured format with expires/reason.",
+        "description": "Legacy scalar format: 'warning', 'critical' or 'all' silence those severities; 'disable' (or its aliases 'disabled', 'off', 'false') turns silent mode off. Write 'false' quoted: unquoted, yaml.v3 (which the repo's schema lint reads conf.d with) reads it as a boolean, which this schema refuses although the exporter takes it, and the lint says to quote it. An unquoted 'off' is a string to yaml.v3; only a YAML 1.1 loader outside the repo reads it as a boolean. For new configs, prefer structured format with expires/reason.",
         "enum": [
           "warning",
           "critical",
           "all",
-          "disable"
+          "disable",
+          "disabled",
+          "off",
+          "false"
         ],
         "examples": [
           "warning",
@@ -28,11 +32,15 @@
           "target": {
             "type": "string",
             "title": "Target Severity",
-            "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'.",
+            "description": "Which severity levels to suppress: 'warning', 'critical', or 'all'. 'disable' (or 'disabled', 'off', or a quoted 'false') turns silent mode off, as in the scalar form; expires and reason are then unused.",
             "enum": [
               "warning",
               "critical",
-              "all"
+              "all",
+              "disable",
+              "disabled",
+              "off",
+              "false"
             ]
           },
           "expires": {

@@ -729,3 +729,40 @@ class TestHiddenEntries:
         result = _run(confd)
         assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
         assert "snap/x.yaml" in result.stderr + result.stdout
+
+
+# --- #3206 round 2 (m5): entries parse-tree cannot read --------------------
+
+class TestEntriesParseTreeCannotRead:
+    """Every entry parse-tree cannot read is named — a config-named directory,
+    a symlink to ANY directory (whatever its name), a FIFO — after the
+    violations of the rest of the tree, and the run exits 2: the gate cannot
+    vouch for a tree it did not read whole. Worded for what each one is (a
+    directory is "not a regular file", not "YAML that does not parse"), and
+    the first one does not stop the walk."""
+
+    def test_all_are_listed_with_the_other_violations(self, confd):
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _routng: "warning"\n')
+        os.mkdir(os.path.join(confd, "beta.yaml"))
+        elsewhere = tempfile.mkdtemp()
+        from _platform_fs import symlink_or_skip
+        symlink_or_skip(elsewhere, os.path.join(confd, "team-a"))
+        try:
+            r = _run(confd)
+        finally:
+            os.rmdir(elsewhere)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        err = r.stderr
+        assert "unknown key '_routng'" in err, err  # the rest still reported
+        assert "ERROR: beta.yaml: not a regular file (not_regular_file):" in err, err
+        assert "ERROR: team-a: not a regular file (not_regular_file):" in err, err
+        assert "cannot read/parse YAML" not in err, err
+        assert "2 conf.d entr(y/ies) could not be read" in err, err
+
+    def test_a_clean_tree_with_one_directory_is_still_exit_2(self, confd):
+        _write(confd, "db-a.yaml",
+               'tenants:\n  db-a:\n    mysql_connections: "70"\n')
+        os.mkdir(os.path.join(confd, "beta.yaml"))
+        r = _run(confd)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert "beta.yaml: not a regular file (not_regular_file)" in r.stderr

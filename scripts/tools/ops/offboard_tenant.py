@@ -73,9 +73,15 @@ def _reader(config_dir):
 
 
 def _top_level(config_dir):
-    """The top-level files parse-tree selects (root-relative names), sorted:
-    this tool reads conf.d FLAT (`warn_nested` names what that leaves out)."""
-    return sorted(rel for rel in _reader(config_dir).tree().selected if "/" not in rel)
+    """The top-level paths parse-tree selects (root-relative names), sorted,
+    each with its entry (Go's `role`): this tool reads conf.d FLAT
+    (`warn_nested` names what that leaves out). #3206: the entries of the
+    document the content is read from — one snapshot, no second walk."""
+    reader = _reader(config_dir)
+    warn_nested(Path(config_dir), reader=reader)  # deduplicated per directory
+    selected = reader.tree().selected
+    return sorted((e.path, e) for e in reader.listing().entries
+                  if e.depth == 0 and e.path in selected)
 
 
 def find_config_file(tenant, config_dir):
@@ -87,16 +93,18 @@ def find_config_file(tenant, config_dir):
     are is parse-tree's answer (a directory named `<tenant>.yaml/` is in its
     `unreadable`, named by `load_all_configs`)."""
     base = Path(config_dir)
+    if not base.is_dir():
+        return None
     # ⚠️ FLAT, and this says so (`warn_nested`): a tenant whose carrier lives
     # in a subdirectory is not found here — the OFFBOARD pre-check, where
     # "no config found" must not read as "safe to remove".
-    warn_nested(base)
-    if not base.is_dir():
-        return None
-    for rel in _top_level(config_dir):
+    warn_nested(base, reader=_reader(config_dir))
+    for rel, e in _top_level(config_dir):
         # A file parse-tree cannot read is still the tenant's file (named
-        # unreadable by `load_all_configs`, which blocks --execute).
-        if config_stem(rel) == tenant and (base / rel).is_file():
+        # unreadable by `load_all_configs`, which blocks --execute) — and so
+        # is one whose stat a permission refuses (#3206: Go's `role`, not
+        # `is_file()`, which said False for it).
+        if config_stem(rel) == tenant and e.config_file:
             return str(base / rel)
     return None
 
@@ -125,10 +133,21 @@ def load_all_configs(config_dir, unreadable=None):
     base = Path(config_dir)
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
-    warn_nested(base, tool="offboard_tenant")
     reader = _reader(config_dir)
     tree = reader.tree()
-    for filename in _top_level(config_dir):
+    listing = reader.listing()  # #3206: one snapshot for the warning, the skip, the reasons
+    warn_nested(base, tool="offboard_tenant", listing=listing)
+    # #3206: a directory the walk could not list — any depth, any name — hides
+    # what is under it (a reference to this tenant could be there): named and
+    # counted unreadable, which blocks --execute; never a clean pre-check.
+    for e in listing.entries:
+        if e.unlistable_dir:
+            kind, message = e.problem
+            print(f"  ⚠️  無法讀取 {safe_label(e.path)}: da-guard parse-tree: "
+                  f"{safe_label(kind)}: {safe_label(message)}")
+            if unreadable is not None:
+                unreadable.append(e.path)
+    for filename, entry in _top_level(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
             # #2856; it imports this copy at startup only while the store has
@@ -136,12 +155,17 @@ def load_all_configs(config_dir, unreadable=None):
             print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
                   "於開機匯入它（引用改由 --state 判定）")
             continue
-        if not (base / filename).is_file():
-            # #1607: an entry with a config name that is not a file (a
-            # directory, a dangling link) — parse-tree lists it as
-            # not_regular_file / read_failure; named in the shared wording,
-            # and skipped as before (warn-and-continue, not a blocker).
-            print(f"  ⚠️  略過 {safe_label(filename)}: {unusable_reason(base / filename)}")
+        if entry.unlistable_dir:
+            continue  # named and counted above
+        if not entry.config_file:
+            # #1607: an entry with a config name that Go says is no config
+            # file (a directory, a directory symlink, a FIFO, a dangling
+            # link); named in the shared wording from that same listing, and
+            # skipped as before (warn-and-continue). Anything else it cannot
+            # read — a file it may not stat or open — is read below and
+            # counted unreadable (#3206).
+            print(f"  ⚠️  略過 {safe_label(filename)}: "
+                  f"{unusable_reason(base / filename, listing)}")
             continue
         try:
             nodes = reader.node(filename)
@@ -212,10 +236,18 @@ def _legacy_refs(tenant, state, config_dir):
     if config_dir is None:
         return refs
     base = Path(config_dir)
-    tree = _reader(config_dir).tree()
+    reader = _reader(config_dir)
+    tree = reader.tree()
+
+    def config_file(rel):
+        # #3206 m6: whether *rel* is a config file is the entry's role in the
+        # reader's one listing, never `is_file()` (False for a file whose
+        # stat is refused, which is then a file read and failing loudly).
+        e = reader.entry(rel)
+        return e is not None and e.config_file
     for name in LEGACY_STATE_FILES:
         path = base / name
-        if name == "_account_registry.yaml" or name in state.records or not path.is_file():
+        if name == "_account_registry.yaml" or name in state.records or not config_file(name):
             continue
         if name in tree.unreadable:
             kind, message = tree.unreadable[name]
@@ -231,7 +263,7 @@ def _legacy_refs(tenant, state, config_dir):
     if subset_key(tenant) not in state.records:
         for ext in (".yaml", ".yml"):
             path = base / "_federation" / f"{tenant}{ext}"
-            if path.is_file():
+            if config_file(f"_federation/{tenant}{ext}"):
                 refs.append((f"conf.d 的 _federation/{safe_label(path.name)}（tenant-api 下次開機會匯入為子集紀錄）",
                              f"刪除 {safe_label(str(path))}"))
     return refs

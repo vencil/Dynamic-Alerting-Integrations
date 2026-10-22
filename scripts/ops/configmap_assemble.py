@@ -79,6 +79,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -93,11 +94,9 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT as _WARN_LIMIT,
+    config_listing,
     configmap_key_problem,
-    has_yaml_extension,
-    is_hidden_name,
     printable_name,
-    unusable_config_entries,
     unusable_reason,
     warn_nested,
 )
@@ -148,36 +147,45 @@ _MAX_CONFIGMAP_BYTES = 1024 * 1024
 _ANNOTATION_TOTAL_LIMIT = 256 * 1024
 
 
-def _carriers(config_dir: Path) -> tuple[list[Path], list[Path]]:
+def _carriers(config_dir: Path) -> tuple[list[Path], list[Path], Any]:
     """The one enumeration: what the exporter reads at THIS level, plus the
-    config-NAMED entries at this level that cannot be read at all.
+    config-NAMED entries at this level that are not config files at all,
+    plus the listing both came from (so the WARN below words each entry from
+    the same snapshot).
 
-    ⛔ Flat (`iterdir`, no recursion) because the ConfigMap key plane cannot
-    express a subdirectory — `warn_nested` says that out loud.
+    ⛔ Flat (depth 0 of the listing) because the ConfigMap key plane cannot
+    express a subdirectory — `warn_nested`, HERE beside the flat read, says
+    that out loud, from the same listing.
 
-    ⛔ `has_yaml_extension` is case-INSENSITIVE, matching the exporter's own
-    scanner; that is #1792. `is_hidden_name` is not decoration either: the
-    exporter skips `.`-prefixed entries (`config_hierarchy.go`), and counting
-    them made the empty-dir guard below pass for a `--config-dir` pointed at
-    a repo root — the exact mis-pointing that guard exists for.
+    ⛔ The listing is `da-guard parse-tree --list-only`'s (`config_listing`,
+    #3206): the exporter's own walk, name rules and per-path verdict (`role`)
+    — case-insensitive extension (#1792), `.`-prefixed entries skipped
+    (counting them made the empty-dir guard below pass for a `--config-dir`
+    pointed at a repo root). This module keeps no name rule and no "is it a
+    file" judgement of its own.
 
-    ⛔ The second list exists because `is_file()` is a SILENT filter: a
+    ⛔ The second list exists because a SILENT filter is the failure: a
     dangling symlink and a directory called `db-x.yaml/` both carry a config
     name and neither is a file, so both used to leave the run with rc 0 and
     one tenant fewer than the tree declares — the exact "a tenant disappears
-    with a green light" this module's own docstring names. The classification
-    is `_lib_confd.unusable_config_entries` / `unusable_reason`, the pair the
-    operator-plane readers already phrase this finding with; a second wording
-    here would put two answers to "what happened to db-x.yaml" in front of
-    the same person.
+    with a green light" this module's own docstring names. It is every entry
+    at this level Go flags (`Entry.flagged`: not a config file, with a
+    problem — a plain subdirectory is neither list), phrased by `unusable_reason`,
+    the wording the operator-plane readers share.
+
+    ⛔ A file whose stat or open is refused is a carrier (role `config`), not
+    an unusable entry (#3206): it goes to the uniqueness check, which cannot
+    read it and refuses — rc 2, never a WARN and a ConfigMap one tenant
+    short. Raises `_lib_parse_tree.ParseTreeError` (no usable da-guard, or a
+    file name that is not UTF-8 anywhere in the tree).
     """
-    entries = sorted(config_dir.iterdir())
-    carriers = [
-        p for p in entries
-        if p.is_file() and not is_hidden_name(p.name)
-        and has_yaml_extension(p.name)
-    ]
-    return carriers, unusable_config_entries(entries)
+    listing = config_listing(config_dir)
+    warn_nested(config_dir, tool="configmap_assemble", listing=listing)
+    if listing is None:
+        return [], [], None
+    top = [e for e in listing.entries if e.depth == 0]
+    return ([config_dir / e.path for e in top if e.config_file],
+            [config_dir / e.path for e in top if e.flagged], listing)
 
 
 def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], dict[str, int]]:
@@ -334,10 +342,18 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_VIOLATION
 
     # This step is FLAT — a ConfigMap key plane cannot express a subdirectory.
-    # `_lib_confd`'s contract is that a flat reader says so out loud.
-    warn_nested(config_dir, tool="configmap_assemble")
-
-    carriers, unusable = _carriers(config_dir)
+    # `_lib_confd`'s contract is that a flat reader says so out loud
+    # (`_carriers`, from the listing it reads).
+    from _lib_parse_tree import ParseTreeError  # lazy: runs da-guard
+    try:
+        carriers, unusable, listing = _carriers(config_dir)
+    except ParseTreeError as exc:
+        # #3206: the listing is da-guard's — no usable da-guard, or a name
+        # it cannot carry (not UTF-8), is "not read", never an empty tree.
+        print(f"ERROR: cannot list {config_dir} through `da-guard parse-tree "
+              f"--list-only` (ADR-036): {_lib_io.safe_label(' '.join(str(exc).split()))}",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     # ⚠️ Non-blocking, and named one by one. Blocking would be the wrong
     # trade (a tree that deploys today would stop deploying over an entry
     # nothing ever read), but staying silent is the failure this file is
@@ -349,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     # reader wrote which line to know whether a list is complete.
     for p in unusable[:_WARN_LIMIT]:
         print(f"WARN: {printable_name(p.name)!r} in {config_dir} "
-              f"{unusable_reason(p)} — it carries a config name but NOTHING "
+              f"{unusable_reason(p, listing)} — it carries a config name but NOTHING "
               f"was read from it, so it is absent from the ConfigMap and its "
               f"tenants have no alerting.", file=sys.stderr)
     if len(unusable) > _WARN_LIMIT:
