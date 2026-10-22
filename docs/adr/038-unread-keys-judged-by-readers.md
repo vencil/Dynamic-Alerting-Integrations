@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-10-17
+updated_at: 2026-10-21
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -28,6 +28,8 @@ updated_at: 2026-10-17
 
 2026-10-17 修訂：自訂告警編譯器改照 exporter 的讀法編譯，兩者讀 `_custom_alerts` 的層相同（決定 2）。
 
+2026-10-21 修訂：產生器那半以登錄表的宣告為準，由雙向探針保證與程式一致，不在每次判定時另外量產生器的輸出（決定 1、5）；Go 的寫入檢查只留值與結構的檢查，鍵名交給共用判決（決定 2）；profile 裡的 `_` 鍵依登錄表的 profile 層直接判、不經租戶（決定 4）；產生器容器接上共用判決前，served-values 先能只算指定的租戶，記憶體與時間預算照 ADR-036 §3（決定 5、11）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -36,7 +38,7 @@ updated_at: 2026-10-17
 
 **決定**：
 
-1. 一個鍵有沒有用，**看讀取端實際做了什麼**，不從鍵名預測：exporter 的部分看它實際送出的值，產生器的部分看產生器自己的輸出。
+1. 一個鍵有沒有用，**看讀取端實際做了什麼**，不從鍵名預測：exporter 的部分看它實際送出的值，產生器的部分看登錄表的宣告，而宣告由探針對照產生器的實際輸出。
 2. 量不到的事實（每個 `_` 開頭的保留鍵歸哪個讀取端、可以寫在哪一層、哪些鍵已退役）寫在**一份登錄表**（JSON）。Python、Go 的保留鍵常數與兩份 JSON schema 的頂層宣告都由它產生。
 3. 「沒有任何讀取端讀」的判決由**一個共用函式**計算，validate-config、產生器 `--validate` 與 tenant-api 的寫入檢查都呼叫它，不各自實作。
 4. `disable` 沒關到任何東西、或只關到一部分時要報出來；並提供一個**讓使用者自己檢查與測試**的輸出。
@@ -107,13 +109,13 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 ### 1. 判決以實測為準
 
-一個鍵的讀取端只來自實測：
+一個鍵的讀取端只來自實測（產生器那半的實測是決定 3 的探針）：
 
 - **exporter**：served-values 有沒有送出該鍵，或有沒有因為它而改變送出的值。`disable` 讓本來會送出的一列不送出，也算 exporter 讀了它；`disable` 沒有改變任何送出的值，則是 `disable_noop`（見決定 8）。exporter 實測送出的鍵判為有人讀，不論登錄表怎麼寫。
-- **產生器**：產生器自己的輸出（它讀到並採用的鍵）。
+- **產生器**：登錄表宣告的、產生器在各層讀的保留鍵。產生器在租戶層逐鍵讀的只有固定幾個 `_` 鍵（決定 3 的探針與「考慮過但否決」），所以這一半不在每次判定時重跑產生器，而是由雙向探針保證登錄表與產生器的程式一致；探針不一致時 CI 紅。
 - **自訂告警編譯器**：它讀的 `_custom_alerts`。
 
-不另寫一份「產生器會讀哪些鍵」的程式邏輯給別的讀取端模仿。某個值在產生器的語意下是否有效（例如 `_routing_profile` 指向的 profile 存不存在），仍只由產生器判，與 [ADR-036](./036-single-parser-effective-config.md) 一致。
+不另寫一份「產生器會讀哪些鍵」的程式邏輯給別的讀取端模仿；登錄表只是宣告，由探針兩個方向對照產生器的實際輸出。某個值在產生器的語意下是否有效（例如 `_routing_profile` 指向的 profile 存不存在），仍只由產生器判，與 [ADR-036](./036-single-parser-effective-config.md) 一致。
 
 ### 2. 保留鍵登錄表
 
@@ -131,17 +133,32 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 | Python 的保留鍵常數 | 由登錄表產生 |
 | Go 的保留鍵常數 | 由登錄表產生 |
 | `tenant-config.schema.json` 與 `platform-defaults.schema.json` 的頂層宣告 | 由登錄表產生 |
-| 產生器、exporter、tenant-api 各自的鍵名判斷 | 由決定 4 的共用判決取代 |
+| 產生器、exporter、tenant-api、validate-config 各自的鍵名判斷 | 由決定 4 的共用判決取代 |
+
+**值與結構的檢查不在此列，留在 Go**。共用判決只回答「有沒有讀取端讀這個鍵」，不判斷值對不對。下面幾種鍵都有 exporter 讀，判決是 `read`，但今天會擋下 tenant-api 寫入的是 Go 的 `ValidateTenantKeys`，所以它保留這些檢查、只刪掉判斷鍵名的那一段：
+
+| 情況 | 判決 | Go 寫入檢查 |
+|---|---|---|
+| `_profile` 指向不存在的 profile | `read` | 擋 |
+| `expires:` 不是 RFC3339 時間 | `read` | 擋 |
+| `expires:` 加在只宣告於 `optional_overrides`、沒有平台預設值的鍵上 | `read` | 擋 |
+| `expires:` 加在 `_critical` 鍵、維度鍵或保留鍵上（不會生效、也不會回復） | `read` | 擋 |
+
+鍵名那一段指的是：登錄表沒有的 `_` 鍵、登錄表有但不在租戶層讀的 `_` 鍵（例如租戶檔裡的 `_policies`、`_routing_defaults`）、`_routing` 前綴下產生器不讀的鍵、平台預設與 `optional_overrides` 都沒有的閾值鍵（維度鍵除外，見下一段）、base 沒有平台預設值的 `_critical` 鍵。這幾種沒有讀取端讀，共用判決判為 `unread`，改由它判，同一件事只有一個地方說了算。維度鍵 `version` 標籤值的檢查屬於值的檢查，留在 Go；舊鍵名改名的提示是遷移說明、不擋寫入，也留在 Go。
+
+base 不在平台預設、也不在 `optional_overrides` 的維度鍵，Go 今天擋，但 exporter 照樣送出它，判決是 `read`。Go 的擋法是誤擋，這一段刪除後 tenant-api 改為收下；這種鍵的問題是沒有規則讀它，由決定 10 報（永遠只是建議）。
+
+tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共用判決擋下的同一步或之後才刪，不因 validate-config 等其他入口先擋就提前刪。刪除之後，判決未完成（da-guard 失敗或逾時、判為 `undecidable`）時依決定 5 只報 notice、寫入照收，拼錯的鍵在這條路徑上會被收下，而今天 Go 會擋；這個差異列在「後果與已知限制」。
 
 執行時各工具讀的是產生出來的常數，不在執行時讀這份 JSON，所以 da-tools 映像不需要多帶檔案。登錄表放在 Go module 內，是為了讓 Go 端日後若要直接嵌入，三個 Go 程式（exporter、da-guard、tenant-api）都不必再複製一份。
 
-**範圍只到頂層鍵名**。子鍵表維持「由讀取它的程式碼為準，schema 與其他端以測試釘住」：
+**範圍只到頂層鍵名**。子鍵表以讀取它的程式為準：`_routing` 與 `_metadata` 的子鍵由程式碼定義，schema 與其他端以測試釘住；`_custom_alerts` 條目的欄位寫在 Go 的 recipe 契約檔，schema 由它產生：
 
 | 子鍵 | 以誰為準 |
 |---|---|
 | `_routing` 的子鍵、receiver 型別、`_routing_enforced` 的欄位 | 產生器的程式碼 |
 | `_metadata` 的 9 個欄位 | Go 的 `TenantMetadata` 結構 |
-| `_custom_alerts` 條目的欄位 | 自訂告警編譯器 |
+| `_custom_alerts` 條目的欄位 | recipe 契約檔（[ADR-024](./024-version-aware-threshold-via-dimensional-label.md) §9） |
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
 
@@ -174,6 +191,8 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
+profile 裡的 `_` 鍵另依登錄表的 profile 層直接判，不經租戶：沒有任何讀取端在 profile 這一層讀的鍵，在該 profile 檔報一筆 notice，列出綁定它的租戶（可以一個都沒有）。不論有沒有租戶綁定、值有沒有被租戶自己的值蓋掉，判決與原因都相同；例如寫在 profile 裡的 `_profile` 永遠被租戶那一層蓋掉，只有這樣判才報得出來。Policy-as-Code 讀的是租戶看到的設定，所以只有真的有租戶拿到這個值時，規則指名它才算有人讀。
+
 `disable_noop` 只報 warning、拼錯的閾值鍵報 error，理由是：一個沒關到東西的 `disable` 不會讓任何值錯誤生效，也可能是刻意的保險寫法（例如預設日後才會加上的鍵）；它的風險在於原意要關的東西沒關到，所以除了 warning，這次變更新引入的還會出現在 config-diff 的 PR 留言（見決定 8）。`disable_partial` 不改變 verdict（鍵有被讀），另以 warning 報。
 
 上表的等級是各閘門改成「判到就擋」之後的等級。在那之前，這些 finding 只報不擋：validate-config 一律列為警告，結束碼不變；`undecidable` 的 rc 2 只出現在判決輸出（決定 9 的 explain）。
@@ -183,13 +202,14 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 「沒有任何讀取端讀」需要把 exporter 與產生器兩邊的結果併起來，放在 Python 的共用函式：
 
 - 它呼叫 served-values 取得 exporter 那半（validate-config 今天已經這樣呼叫）。
-- 它併上產生器自己的讀取結果。
+- 它併上登錄表宣告的產生器讀取（見決定 1）。
 - validate-config 先接上；產生器 `--validate` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）之後接上。
+- 產生器容器每次寫入只需要被寫入的租戶的判決，所以 served-values 要能只算指定的租戶（平台檔照常整份讀）。接上容器前先在形狀接近真實的大樹上量這個模式的峰值記憶體與判定時間，對照 ADR-036 §3 的記憶體與時間預算（以該節為準，不在此重述）；量出來仍超過時，改預算要另外決定。不先量就接上，兩個方向都會出錯：da-guard 超過上限而失敗時，依下一條只報 notice、不擋，大樹上的判決會一律跳過而無人察覺；呼叫它的 Python 子程序自己超過上限或逾時，則那筆寫入被拒收，大樹上每筆寫入都會被拒。
 - da-guard 不可用或失敗時，只報一筆 notice「判決未完成」，**不得**當成拒收寫入。否則 da-guard 一出問題，tenant-api 的所有寫入都會被擋。
 
 da-guard 本身只輸出事實：exporter 實測的 `read_by` 與原因，以及登錄表對非 exporter 鍵的宣告。它對產生器負責的鍵不下判決。
 
-這帶來一個連動修訂：[ADR-036](./036-single-parser-effective-config.md) §9 規定單獨執行的 da-guard 對它判不了的內容回 exit 4（未判定）。原本觸發條件只有「樹上有路由或 policy 內容」，現在擴大為「樹上有只有產生器能判的內容」，包括租戶寫了只由產生器讀、或拼錯而只有產生器會警告的 `_` 鍵。否則單獨跑 da-guard 的人會把「沒判」讀成「判過、沒問題」。exit 4 本身要等 ADR-036 §7 的步驟 2（da-guard 加上「未判定」）完成後才存在，這個擴大範圍也從那時起生效。
+這帶來一個連動修訂：[ADR-036](./036-single-parser-effective-config.md) §9 規定單獨執行的 da-guard 對它判不了的內容回 exit 4（未判定）。原本觸發條件只有「樹上有路由或 policy 內容」，現在擴大為「樹上有只有產生器能判值的內容」，例如租戶寫了 `_routing_profile`，它指向的 profile 存不存在只有產生器能判。鍵名本身不需要產生器：共用判決以 da-guard 與登錄表就判得出來（決定 1）。否則單獨跑 da-guard 的人會把「沒判」讀成「判過、沒問題」。exit 4 本身要等 ADR-036 §7 的步驟 2（da-guard 加上「未判定」）完成後才存在，這個擴大範圍也從那時起生效。
 
 ### 6. 平台側的問題不算在租戶頭上
 
@@ -255,10 +275,10 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 1. 登錄表、產生出來的常數與 schema、黑箱探針。行為不變。
 2. da-guard 輸出 `read_by` 與原因、`disable_partial`、反事實 `disable_noop`、explain 與 `--assert`；共用函式接上 validate-config，只報不擋。
-3. 產生器 `--validate` 與產生器容器接上共用函式，da-guard 的 exit 4 擴大範圍。需要等 [ADR-036](./036-single-parser-effective-config.md) §7 的步驟 2（da-guard 加上「未判定」）先完成。
+3. 產生器 `--validate` 與產生器容器接上共用函式，da-guard 的 exit 4 擴大範圍。需要等 [ADR-036](./036-single-parser-effective-config.md) §7 的步驟 2（da-guard 加上「未判定」）先完成；接上容器前，served-values 先能只算指定的租戶並量過記憶體（決定 5）。
 4. 決定 10 的各項，以及 `_state_` 的平台側 notice。
 
-閘門改成「判到就擋」不在本 ADR，依 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 推進。
+閘門改成「判到就擋」不在本 ADR，依 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 推進。各處手寫的鍵名判斷，與同一入口的閘門改成擋下同一步或之後才刪。唯一的例外是判決未完成時（da-guard 失敗或逾時、`undecidable`）：依決定 5 只報 notice、不擋，tenant-api 的 Go 鍵名檢查刪除後，今天會被擋的拼錯鍵在這條路徑上會被收下；除此之外，任何一個中間版本都不比之前寬鬆。這條降級路徑列在「後果與已知限制」，是否保留要在刪 Go 鍵名檢查之前另行決定。
 
 ## 範例
 
@@ -281,7 +301,8 @@ db-a
 
 - **保留鍵清單只剩一個來源**：新增保留鍵只改登錄表，再重新產生；各讀取端各自的鍵名判斷改由共用判決取代。
 - **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。剩下的差異：根 defaults 宣告了這種鍵時，產生器 `--validate` 對租戶寫的同名鍵仍不警告；共用判決照樣把它判為 `unread`，產生器在第 3 步改用共用判決時一併消除（決定 11）。
-- **判決需要兩支程式**：完整的「沒有讀取端讀」需要 da-guard 與產生器都能跑。只有 da-guard 的環境得到 exporter 那半，產生器那半回 exit 4（未判定）。
+- **鍵名判決只需要 da-guard 與登錄表**：產生器那半取登錄表的宣告，不跑產生器。值在產生器語意下是否有效（例如 `_routing_profile` 指向的 profile）仍只有產生器能判；只有 da-guard 的環境，這部分回 exit 4（未判定）。
+- **判決未完成時 tenant-api 照收**：tenant-api 的 Go 鍵名檢查刪除後，da-guard 失敗或逾時時寫入只帶 notice、照常收下（決定 5），今天 Go 會擋的拼錯鍵在這條路徑上會進 repo。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
 - **規則讀取以 repo 內的規則包為準**：客戶自己的規則讀了某個閾值，除非宣告為外部讀取端，否則會被報成「沒有規則讀」。這一項因此永遠只是建議。
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
@@ -293,7 +314,7 @@ db-a
 
 ## 考慮過但否決
 
-- **在判定工具裡放一份「產生器讀哪些鍵」的表，再用測試追產生器的實作**：表的擁有者（Go 的判定工具）和被描述的程式（Python 產生器）不同，這份表就是漂移點。業界的對照是 Spring Boot 手寫的 `additional-spring-configuration-metadata.json`，同樣靠人記得同步。
+- **在判定工具裡放一份「產生器讀哪些鍵」的表，再用測試追產生器的實作**：表的擁有者（Go 的判定工具）和被描述的程式（Python 產生器）不同，而測試只從表出發、檢查表上寫的鍵，程式多讀了一個表上沒有的鍵時沒有人發現，這份表就是漂移點。業界的對照是 Spring Boot 手寫的 `additional-spring-configuration-metadata.json`，同樣靠人記得同步。採用的登錄表不同在兩點：它是所有讀取端共用的一份宣告，不屬於任何一個判定工具；探針對登錄表上每個鍵、每一層兩個方向都比對（登錄表說讀的必須改變輸出，沒說讀的不能改變輸出，決定 3），程式在某一層多讀或少讀一個登錄表上的鍵都會讓 CI 紅；登錄表沒有的 `_` 鍵依決定 2 本來就不得有讀取端讀。
 - **各讀取端在執行時回報自己讀了哪些鍵，再取聯集**：業界找不到「任一讀取端讀了就合法」的聯集判決先例，主流是按前綴或子樹劃分歸屬（OpenTelemetry Collector 各元件驗自己的子樹、Helm subchart 與 `global`）。實作上，Python 端資料一經複製（`copy.copy`、`json.dumps`）就失去追蹤，平台檔合併後也丟了來源；Go 的 map 讀取無法攔截，要在每個解析階段逐一埋點。實測產生器在租戶層逐鍵讀的只有 `_routing`、`_routing_profile`、`_severity_dedup`、`_metadata` 四個，不隨設定而變，執行時追蹤換不到額外資訊。這個想法改用在決定 3 的黑箱探針。
 - **只在一個點記錄「下層有值」來判 `disable` 有沒有作用**：exporter 在閾值相關的地方讀 `disable` 有五處（base、宣告型閾值、`_critical`、維度鍵、state filter），而且 base 階段是逐一走過 defaults，走得到的 `disable` 本來就有下層值，沒作用的那些反而走不到。所以改用反事實重算。
 - **「conf.d 裡有根 `_defaults.yaml`」就算可以判**：實測根 `_defaults.yaml` 存在但沒有 `defaults:`、只有 `_routing_defaults`、或 `defaults: {}` 時，都沒有任何閾值送出；而只有 `optional_overrides` 的樹沒有 defaults 也送得出值。所以改看「有沒有讀到根平台檔」，再交給現有的逐鍵原因。

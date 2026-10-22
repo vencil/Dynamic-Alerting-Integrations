@@ -1,14 +1,8 @@
-# Custom Alerts example — a recipe in a subdirectory _defaults.yaml is NOT served:
-# the exporter has no subtree inheritance for _custom_alerts (ADR-024 §3), so no
-# tenant under finance/ gets payment_failure_ratio. The custom-alert compiler
-# compiles what the exporter serves (#3042), so it builds no rule for it either:
-# this recipe is not compiled. It moves to a profile (the way to share an alert
-# across tenants) in a later stage of #3042.
-_custom_alerts:
-  - recipe: ratio
-    name: payment_failure_ratio
-    metric: payment_failed_total
-    denominator_metric: payment_attempts_total
-    op: ">"
-    window: 5m
-    threshold: "0.01:critical"
+# Custom Alerts example — a subdirectory _defaults.yaml carries no recipe.
+# The exporter has no subtree inheritance for _custom_alerts (ADR-024 §3): a
+# recipe written here, at the top level or under defaults:, reaches no tenant
+# and the compiler builds no rule for it. A recipe shared by the tenants under
+# finance/ is written in a profile instead — `finance` in the root
+# _profiles.yaml — and each tenant binds it with `_profile: finance`:
+#   - pay-a binds it and writes no list of its own → served the profile's list;
+#   - pay-b binds it and writes its own list → served its own list only.
