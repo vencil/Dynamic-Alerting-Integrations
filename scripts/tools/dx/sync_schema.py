@@ -156,11 +156,11 @@ def _check_value(where, entry):
     """`value`: required for a key read in a tenant's config (tenant-api
     decides from its shape whether a batch patch's string can set it); the
     platform-top-only keys may leave it out."""
-    value = entry.get("value")
-    if value is None:
+    if "value" not in entry:
         if _layers(entry) & TENANT_LAYERS:
             raise RegistryError(f"{where}: a key read in a tenant's config needs value.shape")
         return
+    value = entry["value"]  # an explicit null is refused below, not taken as absent
     if not isinstance(value, dict) or not set(value) <= VALUE_FIELDS:
         raise RegistryError(f"{where}.value: allowed fields are {', '.join(sorted(VALUE_FIELDS))}")
     if value.get("shape") not in SHAPES:
@@ -179,9 +179,9 @@ def _check_value(where, entry):
 
 def _check_batch(where, entry):
     """`batch`: what a tenant-api batch op may do to the key."""
-    batch = entry.get("batch")
-    if batch is None:
+    if "batch" not in entry:
         return
+    batch = entry["batch"]  # an explicit null is refused below, not taken as absent
     if not isinstance(batch, dict) or not set(batch) <= BATCH_FIELDS:
         raise RegistryError(f"{where}.batch: allowed fields are {', '.join(sorted(BATCH_FIELDS))}")
     if "unset" in batch and batch["unset"] is not True:
