@@ -24,6 +24,7 @@ func TestParseRecipeContract_FailsClosed(t *testing.T) {
 		"min_events default too big": strings.Replace(good, `"default": 10, "minimum": 1`, `"default": 10, "minimum": 11`, 1),
 		"pattern does not compile":   strings.Replace(good, `"name": "^[a-z][a-z0-9_]*$"`, `"name": "^[a-z"`, 1),
 		"no recipes":                 `{"recipes": []}`,
+		"tier renamed":               strings.ReplaceAll(good, `"warning"`, `"ticket"`), // multipliers renamed too: only the tier check sees it
 		"cap below one":              strings.Replace(good, `"custom_alert_cap": 20`, `"custom_alert_cap": 0`, 1),
 	}
 	for name, in := range bad {

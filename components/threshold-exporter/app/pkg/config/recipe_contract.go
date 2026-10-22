@@ -151,6 +151,15 @@ func parseRecipeContract(data []byte) (recipeContract, error) {
 			return c, fmt.Errorf("op %q has no slug", op)
 		}
 	}
+	// sloBurnMultipliers reads the critical (fast) and warning (slow) tiers by
+	// name, so the tiers must be exactly those two.
+	var tiers []string
+	for _, t := range c.SloBurnRate.Tiers {
+		tiers = append(tiers, t.Severity)
+	}
+	if strings.Join(tiers, ",") != "critical,warning" {
+		return c, fmt.Errorf("slo_burn_rate tiers %v must be [critical warning]", tiers)
+	}
 	for _, p := range c.SloBurnRate.SloPeriod.Enum {
 		for _, t := range c.SloBurnRate.Tiers {
 			if _, ok := c.SloBurnRate.Multipliers[p][t.Severity]; !ok {
@@ -202,9 +211,6 @@ func RecipeStatus(recipe string) string {
 	}
 	return "active"
 }
-
-// RecipeLifecycle returns a copy of the lifecycle values a recipe status can take.
-func RecipeLifecycle() []string { return append([]string(nil), contract.Lifecycle...) }
 
 // RecipeFieldOrder returns the canonical order of a recipe declaration's keys
 // (recipe → identity → metric(s) → params → routing).
