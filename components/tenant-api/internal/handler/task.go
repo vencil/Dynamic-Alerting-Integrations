@@ -29,6 +29,16 @@ import (
 //
 // The submitter's results are still filtered by the caller's CURRENT read
 // permission: it may have been narrowed since the task was submitted.
+//
+// @Summary     Poll an async batch task
+// @Description Returns a task a batch submitted with ?async=true created, to the caller who submitted it: its status, and its results filtered to the tenants the caller can read now (summary is recounted over them).
+// @Description Any other caller, and an id that is unknown or expired (tasks live in memory: a restart loses them), gets the same 404 TASK_NOT_FOUND.
+// @Tags        tasks
+// @Produce     json
+// @Param       id  path     string true "Task ID"
+// @Success     200 {object} async.Task
+// @Failure     404 {object} ErrorResponse
+// @Router      /api/v1/tasks/{id} [get]
 func GetTask(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		taskID := chi.URLParam(r, "id")

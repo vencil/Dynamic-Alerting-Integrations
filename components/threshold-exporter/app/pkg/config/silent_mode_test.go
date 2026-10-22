@@ -27,9 +27,9 @@ type silentModeCase struct {
 // silentModeCases covers every word the reader knows (with case and
 // surrounding space), the empty / null spellings, non-string shapes, and the
 // structured form's failure modes.
-func silentModeCases() []silentModeCase {
+func silentModeCases(t testing.TB) []silentModeCase {
 	var cs []silentModeCase
-	for _, w := range append(append([]string{}, silentModeTargets...), disabledWords...) {
+	for _, w := range append(append([]string{}, silentModeTargets...), disabledWords(t)...) {
 		cs = append(cs,
 			silentModeCase{"word/" + w, "_silent_mode: " + w, false},
 			silentModeCase{"upper/" + w, "_silent_mode: " + strings.ToUpper(w), false},
@@ -58,6 +58,10 @@ func silentModeCases() []silentModeCase {
 		silentModeCase{"expires/invalid-disabled-target", "_silent_mode:\n  target: off\n  expires: nope", false},
 		silentModeCase{"expires/invalid-unknown-target", "_silent_mode:\n  target: purple\n  expires: nope", true},
 		silentModeCase{"expires/past", "_silent_mode:\n  target: warning\n  expires: \"2020-01-01T00:00:00Z\"", false},
+		// The zero instant parses and reads as already expired; with no
+		// expires nothing expires. The canonical form must keep them apart
+		// (HasExpires), since Expires is the zero time in both.
+		silentModeCase{"expires/zero-instant", "_silent_mode:\n  target: warning\n  expires: \"0001-01-01T00:00:00Z\"", false},
 		silentModeCase{"expires/future", "_silent_mode:\n  target: warning\n  expires: \"2099-01-01T00:00:00Z\"\n  reason: maint", false},
 		silentModeCase{"expires/future-offset", "_silent_mode:\n  target: warning\n  expires: \"2099-01-01T08:00:00+08:00\"\n  reason: maint", false},
 		// An unquoted date is a YAML timestamp: re-serialized as RFC3339.
@@ -108,7 +112,7 @@ var silentModeNows = []time.Time{
 // relies on (a value it rejects is one the exporter ignores, and back).
 func TestSilentModeProblemMatchesReaderWarn(t *testing.T) {
 	t.Parallel()
-	for _, c := range silentModeCases() {
+	for _, c := range silentModeCases(t) {
 		sv := parseSilentMode(t, c.doc)
 		problem := silentModeProblem(sv)
 		if (problem != "") != c.wantProblem {
@@ -134,7 +138,7 @@ func TestSilentModeProblemMatchesReaderWarn(t *testing.T) {
 // for them at every probed now — checked over every pair of silentModeCases.
 func TestSilentModeCanonicalContract(t *testing.T) {
 	t.Parallel()
-	cases := silentModeCases()
+	cases := silentModeCases(t)
 	type observed struct {
 		entries [][]ResolvedSilentMode
 		warns   [][]string
@@ -143,7 +147,8 @@ func TestSilentModeCanonicalContract(t *testing.T) {
 	obs := make([]observed, len(cases))
 	for i, c := range cases {
 		sv := parseSilentMode(t, c.doc)
-		canon[i] = silentModeOf(sv).canonical
+		r := silentModeOf(sv)
+		canon[i] = r.canonical()
 		for _, now := range silentModeNows {
 			e, w := silentModeReaderAt(sv, now)
 			obs[i].entries = append(obs[i].entries, e)
@@ -195,13 +200,13 @@ func TestSilentModeCanonicalSpellings(t *testing.T) {
 		{"_silent_mode: warning", "_silent_mode: off"},
 	}
 	for _, p := range equal {
-		a, b := silentModeOf(parseSilentMode(t, p[0])).canonical, silentModeOf(parseSilentMode(t, p[1])).canonical
+		a, b := silentModeCanonicalOf(parseSilentMode(t, p[0])), silentModeCanonicalOf(parseSilentMode(t, p[1]))
 		if a != b {
 			t.Errorf("want equal:\n  %q -> %+v\n  %q -> %+v", p[0], a, p[1], b)
 		}
 	}
 	for _, p := range unequal {
-		a, b := silentModeOf(parseSilentMode(t, p[0])).canonical, silentModeOf(parseSilentMode(t, p[1])).canonical
+		a, b := silentModeCanonicalOf(parseSilentMode(t, p[0])), silentModeCanonicalOf(parseSilentMode(t, p[1]))
 		if a == b {
 			t.Errorf("want unequal:\n  %q -> %+v\n  %q -> %+v", p[0], a, p[1], b)
 		}
@@ -213,7 +218,7 @@ func TestSilentModeCanonicalSpellings(t *testing.T) {
 // what the resolver honours.
 func TestSilentModeTargetsMatchResolver(t *testing.T) {
 	t.Parallel()
-	candidates := append(append([]string{"", "purple", "warn", "crit", "both", "none"}, silentModeTargets...), disabledWords...)
+	candidates := append(append([]string{"", "purple", "warn", "crit", "both", "none"}, silentModeTargets...), disabledWords(t)...)
 	for _, c := range candidates {
 		got := len(resolveSilentTarget("t1", c, time.Time{}, "", false)) > 0
 		if want := slices.Contains(silentModeTargets, c); got != want {
@@ -230,7 +235,38 @@ func TestSilentModeTargetsMatchResolver(t *testing.T) {
 // which values switch a key off.
 func TestDisabledWordsUnchanged(t *testing.T) {
 	t.Parallel()
-	if want := []string{"disable", "disabled", "off", "false"}; !slices.Equal(disabledWords, want) {
-		t.Errorf("disabledWords = %q, want %q", disabledWords, want)
+	if want := []string{"disable", "disabled", "off", "false"}; !slices.Equal(disabledWords(t), want) {
+		t.Errorf("disabledWords = %q, want %q", disabledWords(t), want)
+	}
+}
+
+// silentModeCanonicalOf is silentModeOf(sv).canonical() in one expression.
+func silentModeCanonicalOf(sv ScheduledValue) silentModeCanonical {
+	r := silentModeOf(sv)
+	return r.canonical()
+}
+
+// TestSilentModeProblemText pins the sentence the write gate shows for each
+// kind of value the reader ignores. The underlying parser errors are taken
+// from the parsers themselves; everything around them is written out here.
+func TestSilentModeProblemText(t *testing.T) {
+	t.Parallel()
+	yamlErr := yaml.Unmarshal([]byte("target: ["), &silentModeStructured{})
+	if yamlErr == nil {
+		t.Fatal(`yaml accepted "target: ["`)
+	}
+	_, timeErr := time.Parse(time.RFC3339, "nope")
+	if timeErr == nil {
+		t.Fatal(`time.Parse accepted "nope"`)
+	}
+	for _, c := range []struct{ doc, want string }{
+		{`_silent_mode: "target: ["`, "structured _silent_mode does not parse: " + yamlErr.Error()},
+		{"_silent_mode:\n  target: all\n  expires: nope", `expires "nope" is not RFC3339 (e.g. 2026-07-01T00:00:00Z): ` + timeErr.Error()},
+		{"_silent_mode:\n  target: Purple", `unknown silent mode target "purple" (valid: warning, critical, all, disable)`},
+		{"_silent_mode: Purple", `unknown silent mode "purple" (valid: warning, critical, all, disable)`},
+	} {
+		if got := silentModeProblem(parseSilentMode(t, c.doc)); got != c.want {
+			t.Errorf("silentModeProblem(%q)\n got  %q\n want %q", c.doc, got, c.want)
+		}
 	}
 }

@@ -21,7 +21,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dennwc/varint v1.0.0 // indirect
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
@@ -32,5 +31,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-// #2681: v3.0.1 plus a linear duplicate-key check; see third_party/README.md.
+// #2681: go.yaml.in/yaml/v3 v3.0.5 plus a linear duplicate-key check; see
+// third_party/README.md.
 replace gopkg.in/yaml.v3 => ./third_party/yaml.v3

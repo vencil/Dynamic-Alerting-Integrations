@@ -38,7 +38,7 @@ var unhashableMergeKeyDocs = map[string]string{
 }
 
 // failOnPanic runs f and turns a panic in it into a t.Fatalf of the calling
-// (per-shape) subtest. Without it, a regression (the vendored yaml.v3 patch
+// (per-shape) subtest. Without it, a regression (the vendored yaml.v3's fix
 // gone) panics the test goroutine and ends the whole test binary, so every
 // test in the package reports nothing instead of each shape failing on its own.
 func failOnPanic(t *testing.T, what string, f func()) {

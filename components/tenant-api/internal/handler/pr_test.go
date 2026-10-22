@@ -301,6 +301,14 @@ func TestPutTenant_PRMode_PendingPRConflict(t *testing.T) {
 	if resp["existing_pr_url"] != "https://github.com/owner/repo/pull/99" {
 		t.Errorf("existing_pr_url = %q", resp["existing_pr_url"])
 	}
+	// #3272: the three fields PENDING_PR_EXISTS declares all reach the client
+	// (MarshalJSON sends only declared ones).
+	if resp["pr_number"] != 99.0 {
+		t.Errorf("pr_number = %v, want 99", resp["pr_number"])
+	}
+	if m, _ := resp["message"].(string); !strings.Contains(m, "db-a") {
+		t.Errorf("message = %v, want the advice naming the tenant", resp["message"])
+	}
 }
 
 func TestPutTenant_PRMode_InvalidTenantID(t *testing.T) {

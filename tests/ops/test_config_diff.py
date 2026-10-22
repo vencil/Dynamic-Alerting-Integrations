@@ -1107,9 +1107,8 @@ class TestPlatformSettings:
         ("_tenant_orgs.yaml", "tenant_orgs:\n  db-a: 1\n", cd.SETTING_NOT_COMPARED),
         ("_rbac.yaml", "groups: {}\n", cd.SETTING_NOT_COMPARED),
         ("team/_defaults.yaml", "_policies: []\n", cd.SETTING_NOT_READ_HERE),
-        ("_platform.yaml", "domain_policies: {}\n", cd.SETTING_NOT_READ_HERE),
     ], ids=["deferred-recipe", "deferred-cap", "unknown-key", "tenant-orgs", "rbac",
-            "policies-nested", "domain-policies-misplaced"])
+            "policies-nested"])
     def test_settings_no_render_reads_exit_1(self, tmp_path, rel, text, status):
         base = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"}
         old, new = _pair(tmp_path, base, {**base, rel: text})
@@ -1119,6 +1118,19 @@ class TestPlatformSettings:
         rows = [r for r in doc["platform_settings"] if r["file"] == rel]
         assert [r["status"] for r in rows] == [status], doc["platform_settings"]
         assert rel in doc["uncovered_files"]
+
+    def test_a_misplaced_domain_policies_block_leaves_routes_not_computed(self, tmp_path):
+        """#3126: the route generator refuses the whole tree on a
+        `domain_policies:` block outside `_domain_policy.yaml` (in every mode),
+        so the PR side's routes are not computed: exit 2, the reason naming
+        the file. It used to be a reviewable setting at exit 1."""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"}
+        old, new = _pair(tmp_path, base, {**base, "_platform.yaml": "domain_policies: {}\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 2, p.stdout + p.stderr
+        routes = _json(p)["views"]["routes"]
+        assert routes["status"] == "not_computed", routes
+        assert "_platform.yaml: a domain_policies block is not read from this file" in routes["reason"]
 
     def test_other_service_note_says_only_what_config_diff_knows(self, tmp_path):
         base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}

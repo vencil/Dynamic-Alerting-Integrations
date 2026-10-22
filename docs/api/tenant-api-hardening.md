@@ -170,6 +170,16 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 **單一來源**：所有 `code` 寫在 tenant-api 的 `internal/errcode`（handler、RBAC 中介層、產生器 client、非同步 task 都從這裡取，不再各自抄字串）。OpenAPI 的 `ErrorResponse.code` 因此成為列舉（`ErrorCode`）。契約檔 `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json`（portal 經 `_common/api/classify-error.js` 讀取，依碼的 `remedy` 決定顯示的訊息；缺少或不在契約內的碼當作未知，不套用任何處理方式的文案：有伺服器訊息就顯示它，沒有才顯示通用訊息）由 `make error-contract` 從同一份表、錯誤種類表，以及 handler／中介層直接寫出的回應（掃描原始碼取得；status 或 code 不是字面常數的寫法會讓產生器直接失敗。這道 fail-closed 只涵蓋經 `errcode` 常數、且經已列出的寫入函式寫出的回應：沒有 `code` 的回應（`http.Error`、`WriteHeader` 加 `Write`）與用字串字面量寫的 code 都不在契約內，portal 會把它們當作未知）產生，逐碼列出 `remedy`、`retryable`（`always`／`never`）、會出現的 status、預設的 `retry_after_s` 與對應的錯誤種類；`make error-contract-check`、pre-commit 與 CI 擋漂移。`SIMULATE_NOT_PROVIDED` 不在其中：那是 portal 部署自己的 nginx 501，不是 tenant-api 發出的。
 
+### 2.7 錯誤回應的附加欄位由錯誤碼宣告（[#3272](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3272)）
+
+錯誤回應除了固定欄位（`error`、`code`、`request_id`、`violations`、`retry_after_s`、`help`、`action`），有些碼會在同一層帶自己的欄位，例如 `PENDING_PR_EXISTS` 的 `existing_pr_url`、`pr_number`。每個碼可以帶哪些欄位、各是什麼 JSON 型別，宣告在 tenant-api 的 `internal/errcode`，每個欄位只宣告一次，所以同名欄位在每個碼底下都是同一個型別：
+
+- **只送宣告過的欄位**：回應只帶該碼宣告過的欄位，其他的丟掉並寫錯誤 log。`INTERNAL_ERROR` 不宣告任何欄位，所以內部錯誤只回固定訊息與 `request_id`（§2.4）；宣告的欄位不能與固定欄位同名，所以蓋不掉 `code`、`error`。值為零的欄位照送（看不到的 PR/MR 是 `existing_pr_url: ""`、`pr_number: 0`；直接寫入批次的衝突是 `committed: false`；沒有可顯示的 finding 是 `findings: []`）。
+- **契約與 OpenAPI**：`tenant-api-errors.json` 每個碼多一個 `extra`，列出欄位名、型別與陣列元素的型別。OpenAPI 的 `ErrorResponse` 列出所有碼的欄位聯集（Swagger 2.0 沒有 `oneOf`，一個回應只能有一個 schema），每個欄位的說明寫明哪些碼會帶它。
+- **擋在出貨前**：`make error-contract`（`make api-docs` 在 swag 之後也會跑它）從型別檢查過的原始碼讀出每個 handler 設定的欄位與值的 Go 型別；設了該碼沒宣告的欄位、值的 JSON 型別與宣告不符、宣告了卻沒有 handler 設、宣告了固定欄位的名字，或 Extra 的 map 被傳進函式、複製、取址而讀不出最後有哪些鍵，產生器都直接失敗。pre-commit 與 CI 擋漂移。
+
+宣告涵蓋現有的所有欄位，所以現有回應的內容不變。`GET /api/v1/tasks/{id}` 也補進了 OpenAPI。
+
 ---
 
 ## 3. Tenant-Scoped Authorization
@@ -349,7 +359,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
 - **寫入扁平鍵 `_routing_receiver_type`** 一律 400，receiver type 寫在 `_routing.receiver.type`：`PUT` 由租戶鍵驗證擋下（`BAD_REQUEST`，訊息 `unknown routing key`），批次 patch 由 patch 鍵驗證擋下（`INVALID_BODY`）。
 - **routing 與 domain policy 只由產生器判（breaking）**：tenant-api 不再自己讀 `_domain_policy.yaml`、不再自己判 routing。domain policy 違規（含 `require_critical_escalation`）、receiver 形狀、不是 mapping 的 `_routing`、matcher 與 `group_by` 的值、產生器不讀的鍵、`_domain_policy.yaml` 讀不了，都是上表的 422 `GENERATOR_FINDINGS`（finding 的 `kind` 如 `domain_policy_violation`、`missing_receiver_field`、`routing_not_mapping`、`routing_group_by_invalid`、`routing_value_not_string`、`routing_key_ignored`、`domain_policy_unusable`）。不再有 403 `POLICY_VIOLATION`、tenant-api 自己的 503 `POLICY_UNAVAILABLE`（上表那一列是產生器的部署端 policy 檔，照舊），`PUT` 這幾類也不再回 400；critical 告警可能被提早攔走的警告不再附在 `warnings`。批次 patch 寫 `_routing` 的非停用值不再是 400，合併後同樣交產生器判。
-- **部分更新不得改到沒編輯的內容**：批次與 `PUT .../custom-alerts` 是把變更合併進現有租戶檔再整份重新輸出。寫入前把原檔與合併結果都解析成 yaml.v3 節點比對：編輯以外的每個節點寫出來都要相同（種類、style 與引號方式、寫出的 tag、純量原文、anchor、別名所指的內容），文件數與 anchor 也要相同；被編輯的鍵另外解碼確認（設定的是新值、刪掉的不在，`<<` 帶進的也算）。有任何差異（例如 flow 序列裡的 `1:20` 會被重新輸出成 `'1:20'`、block scalar 開頭空行被改、別名共用的租戶 block 連帶被改）就拒收：`TENANT_CONFIG_NOT_LOADABLE`（custom-alerts 回 409；批次是該筆結果的 code），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置（只在本租戶 block 內才寫出路徑，其他位置只說「另一處」）。合併寫出的字串一律加雙引號（custom-alerts 裡含換行的字串寫成 literal block `|`，讀回來不變時才用）。修法是用整檔 `PUT /tenants/{id}` 或直接在 git 改寫那個檔（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。
+- **部分更新不得改到沒編輯的內容**：批次與 `PUT .../custom-alerts` 是把變更合併進現有租戶檔再整份重新輸出。寫入前把原檔與合併結果都解析成 yaml.v3 節點比對：編輯以外的每個節點寫出來都要相同（種類、style 與引號方式、寫出的 tag、純量原文、anchor、別名所指的內容），文件數與 anchor 也要相同；被編輯的鍵另外解碼確認（設定的是新值、刪掉的不在，`<<` 帶進的也算）。有任何差異（例如 flow 序列裡的 `1:20` 會被重新輸出成 `'1:20'`、folded block scalar 裡縮排較深的行被改寫、別名共用的租戶 block 連帶被改）就拒收：`TENANT_CONFIG_NOT_LOADABLE`（custom-alerts 回 409；批次是該筆結果的 code），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置（只在本租戶 block 內才寫出路徑，其他位置只說「另一處」）。合併寫出的字串一律加雙引號（custom-alerts 裡含換行的字串寫成 literal block `|`，讀回來不變時才用）。修法是用整檔 `PUT /tenants/{id}` 或直接在 git 改寫那個檔（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。
 - **解碼失敗的訊息不含檔案內容**：YAML 解碼失敗回給呼叫端的文字只說哪裡失敗與行號，parser 的原文只進 server log（一份檔可能有多個租戶，原文會引用別的租戶的值）。
 - **repo 裡不是一般檔的項目**：產生器從 git 物件取檔，symlink（mode 120000）、gitlink（160000）等不是 100644／100755 的項目一律是 `not_regular_file`（路徑中有一段以 `.` 開頭的除外，與所有讀取端略過隱藏項目一致），以 finding 擋下寫入：domain policy 檔名（`_domain_policy.yaml`／`.yml`）報 `domain_policy_unusable`，其他報 `tenant_file_unreadable`，與其他讀不了的檔同一條分類；把它換成一般檔即可。tenant-api 寫該路徑時本來就寫成一般檔（[#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)）。
 

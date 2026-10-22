@@ -2215,6 +2215,30 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             f"remove some\n{out}")
         assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
 
+    def test_a_misplaced_policy_block_gets_move_advice(self, tmp_path, capsys,
+                                                       cli_argv):
+        """#3126: a `domain_policies:` block outside `_domain_policy.yaml` is
+        a policy error in every mode; the advice must say to move it, not
+        only to fix a policy file the tree may not even have."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_threads_running: 90\n"
+            "domain_policies:\n  fin:\n    tenants: [db-a]\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] schema" in out, out
+        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
+        assert ("move a misplaced domain_policies block into _domain_policy.yaml"
+                in vc.POLICY_ONLY_SCHEMA_HINT)
+        assert _generic_schema_hint() not in out, out
+
     def test_an_unquoted_matcher_value_gets_quote_advice(self, tmp_path,
                                                          capsys, cli_argv):
         """#2431: `--strict` also fails the row on a matcher value PyYAML

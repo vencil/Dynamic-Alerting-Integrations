@@ -12,13 +12,13 @@ import (
 // silentModeTargets are the _silent_mode targets that silence something —
 // exactly the targets resolveSilentTarget expands to entries (pinned by
 // TestSilentModeTargetsMatchResolver). Turning silent mode off is spelled with
-// any of disabledWords, or left empty.
+// any word isDisabled accepts, or left empty.
 var silentModeTargets = []string{"warning", "critical", "all"}
 
 // silentModeValidValues is the "(valid: ...)" list the _silent_mode WARNs
-// print: the silencing targets plus the documented off spelling
-// (disabledWords[0]; the other disabled words are accepted aliases).
-var silentModeValidValues = strings.Join(append(append([]string{}, silentModeTargets...), disabledWords[0]), ", ")
+// print: the silencing targets plus the documented off spelling (the other
+// disabled words are accepted aliases).
+var silentModeValidValues = strings.Join(append(append([]string{}, silentModeTargets...), disabledSpelling), ", ")
 
 // silentModeKind is what the exporter's reader makes of a _silent_mode value.
 type silentModeKind uint8
@@ -45,7 +45,7 @@ const (
 //
 // Contract: for two values a and b,
 //
-//	silentModeOf(a).canonical == silentModeOf(b).canonical
+//	silentModeOf(a).canonical() == silentModeOf(b).canonical()
 //
 // holds if and only if the reader (resolveSilentModesAt) treats them the same:
 // the same silence entries (same severities, the same expires instant, the
@@ -76,21 +76,21 @@ type silentModeCanonical struct {
 	Invalid string
 }
 
-// silentModeReading is silentModeOf's result.
+// silentModeReading is silentModeOf's result: what the reader decided, and
+// only the inputs it acts on. ResolveSilentModes reads every tenant on every
+// scrape, so the forms only the write gate needs — the comparable canonical()
+// and the problem() sentence — are derived from it on demand, never built on
+// the read path (#3262).
 type silentModeReading struct {
-	// canonical is the comparable reading (see silentModeCanonical).
-	canonical silentModeCanonical
-	// problem is non-empty exactly when the reader writes a WARN for the value
-	// and ignores it; tenant-free, for callers that word their own message.
-	problem string
-
-	// The setting the resolver expands (Active only): the normalized target
-	// for resolveSilentTarget and the expires as parsed, location kept.
-	target     string
-	hasExpires bool
-	expires    time.Time
-	// err is the parse / expires error the WARN prints.
-	err error
+	kind       silentModeKind
+	hasExpires bool // Active: expires was set
+	// target: the normalized target (Active — what resolveSilentTarget
+	// expands), or the unknown word the WARN names (UnknownScalar,
+	// UnknownTarget), or the expires as written (InvalidExpires).
+	target  string
+	expires time.Time // Active: the expires as parsed, location kept
+	reason  string    // Active: the structured reason as written
+	err     error     // ParseError / InvalidExpires: the error the WARN prints
 }
 
 // silentModeOf reads a _silent_mode value the way the exporter does: only
@@ -104,15 +104,11 @@ func silentModeOf(sv ScheduledValue) silentModeReading {
 	if strings.Contains(val, "target:") {
 		parsed := silentModeStructured{}
 		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-			return silentModeReading{
-				canonical: silentModeCanonical{Kind: silentModeParseError, Invalid: err.Error()},
-				problem:   fmt.Sprintf("structured _silent_mode does not parse: %v", err),
-				err:       err,
-			}
+			return silentModeReading{kind: silentModeParseError, err: err}
 		}
 		target := strings.TrimSpace(strings.ToLower(parsed.Target))
 		if isDisabled(target) || target == "" {
-			return silentModeReading{canonical: silentModeCanonical{Kind: silentModeOff}}
+			return silentModeReading{kind: silentModeOff}
 		}
 
 		var expires time.Time
@@ -120,49 +116,70 @@ func silentModeOf(sv ScheduledValue) silentModeReading {
 		if hasExpires {
 			t, err := time.Parse(time.RFC3339, parsed.Expires)
 			if err != nil {
-				return silentModeReading{
-					canonical: silentModeCanonical{Kind: silentModeInvalidExpires, Invalid: parsed.Expires},
-					problem:   fmt.Sprintf("expires %q is not RFC3339 (e.g. 2026-07-01T00:00:00Z): %v", parsed.Expires, err),
-					err:       err,
-				}
+				return silentModeReading{kind: silentModeInvalidExpires, target: parsed.Expires, err: err}
 			}
 			expires = t
 		}
 
-		sev := silentModeSeverities(target)
-		if sev == "" {
-			return silentModeReading{
-				canonical: silentModeCanonical{Kind: silentModeUnknownTarget, Invalid: target},
-				problem:   fmt.Sprintf("unknown silent mode target %q (valid: %s)", target, silentModeValidValues),
-			}
+		if !isSilentModeTarget(target) {
+			return silentModeReading{kind: silentModeUnknownTarget, target: target}
 		}
 		return silentModeReading{
-			canonical: silentModeCanonical{
-				Kind: silentModeActive, Severities: sev,
-				HasExpires: hasExpires, Expires: expires.UTC(), Reason: parsed.Reason,
-			},
-			target:     target,
-			hasExpires: hasExpires,
-			expires:    expires,
+			kind: silentModeActive, target: target,
+			hasExpires: hasExpires, expires: expires, reason: parsed.Reason,
 		}
 	}
 
 	// Scalar format (backward compatible).
 	lower := strings.TrimSpace(strings.ToLower(val))
 	if isDisabled(lower) || lower == "" {
-		return silentModeReading{canonical: silentModeCanonical{Kind: silentModeOff}}
+		return silentModeReading{kind: silentModeOff}
 	}
-	sev := silentModeSeverities(lower)
-	if sev == "" {
-		return silentModeReading{
-			canonical: silentModeCanonical{Kind: silentModeUnknownScalar, Invalid: lower},
-			problem:   fmt.Sprintf("unknown silent mode %q (valid: %s)", lower, silentModeValidValues),
+	if !isSilentModeTarget(lower) {
+		return silentModeReading{kind: silentModeUnknownScalar, target: lower}
+	}
+	return silentModeReading{kind: silentModeActive, target: lower}
+}
+
+// isSilentModeTarget reports whether target is one of silentModeTargets.
+func isSilentModeTarget(target string) bool {
+	return silentModeSeverities(target) != ""
+}
+
+// canonical is r's comparable form (see silentModeCanonical). Write gate
+// only; the reader never builds it.
+func (r *silentModeReading) canonical() silentModeCanonical {
+	switch r.kind {
+	case silentModeActive:
+		c := silentModeCanonical{Kind: r.kind, Severities: silentModeSeverities(r.target), Reason: r.reason}
+		if r.hasExpires {
+			c.HasExpires, c.Expires = true, r.expires.UTC()
 		}
+		return c
+	case silentModeParseError:
+		return silentModeCanonical{Kind: r.kind, Invalid: r.err.Error()}
+	case silentModeOff:
+		return silentModeCanonical{Kind: r.kind}
+	default: // UnknownScalar, UnknownTarget, InvalidExpires
+		return silentModeCanonical{Kind: r.kind, Invalid: r.target}
 	}
-	return silentModeReading{
-		canonical: silentModeCanonical{Kind: silentModeActive, Severities: sev},
-		target:    lower,
+}
+
+// problem is non-empty exactly when the reader writes a WARN for r and
+// ignores it; tenant-free, for callers that word their own message. Write
+// gate only; the reader prints logWarn's text instead.
+func (r *silentModeReading) problem() string {
+	switch r.kind {
+	case silentModeParseError:
+		return fmt.Sprintf("structured _silent_mode does not parse: %v", r.err)
+	case silentModeInvalidExpires:
+		return fmt.Sprintf("expires %q is not RFC3339 (e.g. 2026-07-01T00:00:00Z): %v", r.target, r.err)
+	case silentModeUnknownTarget:
+		return fmt.Sprintf("unknown silent mode target %q (valid: %s)", r.target, silentModeValidValues)
+	case silentModeUnknownScalar:
+		return fmt.Sprintf("unknown silent mode %q (valid: %s)", r.target, silentModeValidValues)
 	}
+	return ""
 }
 
 // silentModeSeverities is the sorted, comma-joined set of severities
@@ -199,13 +216,14 @@ var silentModeSeveritiesOfTarget = func() []string {
 // silentModeProblem is the tenant-free reason the exporter ignores a
 // _silent_mode value with a WARN, or "" when it reads the value without one.
 func silentModeProblem(sv ScheduledValue) string {
-	return silentModeOf(sv).problem
+	r := silentModeOf(sv)
+	return r.problem()
 }
 
 // logWarn writes the reader's WARN for r, if any. The texts are pinned by
 // operational_log_test.go.
-func (r silentModeReading) logWarn(logf func(format string, args ...any), tenant string) {
-	switch r.canonical.Kind {
+func (r *silentModeReading) logWarn(logf func(format string, args ...any), tenant string) {
+	switch r.kind {
 	case silentModeParseError:
 		logf("WARN: failed to parse structured _silent_mode for tenant=%s: %v", tenant, r.err)
 	case silentModeInvalidExpires:
@@ -213,10 +231,10 @@ func (r silentModeReading) logWarn(logf func(format string, args ...any), tenant
 		// structured _silent_mode (no silent entry → notifications NOT
 		// suppressed) rather than silencing with no end. Same reasoning as
 		// the maintenance branch in ResolveStateFiltersAt.
-		logf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", r.canonical.Invalid, tenant, r.err)
+		logf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", r.target, tenant, r.err)
 	case silentModeUnknownTarget:
-		logf("WARN: unknown silent mode target %q in structured _silent_mode for tenant=%s, ignoring (valid: %s)", r.canonical.Invalid, tenant, silentModeValidValues)
+		logf("WARN: unknown silent mode target %q in structured _silent_mode for tenant=%s, ignoring (valid: %s)", r.target, tenant, silentModeValidValues)
 	case silentModeUnknownScalar:
-		logf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: %s)", r.canonical.Invalid, tenant, silentModeValidValues)
+		logf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: %s)", r.target, tenant, silentModeValidValues)
 	}
 }

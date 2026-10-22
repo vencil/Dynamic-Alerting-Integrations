@@ -163,10 +163,10 @@ func valueNode(v any) *yaml.Node {
 
 // literalBlockKeeps reports whether s, written as a literal block where a
 // recipe value sits, parses and reads back as s. Some texts do not: one
-// opening with a line break loses it (`|2-` reads back without it), and one
 // opening with a tab is written as YAML that does not parse. (A text a block
 // cannot carry at all, e.g. one with trailing spaces, the encoder itself
-// writes double-quoted.)
+// writes double-quoted. One opening with a line break lost it under yaml.v3
+// v3.0.1's encoder; go.yaml.in/yaml/v3 v3.0.5's writes the blank line, #3206.)
 func literalBlockKeeps(s string) bool {
 	// An encode error leaves out short, and a text that does not parse leaves
 	// back without it: either way the comparison fails, so neither error is
