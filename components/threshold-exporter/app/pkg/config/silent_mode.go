@@ -168,14 +168,33 @@ func silentModeOf(sv ScheduledValue) silentModeReading {
 // silentModeSeverities is the sorted, comma-joined set of severities
 // resolveSilentTarget expands target to; "" when it knows no such target.
 func silentModeSeverities(target string) string {
-	entries := resolveSilentTarget("", target, time.Time{}, "", false)
-	sev := make([]string, 0, len(entries))
-	for _, e := range entries {
-		sev = append(sev, e.TargetSeverity)
+	for i, t := range silentModeTargets {
+		if t == target {
+			return silentModeSeveritiesOfTarget[i]
+		}
 	}
-	sort.Strings(sev)
-	return strings.Join(sev, ",")
+	return ""
 }
+
+// silentModeSeveritiesOfTarget[i] is silentModeSeverities(silentModeTargets[i]),
+// built once from resolveSilentTarget itself: ResolveSilentModes reads every
+// tenant on every scrape, so the read is a scan of three strings, not an
+// expand-and-sort. A target the resolver expands but silentModeTargets does
+// not list would read as unknown here; TestSilentModeTargetsMatchResolver
+// keeps the two lists equal.
+var silentModeSeveritiesOfTarget = func() []string {
+	out := make([]string, len(silentModeTargets))
+	for i, target := range silentModeTargets {
+		entries := resolveSilentTarget("", target, time.Time{}, "", false)
+		sev := make([]string, 0, len(entries))
+		for _, e := range entries {
+			sev = append(sev, e.TargetSeverity)
+		}
+		sort.Strings(sev)
+		out[i] = strings.Join(sev, ",")
+	}
+	return out
+}()
 
 // silentModeProblem is the tenant-free reason the exporter ignores a
 // _silent_mode value with a WARN, or "" when it reads the value without one.
