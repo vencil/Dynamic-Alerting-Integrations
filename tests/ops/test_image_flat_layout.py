@@ -591,6 +591,31 @@ def test_generate_observed_map_refuses_when_no_pack_is_reachable(
     assert map_path.read_bytes() == original, "the committed map was rewritten"
 
 
+def test_threshold_govern_reads_the_error_contract_under_the_image_layout(
+    staged_image_dir,
+):
+    """#3271: --apply classifies tenant-api refusals by the shipped contract.
+
+    In the image the contract sits beside the tool (build.sh REPO_DATA_FILES);
+    without it the run refuses (rc 2) instead of misreading every 409.
+    """
+    flat = staged_image_dir
+    probe = ("import json, threshold_govern as tg; "
+             "print(json.dumps([str(tg._find_error_contract()), "
+             "tg.load_error_remedies()]))")
+    proc = _run_flat(flat, "-c", probe)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    found, remedies = json.loads(proc.stdout)
+    assert found == str((flat / "tenant-api-errors.json").resolve())
+    assert remedies.get("PENDING_PR_EXISTS") == "existing"
+
+    (flat / "tenant-api-errors.json").unlink()
+    proc = _run_flat(flat, "-c", "import threshold_govern as tg; "
+                     "print(tg._find_error_contract())")
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip() == "None"
+
+
 def test_registry_repo_functions_fail_loudly_under_the_image_layout(
     staged_image_dir,
 ):

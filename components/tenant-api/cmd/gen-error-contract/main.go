@@ -5,10 +5,11 @@
 // to read instead of writing the codes down a second time (it does, through
 // tools/portal/src/interactive/tools/_common/api/classify-error.js).
 //
-//	go run ./cmd/gen-error-contract           # write the contract
-//	go run ./cmd/gen-error-contract --check   # exit 1 if the committed copy drifted
+//	go run ./cmd/gen-error-contract           # write the contract and patch docs/
+//	go run ./cmd/gen-error-contract --check   # exit 1 if the committed copies drifted
 //
-// Run from components/tenant-api (`make error-contract` does). Exit codes:
+// Run from components/tenant-api (`make error-contract` does; `make api-docs`
+// runs it after swag). Exit codes:
 // 0 wrote / in sync · 1 drift (--check) · 2 caller error (bad arguments, the
 // module or the output not found, a write that failed).
 //
@@ -24,6 +25,15 @@
 // retry_after_s is the kind table's Retry-After when every kind of the code
 // has the same one, else null; an answer's own Retry-After header /
 // retry_after_s always wins over it.
+//
+// extra (#3272) is the envelope fields beyond the fixed ones the code's
+// answers may carry, with their JSON types: internal/errcode's declarations
+// (extra.go). Every field a handler sets must be declared for the code it is
+// sent under, and every declared field must be set somewhere — both read from
+// the source by extra_scan.go — and no declared field may be named like a
+// fixed envelope field (handler.EnvelopeFieldNames); otherwise the command
+// stops (exit 2). The same declarations are written into the OpenAPI
+// ErrorResponse in docs/ (swagger.go), which --check verifies as well.
 package main
 
 import (
@@ -39,11 +49,15 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/handler"
 )
 
 // contractRel is the contract's path from the repository root.
 const contractRel = "tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json"
+
+// docsRel is swag's output directory, from the module root.
+const docsRel = "docs"
 
 const generatedNote = "GENERATED from components/tenant-api internal/errcode, the handler's kind table and the direct answers " +
 	"by cmd/gen-error-contract — DO NOT EDIT. Run `make error-contract`."
@@ -66,6 +80,14 @@ type entry struct {
 	Statuses    []int          `json:"statuses"`
 	RetryAfterS *int           `json:"retry_after_s"`
 	Kinds       []string       `json:"kinds"`
+	Extra       []extraEntry   `json:"extra"`
+}
+
+// extraEntry is one envelope field a code's answers may carry (#3272).
+type extraEntry struct {
+	Name  string            `json:"name"`
+	Type  errcode.ExtraType `json:"type"`
+	Items errcode.ExtraType `json:"items,omitempty"`
 }
 
 // remedyAllows is the statuses an answer with a code of that remedy may
@@ -145,7 +167,15 @@ func build(codes []errcode.Spec, kinds []handler.KindSpec, direct []directUse) (
 	}
 	out := contract{Generated: generatedNote, Codes: make([]entry, 0, len(codes))}
 	for _, c := range codes {
-		e := entry{Code: c.Code, Remedy: c.Remedy, Statuses: []int{}, Kinds: []string{}}
+		e := entry{Code: c.Code, Remedy: c.Remedy, Statuses: []int{}, Kinds: []string{}, Extra: []extraEntry{}}
+		for _, name := range c.Extra {
+			f, ok := errcode.LookupExtraField(name)
+			if !ok {
+				return contract{}, fmt.Errorf("code %s carries Extra %q, which internal/errcode does not declare", c.Code, name)
+			}
+			e.Extra = append(e.Extra, extraEntry{Name: f.Name, Type: f.Type, Items: f.Items})
+		}
+		slices.SortFunc(e.Extra, func(a, b extraEntry) int { return strings.Compare(a.Name, b.Name) })
 		ks := byCode[c.Code]
 		var retryAfter []int
 		for _, k := range ks {
@@ -173,6 +203,75 @@ func build(codes []errcode.Spec, kinds []handler.KindSpec, direct []directUse) (
 	}
 	slices.SortFunc(out.Codes, func(a, b entry) int { return strings.Compare(string(a.Code), string(b.Code)) })
 	return out, nil
+}
+
+// checkExtra holds the Extra fields the handlers set (uses, extra_scan.go) to
+// codes' declarations: each is declared for the code it is sent under — a
+// kind's code is the kind table's — with the JSON type its value has (and an
+// array's element type), and each declared (code, field) is set by some
+// handler. No declared field may be one of fixed, the envelope's
+// fixed field names: it would replace that field.
+func checkExtra(codes []errcode.Spec, kinds []handler.KindSpec, uses []extraUse, fixed []string) error {
+	kindCode := map[errkind.Kind]errcode.Code{}
+	for _, k := range kinds {
+		kindCode[k.Kind] = k.Code
+	}
+	declared := map[errcode.Code][]string{}
+	var bad []string
+	for _, c := range codes {
+		declared[c.Code] = c.Extra
+		for _, f := range c.Extra {
+			if slices.Contains(fixed, f) {
+				bad = append(bad, fmt.Sprintf("code %s declares Extra %q, a fixed envelope field (it would replace it)", c.Code, f))
+			}
+		}
+	}
+	set := map[errcode.Code]map[string]bool{}
+	for _, u := range uses {
+		code, via := u.Code, ""
+		if u.Kind != "" {
+			c, ok := kindCode[u.Kind]
+			if !ok || c == "" {
+				bad = append(bad, fmt.Sprintf("%s: Extra %q for kind %s, which the kind table answers with no code", u.Site, u.Field, u.Kind))
+				continue
+			}
+			code, via = c, " (kind "+string(u.Kind)+")"
+		}
+		if !slices.Contains(declared[code], u.Field) {
+			bad = append(bad, fmt.Sprintf("%s: sets Extra %q on code %s%s, which internal/errcode does not declare for it (extra.go codeExtra)",
+				u.Site, u.Field, code, via))
+			continue
+		}
+		if f, ok := errcode.LookupExtraField(u.Field); ok && u.Type != "" &&
+			(f.Type != u.Type || (f.Type == errcode.ExtraArray && f.Items != u.Items)) {
+			bad = append(bad, fmt.Sprintf("%s: sets Extra %q on code %s%s to a %s (JSON %s%s), but internal/errcode declares it %s%s",
+				u.Site, u.Field, code, via, u.GoType, u.Type, itemsOf(u.Items), f.Type, itemsOf(f.Items)))
+		}
+		if set[code] == nil {
+			set[code] = map[string]bool{}
+		}
+		set[code][u.Field] = true
+	}
+	for _, c := range codes {
+		for _, f := range c.Extra {
+			if !set[c.Code][f] {
+				bad = append(bad, fmt.Sprintf("code %s declares Extra %q, which no handler sets for it; drop it from extra.go codeExtra", c.Code, f))
+			}
+		}
+	}
+	if len(bad) > 0 {
+		slices.Sort(bad)
+		return fmt.Errorf("the Extra fields disagree with internal/errcode's declarations:\n  %s", strings.Join(bad, "\n  "))
+	}
+	return nil
+}
+
+// itemsOf is " of <items>" for an array's element type, "" without one.
+func itemsOf(items errcode.ExtraType) string {
+	if items == "" {
+		return ""
+	}
+	return " of " + string(items)
 }
 
 // render is c as the committed bytes: two-space JSON, LF, a final newline.
@@ -212,6 +311,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	check := fs.Bool("check", false, "verify the committed contract matches; exit 1 on drift")
 	out := fs.String("out", "", "write (or check) this file instead of the repository's "+contractRel)
+	docs := fs.String("docs", "", "patch (or check) the swag output in this directory instead of the module's "+docsRel+"/")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -239,7 +339,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 2
 	}
-	c, err := build(errcode.Specs(), handler.KindSpecs(), direct)
+	extras, err := scanExtra(mod)
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 2
+	}
+	specs, fixed := errcode.Specs(), handler.EnvelopeFieldNames()
+	if err := checkExtra(specs, handler.KindSpecs(), extras, fixed); err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 2
+	}
+	c, err := build(specs, handler.KindSpecs(), direct)
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 2
@@ -249,27 +359,68 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 2
 	}
+	docsDir, docsShown := *docs, *docs
+	if docsDir == "" {
+		docsDir = filepath.Join(mod, docsRel)
+		docsShown = "components/tenant-api/" + docsRel
+	}
+	jsonDoc, err := os.ReadFile(filepath.Join(docsDir, swaggerJSON))
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 2
+	}
+	goDoc, err := os.ReadFile(filepath.Join(docsDir, swaggerGo))
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 2
+	}
+	wantDocs, err := patchedDocs(jsonDoc, goDoc, errcode.ExtraFields(), specs, fixed)
+	if err != nil {
+		fmt.Fprintf(stderr, "ERROR: %v\n", err)
+		return 2
+	}
+	docNames := []string{swaggerJSON, swaggerGo, swaggerYAML}
 	if *check {
+		rc := 0
 		got, err := os.ReadFile(path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			fmt.Fprintf(stderr, "DRIFT: %s is missing; run `make error-contract`\n", shown)
-			return 1
+			rc = 1
 		case err != nil:
 			fmt.Fprintf(stderr, "ERROR: %v\n", err)
 			return 2
 		case !bytes.Equal(got, want):
 			fmt.Fprintf(stderr, "DRIFT: %s is stale vs internal/errcode, the kind table and the direct answers; run `make error-contract`\n", shown)
-			return 1
+			rc = 1
 		}
-		fmt.Fprintf(stdout, "OK: %s matches internal/errcode, the kind table and the direct answers (%d codes).\n", shown, len(c.Codes))
-		return 0
+		for _, n := range docNames {
+			got, err := os.ReadFile(filepath.Join(docsDir, n))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(stderr, "ERROR: %v\n", err)
+				return 2
+			}
+			if !bytes.Equal(got, wantDocs[n]) {
+				fmt.Fprintf(stderr, "DRIFT: %s/%s lacks the ErrorResponse Extra properties of internal/errcode; run `make api-docs`\n", docsShown, n)
+				rc = 1
+			}
+		}
+		if rc == 0 {
+			fmt.Fprintf(stdout, "OK: %s and the ErrorResponse of %s match internal/errcode, the kind table and the direct answers (%d codes).\n", shown, docsShown, len(c.Codes))
+		}
+		return rc
 	}
 	if err := os.WriteFile(path, want, 0o644); err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 2
 	}
-	fmt.Fprintf(stdout, "WROTE: %s (%d codes)\n", shown, len(c.Codes))
+	for _, n := range docNames {
+		if err := os.WriteFile(filepath.Join(docsDir, n), wantDocs[n], 0o644); err != nil {
+			fmt.Fprintf(stderr, "ERROR: %v\n", err)
+			return 2
+		}
+	}
+	fmt.Fprintf(stdout, "WROTE: %s (%d codes) and the ErrorResponse Extra properties of %s\n", shown, len(c.Codes), docsShown)
 	return 0
 }
 

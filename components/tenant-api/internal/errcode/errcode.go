@@ -14,7 +14,8 @@
 // the portal reads through _common/api/classify-error.js, is generated from this table, the
 // kind table and the answers handlers write directly by cmd/gen-error-contract
 // (`make error-contract`); the OpenAPI ErrorResponse.code enum is this
-// package's constants (swag reads them).
+// package's constants (swag reads them). The fields an envelope carries
+// beside the fixed ones, per code, are declared here too (extra.go, #3272).
 //
 // Not here: SIMULATE_NOT_PROVIDED. tenant-api never sends it — it is the
 // portal deployment's own nginx 501 for POST /api/v1/tenants/simulate, which
@@ -355,15 +356,19 @@ func (r Remedy) Retryable() bool {
 	return r == RemedyRefreshRetry || r == RemedyRetryAfter
 }
 
-// Spec is one row of the code table: a code and its remedy.
+// Spec is one row of the code table: a code, its remedy and the envelope
+// fields beyond the fixed ones its answers may carry (Extra, by name — see
+// extra.go).
 type Spec struct {
 	Code   Code
 	Remedy Remedy
+	Extra  []string
 }
 
-// codeTable is every code with its remedy, in declaration order. Read it
-// through Specs or Lookup.
-var codeTable = []Spec{
+// codeTable is every code with its remedy, in declaration order (the
+// envelope fields each carries are codeExtra's, extra.go). Read it through
+// Specs or Lookup.
+var codeTable = []codeRow{
 	{InvalidBody, RemedyFixRequest},
 	{RateLimited, RemedyRetryAfter},
 	{PendingPR, RemedyExisting},
@@ -409,18 +414,34 @@ var codeTable = []Spec{
 	{FederationNotConfigured, RemedyOperator},
 }
 
-// Specs lists the code table, one row per code, in declaration order. The
-// slice is a copy.
+// Specs lists the code table, one row per code, in declaration order, each
+// with its Extra (codeExtra). The slice and every Extra are copies.
 func Specs() []Spec {
-	return slices.Clone(codeTable)
+	out := make([]Spec, len(codeTable))
+	for i, s := range codeTable {
+		out[i] = withExtra(s)
+	}
+	return out
 }
 
-// Lookup is c's row; ok is false for a string that is not a code.
+// Lookup is c's row, with its Extra; ok is false for a string that is not a
+// code.
 func Lookup(c Code) (Spec, bool) {
 	for _, s := range codeTable {
 		if s.Code == c {
-			return s, true
+			return withExtra(s), true
 		}
 	}
 	return Spec{}, false
+}
+
+// codeRow is one row of codeTable: a Spec without its Extra.
+type codeRow struct {
+	Code   Code
+	Remedy Remedy
+}
+
+// withExtra is row's Spec, with a copy of its code's codeExtra.
+func withExtra(row codeRow) Spec {
+	return Spec{Code: row.Code, Remedy: row.Remedy, Extra: slices.Clone(codeExtra[row.Code])}
 }

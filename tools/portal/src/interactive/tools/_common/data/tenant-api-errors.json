@@ -16,7 +16,8 @@
         "reserved_tenant_id",
         "tenant_git_managed_unnamed",
         "validation"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "BASE_RESTORE_FAILED",
@@ -28,7 +29,8 @@
       "retry_after_s": null,
       "kinds": [
         "base_restore_failed"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "BATCH_COMMITTED",
@@ -40,6 +42,16 @@
       "retry_after_s": null,
       "kinds": [
         "batch_committed"
+      ],
+      "extra": [
+        {
+          "name": "commit",
+          "type": "string"
+        },
+        {
+          "name": "committed",
+          "type": "boolean"
+        }
       ]
     },
     {
@@ -50,7 +62,8 @@
         400
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "CONFIG_DECODE_ERROR",
@@ -63,7 +76,8 @@
       "kinds": [
         "config_file_parse",
         "fresh_base_orgs"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "CONFLICT",
@@ -77,6 +91,20 @@
         "conflict",
         "precondition_failed",
         "state_conflict"
+      ],
+      "extra": [
+        {
+          "name": "committed",
+          "type": "boolean"
+        },
+        {
+          "name": "current_source_hash",
+          "type": "string"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        }
       ]
     },
     {
@@ -89,7 +117,8 @@
       "retry_after_s": null,
       "kinds": [
         "federation_not_configured"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "FORBIDDEN",
@@ -102,6 +131,16 @@
       "kinds": [
         "forbidden",
         "fresh_base_scope"
+      ],
+      "extra": [
+        {
+          "name": "operation",
+          "type": "integer"
+        },
+        {
+          "name": "tenant_id",
+          "type": "string"
+        }
       ]
     },
     {
@@ -114,7 +153,8 @@
       "retry_after_s": null,
       "kinds": [
         "forge_forbidden"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "FORGE_UNAVAILABLE",
@@ -127,7 +167,8 @@
       "kinds": [
         "forge_circuit_open",
         "forge_degraded"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "GENERATOR_BUSY",
@@ -139,6 +180,12 @@
       "retry_after_s": 5,
       "kinds": [
         "generator_rejected_retryable"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
       ]
     },
     {
@@ -151,6 +198,21 @@
       "retry_after_s": null,
       "kinds": [
         "generator_findings"
+      ],
+      "extra": [
+        {
+          "name": "findings",
+          "type": "array",
+          "items": "object"
+        },
+        {
+          "name": "findings_compared_with_base",
+          "type": "boolean"
+        },
+        {
+          "name": "unrelated_findings_withheld",
+          "type": "integer"
+        }
       ]
     },
     {
@@ -163,6 +225,12 @@
       "retry_after_s": null,
       "kinds": [
         "generator_rejected"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
       ]
     },
     {
@@ -175,7 +243,8 @@
       "retry_after_s": null,
       "kinds": [
         "git_driver_configured"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "GIT_PUSH_FAILED",
@@ -187,7 +256,8 @@
       "retry_after_s": 5,
       "kinds": [
         "git_push_failed"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "GROUP_ID_UNAVAILABLE",
@@ -197,7 +267,8 @@
         409
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "INTERNAL_ERROR",
@@ -211,7 +282,8 @@
         "internal",
         "stream_unsupported",
         "tenant_tree_scan"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "INVALID_BODY",
@@ -221,7 +293,14 @@
         400
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": [
+        {
+          "name": "admission",
+          "type": "array",
+          "items": "object"
+        }
+      ]
     },
     {
       "code": "MASKED_PREVIEW_UNAVAILABLE",
@@ -231,7 +310,8 @@
         422
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "METHOD_NOT_ALLOWED",
@@ -243,7 +323,8 @@
       "retry_after_s": null,
       "kinds": [
         "method_not_allowed"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "NOT_FOUND",
@@ -255,7 +336,8 @@
       "retry_after_s": null,
       "kinds": [
         "route_not_found"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "NOT_IMPLEMENTED",
@@ -265,7 +347,8 @@
         501
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "PAYLOAD_TOO_LARGE",
@@ -275,7 +358,8 @@
         413
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "PENDING_PR_EXISTS",
@@ -285,7 +369,21 @@
         409
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": [
+        {
+          "name": "existing_pr_url",
+          "type": "string"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        },
+        {
+          "name": "pr_number",
+          "type": "integer"
+        }
+      ]
     },
     {
       "code": "POLICY_UNAVAILABLE",
@@ -297,6 +395,12 @@
       "retry_after_s": 5,
       "kinds": [
         "policy_unavailable"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
       ]
     },
     {
@@ -309,7 +413,8 @@
       "retry_after_s": 60,
       "kinds": [
         "federation_mint_rate_limited"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "REQUEST_TIMEOUT",
@@ -321,7 +426,8 @@
       "retry_after_s": null,
       "kinds": [
         "request_timeout"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "STATE_FULL",
@@ -333,7 +439,8 @@
       "retry_after_s": null,
       "kinds": [
         "state_full"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "TASK_NOT_FOUND",
@@ -343,7 +450,13 @@
         404
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": [
+        {
+          "name": "hint",
+          "type": "string"
+        }
+      ]
     },
     {
       "code": "TENANT_CONFIG_NOT_LOADABLE",
@@ -357,6 +470,20 @@
         "tenant_config_not_loadable",
         "tenant_file_not_regular",
         "tenant_file_unreadable"
+      ],
+      "extra": [
+        {
+          "name": "config_error",
+          "type": "string"
+        },
+        {
+          "name": "parse_tree_kind",
+          "type": "string"
+        },
+        {
+          "name": "tenant_id",
+          "type": "string"
+        }
       ]
     },
     {
@@ -369,7 +496,8 @@
       "retry_after_s": null,
       "kinds": [
         "tenant_declared_elsewhere"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "TENANT_FILE_AMBIGUOUS",
@@ -381,7 +509,8 @@
       "retry_after_s": null,
       "kinds": [
         "ambiguous_tenant_file"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "TENANT_FILE_DIRTY",
@@ -393,7 +522,8 @@
       "retry_after_s": null,
       "kinds": [
         "tenant_file_dirty"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "TENANT_GIT_MANAGED",
@@ -405,6 +535,16 @@
       "retry_after_s": null,
       "kinds": [
         "tenant_git_managed"
+      ],
+      "extra": [
+        {
+          "name": "git_managed_reason",
+          "type": "string"
+        },
+        {
+          "name": "tenant_id",
+          "type": "string"
+        }
       ]
     },
     {
@@ -417,6 +557,17 @@
       "retry_after_s": null,
       "kinds": [
         "tenant_store_fault"
+      ],
+      "extra": [
+        {
+          "name": "unreadable",
+          "type": "array",
+          "items": "object"
+        },
+        {
+          "name": "unreadable_count",
+          "type": "integer"
+        }
       ]
     },
     {
@@ -429,6 +580,17 @@
       "retry_after_s": null,
       "kinds": [
         "tenant_tree_unreadable"
+      ],
+      "extra": [
+        {
+          "name": "unreadable",
+          "type": "array",
+          "items": "object"
+        },
+        {
+          "name": "unreadable_count",
+          "type": "integer"
+        }
       ]
     },
     {
@@ -441,7 +603,8 @@
       "retry_after_s": null,
       "kinds": [
         "federation_token_limit"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "TREE_NOT_ON_BASE",
@@ -453,7 +616,8 @@
       "retry_after_s": 1,
       "kinds": [
         "tree_not_on_base"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "UNAUTHORIZED",
@@ -463,7 +627,8 @@
         401
       ],
       "retry_after_s": null,
-      "kinds": []
+      "kinds": [],
+      "extra": []
     },
     {
       "code": "UPSTREAM_ERROR",
@@ -480,7 +645,8 @@
         "server_shutting_down",
         "state_unavailable",
         "write_cancelled"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "VALIDATOR_UNAVAILABLE",
@@ -492,6 +658,12 @@
       "retry_after_s": 5,
       "kinds": [
         "validator_unavailable"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
       ]
     },
     {
@@ -504,7 +676,8 @@
       "retry_after_s": null,
       "kinds": [
         "write_outcome_unknown"
-      ]
+      ],
+      "extra": []
     },
     {
       "code": "WRITE_OVERLOADED",
@@ -516,7 +689,8 @@
       "retry_after_s": 1,
       "kinds": [
         "write_overloaded"
-      ]
+      ],
+      "extra": []
     }
   ]
 }

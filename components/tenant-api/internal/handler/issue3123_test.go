@@ -254,6 +254,22 @@ func TestIssue3123_PutTenant409NamesOnlyAVisiblePR(t *testing.T) {
 	if strings.Contains(w.Body.String(), pr.WebURL) || strings.Contains(w.Body.String(), `"pr_number":81`) {
 		t.Errorf("409 names a batch PR the caller cannot see on GET /prs: %s", w.Body.String())
 	}
+	// #3272: the body keeps its shape with the zero values — existing_pr_url
+	// "" and pr_number 0 are sent, not dropped — so a caller cannot tell an
+	// invisible PR from one still being created.
+	var hidden map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &hidden); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := hidden["existing_pr_url"]; !ok || u != "" {
+		t.Errorf("existing_pr_url = %v (present %t), want \"\"", u, ok)
+	}
+	if n, ok := hidden["pr_number"]; !ok || n != 0.0 {
+		t.Errorf("pr_number = %v (present %t), want 0", n, ok)
+	}
+	if m, _ := hidden["message"].(string); m == "" {
+		t.Errorf("message = %v, want the advice", hidden["message"])
+	}
 	f.shareOut(t) // now the caller reads every covered tenant
 	if w := put(); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), pr.WebURL) {
 		t.Errorf("caller reading every covered tenant: %d %s, want the 409 naming the PR", w.Code, w.Body.String())

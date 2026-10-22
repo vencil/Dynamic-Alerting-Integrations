@@ -1397,11 +1397,11 @@ repos:
         # `make am-duration-json`.
 
       - id: error-contract-check
-        name: "#3202: tenant-api-errors.json must match tenant-api's errcode, kind table and direct answers"
+        name: "#3202/#3272: tenant-api-errors.json and the swagger ErrorResponse must match tenant-api's errcode, kind table and direct answers"
         entry: bash -c 'cd components/tenant-api && go run ./cmd/gen-error-contract --check'
         language: system
         pass_filenames: false
-        files: ^(components/tenant-api/(internal|cmd)/.*\.go|tools/portal/src/interactive/tools/_common/data/tenant-api-errors\.json)$
+        files: ^(components/tenant-api/(internal|cmd)/.*\.go|components/tenant-api/docs/(docs\.go|swagger\.(json|yaml))|tools/portal/src/interactive/tools/_common/data/tenant-api-errors\.json)$
         # tenant-api-errors.json is DERIVED from internal/errcode (the codes
         # and their remedies), the handler's kind table (internal/errkind's
         # kinds, their statuses) and the answers handlers and middleware write
@@ -1410,6 +1410,10 @@ repos:
         # WriteJSONErrorWithCode in any package changes the contract. The
         # portal reads it (_common/api/classify-error.js). Add a code or an answer but
         # forget to regenerate → this fails before CI. Fix: `make error-contract`.
+        # #3272: it also fails (exit 2) on an Extra field a handler sets that
+        # internal/errcode does not declare for its code, and checks that
+        # components/tenant-api/docs/ carries the declared fields in
+        # ErrorResponse (swag alone drops them; fix: `make api-docs`).
 
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
