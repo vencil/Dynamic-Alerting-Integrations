@@ -66,9 +66,17 @@ func TestChartSchemaWriteModesMatchTheBinary(t *testing.T) {
 	}
 
 	// Strict equality: the chart offers exactly the inputs the binary accepts.
+	// Compare the raw schema strings against writeModeLegalValues, never through
+	// parseWriteMode: that trims whitespace, so a schema entry " pr-github "
+	// would pass as legal while being a value no operator should be offered
+	// (and a set that differs from the binary's only by padding is still drift).
+	legalSet := map[handler.WriteMode]bool{}
+	for _, legal := range writeModeLegalValues {
+		legalSet[legal] = true
+	}
 	var stray, missing []string
 	for v := range inSchema {
-		if _, err := parseWriteMode(string(v)); err != nil {
+		if !legalSet[v] {
 			stray = append(stray, string(v))
 		}
 	}
