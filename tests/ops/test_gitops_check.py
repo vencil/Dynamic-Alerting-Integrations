@@ -190,6 +190,108 @@ class TestRepoPathAgainstRealGit:
         assert result.details["config_path_verified"] is True, result.details
 
 
+class TestRepoVerdictsAgainstRealGit:
+    """#3211: the branch is matched exactly, and a path the server says the
+    branch does not have is a fail — against a real repository whose only
+    branch is `feature/main`."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git not installed")
+        repo = tmp_path / "repo"
+        (repo / "conf.d").mkdir(parents=True)
+        (repo / "conf.d" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+        ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q", "-b", "feature/main"], [*ident, "add", "-A"],
+                     [*ident, "commit", "-q", "-m", "init"], ["branch", "x"],
+                     ["branch", "y/feature/main"]):
+            subprocess.run([git, *args], cwd=repo, check=True, capture_output=True,
+                           timeout=60)
+        return repo.as_posix()
+
+    def test_a_branch_is_not_matched_by_its_suffix(self, repo):
+        result = gc.check_repo(repo, "main", "conf.d")
+        assert result.status == "fail", result.details
+        assert "Branch not found" in result.message or "分支不存在" in result.message
+
+    @pytest.mark.parametrize("branch", ["x", "heads/x", "refs/heads/x"])
+    def test_the_spellings_git_resolves_to_a_branch_pass(self, repo, branch):
+        """`heads/x` and `refs/heads/x` name refs/heads/x, as git resolves them."""
+        result = gc.check_repo(repo, branch, "conf.d")
+        assert result.status == "pass", (branch, result.details)
+
+    def test_a_multi_segment_branch_is_not_matched_by_a_longer_one(self, tmp_path, repo):
+        """`feature/main` exists; `y/feature/main` too. Asking for a third
+        branch that only ENDS like them must not pass: drop feature/main and
+        ask for it — only y/feature/main is left, which merely ends in it."""
+        git = shutil.which("git")
+        subprocess.run([git, "-C", repo, "checkout", "-q", "-b", "tmp"], check=True,
+                       capture_output=True, timeout=60)
+        subprocess.run([git, "-C", repo, "branch", "-D", "feature/main"], check=True,
+                       capture_output=True, timeout=60)
+        result = gc.check_repo(repo, "feature/main", "conf.d")
+        assert result.status == "fail", result.details
+
+    def test_a_full_ref_is_taken_as_given(self, repo):
+        result = gc.check_repo(repo, "refs/heads/feature/main", "conf.d")
+        assert result.status == "pass", result.details
+        assert result.details["config_path_verified"] is True
+
+    def test_a_path_the_branch_does_not_have_is_a_fail(self, repo):
+        result = gc.check_repo(repo, "feature/main", "nope/")
+        assert result.status == "fail", result.details
+        assert result.details["config_path_verified"] is False
+
+    def test_the_cli_exit_codes(self, repo):
+        script = Path(gc.__file__)
+        codes = {}
+        for name, args in {"suffix": ["--branch", "main"],
+                           "missing-path": ["--branch", "feature/main", "--path", "nope/"],
+                           "ok": ["--branch", "feature/main", "--path", "conf.d"]}.items():
+            proc = subprocess.run([sys.executable, str(script), "repo", "--url", repo, *args],
+                                  capture_output=True, text=True, encoding="utf-8", timeout=120)
+            codes[name] = proc.returncode
+        assert codes == {"suffix": 1, "missing-path": 1, "ok": 0}
+
+
+class TestLocalDirMissingIsCallerError:
+    """#3211 (owner-approved rc 1 → 2): `local --dir` naming no directory."""
+
+    @pytest.mark.parametrize("as_json", [False, True])
+    def test_rc_2_and_one_error_line(self, tmp_path, as_json):
+        missing = str(tmp_path / "does-not-exist")
+        argv = [sys.executable, str(Path(gc.__file__)), "local", "--dir", missing]
+        if as_json:
+            argv.append("--json")
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              timeout=120)
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
+        assert "Traceback" not in proc.stderr
+        assert proc.stderr.count("ERROR:") == 1, proc.stderr
+        # named before da-guard is asked — not da-guard failing on no tree
+        assert "is not a directory" in proc.stderr or "不是目錄" in proc.stderr, proc.stderr
+        if as_json:
+            doc = json.loads(proc.stdout)
+            assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_found")
+            # dev-rules §13: the report's own keys stay, zeroed
+            assert (doc["overall_status"], doc["checks"]) == ("", []), doc
+            assert doc["timestamp"], doc
+
+    def test_a_file_is_not_a_directory(self, tmp_path):
+        """`--dir` naming a regular file: the same caller error, named before
+        da-guard is asked (not da-guard failing on a non-tree)."""
+        f = tmp_path / "conf.yaml"
+        f.write_text("tenants: {}\n", encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(Path(gc.__file__)), "local", "--dir", str(f),
+                               "--json"], capture_output=True, text=True, encoding="utf-8",
+                              timeout=120)
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
+        assert json.loads(proc.stdout)["reason"] == "dir_not_found", proc.stdout
+
+
 # ── 2. check_repo() Tests ──────────────────────────────────────────────────
 
 class TestCheckRepo:
@@ -318,13 +420,12 @@ class TestCheckLocal:
         assert result.details["total_metrics"] == 5  # 3 from db-a + 2 from db-b
 
     def test_local_directory_not_found(self):
-        """Directory does not exist."""
-        result = gc.check_local("/nonexistent/path/xyz")
-
-        assert result.check == "local"
-        assert result.status == "fail"
-        assert "not found" in result.message.lower()
-        assert result.details["directory"] == "/nonexistent/path/xyz"
+        """No directory to check is the caller's input, not a fail (#3211)."""
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc_info:
+            gc.check_local("/nonexistent/path/xyz")
+        assert exc_info.value.reason == "dir_not_found"
+        assert "/nonexistent/path/xyz" in str(exc_info.value)
 
     def test_local_missing_defaults_yaml(self, config_dir):
         """Missing _defaults.yaml (required)."""

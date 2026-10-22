@@ -327,7 +327,9 @@ def load_base_config(path: str | None) -> dict:
 
     ⚠️ NOT closed: the CONTENT axis (``--policy`` closed its own in #1649;
     this one stays open). A file that IS a mapping but whose ``global:`` is empty or
-    wrong still merges silently. Partial files are legitimate (absent top-level
+    wrong still merges silently — except a credential a conf.d receiver would
+    inherit (#3257), which ``assert_base_global_inherits_no_credentials``
+    refuses as a config violation (rc 1), not here. Partial files are legitimate (absent top-level
     keys fall back per key, pinned by ``test_partial_file_fills_defaults``), so
     "is a mapping" is as far as the path axis reaches.
     """
@@ -371,6 +373,80 @@ def load_base_config(path: str | None) -> dict:
         if key not in data:
             data[key] = copy.deepcopy(_DEFAULT_BASE_CONFIG[key])
     return data
+
+
+# #3257: what a base config's `global` hands to a receiver that leaves the
+# field out (Alertmanager config.go, v0.33.1, the receiver loop of
+# Config.UnmarshalYAML). An email receiver without auth takes every
+# `smtp_auth_*` (username, password / password_file, secret / secret_file,
+# identity) and sends it to ITS smarthost — which a tenant writes. A webhook,
+# slack, msteams or pagerduty receiver without `http_config` takes
+# `global.http_config` whole, credentials included, and sends them to its URL
+# — again the tenant's (conf.d slack / teams / pagerduty receivers cannot set
+# http_config at all, so they always take it). Either one would hand a
+# platform credential to every tenant that names an endpoint, so the base
+# config may carry none of them.
+# `http_headers` counts only when some header carries `secrets` or `files`
+# (a header holding only `values` is plain text the platform chose to send).
+# NOT refused, on purpose: a TLS client key (`tls_config.key` / `key_file`,
+# under global.http_config.tls_config or smtp_tls_config) and its cert. The
+# private key never leaves the process: it only proves the certificate's
+# identity in the mTLS handshake, so an inheriting receiver presents the
+# platform's certificate to the tenant's endpoint but sends no secret to it.
+BASE_GLOBAL_INHERITED_SECRET_PREFIX = "smtp_auth_"
+BASE_GLOBAL_HTTP_CONFIG_CREDENTIAL_KEYS = (
+    "basic_auth", "authorization", "bearer_token", "bearer_token_file",
+    "oauth2")
+BASE_GLOBAL_HEADER_SECRET_LISTS = ("secrets", "files")
+
+
+def base_global_inherited_credentials(base: object) -> list[str]:
+    """#3257: the ``global`` keys of *base* that would hand a platform
+    credential to a conf.d receiver (see above): each ``smtp_auth_*`` key and
+    each credential key of ``global.http_config`` — set when not null and
+    not ``""`` / an empty mapping — and each ``global.http_config.http_headers``
+    header whose ``secrets`` or ``files`` list is non-empty
+    (``global.http_config.http_headers.<name>``). Paths sorted."""
+    glob = base.get("global") if isinstance(base, dict) else None
+    if not isinstance(glob, dict):
+        return []
+
+    def is_set(value: object) -> bool:
+        return value not in (None, "", {}, [])
+
+    out = [f"global.{k}" for k, v in glob.items()
+           if isinstance(k, str) and k.startswith(BASE_GLOBAL_INHERITED_SECRET_PREFIX)
+           and is_set(v)]
+    http_config = glob.get("http_config")
+    if isinstance(http_config, dict):
+        out += [f"global.http_config.{k}"
+                for k in BASE_GLOBAL_HTTP_CONFIG_CREDENTIAL_KEYS
+                if is_set(http_config.get(k))]
+        headers = http_config.get("http_headers")
+        if isinstance(headers, dict):
+            out += [f"global.http_config.http_headers.{name}"
+                    for name, header in headers.items()
+                    if isinstance(header, dict)
+                    and any(is_set(header.get(lst)) for lst in BASE_GLOBAL_HEADER_SECRET_LISTS)]
+    return sorted(out)
+
+
+def assert_base_global_inherits_no_credentials(base: object) -> None:
+    """Fail-closed guard (#3257): raise ValueError when the base config's
+    ``global`` carries a credential a conf.d receiver would inherit
+    (``base_global_inherited_credentials``). A config violation (rc 1), like
+    ``assert_base_does_not_shadow_generated``."""
+    keys = base_global_inherited_credentials(base)
+    if not keys:
+        return
+    raise ValueError(
+        "ERROR: the base config's global section sets "
+        f"{', '.join(keys)}. Alertmanager gives these to every receiver that "
+        "leaves the field out — an email receiver without auth takes the "
+        "smtp_auth_* values, a receiver without http_config takes "
+        "global.http_config — and a conf.d receiver names its own endpoint, "
+        "so the credential would be sent there. Set the credential on the "
+        "platform's own receivers in the base config instead of in global.")
 
 
 def _platform_placeholder_receiver_names() -> frozenset[str]:
@@ -440,6 +516,11 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
         Complete Kubernetes ConfigMap YAML string (apiVersion, kind, metadata, data.alertmanager.yml).
     """
     merged = dict(base)
+
+    # #3257: a credential in the base's global would reach every conf.d
+    # receiver that leaves the field out (generate-routes checks this already
+    # right after loading the base; here for every other caller).
+    assert_base_global_inherits_no_credentials(merged)
 
     # #2279: a base receiver named like a generated one would WIN the
     # de-duplicating merge below, silently dropping the conf.d definition
@@ -944,6 +1025,8 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     # inhibit rules were generated this run) — the Watchdog heartbeat must never
     # be inhibited before it reaches the external dead-man's-switch.
     assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
+    # #3257: the cluster config's global is the base on this path.
+    assert_base_global_inherits_no_credentials(existing)
     # Same tenant-cannot-silence-platform invariant on the --apply merge path.
     assert_platform_alerts_not_tenant_silenceable(existing.get("inhibit_rules", []))
     # #1132: same equal-label-gated invariant on the --apply merge path.

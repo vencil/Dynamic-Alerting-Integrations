@@ -53,6 +53,7 @@ from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
+from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
     Finding,
@@ -2127,6 +2128,38 @@ def receiver_bool_type_errors(obj: object, *, block: str, where: str,
                         f"{label}.{fld} must be a boolean (true / false, "
                         f"unquoted), got {value_type_text(value)}"))
     return out
+
+
+# #3257: the keys of a routing block whose mapping holds label NAMES, not
+# config keys (`routes[i].match`): a label may legitimately be called
+# `log_file`. Their values are still walked with the full rule; nothing under
+# them is rendered into a receiver.
+ROUTING_LABEL_MAP_KEYS = frozenset({"match"})
+# Below these a receiver starts: its own `match` (a header name) is judged.
+ROUTING_RECEIVER_KEYS = frozenset({"receiver"})
+
+
+def routing_block_file_reference_errors(obj: object, *, block: str, where: str,
+                                        field_prefix: str = "") -> list[tuple[str, str]]:
+    """#3257: ``(field, message)`` of each file-reference key
+    (``_lib_validation.file_reference_paths``: ``*_file``, ``*_ref``,
+    ``files``, a non-string key) ANYWHERE in a routing block — a tenant's
+    ``_routing``, ``_routing_defaults``, ``_routing_enforced``, a routing
+    profile, or routing written where no reader reads it. The whole block is
+    walked, not the places a receiver is rendered from today
+    (``routing_block_receivers``): a receiver under a key the generator does
+    not read (``_routing_defaults.routes``, ``_routing_enforced.overrides``)
+    is only a WARN, and a reader that starts rendering it later must not
+    find the key already accepted. Only label names under
+    ``ROUTING_LABEL_MAP_KEYS`` (outside a receiver) are exempt from the name rule. *field* starts
+    at the block root (``_routing.routes[0].receiver.http_config…``). Each
+    refuses the whole tree in every mode, like a boolean of the wrong type."""
+    if not isinstance(obj, dict):
+        return []
+    root = field_prefix or ("_routing." if block == "routing" else "")
+    return [(f"{root}{fld}", f"{where} {file_reference_problem([fld])}")
+            for fld in file_reference_paths(obj, label_maps=ROUTING_LABEL_MAP_KEYS,
+                                                 receiver_keys=ROUTING_RECEIVER_KEYS)]
 
 
 # ── #2983: the `_routing*` keys each layer is read for ──

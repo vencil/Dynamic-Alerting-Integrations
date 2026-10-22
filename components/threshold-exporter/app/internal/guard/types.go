@@ -91,7 +91,9 @@
 //     exporter reads, a schedule window it does not accept, or a subtree
 //     defaults value it refuses. The set is the effective config's
 //     NotServed (CheckInput.ValuesNotServed), the table `da-guard
-//     effective` prints as not_served.
+//     effective` prints as not_served; and a `_custom_alerts` entry the
+//     exporter rejects for its `threshold:` (#3209,
+//     CheckInput.CustomAlertsRefused).
 //
 //  12. Custom alerts serving one series twice (#2031; see
 //     custom_alert_duplicate.go), error: a `_custom_alerts` entry the
@@ -336,6 +338,13 @@ type CheckInput struct {
 	// tenant in EffectiveConfigs (#2065); nil skips the check.
 	ValuesNotServed map[string]map[string]config.NotServedKey `json:"-"`
 
+	// CustomAlertsRefused maps tenant ID → the `_custom_alerts` entries the
+	// exporter rejects because it refuses their `threshold:` as a threshold
+	// value (config.CustomAlertEntry.Refused over the exporter's build,
+	// #3209). Each becomes the same value_not_served error a refused
+	// threshold row does, for a tenant in EffectiveConfigs; nil skips.
+	CustomAlertsRefused map[string][]RefusedCustomAlert `json:"-"`
+
 	// CustomAlertDuplicates maps tenant ID → the `_custom_alerts` entries
 	// the exporter drops because an earlier entry of the list already serves
 	// their series (config.CustomAlertDuplicates over the exporter's build).
@@ -355,4 +364,17 @@ type CheckInput struct {
 	// two keys giving one series fail the scrape for every tenant (HTTP 500).
 	// Non-empty becomes one metrics_not_gatherable error (#2031); "" skips.
 	MetricsNotGatherable string `json:"-"`
+}
+
+// RefusedCustomAlert is one entry of CheckInput.CustomAlertsRefused: a
+// `_custom_alerts` element the exporter rejects for its `threshold:`
+// (config.CustomAlertEntry with Refused set, #3209).
+type RefusedCustomAlert struct {
+	Index     int    // the entry's index in the tenant's built list
+	Name      string // its `name:` as decoded
+	Threshold string // its `threshold:` as decoded
+	// Refused is config.RefusedNonFinite or config.RefusedUnparsed.
+	Refused string
+	// Reason is the exporter's own rejection text (CustomAlertEntry.Reason).
+	Reason string
 }
