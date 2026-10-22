@@ -114,7 +114,9 @@ var reservedValueShapes = map[string]string{
 
 // reservedValueChecks names, per key, the exporter-side function that
 // judges its value (`value.check`; bound in valueChecks).
-var reservedValueChecks = map[string]string{}
+var reservedValueChecks = map[string]string{
+	"_silent_mode": "silent_mode",
+}
 
 // batchUnsettableKeys are the keys a tenant-api batch op's `unset` may
 // remove: `batch.unset`, and every retired key — on purpose: nothing

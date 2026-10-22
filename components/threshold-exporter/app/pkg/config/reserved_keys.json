@@ -18,7 +18,7 @@
     "_silent_mode": {
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
       "description": "Suppress notifications for some severities while alerts still fire.",
-      "value": {"shape": "scalar_or_mapping"}
+      "value": {"shape": "scalar_or_mapping", "check": "silent_mode"}
     },
     "_severity_dedup": {
       "read_by": {

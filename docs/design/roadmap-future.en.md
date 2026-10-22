@@ -36,7 +36,7 @@ PromRule corpus → da-parser → Profile Builder (library) → da-batchpr apply
 ### Scale Foundation III + Tenant API hardening ✅
 
 - 1000-tenant synthetic baseline landed: `make benchmark-report` runs 17 benches × count=6 nightly via cron; mixed-mode flat+hierarchy benches added to trend tracking.
-- Tenant API hardening: rate limit per-pod + `X-Request-ID` middleware + tenant-scoped authz + body-content range validation (go-playground/validator + struct tags + reservedKeyValidators registry).
+- Tenant API hardening: rate limit per-pod + `X-Request-ID` middleware + tenant-scoped authz + body-content range validation (go-playground/validator + struct tags; patch keys judged by the reserved-key registry, reserved values by the write gate with the exporter's reader, #3227).
 - Mixed-mode duplicate tenant ID: WARN → typed `*DuplicateTenantError` hard error + state preservation invariant.
 
 ### Server-side Search / Tenant Manager virtualization / Master Onboarding / Smart Views ✅

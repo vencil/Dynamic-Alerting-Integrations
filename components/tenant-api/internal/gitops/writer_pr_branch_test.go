@@ -163,7 +163,7 @@ func TestWritePR_SameNameSecondPushFails(t *testing.T) {
 	}
 
 	suffix = "111111111111"
-	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", "tenants:\n  db-a:\n    _silent_mode: \"info\"\n"); err != nil {
+	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", "tenants:\n  db-a:\n    _silent_mode: \"all\"\n"); err != nil {
 		t.Fatalf("third write after the failed one: %v", err)
 	}
 }

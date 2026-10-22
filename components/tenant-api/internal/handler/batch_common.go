@@ -17,6 +17,7 @@ import (
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,10 +44,11 @@ func gateRefusal(tenantID string, k errkind.Kind, msg string) BatchResult {
 }
 
 // scopeMetadataKeys are the tenant keys a batch op can write that decide the
-// tenant's environment/domain (#2830): `_profile`, whose profile's
-// `_metadata` the tenant reads when no layer writes its own. `_metadata`
-// itself is not one: a batch cannot set it (rejectMetadataPatch, #2859).
-var scopeMetadataKeys = []string{"_profile"}
+// tenant's environment/domain (#2830): today `_profile`, whose profile's
+// `_metadata` the tenant reads when no layer writes its own — derived from
+// the registry (cfg.ScopeMetadataKeys). `_metadata` itself is not one: a
+// batch cannot set it (cfg.PatchableAsString, #2859).
+var scopeMetadataKeys = cfg.ScopeMetadataKeys()
 
 // gateBatchOpPostState is the post-state half of a batch op's write gate, the
 // batch twin of RequireOrgWriteProposed: gateBatchOp authorized the op
@@ -78,7 +80,7 @@ func gateBatchOpPostStateAt(post scopePair, op BatchOperation, p *rbac.VerifiedP
 }
 
 // touchesScopeMetadata reports whether op's patch sets a scopeMetadataKeys
-// key. Its unset cannot remove one: unsetAllowedKeys admits neither, and
+// key. Its unset cannot remove one: cfg.BatchUnsettable admits neither, and
 // widening it to one of them must widen this too.
 func touchesScopeMetadata(op BatchOperation) bool {
 	for _, k := range scopeMetadataKeys {

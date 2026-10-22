@@ -10,137 +10,13 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────
-// Reserved-key validators — unit
-// ─────────────────────────────────────────────────────────────────
-
-func TestValidateSilentMode(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name           string
-		input          string
-		wantSubstrings []string // empty = expect pass; otherwise substrings the reason must contain
-	}{
-		// Scalar enum form — case-insensitive match per production resolve
-		{"warning lower", "warning", nil},
-		{"critical lower", "critical", nil},
-		{"all lower", "all", nil},
-		{"disable lower", "disable", nil},
-		{"WARNING upper", "WARNING", nil},
-		{"Critical mixed", "Critical", nil},
-		// Structured YAML form — production heuristic:
-		// `strings.Contains(val, "target:")` distinguishes structured vs
-		// scalar. Validator must let structured form pass (downstream
-		// parses it; this layer only ensures length/format basics).
-		{"structured target+expires (multi-line)",
-			"target: warning\nexpires: 2099-12-31T00:00:00Z\nreason: planned migration",
-			nil},
-		{"structured target only", "target: critical", nil},
-		{"structured target=disable", "target: disable", nil},
-		// Unknowns rejected — only when neither scalar enum NOR structured form
-		{"off (production uses 'disable' not 'off')", "off",
-			[]string{`got "off"`, `{warning, critical, all, disable}`}},
-		{"empty string", "",
-			[]string{`got ""`}},
-		{"nonsense scalar", "purple-elephant",
-			[]string{`got "purple-elephant"`}},
-		// Edge case: value containing a `:` that's NOT `target:` — still
-		// goes through the enum path (and gets rejected because
-		// `key:value` doesn't match any enum value).
-		{"unrelated-key:value", "expires: 2025-01-01",
-			[]string{`got "expires: 2025-01-01"`}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := validateSilentMode(tt.input)
-			if len(tt.wantSubstrings) == 0 {
-				if got != "" {
-					t.Errorf("validateSilentMode(%q) = %q, want pass", tt.input, got)
-				}
-				return
-			}
-			if got == "" {
-				t.Fatalf("validateSilentMode(%q) passed unexpectedly", tt.input)
-			}
-			for _, sub := range tt.wantSubstrings {
-				if !strings.Contains(got, sub) {
-					t.Errorf("validateSilentMode(%q): reason %q missing substring %q",
-						tt.input, got, sub)
-				}
-			}
-		})
-	}
-}
-
-func TestValidateNonNegativeIntCap(t *testing.T) {
-	t.Parallel()
-	const cap = int64(3_600_000)
-	v := validateNonNegativeIntCap(cap)
-
-	// Pass cases
-	for _, ok := range []string{"0", "1", "1000", "3600000"} {
-		if got := v(ok); got != "" {
-			t.Errorf("validateNonNegativeIntCap(%d)(%q) = %q, want pass", cap, ok, got)
-		}
-	}
-
-	// Fail cases — need non-empty reason
-	failCases := []struct {
-		input          string
-		wantSubstrings []string
-	}{
-		{"-1", []string{"non-negative"}},
-		{"3600001", []string{"≤ 3600000", "got 3600001"}},
-		{"99999999999", []string{"≤ 3600000", "got 99999999999"}}, // issue #134 example
-		{"abc", []string{"integer", "abc"}},
-		{"3.14", []string{"integer", "3.14"}},
-		{"", []string{"integer"}},
-	}
-	for _, tt := range failCases {
-		t.Run(tt.input, func(t *testing.T) {
-			got := v(tt.input)
-			if got == "" {
-				t.Fatalf("validateNonNegativeIntCap(%d)(%q) passed unexpectedly", cap, tt.input)
-			}
-			for _, sub := range tt.wantSubstrings {
-				if !strings.Contains(got, sub) {
-					t.Errorf("validateNonNegativeIntCap(%q): reason %q missing substring %q",
-						tt.input, got, sub)
-				}
-			}
-		})
-	}
-}
-
-func TestValidateProfileReference(t *testing.T) {
-	t.Parallel()
-	// Empty string MUST pass — customer can patch _profile: "" to
-	// clear the profile reference (downstream treats empty as "no
-	// profile", same semantic as missing key).
-	if r := validateProfileReference(""); r != "" {
-		t.Errorf("empty string should pass (clears profile reference); got %q", r)
-	}
-	if r := validateProfileReference("standard-db"); r != "" {
-		t.Errorf("'standard-db': got %q, want pass", r)
-	}
-	long := strings.Repeat("x", 257)
-	if r := validateProfileReference(long); !strings.Contains(r, "256") {
-		t.Errorf("257-char string: reason %q should mention 256", r)
-	}
-	exact := strings.Repeat("x", 256)
-	if r := validateProfileReference(exact); r != "" {
-		t.Errorf("256-char string (boundary): got %q, want pass", r)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────
-// validatePatchMap — registry + length-cap composition
+// validatePatchMap — keys judged by the registry, values by the write gate
 // ─────────────────────────────────────────────────────────────────
 
 func TestValidatePatchMap_ValidPassthrough(t *testing.T) {
 	t.Parallel()
 	patch := map[string]string{
 		"_silent_mode":    "warning",
-		"_timeout_ms":     "30000",
 		"max_connections": "100", // non-reserved, no registry rule, passes through
 		"redis_memory":    "disable",
 	}
@@ -149,20 +25,51 @@ func TestValidatePatchMap_ValidPassthrough(t *testing.T) {
 	}
 }
 
-func TestValidatePatchMap_SingleViolation(t *testing.T) {
+// #3227: a reserved key's VALUE is not judged here — the write gate judges
+// it with the exporter's reader, per op (TestBatchTenants_SilentModeValue_*).
+// So every value passes this layer, the ones the reader takes and the ones it
+// ignores alike; the old copy of the reader's word list refused `off`, which
+// the reader takes.
+func TestValidatePatchMap_ReservedValuesAreNotJudgedHere(t *testing.T) {
 	t.Parallel()
-	patch := map[string]string{
-		"_silent_mode": "purple-elephant",
+	for _, val := range []string{"warning", "off", "disabled", "false", " warning ", "purple-elephant", "",
+		"target: warning\nexpires: 2099-12-31T00:00:00Z\nreason: planned migration"} {
+		if v := validatePatchMap(map[string]string{"_silent_mode": val}, "p"); len(v) != 0 {
+			t.Errorf("_silent_mode %q: %+v", val, v)
+		}
 	}
-	v := validatePatchMap(patch, "operations[0].patch")
-	if len(v) != 1 {
-		t.Fatalf("expected 1 violation, got %d: %+v", len(v), v)
+	// `_profile` / `_routing_profile`: the generic 1024 cap only (the 256 cap
+	// is gone); empty clears the reference.
+	for _, val := range []string{"", "standard-db", strings.Repeat("p", 257), strings.Repeat("p", maxPatchValueLen)} {
+		for _, k := range []string{"_profile", "_routing_profile"} {
+			if v := validatePatchMap(map[string]string{k: val}, "p"); len(v) != 0 {
+				t.Errorf("%s len %d: %+v", k, len(val), v)
+			}
+		}
 	}
-	if !strings.Contains(v[0].Field, "_silent_mode") {
-		t.Errorf("field %q should reference _silent_mode", v[0].Field)
+}
+
+// A `_` key the registry does not list is read by nothing: refused, with the
+// same reason whatever the key (`_timeout_ms` was a hand-kept rule here).
+func TestValidatePatchMap_UnregisteredUnderscoreKey(t *testing.T) {
+	t.Parallel()
+	for _, k := range []string{"_timeout_ms", "_silent_mod", "_some_future_reserved_key"} {
+		v := validatePatchMap(map[string]string{k: "1"}, "operations[0].patch")
+		if len(v) != 1 || v[0].Field != `operations[0].patch["`+k+`"]` ||
+			v[0].Reason != "unknown reserved key (typo?); nothing reads it" {
+			t.Errorf("%s: %+v", k, v)
+		}
 	}
-	if !strings.Contains(v[0].Reason, "{warning, critical, all, disable}") {
-		t.Errorf("reason %q should list valid values", v[0].Reason)
+}
+
+// A mapping or a list cannot be set from a string.
+func TestValidatePatchMap_NotPatchableAsString(t *testing.T) {
+	t.Parallel()
+	for _, k := range []string{"_metadata", "_custom_alerts", "_namespaces"} {
+		v := validatePatchMap(map[string]string{k: "x"}, "p")
+		if len(v) != 1 || !strings.HasPrefix(v[0].Reason, k+" is a ") {
+			t.Errorf("%s: %+v", k, v)
+		}
 	}
 }
 
@@ -171,9 +78,9 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 	// Per #134 spec: report ALL violations, not first-only — matches
 	// PR-2 forbidden-member listing UX (one round-trip to fix everything).
 	patch := map[string]string{
-		"_silent_mode":     "purple-elephant",        // bad enum
-		"_timeout_ms":      "99999999999",            // exceeds 1h cap
-		"_routing_profile": strings.Repeat("p", 257), // exceeds 256 chars
+		"_timeout_ms":     "99999999999", // unregistered
+		"_routing_profle": "p",           // unknown routing key
+		"_metadata":       "env: prod",   // a mapping
 	}
 	v := validatePatchMap(patch, "operations[0].patch")
 	if len(v) != 3 {
@@ -186,27 +93,14 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 		gotFields[vio.Field] = true
 	}
 	wantFields := []string{
-		`operations[0].patch["_silent_mode"]`,
 		`operations[0].patch["_timeout_ms"]`,
-		`operations[0].patch["_routing_profile"]`,
+		`operations[0].patch["_routing_profle"]`,
+		`operations[0].patch["_metadata"]`,
 	}
 	for _, want := range wantFields {
 		if !gotFields[want] {
 			t.Errorf("missing violation for field %q; got: %v", want, gotFields)
 		}
-	}
-}
-
-func TestValidatePatchMap_UnknownReservedKey_PassesThrough(t *testing.T) {
-	t.Parallel()
-	// Soft whitelist: _* keys not in registry pass through (only
-	// generic length cap applies). Catches new threshold-exporter
-	// keys without requiring tenant-api release.
-	patch := map[string]string{
-		"_some_future_reserved_key": "any-value",
-	}
-	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
-		t.Errorf("unknown _* key should pass through; got %d violations: %+v", len(v), v)
 	}
 }
 
@@ -233,52 +127,6 @@ func TestValidatePatchMap_OversizedValue(t *testing.T) {
 	}
 	if !strings.Contains(v[0].Reason, "value length must not exceed") {
 		t.Errorf("expected 'value length' violation, got %q", v[0].Reason)
-	}
-}
-
-func TestValidatePatchMap_SilentMode_StructuredFormPassthrough(t *testing.T) {
-	t.Parallel()
-	// Production accepts BOTH scalar enum and structured YAML form:
-	//   "warning"                                         (scalar)
-	//   "target: warning\nexpires: 2099-12-31T00:00:00Z\n" (structured)
-	// Validator must let the structured form through (downstream parser
-	// handles RFC3339 expires + lower-case target enum). Locks the
-	// production-mirror heuristic added in self-review.
-	patch := map[string]string{
-		"_silent_mode": "target: warning\nexpires: 2099-12-31T00:00:00Z\nreason: planned migration",
-	}
-	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
-		t.Errorf("structured _silent_mode form should pass; got %d violations: %+v", len(v), v)
-	}
-}
-
-func TestValidatePatchMap_ProfileReference_EmptyAllowed(t *testing.T) {
-	t.Parallel()
-	// Empty `_profile` / `_routing_profile` is a documented "clear
-	// the profile reference" semantic (downstream treats empty same
-	// as missing). Validator must NOT reject it. Locks the empty-
-	// allowed behavior of validateProfileReference added in self-review.
-	patch := map[string]string{
-		"_profile":         "", // clear profile
-		"_routing_profile": "", // clear routing profile
-	}
-	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
-		t.Errorf("empty profile reference should pass; got %d violations: %+v", len(v), v)
-	}
-}
-
-func TestValidatePatchMap_BoundaryNumeric_ExactCapPasses(t *testing.T) {
-	t.Parallel()
-	// Boundary case for #134 acceptance: cap is INCLUSIVE.
-	// _timeout_ms cap = 3_600_000 → "3600000" must pass, "3600001" fail.
-	patch := map[string]string{"_timeout_ms": "3600000"}
-	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 0 {
-		t.Errorf("exact cap value should pass; got %d violations: %+v", len(v), v)
-	}
-
-	patch = map[string]string{"_timeout_ms": "3600001"}
-	if v := validatePatchMap(patch, "operations[0].patch"); len(v) != 1 {
-		t.Errorf("cap+1 value should fail with 1 violation; got %d: %+v", len(v), v)
 	}
 }
 
@@ -393,8 +241,8 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
 	violations := []Violation{
-		{Field: "operations[0].patch[\"_timeout_ms\"]", Reason: "must be ≤ 3600000"},
-		{Field: "operations[0].patch[\"_silent_mode\"]", Reason: "must be one of ..."},
+		{Field: "operations[0].patch[\"_timeout_ms\"]", Reason: "unknown reserved key (typo?); nothing reads it"},
+		{Field: "operations[0].patch[\"_metadata\"]", Reason: "_metadata is a mapping ..."},
 	}
 	WriteValidationErrors(w, nil, violations)
 
@@ -435,7 +283,8 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 
 func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 	t.Parallel()
-	// Fixture: one op with a bad _timeout_ms value
+	// Fixture: one op with an unregistered `_` key (#3227: refused by the
+	// registry, no longer by a hand-kept integer rule)
 	body := bytes.NewBufferString(`{
 		"operations": [
 			{"tenant_id": "db-a", "patch": {"_timeout_ms": "99999999999"}}
@@ -471,14 +320,17 @@ func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 	if !strings.Contains(first["field"].(string), "_timeout_ms") {
 		t.Errorf("expected violation field referencing _timeout_ms, got %v", first["field"])
 	}
+	if first["reason"] != "unknown reserved key (typo?); nothing reads it" {
+		t.Errorf("reason = %v", first["reason"])
+	}
 }
 
 func TestBatchTenants_BodyValidation_ReportsAllViolations(t *testing.T) {
 	t.Parallel()
-	// Two ops, both with bad values — response must list BOTH
+	// Two ops, both with keys a patch cannot set — response must list BOTH
 	body := bytes.NewBufferString(`{
 		"operations": [
-			{"tenant_id": "db-a", "patch": {"_silent_mode": "purple"}},
+			{"tenant_id": "db-a", "patch": {"_namespaces": "ns-a"}},
 			{"tenant_id": "db-b", "patch": {"_timeout_ms": "abc"}}
 		]
 	}`)

@@ -42,7 +42,7 @@ lang: zh
 | 角色 | 動作 | 工具/機制 | Gate（已存在） | Disp | Reuse/Gap |
 |---|---|---|---|---|---|
 | PE | bootstrap 平台 | `init_project` · `operator_generate` · Helm · `federation_keygen`/`federation_check` | 數十條 pre-commit + CI required（iac-lint、secret-scan、rulepack-drift、single-writer-invariant） | 🟢 | reuse；缺**一個宣告式入口**（ArgoCD ApplicationSet bundle） |
-| TA | 上線自己 tenant | `scaffold_tenant` · tenant-api PUT · portal wizard | `body_validator` · `ValidateTenantCustomAlerts` · `CheckTenantRootKeys` | 🟢🟡 | reuse |
+| TA | 上線自己 tenant | `scaffold_tenant` · tenant-api PUT · portal wizard | `body_validator`（patch key 依保留鍵登錄表）· 寫入關卡 `CheckReservedValue`（保留鍵的值，#3227）· `ValidateTenantCustomAlerts` · `CheckTenantRootKeys` | 🟢🟡 | reuse |
 | SRE | 整合進既有 stack / cutover | `onboard_platform` · `migrate_rule` · `validate_migration` · `cutover_tenant` · `shadow_verify` | promtool · `blast_radius` | 🟡 | reuse（判斷重→GUIDED）；缺打包成 golden path |
 | DE | 寫 rule-pack | `rule-packs/` YAML · `lint_custom_rules` | promtool unit · pint · deny-list/required-labels · `hardcode-tenant-check` | 🟢 | reuse |
 | SEC | 上線時驗隔離 | RBAC · federation admission（label-enrichment）· CODEOWNERS | admission validators | 🔴 | reuse |

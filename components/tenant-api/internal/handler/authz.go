@@ -216,7 +216,7 @@ func orgWriteAt(r *http.Request, d *Deps, tenantID string) (writeGate, bool) {
 // way: org membership lives in the admin-only `_tenant_orgs.yaml`, a separate
 // file this path cannot write. The batch path reaches the metadata axis
 // through `_profile` alone (a batch cannot set `_metadata`, #2859:
-// rejectMetadataPatch) and runs the same post-state check per op
+// cfg.PatchableAsString) and runs the same post-state check per op
 // (gateBatchOpPostState).
 //
 // The check runs the SAME predicate against the PROPOSED metadata, so it
