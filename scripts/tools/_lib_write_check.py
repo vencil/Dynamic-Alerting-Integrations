@@ -199,6 +199,13 @@ def _readers(tree: "_lib_parse_tree.Tree", rel: str) -> "tuple[str, ...]":
 
 
 def _not_read_detail(tree: "_lib_parse_tree.Tree", rel: str) -> str:
+    # A directory at the target (role dir / unlistable_dir, #3206) is a path
+    # no reader reads as a file — NOT_READ, the kind for "a write here would
+    # reach no reader", kept rather than a new kind: the remedy is the same
+    # (write somewhere a reader reads) and REASONS stays a closed list.
+    role = next((e.role for e in tree.entries if e.path == rel), None)
+    if role in ("dir", "unlistable_dir"):
+        return f"it is a directory (parse-tree role {role}); no reader reads it as a file"
     why = tree.not_read.get(rel)
     return (f"no reader reads this path (parse-tree: {why})" if why
             else "no reader reads this path")
