@@ -18,7 +18,10 @@
 * duration bound（`max_repeat_interval`／`min_group_wait`）解析不了；
 * `require_critical_escalation` 不是布林（#2906）；
 * 整份 `_domain_policy.yaml` 不能用（語法錯、頂層或 `domain_policies:` 不是 mapping；
-  `domain_policies:` 沒有值＝沒有任何 policy，照收）。
+  `domain_policies:` 沒有值＝沒有任何 policy，照收）；
+* `domain_policies:` 寫在產生器不從那裡讀 policy 的檔（`_defaults.yaml`、租戶檔、其他
+  `_` 檔；#3126）：不論值是什麼，那個 block 都不會生效。#3126 之前只有 `--strict` 擋，
+  非 strict 印一行 WARN、rc 0。
 
 在這之前，除了 `require_critical_escalation` 以外都只在 `--strict` 擋：非 strict 時拼錯的
 forbidden 類型什麼都不禁止、解析不了的 bound 不生效、整份檔不能用時所有 policy 靜默消失，
@@ -45,10 +48,12 @@ import explain_route as er  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
 import validate_config as vc  # noqa: E402
 from test_grar_field_types import (  # noqa: E402
+    _DEFAULTS,
     _MODES,
     _REFUSAL,
     _fake_kubectl,
     _gar,
+    _tenant,
     _write,
 )
 
@@ -132,6 +137,21 @@ CASES = {
     "file-domain-policies-list": (_doc("domain_policies: [fin]\n"), "domain_policies", None,
                                   "'domain_policies:' must be a mapping"),
 }
+# #3126: a `domain_policies:` block in a file the generator does not read
+# policies from. The key decides, not its value: an empty block is refused
+# too (nothing in that file is ever read as a policy).
+_POLICY_BLOCK = ("domain_policies:\n  fin:\n    tenants: [t-a]\n"
+                 "    constraints: {allowed_receiver_types: [slack]}\n")
+_MISPLACED = {
+    "misplaced-in-defaults": ("_defaults.yaml", _DEFAULTS + _POLICY_BLOCK),
+    "misplaced-in-tenant-file": ("t-a.yaml", _POLICY_BLOCK + _tenant("t-a")),
+    "misplaced-in-platform-file": ("_platform.yaml", _POLICY_BLOCK),
+    "misplaced-empty-block": ("_defaults.yaml", _DEFAULTS + "domain_policies: {}\n"),
+    "misplaced-null-block": ("_defaults.yaml", _DEFAULTS + "domain_policies:\n"),
+}
+for _name, (_rel, _body) in _MISPLACED.items():
+    CASES[_name] = ({_rel: _body}, "domain_policies", None,
+                    f"{_rel}: a domain_policies block is not read from this file")
 # Receiver-type entries: YAML text of one entry → the words the message uses.
 _BAD_TYPES = {
     "webhok": "string 'webhok'",       # a misspelt name
@@ -191,6 +211,33 @@ def test_a_subtree_policy_is_judged_too(tmp_path):
         _cons("max_repeat_interval: banana")["_domain_policy.yaml"], encoding="utf-8")
     assert [(e.kind, e.field) for e in _errors(d)] == [
         ("domain_policy_unusable", "constraints.max_repeat_interval")]
+
+
+def test_a_misplaced_block_names_where_it_must_live(tmp_path):
+    """#3126: the message names the file and the one file in its directory
+    the block is read from; below the root that is the subtree's own
+    `_domain_policy.yaml`, the scope a block written there was meant for."""
+    d = _write(tmp_path, {})
+    (d / "team").mkdir()
+    (d / "t-a.yaml").rename(d / "team" / "t-a.yaml")
+    (d / "team" / "_defaults.yaml").write_text(_DEFAULTS + _POLICY_BLOCK, encoding="utf-8")
+    [err] = _errors(d)
+    assert (err.kind, err.file, err.field, err.policy) == (
+        "domain_policy_unusable", "team/_defaults.yaml", "domain_policies", None), err
+    assert "move the domain_policies block into team/_domain_policy.yaml" in err.message, err
+    [root] = _errors(_write(tmp_path / "root", {"_defaults.yaml": _DEFAULTS + _POLICY_BLOCK}))
+    assert "move the domain_policies block into _domain_policy.yaml" in root.message, root
+    assert "no policy in it is enforced" in root.message, root
+
+
+def test_a_misplaced_block_is_not_also_a_strict_error(tmp_path):
+    """#3126: the field-type error is its only record — the `--strict`
+    ERROR line it used to be (an `unclassified` finding) is gone, so the
+    stream does not say it twice under two kinds."""
+    d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS + _POLICY_BLOCK})
+    tree = load_tenant_tree(str(d), strict_policies=True)
+    assert [getattr(w, "kind", None) for w in tree.schema_warnings
+            if "domain_policies" in w] == ["domain_policy_unusable"], tree.schema_warnings
 
 
 # Null is "not set" wherever the schema allows it; legal values render.
@@ -259,7 +306,8 @@ def test_every_mode_refuses_and_writes_nothing(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", ["tenants-scalar", "max-repeat-banana", "file-syntax-error",
-                                  "forbidden_receiver_types=opsgenie"])
+                                  "forbidden_receiver_types=opsgenie",
+                                  "misplaced-in-defaults"])
 def test_the_findings_document_names_the_problem(tmp_path, name):
     files, field, policy, _text = CASES[name]
     d = _write(tmp_path, files)
@@ -298,7 +346,8 @@ def test_tree_refusal_refuses_it_for_every_consumer(tmp_path, name):
     assert rc == 1 and _REFUSAL in lines[0], lines
 
 
-@pytest.mark.parametrize("name", ["tenants-scalar", "max-repeat-banana", "file-syntax-error"])
+@pytest.mark.parametrize("name", ["tenants-scalar", "max-repeat-banana", "file-syntax-error",
+                                  "misplaced-in-tenant-file"])
 def test_validate_config_schema_row_fails(tmp_path, name):
     row = vc.check_schema(str(_write(tmp_path, CASES[name][0])))
     assert row["status"] == vc.FAIL, row

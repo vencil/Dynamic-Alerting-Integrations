@@ -333,6 +333,12 @@ func TestUndetermined_EveryReason(t *testing.T) {
 			[]string{"_domain_policy.yaml  domain_policy"}},
 		{"nested domain policy file, .yml", base(map[string]string{"team/_domain_policy.yml": "domain_policies: {}\n"}),
 			[]string{"team/_domain_policy.yml  domain_policy"}},
+		// #3126: a domain_policies block outside a policy file is not read
+		// as a policy, and the generator refuses the tree on it in every mode.
+		{"domain_policies in a tenant file", base(map[string]string{"tx.yaml": "domain_policies: {}\n" + udTenant}),
+			[]string{"tx.yaml domain_policies domain_policy"}},
+		{"domain_policies in a nested platform file", base(map[string]string{"team/_noc.yaml": "domain_policies:\n  fin: {tenants: [tx]}\n"}),
+			[]string{"team/_noc.yaml domain_policies domain_policy"}},
 		{"routing profiles file", base(map[string]string{"team/_routing_profiles.yaml": "routing_profiles: {}\n"}),
 			[]string{"team/_routing_profiles.yaml  routing_profiles_file"}},
 		// A file parse-tree refuses is exit 3 since ADR-036 step 6 (#3206),
