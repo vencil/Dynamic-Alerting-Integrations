@@ -24,6 +24,7 @@ import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 import check_path_metadata_consistency as cpmc  # noqa: E402
+from _go_refusal import assert_refused, refuses  # noqa: E402  (#3206)
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -154,11 +155,14 @@ class TestScanFile:
         _write(f, _tenant_yaml("t", domain="DB", environment="PROD"))
         assert cpmc.scan_file(f, config_dir) == []
 
-    def test_malformed_yaml_is_silent(self, tmp_path):
+    def test_malformed_yaml_is_refused(self, tmp_path):
+        """#3206: a file the exporter cannot read is not a silent skip — the
+        tree is one no conf.d tool reads, so the shared refusal names it."""
         config_dir = tmp_path / "conf.d"
         f = config_dir / "db" / "prod" / "bad.yaml"
         _write(f, "tenants:\n  - not-a-map\n    x: [unclosed")
-        assert cpmc.scan_file(f, config_dir) == []
+        with refuses("db/prod/bad.yaml"):
+            cpmc.scan_file(f, config_dir)
 
     def test_region_field_never_warns_without_path_inference(
         self, tmp_path
@@ -445,7 +449,9 @@ class TestExtensionSpellingAxis:
                 "--config-dir", str(config_dir), "--ci",
             )
 
-            assert code == 0, "this lint is warning-only and must stay exit 0"
+            # Warning-only on a tree it reads; a tree da-guard validation
+            # names a path on is the shared conf.d refusal (#3206): rc 2.
+            assert_refused(code, err, ["db-broken" + ext])
             # Name the REASON, not just the filename. The sibling tool has a
             # SECOND stderr station that prints the same basename (its
             # parse-failure handler), and blind review showed a
@@ -642,7 +648,8 @@ class TestHiddenAxis:
     ):
         """The "not checked" report walks what the selection walks: a broken
         link under a visible name is named, the same link under `.snap/`
-        is not (the exporter never looks there)."""
+        is not (the exporter never looks there). #3206: the naming is the
+        shared conf.d refusal's (rc 2)."""
         (tmp_path / ".git").mkdir()
         conf = self._seed(tmp_path / "conf.d", "file", hidden=False)
         (conf / "staging" / ".snap").mkdir()
@@ -650,13 +657,11 @@ class TestHiddenAxis:
         _symlink_or_skip(conf / "staging" / ".snap" / "brk.yaml",
                          "missing.yaml")
 
-        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
-                               "--config-dir", str(conf), "--ci")
-        warned = [ln for ln in err.splitlines() if "not checked" in ln]
+        code, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                                  "--config-dir", str(conf), "--ci")
         # 必響對照: the visible broken link IS named.
-        assert any(ln.startswith(f"{conf / 'staging' / 'brk.yaml'}:0:")
-                   for ln in warned), err
-        assert not any(".snap" in ln for ln in warned), err
+        assert_refused(code, err, ["staging/brk.yaml"])
+        assert ".snap" not in err, err
 
 
 class TestDisplayPath:

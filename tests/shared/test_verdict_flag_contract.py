@@ -111,6 +111,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
+
 # validate_config reads the tenants through da-guard (#2115 0-B).
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -257,6 +259,15 @@ SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {
     ("generator_service", "--max-cache-transfer-bytes"): (
         "server limit on parse-cache entries handed back; never changes an answer, "
         "only what is cached (test_result_and_transfer_limits)"),
+    # #3206: every file --validate called an ERROR (top level not a mapping,
+    # a parse error) is a path da-guard validation names, so the sources are
+    # refused before assembly whether or not the flag is given; what is left
+    # for it is WARN, which is non-fatal by design.
+    ("assemble_config_dir", "--validate"): (
+        "its ERROR cases are the shared conf.d refusal before assembly since "
+        "#3206 (rc 2 with or without the flag, nothing written); the flag now "
+        "reports WARN lines only (test_assemble_validate_errors_are_refused_"
+        "with_or_without_it)"),
     ("explain_route", "--severity"): (
         "an INPUT label of the alert --trace simulates (beside --alertname / "
         "--tenant / --label), not a threshold the tool judges against: the "
@@ -615,6 +626,25 @@ def _assembly(tmp: Path, malformed: bool) -> list[str]:
             "--output", str(out), "--json"]
 
 
+def test_assemble_validate_errors_are_refused_with_or_without_it(tmp_path: Path):
+    """The list-shaped carrier #1828's --validate caught is refused before
+    assembly (#3206), flag or no flag: rc 2, the file named, the `--json`
+    reason `conf_d_not_servable`, and nothing written to `--output`. A clean
+    assembly stays (ok, 0) under --validate."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    for flag in ((), ("--validate",)):
+        argv = _assembly(tmp_path, malformed=True) + list(flag)
+        p = _run("assemble_config_dir", argv, tmp_path, env)
+        assert_refused(p.returncode, p.stderr, ["tenant-two.yaml"])
+        doc = json.loads(p.stdout)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "conf_d_not_servable"), doc
+        out = Path(argv[argv.index("--output") + 1])
+        assert list(out.iterdir()) == [], (flag, sorted(out.iterdir()))
+    p = _run("assemble_config_dir", _assembly(tmp_path, malformed=False) + ["--validate"],
+             tmp_path, env)
+    assert _json_status_and_rc(p) == ("ok", EXIT_OK), (p.stdout, p.stderr)
+
+
 def _risk_and_rc(proc: subprocess.CompletedProcess) -> object:
     try:
         return (json.loads(proc.stdout)["tenants"][0]["risk_level"], proc.returncode)
@@ -769,18 +799,8 @@ RECIPES: list[Recipe] = [
       without=EXIT_VIOLATION, with_=EXIT_OK,
       note="3 matching rounds: window 5 (default) and 4 never converge, 2 does"),
 
-    # #1828's tool. A carrier whose top level is a list assembles fine and
-    # is caught only by --validate, whose documented exit for it is 2 — so
-    # the verdict is read from the --json status, not the exit code.
-    R("assemble_config_dir", "--validate",
-      lambda t, s: _assembly(t, malformed=True),
-      flip=("--validate",), boundary=("--validate",),
-      boundary_base=lambda t, s: _assembly(t, malformed=False),
-      without=("ok", EXIT_OK), with_=("validation_error", EXIT_CALLER_ERROR),
-      observe=_json_status_and_rc,
-      note="list-shaped carrier: (ok, 0) -> (validation_error, 2) — exit 2 is "
-           "the documented validation-error code (#1831, owner decision); "
-           "a clean assembly stays (ok, 0)"),
+    # #1828's tool: its --validate is in SAME_NAME_DIFFERENT_MEANING since
+    # #3206 (test_assemble_validate_errors_are_refused_with_or_without_it).
 
     # Render mode replaces an unreadable group_wait with the default and
     # exits 0; --validate counts that replacement as blocking.
