@@ -22,6 +22,9 @@ import {
   requiredFields,
   isFieldValid,
   opOptions,
+  opFor,
+  forecastFloorError,
+  FIELDS_BY_RECIPE,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
@@ -91,13 +94,13 @@ describe('composeThreshold', () => {
 
 describe('requiredFields', () => {
   it('threshold requires name/metric/threshold/window', () => {
-    expect(requiredFields('threshold')).toEqual(['name', 'metric', 'threshold', 'window']);
+    expect(requiredFields('threshold')).toEqual(['name', 'metric', 'window', 'threshold']);
   });
   it('forecast swaps window for horizon', () => {
-    expect(requiredFields('forecast')).toEqual(['name', 'metric', 'threshold', 'horizon']);
+    expect(requiredFields('forecast')).toEqual(['name', 'metric', 'horizon', 'threshold']);
   });
   it('ratio additionally requires denominator_metric', () => {
-    expect(requiredFields('ratio')).toEqual(['name', 'metric', 'threshold', 'window', 'denominator_metric']);
+    expect(requiredFields('ratio')).toEqual(['name', 'metric', 'denominator_metric', 'window', 'threshold']);
   });
 });
 
@@ -119,6 +122,40 @@ describe('isFieldValid', () => {
   });
   it('an unknown field is permissive (returns true)', () => {
     expect(isFieldValid('unknown_field', 'anything')).toBe(true);
+  });
+});
+
+describe('the field model comes from the recipe contract', () => {
+  it('absence has no op field; the form fields follow the contract order', () => {
+    expect(FIELDS_BY_RECIPE.absence).not.toContain('op');
+    expect(FIELDS_BY_RECIPE.ratio).toEqual(
+      ['metric', 'denominator_metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for']);
+  });
+  it('a recipe whose required fields the form cannot render has no layout', () => {
+    expect(FIELDS_BY_RECIPE).not.toHaveProperty('slo_burn_rate');
+  });
+});
+
+describe('opFor', () => {
+  it('keeps an op the recipe takes, else falls back to the default', () => {
+    expect(opFor('threshold', '==')).toBe('==');
+    expect(opFor('rate', '==')).toBe('>');
+    expect(opFor('rate', '<')).toBe('<');
+  });
+  it('a fixed-op recipe only offers its op', () => {
+    expect(opOptions('slo_burn_rate')).toEqual(['>']);
+    expect(opFor('slo_burn_rate', '<')).toBe('>');
+  });
+});
+
+describe('forecastFloorError', () => {
+  const base = { capacity_metric: 'cap' };
+  it('names the band for a floor at or above it, nothing inside', () => {
+    expect(forecastFloorError('forecast', { ...base, threshold: '0.5' })).toMatch(/0\.5/);
+    expect(forecastFloorError('forecast', { ...base, threshold: '0' })).not.toBeNull();
+    expect(forecastFloorError('forecast', { ...base, threshold: '0.2' })).toBeNull();
+    expect(forecastFloorError('forecast', { threshold: '9' })).toBeNull(); // raw mode
+    expect(forecastFloorError('rate', { ...base, threshold: '9' })).toBeNull();
   });
 });
 

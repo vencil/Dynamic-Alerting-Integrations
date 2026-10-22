@@ -1366,7 +1366,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/dx/gen_recipe_contract.py --check
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/app/pkg/config/recipe_contract\.json|scripts/tools/dx/(gen_recipe_contract|sync_schema)\.py|scripts/tools/dx/custom_alerts/shape\.py|docs/schemas/tenant-config\.schema\.json|tools/portal/src/interactive/tools/_common/data/recipe-(enums|status)\.json|rule-packs/recipes/[^/]+\.yaml|tests/shared/threshold_value_matrix\.json)$
+        files: ^(components/threshold-exporter/app/pkg/config/recipe_contract\.json|scripts/tools/dx/(gen_recipe_contract|sync_schema)\.py|scripts/tools/dx/custom_alerts/shape\.py|scripts/tools/_lib_constants\.py|docs/schemas/tenant-config\.schema\.json|tools/portal/src/interactive/tools/_common/data/recipe-(enums|status)\.json|rule-packs/recipes/[^/]+\.yaml|tests/shared/threshold_value_matrix\.json)$
         # The schema's customAlertInstance enums/patterns, the portal's
         # recipe-enums.json / recipe-status.json, shape.py's GENERATED block and
         # rule-packs/recipes/*.yaml's status/enum/default are GENERATED from the

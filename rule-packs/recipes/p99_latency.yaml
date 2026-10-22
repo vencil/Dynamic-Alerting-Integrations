@@ -5,7 +5,7 @@ summary: A histogram quantile (default p99) latency crosses a threshold.
 summary_zh: histogram 分位數（預設 p99）延遲越過閾值。
 params:
   metric:    {required: true,  desc: "histogram base name; the recipe queries <metric>_bucket"}
-  quantile:  {required: false, default: "0.99", desc: "quantile in (0,1), e.g. 0.99"}
+  quantile:  {required: false, default: "0.99", desc: "quantile in the open interval the recipe contract gives, e.g. 0.99"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<="]}
   window:    {required: true,  desc: "rate window over buckets (Go duration, e.g. 5m)"}
   threshold: {required: true,  desc: "value[:severity] — seconds, e.g. 2:warning"}

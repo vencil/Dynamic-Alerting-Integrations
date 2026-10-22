@@ -1296,24 +1296,15 @@
       "description": "One parameterized custom alert. The compiler groups instances by shape signature (recipe, metric, op, window, quantile, denominator, selectors) and emits ONE vectorized rule per shape.",
       "required": ["recipe", "name", "metric"],
       "allOf": [
-        {
-          "$comment": "Three-way recipe-shape branch (ADR-031 added slo_burn_rate). `threshold` moved from the instance-level required into the two non-slo branches: slo_burn_rate REPLACES it with `objective` (severity is fixed by the recipe: fast→critical, slow→warning) and FORBIDS a stray threshold; its burn windows are fixed recipe semantics so it requires no `window` either, and op is pinned to '>' (editor-guard, mirrored imperatively in shape.py/custom_alert.go).",
-          "if": { "properties": { "recipe": { "const": "forecast" } }, "required": ["recipe"] },
-          "then": { "required": ["horizon", "threshold"] },
-          "else": {
-            "if": { "properties": { "recipe": { "const": "slo_burn_rate" } }, "required": ["recipe"] },
-            "then": {
-              "required": ["denominator_metric", "objective"],
-              "not": { "required": ["threshold"] },
-              "properties": { "op": { "const": ">" } }
-            },
-            "else": { "required": ["window", "threshold"] }
-          }
-        },
-        {
-          "if": { "properties": { "op": { "const": "==" } }, "required": ["op"] },
-          "then": { "properties": { "recipe": { "const": "threshold" } } }
-        }
+        {"$comment": "GENERATED from components/threshold-exporter/app/pkg/config/recipe_contract.json by scripts/tools/dx/gen_recipe_contract.py --update — DO NOT EDIT. The per-recipe declaration rules, the same ones custom_alert.go checkRecipeFields applies.", "if": {"properties": {"recipe": {"const": "threshold"}}, "required": ["recipe"]}, "then": {"required": ["window", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "rate"}}, "required": ["recipe"]}, "then": {"required": ["window", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "ratio"}}, "required": ["recipe"]}, "then": {"required": ["denominator_metric", "window", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "absence"}}, "required": ["recipe"]}, "then": {"required": ["window", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "p99_latency"}}, "required": ["recipe"]}, "then": {"required": ["window", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "forecast"}}, "required": ["recipe"]}, "then": {"required": ["horizon", "threshold"]}},
+        {"if": {"properties": {"recipe": {"const": "slo_burn_rate"}}, "required": ["recipe"]}, "then": {"required": ["denominator_metric", "objective"], "not": {"anyOf": [{"required": ["threshold"]}]}, "properties": {"op": {"const": ">"}}}},
+        {"if": {"properties": {"op": {"const": "=="}}, "required": ["op"]}, "then": {"properties": {"recipe": {"enum": ["threshold"]}}, "not": {"required": ["group_by"]}}},
+        {"if": {"properties": {"recipe": {"enum": ["absence", "slo_burn_rate"]}}, "required": ["recipe"]}, "then": {"not": {"required": ["group_by"]}}}
       ],
       "properties": {
         "recipe": {
@@ -1344,14 +1335,14 @@
         "objective": {
           "type": "string",
           "title": "SLO Objective (slo_burn_rate recipe)",
-          "description": "SLO target percentage in the OPEN interval (0,100), e.g. \"99.9\" — =100 (error budget 0 → always fires) and =0 are rejected imperatively by the Python compiler + Go preflight (this pattern is the charset gate only). \"disable\" is the tri-state opt-out (the declaration keeps compiling; the exporter never emits its user_threshold series). STRING-ONLY, always quote it (the #1017 quantile lesson). NOT a shape component: it never enters recipe_id or the rule text — the exporter derives the per-severity burn thresholds (14.4×(1−obj) fast / 6×(1−obj) slow for a 30d period) at resolve time and feeds them through the existing user_threshold{severity} channel, so editing the objective never re-slugs (ADR-031).",
+          "description": "SLO target percentage inside the open interval `slo_burn_rate.objective` of components/threshold-exporter/app/pkg/config/recipe_contract.json, e.g. \"99.9\" — the upper end (error budget 0 → always fires) and the lower end are rejected imperatively by the Go preflight (this pattern is the charset gate only). \"disable\" is the tri-state opt-out (the declaration keeps compiling; the exporter never emits its user_threshold series). STRING-ONLY, always quote it (the #1017 quantile lesson). NOT a shape component: it never enters recipe_id or the rule text — the exporter derives the per-severity burn thresholds (multiplier × (1 − objective/100), the multipliers per slo_period in the recipe contract) at resolve time and feeds them through the existing user_threshold{severity} channel, so editing the objective never re-slugs (ADR-031).",
           "pattern": "^([0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?|disable)$",
           "examples": ["99.9", "99.5", "disable"]
         },
         "slo_period": {
           "type": "string",
           "title": "SLO Budget Period (slo_burn_rate recipe)",
-          "description": "Error-budget window the burn-rate multipliers are derived from (30d→14.4/6, 28d→13.44/5.6). NOT a shape component: it only scales the exporter-computed threshold VALUES — never enters recipe_id or the rule text, so changing it never re-slugs or forks the rule (ADR-031).",
+          "description": "Error-budget window the burn-rate multipliers are derived from (`slo_burn_rate.multipliers` in components/threshold-exporter/app/pkg/config/recipe_contract.json). NOT a shape component: it only scales the exporter-computed threshold VALUES — never enters recipe_id or the rule text, so changing it never re-slugs or forks the rule (ADR-031).",
           "enum": ["28d", "30d"],
           "default": "30d"
         },
@@ -1372,7 +1363,7 @@
         "capacity_metric": {
           "type": "string",
           "title": "Capacity Metric (forecast ratio mode)",
-          "description": "Forecast ratio mode: the denominator (e.g. total capacity). Present → predict the headroom ratio metric/capacity crossing a fractional floor in (0, 0.5) (the current-state band; >= 0.5 is rejected); absent → raw mode (predict the gauge crossing an absolute threshold).",
+          "description": "Forecast ratio mode: the denominator (e.g. total capacity). Present → predict the headroom ratio metric/capacity crossing a fractional floor below the current-state band (`forecast` in components/threshold-exporter/app/pkg/config/recipe_contract.json; a floor at or above the band is rejected); absent → raw mode (predict the gauge crossing an absolute threshold).",
           "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
         },
         "op": {
@@ -1392,7 +1383,7 @@
         "quantile": {
           "type": "string",
           "title": "Quantile (p99_latency recipe)",
-          "description": "Quantile in the open interval (0,1); default 0.99. STRING-ONLY, always quote it (#1017): the exact quantile TEXT enters the recipe_id slug that the Go exporter and the Python compiler compute independently — a bare YAML number is dialect-ambiguous (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string, yaml.v3 as a float), silently splitting the recipe_id join and muting the alert. Quoting pins both readers to the same text. Also interpolated raw into histogram_quantile(<quantile>, …), so it stays decimal-charset (this pattern) + range validated at write + compile time — the Go preflight and the Python compiler share one decimal regex to keep their accept-set identical (a Go hex-float like 0x1p-1 that only one side accepts would wedge the CI drift gate); the (0,1) range check lives in those validators.",
+          "description": "Quantile inside the open interval `quantile` of components/threshold-exporter/app/pkg/config/recipe_contract.json; the default is that entry's default. STRING-ONLY, always quote it (#1017): the exact quantile TEXT enters the recipe_id slug that the Go exporter and the Python compiler compute independently — a bare YAML number is dialect-ambiguous (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string, yaml.v3 as a float), silently splitting the recipe_id join and muting the alert. Quoting pins both readers to the same text. Also interpolated raw into histogram_quantile(<quantile>, …), so it stays decimal-charset (this pattern) + range validated at write + compile time — the Go preflight and the Python compiler share one decimal regex to keep their accept-set identical (a Go hex-float like 0x1p-1 that only one side accepts would wedge the CI drift gate); the range check lives in those validators.",
           "pattern": "^[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$",
           "examples": ["0.99", "0.95"]
         },
@@ -1432,7 +1423,7 @@
         "group_by": {
           "type": "array",
           "title": "Per-Dimension Evaluation (bounded whitelist)",
-          "description": "Extra label(s) to keep in the rule's aggregation so the alert is evaluated SEPARATELY per that dimension and fires if ANY one crosses. Bounded to a whitelist to keep cardinality safe; today only `persistentvolumeclaim` — a disk-fill alert must fire per PVC, so a small full volume is not masked by a large empty one. Like `for`, it enters the recipe_id slug (instances differing in group_by compile to distinct rules). The per-tenant threshold still broadcasts to each dimension. WARNING: every metric the recipe aggregates — including a ratio's `denominator_metric` and a forecast's `capacity_metric` — MUST carry this label, or the per-dimension join yields an empty vector and the alert SILENTLY NEVER FIRES (the kubelet disk-fill metrics both carry `persistentvolumeclaim`, so the shipped example is safe). The CI scrape-config lint (#692 P0 ③ guard) enforces this, since the compiler cannot see live label sets.",
+          "description": "Extra label(s) to keep in the rule's aggregation so the alert is evaluated SEPARATELY per that dimension and fires if ANY one crosses. Bounded to the enum below to keep cardinality safe — e.g. a disk-fill alert must fire per PVC, so a small full volume is not masked by a large empty one. Like `for`, it enters the recipe_id slug (instances differing in group_by compile to distinct rules). The per-tenant threshold still broadcasts to each dimension. WARNING: every metric the recipe aggregates — including a ratio's `denominator_metric` and a forecast's `capacity_metric` — MUST carry this label, or the per-dimension join yields an empty vector and the alert SILENTLY NEVER FIRES (the kubelet disk-fill metrics both carry the PVC label, so the shipped example is safe). The CI scrape-config lint (#692 P0 ③ guard) enforces this, since the compiler cannot see live label sets.",
           "items": { "enum": ["persistentvolumeclaim"] },
           "uniqueItems": true,
           "examples": [["persistentvolumeclaim"]]

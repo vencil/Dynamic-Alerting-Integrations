@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -125,13 +126,18 @@ def test_governance_yaml_status_and_enums_match_the_contract():
         assert doc["params"]["for"]["enum"] == c["for"]["enum"]
 
 
-@pytest.mark.parametrize("case", ["schema_extra_property", "missing_yaml", "unknown_param", "bad_json"])
+@pytest.mark.parametrize("case", ["schema_extra_property", "missing_yaml", "unknown_param",
+                                  "undocumented_param", "bad_json"])
 def test_malformed_inputs_are_caller_errors(tmp_path, case):
     root = _tree(tmp_path)
     if case == "schema_extra_property":
         _edit_contract(root, lambda d: d["fields"].append({"name": "lookback"}))
     elif case == "missing_yaml":
         (root / gen.RECIPES_DIR_REL / "ratio.yaml").unlink()
+    elif case == "undocumented_param":
+        p = root / gen.RECIPES_DIR_REL / "rate.yaml"
+        lines = [ln for ln in p.read_text(encoding="utf-8").split("\n") if not ln.startswith("  op:")]
+        p.write_text("\n".join(lines), encoding="utf-8")
     elif case == "unknown_param":
         p = root / gen.RECIPES_DIR_REL / "rate.yaml"
         p.write_text(p.read_text(encoding="utf-8").replace(
@@ -151,3 +157,73 @@ def test_shape_py_reads_the_generated_values():
     assert shape.RECIPES == tuple(r["name"] for r in c["recipes"])
     assert shape.RESERVED_LABELS == frozenset(c["reserved_labels"])
     assert "mode" in shape.RESERVED_LABELS   # the label Go reserved and Python did not
+
+
+def test_the_precommit_hook_sees_every_input_and_target():
+    # Derived from the generator's own target list, so a new target cannot be
+    # left outside the hook's `files` (the hook would then never run for it).
+    cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in cfg["repos"] for h in repo.get("hooks", []) if h.get("id") == "recipe-contract-check"]
+    assert len(hooks) == 1
+    files = re.compile(hooks[0]["files"])
+    c, severities = gen.load(_REPO)
+    rels = [rel for rel, _ in gen.targets(_REPO, c, severities)]
+    rels += [gen.CONTRACT_REL, gen.SEVERITY_REL, "scripts/tools/dx/gen_recipe_contract.py"]
+    missed = [rel for rel in rels if not files.search(rel)]
+    assert not missed, f"recipe-contract-check `files` misses {missed}"
+
+
+def test_eq_recipes_reach_the_schema(tmp_path):
+    # The review's mutation: widening eq_recipes used to leave the schema's
+    # hand-written `== -> threshold` rule untouched while --check stayed green.
+    root = _tree(tmp_path)
+    _edit_contract(root, lambda d: d["op"]["eq_recipes"].append("rate"))
+    r = _cli(root, "--check")
+    assert f"STALE: {gen.SCHEMA_REL}" in r.stdout, r.stdout
+    assert _cli(root, "--update").returncode == 0
+    schema = json.loads((root / gen.SCHEMA_REL).read_text(encoding="utf-8"))
+    eq = [a for a in schema["definitions"]["customAlertInstance"]["allOf"]
+          if a["if"].get("properties", {}).get("op") == {"const": "=="}]
+    assert eq and eq[0]["then"]["properties"]["recipe"]["enum"] == ["threshold", "rate"]
+
+
+def test_required_fields_reach_schema_and_yaml(tmp_path):
+    root = _tree(tmp_path)
+
+    def require_op(d):
+        r = next(r for r in d["recipes"] if r["name"] == "rate")
+        r["required"].append("op")
+
+    _edit_contract(root, require_op)
+    assert _cli(root, "--update").returncode == 0
+    schema = json.loads((root / gen.SCHEMA_REL).read_text(encoding="utf-8"))
+    rate = [a for a in schema["definitions"]["customAlertInstance"]["allOf"]
+            if a["if"].get("properties", {}).get("recipe") == {"const": "rate"}]
+    assert "op" in rate[0]["then"]["required"]
+    doc = yaml.safe_load((root / gen.RECIPES_DIR_REL / "rate.yaml").read_text(encoding="utf-8"))
+    assert doc["params"]["op"]["required"] is True
+
+
+def test_the_schema_refuses_what_the_go_rules_refuse():
+    # One example per allOf rule kind; Go's checkRecipeFields refuses each
+    # (pkg/config TestCheckRecipeFields_FromContract).
+    import jsonschema
+
+    schema = json.loads((_REPO / gen.SCHEMA_REL).read_text(encoding="utf-8"))
+    inst = dict(schema["definitions"]["customAlertInstance"])
+    inst["definitions"] = schema["definitions"]
+    v = jsonschema.Draft7Validator(inst)
+    ok = {"recipe": "ratio", "name": "a", "metric": "m", "denominator_metric": "d",
+          "window": "5m", "threshold": "1"}
+    assert not list(v.iter_errors(ok))
+    for bad in (
+        {k: x for k, x in ok.items() if k != "denominator_metric"},
+        {**ok, "op": "=="},
+        {"recipe": "absence", "name": "a", "metric": "m", "window": "5m", "threshold": "1",
+         "group_by": ["persistentvolumeclaim"]},
+        {"recipe": "slo_burn_rate", "name": "a", "metric": "m", "denominator_metric": "d",
+         "objective": "99.9", "threshold": "1"},
+        {"recipe": "slo_burn_rate", "name": "a", "metric": "m", "denominator_metric": "d",
+         "objective": "99.9", "op": "<"},
+    ):
+        assert list(v.iter_errors(bad)), bad

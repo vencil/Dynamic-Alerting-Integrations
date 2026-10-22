@@ -219,16 +219,16 @@ On its way from a write to a rule, a custom alert passes tenant-api's write chec
 
 The portal's recipe form runs in the browser and does not run Go: it only gives instant hints, reads its bounds from the generated files below, and validity is decided by tenant-api's write check.
 
-The **data** in those rules — each recipe's required fields and defaults, each field's enum (recipe, op, mode, for, horizon, group_by, slo_period …), the format of metric, label, window and name values, the reserved labels a tenant may not use as selectors, p99_latency's quantile range, forecast's current-state band and ratio floor, slo_burn_rate's `min_events` default and maximum, the lifecycle status, the SLO detection windows per severity, the fast and slow burn multipliers per budget period (28d, 30d), and the per-tenant custom-alert cap — is written in one **recipe contract file**, kept in the same Go package and embedded with `go:embed` (Go's mechanism for compiling a file's contents into the executable). The exporter, da-guard and tenant-api are Go programs and read it through that same package, with no copy; every other place that needs this data is generated from it; CI regenerates and diffs, and a difference turns it red:
+The **data** in those rules — the fields each recipe may carry, requires and refuses, and the operator it fixes, each field's default, each field's enum (recipe, op, mode, for, horizon, group_by, slo_period …), the format of metric, label, window and name values, the reserved labels a tenant may not use as selectors, p99_latency's quantile range, forecast's current-state band and ratio floor, slo_burn_rate's `min_events` default and maximum, the lifecycle status, the SLO detection windows per severity, the fast and slow burn multipliers per budget period (28d, 30d), and the per-tenant custom-alert cap — is written in one **recipe contract file**, kept in the same Go package and embedded with `go:embed` (Go's mechanism for compiling a file's contents into the executable). The exporter, da-guard and tenant-api are Go programs and read it through that same package, with no copy; every other place that needs this data is generated from it; CI regenerates and diffs, and a difference turns it red:
 
 | Generated | Used for |
 |---|---|
-| the `_custom_alerts` entry definition in `tenant-config.schema.json` | editor hints, validate-config's schema check |
+| the `_custom_alerts` entry definition in `tenant-config.schema.json` (enums, formats, defaults and each recipe's required-field rules) | editor hints, validate-config's schema check |
 | the portal's `recipe-enums.json` and `recipe-status.json` | the recipe builder's options and status badges |
 | the per-tenant custom-alert cap validate-config reads (`_lib_constants.py`) | the `custom_alert_cap` row |
-| the parameter enums and defaults in `rule-packs/recipes/*.yaml` | the human-readable governance documents |
-| the custom-rule lint's query range ceiling (derived from the largest horizon) | `lint_custom_rules.py` |
-| the recipe-preview's `for`-to-minutes table | the preview's trial run |
+| the lifecycle status and each parameter's required flag, enum and default in `rule-packs/recipes/*.yaml` | the human-readable governance documents |
+
+The custom-rule lint's (`lint_custom_rules.py`) query range ceiling and the recipe-preview's `for`-to-minutes table are still written by hand; both are to be generated from the contract when the recipe-preview moves to Go (the former derived from the largest horizon).
 
 The portal form's hand-written checks read the generated files instead of writing their own bounds. The field order tenant-api uses when it writes YAML back, and which fields it writes as strings, also come from the contract file.
 

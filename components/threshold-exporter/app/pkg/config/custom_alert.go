@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -493,11 +494,99 @@ func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
 	return items, nil
 }
 
+// customAlertSpecFields maps each yaml key of CustomAlertSpec to its field
+// index, so the contract's field names address the struct directly (a
+// contract field with no struct field is caught by a test).
+var customAlertSpecFields = func() map[string]int {
+	m := map[string]int{}
+	t := reflect.TypeOf(CustomAlertSpec{})
+	for i := 0; i < t.NumField(); i++ {
+		m[strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]] = i
+	}
+	return m
+}()
+
+// specFieldSet reports whether the declaration carries field (an authored
+// empty string counts as absent, as the hand-written checks treated it).
+func specFieldSet(spec CustomAlertSpec, field string) bool {
+	i, ok := customAlertSpecFields[field]
+	if !ok {
+		return false
+	}
+	switch v := reflect.ValueOf(spec).Field(i).Interface().(type) {
+	case string:
+		return v != ""
+	case flexStr:
+		return v != ""
+	case taggedScalar:
+		return v.value != ""
+	case *strictInt:
+		return v != nil
+	case map[string]string:
+		return len(v) > 0
+	case []string:
+		return len(v) > 0
+	}
+	return false
+}
+
+// checkRecipeFields applies the contract's per-recipe declaration rules:
+// base_required + the recipe's required fields present, its forbidden fields
+// absent, its fixed op (if any) the one used, and group_by only where the
+// recipe takes it. withDataPlane=false skips the data-plane fields (name,
+// threshold, objective …) the shape slug does not need.
+func checkRecipeFields(spec CustomAlertSpec, op string, withDataPlane bool) error {
+	r, ok := contractRecipe(spec.Recipe)
+	if !ok {
+		return fmt.Errorf("unknown recipe %q", spec.Recipe)
+	}
+	dataPlane := map[string]bool{}
+	for _, f := range contract.Fields {
+		dataPlane[f.Name] = f.DataPlane
+	}
+	for _, f := range append(append([]string(nil), contract.BaseRequired...), r.Required...) {
+		if !withDataPlane && dataPlane[f] {
+			continue
+		}
+		if !specFieldSet(spec, f) {
+			return fmt.Errorf("missing required field %s (the %s recipe requires %s)",
+				f, r.Name, strings.Join(append(append([]string(nil), contract.BaseRequired...), r.Required...), "/"))
+		}
+	}
+	forbidden := make([]string, 0, len(r.Forbidden))
+	for f := range r.Forbidden {
+		forbidden = append(forbidden, f)
+	}
+	sort.Strings(forbidden)
+	for _, f := range forbidden {
+		if specFieldSet(spec, f) {
+			return fmt.Errorf("%s does not take %s: %s", r.Name, f, r.Forbidden[f])
+		}
+	}
+	if r.FixedOp != "" && op != r.FixedOp {
+		return fmt.Errorf("op %q is not settable for %s (the recipe fixes %q); omit op", op, r.Name, r.FixedOp)
+	}
+	if len(spec.GroupBy) > 0 && !r.GroupBy {
+		return fmt.Errorf("group_by (per-dimension eval) is not supported for the %s recipe — "+
+			"it applies only to value-crossing recipes (ADR-024 Addendum)", r.Name)
+	}
+	return nil
+}
+
 // RecipeID computes the deterministic shape slug. MUST stay byte-identical to
 // scripts/tools/dx/custom_alerts/shape.py::recipe_id (golden vector test).
 func RecipeID(spec CustomAlertSpec) (string, error) {
 	if !customAlertRecipes[spec.Recipe] {
 		return "", fmt.Errorf("unknown recipe %q", spec.Recipe)
+	}
+	op := spec.Op
+	if op == "" {
+		op = contract.Op.Default
+	}
+	// The shape slug needs the identity fields only: name, threshold and the
+	// other data-plane values are checked by the resolve paths.
+	if err := checkRecipeFields(spec, op, false); err != nil {
+		return "", err
 	}
 	if err := validateCustomAlertMetric(spec.Metric, "metric"); err != nil {
 		return "", err
@@ -515,10 +604,6 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		}
 		parts = append(parts, prefix+"_"+it.key+"_"+it.value)
 	}
-	op := spec.Op
-	if op == "" {
-		op = contract.Op.Default
-	}
 	// `==` is threshold-recipe-only (#810): exact match suits integer status/
 	// error codes on a RAW gauge; other recipes emit computed floats where
 	// equality is fragile. This gate runs BEFORE the absence short-circuit so it
@@ -529,14 +614,6 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	if op == "==" && !customAlertEqRecipes[spec.Recipe] {
 		return "", fmt.Errorf("op \"==\" is only allowed for the %s recipe "+
 			"(raw-gauge status-code match); %s does not support it", oneOf(contract.Op.EqRecipes), spec.Recipe)
-	}
-	// slo_burn_rate fixes op ">" (a burn RATE exceeding its budget threshold is
-	// the only meaningful direction). An explicit different op is a semantic
-	// error, not a knob — reject loudly rather than silently slug `gt`.
-	// Mirrors shape.py.
-	if spec.Recipe == "slo_burn_rate" && op != ">" {
-		return "", fmt.Errorf("op %q is not settable for slo_burn_rate (the recipe fixes '>' — "+
-			"burn rate exceeding the objective-derived threshold); omit op", op)
 	}
 	if spec.Recipe == "absence" {
 		parts = append(parts, "absent")
@@ -554,10 +631,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		// window — `h{horizon}` takes the `w{window}` slot. capacity_metric
 		// present → ratio mode → `den_` slot (raw mode omits it). MUST match
 		// shape.py recipe_id's forecast branch.
-		h := spec.Horizon
-		if h == "" {
-			return "", fmt.Errorf("forecast recipe requires horizon (one of %s)", oneOf(contract.Horizon.Enum))
-		}
+		h := spec.Horizon // required by the contract (checkRecipeFields)
 		if !customAlertHorizonValid[h] {
 			return "", fmt.Errorf("horizon %q must be one of %s", h, oneOf(contract.Horizon.Enum))
 		}
@@ -576,20 +650,11 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		// severity burn thresholds from it) — so an authored `threshold` is a
 		// declaration error, and objective/slo_period are validated here (ADR-029
 		// dual-side duty) but NEVER enter the slug. MUST match shape.py.
-		if spec.Threshold != "" {
-			return "", fmt.Errorf("slo_burn_rate takes objective (SLO target percentage), not " +
-				"threshold — severity is fixed by the recipe (fast→critical, slow→warning), " +
-				"so a value:severity threshold has no meaning here")
-		}
 		if err := validateSloObjective(spec.Objective); err != nil {
 			return "", err
 		}
 		if _, err := sloPeriod(spec); err != nil {
 			return "", err
-		}
-		if spec.DenominatorMetric == "" {
-			return "", fmt.Errorf("slo_burn_rate recipe requires denominator_metric (the " +
-				"TOTAL-events counter; metric is the BAD-events counter)")
 		}
 		if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
 			return "", err
@@ -651,18 +716,10 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(gb) > 0 && (spec.Recipe == "absence" || op == "==" || spec.Recipe == "slo_burn_rate") {
-		what := "op \"==\""
-		switch spec.Recipe {
-		case "absence":
-			what = "the absence recipe"
-		case "slo_burn_rate":
-			// the SLI is a per-tenant aggregate by design — a per-dimension SLO
-			// is a distinct declaration, not a group_by knob. Mirrors shape.py.
-			what = "the slo_burn_rate recipe"
-		}
-		return "", fmt.Errorf("group_by (per-dimension eval) is not supported for %s — "+
-			"it applies only to value-crossing recipes (ADR-024 Addendum)", what)
+	// Which recipes take group_by at all is the contract's (checkRecipeFields).
+	if len(gb) > 0 && op == "==" {
+		return "", fmt.Errorf("group_by (per-dimension eval) is not supported for op \"==\" — " +
+			"it applies only to value-crossing recipes (ADR-024 Addendum)")
 	}
 	for _, g := range gb {
 		parts = append(parts, "gb_"+g)
@@ -712,16 +769,19 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	if spec.Recipe == "slo_burn_rate" {
 		return resolveSloBurnRate(tenant, spec)
 	}
-	if spec.Recipe == "" || spec.Name == "" || spec.Metric == "" || spec.Threshold == "" {
-		return nil, fmt.Errorf("missing required field (recipe/name/metric/threshold)")
+	if !customAlertRecipes[spec.Recipe] {
+		return nil, fmt.Errorf("unknown recipe %q", spec.Recipe)
 	}
-	// recipe-aware shaping duration: forecast supplies `horizon` (required + enum
-	// validated in RecipeID), every other recipe supplies `window` (empty window
-	// → invalid PromQL like rate(m[])).
-	if spec.Recipe != "forecast" {
-		if spec.Window == "" {
-			return nil, fmt.Errorf("missing required field window")
-		}
+	op := spec.Op
+	if op == "" {
+		op = contract.Op.Default
+	}
+	if err := checkRecipeFields(spec, op, true); err != nil {
+		return nil, err
+	}
+	// A recipe whose params carry `window` interpolates it raw into
+	// rate(…[<window>]); one without (forecast's horizon) ignores a stray one.
+	if r, _ := contractRecipe(spec.Recipe); contains(r.Params, "window") {
 		if !customAlertWindowRe.MatchString(spec.Window) {
 			return nil, fmt.Errorf("window %q is not a valid Go duration "+
 				"(%s); it is interpolated raw into rate(…[<window>]) "+
@@ -763,8 +823,8 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	// forecast ratio mode: the threshold is a headroom-fraction floor
 	// (avail/capacity), so it must be in (0, forecastCurrentBand) — a floor >= 1 would
 	// fire permanently; a floor >= the current-state band is silently neutered by the band gate (lockstep w/ shape.py).
-	if spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= 0 || value >= forecastCurrentBand) {
-		return nil, fmt.Errorf("forecast ratio-mode threshold %v must be in (0,%v): a floor >= the current-state band is neutered by the band gate", value, forecastCurrentBand)
+	if lo := contract.Forecast.RatioFloorExclusiveMinimum; spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= lo || value >= forecastCurrentBand) {
+		return nil, fmt.Errorf("forecast ratio-mode threshold %v must be in (%v,%v): a floor >= the current-state band is neutered by the band gate", value, lo, forecastCurrentBand)
 	}
 	mode := spec.Mode
 	if mode == "" {
@@ -811,8 +871,12 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 // objective:"disable" is the tri-state opt-out: valid, but emits NO series
 // (errCustomAlertDisabled — same semantics as threshold:"disable").
 func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshold, error) {
-	if spec.Name == "" || spec.Metric == "" {
-		return nil, fmt.Errorf("missing required field (recipe/name/metric)")
+	op := spec.Op
+	if op == "" {
+		op = contract.Op.Default
+	}
+	if err := checkRecipeFields(spec, op, true); err != nil {
+		return nil, err
 	}
 	if !customAlertAlertNameRe.MatchString(spec.Name) {
 		return nil, fmt.Errorf("name %q is not a valid alert name (%s)", spec.Name, contract.Patterns.Name)

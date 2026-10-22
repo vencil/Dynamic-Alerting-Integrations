@@ -9,16 +9,20 @@ The exporter reads it through go:embed and tenant-api through pkg/config;
 every other copy is GENERATED from it:
 
   - Schema : the enum / pattern / default / bounds members of
-             docs/schemas/tenant-config.schema.json customAlertInstance
-             (the rest of each property is hand-written and kept)
+             docs/schemas/tenant-config.schema.json customAlertInstance,
+             its `required` and its whole `allOf` (each recipe's required /
+             forbidden fields and fixed op, `==` only on the eq recipes,
+             group_by only where a recipe takes it); the rest of each
+             property is hand-written and kept
   - Portal : tools/portal/src/interactive/tools/_common/data/recipe-enums.json
              and recipe-status.json (imported by recipe-builder)
   - Python : the blocks between the GENERATED markers in
              scripts/tools/dx/custom_alerts/shape.py (the compiler's enums
              and patterns) and scripts/tools/_lib_constants.py (the
              per-tenant custom-alert cap validate-config judges)
-  - Recipes: the `status:` line and each param's `enum:` / `default:` in
-             rule-packs/recipes/*.yaml (the rest is hand-written and kept)
+  - Recipes: the `status:` line and each param's `required:` / `enum:` /
+             `default:` in rule-packs/recipes/*.yaml, whose params must be
+             exactly the recipe's (the rest is hand-written and kept)
 
 The portal's severity pair is not the recipe contract's: it is the threshold
 grammar's, read from tests/shared/threshold_value_matrix.json (which Go
@@ -69,7 +73,8 @@ PY_END = "# END GENERATED recipe contract"
 _HEADER = (f"GENERATED from {CONTRACT_REL} by scripts/tools/dx/gen_recipe_contract.py "
            "--update — DO NOT EDIT.")
 
-_PROPS = ["definitions", "customAlertInstance", "properties"]
+_INSTANCE = ["definitions", "customAlertInstance"]
+_PROPS = _INSTANCE + ["properties"]
 
 
 class ContractError(RegistryError):
@@ -136,7 +141,39 @@ def schema_members(c):
         (["for"], "enum", c["for"]["enum"]),
         (["for"], "default", c["for"]["default"]),
         (["group_by", "items"], "enum", c["group_by"]["enum"]),
+        (["group_by"], "examples", [c["group_by"]["enum"]]),
     ]
+
+
+def _recipe_is(names):
+    cond = {"const": names[0]} if len(names) == 1 else {"enum": names}
+    return {"properties": {"recipe": cond}, "required": ["recipe"]}
+
+
+def schema_all_of(c):
+    """customAlertInstance.allOf: the per-recipe declaration rules, the same
+    ones checkRecipeFields applies in Go."""
+    out = []
+    for r in c["recipes"]:
+        then = {"required": r["required"]}
+        forbidden = sorted(r.get("forbidden") or {})
+        if forbidden:
+            then["not"] = {"anyOf": [{"required": [f]} for f in forbidden]}
+        if r.get("fixed_op"):
+            then["properties"] = {"op": {"const": r["fixed_op"]}}
+        out.append({"if": _recipe_is([r["name"]]), "then": then})
+    out.append({
+        "if": {"properties": {"op": {"const": "=="}}, "required": ["op"]},
+        "then": {"properties": {"recipe": {"enum": c["op"]["eq_recipes"]}},
+                 "not": {"required": ["group_by"]}},
+    })
+    no_group_by = [r["name"] for r in c["recipes"] if not r["group_by"]]
+    if no_group_by:
+        out.append({"if": _recipe_is(no_group_by), "then": {"not": {"required": ["group_by"]}}})
+    out[0] = {"$comment": f"GENERATED from {CONTRACT_REL} by scripts/tools/dx/gen_recipe_contract.py "
+                          "--update — DO NOT EDIT. The per-recipe declaration rules, the same ones "
+                          "custom_alert.go checkRecipeFields applies.", **out[0]}
+    return out
 
 
 def render_schema(text, c):
@@ -149,7 +186,18 @@ def render_schema(text, c):
             f"are not both in the schema and in the contract's fields")
     for path, name, value in schema_members(c):
         text = _set_compact(text, _PROPS + path, name, value)
-    return text
+    text = _set_compact(text, _INSTANCE, "required", c["base_required"])
+    return _set_pretty(text, _INSTANCE, "allOf", schema_all_of(c))
+
+
+def _set_pretty(text, obj_path, name, items):
+    """Like _set_compact for a list, but one item per line under the member."""
+    for key, kstart, vstart, vend in members(text, locate(text, obj_path)):
+        if key == name:
+            indent = text[text.rindex("\n", 0, kstart) + 1:kstart]
+            lines = ",\n".join(f"{indent}  {json.dumps(i, ensure_ascii=False)}" for i in items)
+            return text[:vstart] + "[\n" + lines + "\n" + indent + "]" + text[vend:]
+    raise ContractError(f"{SCHEMA_REL}: {'.'.join(obj_path)} has no {name!r} member to set")
 
 
 def _set_compact(text, obj_path, name, value):
@@ -188,6 +236,12 @@ def render_portal_enums(c, severities):
         "quantileDefault": c["quantile"]["default"],
         "quantileRange": [c["quantile"]["exclusive_minimum"], c["quantile"]["exclusive_maximum"]],
         "forecastCurrentBand": c["forecast"]["current_band"],
+        "forecastRatioFloorMin": c["forecast"]["ratio_floor_exclusive_minimum"],
+        "fields": [f["name"] for f in c["fields"]],
+        "baseRequired": c["base_required"],
+        "recipeSpecs": {r["name"]: {"params": r["params"], "required": r["required"],
+                                    "groupBy": r["group_by"], "fixedOp": r.get("fixed_op", "")}
+                        for r in c["recipes"]},
         "sloPeriod": slo["slo_period"]["enum"],
         "sloPeriodDefault": slo["slo_period"]["default"],
         "reservedLabels": c["reserved_labels"],
@@ -236,7 +290,6 @@ def render_python(c):
         f"RECIPES = {_py_tuple([r['name'] for r in c['recipes']])}",
         f"RECIPE_LIFECYCLE = {_py_fset(c['lifecycle'])}",
         "RECIPE_STATUS = {\n" + statuses + "}",
-        f"_NAME_RE = {_py_re(p['name'])}",
         f"_METRIC_RE = {_py_re(p['metric'])}",
         f"_LABEL_RE = {_py_re(p['label'])}",
         f"_WINDOW_RE = {_py_re(p['window'])}",
@@ -263,6 +316,7 @@ def render_python(c):
         "# severity -> (long window, short window, bad-event floor multiplier)",
         "SLO_BURN_WINDOWS = {\n" + windows + "}",
         f"_FORECAST_CURRENT_BAND = {c['forecast']['current_band']}",
+        f"_FORECAST_RATIO_FLOOR_MIN = {c['forecast']['ratio_floor_exclusive_minimum']}",
         PY_END,
     ]
     return "\n".join(lines) + "\n"
@@ -334,7 +388,8 @@ def render_recipe_yaml(text, c, rel):
     if len(_STATUS_LINE.findall(text)) != 1:
         raise ContractError(f"{rel}: expected exactly one top-level status: line")
     text = _STATUS_LINE.sub(lambda _m: status, text, count=1)
-    fields = {f["name"] for f in c["fields"]}
+    required = set(c["base_required"]) | set(recipe["required"])
+    seen = []
     out, in_params = [], False
     for line in text.split("\n"):
         if line.startswith("params:"):
@@ -344,8 +399,11 @@ def render_recipe_yaml(text, c, rel):
         m = _PARAM_LINE.match(line) if in_params else None
         if m:
             param = m.group(1)
-            if param not in fields:
-                raise ContractError(f"{rel}: param {param!r} is not a field of the contract")
+            if param not in recipe["params"]:
+                raise ContractError(f"{rel}: param {param!r} is not one of the {name} recipe's params")
+            seen.append(param)
+            line = _set_token(line, re.compile(r"required: (?:true|false)"),
+                              f"required: {'true' if param in required else 'false'}", re.compile(r"\{"))
             enum, default = param_spec(c, name, param)
             if default is not None:
                 line = _set_token(line, _DEFAULT_TOKEN, f"default: {_yaml_flow(default)}", _REQUIRED_TOKEN)
@@ -353,6 +411,9 @@ def render_recipe_yaml(text, c, rel):
                 anchor = _DEFAULT_TOKEN if default is not None else _REQUIRED_TOKEN
                 line = _set_token(line, _ENUM_TOKEN, f"enum: {_yaml_flow(enum)}", re.compile(anchor.pattern + r",\s*"))
         out.append(line)
+    missing = [p for p in recipe["params"] if p not in seen]
+    if missing:
+        raise ContractError(f"{rel}: params {missing} of the {name} recipe are not documented")
     return "\n".join(out)
 
 

@@ -75,7 +75,6 @@ from typing import Dict, List, Tuple
 #       and is the first line of the PromQL-injection defence (ADR-024 §2d).
 #       The second line is _assemble_selector, which never interpolates a raw
 #       value outside a quoted+escaped string literal.
-#   _NAME_RE — the tenant-chosen alert name (the `name` label).
 #   _WINDOW_RE / _QUANTILE_RE — `window` and `quantile` are BARE PromQL
 #       tokens interpolated raw into the rule (rate(m[<window>]) /
 #       histogram_quantile(<quantile>, …)); a bare token IS syntax, so they are
@@ -108,7 +107,8 @@ from typing import Dict, List, Tuple
 #       emits a non-fatal notice and the portal warns; eol = existing
 #       declarations KEEP compiling, but tenant-api rejects a write that grows
 #       the recipe's usage.
-#   _FORECAST_CURRENT_BAND — see validate_forecast_ratio_threshold.
+#   _FORECAST_CURRENT_BAND / _FORECAST_RATIO_FLOOR_MIN — see
+#       validate_forecast_ratio_threshold.
 # BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
 # block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
 RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate")
@@ -122,7 +122,6 @@ RECIPE_STATUS = {
     "forecast": "active",
     "slo_burn_rate": "active",
 }
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _METRIC_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _LABEL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _WINDOW_RE = re.compile(r"^([0-9]+(ns|us|µs|ms|s|m|h))+$")
@@ -160,6 +159,7 @@ SLO_BURN_WINDOWS = {
     "warning": ("6h", "30m", 6),
 }
 _FORECAST_CURRENT_BAND = 0.5
+_FORECAST_RATIO_FLOOR_MIN = 0
 # END GENERATED recipe contract
 
 
@@ -703,9 +703,9 @@ def validate_forecast_ratio_threshold(inst: dict, value: str) -> None:
         v = float(value)
     except (TypeError, ValueError):
         return
-    if v <= 0 or v >= _FORECAST_CURRENT_BAND:
+    if v <= _FORECAST_RATIO_FLOOR_MIN or v >= _FORECAST_CURRENT_BAND:
         raise RecipeError(
-            f"ratio-mode forecast threshold {v} must be in (0, {_FORECAST_CURRENT_BAND}) "
+            f"ratio-mode forecast threshold {v} must be in ({_FORECAST_RATIO_FLOOR_MIN}, {_FORECAST_CURRENT_BAND}) "
             f"— the current-state band: a floor >= the band is silently neutered (the "
             f"alert can only fire once current headroom drops below the band)"
         )

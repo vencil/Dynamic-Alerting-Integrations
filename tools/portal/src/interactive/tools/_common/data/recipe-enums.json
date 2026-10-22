@@ -56,6 +56,164 @@
     1
   ],
   "forecastCurrentBand": 0.5,
+  "forecastRatioFloorMin": 0,
+  "fields": [
+    "recipe",
+    "name",
+    "metric",
+    "denominator_metric",
+    "capacity_metric",
+    "op",
+    "window",
+    "horizon",
+    "quantile",
+    "threshold",
+    "objective",
+    "slo_period",
+    "min_events",
+    "selectors",
+    "selectors_re",
+    "mode",
+    "for",
+    "group_by"
+  ],
+  "baseRequired": [
+    "recipe",
+    "name",
+    "metric"
+  ],
+  "recipeSpecs": {
+    "threshold": {
+      "params": [
+        "metric",
+        "op",
+        "window",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "window",
+        "threshold"
+      ],
+      "groupBy": true,
+      "fixedOp": ""
+    },
+    "rate": {
+      "params": [
+        "metric",
+        "op",
+        "window",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "window",
+        "threshold"
+      ],
+      "groupBy": true,
+      "fixedOp": ""
+    },
+    "ratio": {
+      "params": [
+        "metric",
+        "denominator_metric",
+        "op",
+        "window",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "denominator_metric",
+        "window",
+        "threshold"
+      ],
+      "groupBy": true,
+      "fixedOp": ""
+    },
+    "absence": {
+      "params": [
+        "metric",
+        "window",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "window",
+        "threshold"
+      ],
+      "groupBy": false,
+      "fixedOp": ""
+    },
+    "p99_latency": {
+      "params": [
+        "metric",
+        "quantile",
+        "op",
+        "window",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "window",
+        "threshold"
+      ],
+      "groupBy": true,
+      "fixedOp": ""
+    },
+    "forecast": {
+      "params": [
+        "metric",
+        "capacity_metric",
+        "op",
+        "horizon",
+        "threshold",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "horizon",
+        "threshold"
+      ],
+      "groupBy": true,
+      "fixedOp": ""
+    },
+    "slo_burn_rate": {
+      "params": [
+        "metric",
+        "denominator_metric",
+        "objective",
+        "slo_period",
+        "min_events",
+        "selectors",
+        "selectors_re",
+        "mode",
+        "for"
+      ],
+      "required": [
+        "denominator_metric",
+        "objective"
+      ],
+      "groupBy": false,
+      "fixedOp": ">"
+    }
+  },
   "sloPeriod": [
     "28d",
     "30d"
