@@ -739,7 +739,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | tenant-api 經共用判定的入口 | `internal/confd/verdict.go` 的 `Judge`（回 `pkg/config` 的 `UnreadableFileError`）；呼叫端：`validateShape`、`eolGuardErrs`、`tenantorg`、`rbac`、`groups`、`views`、`fedpolicy`、`account` 的解析函式，以及批次的 `tenantAbsentIn` 與 `scopeBlockOnDisk` |
 | 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`）；離線差分測試 `handler/batch_patch_diff_test.go` |
 | tenant-api 裡其他的 Go 端路由與 policy 判定（已刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
-| tenant-api 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（先經 `parse-tree` 的判定，再以 yaml.v3 確認 exporter 讀得了）；`handler/body_validator.go` 的保留鍵值檢查（例如 `validateSilentMode`） |
+| tenant-api 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（先經 `parse-tree` 的判定，再以 yaml.v3 確認 exporter 讀得了）；保留鍵值的檢查（`_silent_mode`）改由寫入關卡以 exporter 自己的讀取函式判定（`pkg/config` 的 `CheckReservedValue`，[ADR-038](038-unread-keys-judged-by-readers.md) 決定 12），`handler/body_validator.go` 只剩長度上限與依保留鍵登錄表判定的 key 檢查 |
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
 | 刪除範圍的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
 | 只有 Go 有的 da-guard 檢查（已搬到產生器） | 產生器那一側由 `tests/shared/routing_policy_parity_matrix.json` 釘住 |
