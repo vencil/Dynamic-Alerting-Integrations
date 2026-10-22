@@ -616,6 +616,11 @@ def generate_markdown(report: QualityReport) -> str:
     lines.append(f"**Overall Score: {s.get('overall_score', 0)}/100** "
                  f"({s.get('good', 0)} GOOD / {s.get('warn', 0)} WARN / {s.get('bad', 0)} BAD)")
     lines.append("")
+    if s.get("non_finite_samples_dropped"):
+        # #3213: disclosed in every format, not only --json / text
+        lines.append(f"> {s['non_finite_samples_dropped']} non-finite sample value(s) "
+                     "(+Inf / -Inf / NaN) left out of the grades")
+        lines.append("")
 
     lines.append("| Tenant | Score | GOOD | WARN | BAD |")
     lines.append("|--------|-------|------|------|-----|")

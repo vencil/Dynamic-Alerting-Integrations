@@ -521,6 +521,11 @@ def generate_markdown(report: ForecastReport) -> str:
                  f"**Limit:** {report.cardinality_limit} | "
                  f"**Warn:** {report.warn_days} days")
     lines.append("")
+    if report.non_finite_samples_dropped:
+        # #3213: disclosed in every format, not only --json / text
+        lines.append(f"> {report.non_finite_samples_dropped} non-finite sample value(s) "
+                     "(+Inf / -Inf / NaN) left out of the regression")
+        lines.append("")
 
     risk_icons = {"critical": "🔴", "warning": "🟡", "safe": "🟢"}
 
@@ -685,8 +690,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "cardinality_limit": args.limit,
                 "warn_days": args.warn_days,
                 "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
-                            # #3213: every sample non-finite
-                            "non_finite_samples_dropped": sum(non_finite_dropped.values())},
+                            # #3213: every sample non-finite (the --tenant's
+                            # only, as in the report)
+                            "non_finite_samples_dropped": sum(
+                                n for t, n in non_finite_dropped.items()
+                                if not args.tenant or t == args.tenant)},
                 "tenants": [],
             }))
         return EXIT_CALLER_ERROR

@@ -76,10 +76,10 @@ _SHAPES = {
         "status": "success",
         "data": {"resultType": "matrix",
                  "result": [good, {"metric": {"tenant": "t2"}, "values": [[1, "abc"]]}]}},
-    "sample_not_string": lambda good: {
+    "sample_is_bool": lambda good: {
         "status": "success",
         "data": {"resultType": "matrix",
-                 "result": [good, {"metric": {"tenant": "t2"}, "values": [[1, 1]]}]}},
+                 "result": [good, {"metric": {"tenant": "t2"}, "values": [[1, True]]}]}},
     "result_type_vector": lambda good: {
         "status": "success",
         "data": {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}]}},
@@ -352,3 +352,45 @@ def test_backtest_keeps_inf_as_a_sample(tmp_path):
     change = json.loads(proc.stdout)["changes"][0]
     assert (change["status"], change["data_points"]) == ("analyzed", 10), change
     assert (change["old_breach_count"], change["new_breach_count"]) == (1, 1), change
+
+
+def _two_tenants(a_values, b_values):
+    return {"status": "success", "data": {"resultType": "matrix", "result": [
+        {"metric": {"tenant": "a"}, "values": a_values},
+        {"metric": {"tenant": "b"}, "values": b_values}]}}
+
+
+def test_cardinality_disclosure_counts_only_the_tenant_asked_for():
+    """--tenant a: only a's dropped samples, in the report and in the
+    no_data envelope alike."""
+    good = [[_NOW - d * 86400, "10"] for d in range(10, 0, -1)]
+    mixed = _two_tenants(good[:-2] + [[_NOW - 7200, "NaN"], [_NOW - 3600, "NaN"]],
+                         good[:-1] + [[_NOW - 3600, "+Inf"]])
+    with _fake(mixed) as url:
+        proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url),
+                    "--tenant", "a")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["summary"]["non_finite_samples_dropped"] == 2
+    nan = [[_NOW - d * 3600, "NaN"] for d in range(3, 0, -1)]
+    all_nan = _two_tenants(nan, nan + [[_NOW, "NaN"]])
+    with _fake(all_nan) as url:
+        proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url),
+                    "--tenant", "a")
+    doc = json.loads(proc.stdout)
+    assert (proc.returncode, doc["reason"]) == (2, "no_cardinality_data"), doc
+    assert doc["summary"]["non_finite_samples_dropped"] == 3, doc["summary"]
+
+
+@pytest.mark.parametrize("tool", ["alert_quality", "cardinality_forecasting"])
+def test_markdown_discloses_non_finite(tool):
+    if tool == "alert_quality":
+        row = {"metric": {"alertname": "HostDown", "tenant": "tenant-one"},
+               "values": [[_NOW - 120, "1"], [_NOW - 60, "NaN"]]}
+    else:
+        good = _GOOD_ROW[tool]
+        row = dict(good, values=good["values"][:-1] + [[good["values"][-1][0], "NaN"]])
+    body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
+    with _fake(body) as url:
+        proc = _run(tool, "--prometheus", url, "--markdown")
+    assert proc.returncode == 0, proc.stderr
+    assert "1 non-finite sample value(s)" in proc.stdout, proc.stdout

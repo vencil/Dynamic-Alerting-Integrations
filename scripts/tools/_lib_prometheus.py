@@ -353,13 +353,15 @@ def _malformed(source: str, defect: str) -> QueryError:
 
 def sample_value(raw: Any) -> float:
     """The float a Prometheus sample holds — ``+Inf`` / ``-Inf`` / ``NaN``
-    included. The API writes every sample value as a JSON string; anything
-    that is not a string ``float()`` reads raises ``ValueError``, which
+    included. The API writes every sample value as a JSON string; a JSON
+    number is read too, as the tools read it before (refusing it would
+    change their exit code, which is not decided). Anything ``float()``
+    cannot read — and a boolean — raises ``ValueError``, which
     ``_matrix_rows`` turns into a ``QueryError`` naming the sample. The one
     reading of a sample (#3213): tools do not call ``float()`` / ``int()`` on
     one themselves."""
-    if not isinstance(raw, str):
-        raise ValueError(f"{raw!r:.40} is not a sample string")
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raise ValueError(f"{raw!r:.40} is not a sample value")
     return float(raw)
 
 
@@ -427,8 +429,9 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
                                      "expected [timestamp, sample]")
                 if key != "values":
                     continue
+                # Only the value: an unreadable timestamp is not refused here
+                # (backtest never reads it; refusing would change its rc).
                 try:
-                    float(sample[0])
                     sample_value(sample[1])
                 except (TypeError, ValueError):
                     raise _malformed("Prometheus",

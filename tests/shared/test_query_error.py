@@ -99,15 +99,28 @@ def test_sample_value_nan():
     assert math.isnan(lp.sample_value("NaN"))
 
 
-@pytest.mark.parametrize("raw", ["abc", "", 1, 1.5, None, [1]])
-def test_sample_value_refuses_what_is_not_a_sample_string(raw):
-    """#3213: the API writes every sample as a string; a number or garbage is
-    not an answer, refused at the one reading."""
+@pytest.mark.parametrize("raw", ["abc", "", True, None, [1]])
+def test_sample_value_refuses_what_is_not_a_sample(raw):
+    """#3213: garbage (and a boolean) is not an answer, refused at the one
+    reading."""
     with pytest.raises(ValueError):
         lp.sample_value(raw)
 
 
-@pytest.mark.parametrize("value", ["abc", 1, None])
+@pytest.mark.parametrize("raw,want", [(1, 1.0), (1.5, 1.5)])
+def test_sample_value_reads_a_json_number_as_before(raw, want):
+    """The API sends strings; a JSON number is read as the tools read it
+    before #3213 — refusing it would be an exit-code change not decided."""
+    assert lp.sample_value(raw) == want
+
+
+def test_matrix_rows_does_not_check_timestamps():
+    """An unreadable timestamp is left to the reader (backtest never reads
+    it): refusing it here would change backtest's exit code."""
+    lp._matrix_rows(_ok([{"values": [["abc", "1"], [None, "2"]]}]))
+
+
+@pytest.mark.parametrize("value", ["abc", True, None])
 def test_matrix_rows_names_an_unreadable_sample(value):
     body = _ok([_ROW, {"metric": {}, "values": [[1, "1"], [2, value]]}])
     with pytest.raises(lp.QueryError, match=r"result\[1\]\.values\[1\] is "):
