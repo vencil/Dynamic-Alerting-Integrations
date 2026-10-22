@@ -94,7 +94,8 @@ func TestLoad_DirMode_WarnsSubtreeScheduledReserved(t *testing.T) {
 		"sub/_defaults.yaml: defaults._severity_dedup, sub/_defaults.yaml: defaults._silent_mode — a reserved key does not support them: " +
 		"only each value's `default` is used and the rest is ignored."
 	unapplied := "WARN: 2 subtree defaults entries write a reserved key with a time window or expires (`overrides:` / `expires:` / `reason:`, #3269): " +
-		"other/_defaults.yaml: defaults._silent_mode, other/_defaults.yaml: defaults._state_maint — not applied at all"
+		"other/_defaults.yaml: defaults._silent_mode, other/_defaults.yaml: defaults._state_maint — not applied at all: " +
+		"a subtree `_defaults.yaml` does not hand this value down to its tenants, `default` included. Remove them"
 	for _, want := range []string{used, unapplied} {
 		if got := buf.String(); !strings.Contains(got, want) {
 			t.Fatalf("log = %q, want %q", got, want)

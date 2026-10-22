@@ -65,8 +65,7 @@ func warnScheduledReserved(logger *log.Logger, defaultOnly, notApplied []string)
 	if len(notApplied) > 0 {
 		logger.Printf("WARN: %d subtree defaults entries write a reserved key with a time window or expires "+
 			"(`overrides:` / `expires:` / `reason:`, #3269): %s — not applied at all: a subtree `_defaults.yaml` "+
-			"does not hand this value down to its tenants, `default` included (only a `disable` or a number, "+
-			"for a key a resolver reads from the tenant's own map, is handed down). %s",
+			"does not hand this value down to its tenants, `default` included. %s",
 			len(notApplied), cappedList(notApplied), scheduledReservedRemedy)
 	}
 }
