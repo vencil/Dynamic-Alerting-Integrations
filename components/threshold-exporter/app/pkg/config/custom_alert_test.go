@@ -858,3 +858,42 @@ func TestCustomAlertSpec_Fields(t *testing.T) {
 		t.Errorf("an absent field is left out: %#v", f)
 	}
 }
+
+// #3209: an entry rejected because its `threshold:` is a value the threshold
+// rows' grammar and finite-number reader refuse carries Refused, classed as
+// RefusedValueAt classes a threshold key's value; any other rejection, a
+// switched-off entry and a served one carry none. The rejection text is
+// unchanged.
+func TestCustomAlertEntries_ThresholdRefused(t *testing.T) {
+	const thr = "recipe: threshold, metric: m, op: \">\", window: 5m"
+	for _, tc := range []struct {
+		name, entry, status, refused, reason string
+	}{
+		{"abc", "{" + thr + ", name: a, threshold: abc}", CustomAlertRejected, RefusedUnparsed, `threshold value "abc" is not numeric`},
+		{"NaN", "{" + thr + ", name: a, threshold: \"NaN\"}", CustomAlertRejected, RefusedNonFinite, `threshold value "NaN" must be finite`},
+		{"-Inf:critical", "{" + thr + ", name: a, threshold: \"-Inf:critical\"}", CustomAlertRejected, RefusedNonFinite, "must be finite"},
+		{"infinity", "{" + thr + ", name: a, threshold: infinity}", CustomAlertRejected, RefusedNonFinite, "must be finite"},
+		{"1e999", "{" + thr + ", name: a, threshold: \"1e999\"}", CustomAlertRejected, RefusedUnparsed, "is not numeric"},
+		{"70:high", "{" + thr + ", name: a, threshold: \"70:high\"}", CustomAlertRejected, RefusedUnparsed, "must be warning or critical"},
+		{"served", "{" + thr + ", name: a, threshold: \"80:critical\"}", CustomAlertServed, "", ""},
+		{"disable", "{" + thr + ", name: a, threshold: disable}", CustomAlertDisabled, "", ""},
+		{"disable:critical", "{" + thr + ", name: a, threshold: \"disable:critical\"}", CustomAlertDisabled, "", ""},
+		{"switched off, bad for", "{" + thr + ", name: a, threshold: disable, for: 7m}", CustomAlertRejected, "", "switched off"},
+		{"bad window", "{recipe: threshold, metric: m, op: \">\", window: 5x, name: a, threshold: \"80\"}", CustomAlertRejected, "", "window"},
+		{"bad name", "{" + thr + ", name: \"a-b\", threshold: \"80\"}", CustomAlertRejected, "", "not a valid identifier"},
+		{"no threshold", "{" + thr + ", name: a}", CustomAlertRejected, "", "missing required field"},
+		{"forecast band", "{recipe: forecast, name: f, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.9\"}", CustomAlertRejected, "", "must be in (0,"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, blockErr := CustomAlertEntries("t1", customAlertsConfig(t, "t1", "      - "+tc.entry+"\n").Tenants["t1"])
+			if blockErr != "" || len(entries) != 1 {
+				t.Fatalf("entries %+v, blockErr %q", entries, blockErr)
+			}
+			e := entries[0]
+			if e.Status != tc.status || e.Refused != tc.refused || !strings.Contains(e.Reason, tc.reason) {
+				t.Errorf("status %q refused %q reason %q; want %q, %q, reason containing %q",
+					e.Status, e.Refused, e.Reason, tc.status, tc.refused, tc.reason)
+			}
+		})
+	}
+}

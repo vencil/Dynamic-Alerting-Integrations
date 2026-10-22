@@ -944,11 +944,11 @@ func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed
 }
 
 // disabledEverywhere reports whether every value sv can resolve to is a
-// disable by resolveBaseRows' own test (isDisabled on the trimmed, lowered
-// text): its default and each window's value. A schedule that is a number in
+// disable by resolveBaseRows' own test (thresholdRowDisabled): its default
+// and each window's value. A schedule that is a number in
 // any window is not — it would serve a row then.
 func disabledEverywhere(sv ScheduledValue) bool {
-	off := func(s string) bool { return isDisabled(strings.ToLower(strings.TrimSpace(s))) }
+	off := func(s string) bool { o, _ := thresholdRowDisabled(s); return o }
 	if !off(sv.Default) {
 		return false
 	}
@@ -1202,11 +1202,12 @@ func thresholdScalar(value string) bool {
 	if raw == "" {
 		return false
 	}
-	if isDisabled(strings.ToLower(raw)) {
+	if off, _ := thresholdRowDisabled(raw); off {
 		return true
 	}
 	// `value:severity` is the inline-severity form resolveBaseRows accepts —
-	// read by the same function, so a severity it refuses (#3071) is refused
+	// read by the same function, so a severity it refuses (#3071), a
+	// non-finite number (#3140) and `disable:<severity>` (#3141) are refused
 	// here too.
 	_, _, ok := parseThresholdValue(raw)
 	return ok

@@ -137,7 +137,12 @@ func checkSelectedInvariant(t *testing.T, doc map[string]any) {
 		}
 		_, hasContent := files[p]
 		readers := stringsOf(e["readers"])
-		if (len(readers) == 0) != (e["not_read"] != nil) {
+		if e["role"] == "dir" || e["role"] == "unlistable_dir" {
+			// A directory is no file a reader reads, and nothing is passed over.
+			if len(readers) != 0 || e["not_read"] != nil {
+				t.Errorf("%s: role %v with readers %v, not_read %v", p, e["role"], readers, e["not_read"])
+			}
+		} else if (len(readers) == 0) != (e["not_read"] != nil) {
 			t.Errorf("%s: readers %v, not_read %v", p, readers, e["not_read"])
 		}
 		if hasContent && e["problem"] != nil {
@@ -235,7 +240,7 @@ func TestParseTree_PathKinds(t *testing.T) {
 	if got := unreadableKinds(doc); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unreadable\n got %v\nwant %v", got, want)
 	}
-	if r := readersOf(doc)["dir.yaml"]; !reflect.DeepEqual(r, []string{"generator"}) {
+	if r := readersOf(doc)["dir.yaml"]; len(r) != 0 {
 		t.Fatalf("dir.yaml readers %v", r)
 	}
 	if _, ok := doc["files"].(map[string]any)["dir.yaml/x.yaml"]; !ok {
@@ -427,6 +432,29 @@ func TestParseTree_FileModeOnDisk(t *testing.T) {
 			if len(nr) != 0 || !reflect.DeepEqual(readers, both) || len(unreadableKinds(doc)) != 0 {
 				t.Errorf("%s: readers %v, not_read %v; want read by both", tc.path, readers, nr)
 			}
+		}
+	}
+}
+
+// TestParseTree_FileModeGivesADirectoryTreeModesEntry: a --path that is an
+// existing directory the walk enters is what tree mode says it is — role
+// dir, class directory, readers [], not_read null, no problem — whatever its
+// name; its text is not read. A config-named one also carries the problem.
+func TestParseTree_FileModeGivesADirectoryTreeModesEntry(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"team/t.yaml": "a: 1\n", "team/sub/s.yaml": "a: 1\n",
+		"x.yaml/i.yaml": "a: 1\n"})
+	_, tree, _ := runPT(t, "", "--config-dir", root)
+	treeEntries := entriesByPath(t, tree)
+	for _, p := range []string{"team", "team/sub", "x.yaml"} {
+		_, doc, _ := runPT(t, "a: 1\n", "--config-dir", root, "--path", p, "--input", "-")
+		checkSelectedInvariant(t, doc)
+		got := doc["entries"].([]any)
+		if len(got) != 1 || !reflect.DeepEqual(got[0], any(treeEntries[p])) || treeEntries[p]["role"] != "dir" {
+			t.Errorf("%s: file mode %v; tree mode %v", p, got, treeEntries[p])
+		}
+		if len(doc["files"].(map[string]any)) != 0 {
+			t.Errorf("%s: the text was read", p)
 		}
 	}
 }

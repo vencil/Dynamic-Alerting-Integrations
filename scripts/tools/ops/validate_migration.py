@@ -595,5 +595,6 @@ def main():
 if __name__ == "__main__":
     # entrypoint.py 以 exec_module(__main__) 執行本檔，exit code 只能靠
     # SystemExit 上傳——裸 main() 會把回傳值丟掉（正是 silent-pass bug 的
-    # 後半段）。main() 回傳 int、這裡統一轉成 process exit code。
-    sys.exit(main())
+    # 後半段）。main() 回傳 int，run() 把它當成 process exit code。
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

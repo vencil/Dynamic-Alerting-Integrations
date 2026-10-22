@@ -149,6 +149,8 @@ from _grar_render import (  # noqa: E402
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
 from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
+# #3257: the base config's global may not hand a credential to a receiver.
+from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the whole --validate verdict, shared with validate-config's routes
 # row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
 from _grar_render import evaluate_generated_config  # noqa: E402
@@ -1296,6 +1298,14 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
             base_config = load_base_config(args.base_config)
         except BaseConfigInputError as exc:
             die_caller_error(str(exc))
+        # #3257: a credential in the base's global reaches every conf.d
+        # receiver that leaves the field out. A verdict on the CONFIG (rc 1),
+        # decided here, before the tenant scan, so a tree with no routes
+        # cannot pass it in silence (the #1616 lesson above).
+        try:
+            assert_base_global_inherits_no_credentials(base_config)
+        except ValueError as exc:
+            _assembly_failed(exc, "nothing was generated or written")
 
     # Load tenant configs (routing + dedup + schema warnings + enforced routing)
     # #1460: the tree carries the record of the files that did not parse, and
@@ -1406,4 +1416,5 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

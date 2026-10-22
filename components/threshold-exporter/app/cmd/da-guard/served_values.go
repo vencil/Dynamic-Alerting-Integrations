@@ -185,8 +185,11 @@ type servedTenantValues struct {
 	Routing map[string]any `json:"routing,omitempty"`
 	// Keys (ADR-038 decision 5): for every key of the tenant's merged
 	// config and every key of Unserved, whether the exporter reads it, why
-	// not, and what the reserved-key registry declares for a `_` key. Facts
-	// only: no verdict on keys another reader owns. Always present.
+	// not, and what the reserved-key registry declares for a `_` key — and
+	// (#3140) for every threshold key the root `defaults:` writes as a
+	// non-finite number that the tenant does not write (reason
+	// root_default_non_finite). Facts only: no verdict on keys another
+	// reader owns. Always present.
 	Keys map[string]servedKey `json:"keys"`
 	// CustomAlertRows: the custom-alert rows the tenant's `_custom_alerts`
 	// asks /metrics to serve, counted before the per-tenant metric limit
@@ -220,6 +223,12 @@ type servedCustomAlert struct {
 	// serves (would serve, switched back on), in row order.
 	RecipeID   string   `json:"recipe_id,omitempty"`
 	Severities []string `json:"severities,omitempty"`
+	// Refused (#3209), on a rejected entry only: the exporter rejects it
+	// because it refuses its `threshold:` as a threshold value —
+	// "non_finite" or "unparsed" (config.CustomAlertEntry.Refused), the
+	// classes keys[].refused uses. da-guard reports such an entry as
+	// value_not_served. Absent for any other rejection.
+	Refused string `json:"refused,omitempty"`
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -247,6 +256,18 @@ type servedKey struct {
 	Declared map[string][]string `json:"declared,omitempty"`
 	// Hint is the registry's hint for a retired key.
 	Hint string `json:"hint,omitempty"`
+	// Refused (#3140), for a threshold key only: why the row resolver
+	// refused the key's value at --at — config.RefusedNonFinite
+	// ("non_finite": NaN or ±Inf) or config.RefusedUnparsed ("unparsed") —
+	// whether it then served the platform default (a base key: Exporter
+	// true) or no row (Reason value_non_finite / value_unparsed). Absent
+	// when the value is read: a number, or a disable (Reason disabled). Set
+	// only when the resolver itself recorded the refusal
+	// (config.TenantValuesNotServed), so a key the platform does not declare
+	// stays no_row whatever it holds. Also "non_finite" on a key with
+	// Reason root_default_non_finite: the value refused is the root
+	// default's, which leaves the tenant no row.
+	Refused string `json:"refused,omitempty"`
 	// Disable, only with --disable-effects and only for a key that reads
 	// `disable` in some part of the day and is not a registered `_` key:
 	// what switching it off does to the user_threshold rows /metrics serves — effective, partial (ServedFamily is still served) or
@@ -283,7 +304,48 @@ const (
 	keyReasonUnregistered = "unregistered"
 	// keyReasonRetired: a retired key (Hint says what replaced it).
 	keyReasonRetired = "retired"
+	// keyReasonValueNonFinite (#3140): the resolver refused the key's value
+	// as a non-finite number (NaN, ±Inf) and serves no row for it — not a
+	// switch-off: the alert the value was written for can never fire.
+	keyReasonValueNonFinite = "value_non_finite"
+	// keyReasonValueUnparsed (#3140): the resolver refused the key's value
+	// as one it cannot read and serves no row for it.
+	keyReasonValueUnparsed = "value_unparsed"
+	// keyReasonRootDefaultNonFinite (#3140): a threshold key the tenant
+	// does not write, whose root `defaults:` value is a non-finite number
+	// (config.NonFiniteRootDefaults): the resolver serves no default row
+	// for it, so the tenant has none — not a switch-off, and not a key
+	// nobody declares. Refused is "non_finite". da-guard reports the root
+	// value as root_default_non_finite.
+	keyReasonRootDefaultNonFinite = "root_default_non_finite"
 )
+
+// refusedReason is the keyReason* / segment reason of a refusal
+// (config.RefusedValueAt) that leaves no row.
+func refusedReason(refused string) string {
+	if refused == config.RefusedNonFinite {
+		return keyReasonValueNonFinite
+	}
+	return keyReasonValueUnparsed
+}
+
+// recordedRefusals is, lazily, whether the resolver recorded a refused
+// value (NotServedValueUnparsed / NotServedValueUnparsedDropped, over the
+// whole UTC day) for a canonical key of tenant: the condition under which
+// served-values names a refusal at all (servedKey.Refused).
+func recordedRefusals(cfg *config.ThresholdConfig, tenant string, at time.Time) func(canon string) bool {
+	var table map[string]string
+	return func(canon string) bool {
+		if table == nil {
+			table = cfg.TenantValuesNotServed(tenant, at)
+			if table == nil {
+				table = map[string]string{}
+			}
+		}
+		r := table[canon]
+		return r == config.NotServedValueUnparsed || r == config.NotServedValueUnparsedDropped
+	}
+}
 
 // servedTimeBox is one entry of servedTenantValues.TimeBoxes.
 type servedTimeBox struct {
@@ -332,6 +394,11 @@ type scheduleSegment struct {
 	Severity *string         `json:"severity,omitempty"`
 	Series   []metricsSeries `json:"series,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// Reason (#3140), only on a segment whose Value is null: why the key
+	// serves no row there — "disabled" (a disable written for that part of
+	// the day), "value_non_finite" or "value_unparsed" (a value the resolver
+	// refused; keyReason*). Absent when there is nothing to serve.
+	Reason string `json:"reason,omitempty"`
 }
 
 // jsonNull is a segment's Value when the key is not served: an explicit JSON
@@ -661,6 +728,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		stateOn[sf.Tenant][sf.FilterName] = servedStateFilter{Severity: sf.Severity}
 	}
 
+	// #3140: the root defaults the resolver serves no default row for.
+	rootNonFinite := cfg.NonFiniteRootDefaults()
+
 	out := make(map[string]servedTenantValues, len(cfg.Tenants))
 	for tenant, overrides := range cfg.Tenants {
 		tv := servedTenantValues{
@@ -679,7 +749,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		tv.CustomAlerts, tv.CustomAlertsError = make([]servedCustomAlert, 0, len(entries)), blockErr
 		for _, e := range entries {
 			tv.CustomAlerts = append(tv.CustomAlerts, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
-				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities})
+				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities,
+				Refused: e.Refused})
 		}
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)
@@ -775,7 +846,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			canon, _ := config.CanonicalKeyFor(k)
 			_, own := overrides[canon]
 			perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
-			if _, served := tv.Values[canon]; served || own || !perTenant {
+			if _, served := tv.Values[canon]; served || own || !perTenant || rootNonFinite[k] {
+				// A non-finite one (#3140) is in Keys instead (below): it
+				// is no value to show, and JSON has no NaN.
 				continue
 			}
 			tv.Unserved[k] = v
@@ -797,7 +870,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
-		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at)
+		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedRefusals(cfg, tenant, at))
+		addRootNonFinite(tv, overrides, rootNonFinite)
 		out[tenant] = tv
 	}
 	if withSchedules {
@@ -842,7 +916,7 @@ func addDisableEffects(cfg *config.ThresholdConfig, at time.Time,
 // resolver's own).
 func servedKeys(tv servedTenantValues,
 	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
-	at time.Time,
+	at time.Time, recorded func(canon string) bool,
 ) map[string]servedKey {
 	out := map[string]servedKey{}
 	add := func(k string) {
@@ -862,15 +936,23 @@ func servedKeys(tv servedTenantValues,
 			if !written {
 				sv, written = undeliverable[k]
 			}
+			refused := ""
+			if written && !inUndeliverable && (!isAlias || !canonWritten) {
+				if r := config.RefusedValueAt(canon, sv, at); r != "" && recorded(canon) {
+					refused = r
+				}
+			}
 			switch {
 			case isAlias && canonWritten:
 				e.Reason = keyReasonShadowed
 			case kept || dropped:
-				e.Exporter = true
+				e.Exporter, e.Refused = true, refused
 			case written && config.DisabledAt(sv, at):
 				e.Reason = keyReasonDisabled
 			case inUndeliverable:
 				e.Reason = keyReasonUndeliverable
+			case refused != "":
+				e.Reason, e.Refused = refusedReason(refused), refused
 			default:
 				e.Reason = keyReasonNoRow
 			}
@@ -924,6 +1006,34 @@ func servedKeys(tv servedTenantValues,
 		add(k)
 	}
 	return out
+}
+
+// addRootNonFinite gives tv.Keys an entry, reason
+// root_default_non_finite, for every key of rootNonFinite
+// (config.NonFiniteRootDefaults) the tenant does not write under any
+// spelling and has no row for: the root's value is refused, so the tenant
+// gets no default row (#3140). A tenant that writes the key is read as
+// any key it writes (servedKeys).
+func addRootNonFinite(tv servedTenantValues, overrides map[string]config.ScheduledValue, rootNonFinite map[string]bool) {
+	if len(rootNonFinite) == 0 {
+		return
+	}
+	written := map[string]bool{}
+	for k := range overrides {
+		canon, _ := config.CanonicalKeyFor(k)
+		written[canon] = true
+	}
+	for k := range rootNonFinite {
+		canon, _ := config.CanonicalKeyFor(k)
+		_, served := tv.Values[canon]
+		_, listed := tv.Keys[canon]
+		if written[canon] || served || listed {
+			continue
+		}
+		// Keyed by the canonical spelling, as tv.Values is: a root that still
+		// writes a retired alias (mysql_cpu) names the key readers know.
+		tv.Keys[canon] = servedKey{Reason: keyReasonRootDefaultNonFinite, Refused: config.RefusedNonFinite}
+	}
 }
 
 // spellAsWritten re-keys each tenant's maps with its keys as written

@@ -429,3 +429,76 @@ class TestBilingual:
         zh_out = capsys.readouterr().out
         assert "Usage" in en_out
         assert "用法" in zh_out
+
+
+# ── #3214: a binary in a directory the caller cannot enter ─────────────
+
+
+def too_long(self):
+    raise OSError(36, "File name too long", str(self))
+
+
+@pytest.mark.parametrize("err", ["EACCES", "ENAMETOOLONG"])
+@pytest.mark.parametrize("how", ["flag", "env"])
+def test_an_unreadable_parent_directory_is_not_a_missing_binary(monkeypatch, make_dispatcher,
+                                                                how, err):
+    """``Path.is_file`` raises EACCES for a path under a directory the caller
+    cannot enter (ENAMETOOLONG for an over-long one). That is not "no such
+    binary": the path is resolved and left to be run, where the OS names
+    the real reason."""
+    path = "/nonexistent-3214/locked/da-guard"
+
+    def denied(self):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(gd.Path, "is_file", denied if err == "EACCES" else too_long)
+    d = make_dispatcher()
+    if how == "flag":
+        monkeypatch.delenv("FAKE_BINARY", raising=False)
+        assert d.resolve_binary(path) == path
+    else:
+        monkeypatch.setenv("FAKE_BINARY", path)
+        assert d.resolve_binary() == path
+
+
+@pytest.mark.skipif(os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() != 0,
+                    reason="needs root to drop to an unprivileged uid with setpriv")
+def test_a_da_guard_behind_a_locked_directory_is_a_named_error():
+    """End to end (#3214): ``$DA_GUARD_BINARY`` sits in a 0700 root directory
+    and the tool runs as ``nobody``. It names why da-guard could not run
+    (rc 2), never ``unexpected internal error (PermissionError)``."""
+    import shutil
+    setpriv = shutil.which("setpriv")
+    if setpriv is None:
+        pytest.skip("setpriv is not installed")
+    import tempfile
+    # pytest's own tmp_path sits under a 0700 root directory: `nobody` could
+    # not reach conf.d either. Only the da-guard's directory is locked here.
+    base = tempfile.mkdtemp(prefix="e3214-")
+    os.chmod(base, 0o755)
+    request_cleanup = base
+    tmp_path = gd.Path(base)
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o700)
+    fake = locked / "da-guard"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    tool = os.path.join(os.path.dirname(gd.__file__), "lint",
+                        "check_path_metadata_consistency.py")
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    env = dict(os.environ, DA_GUARD_BINARY=str(fake))
+    argv = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups",
+            sys.executable, tool, "--config-dir", str(confd)]
+    probe = subprocess.run([*argv[:5], "-c", f"open({tool!r}).close()"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    if probe.returncode != 0:
+        pytest.skip("uid 65534 cannot read the tool from this checkout")
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              timeout=60, env=env)
+    finally:
+        shutil.rmtree(request_cleanup, ignore_errors=True)
+    assert proc.returncode == 2, proc.stderr
+    assert "unexpected internal error" not in proc.stderr, proc.stderr
+    assert "could not be run" in proc.stderr and "Permission denied" in proc.stderr, proc.stderr

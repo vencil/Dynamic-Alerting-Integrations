@@ -253,3 +253,41 @@ func TestDefaultsWrapperRootCustomAlertsFix(t *testing.T) {
 		})
 	}
 }
+
+// #3140: a root threshold yaml.v3 decodes to NaN / ±Inf is an error finding,
+// one per key, named by the exporter's predicate (config.NonFiniteDefaultKeys);
+// a subtree carrier, a `_` key, a finite value and a dropped file are not.
+func TestCheckRootDefaultsNonFinite(t *testing.T) {
+	t.Parallel()
+	got := checkRootDefaultsNonFinite(CheckInput{
+		DefaultsFiles: []config.DefaultsFile{
+			{Name: "_defaults.yaml", Data: []byte("defaults:\n  b: -.inf\n  a: .nan\n  c: 80\n  _x: .inf\n")},
+			{Name: "sub/_defaults.yaml", Data: []byte("defaults:\n  a: .nan\n")},
+		},
+	})
+	var fields []string
+	for _, f := range got {
+		if f.Severity != SeverityError || f.Kind != findingkind.FindingRootDefaultNonFinite {
+			t.Errorf("finding %+v, want an error root_default_non_finite", f)
+		}
+		if !strings.Contains(f.Message, "not a finite number") || !strings.Contains(f.Message, "optional_overrides:") {
+			t.Errorf("message %q", f.Message)
+		}
+		fields = append(fields, f.Field)
+	}
+	if want := []string{"_defaults.yaml:defaults.a", "_defaults.yaml:defaults.b"}; strings.Join(fields, ",") != strings.Join(want, ",") {
+		t.Errorf("fields = %v, want %v", fields, want)
+	}
+	if n := len(checkRootDefaultsNonFinite(CheckInput{
+		DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml", Data: []byte("defaults:\n  a: .nan\n")}},
+		ParseFailed:   []string{"_defaults.yaml"},
+	})); n != 0 {
+		t.Errorf("a dropped file got %d findings", n)
+	}
+	// Wired into the run.
+	rep, err := CheckDefaultsImpact(CheckInput{DefaultsFiles: []config.DefaultsFile{
+		{Name: "_defaults.yaml", Data: []byte("defaults:\n  a: .nan\n")}}})
+	if err != nil || rep.Summary.Errors != 1 {
+		t.Fatalf("CheckDefaultsImpact: %+v, %v; want one error", rep, err)
+	}
+}
