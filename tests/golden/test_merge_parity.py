@@ -61,7 +61,10 @@ tests/golden/not_served.json; the served-* trees are the counterpart in a
 shape /metrics does serve. Which tree is which is enforced on the Go side
 (components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs
 `da-guard served-values` over every fixture tree), since that is where the
-exporter's load lives.
+exporter's load lives. Since #3206 describe_tenant refuses those five trees
+(the shared conf.d refusal, the root file named); their golden row is held
+against `da-guard effective` read directly, the answer describe_tenant shows
+on every tree it does read.
 
 Chain discovery is checked on both sides from the tree itself: here by
 describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
@@ -109,8 +112,10 @@ REPO_ROOT = HERE.parent.parent
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
 sys.path.insert(0, str(DESCRIBE.parent))
 sys.path.insert(0, str(DESCRIBE.parent.parent))
-import describe_tenant as dt  # noqa: E402
 from _lib_tenant_values import run_effective  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 GOLDEN = json.loads((HERE / "golden.json").read_text(encoding="utf-8"))
 # The trees whose root file the exporter drops whole (exit 3). da-guard
 # effective refuses to give their values (#1549: describe_tenant then prints
@@ -187,6 +192,22 @@ def test_merge_parity_python(golden: dict, da_guard_env):
     conf_d = _fixture_path(golden["fixture_dir"])
     assert conf_d.exists(), f"Fixture dir missing: {conf_d}"
 
+    if golden["fixture_dir"] in NOT_SERVED:
+        # #3206: a conf.d tool refuses the tree, naming the root file; the
+        # row is Go's own answer, read as a judge reads it.
+        assert go_refused(conf_d) == ["_defaults.yaml"], golden["scenario"]
+        p = subprocess.run([sys.executable, str(DESCRIBE), golden["tenant_id"],
+                            "--conf-d", str(conf_d), "--show-sources", "--format", "json"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert_refused(p.returncode, p.stderr, ["_defaults.yaml"])
+        with _lib_parse_cache.judging():
+            t = run_effective(conf_d).tenants[golden["tenant_id"]]
+        got = {"source_file": t.source_file, "source_hash": t.source_hash,
+               "merged_hash": t.merged_hash, "defaults_chain": list(t.defaults_chain),
+               "effective_config": t.effective_config}
+        assert got == {k: golden[k] for k in got}, golden["scenario"]
+        return
+
     result = _run_describe(conf_d, golden["tenant_id"])
 
     assert result["source_hash"] == golden["source_hash"], \
@@ -194,12 +215,8 @@ def test_merge_parity_python(golden: dict, da_guard_env):
     go = run_effective(conf_d).tenants[golden["tenant_id"]].merged_hash
     assert go == golden["merged_hash"], \
         f"da-guard effective's merged_hash drift for {golden['scenario']}"
-    if golden["fixture_dir"] in NOT_SERVED:
-        assert result["merged_hash"] is None, golden["scenario"]
-        assert result["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE, result
-    else:
-        assert result["merged_hash"] == golden["merged_hash"], \
-            f"merged_hash drift for {golden['scenario']}"
+    assert result["merged_hash"] == golden["merged_hash"], \
+        f"merged_hash drift for {golden['scenario']}"
     assert result["effective_config"] == golden["effective_config"], \
         f"effective_config drift for {golden['scenario']}"
     assert result["defaults_chain"] == golden["defaults_chain"], \

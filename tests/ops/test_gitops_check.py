@@ -64,6 +64,7 @@ import yaml
 import gitops_check as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206)
 
 
 def run_main(argv):
@@ -437,16 +438,14 @@ class TestCheckLocal:
         assert "_defaults.yaml" in result.message
 
     def test_local_invalid_defaults_yaml(self, config_dir):
-        """Invalid YAML in _defaults.yaml."""
+        """Invalid YAML in _defaults.yaml: the tree cannot be served, so the
+        shared refusal names it and the check stops (#3206)."""
         bad_yaml = "key: value\n  bad indentation:\n not aligned:"
         with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             f.write(bad_yaml)
 
-        result = gc.check_local(config_dir)
-
-        assert result.check == "local"
-        assert result.status == "fail"
-        assert "invalid" in result.message.lower()
+        with refuses("_defaults.yaml"):
+            gc.check_local(config_dir)
 
     def test_local_invalid_tenant_yaml(self, config_dir):
         """Invalid YAML in tenant file."""
@@ -458,14 +457,8 @@ class TestCheckLocal:
         with open(os.path.join(config_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
             f.write("invalid: yaml\n  bad indent:")
 
-        result = gc.check_local(config_dir)
-
-        assert result.check == "local"
-        assert result.status == "fail"
-        assert "invalid" in result.message.lower()
-        assert "parse_errors" in result.details
-        assert len(result.details["parse_errors"]) == 1
-        assert result.details["parse_errors"][0]["file"] == "db-a.yaml"
+        with refuses("db-a.yaml"):
+            gc.check_local(config_dir)
 
     def test_local_multiple_parse_errors(self, config_dir):
         """Multiple tenant files with YAML errors."""
@@ -479,11 +472,8 @@ class TestCheckLocal:
                 # Use invalid YAML: unclosed quotes
                 f.write("key: 'unclosed quote\nanother: value")
 
-        result = gc.check_local(config_dir)
-
-        assert result.status == "fail"
-        assert "3 yaml files" in result.message.lower()
-        assert len(result.details["parse_errors"]) == 3
+        with refuses("db-a.yaml", "db-b.yaml", "db-c.yaml"):
+            gc.check_local(config_dir)
 
     def test_local_empty_tenant_files(self, config_dir):
         """Only _defaults.yaml, no tenant files."""
@@ -673,17 +663,10 @@ class TestCheckLocalExtensionSpelling:
             Path(root, f"db-b{ext}").write_text(
                 "mysql_connections: [unclosed\n", encoding="utf-8")
 
-            result = gc.check_local(str(root))
-
-            assert result.status == "fail", (
-                f"a conf.d holding an unparseable `db-b{ext}` was reported "
-                f"{result.status!r}"
-            )
-            assert [e["file"] for e in result.details["parse_errors"]] == [
-                f"db-b{ext}"], (
-                f"the report must name the carrier it could not parse; got "
-                f"{result.details.get('parse_errors')!r}"
-            )
+            # The shared refusal (#3206) must name the carrier it could not
+            # parse, for either spelling.
+            with refuses(f"db-b{ext}"):
+                gc.check_local(str(root))
 
     def test_local_does_not_count_a_json_or_reserved_carrier(self, tmp_path):
         """CEILING, by counterexample — that is all a ceiling can be.
@@ -845,11 +828,8 @@ class TestCheckLocalHiddenEntries:
         root = self._root(tmp_path)
         Path(root, "bad.yaml").write_text(self._BROKEN, encoding="utf-8")
 
-        result = gc.check_local(str(root))
-
-        assert result.status == "fail"
-        assert [e["file"] for e in result.details["parse_errors"]] \
-            == ["bad.yaml"]
+        with refuses("bad.yaml"):
+            gc.check_local(str(root))
 
 
 # ── 4. check_sidecar() Tests ───────────────────────────────────────────────
@@ -1437,18 +1417,16 @@ class TestErrorRecovery:
     def test_local_names_a_file_parse_tree_cannot_read(self, config_dir):
         """ADR-036 step 4 (#2906): the tree is listed and read by `da-guard
         parse-tree`, so a file it cannot read — at any depth, here one that
-        is not UTF-8 — is named as a parse error, never skipped."""
+        is not UTF-8 — is named (by the shared refusal, #3206), never skipped."""
         with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
             f.write("defaults:\n  threshold: 100\n")
         os.makedirs(os.path.join(config_dir, "team"))
         with open(os.path.join(config_dir, "team", "bad.yaml"), "wb") as f:
             f.write(b"tenants:\n  t\xff: {}\n")
 
-        result = gc.check_local(config_dir)
-
-        assert result.status == "fail"
-        assert result.details["parse_errors"] == [
-            {"file": "team/bad.yaml", "error": "invalid_utf8: not valid UTF-8 at byte 12"}]
+        with refuses("team/bad.yaml") as err:
+            gc.check_local(config_dir)
+        assert "invalid_utf8: not valid UTF-8 at byte 12" in err.getvalue()
 
     def test_run_cmd_with_unicode_error(self):
         """_run_cmd handles unicode in error messages."""
