@@ -135,7 +135,8 @@ func undeterminedFromParseTree(doc *parseTreeDoc, reported map[string]bool) []un
 	readers := map[string][]string{}
 	for _, e := range doc.Entries {
 		readers[e.Path] = e.Readers
-		if e.Problem != nil && !reported[e.Path] {
+		// pathVerdict: the rule parse-tree's "verdict" is (verdict.go).
+		if pathVerdict(e, reported) == verdictTreeRefused {
 			out = append(out, undeterminedItem{File: e.Path, Field: string(e.Problem.Kind), Reason: undeterminedUnreadableOutsideRun})
 		}
 	}

@@ -224,7 +224,8 @@ def unlistable_dir(monkeypatch):
                     "role": "unlistable_dir",
                     "problem": {"kind": "read_failure",
                                 "message": "the directory cannot be listed; nothing under "
-                                           "it is read (walk_error)"}})
+                                           "it is read (walk_error)"},
+                    "verdict": "unservable"})
                 out["entries"].sort(key=lambda e: e["path"])
         return real(_json.dumps(out).encode("utf-8"), check=check, what=what)
 

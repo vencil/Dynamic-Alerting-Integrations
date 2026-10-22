@@ -237,7 +237,7 @@ def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
 
 
 def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
-    """壞檔的檔名不是 UTF-8：da-guard 的 stderr 帶原始 bytes，lib 仍 raise 已列出的例外並點名該檔。"""
+    """檔名不是 UTF-8：da-guard 整棵樹拒收（#3206，不論內容），lib raise 已列出的例外並以跳脫後的檔名點名。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
@@ -247,7 +247,7 @@ def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_values(conf_d, binary=da_guard)
     assert ei.value.returncode == 2
-    assert 'parse_failed[0]: "b\\xff.yaml"' in str(ei.value)
+    assert '"b\\xff.yaml" is not valid UTF-8' in str(ei.value)
 
 
 # ── skipped：exporter 讀了、但不當租戶的檔（#2115 R3）────────────────────────

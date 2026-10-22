@@ -27,6 +27,7 @@ type wireEntry struct {
 	NotRead          *string           `json:"not_read"`
 	Role             *string           `json:"role"`
 	Problem          *parseTreeProblem `json:"problem"`
+	Verdict          *string           `json:"verdict"`
 }
 
 type wireIndex struct {
@@ -69,8 +70,8 @@ func runPTList(t *testing.T, stdin string, args ...string) (int, *wireIndex, str
 		t.Fatal(err)
 	}
 	for _, e := range loose.Entries {
-		if len(e) != 9 {
-			t.Errorf("%v: %d fields, want 9", e["path"], len(e))
+		if len(e) != 10 {
+			t.Errorf("%v: %d fields, want 10", e["path"], len(e))
 		}
 	}
 	return code, &doc, errOut.String()
@@ -139,13 +140,23 @@ func TestParseTree_ListEntriesAreTreeEntries(t *testing.T) {
 	if !reflect.DeepEqual(list["defaults_carriers"], tree["defaults_carriers"]) {
 		t.Errorf("defaults_carriers list %v, tree %v", list["defaults_carriers"], tree["defaults_carriers"])
 	}
-	// The tree's entries minus what only reading finds.
+	// The tree's entries minus what only reading finds: a content problem,
+	// and the verdict of a file the exporter's load drops (parse_failed) —
+	// list mode's verdict knows the walk's records alone.
 	sawContentProblem := false
 	want := []any{}
 	for _, raw := range tree["entries"].([]any) {
 		e := map[string]any{}
 		for k, v := range raw.(map[string]any) {
 			e[k] = v
+		}
+		walkRecord := false
+		if pr, ok := e["problem"].(map[string]any); ok {
+			k := parsetree.Kind(pr["kind"].(string))
+			walkRecord = k == parsetree.KindReadFailure || k == parsetree.KindNotRegularFile
+		}
+		if e["verdict"] == verdictUnservable && !walkRecord {
+			e["verdict"] = nil
 		}
 		if pr, ok := e["problem"].(map[string]any); ok {
 			switch parsetree.Kind(pr["kind"].(string)) {
@@ -266,12 +277,19 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// No file here has content to refuse, so validation's exit-3 lists are
+	// the walk's alone, and the two modes give one verdict per path.
+	if err := setVerdicts(tree.Entries, reportedPaths(nil, unreadableEntries(config.TreeUnreadable(scan)))); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(list.Entries, tree.Entries) {
 		t.Errorf("list and tree entries differ:\n list %+v\n tree %+v", list.Entries, tree.Entries)
 	}
 	got := map[string]string{}
+	verdicts := map[string]string{}
 	for _, e := range list.Entries {
 		got[e.Path] = string(e.Role)
+		verdicts[e.Path] = e.Verdict
 		if e.Problem == nil {
 			t.Errorf("%s: no problem", e.Path)
 		}
@@ -288,6 +306,18 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("roles\n got  %v\n want %v", got, want)
+	}
+	// Every walk record is in validation's unreadable (exit 3) but the two
+	// paths that are no file the walk reads (exit 4); "." too, as no file
+	// was kept (config.RootUnreadable).
+	wantVerdicts := map[string]string{
+		"locked.yaml": verdictUnservable, "denied.yaml": verdictUnservable, "_defaults.yaml": verdictUnservable,
+		"future.yaml": verdictUnservable, "gone.yaml": verdictUnservable, "queue.yaml": verdictUnservable,
+		"sub": verdictUnservable, ".": verdictUnservable,
+		"d.yaml": verdictTreeRefused, "l.yaml": verdictTreeRefused,
+	}
+	if !reflect.DeepEqual(verdicts, wantVerdicts) {
+		t.Errorf("verdicts\n got  %v\n want %v", verdicts, wantVerdicts)
 	}
 }
 

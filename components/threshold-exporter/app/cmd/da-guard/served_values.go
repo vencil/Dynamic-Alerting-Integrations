@@ -445,7 +445,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"The document's \"schema\" is "+servedValuesSchema+"; a reader refuses any other value.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
-			"     any output string that is not valid UTF-8, or a Gather failure of the same\n"+
+			"     a conf.d path or any output string that is not valid UTF-8, or a Gather failure of the same\n"+
 			"     collectors production /metrics serves (e.g. two keys producing one series)\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n\n"+
@@ -486,6 +486,9 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
+	if refuseNonUTF8Tree(f.configDir, programName+" "+servedValuesCmd, errOut) {
+		return exitCallerErr // utf8_names.go (#3206)
+	}
 	cfg, rep, written, err := config.LoadDirReportWritten(f.configDir, log.New(errOut, "", 0))
 	// A tree whose every config file is unreadable is not "no .yaml files"
 	// (#2627): the exporter serves nothing from it, so the document carries

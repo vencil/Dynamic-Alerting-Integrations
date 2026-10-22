@@ -84,7 +84,8 @@ func parseKeyRefsFlags(args []string, errOut io.Writer) (string, []string, error
 			"their keys are not listed.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the exporter rejects (e.g. a tenant declared twice,\n"+
-			"     no .yaml file at all), or any output string that is not valid UTF-8\n"+
+			"     no .yaml file at all), a conf.d path that is not valid UTF-8, or any output string\n"+
+			"     that is not valid UTF-8\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n")
 	}
@@ -116,6 +117,9 @@ func runKeyRefs(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 
+	if refuseNonUTF8Tree(configDir, programName+" "+keyRefsCmd, errOut) {
+		return exitCallerErr // utf8_names.go (#3206)
+	}
 	rep, err := config.KeyRefs(configDir, metrics, log.New(errOut, "", 0))
 	// As served-values (#2627): a tree whose every config file is unreadable
 	// is exit 3 with the files named, not the "no .yaml files" refusal.
