@@ -395,6 +395,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
                  quoting_reported_for: frozenset[str] | None = None,
                  not_read: list[str] | None = None,
                  unreadable: list[str] | None = None,
+                 tenants_checked: list[str] | None = None,
                  ) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
 
@@ -411,6 +412,11 @@ def validate_dir(config_dir: str, schema: dict, validator,
     spelling a directory does not select) — skipped here, not checked: the
     route generator names it (`unselected_defaults_carrier`). Without the
     list such a file is still skipped.
+
+    `tenants_checked`, when given, collects the skipped meta-files whose
+    `tenants:` block WAS checked (#2743: a root platform file such as
+    `_profiles.yaml`) — each is in the skipped list for its own shape and
+    in `checked_count` for that block, so a caller can say both.
 
     `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
     boolean word in a boolean field) — findings that do not fail the gate,
@@ -559,6 +565,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
                 rel, doc["tenants"], schema, validator))
             if file_schema is None:
                 checked += 1
+                if tenants_checked is not None:
+                    tenants_checked.append(rel)
         if file_schema is None:
             continue
         if doc == {} and (is_defaults or is_profiles):
@@ -703,6 +711,7 @@ def main() -> int:
     skipped: list[str] = []
     not_read_all: list[str] = []
     unreadable_all: list[str] = []
+    tenants_checked_all: list[str] = []
     multi = len(args.config_dir) > 1
     for config_dir in args.config_dir:
         # ADR-036 step 4: no usable da-guard is rc 2 on every tree, an empty
@@ -717,10 +726,12 @@ def main() -> int:
         d_warnings: list[str] = []
         d_not_read: list[str] = []
         d_unreadable: list[str] = []
+        d_tenants_checked: list[str] = []
         try:
             d_checked, d_violations, d_skipped = validate_dir(
                 config_dir, schema, jsonschema, platform_schema, profiles_schema,
-                warnings=d_warnings, not_read=d_not_read, unreadable=d_unreadable)
+                warnings=d_warnings, not_read=d_not_read, unreadable=d_unreadable,
+                tenants_checked=d_tenants_checked)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -731,11 +742,18 @@ def main() -> int:
         warnings.extend(w.replace("WARN: ", f"WARN: {prefix}", 1) for w in d_warnings)
         skipped.extend(f"{prefix}{s}" for s in d_skipped)
         not_read_all.extend(f"{prefix}{s}" for s in d_not_read)
+        tenants_checked_all.extend(f"{prefix}{s}" for s in d_tenants_checked)
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config, "
               f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
+    if tenants_checked_all:
+        # #2743: skipped for their own shape, yet their `tenants:` block
+        # (root platform files) was checked and is in the count below.
+        print(f"  of which {len(tenants_checked_all)} root platform file(s) had their "
+              f"`tenants:` block checked against tenant-config.schema.json: "
+              f"{safe_label(', '.join(tenants_checked_all))}")
     if not_read_all:
         print(f"skipped {len(not_read_all)} file(s) no reader reads (da-guard parse-tree's "
               f"not_read): {safe_label(', '.join(not_read_all))}")
@@ -763,7 +781,11 @@ def main() -> int:
         return EXIT_VIOLATION
 
     tail = f" ({len(warnings)} warning(s) above)" if warnings else ""
-    print(f"OK: {checked} tenant conf.d file(s) valid against tenant-config.schema.json{tail}")
+    # #2743: the count is every document checked — tenant files, `_defaults*`,
+    # `_routing_profiles` and root platform files' `tenants:` blocks — not
+    # tenant files alone.
+    print(f"OK: {checked} conf.d file(s) valid against the tenant-config / "
+          f"platform-defaults / routing-profiles schemas{tail}")
     return EXIT_OK
 
 

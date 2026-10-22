@@ -668,6 +668,23 @@ class TestRootPlatformTenantsBlock:
                        "_profiles.yaml": True, "t1.yaml": False,
                        "sub/_defaults.yaml": False, "sub/_profiles.yaml": False}, got
 
+    def test_cli_says_a_skipped_files_tenants_block_was_checked(self, confd):
+        """Review nit: `_profiles.yaml` is skipped for its own shape, yet its
+        `tenants:` block is checked and counted — the output says both, and
+        the count does not call it a tenant file."""
+        _write(confd, "_profiles.yaml",
+               "profiles:\n  std: {}\ntenants:\n  t1:\n    mysql_connections: \"60\"\n")
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stderr
+        lines = result.stdout.splitlines()
+        assert lines[0].startswith("skipped 1 meta-file(s) ") and lines[0].endswith(
+            ": _profiles.yaml"), lines
+        assert lines[1] == ("  of which 1 root platform file(s) had their `tenants:` block "
+                            "checked against tenant-config.schema.json: _profiles.yaml"), lines
+        assert lines[2] == ("OK: 2 conf.d file(s) valid against the tenant-config / "
+                            "platform-defaults / routing-profiles schemas"), lines
+
     def test_cli_exit_one(self, confd):
         _write(confd, "_defaults.yaml",
                "defaults:\n  mysql_connections: 80\ntenants:\n" + self._ENTRY)
@@ -810,7 +827,7 @@ class TestUnresolvableCrossFileRef:
         _write(confd, "t1.yaml", self._TENANT)
         result = _run_with_schema(confd, _SCHEMA)
         assert result.returncode == EXIT_OK, result.stdout + result.stderr
-        assert "OK: 2 tenant conf.d file(s)" in result.stdout
+        assert "OK: 2 conf.d file(s) valid" in result.stdout
 
     def test_checked_registry_resolves_every_repo_ref(self, schema, platform_schema):
         from check_confd_schema import _cross_file_refs, checked_schema_registry
@@ -839,7 +856,7 @@ class TestHiddenEntries:
         _write(confd, ".ghost.yaml", "a: [1, 2\n")
         result = _run(confd)
         assert result.returncode == EXIT_OK, result.stdout + result.stderr
-        assert "OK: 1 tenant conf.d file(s)" in result.stdout
+        assert "OK: 1 conf.d file(s) valid" in result.stdout
 
     def test_control_broken_yaml_in_visible_subdir_is_still_read(self, confd):
         """Sensitivity control: the same file under a VISIBLE directory must
