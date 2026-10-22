@@ -934,6 +934,36 @@ def generator_version_problem(own: str | None, minimum: str | None) -> str | Non
             f"min_generator_version {minimum} — {remedy}")
 
 
+# ── What every tool taking the deployment --policy says about it (#3142);
+# the resolver itself is generate_alertmanager_routes.resolve_policy.
+
+POLICY_HELP = {
+    "en": ("Deployment policy YAML (the file generate-routes takes): its "
+           "allowed_domains refuse receivers whose host is outside it, its "
+           "min_generator_version refuses an older generator. Without it the "
+           "allowlist is not applied"),
+    "zh": ("部署端 policy YAML（與 generate-routes 同一份）：host 不在 "
+           "allowed_domains 內的 receiver 被拒收；比 min_generator_version "
+           "舊的產生器拒絕判定。沒帶時不套用 allowlist"),
+}
+
+#: printed (stderr) by test-notification / explain-route run without --policy
+#: (the exit code is unchanged); for the CI tools the CI template says it.
+POLICY_NOT_APPLIED_NOTICE = (
+    "NOTICE: no --policy given: the deployment policy's webhook domain "
+    "allowlist (allowed_domains) is not applied, so a receiver it refuses is "
+    "treated as allowed here. Pass the deployment policy file with --policy.")
+
+#: what to do about a receiver the allowlist refuses.
+POLICY_REFUSAL_REMEDY = (
+    "Add the receiver's host to `allowed_domains` in the --policy file, or "
+    "correct the tenant's receiver URL (see docs/cli-reference.md § "
+    "validate-config).")
+
+#: the `kind` of the finding that drops a receiver for the allowlist.
+POLICY_REFUSAL_KIND = "receiver_domain_not_allowed"
+
+
 def load_policy(policy_path: str | None) -> list[str]:
     """``load_policy_document(policy_path).allowed_domains``."""
     return load_policy_document(policy_path).allowed_domains

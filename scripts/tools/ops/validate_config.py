@@ -217,6 +217,8 @@ from _lib_tenant_values import (  # noqa: E402
 )
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
+# #3142: the deployment --policy's remedy, shared with the tools that take it.
+from _grar_validate import POLICY_REFUSAL_REMEDY  # noqa: E402
 
 # ============================================================
 # Check results
@@ -900,8 +902,10 @@ def check_routes(
     # error, not "no policy" — see check_policy)
     allowed_domains = None
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
+        # #3142: the generator's own resolver — the min_generator_version
+        # gate (ADR-036 §6) included, as generate-routes applies it.
         try:
-            allowed_domains = gen.load_policy(policy_file)
+            allowed_domains = gen.resolve_policy(policy_file).allowed_domains
         except gen.PolicyInputError as exc:
             # ⛔ hint= is not decoration here. Without it this row inherits the
             # generic routes advice ("check _routing for invalid receiver
@@ -1027,7 +1031,7 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     import generate_alertmanager_routes as gen
 
     try:
-        allowed_domains = gen.load_policy(policy_file)
+        allowed_domains = gen.resolve_policy(policy_file).allowed_domains
     except gen.PolicyInputError as exc:
         return _argv_error_row("policy", str(exc), _POLICY_ROW_HINT)
     if not allowed_domains:
@@ -2910,10 +2914,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Run: da-tools explain-route --config-dir <dir> --tenant <id>",
         "docs/scenarios/alert-routing-split.md",
     ),
+    # #3208: this row judges the --policy file's allowed_domains, not the
+    # conf.d `_domain_policy.yaml`; the advice is the resolver's own (#3142).
     "policy": (
-        "Review _domain_policy.yaml constraints (allowed/forbidden receiver types, "
-        "timing guardrails). Contact a domain admin to update if needed.",
-        "docs/internal/test-coverage-matrix.md",
+        POLICY_REFUSAL_REMEDY,
+        "docs/cli-reference.md#validate-config",
     ),
     "custom_rules": (
         "Validate rule pack YAML syntax and ensure referenced profiles exist. "

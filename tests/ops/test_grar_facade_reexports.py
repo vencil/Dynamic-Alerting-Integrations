@@ -47,6 +47,11 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
     ),
     "_grar_validate": (
         "POLICY_ERROR_PREFIX",  # ADR-007 --strict blocking-prefix SSOT
+        # #3142: the deployment --policy's words, read by the four tools
+        "POLICY_HELP",
+        "POLICY_NOT_APPLIED_NOTICE",
+        "POLICY_REFUSAL_KIND",
+        "POLICY_REFUSAL_REMEDY",
         "PolicyInputError",  # #1556 supplied-but-unusable --policy
         "_extract_host",
         "_validate_profile_refs",

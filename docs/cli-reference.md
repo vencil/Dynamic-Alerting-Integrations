@@ -2279,7 +2279,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。檔裡的 `min_generator_version` 與 `generate-routes` 同一套規則：本工具比它舊時 routes、policy 兩列都是呼叫端錯誤、結束碼 `2`（先前不讀這個鍵、照樣判定；[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）。`policy` 列 FAIL 時建議的修法是把 receiver 的 host 加進這份檔的 `allowed_domains`，或修正租戶的 receiver URL（[#3208](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3208)）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
@@ -3305,12 +3305,12 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 多通道通知連通性測試 — 驗證所有已配置 receiver 的可達性，報告連通性狀態。
 
-受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。受測清單是產生器對每個項目（主 receiver、`overrides[i]`、`routes[i]`）的判定，本工具不另外列舉 `_routing`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)）：只送產生器實際產出的 receiver；沒產出的項目照列、不送出、算失敗——receiver **本身的設定**被產生器（`build_receiver_config`）拒收標 `INVALID_URL`／`INVALID_CONFIG`，在路由層被略過標 `NOT_RENDERED` 並附產生器的原因（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key，以及主 receiver 被拒收或缺少時該租戶的每個 `overrides`／`routes` 項目）。本工具沒有 `--policy`，產生器帶 `--policy` 時因 `allowed_domains` 略過的項目不在判定內。要確認產生器收不收整份設定，跑 `generate-routes --validate`。
+受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。受測清單是產生器對每個項目（主 receiver、`overrides[i]`、`routes[i]`）的判定，本工具不另外列舉 `_routing`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)）：只送產生器實際產出的 receiver；沒產出的項目照列、不送出、算失敗——receiver **本身的設定**被產生器（`build_receiver_config`）拒收標 `INVALID_URL`／`INVALID_CONFIG`，在路由層被略過標 `NOT_RENDERED` 並附產生器的原因（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key，以及主 receiver 被拒收或缺少時該租戶的每個 `overrides`／`routes` 項目）。帶 `--policy` 時判定與產生器帶同一份 `--policy` 相同：`allowed_domains` 拒收的項目標 `POLICY_REFUSED`（[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）。要確認產生器收不收整份設定，跑 `generate-routes --validate`。
 
 **用法**
 
 ```bash
-da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>]
+da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>] [--policy <FILE>]
 ```
 
 **參數**
@@ -3324,6 +3324,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
 | `--timeout` | 每個 receiver 的逾時秒數，連線與等待回應兩個階段都適用，任一階段逾時皆回報 `TIMEOUT`（[#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)）。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數（≥ 0，可帶小數；`0` = 不等待；負數、`nan`、`inf` 回 `2`） | `0.5` |
+| `--policy <FILE>` | 部署端 policy 檔（與 `generate-routes --policy` 同一份，由同一個 resolver 讀，[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）：`allowed_domains` 拒收的 receiver 不送出、標 `POLICY_REFUSED`、算失敗；檔案不可用或 `min_generator_version` 比本工具新時結束碼 `2`（`--json` 的 `reason` 為 `policy_unusable`）。沒帶時不套用 allowlist，stderr 印一行 `NOTICE`，結束碼不變；`--json` 的 `policy_applied` 標明有沒有套用 | （不套用） |
 
 **支援的 Receiver 類型**
 
@@ -3346,6 +3347,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `HTTP_ERROR` | 其他 HTTP 錯誤狀態碼，或回應格式錯誤、被截斷（detail 以 `malformed response:` 開頭） |
 | `INVALID_URL` | receiver 本身的設定被路由產生器（`build_receiver_config`）以 URL 欄位（email 為 `smarthost`）有給但格式不合或不是字串拒收、port 不在 1–65535，或送出時主機名無法編碼、URL 被拒（未送出任何請求） |
 | `INVALID_CONFIG` | receiver 本身的設定被路由產生器（`build_receiver_config`）以其他原因拒收（例如缺必填欄位——URL 欄位缺鍵、空字串或 null 也算、`type` 不認得、選填欄位型別不對；項目或租戶沒寫 `receiver`、`receiver` 不是物件也算），與產生器的判定一致 |
+| `POLICY_REFUSED` | `--policy` 的 `allowed_domains` 拒收這個 receiver（host 不在清單內），產生器不產出它，未送出任何請求；detail 是產生器的原因加上修法（把 host 加進 `--policy` 檔的 `allowed_domains`，或修正租戶的 receiver URL）。主 receiver 被拒收時，該租戶的子項目標 `NOT_RENDERED`（[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)） |
 | `NOT_RENDERED` | 路由產生器在路由層略過這個項目，Alertmanager 不會有它（未送出任何請求）：`overrides[i]`／`routes[i]` 本身不合格（例如缺 matcher、有不支援的 key、不是 mapping），或該租戶的主 receiver 沒產出、子項目一個都不產出。detail 是產生器自己的原因；主 receiver 沒產出時，本身另有缺陷的子項目也只報這個原因（`NOT_RENDERED`），修好主 receiver 後才會看到它自己的問題；`overrides`／`routes` 不是清單時標在 `<tenant>-overrides`／`<tenant>-routes`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)） |
 
 `TIMEOUT`、`CONNECTION_REFUSED`、`CONNECTION_ERROR`、`TLS_ERROR` 的 detail 截在 80 字元（含 `via proxy: ` 前綴），較長的錯誤訊息會被切掉。設了 `https_proxy`／`http_proxy` 時，這些狀態可能描述的是到 proxy 的那一段：proxy 的埠沒開是 `CONNECTION_REFUSED`、proxy 主機名解析失敗是 `CONNECTION_ERROR`，http receiver 經 proxy 收到的 `HTTP 502` 是 `HTTP_ERROR`；只有 HTTPS 的 CONNECT 失敗會帶 `via proxy: ` 前綴（含 proxy 回 `504 Connection Timed Out`，這時不標 `TIMEOUT`）。
@@ -3371,8 +3373,8 @@ da-tools test-notification --config-dir conf.d/ --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
-| `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752） |
+| `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED`、`--policy` 拒收的 `POLICY_REFUSED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
+| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752）；`--policy` 不可用或 `min_generator_version` 比本工具新（`reason: policy_unusable`，#3142） |
 
 #### explain-route
 
@@ -3383,8 +3385,8 @@ da-tools test-notification --config-dir conf.d/ --ci
 **用法**
 
 ```bash
-da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
+da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--policy <FILE>] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--policy <FILE>] [--json]
 ```
 
 **參數**
@@ -3399,6 +3401,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--severity` | 追蹤的 alert 嚴重度（只在 `--trace` 下讀取） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
 | `--base-config` | 追蹤用的 base Alertmanager YAML：`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
+| `--policy <FILE>` | 部署端 policy 檔（與 `generate-routes --policy` 同一份，由同一個 resolver 讀，[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）：列出與追蹤的都是產生器在這份 `allowed_domains` 下產出的路由；被拒收的 receiver 列在「被 --policy 的 allowed_domains 拒收」（`--json` 的 `policy_refused`，每筆 `source`／`status: POLICY_REFUSED`／`detail`／`remedy`），主 receiver 被拒收時該租戶的路由整條不產出。檔案不可用或 `min_generator_version` 比本工具新時結束碼 `2`（`reason: policy_unusable`）。沒帶時不套用，stderr 印一行 `NOTICE`，結束碼不變；`--json` 每筆的 `policy_applied` 標明有沒有套用 | （不套用） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group`，以及 `routes` 裡 `alertname`／`severity`／`tenant` 以外的 `match` key，只能經 `--label` 帶入，否則追蹤不會命中那條子路由。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。沒有 `--trace` 卻給 `--alertname`／`--severity`（即使給的就是預設值）同樣以結束碼 `2` 拒絕（[#2926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2926)）。

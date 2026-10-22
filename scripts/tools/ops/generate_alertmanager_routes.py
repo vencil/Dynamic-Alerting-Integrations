@@ -38,6 +38,7 @@ import json
 import os
 import sys
 import textwrap
+from typing import NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -1009,8 +1010,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--configmap", default=None,
                         help=f"ConfigMap name for --apply/--output-configmap "
                              f"(default: {_DEFAULT_CONFIGMAP})")
-    parser.add_argument("--policy", default=None,
-                        help="Policy YAML with allowed_domains for webhook URL validation")
+    add_policy_argument(parser)
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
     parser.add_argument("--findings-json", default=None, metavar="PATH",
@@ -1043,6 +1043,64 @@ def da_tools_version() -> str | None:
     value (#2900), so the two cannot disagree about which release they are.
     """
     return read_shipped_da_tools_version(_THIS_DIR)
+
+
+# ── The deployment policy, one resolver for every tool that takes it (#3142)
+#
+# generate-routes, validate-config, test-notification and explain-route judge
+# receivers by the same `--policy` file: the flag, its reading
+# (`load_policy_document`), the generator-version gate (ADR-036 §6) and the
+# words they print are defined here once, so no tool reads it its own way.
+# generator-service is not a caller: it reads the file per judgement and
+# answers 503 (ADR-036 §5).
+
+# The words (help, NOTICE, remedy) and the refusal's kind live beside
+# `load_policy_document` in _grar_validate, which validate-config imports
+# without loading this module.
+from _grar_validate import (  # noqa: E402,F401
+    POLICY_HELP, POLICY_NOT_APPLIED_NOTICE, POLICY_REFUSAL_KIND, POLICY_REFUSAL_REMEDY,
+)
+
+
+class ResolvedPolicy(NamedTuple):
+    """The deployment policy a run judges under. ``path`` None = no
+    ``--policy``: nothing is applied (``allowed_domains`` None)."""
+
+    path: str | None
+    allowed_domains: list[str] | None
+    min_generator_version: str | None
+
+    @property
+    def applied(self) -> bool:
+        return self.path is not None
+
+
+def add_policy_argument(parser: argparse.ArgumentParser, *, lang: str = "en") -> None:
+    """``--policy PATH``, the same flag on every tool that judges receivers."""
+    parser.add_argument("--policy", default=None, metavar="PATH",
+                        help=POLICY_HELP.get(lang, POLICY_HELP["en"]))
+
+
+def resolve_policy(policy_path: str | None) -> ResolvedPolicy:
+    """The deployment policy at *policy_path* (None: not given).
+
+    Raises ``PolicyInputError`` — the caller's exit 2 — when the file is
+    unusable (``load_policy_document``) or names a ``min_generator_version``
+    this generator does not meet (ADR-036 §6): judging under it would use
+    rules its author did not mean.
+    """
+    if policy_path is None:   # ⛔ not truthiness: "" is supplied (#1616)
+        return ResolvedPolicy(None, None, None)
+    doc = load_policy_document(policy_path)
+    too_old = generator_version_problem(da_tools_version(), doc.min_generator_version)
+    if too_old is not None:
+        raise PolicyInputError(f"--policy: {too_old}")
+    return ResolvedPolicy(policy_path, doc.allowed_domains, doc.min_generator_version)
+
+
+def is_policy_refusal(finding: object) -> bool:
+    """Whether *finding* is the allowlist dropping a receiver."""
+    return getattr(finding, "kind", None) == POLICY_REFUSAL_KIND
 
 
 def in_force_blocks(*, validate: bool, strict: bool) -> set[str]:
@@ -1270,17 +1328,13 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     # policy". Exiting 2 here rather than proceeding with an empty allowlist
     # is the whole point — the previous behaviour generated routes with SSRF
     # domain checking off and said nothing.
-    try:
-        policy = load_policy_document(args.policy)
-    except PolicyInputError as exc:
-        die_caller_error(str(exc))
-    allowed_domains = policy.allowed_domains
     # #2901 (ADR-036 §6): a policy may name the oldest generator it accepts;
     # an older one would judge by rules the policy's author did not mean.
-    too_old = generator_version_problem(da_tools_version(),
-                                        policy.min_generator_version)
-    if too_old is not None:
-        die_caller_error(f"--policy: {too_old}")
+    try:
+        policy = resolve_policy(args.policy)
+    except PolicyInputError as exc:
+        die_caller_error(str(exc))
+    allowed_domains = policy.allowed_domains or []
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 
