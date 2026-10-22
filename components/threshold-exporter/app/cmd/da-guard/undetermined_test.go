@@ -363,6 +363,52 @@ func TestUndetermined_EveryReason(t *testing.T) {
 	}
 }
 
+// #3126: a top-level `domain_policies` key is evidence in every file the
+// generator reads, whatever its value; a hidden file and an unselected
+// defaults carrier (no reader opens either) and a nested key (the generator
+// reads only the top level) are not. Only the
+// evidence is compared: a root `_defaults.yaml` with an unread top-level key
+// is also a da-guard error finding (exit 1), which is not what this pins.
+func TestUndetermined_DomainPoliciesKey(t *testing.T) {
+	t.Parallel()
+	base := func(over map[string]string) map[string]string {
+		files := map[string]string{"_defaults.yaml": udDefaults, "tx.yaml": udTenant}
+		for k, v := range over {
+			files[k] = v
+		}
+		return files
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"root defaults carrier", base(map[string]string{"_defaults.yaml": udDefaults + "domain_policies:\n  fin: {}\n"}),
+			[]string{"_defaults.yaml domain_policies domain_policy"}},
+		{"null value", base(map[string]string{"_extra.yaml": "domain_policies: ~\n"}),
+			[]string{"_extra.yaml domain_policies domain_policy"}},
+		{"hidden file at the root", base(map[string]string{".x.yaml": "domain_policies: {}\n"}),
+			[]string{}},
+		{"hidden file below the root", base(map[string]string{"sub/.x.yaml": "domain_policies: {}\n"}),
+			[]string{}},
+		{"nested key", base(map[string]string{"_extra.yaml": "defaults: {domain_policies: 1}\n"}),
+			[]string{}},
+		// The generator does not open the carrier its directory does not
+		// select (unselected_defaults_carrier); parse-tree gives it no reader.
+		{"unselected defaults carrier", base(map[string]string{"_defaults.yml": udDefaults + "domain_policies: {}\n"}),
+			[]string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := runJudged(t, tc.files, "")
+			if !reflect.DeepEqual(reasonsOf(got.undetermined), tc.want) {
+				t.Errorf("undetermined %q, want %q", reasonsOf(got.undetermined), tc.want)
+			}
+		})
+	}
+}
+
 // --scope does not narrow the evidence: the generator judges the whole tree.
 func TestUndetermined_ScopeSeesTheWholeTree(t *testing.T) {
 	t.Parallel()

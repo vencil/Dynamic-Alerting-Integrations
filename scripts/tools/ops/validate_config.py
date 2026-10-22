@@ -249,9 +249,10 @@ POLICY_ONLY_SCHEMA_HINT = (
     "matcher value that is not a string, or a bad group_by entry), not "
     "tenant key problems: no unknown key was reported in this "
     "run. \u26d4 Ignore the generic advice about removing keys: fix what "
-    "each error names (the domain policy file, quote the matcher value in "
-    "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
-    "re-run.")
+    "each error names (fix the domain policy file, or move a misplaced "
+    "domain_policies block into _domain_policy.yaml; quote the matcher "
+    "value in YAML, e.g. team: \"yes\", or quote / remove the group_by "
+    "entry), then re-run.")
 # #2490: the non-strict twin — the same findings as WARNs (non-blocking).
 POLICY_ONLY_SCHEMA_WARN_HINT = (
     "The findings above are ADR-007 domain-policy warnings, not tenant key "
