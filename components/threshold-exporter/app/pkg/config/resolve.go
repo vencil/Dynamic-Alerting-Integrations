@@ -1357,19 +1357,32 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 
 // KeyValidation is the two-channel result of ValidateTenantKeys (#1231 c2).
 //
-// Errors carries the pre-existing warning kinds — everything that gates a
-// tenant-api write (gitops/writer.go turns any entry into ErrValidation) and
-// that CI's Python validator mirrors. Notices carries advisory,
-// never-blocking messages (currently: deprecated-key alias notices), so a
-// tenant whose config still uses an old spelling keeps writing successfully
-// during the transition window while being told to migrate.
+// Errors carries everything that gates a tenant-api write (gitops/writer.go
+// turns any entry into ErrValidation). Notices carries advisory,
+// never-blocking messages (deprecated-key alias notices, and a reserved
+// value a write left as it was — see Ratchet), so a tenant whose config
+// still uses an old spelling keeps writing successfully during the
+// transition window while being told to migrate.
+//
+// ⚠️ Parity with CI's Python validator (`_grar_validate.validate_tenant_keys`)
+// is about key MEMBERSHIP only — which keys are unknown, reserved, dangling.
+// The reserved-VALUE errors (#3227, Values below) have no Python counterpart:
+// the value is judged by the exporter's own reading of it, which only the Go
+// side has.
+//
+// Values repeats, one finding each, the Errors entries that are about a
+// reserved key's VALUE (CheckReservedValue). They are in Errors too, so a
+// caller that does not Ratchet stays strict; Ratchet is how a write gate
+// lets a value already on disk through when the write leaves it as the
+// exporter reads it.
 //
 // A named struct (not a bare ([]string, []string) pair) on purpose: a
 // positional swap at a call site would compile clean and silently invert the
 // gate semantics.
 type KeyValidation struct {
-	Errors  []string // blocking channel: unknown keys, bad expires, version-label violations, dangling _critical, ...
-	Notices []string // advisory channel: #1231 deprecation notices; MUST never block a write
+	Errors  []string       // blocking channel: unknown keys, bad expires, version-label violations, dangling _critical, a reserved value the exporter ignores, ...
+	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
+	Values  []ValueFinding // the Errors entries about a reserved value, for Ratchet (#3227)
 }
 
 // ValidateTenantKeys checks all tenant config keys against the platform key
@@ -1396,7 +1409,8 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 }
 
 // validateTenantKeys is ValidateTenantKeys' body, shared with the tenant-api
-// merge core (TenantMerge.ValidateTenantKeys).
+// merge core (TenantMerge.ValidateTenantKeys). Python parity: key membership
+// only (see KeyValidation).
 //
 // ⚠️ There used to be an `aliasShadow` hook here (#2208): a tenant's legacy
 // key whose canonical spelling a root platform file supplied was reported as
@@ -1409,6 +1423,7 @@ func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 	o := c.validateOverrideKeys()
 	v.Errors = append(v.Errors, o.Errors...)
 	v.Notices = append(v.Notices, o.Notices...)
+	v.Values = append(v.Values, o.Values...)
 	return v
 }
 
@@ -1587,6 +1602,15 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					v.Errors = append(v.Errors, fmt.Sprintf(
 						"WARN: tenant=%s: unknown routing key %q — not a key the route generator reads (%s); "+
 							"remove it", tenant, canonKey, UnknownRoutingKeyHint(canonKey, false)))
+				}
+				// #3227: a value the exporter's reader ignores (`_silent_mode:
+				// purple`) is refused where it is written, by that reader's own
+				// judgement. Written to Errors AND Values: a caller that does
+				// not Ratchet stays strict.
+				if problem := CheckReservedValue(canonKey, sv); problem != "" {
+					f := newValueFinding(tenant, canonKey, sv, problem)
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
 				}
 				continue
 			}

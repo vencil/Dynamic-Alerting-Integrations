@@ -94,8 +94,9 @@ func TestValueChecks_BoundBothWays(t *testing.T) {
 	used := map[string]bool{}
 	for k, name := range reservedValueChecks {
 		used[name] = true
-		if valueChecks[name] == nil {
-			t.Errorf("reserved_keys.json: %s names value.check %q, but valueChecks binds no function to it", k, name)
+		c, ok := valueChecks[name]
+		if !ok || c.problem == nil || c.reading == nil || c.effect == "" {
+			t.Errorf("reserved_keys.json: %s names value.check %q, but valueChecks binds no complete check to it", k, name)
 		}
 	}
 	for name := range valueChecks {
@@ -108,13 +109,13 @@ func TestValueChecks_BoundBothWays(t *testing.T) {
 func TestCheckReservedValue_UsesTheBinding(t *testing.T) {
 	t.Parallel()
 	names := map[string]string{"_probe": "probe"}
-	fns := map[string]func(ScheduledValue) string{
-		"probe": func(sv ScheduledValue) string {
+	fns := map[string]valueCheck{
+		"probe": {problem: func(sv ScheduledValue) string {
 			if sv.Default == "bad" {
 				return "bad value"
 			}
 			return ""
-		},
+		}},
 	}
 	cases := []struct {
 		key, val, want string

@@ -114,7 +114,17 @@ func TestMembershipParityMatrix(t *testing.T) {
 
 			// accept == no BLOCKING message. Deprecation Notices are advisory
 			// on both sides and never count as a refusal.
-			errs := cfg.ValidateTenantKeys().Errors
+			//
+			// The matrix is about key MEMBERSHIP, the only thing the Python
+			// side judges: every row writes the value "5", and a reserved
+			// key's value errors (#3227 — `_silent_mode: "5"` is not a value
+			// the exporter reads) have no Python counterpart, so they are
+			// taken out before the verdict.
+			kv := cfg.ValidateTenantKeys()
+			errs := kv.Errors
+			for _, f := range kv.Values {
+				errs = removeFirst(errs, f.Message)
+			}
 			accepted := len(errs) == 0
 
 			if accepted != (tc.Verdict == "accept") {
