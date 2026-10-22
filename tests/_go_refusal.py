@@ -9,6 +9,8 @@ to the refusal (`assert_refused`) — it never composes the list itself.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -46,3 +48,18 @@ def write_tree(root: Path, files: "dict[str, str | bytes]") -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
     return root
+
+
+@contextlib.contextmanager
+def refuses(*paths: str, code: int = 2):
+    """The block ends the run through the shared refusal, naming *paths*
+    (`assert_refused`) — for an in-process call of a tool's function."""
+    err = io.StringIO()
+    got = None
+    with contextlib.redirect_stderr(err):
+        try:
+            yield err
+        except SystemExit as exc:
+            got = exc.code
+    assert got is not None, f"no refusal; stderr: {err.getvalue()[-2000:]}"
+    assert_refused(got, err.getvalue(), list(paths), code=code)
