@@ -1795,15 +1795,16 @@ class TestOutputsOnEveryPath:
 
 
 @pytest.mark.usefixtures("da_guard_env")
-class TestConfdRefusalWritesNothing:
+class TestConfdRefusalWritesBothOutputs:
     """#3206: a tree da-guard validation names a path on (here a file that is
     not UTF-8) ends through the shared conf.d refusal before either tree is
-    read — rc 2, the file named, the `--json` envelope with reason
-    `conf_d_not_servable` on stdout, and neither `-o` nor `--markdown-output`
-    touched (the refusal stops before it writes anything; #3089's "every
-    path writes both" covers the paths after the trees are read)."""
+    read — rc 2, the file named on stderr — and, #3089, still writes `-o`
+    and `--markdown-output` as a not-run report: the `--json` document (status
+    `caller_error`, reason `conf_d_not_servable`, `refused_paths`), the same
+    document in `-o`, and the markdown naming the reason and the path."""
 
-    def test_refusal_names_the_file_and_writes_neither_output(self, tmp_path):
+    @pytest.mark.parametrize("json_mode", [True, False])
+    def test_refusal_names_the_file_and_writes_both_outputs(self, tmp_path, json_mode):
         d = tmp_path / "bad-conf.d"
         d.mkdir()
         (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
@@ -1811,17 +1812,23 @@ class TestConfdRefusalWritesNothing:
         out_json.write_text("stale\n", encoding="utf-8")
         p = subprocess.run(
             [sys.executable, bt.__file__, "--config-dir", str(d), "--baseline", str(d),
-             "--prometheus", "http://127.0.0.1:9", "--json",
+             "--prometheus", "http://127.0.0.1:9", *(["--json"] if json_mode else []),
              "-o", str(out_json), "--markdown-output", str(out_md)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         assert_refused(p.returncode, p.stderr, ["db.yaml"])
         assert "(invalid_utf8: " in p.stderr, p.stderr
-        doc = json.loads(p.stdout)
-        assert (doc["status"], doc["reason"], doc["changes"]) == (
-            "caller_error", "conf_d_not_servable", [])
-        assert out_json.read_text(encoding="utf-8") == "stale\n"
-        assert not out_md.exists()
+        doc = json.loads(out_json.read_text(encoding="utf-8"))
+        assert (doc["status"], doc["reason"], doc["changes"], doc["refused_paths"]) == (
+            "caller_error", "conf_d_not_servable", [], ["db.yaml"]), doc
+        assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}, doc
+        if json_mode:
+            assert json.loads(p.stdout) == doc
+        else:
+            assert "{" not in p.stdout, p.stdout
+        md = out_md.read_text(encoding="utf-8")
+        assert "Backtest not run" in md and "da-guard validation names" in md, md
+        assert "`db.yaml`" in md, md
 
 
 def _unwritable(tmp, shape, name):
