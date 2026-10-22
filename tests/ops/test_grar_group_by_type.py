@@ -269,6 +269,8 @@ def test_validate_config_schema_row_fails(tmp_path, loc):
     row = vc.check_schema(str(d))
     assert row["status"] == vc.FAIL, row
     assert any("ERROR (field type):" in m and "group_by" in m for m in row["details"]), row
+    # Not the "a line ends in 'skipping'" / `_routing_enforced.enabled` advice.
+    assert row["hint"] == vc.FIELD_TYPE_HINT, row
 
 
 @pytest.mark.parametrize("loc", sorted(LOCATIONS))
@@ -278,6 +280,24 @@ def test_validate_config_routes_row_fails(tmp_path, loc):
     row = vc.check_routes(str(d))
     assert row["status"] == vc.FAIL, row
     assert any("ERROR (field type):" in m and "group_by" in m for m in row["details"]), row
+    assert row["hint"] == vc.FIELD_TYPE_HINT, row
+
+
+def test_field_type_hint_says_what_to_do():
+    assert "group_by: [alertname]" in vc.FIELD_TYPE_HINT
+    assert "skipping" not in vc.FIELD_TYPE_HINT
+
+
+def test_validate_config_cli_prints_the_field_type_hint(tmp_path):
+    d = _write(tmp_path, _main("alertname"))
+    p = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "tools" / "ops" / "validate_config.py"),
+         "--config-dir", str(d)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert p.returncode == 1, (p.stdout, p.stderr)
+    out = p.stdout + p.stderr
+    assert out.count(vc.FIELD_TYPE_HINT) == 2, out  # schema + routes rows
+    assert "A line above ends in 'skipping'" not in out, out
 
 
 # ── null keeps its meaning ───────────────────────────────────────────────

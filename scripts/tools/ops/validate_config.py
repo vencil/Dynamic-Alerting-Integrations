@@ -264,6 +264,16 @@ SKIPPED_ENTRY_SCHEMA_HINT = (
     "not merely flagged. Fix the value it names — e.g. "
     "`_routing_enforced.enabled` must be the YAML boolean true or false — "
     "then re-run.")
+# #3284: a row whose findings are all `ERROR (field type):` lines (#2906 —
+# a group_by that is not a list, a quoted boolean, an unknown
+# _severity_dedup word) is neither "a line ending in 'skipping'" nor a
+# receiver problem; the generator refused the WHOLE tree in every mode.
+FIELD_TYPE_HINT = (
+    "Each 'ERROR (field type)' line above is a value of the wrong type or "
+    "one the generator does not know, and the route generator refuses the "
+    "whole tree in every mode until it is fixed. Fix the value as the ERROR "
+    "line says (e.g. write group_by as a YAML list: group_by: [alertname]; "
+    "a boolean as unquoted true / false), then re-run.")
 # #2279: the generic routes advice ("check _routing … for invalid receiver
 # types") points at a receiver that is fine; what is wrong is its NAME.
 RECEIVER_COLLISION_ROUTES_HINT = (
@@ -862,6 +872,16 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     # advice this hint exists to replace, on the path where the customer is
     # most likely to be in a hurry.
     hint = _no_declared_defaults_hint(config_dir)
+    # #3284: only field-type lines (and not only an unusable domain policy,
+    # which POLICY_ONLY_SCHEMA_HINT below names more precisely): neither the
+    # "skipping" advice nor the key advice applies.
+    from _grar_validate import is_field_type_error
+    field_type = [w for w in schema_warnings if is_field_type_error(w)]
+    if (field_type and len(field_type) == len(schema_warnings)
+            and any(getattr(w, "kind", None) != "domain_policy_unusable"
+                    for w in field_type)):
+        return _make_result("schema", FAIL, schema_warnings,
+                            hint=FIELD_TYPE_HINT)
     if policy_errors:
         # ⛔ This row is a multiplexer: its details carry unknown-key WARNs
         # AND ADR-007 policy ERRORs, while the advice line is keyed on the
@@ -907,7 +927,8 @@ def check_routes(
     # generates as WARN / PASS. The schema row lists the same lines.
     refusal = gen.field_type_errors_refusal(tree.field_type_errors)
     if refusal:
-        return _make_result("routes", FAIL, [line.strip() for line in refusal])
+        return _make_result("routes", FAIL, [line.strip() for line in refusal],
+                            hint=FIELD_TYPE_HINT)
     routing = tree.routing_configs
     dedup = tree.dedup_configs
     enforced_routing = tree.enforced_routing
