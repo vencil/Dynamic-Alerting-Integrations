@@ -209,7 +209,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 **重新載入的時機**：exporter 每 30 秒（`-reload-interval`）掃描一次 conf.d/。偵測到變動後等 300 毫秒（`-scan-debounce`）再重新載入：這段等待叫去抖動（debounce），把短時間內接連發生的變動合成一次，`git pull` 一次改了 20 個檔也只重新載入一次。
 
-**每次重新載入都重建全部設定。** 兩個雜湊決定的是這次變更記成什麼，供 metrics 與爆炸半徑（blast radius，一次變更影響多少租戶）報告使用：
+**每次重新載入都重建全部設定。** 兩個雜湊決定的是這次變更記成什麼，供 metrics 使用，包括受影響租戶數（`da_config_blast_radius_tenants_affected`，一次變更影響多少租戶）：
 
 ```
 租戶檔的 source_hash 變了            → applied（reason=source；新租戶 reason=new；檔案刪除 reason=delete）
@@ -235,7 +235,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 ### 8. 有些頂層鍵的變更，最終設定看不到
 
-例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_defaults.yaml` 裡 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
 - **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
@@ -279,7 +279,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ## 後果
 
-- **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，爆炸半徑報告看得出一次變更真正影響了誰。
+- **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，受影響租戶數的 metrics 看得出一次變更真正影響了誰。
 - **代價**：
   - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
@@ -289,7 +289,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ### A：只用一個雜湊（只看租戶檔）
 
-❌ 預設值變更時分不出哪些租戶真的受影響，只能把所有租戶都記成受影響，爆炸半徑報告就失去意義。exporter 每次重新載入都重建全部設定，所以雙雜湊省下的不是載入工作，而是正確的歸因。
+❌ 預設值變更時分不出哪些租戶真的受影響，只能把所有租戶都記成受影響，受影響租戶數的 metrics 就失去意義。exporter 每次重新載入都重建全部設定，所以雙雜湊省下的不是載入工作，而是正確的歸因。
 
 ### B：用檔案系統事件（inotify / fsnotify）取代週期掃描
 

@@ -37,7 +37,7 @@ updated_at: 2026-10-22
 
 平台把預設路由的 `group_wait` 從 30s 改成 99s（`_defaults.yaml` 的 `_routing_defaults`）。實際影響：沒有自己 `_routing`、也沒有綁 routing profile 的租戶，告警的等待時間都變了。
 
-目前的 config-diff 對這個變更只能說「`_defaults.yaml` 有變，但沒有比對」，說不出影響了誰。平台 CI 另有一支 blast-radius 報告（`blast_radius.py`，已退役），它讀的是每個租戶合併後的設定。那份合併結果看得到 `defaults:` 裡的值，但依 [ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) 不含與 `defaults:` 同層的鍵（`_routing_defaults` 就是其中之一），所以這個變更它也看不到。
+目前的 config-diff 對這個變更只能說「`_defaults.yaml` 有變，但沒有比對」，說不出影響了誰。平台 CI 原本另有一支 blast-radius 報告（`blast_radius.py`，已退役），它讀的是每個租戶合併後的設定。那份合併結果看得到 `defaults:` 裡的值，但依 [ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) 不含與 `defaults:` 同層的鍵（`_routing_defaults` 就是其中之一），所以這個變更它也看不到。
 
 ### 兩支渲染程式各看得到什麼
 

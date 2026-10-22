@@ -66,7 +66,6 @@ __all__ = [
     "declared_tenant_ids",
     "duplicate_declarations",
     "overlay_platform_tenants",
-    "defaults_files_in",
     "has_yaml_extension",
     "is_defaults_name",
     "is_hidden_name",
@@ -75,7 +74,6 @@ __all__ = [
     "ConfigTreeListing",
     "list_config_tree",
     "readable_carriers",
-    "warn_dir_symlink_once",
     "is_dir_symlink",
     "dir_link_target_is_walked",
     "select_defaults_carrier",
@@ -328,26 +326,6 @@ def readable_carriers(carriers: "Iterable[Path]"
     return readable, unreadable
 
 
-# Directory symlinks whose skip WARNING this process has already printed.
-_DIR_LINK_WARNED: set[str] = set()
-
-
-def warn_dir_symlink_once(link: Path) -> None:
-    """Name a directory symlink the walk skipped, at most ONCE per link per
-    process (#1972). describe_tenant names it from its own listing AND calls
-    the custom-alerts loader over the same tree (and compile_custom_alerts
-    runs the loader more than once): each printing its own copy named every
-    link two times — the #1674 once-per-directory shape.
-    Keyed by the LINK's own absolute path (not its target, which is what
-    two different links may share)."""
-    key = os.path.abspath(link)
-    if key in _DIR_LINK_WARNED:
-        return
-    _DIR_LINK_WARNED.add(key)
-    print(f"WARNING: skipped {link} — {unusable_reason(link)}",
-          file=sys.stderr)
-
-
 def config_stem(name: str) -> str:
     """Tenant id carried by a filename, or `""` if it carries none.
 
@@ -371,29 +349,6 @@ def config_stem(name: str) -> str:
             # the wrong place.
             return name[: len(name) - len(suffix)]
     return ""
-
-
-def defaults_files_in(root: str | os.PathLike[str],
-                      names: "Iterable[str]") -> list[Path]:
-    """The defaults carriers among ALREADY-LISTED `names`, sorted.
-
-    ⛔ Takes the names instead of listing the directory, and that is not a
-    style choice. The first version called `root.iterdir()` and
-    `test_confd_enumeration_contract` correctly reddened `_lib_confd.py`
-    itself: a sentinel flat scan with nothing said about nested content.
-    Its docstring argued the callers were already recursive — which was
-    true, and which is exactly why listing again was wrong. Both callers
-    (`loader._dir_defaults_alerts` walking with `os.walk`,
-    `describe_tenant._scan` with `rglob`) already hold the names.
-
-    ⚠️ Ordering is `sorted(names)`, so a directory carrying both
-    spellings contributes deterministically. Two spellings is already a
-    misconfiguration; resolving it by directory order would make it an
-    intermittent one.
-    """
-    base = Path(root)
-    return [base / n for n in sorted(names) if is_defaults_name(n)]
-
 
 
 def resolve_defaults_file(
@@ -742,8 +697,7 @@ def unusable_config_entries(
     `os.walk()` rather than through `iter_config_files`. Same question,
     same predicate, no second listing.
 
-    ⛔ Takes the entries instead of listing, for the reason `defaults_files_in`
-    does: a helper that lists is a flat scan with nothing said about nested
+    ⛔ Takes the entries instead of listing: a helper that lists is a flat scan with nothing said about nested
     content, and `test_confd_enumeration_contract` reddens `_lib_confd.py`
     itself for it. The caller has already listed and has already called
     `warn_nested`; doing either again here would either duplicate the
@@ -1101,7 +1055,6 @@ def reset_warned_for_test() -> None:
     "last cleanup wins" and would undo a parallel test's writes.
     """
     _WARNED.clear()
-    _DIR_LINK_WARNED.clear()
 
 
 class FlatRead(NamedTuple):

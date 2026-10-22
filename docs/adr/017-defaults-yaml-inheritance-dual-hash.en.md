@@ -204,7 +204,7 @@ So `sha256sum` of any file never matches a `merged_hash`. And because `merged_ha
 
 **When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
 
-**Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics and for the blast-radius report (how many tenants one change affected):
+**Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics, including the affected-tenant count (`da_config_blast_radius_tenants_affected`, how many tenants one change affected):
 
 ```
 the tenant file's source_hash changed  → applied (reason=source; a new tenant reason=new; a deleted file reason=delete)
@@ -230,7 +230,7 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 
 ### 8. Changes to some top-level keys are invisible in the effective config
 
-For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
+For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
 - **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
@@ -274,7 +274,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 
 ## Consequences
 
-- **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the blast-radius report shows whom a change really affected.
+- **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the affected-tenant metrics show whom a change really affected.
 - **Costs**:
   - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
@@ -284,7 +284,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 
 ### A: A single hash (tenant file only)
 
-❌ When defaults change, it cannot tell which tenants were really affected and must record every tenant as affected, which makes the blast-radius report meaningless. The exporter rebuilds the whole config on every reload, so what the dual hash buys is correct attribution, not saved loading work.
+❌ When defaults change, it cannot tell which tenants were really affected and must record every tenant as affected, which makes the affected-tenant metrics meaningless. The exporter rebuilds the whole config on every reload, so what the dual hash buys is correct attribution, not saved loading work.
 
 ### B: File-system events (inotify / fsnotify) instead of periodic scans
 

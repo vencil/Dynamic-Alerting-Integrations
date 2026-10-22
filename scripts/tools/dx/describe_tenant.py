@@ -290,18 +290,32 @@ class ConfDScanner:
         }
 
 
+def warn_not_read(scanner: "ConfDScanner") -> None:
+    """One WARN line per file no plane reads (#1674): a defaults carrier its
+    directory's chain does not select. describe_tenant and tenant_verify
+    both say it, in these words (the custom-alert loader's walk did until
+    #3230 removed it)."""
+    for rel, why in scanner.not_read.items():
+        print(f"WARN: {safe_label(rel)} is ignored on every plane (#1674): da-guard "
+              f"parse-tree does not read it ({safe_label(why)})", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # custom_alerts: the exporter's judgement of each `_custom_alerts` element
 # ---------------------------------------------------------------------------
 
-def custom_alerts_fields(conf_d: Path) -> "dict[str, dict] | None":
+def custom_alerts_fields(conf_d: Path,
+                         declared: "dict[str, Any] | None" = None) -> "dict[str, dict] | None":
     """`{tenant_id: fields}` — what the default output, `--show-sources` and
     `--all` add beside `effective_config` (#3230), from one `da-guard
     served-values` run over `conf_d` (`partial`: a file the load skips leaves
     the rest of the tree): `custom_alerts`, one `{index, name, recipe,
     status[, reason][, recipe_id]}` per element of the tenant's
     `_custom_alerts` as the exporter judges it, and `custom_alerts_error`
-    when the list does not decode. A tenant with neither has no entry.
+    when the list does not decode. A tenant with neither has no entry —
+    unless `declared` (tenant → its effective config) gives it a
+    `_custom_alerts` the exporter takes nothing from: then `custom_alerts`
+    is `[]`, so "declared, none served" reads apart from "not declared".
 
     None, with one WARN line on stderr, when served-values fails; a tenant
     whose da-guard is older than the field has no entry, with one WARN line.
@@ -320,6 +334,11 @@ def custom_alerts_fields(conf_d: Path) -> "dict[str, dict] | None":
                  else [str(exc)])
         print(f"WARN: custom_alerts not shown — da-guard served-values failed: "
               f"{safe_label(lines[0] if lines else str(exc))}", file=sys.stderr)
+        # #1822: a caller that goes on after the failure passes da-guard's
+        # own lines on whole.
+        for line in lines[1:]:
+            print(line if line.startswith(DA_GUARD_PREFIX) else f"{DA_GUARD_PREFIX}{safe_label(line)}",
+                  file=sys.stderr)
         return None
     out: "dict[str, dict]" = {}
     stale = False
@@ -327,7 +346,10 @@ def custom_alerts_fields(conf_d: Path) -> "dict[str, dict] | None":
         fields: dict = {}
         if tv.custom_alerts is None:
             stale = True
-        elif tv.custom_alerts:
+        elif not tv.custom_alerts:
+            if (declared or {}).get(tid, {}).get("_custom_alerts") and tv.custom_alerts_error is None:
+                fields["custom_alerts"] = []
+        else:
             rows = []
             for e in tv.custom_alerts:
                 row = {"index": e.index, "name": e.spec.get("name"),
@@ -642,10 +664,7 @@ def main() -> None:
     # own words (da-guard's lines follow behind its prefix).
     for rel, why in scanner.skipped_entries.items():
         print(f"WARNING: skipped {safe_label(rel)} — {safe_label(why)}", file=sys.stderr)
-    # #1674: said by the custom-alert loader's walk until #3230 removed it.
-    for rel, why in scanner.not_read.items():
-        print(f"WARN: {safe_label(rel)} is ignored on every plane (#1674): da-guard "
-              f"parse-tree does not read it ({safe_label(why)})", file=sys.stderr)
+    warn_not_read(scanner)
     if scanner.dropped:
         print("WARN: the exporter's load skips or cannot read file(s) of this tree (named "
               "above): their tenants and values are absent, and merged_hash is not "
@@ -707,7 +726,8 @@ def main() -> None:
                 result[tid] = scanner.source_info(tid)
         if result:
             # Beside effective_config, never inside it (#3230).
-            for tid, fields in (custom_alerts_fields(scanner.conf_d) or {}).items():
+            declared = {t: scanner.tenants[t].effective_config for t in result}
+            for tid, fields in (custom_alerts_fields(scanner.conf_d, declared) or {}).items():
                 if tid in result:
                     result[tid].update(fields)
         if scanner.refused is not None:
@@ -768,7 +788,8 @@ def main() -> None:
             result["profile_overlay"] = profile
         result["effective_config"] = scanner.effective_config(tid)
     # Beside effective_config, never inside it: that one is Go's value as is (#3230).
-    result.update((custom_alerts_fields(scanner.conf_d) or {}).get(tid, {}))
+    declared = {tid: scanner.tenants[tid].effective_config}
+    result.update((custom_alerts_fields(scanner.conf_d, declared) or {}).get(tid, {}))
     print(_output(result))
 
 

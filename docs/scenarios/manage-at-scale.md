@@ -70,7 +70,7 @@ da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/
 ```
 # Config Diff Report
 
-Comparing: `conf.d.before` → `conf.d`
+Comparing: `conf.d.before/` → `conf.d/`
 
 Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows are read at this instant, on both sides)
 
@@ -191,7 +191,7 @@ PR 提交 → CI 執行 config-diff 那一步
   ├── 1. 取出 base branch 的 conf.d/ 到 conf.d.base/
   ├── 2. da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/
   │      （兩側各以 da-guard served-values 與路由產生器渲染，再比較）
-  └── 3. 結束碼 0 或 1：貼出報告；2：該步驟失敗
+  └── 3. 結束碼 0 或 1：貼出報告；2：該步驟失敗，GitHub 版另貼一則「NOT COMPUTED」留言蓋掉舊報告
 ```
 
 報告的內容與情景 1 的輸出範例相同：平台設定的變更、閾值、路由、receiver 等區段，每一筆變更帶它影響的租戶清單。比較規則見 [ADR-037](../adr/037-config-diff-compares-rendered-output.md)。

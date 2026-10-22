@@ -1669,8 +1669,8 @@ def _gen_github_actions(
               # the report silently degrades to "every tenant is new", which
               # docs/internal/lint-policy.md names as pretending to be
               # diff-aware. Same value and same reason as this platform's own
-              # config-diff.yaml and blast-radius.yml — but note those reach
-              # for `origin/<base branch>`, which this depth guarantees,
+              # config-diff-advisory.yml — but note it reaches for
+              # `origin/<base branch>`, which this depth guarantees,
               # while a PR event's base SHA is only reachable while some
               # branch still leads to it. The next step reports that case
               # rather than papering over it.

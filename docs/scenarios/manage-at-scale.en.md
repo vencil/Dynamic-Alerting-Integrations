@@ -70,7 +70,7 @@ Example output (a tree of three finance tenants, `tenant-fin-003` writing its ow
 ```
 # Config Diff Report
 
-Comparing: `conf.d.before` → `conf.d`
+Comparing: `conf.d.before/` → `conf.d/`
 
 Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows are read at this instant, on both sides)
 
@@ -194,7 +194,7 @@ PR submitted → CI runs the config-diff step
   ├── 1. extract the base branch's conf.d/ into conf.d.base/
   ├── 2. da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/
   │      (each side rendered by da-guard served-values and the route generator, then compared)
-  └── 3. exit 0 or 1: post the report; 2: the step fails
+  └── 3. exit 0 or 1: post the report; 2: the step fails, and the GitHub version posts a "NOT COMPUTED" comment over the old report
 ```
 
 The report reads like the example output in Scenario 1: sections for changed platform settings, thresholds, routes, receivers and so on, each change with the tenants it affects. The comparison rules are in [ADR-037](../adr/037-config-diff-compares-rendered-output.en.md).

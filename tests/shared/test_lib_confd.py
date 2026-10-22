@@ -847,7 +847,6 @@ def test_entries_is_case_insensitive_like_every_other_predicate(tmp_path):
 def test_entries_does_not_list_the_directory_itself(tmp_path, capsys):
     """⛔ It must make NO filesystem listing of its own.
 
-    `defaults_files_in` takes names for this reason and
     `test_confd_enumeration_contract` reddens `_lib_confd.py` for a sentinel
     flat scan. Passing entries from a DIFFERENT directory than the one the
     paths live in would still work if the function only inspects what it is

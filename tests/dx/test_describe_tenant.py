@@ -957,6 +957,41 @@ class TestCustomAlertsAsTheExporterServes:
         assert "custom_alerts" not in json.loads(out)
         warns = [line for line in err.splitlines() if "custom_alerts not shown" in line]
         assert len(warns) == 1 and warns[0].startswith("WARN: "), err
+        # #1822: da-guard's own lines are passed on whole.
+        assert any(line.startswith(dt.DA_GUARD_PREFIX) and "boom" in line for line in err.splitlines()), err
+
+    def test_declared_but_none_served_is_an_empty_list(self, tmp_path):
+        """`_custom_alerts` the effective config carries but the exporter takes
+        nothing from (under a subdirectory `defaults:`) reads as `[]`, apart
+        from a tenant that declares none (the field omitted)."""
+        conf_d = _write(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n  _custom_alerts:\n"
+                                   "    - {recipe: threshold, name: tp, metric: m, op: '>', window: 5m,"
+                                   " threshold: '1:warning'}\n",
+            "team/a.yaml": "tenants:\n  tq:\n    redis_memory: '50'\n",
+            "b.yaml": "tenants:\n  tn:\n    redis_memory: '50'\n"})
+        tq = json.loads(self._run(conf_d, "tq").stdout)
+        assert tq["effective_config"].get("_custom_alerts"), tq
+        assert tq["custom_alerts"] == []
+        assert "custom_alerts" not in json.loads(self._run(conf_d, "tn").stdout)
+
+    def test_a_defaults_carrier_no_plane_reads_is_named_once_by_both_tools(self, tmp_path, monkeypatch, capsys):
+        """#1674: the carrier its directory's chain does not select is named,
+        once, by describe_tenant and by tenant_verify alike."""
+        import tenant_verify
+        conf_d = _write(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+            "team/_defaults.yml": "defaults:\n  mysql_connections: 60\n",
+            "team/a.yaml": "tenants:\n  tx:\n    redis_memory: '50'\n"})
+        code, _out, err = self._main(monkeypatch, capsys, conf_d, "tx")
+        assert code == 0, err
+        assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
+        monkeypatch.setattr(sys, "argv", ["tenant_verify", "tx", "--conf-d", str(conf_d)])
+        tenant_verify.main()
+        err = capsys.readouterr().err
+        assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
 
     def test_a_da_guard_without_the_field_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
         conf_d = _write(tmp_path, self.FILES)
