@@ -614,8 +614,8 @@ def _find_schema(name: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
-    """(file, label, schema name) for every file `yaml_quoting` reads.
+def _quoting_scope(config_dir: str) -> list[tuple[Path, str, tuple[str, ...]]]:
+    """(file, label, schema names) for every file `yaml_quoting` reads.
 
     #2695: `json_schema` leaves the misread scalars of exactly these files
     to `yaml_quoting` — so the set is computed in ONE place. Were the two
@@ -630,20 +630,30 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
     # #3206: the files are the entries of the run's tree-mode document (Go's
     # `role`; the list `check_confd_schema.validate_dir` iterates too), and
     # the schema a name selects is da-guard's (`defaults_document`, class).
+    #
+    # #2743 (#2509 review F3 before it): a ROOT platform file's `tenants:`
+    # block — any root `_` file the exporter reads, Go's verdict
+    # (`root_platform_file`) — is held to the tenant schema too, whose only
+    # top-level key is `tenants`; another `_` file has no schema of its own
+    # here and is read for that block alone. A nested one is not (no plane
+    # reads its block, #1576).
     reader = _lib_parse_cache.reader_for(config_dir)
-    out: list[tuple[Path, str, str]] = []
+    out: list[tuple[Path, str, tuple[str, ...]]] = []
     for e in reader.listing().config_files():
         if e.not_read is not None:
             continue
         if e.defaults_document:
-            schema_name = _PLATFORM_SCHEMA
+            names: tuple[str, ...] = (_PLATFORM_SCHEMA,)
         elif e.name in _PROFILES_NAMES:
-            schema_name = _PROFILES_SCHEMA
+            names = (_PROFILES_SCHEMA,)
         elif e.reserved:
-            continue
+            names = ()
         else:
-            schema_name = _TENANT_SCHEMA
-        out.append((Path(config_dir) / e.path, e.path, schema_name))
+            names = (_TENANT_SCHEMA,)
+        if e.root_platform_file:
+            names += (_TENANT_SCHEMA,)
+        if names:
+            out.append((Path(config_dir) / e.path, e.path, names))
     return out
 
 
@@ -654,7 +664,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     to tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
     and `_routing_profiles.y(a)ml` to routing-profiles.schema.json (#2245;
     the same selection `check_confd_schema` makes); other `_*` files have
-    no schema and are not read. Which values are not strings is yaml.v3's
+    no schema and are read only for a root one's `tenants:` block (below).
+    Which values are not strings is yaml.v3's
     verdict (parse-tree's tag) and which fields are strings is the schema's —
     see `_lib_io.find_misread_scalars`; nothing is listed here. `channel: yes`
     is the string "yes" to yaml.v3 and is no finding.
@@ -668,7 +679,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     `!!bool yes` makes the whole file unreadable to parse-tree
     (`decode_error`), which `yaml_syntax` reports. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
-    nested one is not (the exporter does not read it).
+    nested one is not (the exporter does not read it); so is that of every
+    other root platform file the exporter reads (#2743, `_quoting_scope`).
     """
     from _lib_io import find_misread_scalars, find_yaml11_bool_words
     schemas: dict[str, object] = {}
@@ -685,17 +697,12 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
     checked = 0
-    for fpath, label, schema_name in _quoting_scope(config_dir):
+    for fpath, label, names in _quoting_scope(config_dir):
         try:
             root = reader.node(fpath)
         except FileUnreadable:
             continue
         checked += 1
-        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
-        # is held to the tenant schema too (same rule as check_confd_schema).
-        names = [schema_name]
-        if schema_name == _PLATFORM_SCHEMA and "/" not in label:
-            names.append(_TENANT_SCHEMA)
         for name_ in names:
             for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
                 errors.append(f"{label}: {hit.message()}")
@@ -794,8 +801,9 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
               for v in violations]
     if errors:
         return _make_result("json_schema", FAIL, errors)
-    note = (f"; {len(skipped)} other `_` file(s) have their own shape and "
-            f"are not read here" if skipped else "")
+    # #2743: a root one's `tenants:` block is checked; its own shape is not.
+    note = (f"; {len(skipped)} other `_` file(s) have their own shape, "
+            f"not checked here" if skipped else "")
     # #2906 review: a file no reader reads (parse-tree's `not_read`) is not
     # checked; said here, the `schema` row names why.
     note += (f"; not checked, no reader reads: {', '.join(not_read)}" if not_read else "")

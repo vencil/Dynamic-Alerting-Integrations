@@ -1463,6 +1463,10 @@ definitions:
         type: string
       label:
         type: string
+    required:
+    - filters
+    - id
+    - label
     type: object
   internal_handler_federation.BackfillAccountsResponse:
     properties:
