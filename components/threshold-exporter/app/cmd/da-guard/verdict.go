@@ -8,19 +8,17 @@ package main
 //
 // ⛔ ONE RULE, TWO CONSUMERS. pathVerdict is the rule; validation's
 // unreadable_outside_run evidence (undeterminedFromParseTree) and
-// parse-tree's verdict are both it. What it is given is validation's own
-// exit-3 lists — config.ScopeDropped, the steps of config.ScopeEffective that
-// fill ScopedTenants.ParseFailed and .Unreadable, passed through
-// reportedPaths as validation passes them — never a list of parse-tree's own.
-// TestFixtureCatalog_RecipesGiveTheirEntries holds the two outputs equal on
-// every catalogue tree (fixture_catalog_unix_test.go,
-// assertVerdictIsValidationsLists).
+// parse-tree's verdict are both it. What it is given is the set of paths
+// validation names under exit 3, built from the walk parse-tree already made:
+// the walk's half (config.TreeUnreadable, the function ScopeEffective fills
+// unreadable with) and the build's half (TreeScan.DroppedFiles — the
+// exporter's build's own per-file decode, config.DropsConfFile, over the bytes
+// the walk read), never a list of parse-tree's own. One walk, no second load.
+// fixture_catalog_unix_test.go (assertVerdictIsValidationsLists) holds the
+// verdicts equal to validation's report on every catalogue tree.
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"log"
 	"sort"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -53,21 +51,22 @@ func pathVerdict(e parseTreeEntry, dropped map[string]bool) string {
 	return ""
 }
 
-// treeDropped is the set of paths a whole-tree validation run (no --scope)
-// names under exit 3, on the tree opts makes the walk read (the zero opts:
-// the tree on disk).
-func treeDropped(configDir string, opts config.ScanOptions) (map[string]bool, error) {
-	s, err := config.ScopeDropped(configDir, "", opts)
-	if err != nil {
-		return nil, err
-	}
-	return reportedPaths(s.ParseFailed, unreadableEntries(s.Unreadable)), nil
+// walkDropped is the walk's half of the paths a whole-tree validation run
+// (no --scope) names under exit 3: unreadable. List mode reads no byte and
+// has only this half; so do the entries file mode does not judge.
+func walkDropped(scan *config.TreeScan) map[string]bool {
+	return reportedPaths(nil, unreadableEntries(config.TreeUnreadable(scan)))
+}
+
+// treeDropped is the whole set: walkDropped plus parse_failed, the files the
+// exporter's build drops (TreeScan.DroppedFiles over the bytes this walk read).
+func treeDropped(scan *config.TreeScan) map[string]bool {
+	return reportedPaths(scan.DroppedFiles(), unreadableEntries(config.TreeUnreadable(scan)))
 }
 
 // setVerdicts sets every entry's Verdict from dropped. A dropped path no
 // entry has is an error: the verdicts would not name it, and a reader would
-// read the tree as servable (the two walks saw different trees — it changed
-// between them — or a da-guard defect).
+// read the tree as servable (a da-guard defect).
 func setVerdicts(entries []parseTreeEntry, dropped map[string]bool) error {
 	seen := make(map[string]bool, len(entries))
 	for i := range entries {
@@ -82,66 +81,37 @@ func setVerdicts(entries []parseTreeEntry, dropped map[string]bool) error {
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return fmt.Errorf("the exporter's load drops %q, and the walk recorded no entry for it: "+
-			"the tree changed during the run, or a da-guard defect; run again", missing)
+		return fmt.Errorf("validation would drop %q, and the walk recorded no entry for it "+
+			"(a da-guard defect)", missing)
 	}
 	return nil
 }
 
-// treeVerdicts is tree mode's verdict of every path of scan (a
-// ScanDirTreeFiles walk of configDir as opts makes it read), by path.
-func treeVerdicts(configDir string, scan *config.TreeScan, opts config.ScanOptions) (map[string]string, error) {
-	doc, err := parseTreeOf(scan)
-	if err != nil {
-		return nil, err
-	}
-	dropped, err := treeDropped(configDir, opts)
-	if err != nil {
-		return nil, err
-	}
-	if err := setVerdicts(doc.Entries, dropped); err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(doc.Entries))
-	for _, e := range doc.Entries {
-		out[e.Path] = e.Verdict
-	}
-	return out, nil
-}
-
-// setFileVerdict is file mode's verdict: the one tree mode gives --path (rel)
-// in the tree as it is once input is written there. asOnDisk: the entry is
-// already tree mode's entry of the tree on disk (a directory, or a path that
-// is no regular file), whose text is not read — its verdict is that tree's.
-// A path the walk would not record (hidden, not a config name, under a
-// directory the walk does not descend) has none: no validation list can name
-// it. When the walk refuses to take input at rel (ErrOverlay: rel exists but
-// cannot be read, or its directory cannot be listed), the verdict is the tree
-// on disk's — that directory's own entry carries its verdict there, rel none.
-func setFileVerdict(configDir string, disk *config.TreeScan, e *parseTreeEntry, asOnDisk bool, rel string, input []byte) error {
-	switch e.NotRead {
-	case notReadHidden, notReadNotConfigName, notReadParentNotWalked:
-		return nil
-	}
+// setFileVerdict is file mode's verdict on its one entry, --path (rel), with
+// no load of the tree: the walk half of the tree on disk (walkDropped), plus,
+// for a file the walk would keep at rel, whether the exporter's build drops
+// input there (config.DropsConfFile, the build's own per-file decode;
+// selectedCarrier as parseFileIn decided it). asOnDisk: the entry is the
+// walk's own record of rel (a directory, a symlink to one, a path that is no
+// regular file), judged as tree mode judges it. A path the walk would not
+// record (hidden, not a config name, under a directory the walk does not
+// descend) has none. pathVerdict is the rule, as in tree mode; it is given
+// the entry as tree mode would hold it: content no reader reads is not
+// parsed there (parseTreeOf), so its problem does not count.
+func setFileVerdict(disk *config.TreeScan, e *parseTreeEntry, asOnDisk, selectedCarrier bool, rel string, input []byte) {
+	dropped := walkDropped(disk)
 	if !asOnDisk {
-		opts := config.ScanOptions{Overlay: &config.FileOverlay{Rel: rel, Data: input}}
-		scan, err := config.ScanDirTreeFilesWith(configDir, log.New(io.Discard, "", 0), opts)
-		if err == nil {
-			v, err := treeVerdicts(configDir, scan, opts)
-			if err != nil {
-				return err
-			}
-			e.Verdict = v[rel]
-			return nil
+		switch e.NotRead {
+		case notReadHidden, notReadNotConfigName, notReadParentNotWalked:
+			return
 		}
-		if !errors.Is(err, config.ErrOverlay) {
-			return err
+		if config.DropsConfFile(rel, input, selectedCarrier) {
+			dropped[rel] = true
 		}
 	}
-	v, err := treeVerdicts(configDir, disk, config.ScanOptions{})
-	if err != nil {
-		return err
+	judged := *e
+	if !asOnDisk && len(judged.Readers) == 0 {
+		judged.Problem = nil
 	}
-	e.Verdict = v[rel]
-	return nil
+	e.Verdict = pathVerdict(judged, dropped)
 }

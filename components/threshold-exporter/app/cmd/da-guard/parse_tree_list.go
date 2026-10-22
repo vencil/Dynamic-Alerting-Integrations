@@ -203,7 +203,7 @@ func parseTreeListOf(scan *config.TreeScan) (*parseTreeIndex, error) {
 	if err := walkEntries(scan, &idx); err != nil {
 		return nil, err
 	}
-	if err := setVerdicts(idx.Entries, reportedPaths(nil, unreadableEntries(config.TreeUnreadable(scan)))); err != nil {
+	if err := setVerdicts(idx.Entries, walkDropped(scan)); err != nil {
 		return nil, err
 	}
 	return &idx, nil

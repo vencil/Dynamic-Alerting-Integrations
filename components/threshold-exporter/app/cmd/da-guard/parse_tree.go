@@ -155,11 +155,16 @@ type parseTreeEntry struct {
 	// exit 3 (parse_failed or unreadable: the exporter cannot serve it) —,
 	// "tree_refused" — under exit 4 as unreadable_outside_run (the route
 	// generator refuses the whole tree on it) —, else null. Tree mode: of the
-	// tree on disk. File mode: of the tree once --path is written
-	// (setFileVerdict). List mode reads no byte, so it knows only the walk's
-	// half of exit 3 (unreadable): a file whose content the exporter refuses
-	// (parse_failed) is null there and unservable in tree mode. Names mode:
-	// always null (no tree).
+	// tree on disk, every entry. File mode: the full verdict of --path once
+	// its text is written (setFileVerdict; no load of the tree). List mode
+	// reads no byte, so it knows only the walk's half of exit 3 (unreadable):
+	// a file whose content the exporter refuses (parse_failed) is null there
+	// and unservable in tree mode. Names mode: always null (no tree).
+	// ⚠️ Per path only: null on every entry is not "validation passes" — a
+	// tenant declared twice (exit 2) or routing evidence (exit 4) is no
+	// path's verdict. An entry can be unselected_defaults_carrier AND
+	// unservable: a broken carrier below the root that its directory does not
+	// select is still probed, and dropped, by the exporter's build.
 	Verdict string
 }
 
@@ -291,12 +296,16 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"                  serve it.\n"+
 			"  tree_refused    named under exit 4 as unreadable_outside_run: the route generator\n"+
 			"                  refuses the whole tree on it.\n"+
-			"Tree mode: the tree on disk. File mode: the tree once --path is written (null when the\n"+
-			"walk would not record --path: hidden, not_config_name, parent_not_walked; the tree on\n"+
-			"disk's when the walk cannot take the text at --path). List mode reads no byte and so\n"+
-			"knows only the walk's half of exit 3: a file the exporter cannot decode is null there\n"+
-			"and unservable in tree mode — a reader that must name every path validation names\n"+
-			"reads tree mode. Names mode: always null.\n\n"+
+			"Tree mode: every entry, of the tree on disk. File mode: the full verdict of --path\n"+
+			"once its text is written (null when the walk would not record it: hidden,\n"+
+			"not_config_name, parent_not_walked); file mode judges no other path — read tree mode\n"+
+			"for the rest. List mode reads no byte and so knows only the walk's half of exit 3: a\n"+
+			"file the exporter cannot decode is null there and unservable in tree mode — a reader\n"+
+			"that must name every path validation names reads tree mode. Names mode: always null.\n"+
+			"An unselected_defaults_carrier below the root can be unservable (the exporter still\n"+
+			"probes it). Per path only: null everywhere is not \"validation passes\" — a tenant\n"+
+			"declared twice (exit 2) or routing content (exit 4) is no path's verdict; a reader that\n"+
+			"needs the whole verdict runs validation.\n\n"+
 			"\"files\" holds every config entry with readers and no problem (tree mode), or the\n"+
 			"text of --path (file mode). <content> is the top-level mapping, aliases and unquoted\n"+
 			"`<<` merges expanded. A mapping is a JSON object keyed by each key's source text\n"+
@@ -418,15 +427,12 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	var doc *parseTreeDoc
 	if f.path == "" {
 		if doc, err = parseTreeOf(scan); err == nil {
-			var dropped map[string]bool
-			if dropped, err = treeDropped(f.configDir, config.ScanOptions{}); err == nil {
-				err = setVerdicts(doc.Entries, dropped)
-			}
+			err = setVerdicts(doc.Entries, treeDropped(scan))
 		}
 	} else {
-		var asOnDisk bool
-		if doc, asOnDisk, err = parseFileIn(scan, rel, input); err == nil {
-			err = setFileVerdict(f.configDir, scan, &doc.Entries[0], asOnDisk, rel, input)
+		var asOnDisk, selected bool
+		if doc, asOnDisk, selected, err = parseFileIn(scan, rel, input); err == nil {
+			setFileVerdict(scan, &doc.Entries[0], asOnDisk, selected, rel, input)
 		}
 	}
 	if err != nil {
@@ -481,19 +487,21 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 
 // parseFileIn is file mode: input read as the text of rel, in the tree scan
 // holds once rel is written. asOnDisk: the one entry is tree mode's entry of
-// rel in the tree on disk (a walked directory, or a path that is no regular
-// file), whose text is not read.
-func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTreeDoc, asOnDisk bool, err error) {
+// rel in the tree on disk (a walk record that is no config file, or a path
+// that is no regular file), whose text is not read. selectedCarrier: false
+// only for a defaults carrier its directory's chain would not select.
+func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTreeDoc, asOnDisk, selectedCarrier bool, err error) {
 	doc = newParseTreeDoc("file")
-	// A directory the walk recorded (entered: role dir; could not list:
-	// unlistable_dir) is what tree mode says it is — the very entry, from
-	// the same walk and the same function (walkEntries), never a second
-	// verdict here. Its text is not read.
+	// A path the walk recorded as no config file (a directory it entered or
+	// could not list, a symlink to a directory, a path that is no regular
+	// file — whatever its name: `etc/`, `etc -> /etc`) is what tree mode says
+	// it is — the very entry, from the same walk and the same function
+	// (walkEntries), never a second verdict here. Its text is not read.
 	if d, err := walkedDirEntry(scan, rel); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	} else if d != nil {
 		doc.Entries = append(doc.Entries, *d)
-		return doc, true, nil
+		return doc, true, false, nil
 	}
 	e := nameEntry(rel)
 	e.Role = config.RoleConfig
@@ -511,13 +519,13 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTre
 			// What tree mode gives the same path: the same entry, and the
 			// text is not read.
 			doc.Entries = append(doc.Entries, *issue)
-			return doc, true, nil
+			return doc, true, false, nil
 		}
 	}
 	readers := []string{}
 	carrier := false
+	selected := true
 	if reason == "" {
-		selected := true
 		if confdname.IsDefaults(path.Base(rel)) {
 			// The directory's carriers once rel is written: the readable
 			// ones the walk found there, rel among them.
@@ -534,11 +542,11 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTre
 			carrier = selected
 			d, err := relTo(scan.AbsRoot, dir)
 			if err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 			c, err := relTo(scan.AbsRoot, chosen)
 			if err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 			doc.DefaultsCarriers[d] = c
 		}
@@ -557,7 +565,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTre
 		}
 	}
 	doc.Entries = append(doc.Entries, e)
-	return doc, false, nil
+	return doc, false, selected, nil
 }
 
 // notFileEntry is the readers and the message of a path that is not a file
@@ -609,16 +617,17 @@ func fileOnDisk(root, rel string) *parseTreeEntry {
 	return nil
 }
 
-// walkedDirEntry is tree mode's entry of rel when the walk recorded rel as a
-// directory (role dir or unlistable_dir), else nil: walkEntries over the
-// same scan, so file and tree mode cannot disagree about a directory.
+// walkedDirEntry is tree mode's entry of rel when the walk recorded rel as
+// anything but a config file (role dir, unlistable_dir or not_a_file), else
+// nil: walkEntries over the same scan, so file and tree mode cannot disagree
+// about such a path.
 func walkedDirEntry(scan *config.TreeScan, rel string) (*parseTreeEntry, error) {
 	idx := newParseTreeIndex("tree")
 	if err := walkEntries(scan, &idx); err != nil {
 		return nil, err
 	}
 	for _, e := range idx.Entries {
-		if e.Path == rel && (e.Role == config.RoleDir || e.Role == config.RoleUnlistableDir) {
+		if e.Path == rel && e.Role != config.RoleConfig {
 			return &e, nil
 		}
 	}

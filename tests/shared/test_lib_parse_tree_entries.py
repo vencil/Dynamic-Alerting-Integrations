@@ -158,7 +158,7 @@ def test_config_file_is_the_role_and_nothing_else() -> None:
     of these wrong (a stat refused and a dangling link share their problem)."""
     facts = dict(path="x.yaml", depth=0, cls="tenant", tenant_named="x", defaults_document=False,
                  readers=("exporter", "generator"), not_read=None,
-                 problem=("read_failure", "the path cannot be statted (stat_error)"))
+                 problem=("read_failure", "the path cannot be statted (stat_error)"), verdict=None)
     got = {role: lpt.Entry(**facts, role=role) for role in sorted(lpt.ROLES)}
     assert {r: (e.config_file, e.is_dir, e.not_a_file, e.unlistable_dir)
             for r, e in got.items()} == {

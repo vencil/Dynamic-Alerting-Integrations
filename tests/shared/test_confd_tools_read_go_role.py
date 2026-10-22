@@ -906,7 +906,7 @@ def test_flagged_is_the_role_and_the_problem() -> None:
     def e(role, problem):
         return pt.Entry(path="x", depth=0, cls="directory", tenant_named=None,
                         defaults_document=False, readers=(), not_read=None,
-                        role=role, problem=problem)
+                        role=role, problem=problem, verdict=None)
     assert [e(r, p).flagged for r, p in (
         ("not_a_file", bad), ("unlistable_dir", ("read_failure", "x")), ("dir", bad),
         ("dir", None), ("config", bad), ("config", None))] == [True, True, True, False, False, False]

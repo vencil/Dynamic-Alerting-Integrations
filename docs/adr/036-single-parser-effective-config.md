@@ -152,7 +152,7 @@ da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一�
   - `unlistable_dir`：列不出內容的目錄（根目錄為 `.`），它底下的檔都沒看到，所以這份文件不完整。
   - 判定是白名單：只有上面列的情況是 `not_a_file`，其餘任何失敗（權限不足、EIO、名稱過長、之後新增的原因）一律是 `config`。反方向的預設會讓一份 stat 被權限擋下的租戶檔只留一行 WARN 就從清單上消失。
 - `problem`：讀它會失敗的原因，`{kind, message}`（見下方「讀不了的檔」）。
-- `verdict`：da-guard 的驗證（不帶 `--scope`）會怎麼列這個路徑，由 Go 從驗證自己的清單算出：`unservable`（結束碼 3 列出：exporter 載入時丟掉或讀不到，無法服務它）、`tree_refused`（結束碼 4 列為 `unreadable_outside_run`：產生器因它拒收整棵樹）或 `null`。讀取端要在驗證列出的每個路徑上失敗時，讀這一欄，不從 `role` 與 `problem` 自己組合——exporter 解碼拒收的檔可能完全沒有 `problem`（例如 `tenants:` 底下是清單）。只列檔模式不讀內容，只知道走訪那一半：內容被拒收的檔在那裡是 `null`。
+- `verdict`：da-guard 的驗證（不帶 `--scope`）會怎麼列這個路徑，由 Go 從驗證自己的清單算出：`unservable`（結束碼 3 列出：exporter 載入時丟掉或讀不到，無法服務它）、`tree_refused`（結束碼 4 列為 `unreadable_outside_run`：產生器因它拒收整棵樹）或 `null`。讀取端要在驗證列出的每個路徑上失敗時，讀這一欄，不從 `role` 與 `problem` 自己組合——exporter 解碼拒收的檔可能完全沒有 `problem`（例如 `tenants:` 底下是清單）。只列檔模式不讀內容，只知道走訪那一半：內容被拒收的檔在那裡是 `null`；單檔模式只對 `--path` 本身給完整判定，不載入整棵樹。子目錄裡未被選中、內容壞掉的 `_defaults` 載體會同時是 `unselected_defaults_carrier` 與 `unservable`。`verdict` 只回答單一路徑：每筆都是 `null` 不等於驗證通過（同一租戶兩處宣告、路由內容都不落在路徑上），要整體結論就跑驗證。
 
 範例：一棵樹有 `t1.yaml`、`_defaults.yaml` 與 `_defaults.yml`、語法錯的 `team/t2.yaml`，以及指向不存在檔案的 `gone.yaml`。`da-guard parse-tree --list-only --config-dir conf.d` 輸出（節錄三筆，各佔一行）：
 

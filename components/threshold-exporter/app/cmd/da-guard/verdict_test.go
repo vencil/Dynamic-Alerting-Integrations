@@ -15,9 +15,12 @@ func TestParseTree_FileModeVerdictIsTheWrittenTrees(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	for rel, text := range map[string]string{
-		"a.yaml":        "tenants:\n  a: {}\n",
-		"b.yaml":        "tenants: {t1: [\n",
-		"x.yaml/t.yaml": "tenants:\n  t: {}\n",
+		"a.yaml":              "tenants:\n  a: {}\n",
+		"b.yaml":              "tenants: {t1: [\n",
+		"x.yaml/t.yaml":       "tenants:\n  t: {}\n",
+		"plain/t.yaml":        "tenants:\n  p: {}\n",
+		"_defaults.yaml":      "defaults: {}\n",
+		"team/_defaults.yaml": "defaults: {}\n",
 	} {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -26,6 +29,9 @@ func TestParseTree_FileModeVerdictIsTheWrittenTrees(t *testing.T) {
 		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "etc")); err != nil {
+		t.Skipf("no symlinks here: %v", err)
 	}
 	for _, tc := range []struct {
 		rel, text string
@@ -37,6 +43,12 @@ func TestParseTree_FileModeVerdictIsTheWrittenTrees(t *testing.T) {
 		{"a.yaml", "tenants:\n  a: {}\n", nil},
 		{".hidden.yaml", "tenants: {t1: [\n", nil},      // no walk records it
 		{"x.yaml", "tenants: {}\n", verdictTreeRefused}, // a config-named directory: tree mode's entry
+		// Walk records whatever their name: a symlink to a directory is
+		// tree_refused as in tree mode; a plain directory is nothing.
+		{"etc", "tenants: {}\n", verdictTreeRefused},
+		{"plain", "tenants: {}\n", nil},
+		{"_defaults.yml", "defaults: [\n", nil},                    // an unselected root carrier is not parsed
+		{"team/_defaults.yml", "defaults: [\n", verdictUnservable}, // a nested one is probed
 	} {
 		code, doc, msg := runPT(t, tc.text, "--config-dir", root, "--path", tc.rel, "--input", "-")
 		if code != exitOK {
@@ -55,8 +67,9 @@ func TestParseTree_FileModeVerdictIsTheWrittenTrees(t *testing.T) {
 			got[p] = e["verdict"]
 		}
 	}
-	if len(got) != 2 || got["b.yaml"] != verdictUnservable || got["x.yaml"] != verdictTreeRefused {
-		t.Errorf("tree mode verdicts %v, want b.yaml unservable and x.yaml tree_refused", got)
+	if len(got) != 3 || got["b.yaml"] != verdictUnservable || got["x.yaml"] != verdictTreeRefused ||
+		got["etc"] != verdictTreeRefused {
+		t.Errorf("tree mode verdicts %v, want b.yaml unservable, x.yaml and etc tree_refused", got)
 	}
 }
 

@@ -60,12 +60,17 @@ tree on it), or None. Go computes it from validation's own lists; a reader
 that must fail closed on every path validation names reads this field and
 composes nothing from role and problem (a file the exporter's decode
 refuses can have no `problem` at all). ⚠️ Per mode: tree mode answers for
-the tree on disk; file mode for the tree once the text is written at the
-path (None for a path no walk records); list mode reads no byte, so it
+every entry of the tree on disk; file mode gives the full verdict for the
+target path alone, once the text is written there (None for a path no walk
+records) — read tree mode for the rest; list mode reads no byte, so it
 knows only the walk's half of exit 3 — a file whose content the exporter
 refuses is None there and `unservable` in tree mode: a reader that must
 name every path validation names reads tree mode, not a listing. Names
-mode: always None.
+mode: always None. A broken unselected `_defaults` carrier below the root is
+both `not_read` unselected_defaults_carrier and `unservable`. ⛔ Per path
+only: None on every entry is NOT "validation passes" — a tenant declared
+twice (exit 2) or routing content (exit 4) falls on no path; a reader that
+needs the whole verdict runs validation (`da-tools guard defaults-impact`).
 
 "Which files can declare a tenant" is ONE answer with two halves
 (`tenant_scope`): the tenant files, and the entries that leave the set
@@ -365,7 +370,7 @@ class Entry:
     not_read: Optional[str]
     role: Optional[str]
     problem: Optional[tuple[str, str]]
-    verdict: Optional[str] = None
+    verdict: Optional[str]
 
     @property
     def name(self) -> str:
