@@ -1008,7 +1008,20 @@ def _main():
                              "體檢；subtree 跳過（子樹平面的字串值合法）")
 
     args = parser.parse_args()
+    if args.plane == "subtree":
+        # ⚠️ #3206 known gap: `--plane subtree` points at a directory BELOW
+        # the exporter's --config-dir, but `da-guard parse-tree` judges the
+        # directory it is given as a root — a subtree carrier's string value
+        # (legal there) reads as a root default the exporter drops. Until Go
+        # can judge a subtree in its place, this plane stands aside from the
+        # shared refusal and keeps its own checks (`judging`).
+        with _lib_parse_cache.judging():
+            return _deprecate(args)
+    return _deprecate(args)
 
+
+def _deprecate(args):
+    """The run, once the arguments are parsed."""
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

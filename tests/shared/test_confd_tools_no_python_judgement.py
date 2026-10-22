@@ -160,7 +160,7 @@ ALLOWED = {
     "tools/ops/batch_diagnose.py:discover_tenants:is_reserved_name": CONFIGMAP,
     "tools/ops/config_history.py:_scan_config_dir:has_yaml_extension": PR_BETA2,
     "tools/ops/config_history.py:_scan_config_dir:is_hidden_name": PR_BETA2,
-    "tools/ops/deprecate_rule.py:_main:is_defaults_name": PR_BETA2,
+    "tools/ops/deprecate_rule.py:_deprecate:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:_nested_ignored:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:section_owner:is_defaults_name": PR_BETA2,
     "tools/ops/drift_detect.py:compute_dir_manifest:has_yaml_extension": PR_BETA2,
@@ -305,6 +305,9 @@ JUDGES = {
     "tools/lint/check_routing_profiles.py": "runs the route generator; its refusal is the finding",
     "tools/ops/config_diff.py": "names a PR side it cannot read (exit 2) and leaves a broken "
                                 "base side uncompared (exit 1), so a repairing PR is not blocked",
+    "tools/ops/deprecate_rule.py": "`--plane subtree` only: parse-tree judges the subtree as a "
+                                   "root, so its legal string values would read as dropped "
+                                   "root defaults (a gap until Go can judge a subtree in place)",
     "tools/lint/check_confd_schema.py": "the schema lint: names every entry it cannot read after "
                                         "the violations of the rest of the tree, exit 2",
 }
