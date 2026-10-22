@@ -520,11 +520,49 @@ def _tap_stdout(stream: Any) -> None:
                 _record_stdout_failure(exc, stream)
                 raise
 
+        before = getattr(stream, "__dict__", {})
+        prev = (before.get("write", _UNSET), before.get("flush", _UNSET))
         stream.write = write
         stream.flush = flush
         stream._da_stdout_tap = True
+        _stdout_taps.append((stream, write, flush, prev))
     except (AttributeError, TypeError):
         pass
+
+
+# Every stream _tap_stdout wrapped: (stream, its write, its flush, the
+# instance attributes they replaced). The wrappers refer to the stream, so a
+# wrapped stream is in a reference cycle; reset_exit_state undoes them so a
+# test's fake stdout dies by refcount, not at a later collection inside the
+# next test (where its last flush would record a failure).
+_UNSET = object()
+_stdout_taps: list[tuple[Any, Any, Any, tuple[Any, Any]]] = []
+
+
+def _untap_stdouts() -> None:
+    """Undo every ``_tap_stdout`` still in place: put back what each
+    wrapper replaced. A wrapper something else has since replaced (``_seal``)
+    stays as that left it, and so does the stream's tap flag."""
+    while _stdout_taps:
+        stream, write, flush, prev = _stdout_taps.pop()
+        attrs = getattr(stream, "__dict__", {})
+        undone = True
+        for name, ours, was in (("write", write, prev[0]), ("flush", flush, prev[1])):
+            if attrs.get(name) is not ours:
+                undone = False
+                continue
+            try:
+                if was is _UNSET:
+                    delattr(stream, name)
+                else:
+                    setattr(stream, name, was)
+            except (AttributeError, TypeError):
+                undone = False
+        if undone:
+            try:
+                del stream._da_stdout_tap
+            except (AttributeError, TypeError):
+                pass
 
 
 def _tap_stderr(stream: Any) -> None:
@@ -589,7 +627,11 @@ def reset_exit_state() -> None:
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope
-    held = bool(_stdout_failures) or _lost_envelope is not None or _armed_stdout is not None
+    # A recorded failure holds its exception, whose traceback frames can be
+    # in a cycle with the failing stream; an armed or tapped stream alone is
+    # not (the taps are undone first), and dies by refcount right here.
+    held = bool(_stdout_failures) or _lost_envelope is not None
+    _untap_stdouts()
     disarm_crash_envelope()
     _stdout_failures.clear()
     _stdout_closed_reported = False
@@ -597,11 +639,11 @@ def reset_exit_state() -> None:
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
     if held:
-        # A stream only this state kept alive (a test's fake stdout) is in a
-        # reference cycle with its tapped write / flush, so it dies at some
-        # later collection — inside the next test — and its final flush then
-        # records a stdout failure there. Collect it now and forget what that
-        # dying flush recorded.
+        # A stream only that failure kept alive (a test's fake stdout) would
+        # die at some later collection — inside the next test — and its last
+        # flush record a stdout failure there. Collect it now and forget what
+        # that dying flush recorded. Only here: a full collection per test
+        # that merely ran a tool in-process cost ~0.4 s each (#3156).
         import gc
         gc.collect()
         _stdout_failures.clear()

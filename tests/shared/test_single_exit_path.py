@@ -906,6 +906,19 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
+def test_probe_leaves_a_failing_stdout_armed(monkeypatch):
+    """Armed with a stream whose flush fails, no failure recorded: the reset
+    takes no collection for it, so nothing but undoing the tap keeps the
+    stream's last flush from recording in the next test."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    ns: dict = {}
+    exec(_BROKEN_STREAM, ns)
+    monkeypatch.setattr(sys, "stdout", ns["Broken"]())
+    ec.arm_crash_envelope()
+
+
+@pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
@@ -922,7 +935,9 @@ def test_probe_sees_clean_exit_state():
                                             ec._IMPORT_CALLER_ERROR_CODE)
 
 
-def test_exit_state_does_not_leak_between_tests():
+@pytest.mark.parametrize("dirty", ["test_probe_leaves_every_piece_of_exit_state_dirty",
+                                   "test_probe_leaves_a_failing_stdout_armed"])
+def test_exit_state_does_not_leak_between_tests(dirty):
     """M1/S2: a green pytest run must not end at rc 2 because one test left
     a failing stream armed (order-dependent: measured on
     test_patch_config_verify -k "test_w1 and EPIPE and json"), and no test
@@ -930,7 +945,7 @@ def test_exit_state_does_not_leak_between_tests():
     me = Path(__file__)
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
-         f"{me}::test_probe_leaves_every_piece_of_exit_state_dirty",
+         f"{me}::{dirty}",
          f"{me}::test_probe_sees_clean_exit_state"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300, cwd=str(REPO_ROOT), env=dict(os.environ, **{_STATE_PROBE: "1"}))
@@ -994,6 +1009,27 @@ def test_raise_from_none_cuts_the_chain(tmp_path):
         "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert "ERROR: render failed" in err, err
+
+
+def test_a_reset_after_an_arm_alone_takes_no_collection(monkeypatch):
+    """#3156: an arm with no failure recorded is undone without a full
+    collection (one per such test cost ~0.4 s, the bulk of the suite's time),
+    and the stream gets its own write / flush back."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    import gc
+    ns: dict = {}
+    exec(_BROKEN_STREAM, ns)
+    fake = ns["Broken"]()
+    monkeypatch.setattr(sys, "stdout", fake)
+    ec.arm_crash_envelope()
+    assert "flush" in vars(fake) and fake._da_stdout_tap
+    calls = []
+    monkeypatch.setattr(gc, "collect", lambda *a: calls.append(a) or 0)
+    ec.reset_exit_state()
+    assert calls == []
+    assert "write" not in vars(fake) and "flush" not in vars(fake)
+    assert not getattr(fake, "_da_stdout_tap", False)
 
 
 def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
