@@ -204,7 +204,7 @@ repos:
         language: python
         files: '\.go$'
         # Vendored upstream gopkg.in/yaml.v3 (#2681) is not this repo's code: it
-        # must stay byte-identical to v3.0.1 + one pinned hunk
+        # must stay byte-identical to go.yaml.in/yaml/v3 v3.0.5 + one pinned hunk
         # (tests/ops/test_vendored_yaml_v3.py), so a finding there has no fix.
         exclude: ^components/threshold-exporter/app/third_party/yaml\.v3/
 
@@ -1271,7 +1271,7 @@ repos:
         language: python
         files: \.go$
         # Vendored upstream gopkg.in/yaml.v3 (#2681) is not this repo's code: it
-        # must stay byte-identical to v3.0.1 + one pinned hunk
+        # must stay byte-identical to go.yaml.in/yaml/v3 v3.0.5 + one pinned hunk
         # (tests/ops/test_vendored_yaml_v3.py), so a finding there has no fix.
         exclude: ^components/threshold-exporter/app/third_party/yaml\.v3/
 

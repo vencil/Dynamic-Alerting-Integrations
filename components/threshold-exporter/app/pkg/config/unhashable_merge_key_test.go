@@ -9,8 +9,8 @@ package config
 // (loadFile / the conf.d walker) and from tenant-api's write validation, so a
 // tenant file of this shape took the whole process down.
 //
-// The vendored copy carries upstream's fix (go.yaml.in/yaml/v3 v3.0.2+,
-// third_party/yaml.v3-unhashable-merge-key.patch): the panic becomes a decode
+// The vendored copy is upstream go.yaml.in/yaml/v3 v3.0.5, which carries the
+// fix (since v3.0.2; third_party/README.md): the panic becomes a decode
 // error. Decoding into a yaml.Node never panicked, and into
 // map[string]interface{} it already answered "invalid map key"; only a typed
 // decode reached the map write.

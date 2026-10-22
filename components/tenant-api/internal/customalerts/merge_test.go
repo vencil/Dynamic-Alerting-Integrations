@@ -139,10 +139,12 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 
 // #2903: a string with a line break is a literal block, so a diff shows its
 // lines; one the block cannot carry unchanged stays double-quoted (trailing
-// spaces: the encoder's own fallback; a leading line break would read back
-// without it; a leading tab would not parse). Each reads back as the same
-// string, and the merged file re-encodes to the same bytes (the next partial
-// write would otherwise refuse it).
+// spaces: the encoder's own fallback; a leading tab would not parse). A
+// leading line break is a block too: the encoder writes the blank line
+// (yaml.v3 v3.0.1's dropped it, so the string stayed double-quoted until the
+// vendored base moved to go.yaml.in/yaml/v3 v3.0.5, #3206). Each reads back
+// as the same string, and the merged file re-encodes to the same bytes (the
+// next partial write would otherwise refuse it).
 func TestMerge_MultilineStringIsALiteralBlock(t *testing.T) {
 	const twoLines = "line one\nline two"
 	out, err := MergeCustomAlerts(tenantWithComments, "shop-a", []map[string]any{
@@ -153,7 +155,7 @@ func TestMerge_MultilineStringIsALiteralBlock(t *testing.T) {
 		t.Fatalf("merge: %v", err)
 	}
 	for _, frag := range []string{"x_block: |-\n          line one\n          line two\n",
-		`x_trailing: "a  \nb"`, `x_blank: "\nteam"`, `x_tab: "\ta\nb"`, `name: "a"`} {
+		`x_trailing: "a  \nb"`, "x_blank: |2-\n\n          team\n", `x_tab: "\ta\nb"`, `name: "a"`} {
 		if !strings.Contains(out, frag) {
 			t.Errorf("want %q in:\n%s", frag, out)
 		}
