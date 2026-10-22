@@ -88,7 +88,9 @@ type BatchResult struct {
 	// CONFIG_DECODE_ERROR (the base's _tenant_orgs.yaml cannot be read).
 	Code errcode.Code `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
-	// (#1231 deprecated-key alias notices from the direct write path).
+	// in direct mode: #1231 deprecated-key alias notices, and #3227 notices
+	// for an invalid reserved value the tenant file already held and the op
+	// left unchanged. PR mode puts them in BatchResponse.Warnings instead.
 	// Error results never carry warnings — Message owns the failure text.
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -141,7 +143,7 @@ type BatchResponse struct {
 // @Description With ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.
 // @Description The batch is applied and judged in a separate staging git worktree; the branch is advanced first, then the served config files, so readers never see content that was not committed (while the files are updated they may see some of the batch's files new and others old, all committed).
 // @Description An operation may also remove keys with unset (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
-// @Description Patch keys are judged up front against the reserved-key registry (400 INVALID_BODY): a key starting with _ that the registry does not list (nothing reads it, e.g. _timeout_ms), and a key whose value is a mapping or a list (_metadata, _custom_alerts, _namespaces: write it with PUT /api/v1/tenants/{id}). A reserved key's value is judged per operation by the write's own validation, with the exporter's reader (#3227): an operation setting _silent_mode to a value the exporter ignores (e.g. purple) is refused with code BAD_REQUEST and rejects the batch (422; async: the task fails); a value the tenant file already holds that the operation leaves as it is does not block it and comes back in the operation's warnings as a NOTICE.
+// @Description Patch keys are judged up front against the reserved-key registry (400 INVALID_BODY): a key starting with _ that the registry does not list (nothing reads it, e.g. _timeout_ms), and a key whose value is a mapping or a list (_metadata, _custom_alerts, _namespaces: write it with PUT /api/v1/tenants/{id}). A reserved key's value is judged per operation by the write's own validation, with the exporter's reader (#3227): an operation setting _silent_mode to a value the exporter ignores (e.g. purple) is refused with code BAD_REQUEST and rejects the batch (422; async: the task fails); a value the tenant file already holds that the operation leaves as it is does not block it and comes back as a NOTICE naming the tenant: in direct mode in that operation's warnings, in PR write-back mode in the batch-level warnings (the operations' results are fixed as included before the write runs).
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
 // @Description Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
