@@ -284,6 +284,9 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 		"routing not a mapping": {"tenants:\n  t-a:\n    _routing: slack\n", "routing_not_mapping"},
 		"group_by element": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
 			"        url: https://ok.example.com/x\n      group_by: [\"\"]\n", "routing_group_by_invalid"},
+		// #3284: a group_by that is not a list used to render no group_by at all.
+		"group_by not a list": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
+			"        url: https://ok.example.com/x\n      group_by: alertname\n", "routing_group_by_invalid"},
 		"matcher value": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
 			"        url: https://ok.example.com/x\n      routes:\n        - match: {severity: 1}\n" +
 			"          receiver: {type: webhook, url: \"https://ok.example.com/y\"}\n", "routing_value_not_string"},

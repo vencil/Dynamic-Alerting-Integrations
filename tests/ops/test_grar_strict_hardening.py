@@ -584,11 +584,14 @@ class TestStrictBypassScenariosCLI:
             # 非 strict：同一 config 照舊通過（向後相容）——除了 #2490：
             # `-1h` 是 Alertmanager 拒收的時長，產生器自己的阻擋行（不是
             # policy ERROR）讓 --validate 回 1；以及 #3116：policy 本身寫壞
-            # （讀不出的 bound、壞掉的 policy 檔）所有模式整棵樹拒收。
+            # （讀不出的 bound、壞掉的 policy 檔）所有模式整棵樹拒收；以及
+            # #3284：不是 list 的 group_by 本身就所有模式整棵樹拒收（過去
+            # 非 strict 照樣 rc 0，route 上沒有 group_by）。
             lenient = self._run(d)
             refused = defaults_patch.get("repeat_interval") == "-1h"
             policy_unusable = raw_policy is not None or (
-                constraints or {}).get("max_repeat_interval") == "banana"
+                constraints or {}).get("max_repeat_interval") == "banana" or (
+                isinstance(defaults_patch.get("group_by"), str))
             assert lenient.returncode == (1 if refused or policy_unusable else 0), (
                 lenient.stdout + lenient.stderr)
             if refused:
