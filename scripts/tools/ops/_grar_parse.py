@@ -61,7 +61,7 @@ from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     domain_policy_problems,
     receiver_bool_type_errors,
-    receiver_file_reference_errors,
+    routing_block_file_reference_errors,
     value_type_text,
     _validate_profile_refs,
     check_domain_policies,
@@ -389,6 +389,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             # as a `WARN … skipping` line (→ schema_warnings, blocking under
             # `--validate`), like a non-boolean `_routing_enforced.enabled`.
             if isinstance(rd, dict) and "routes" in rd:
+                _record_file_reference_errors(  # #3257: dropped, still judged
+                    result, {"routes": rd["routes"]}, where="_routing_defaults",
+                    field_prefix="_routing_defaults.", file=fname)
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
                     skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
@@ -509,16 +512,27 @@ def _record_receiver_bool_errors(result: dict, obj: object, *, block: str,
     """#2906: a receiver boolean (`send_resolved`, `require_tls`,
     `http_config.proxy_from_environment`) that is not a boolean or null —
     `"yes"` / `"true"` used to be written out as the boolean they spell.
-    #3257: and a file-reference key (`*_file` / `*_ref` / `files`) at any
-    depth of a receiver — Alertmanager would load it from its own container."""
+    #3257: and a file-reference key (`*_file` / `*_ref` / `files`) anywhere
+    in the routing block — Alertmanager would load it from its own container."""
     for fld, message in [
             *receiver_bool_type_errors(
                 obj, block=block, where=where, field_prefix=field_prefix),
-            *receiver_file_reference_errors(
+            *routing_block_file_reference_errors(
                 obj, block=block, where=where, field_prefix=field_prefix)]:
         _field_type_error(result, "invalid_receiver_field",
                           f"{file}: {message}" if file else message,
                           file=file, tenant=tenant, field=fld)
+
+
+def _record_file_reference_errors(result: dict, obj: object, *, where: str,
+                                  field_prefix: str, file: str) -> None:
+    """#3257: the file-reference keys of routing this reader drops or never
+    reads (`_routing_defaults.routes`, routing under `defaults:` or a
+    threshold profile): rendered nowhere today, refused like everywhere else."""
+    for fld, message in routing_block_file_reference_errors(
+            obj, block="unread", where=where, field_prefix=field_prefix):
+        _field_type_error(result, "invalid_receiver_field", f"{file}: {message}",
+                          file=file, field=fld)
 
 
 def _record_unknown_routing_keys(result: dict, obj: object, **kw) -> None:
@@ -716,6 +730,19 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
                  f"routing or severity dedup from it, and the exporter does "
                  f"not apply it either (#2914)")
                 for k in sorted(k for k in body if _is_routing_layer_key(k)))
+    # #3257: routing written here is rendered nowhere, but a file-reference
+    # key in it refuses the tree as it does in a routing block that is read.
+    unread = []
+    if is_carrier and isinstance(data.get("defaults"), dict):
+        unread.append(("defaults.", data["defaults"], _is_routing_key))
+    if isinstance(profiles, dict):
+        unread.extend((f"profiles.{n}.", profiles[n], _is_routing_layer_key)
+                      for n in sorted(n for n in profiles if isinstance(n, str))
+                      if isinstance(profiles[n], dict))
+    for prefix, holder, is_key in unread:
+        for k in sorted(k for k in holder if is_key(k)):
+            _record_file_reference_errors(result, holder[k], where=f"{prefix}{k}",
+                                          field_prefix=f"{prefix}{k}.", file=fname)
     for fld, key, why in found:
         text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
         result.setdefault("routing_defaults_errors", []).append(
@@ -781,6 +808,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
         else:
             # #2245, as at the root: `routes` never belong to the defaults.
             if "routes" in rd:
+                _record_file_reference_errors(  # #3257: dropped, still judged
+                    result, {"routes": rd["routes"]}, where="_routing_defaults",
+                    field_prefix="_routing_defaults.", file=fname)
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
                     skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "

@@ -386,17 +386,27 @@ def load_base_config(path: str | None) -> dict:
 # http_config at all, so they always take it). Either one would hand a
 # platform credential to every tenant that names an endpoint, so the base
 # config may carry none of them.
+# `http_headers` counts only when some header carries `secrets` or `files`
+# (a header holding only `values` is plain text the platform chose to send).
+# NOT refused, on purpose: a TLS client key (`tls_config.key` / `key_file`,
+# under global.http_config.tls_config or smtp_tls_config) and its cert. The
+# private key never leaves the process: it only proves the certificate's
+# identity in the mTLS handshake, so an inheriting receiver presents the
+# platform's certificate to the tenant's endpoint but sends no secret to it.
 BASE_GLOBAL_INHERITED_SECRET_PREFIX = "smtp_auth_"
 BASE_GLOBAL_HTTP_CONFIG_CREDENTIAL_KEYS = (
     "basic_auth", "authorization", "bearer_token", "bearer_token_file",
-    "oauth2", "http_headers")
+    "oauth2")
+BASE_GLOBAL_HEADER_SECRET_LISTS = ("secrets", "files")
 
 
 def base_global_inherited_credentials(base: object) -> list[str]:
     """#3257: the ``global`` keys of *base* that would hand a platform
     credential to a conf.d receiver (see above): each ``smtp_auth_*`` key and
     each credential key of ``global.http_config`` — set when not null and
-    not ``""`` / an empty mapping. ``global.<key>`` paths, sorted."""
+    not ``""`` / an empty mapping — and each ``global.http_config.http_headers``
+    header whose ``secrets`` or ``files`` list is non-empty
+    (``global.http_config.http_headers.<name>``). Paths sorted."""
     glob = base.get("global") if isinstance(base, dict) else None
     if not isinstance(glob, dict):
         return []
@@ -412,6 +422,12 @@ def base_global_inherited_credentials(base: object) -> list[str]:
         out += [f"global.http_config.{k}"
                 for k in BASE_GLOBAL_HTTP_CONFIG_CREDENTIAL_KEYS
                 if is_set(http_config.get(k))]
+        headers = http_config.get("http_headers")
+        if isinstance(headers, dict):
+            out += [f"global.http_config.http_headers.{name}"
+                    for name, header in headers.items()
+                    if isinstance(header, dict)
+                    and any(is_set(header.get(lst)) for lst in BASE_GLOBAL_HEADER_SECRET_LISTS)]
     return sorted(out)
 
 

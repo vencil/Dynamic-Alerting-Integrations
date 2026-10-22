@@ -36,6 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 from _lib_validation import (  # noqa: E402
+    FILE_REFERENCE_KEY_PATTERN,
     file_reference_paths,
     is_file_reference_key,
     receiver_file_reference_problem,
@@ -83,14 +84,23 @@ _MATCH = ["bearer_token_file", "username_file", "username_ref", "password_file",
           "password_ref", "credentials_file", "credentials_ref", "client_secret_file",
           "client_secret_ref", "client_certificate_key_file", "client_certificate_key_ref",
           "ca_file", "cert_file", "key_file", "ca_ref", "cert_ref", "key_ref", "files",
-          "url_file", "api_url_file", "auth_password_file", "x_file", "_ref"]
+          "url_file", "api_url_file", "auth_password_file", "x_file", "_ref",
+          # Python's `$` also matches before ONE final newline, in the
+          # schema's pattern as applied by jsonschema and in the generator
+          # alike: refused on both sides.
+          "password_file\n", "files\n", "key_ref\n"]
 _NO_MATCH = ["file", "files_x", "profile", "refs", "ref", "prefix_files", "file_name",
              "password", "bearer_token", "secrets", "values", "Files", "KEY_FILE",
-             "ca", "x-file", "x_file2", "client_secret"]
+             "ca", "x-file", "x_file2", "client_secret",
+             # a newline that is not the final character does not end the key
+             "password_file\nx", "\nfiles", "files\n\n", "x_file \n"]
 
 
 def test_python_rule_and_schema_pattern_agree():
     pattern = _schema()["definitions"]["fileReferenceKey"]["pattern"]
+    # One string, not two spellings of one idea (`str.endswith` disagreed
+    # with the pattern on "password_file\n").
+    assert pattern == FILE_REFERENCE_KEY_PATTERN
     candidates = set(_MATCH) | set(_NO_MATCH) | _all_schema_property_names(_schema(), set())
     wrong = sorted(k for k in candidates
                    if (re.search(pattern, k) is not None) != is_file_reference_key(k))
@@ -298,6 +308,21 @@ def _tree(where: str, http_config: str) -> dict[str, str]:
     elif where == "routing_enforced":
         files["_defaults.yaml"] = _DEFAULTS + "_routing_enforced:\n  enabled: true\n" + _recv(
             "https://noc.example.com/a", 2, http_config)
+    elif where == "routing_defaults_route":
+        files["_defaults.yaml"] = _DEFAULTS + "_routing_defaults:\n" + _recv(
+            "https://hooks.example.com/d", 2) + "  routes:\n    - match: {severity: critical}\n" + _recv(
+            "https://hooks.example.com/dr", 6, http_config)
+    elif where == "routing_enforced_override":
+        files["_defaults.yaml"] = _DEFAULTS + "_routing_enforced:\n  enabled: true\n" + _recv(
+            "https://noc.example.com/a", 2) + "  overrides:\n    - alertname: X\n" + _recv(
+            "https://noc.example.com/o", 6, http_config)
+    elif where == "routing_enforced_route":
+        files["_defaults.yaml"] = _DEFAULTS + "_routing_enforced:\n  enabled: true\n" + _recv(
+            "https://noc.example.com/a", 2) + "  routes:\n    - match: {severity: critical}\n" + _recv(
+            "https://noc.example.com/r", 6, http_config)
+    elif where == "threshold_profile":
+        files["_profiles.yaml"] = "profiles:\n  p1:\n    _routing:\n" + _recv(
+            "https://hooks.example.com/tp", 6, http_config)
     elif where == "routing_profile":
         files["_routing_profiles.yaml"] = "routing_profiles:\n  p1:\n" + _recv(
             "https://hooks.example.com/p", 4, http_config)
@@ -309,9 +334,17 @@ def _tree(where: str, http_config: str) -> dict[str, str]:
 
 # where → the finding's field
 _WHERE = {
-    "tenant": "receiver.http_config.basic_auth.password_file",
-    "override": "overrides[0].receiver.http_config.basic_auth.password_file",
-    "route": "routes[0].receiver.http_config.basic_auth.password_file",
+    "tenant": "_routing.receiver.http_config.basic_auth.password_file",
+    "override": "_routing.overrides[0].receiver.http_config.basic_auth.password_file",
+    "route": "_routing.routes[0].receiver.http_config.basic_auth.password_file",
+    # #3257 review: places a receiver is NOT rendered from today (a WARN
+    # names them as unread) — refused all the same, the block being walked
+    # whole rather than at the places a receiver is rendered from.
+    "routing_defaults_route": "_routing_defaults.routes[0].receiver.http_config.basic_auth.password_file",
+    "routing_enforced_override":
+        "_routing_enforced.overrides[0].receiver.http_config.basic_auth.password_file",
+    "routing_enforced_route": "_routing_enforced.routes[0].receiver.http_config.basic_auth.password_file",
+    "threshold_profile": "profiles.p1._routing.receiver.http_config.basic_auth.password_file",
     "routing_defaults": "_routing_defaults.receiver.http_config.basic_auth.password_file",
     "routing_enforced": "_routing_enforced.receiver.http_config.basic_auth.password_file",
     "routing_profile": "routing_profiles.p1.receiver.http_config.basic_auth.password_file",
@@ -353,7 +386,9 @@ _MODES = {
 }
 
 
-@pytest.mark.parametrize("where", ["tenant", "routing_defaults", "override"])
+@pytest.mark.parametrize("where", ["tenant", "routing_defaults", "override",
+                                   "routing_defaults_route", "routing_enforced_override",
+                                   "routing_enforced_route", "threshold_profile"])
 def test_every_mode_refuses_and_writes_nothing(tmp_path, where):
     d = _write(tmp_path, _tree(where, _BAD_HC))
     out = tmp_path / "out.yaml"
@@ -468,3 +503,83 @@ def test_alertmanager_pod_mounts_no_service_account_token():
         deployment = yaml.safe_load(fh)
     assert deployment["kind"] == "Deployment"
     assert deployment["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+
+
+# ── 5. the scan covers every receiver a routing block renders ────────────
+
+_BLOCKS = {
+    # block → (field_prefix as the reader passes it, the root the scan names)
+    "routing": ("", "_routing."),
+    "routing_defaults": ("_routing_defaults.", "_routing_defaults."),
+    "routing_enforced": ("_routing_enforced.", "_routing_enforced."),
+}
+
+
+def _full_block() -> dict:
+    hook = {"type": "webhook", "url": _URL}
+    return {"receiver": dict(hook),
+            "overrides": [{"alertname": "X", "receiver": dict(hook)}],
+            "routes": [{"match": {"severity": "critical"}, "receiver": dict(hook)}]}
+
+
+@pytest.mark.parametrize("block", sorted(_BLOCKS))
+def test_every_rendered_receiver_is_inside_the_scan(block):
+    """Each receiver `routing_block_receivers` hands to the renderer, with a
+    file-reference key planted in it, is named by the scan — the rendered
+    receiver paths are a subset of what the rule walks. (The converse is
+    not asked: the scan walks more, on purpose.)"""
+    from _grar_validate import routing_block_file_reference_errors, routing_block_receivers
+    prefix, root = _BLOCKS[block]
+    positions = routing_block_receivers(_full_block(), block=block, where="w",
+                                        field_prefix=prefix)
+    assert positions, "no rendered receiver: the subset would be vacuous"
+    for _recv_obj, _label, path in positions:
+        obj = _full_block()
+        # plant the key in the receiver at *path* (relative to the block)
+        rel = path[len(prefix):]
+        target = obj
+        for part in re.findall(r"[^.\[\]]+|\[\d+\]", rel):
+            target = target[int(part[1:-1])] if part.startswith("[") else target[part]
+        target["http_config"] = {"bearer_token_file": "/t"}
+        got = [f for f, _m in routing_block_file_reference_errors(
+            obj, block=block, where="w", field_prefix=prefix)]
+        want = f"{root}{rel}.http_config.bearer_token_file"
+        assert got == [want], (block, path, got)
+
+
+def test_label_names_under_match_are_not_judged():
+    """A label may be called `log_file`; nothing under `match` reaches a
+    receiver. Its values are still walked."""
+    from _grar_validate import routing_block_file_reference_errors
+    block = {"receiver": {"type": "webhook", "url": _URL},
+             "routes": [{"match": {"log_file": "x", "files": "y"},
+                         "receiver": {"type": "webhook", "url": _URL}}]}
+    assert routing_block_file_reference_errors(block, block="routing", where="w") == []
+    block["routes"][0]["match"]["log_file"] = {"key_file": "/k"}
+    got = [f for f, _m in routing_block_file_reference_errors(block, block="routing", where="w")]
+    assert got == ["_routing.routes[0].match.log_file.key_file"]
+
+
+# ── 6. global.http_config.http_headers counts only with secrets / files ──
+
+@pytest.mark.parametrize("headers,refused", [
+    ({"X-Team": {"values": ["a"]}}, []),
+    ({"X-Team": {"values": ["a"], "secrets": []}}, []),
+    ({"X-Team": {"secrets": ["s"]}}, ["global.http_config.http_headers.X-Team"]),
+    ({"X-Team": {"files": ["/f"]}}, ["global.http_config.http_headers.X-Team"]),
+    ({"X-A": {"values": ["a"]}, "X-B": {"secrets": ["s"]}}, ["global.http_config.http_headers.X-B"]),
+])
+def test_base_global_http_headers(headers, refused):
+    base = {"global": {"http_config": {"http_headers": headers}}}
+    assert base_global_inherited_credentials(base) == refused
+
+
+@pytest.mark.parametrize("glob", [
+    {"http_config": {"tls_config": {"cert_file": "/c", "key_file": "/k"}}},
+    {"http_config": {"tls_config": {"cert": "c", "key": "k"}}},
+    {"smtp_tls_config": {"cert_file": "/c", "key_file": "/k"}},
+])
+def test_base_global_tls_client_key_is_not_refused(glob):
+    """The private key only proves the certificate's identity in the mTLS
+    handshake; it is never sent (see the comment on the rule)."""
+    assert base_global_inherited_credentials({"global": glob}) == []

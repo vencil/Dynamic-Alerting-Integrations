@@ -689,17 +689,22 @@ def _http_config_problem(value: Any) -> Optional[str]:
 # Alertmanager's minus exactly these keys). A secret the platform itself
 # needs belongs in the base config (--base-config), which this rule never
 # reads.
-FILE_REFERENCE_KEY_SUFFIXES: tuple[str, ...] = ("_file", "_ref")
-FILE_REFERENCE_KEYS: frozenset[str] = frozenset({"files"})
+# ONE pattern, the very string tenant-config.schema.json carries as
+# definitions.fileReferenceKey.pattern (the test asserts the two are equal),
+# applied with `re.search` as jsonschema applies it — so both sides give one
+# verdict on every key, `"password_file\n"` included (Python's `$` also
+# matches before a final newline: refused on both sides, not on one).
+FILE_REFERENCE_KEY_PATTERN = r"(?:_file|_ref)$|^files$"
+_FILE_REFERENCE_KEY_RE = re.compile(FILE_REFERENCE_KEY_PATTERN)
 
 
 def is_file_reference_key(key: Any) -> bool:
     """#3257: whether *key* is a receiver key the rule above refuses."""
-    return isinstance(key, str) and (
-        key.endswith(FILE_REFERENCE_KEY_SUFFIXES) or key in FILE_REFERENCE_KEYS)
+    return isinstance(key, str) and _FILE_REFERENCE_KEY_RE.search(key) is not None
 
 
-def file_reference_paths(value: Any, path: str = "") -> list[str]:
+def file_reference_paths(value: Any, path: str = "", *,
+                         label_maps: frozenset[str] = frozenset()) -> list[str]:
     """#3257: the path of every key of *value* (a receiver, walked through
     every nested mapping and list) that ``is_file_reference_key``: dotted,
     list items as ``[i]`` — ``http_config.basic_auth.password_file``,
@@ -709,7 +714,13 @@ def file_reference_paths(value: Any, path: str = "") -> list[str]:
     A key that is not a string (a ``!!binary`` key reads as bytes, and
     Alertmanager decodes ``!!binary password_file`` to ``password_file``) is
     refused too: the rule cannot read its name, so it does not lean on the
-    file reader having refused the tag first."""
+    file reader having refused the tag first.
+
+    *label_maps*: keys whose mapping's own keys are NAMES, not config keys
+    (a routing block's ``match``: label names, which may legitimately end in
+    ``_file``). Under such a key the names are not judged at all (Alertmanager
+    reads no file through a matcher; a name of the wrong type is the routing
+    checks' to name); every value is still walked with the full rule."""
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
@@ -717,11 +728,15 @@ def file_reference_paths(value: Any, path: str = "") -> list[str]:
             here = f"{path}.{name}" if path else name
             if not isinstance(key, str) or is_file_reference_key(key):
                 out.append(here)
+            elif key in label_maps and isinstance(item, dict):
+                for label, v in item.items():
+                    lname = label if isinstance(label, str) else repr(label)
+                    out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps))
             else:
-                out.extend(file_reference_paths(item, here))
+                out.extend(file_reference_paths(item, here, label_maps=label_maps))
     elif isinstance(value, list):
         for i, item in enumerate(value):
-            out.extend(file_reference_paths(item, f"{path}[{i}]"))
+            out.extend(file_reference_paths(item, f"{path}[{i}]", label_maps=label_maps))
     return out
 
 
@@ -768,7 +783,7 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     # #3257: first — a file-reference key is never written out, whatever
     # else the receiver gets wrong. The route generator refuses the whole
     # tree on it before any receiver is built
-    # (`_grar_validate.receiver_file_reference_errors`); this check stays for
+    # (`_grar_validate.routing_block_file_reference_errors`); this check stays for
     # the callers that build a receiver directly.
     problem = receiver_file_reference_problem(receiver)
     if problem:

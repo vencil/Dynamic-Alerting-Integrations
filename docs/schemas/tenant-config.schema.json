@@ -1032,7 +1032,7 @@
       "type": "string",
       "title": "File-reference key",
       "description": "A key that makes Alertmanager load a value from somewhere other than the config: a name ending in _file (a file inside the Alertmanager container) or _ref (a secret manager Alertmanager does not have), or files (the header-file list of http_headers). A conf.d receiver may carry none of them, at any depth (#3257); a credential the platform needs goes in the base config.",
-      "$comment": "#3257: the rule, not a list of today's keys, so a key Alertmanager adds upstream is covered as well. The Python copy is _lib_validation.is_file_reference_key (FILE_REFERENCE_KEY_SUFFIXES / FILE_REFERENCE_KEYS); tests/shared/test_receiver_file_reference_rule.py pins the two together, and checks that no property a receiver reaches matches it.",
+      "$comment": "#3257: the rule, not a list of today's keys, so a key Alertmanager adds upstream is covered as well. The route generator applies this same pattern string (_lib_validation.FILE_REFERENCE_KEY_PATTERN, with re.search, as jsonschema does); tests/shared/test_receiver_file_reference_rule.py asserts the two strings are equal, and checks that no property a receiver reaches matches it.",
       "pattern": "(?:_file|_ref)$|^files$"
     },
     "fileReferenceFree": {
