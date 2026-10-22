@@ -2135,6 +2135,8 @@ def receiver_bool_type_errors(obj: object, *, block: str, where: str,
 # `log_file`. Their values are still walked with the full rule; nothing under
 # them is rendered into a receiver.
 ROUTING_LABEL_MAP_KEYS = frozenset({"match"})
+# Below these a receiver starts: its own `match` (a header name) is judged.
+ROUTING_RECEIVER_KEYS = frozenset({"receiver"})
 
 
 def routing_block_file_reference_errors(obj: object, *, block: str, where: str,
@@ -2149,14 +2151,15 @@ def routing_block_file_reference_errors(obj: object, *, block: str, where: str,
     not read (``_routing_defaults.routes``, ``_routing_enforced.overrides``)
     is only a WARN, and a reader that starts rendering it later must not
     find the key already accepted. Only label names under
-    ``ROUTING_LABEL_MAP_KEYS`` are exempt from the name rule. *field* starts
+    ``ROUTING_LABEL_MAP_KEYS`` (outside a receiver) are exempt from the name rule. *field* starts
     at the block root (``_routing.routes[0].receiver.http_config…``). Each
     refuses the whole tree in every mode, like a boolean of the wrong type."""
     if not isinstance(obj, dict):
         return []
     root = field_prefix or ("_routing." if block == "routing" else "")
     return [(f"{root}{fld}", f"{where} {file_reference_problem([fld])}")
-            for fld in file_reference_paths(obj, label_maps=ROUTING_LABEL_MAP_KEYS)]
+            for fld in file_reference_paths(obj, label_maps=ROUTING_LABEL_MAP_KEYS,
+                                                 receiver_keys=ROUTING_RECEIVER_KEYS)]
 
 
 # ── #2983: the `_routing*` keys each layer is read for ──

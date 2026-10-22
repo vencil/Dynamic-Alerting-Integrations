@@ -470,6 +470,8 @@ spec:
 
 元件間通訊應啟用 TLS。推薦用 cert-manager 簽發憑證，threshold-exporter 支援 `--tls-cert-file` / `--tls-key-file` 參數，Prometheus 用 `scheme: https` + `tls_config` 抓取。
 
+Alertmanager 送通知時用的 TLS 設定（例如 `http_config.tls_config.ca_file`）放在平台自己的 base Alertmanager config。寫在 conf.d 的 receiver 不能帶 `ca_file` 或任何 `*_file`／`*_ref` 鍵：路由產生器會拒收（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）。
+
 ### Config Reload 端點安全
 
 Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設定重新載入的 HTTP POST 端點。本專案在**兩邊各有一顆** `config-reloader` sidecar 自動呼叫該端點：Alertmanager 側守路由設定（#1243），Prometheus 側守 Rule Pack 目錄 `/etc/prometheus/rules`（#1246 補上）。Prometheus 側**不涵蓋 `prometheus.yml`**——它以 `subPath` 掛載，K8s 不把 ConfigMap 更新傳播進 subPath 掛載，改它仍須重啟 Pod。

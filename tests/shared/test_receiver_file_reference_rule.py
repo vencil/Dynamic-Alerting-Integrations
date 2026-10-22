@@ -560,6 +560,24 @@ def test_label_names_under_match_are_not_judged():
     assert got == ["_routing.routes[0].match.log_file.key_file"]
 
 
+@pytest.mark.parametrize("block,want", [
+    # a header named `match` inside a receiver is not a label map
+    ({"receiver": {"type": "webhook", "url": _URL,
+                   "http_config": {"http_headers": {"match": {"files": ["/f"]}}}}},
+     ["_routing.receiver.http_config.http_headers.match.files"]),
+    ({"routes": [{"match": {"a": "b"},
+                  "receiver": {"type": "webhook", "url": _URL,
+                               "http_config": {"http_headers": {"match": {"files": ["/f"]}}}}}]},
+     ["_routing.routes[0].receiver.http_config.http_headers.match.files"]),
+    # _routing_enforced carries `match` at its root: still label names
+    ({"match": {"log_file": "x"}, "receiver": {"type": "webhook", "url": _URL}}, []),
+])
+def test_match_is_a_label_map_only_outside_a_receiver(block, want):
+    from _grar_validate import routing_block_file_reference_errors
+    got = [f for f, _m in routing_block_file_reference_errors(block, block="routing", where="w")]
+    assert got == want
+
+
 # ── 6. global.http_config.http_headers counts only with secrets / files ──
 
 @pytest.mark.parametrize("headers,refused", [

@@ -704,7 +704,8 @@ def is_file_reference_key(key: Any) -> bool:
 
 
 def file_reference_paths(value: Any, path: str = "", *,
-                         label_maps: frozenset[str] = frozenset()) -> list[str]:
+                         label_maps: frozenset[str] = frozenset(),
+                         receiver_keys: frozenset[str] = frozenset()) -> list[str]:
     """#3257: the path of every key of *value* (a receiver, walked through
     every nested mapping and list) that ``is_file_reference_key``: dotted,
     list items as ``[i]`` — ``http_config.basic_auth.password_file``,
@@ -720,7 +721,11 @@ def file_reference_paths(value: Any, path: str = "", *,
     (a routing block's ``match``: label names, which may legitimately end in
     ``_file``). Under such a key the names are not judged at all (Alertmanager
     reads no file through a matcher; a name of the wrong type is the routing
-    checks' to name); every value is still walked with the full rule."""
+    checks' to name); every value is still walked with the full rule.
+    *receiver_keys*: keys whose value is a receiver (a routing block's
+    ``receiver``). Below one, *label_maps* no longer applies: inside a
+    receiver ``match`` is an ordinary key (a header named ``match`` under
+    ``http_headers``), so ``http_headers.match.files`` is refused."""
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
@@ -731,12 +736,17 @@ def file_reference_paths(value: Any, path: str = "", *,
             elif key in label_maps and isinstance(item, dict):
                 for label, v in item.items():
                     lname = label if isinstance(label, str) else repr(label)
-                    out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps))
+                    out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps,
+                                                    receiver_keys=receiver_keys))
+            elif key in receiver_keys:
+                out.extend(file_reference_paths(item, here))
             else:
-                out.extend(file_reference_paths(item, here, label_maps=label_maps))
+                out.extend(file_reference_paths(item, here, label_maps=label_maps,
+                                                receiver_keys=receiver_keys))
     elif isinstance(value, list):
         for i, item in enumerate(value):
-            out.extend(file_reference_paths(item, f"{path}[{i}]", label_maps=label_maps))
+            out.extend(file_reference_paths(item, f"{path}[{i}]", label_maps=label_maps,
+                                            receiver_keys=receiver_keys))
     return out
 
 
