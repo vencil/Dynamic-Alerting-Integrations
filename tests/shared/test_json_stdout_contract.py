@@ -929,13 +929,15 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--sources", str(SEED_CONF_D),
                     "--output", _out(t, "assembled"), "--json"]),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--check` returns before
-    # anything is assembled, so `--validate` used to be silently ignored and
+    # anything is assembled, so `--manifest` used to be silently ignored and
     # the pair answered rc 0 (#1828). It is refused now — rc 2, and the
-    # rejection still emits exactly one document naming why.
-    R("assemble_config_dir", "check-validate",
-      lambda t, s: ["--sources", str(SEED_CONF_D), "--check", "--validate", "--json"],
+    # rejection still emits exactly one document naming why. (`--validate`,
+    # the other such flag, was removed in #3206.)
+    R("assemble_config_dir", "check-manifest",
+      lambda t, s: ["--sources", str(SEED_CONF_D), "--check",
+                    "--manifest", _out(t, "m.json"), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("check_with_validate")),
+      doc_check=_caller_error_doc("check_with_manifest")),
     # #1829: `--manifest` alone (no `--sources`) has no load path to take.
     R("assemble_config_dir", "manifest-without-sources",
       lambda t, s: ["--manifest", _out(t, "m.json"),

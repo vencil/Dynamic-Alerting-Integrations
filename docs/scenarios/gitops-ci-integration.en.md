@@ -568,7 +568,7 @@ python3 scripts/tools/ops/assemble_config_dir.py \
   --validate
 ```
 
-⚠️ **It needs da-guard** ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): the tenant-uniqueness check reads conf.d through `validate-config`, and `--validate` reads the assembled directory, both through `da-guard parse-tree` (the exporter's own reading). Run `make da-guard-build` and set `DA_GUARD_BINARY=$PWD/.build/da-guard` first (or use `make sharded-assemble`, which builds it); without one the exit code is 2.
+⚠️ **It needs da-guard** ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): the tenant-uniqueness check reads conf.d through `validate-config`, and the sources and the output directory are read through `da-guard parse-tree` too (the exporter's own reading; a path da-guard validation names refuses the run before assembly, #3206). Run `make da-guard-build` and set `DA_GUARD_BINARY=$PWD/.build/da-guard` first (or use `make sharded-assemble`, which builds it); without one the exit code is 2.
 
 With CI pipeline integration, each team only modifies their own conf.d/. The merge stage auto-detects conflicts (same tenant in multiple sources).
 ⛔ **Detecting one means refusing to assemble**: when two files declare the same tenant id the exporter rejects the **entire** config-dir, so this step exits non-zero and **writes none of this round's output** — deciding which file owns that tenant is yours to make ([#1794](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1794)).

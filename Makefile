@@ -648,12 +648,12 @@ DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINA
 bench-e2e: $(DA_GUARD_PREREQ)
 
 # Sharded GitOps（#2906）：assemble_config_dir 的 tenant_uniqueness 經 validate-config
-# 讀 conf.d、--validate 經 da-guard parse-tree 讀組裝結果，兩者都要 da-guard。
+# 讀 conf.d、來源與輸出都經 da-guard parse-tree 讀（#3206），兩者都要 da-guard。
 .PHONY: sharded-assemble
 sharded-assemble: $(DA_GUARD_PREREQ) ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
 	@mkdir -p .build
 	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/assemble_config_dir.py \
-		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --validate \
+		--sources $(SOURCES) --output $(SHARDED_OUTDIR) \
 		--manifest .build/assembly-manifest.json
 	@echo "✓ manifest: .build/assembly-manifest.json"
 

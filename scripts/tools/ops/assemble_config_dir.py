@@ -16,10 +16,12 @@ Exit codes:
        tool's own policy; only one copy could ever ship), or one tenant id
        declared by two carriers (the exporter rejects the WHOLE config-dir in
        that state). Nothing is written in either case.
-    2  validation error (malformed YAML), the duplicate-tenant question
-       could not be answered, or the flags contradict each other
-       (`--check` with `--validate` / `--manifest`, `--manifest` without
-       `--sources`) — refused before anything is read or written
+    2  a source or the output holds a path da-guard validation names (the
+       shared conf.d refusal, #3206), the duplicate-tenant question could
+       not be answered, or the flags contradict each other (`--check` with
+       `--manifest`, `--manifest` without `--sources`) — refused before
+       anything is read or written. `--validate` was removed (#3206): every
+       file it called an ERROR is refused before assembly.
 """
 
 import argparse
@@ -55,7 +57,6 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
 
@@ -96,8 +97,8 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     """Config-NAMED entries of `dir_path`, flat, minus the hidden ones —
     each of which is named on stderr before it is left out.
 
-    ⛔ The ONE listing behind both scan sites of this tool, `discover_yamls`
-    (the sources) and `validate_merged` (the artifact). #1827 was fixed at
+    ⛔ The ONE listing behind this tool's scan sites (`discover_yamls`, the
+    sources; until #3206 also `--validate`, the artifact). #1827 was fixed at
     the first site and blind review found the second still validating a
     `.`-prefixed carrier the exporter never reads — refusing a deploy (rc 2)
     over a file that is not part of it. Two readers, one question, two
@@ -183,7 +184,7 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # the count or the manifest. Named first, then excluded, so the operator
     # learns WHICH tenant just lost its carrier instead of finding out from
     # a missing alert. The listing (and the nested-config guard) is the
-    # shared one — `validate_merged` reads the artifact through it too.
+    # shared one.
     #
     # ⛔ #3206: taking the listing is the run's fail-closed exit
     # (`_lib_parse_cache.ConfdReader.tree`): a source Go names paths on — a
@@ -371,94 +372,6 @@ def build_manifest(
     }
 
 
-# ── Validation (optional) ───────────────────────────────────────────
-
-ERROR_PREFIX = "ERROR: "
-WARN_PREFIX = "WARN: "
-
-
-def has_errors(issues: List[str]) -> bool:
-    """Do these `validate_merged` issues include an ERROR (not just a WARN)?
-
-    Both sides use `ERROR_PREFIX`, so the classification cannot drift the way
-    a second copy of the word would. #1794: `validate_merged`'s issues were
-    only printed and `main()` returned `EXIT_OK` on every path below, so the
-    flag could not fail the command while the module's own exit table promised
-    `2  validation error`. Measured on a malformed carrier and on a non-mapping
-    top level, with a clean tree as the must-stay-quiet control.
-    """
-    return any(i.startswith(ERROR_PREFIX) for i in issues)
-
-
-def validate_merged(output_dir: Path) -> List[str]:
-    """Read the assembled config-dir through `da-guard parse-tree` (the
-    exporter's yaml.v3 reading) and report what the exporter cannot read.
-
-    Returns list of warning/error messages.
-    """
-    issues = []
-    # ⛔ Second scan site, SAME listing as `discover_yamls` — not the same
-    # predicate re-typed. What this validates is what the exporter will read:
-    # a `.yml` this tool copies (#1603) is validated; a `.`-prefixed file
-    # already sitting in `--output` (#1827) is named on stderr and NOT
-    # validated, because failing the deploy over a carrier the exporter
-    # skips blocks a tree that is in fact fine. The nested-config guard
-    # (#1911) rides along inside the helper, where the scan is.
-    # ADR-036 step 4 (#2906): the artifact is read the way the exporter
-    # reads it — `da-guard parse-tree` (yaml.v3), one run over the output
-    # directory, whose entries are also the listing (#3206: no second walk).
-    # No usable da-guard raises `ParseTreeError` (exit 2 in main).
-    reader = _lib_parse_cache.ConfdReader(output_dir)
-    reader.require()
-    listing = config_listing(output_dir, reader=reader)
-    # A config-NAMED entry the exporter cannot read (a directory called
-    # `stale.yaml`, a dangling symlink) never reaches here: `require()` is the
-    # run's fail-closed exit (#3206), and the sources and the output were
-    # both read through it before the copy.
-    visible = list_visible_config_entries(output_dir, listing)
-    for f in visible:
-        # #2906 review: parse-tree decides which files the exporter reads —
-        # one it lists as `not_read` (the `_defaults` spelling a directory
-        # does not select) is not validated, and said so; not an ERROR: the
-        # exporter serves the rest of the tree.
-        why = reader.not_read(f)
-        if why is not None:
-            issues.append(f"{WARN_PREFIX}{f.relative_to(output_dir).as_posix()} is read by "
-                          f"no reader ({why}) — not validated")
-            continue
-        try:
-            root = reader.node(f)
-        except FileUnreadable as e:
-            if e.kind == "top_level_not_mapping":
-                issues.append(
-                    f"{ERROR_PREFIX}{f.name} top-level is not a mapping")
-            else:
-                issues.append(f"{ERROR_PREFIX}{f.name} parse error ({e.kind}): "
-                              f"{' '.join(e.message.split())}")
-            continue
-        if root == {} and not _has_content(f):
-            issues.append(f"{WARN_PREFIX}{f.name} is empty")
-
-    return issues
-
-
-#: Lines that leave a document with no value: a document marker, or the
-#: whole document written as null (yaml.v3's null spellings).
-_NO_VALUE_LINES = frozenset({"---", "...", "~", "null", "Null", "NULL"})
-
-
-def _has_content(path: Path) -> bool:
-    """Whether *path* holds a value. parse-tree reads an empty file, a
-    comment-only one, a null document and `{}` all as an empty mapping; only
-    the first three are the "empty" placeholder this WARN is about."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return True
-    return any(ln.strip() and not ln.lstrip().startswith("#")
-               and ln.strip() not in _NO_VALUE_LINES for ln in text.splitlines())
-
-
 # ── Main ─────────────────────────────────────────────────────────────
 
 @exit_on_output_write_error
@@ -482,10 +395,6 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true",
         help="Dry-run: detect conflicts without writing files",
-    )
-    parser.add_argument(
-        "--validate", action="store_true",
-        help="Run YAML validation on assembled output (not with --check)",
     )
     parser.add_argument(
         "--manifest", type=str, default="",
@@ -515,13 +424,7 @@ def main() -> int:
 
     # ⛔ `--check` returns before anything is assembled, so a flag that acts
     # on the assembled output is never reached under it. Accepting the pair
-    # turned `--check --validate` into a green that validated nothing (#1828)
-    # and `--check --manifest` into rc 0 with no manifest written.
-    if args.check and args.validate:
-        return reject("check_with_validate",
-                      "--validate checks the assembled output and --check "
-                      "assembles nothing; drop --check and pass --output to "
-                      "validate")
+    # turned `--check --manifest` into rc 0 with no manifest written (#1828).
     if args.check and args.manifest:
         return reject("check_with_manifest",
                       "--manifest records an assembly and --check assembles "
@@ -757,20 +660,6 @@ def main() -> int:
     # Assemble (`--output` presence was settled before anything was read)
     count = assemble(file_map, output_dir)
 
-    # Validate
-    validation_issues: List[str] = []
-    if args.validate:
-        try:
-            validation_issues = validate_merged(output_dir)
-        except ParseTreeError as e:
-            msg = ("cannot validate the assembled config-dir through `da-guard "
-                   f"parse-tree` (ADR-036): {' '.join(str(e).split())}")
-            if args.json:
-                print(format_json_report({"status": "caller_error",
-                                          "reason": "da_guard_parse_tree"}))
-            print(f"ERROR: {msg}", file=sys.stderr)
-            return EXIT_CALLER_ERROR
-
     # Manifest
     if args.manifest:
         manifest = build_manifest(sources, file_map, conflicts)
@@ -790,17 +679,10 @@ def main() -> int:
             os.chmod(manifest_path,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
-    # ⛔ `--validate` has to be able to fail, or it is a report with a name
-    # that reads like a gate. WARN stays non-fatal (an empty carrier is a
-    # placeholder, not a broken one); ERROR is the module's documented exit 2.
-    # The artifact is NOT removed: it may have been written into a directory
-    # that already held files, and deleting those would be a second bug.
-    failed_validation = has_errors(validation_issues)
-
     # Output
     if args.json:
         result = {
-            "status": "validation_error" if failed_validation else "ok",
+            "status": "ok",
             "output": str(output_dir),
             "file_count": count,
             "sources": [str(s) for s in sources],
@@ -818,8 +700,6 @@ def main() -> int:
             # `count` included hidden entries before #1827; it no longer does,
             # and the re-derivation is what keeps that from mattering.)
             result["artifact_file_count"] = len(carriers_already_in(output_dir))
-        if validation_issues:
-            result["validation"] = validation_issues
         print(format_json_report(result))
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
@@ -828,17 +708,6 @@ def main() -> int:
                   f"{len(carriers_already_in(output_dir))} carrier(s) the "
                   f"exporter will read — {len(residue)} of them left over "
                   f"from an earlier run (listed above).")
-        if validation_issues:
-            print(f"\nValidation ({len(validation_issues)} issue(s)):")
-            for issue in validation_issues:
-                print(f"   {issue}")
-        if failed_validation:
-            print(f"\n❌ {output_dir} was written but does not validate — "
-                  f"the exporter will not read it as intended.",
-                  file=sys.stderr)
-
-    if failed_validation:
-        return EXIT_CALLER_ERROR
 
     return EXIT_OK
 
