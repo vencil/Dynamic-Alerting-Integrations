@@ -207,8 +207,9 @@ func build(codes []errcode.Spec, kinds []handler.KindSpec, direct []directUse) (
 
 // checkExtra holds the Extra fields the handlers set (uses, extra_scan.go) to
 // codes' declarations: each is declared for the code it is sent under — a
-// kind's code is the kind table's — and each declared (code, field) is set
-// by some handler. No declared field may be one of fixed, the envelope's
+// kind's code is the kind table's — with the JSON type its value has (and an
+// array's element type), and each declared (code, field) is set by some
+// handler. No declared field may be one of fixed, the envelope's
 // fixed field names: it would replace that field.
 func checkExtra(codes []errcode.Spec, kinds []handler.KindSpec, uses []extraUse, fixed []string) error {
 	kindCode := map[errkind.Kind]errcode.Code{}
@@ -241,6 +242,11 @@ func checkExtra(codes []errcode.Spec, kinds []handler.KindSpec, uses []extraUse,
 				u.Site, u.Field, code, via))
 			continue
 		}
+		if f, ok := errcode.LookupExtraField(u.Field); ok && u.Type != "" &&
+			(f.Type != u.Type || (f.Type == errcode.ExtraArray && f.Items != u.Items)) {
+			bad = append(bad, fmt.Sprintf("%s: sets Extra %q on code %s%s to a %s (JSON %s%s), but internal/errcode declares it %s%s",
+				u.Site, u.Field, code, via, u.GoType, u.Type, itemsOf(u.Items), f.Type, itemsOf(f.Items)))
+		}
 		if set[code] == nil {
 			set[code] = map[string]bool{}
 		}
@@ -258,6 +264,14 @@ func checkExtra(codes []errcode.Spec, kinds []handler.KindSpec, uses []extraUse,
 		return fmt.Errorf("the Extra fields disagree with internal/errcode's declarations:\n  %s", strings.Join(bad, "\n  "))
 	}
 	return nil
+}
+
+// itemsOf is " of <items>" for an array's element type, "" without one.
+func itemsOf(items errcode.ExtraType) string {
+	if items == "" {
+		return ""
+	}
+	return " of " + string(items)
 }
 
 // render is c as the committed bytes: two-space JSON, LF, a final newline.

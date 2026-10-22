@@ -213,8 +213,9 @@ func TestScanDirect_ReadsTheDirectAnswers(t *testing.T) {
 	}
 }
 
-// plantedModule is a copy of this module's internal/ and cmd/ with file
-// added as internal/handler/zz_planted.go.
+// plantedModule is a copy of this module's internal/ and cmd/ — with its
+// go.mod (relative replace targets made absolute) and go.sum, so the copy
+// type-checks — with file added as internal/handler/zz_planted.go.
 func plantedModule(t *testing.T, file string) string {
 	t.Helper()
 	wd, _ := os.Getwd()
@@ -227,6 +228,21 @@ func plantedModule(t *testing.T, file string) string {
 		if err := os.CopyFS(filepath.Join(dst, dir), os.DirFS(filepath.Join(mod, dir))); err != nil {
 			t.Fatal(err)
 		}
+	}
+	gomod, err := os.ReadFile(filepath.Join(mod, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gomod = bytes.ReplaceAll(gomod, []byte("=> ../"), []byte("=> "+filepath.Dir(mod)+"/"))
+	gosum, err := os.ReadFile(filepath.Join(mod, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "go.mod"), gomod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "go.sum"), gosum, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dst, "internal", "handler", "zz_planted.go"), []byte(file), 0o644); err != nil {
 		t.Fatal(err)

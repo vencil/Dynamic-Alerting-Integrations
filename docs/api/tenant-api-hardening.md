@@ -176,7 +176,7 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 - **只送宣告過的欄位**：回應只帶該碼宣告過的欄位，其他的丟掉並寫錯誤 log。`INTERNAL_ERROR` 不宣告任何欄位，所以內部錯誤只回固定訊息與 `request_id`（§2.4）；宣告的欄位不能與固定欄位同名，所以蓋不掉 `code`、`error`。值為零的欄位照送（看不到的 PR/MR 是 `existing_pr_url: ""`、`pr_number: 0`；直接寫入批次的衝突是 `committed: false`；沒有可顯示的 finding 是 `findings: []`）。
 - **契約與 OpenAPI**：`tenant-api-errors.json` 每個碼多一個 `extra`，列出欄位名、型別與陣列元素的型別。OpenAPI 的 `ErrorResponse` 列出所有碼的欄位聯集（Swagger 2.0 沒有 `oneOf`，一個回應只能有一個 schema），每個欄位的說明寫明哪些碼會帶它。
-- **擋在出貨前**：`make error-contract`（`make api-docs` 在 swag 之後也會跑它）從原始碼讀出每個 handler 設定的欄位；設了該碼沒宣告的欄位、宣告了卻沒有 handler 設、或宣告了固定欄位的名字，產生器都直接失敗。pre-commit 與 CI 擋漂移。
+- **擋在出貨前**：`make error-contract`（`make api-docs` 在 swag 之後也會跑它）從型別檢查過的原始碼讀出每個 handler 設定的欄位與值的 Go 型別；設了該碼沒宣告的欄位、值的 JSON 型別與宣告不符、宣告了卻沒有 handler 設、宣告了固定欄位的名字，或 Extra 的 map 被傳進函式、複製、取址而讀不出最後有哪些鍵，產生器都直接失敗。pre-commit 與 CI 擋漂移。
 
 宣告涵蓋現有的所有欄位，所以現有回應的內容不變。`GET /api/v1/tasks/{id}` 也補進了 OpenAPI。
 

@@ -79,30 +79,57 @@ func TestScanExtra_ReadsEveryShape(t *testing.T) {
 	if err := checkExtra(errcode.Specs(), handler.KindSpecs(), uses, handler.EnvelopeFieldNames()); err != nil {
 		t.Fatal(err)
 	}
+	// Every use carries the JSON type of its value, from its Go type.
+	for _, u := range uses {
+		if u.Type == "" {
+			t.Errorf("%s: Extra %q has no type", u.Site, u.Field)
+		}
+		if u.Field == "pr_number" && (u.Type != errcode.ExtraInteger || u.GoType != "int") {
+			t.Errorf("%s: pr_number is %s (%s), want integer (int)", u.Site, u.Type, u.GoType)
+		}
+		if u.Field == "findings" && (u.Type != errcode.ExtraArray || u.Items != errcode.ExtraObject) {
+			t.Errorf("%s: findings is %s of %s, want array of object", u.Site, u.Type, u.Items)
+		}
+	}
 }
 
-const plantedHead = "package handler\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/vencil/tenant-api/internal/errcode\"\n\t\"github.com/vencil/tenant-api/internal/errkind\"\n)\n\n"
+const plantedHead = "package handler\n\nimport (\n\t\"maps\"\n\t\"net/http\"\n\n\t\"github.com/vencil/tenant-api/internal/errcode\"\n\t\"github.com/vencil/tenant-api/internal/errkind\"\n)\n\n" +
+	"var (\n\t_ = errcode.Conflict\n\t_ = errkind.Conflict\n\t_ = maps.Copy[map[string]any, map[string]any]\n\t_ http.Handler\n)\n\n" +
+	"func addSecret(m map[string]any) { m[\"undeclared_a\"] = 1 }\n\n"
 
 // TestScanExtra_FailsClosed: an Extra the scan cannot read stops it with its
 // place — never a field that slips past the declarations.
 func TestScanExtra_FailsClosed(t *testing.T) {
 	t.Parallel()
-	for name, body := range map[string]string{
-		"key variable":     `WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{k: 1}})`,
-		"index variable":   `e := map[string]any{}; e[k] = 1; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`,
-		"from a call":      `e := extraOf(); WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`,
-		"set afterwards":   `env := ErrorResponse{Code: errcode.Conflict}; env.Extra = map[string]any{"x": 1}; _ = env`,
-		"indexed after":    `env := ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{}}; env.Extra["x"] = 1; _ = env`,
-		"no code":          `_ = ErrorResponse{Error: "x", Extra: map[string]any{"message": "m"}}`,
-		"spec not looked":  `writeKindAnswer(w, r, KindSpec{}, 0, ErrorResponse{Extra: map[string]any{"message": "m"}})`,
-		"another map type": `WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: extraOf()})`,
+	for name, c := range map[string]struct{ body, want string }{
+		"key variable":     {`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{k: 1}})`, ""},
+		"index variable":   {`e := map[string]any{}; e[k] = 1; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, ""},
+		"from a call":      {`e := extraOf(); WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, ""},
+		"set afterwards":   {`env := ErrorResponse{Code: errcode.Conflict}; env.Extra = map[string]any{"x": 1}; _ = env`, ""},
+		"indexed after":    {`env := ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{}}; env.Extra["x"] = 1; _ = env`, ""},
+		"no code":          {`_ = ErrorResponse{Error: "x", Extra: map[string]any{"message": "m"}}`, ""},
+		"spec not looked":  {`writeKindAnswer(w, r, KindSpec{}, 0, ErrorResponse{Extra: map[string]any{"message": "m"}})`, ""},
+		"another map type": {`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: extraOf()})`, ""},
+		// #3272 review: keys added where the scan does not look.
+		"passed to a helper": {`e := map[string]any{"committed": false}; addSecret(e); WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "is used other than"},
+		"maps.Copy into it":  {`e := map[string]any{"committed": false}; maps.Copy(e, map[string]any{"undeclared_b": 2}); WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "is used other than"},
+		"address taken":      {`e := map[string]any{"committed": false}; p := &e; (*p)["undeclared_c"] = 3; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "is used other than"},
+		"copied":             {`e := map[string]any{"committed": false}; o := e; o["undeclared_d"] = 4; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "is used other than"},
+		"ranged into":        {`e := map[string]any{"committed": false}; for k, v := range map[string]any{"undeclared_e": 5} { e[k] = v }; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "that is not a string literal"},
+		"untellable type":    {`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{"committed": any(false)}})`, "cannot tell the JSON type"},
 	} {
-		src := plantedHead + "var _ = errkind.Conflict\n\nfunc extraOf() map[string]any { return nil }\n\n" +
-			"func planted(w http.ResponseWriter, r *http.Request, k string) {\n\t" + body + "\n}\n"
-		_, err := scanExtra(plantedModule(t, src))
-		if err == nil || !strings.Contains(err.Error(), "internal/handler/zz_planted.go:") {
-			t.Errorf("%s: scan error %v, want one naming the planted file", name, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			src := plantedHead + "func extraOf() map[string]any { return nil }\n\n" +
+				"func planted(w http.ResponseWriter, r *http.Request, k string) {\n\t" + c.body + "\n}\n"
+			_, err := scanExtra(plantedModule(t, src))
+			// A type error would name the file too: the planted code must
+			// compile, so the refusal is the scan's.
+			if err == nil || !strings.Contains(err.Error(), "\n  internal/handler/zz_planted.go:") || strings.Contains(err.Error(), "type-check:") ||
+				!strings.Contains(err.Error(), c.want) {
+				t.Errorf("scan error %v, want the scan's refusal naming the planted file and %q", err, c.want)
+			}
+		})
 	}
 	// The control: the writeKindAnswer shape is read, with its kind.
 	uses, err := scanExtra(plantedModule(t, plantedHead+"func planted(w http.ResponseWriter, r *http.Request) {\n\t"+
@@ -125,7 +152,7 @@ func TestCheckExtra_RefusesUndeclared(t *testing.T) {
 	t.Parallel()
 	specs, kinds, fixed := errcode.Specs(), handler.KindSpecs(), handler.EnvelopeFieldNames()
 
-	planted := plantedHead + "var _ = errkind.Conflict\n\nfunc planted(w http.ResponseWriter, r *http.Request) {\n\t" +
+	planted := plantedHead + "func planted(w http.ResponseWriter, r *http.Request) {\n\t" +
 		`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.PendingPR, Extra: map[string]any{"pr_number": 1, "tenant_id": "x"}})` + "\n}\n"
 	uses, err := scanExtra(plantedModule(t, planted))
 	if err != nil {
@@ -134,6 +161,17 @@ func TestCheckExtra_RefusesUndeclared(t *testing.T) {
 	if err := checkExtra(specs, kinds, uses, fixed); err == nil ||
 		!strings.Contains(err.Error(), "internal/handler/zz_planted.go:") || !strings.Contains(err.Error(), `"tenant_id" on code PENDING_PR_EXISTS`) {
 		t.Errorf("an undeclared field in a literal: %v", err)
+	}
+
+	// A declared field set to a value of another JSON type (#3272 review).
+	typed := plantedHead + "func planted(w http.ResponseWriter, r *http.Request) {\n\t" +
+		`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.PendingPR, Extra: map[string]any{"existing_pr_url": "", "pr_number": "7", "message": "m"}})` + "\n}\n"
+	if uses, err = scanExtra(plantedModule(t, typed)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkExtra(specs, kinds, uses, fixed); err == nil ||
+		!strings.Contains(err.Error(), `Extra "pr_number" on code PENDING_PR_EXISTS to a string (JSON string), but internal/errcode declares it integer`) {
+		t.Errorf("a declared field of another type: %v", err)
 	}
 
 	// A renderKind clause: the kind's code is the kind table's.
