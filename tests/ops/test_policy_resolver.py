@@ -295,3 +295,50 @@ def test_tester_explain_and_generator_agree_under_a_policy_across_parity_matrix(
         compared += 1
     assert compared >= 40, compared
     assert refused_seen >= 20, refused_seen
+
+
+# ── review findings (#3142) ──────────────────────────────────────────
+
+
+def test_explain_names_a_refused_enforced_receiver(tmp_path):
+    """被 allowlist 拒收的平台強制路由 receiver 也列在 policy_refused。"""
+    conf = _tree(tmp_path, {"receiver": _OK})
+    (conf / "_defaults.yaml").write_text(
+        "defaults: {}\n_routing_enforced:\n  enabled: true\n  receiver:\n"
+        "    type: webhook\n    url: https://noc.evil.org/hook\n", encoding="utf-8")
+    res = _run(_EXPLAIN, "--config-dir", str(conf), "--json", "--policy", _allow(tmp_path))
+    assert res.returncode == 0, res.stderr
+    (t1,) = json.loads(res.stdout)
+    assert [(r["source"], r["status"]) for r in t1["policy_refused"]] == [
+        ("_routing_enforced.receiver", "POLICY_REFUSED")]
+    bare = _run(_EXPLAIN, "--config-dir", str(conf), "--json")
+    assert json.loads(bare.stdout)[0]["policy_refused"] == []
+
+
+def test_validate_config_version_error_gets_the_version_remedy(tmp_path):
+    conf = _tree(tmp_path, {"receiver": _OK})
+    res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _too_new(tmp_path))
+    rows = {r["check"]: r for r in json.loads(res.stdout)}
+    for name in ("routes", "policy"):
+        assert rows[name]["suggested_action"] == gar.POLICY_VERSION_REMEDY, rows[name]
+
+
+def test_validate_config_allowlist_advice_only_for_an_allowlist_refusal(tmp_path):
+    """租戶 id 含 "domain" 的路由 WARN 被 policy 列的字串過濾撿到時，建議不是
+    「改 allowlist」，而是路由的建議（那一行講的是路由）。"""
+    conf = _tree(tmp_path, {"receiver": _OK, "overrides": [{"receiver": _OK_O}]})
+    (conf / "t1.yaml").rename(conf / "domain-a.yaml")
+    text = (conf / "domain-a.yaml").read_text(encoding="utf-8").replace("t1:", "domain-a:")
+    (conf / "domain-a.yaml").write_text(text, encoding="utf-8")
+    res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _allow(tmp_path))
+    (row,) = [r for r in json.loads(res.stdout) if r["check"] == "policy"]
+    assert row["status"] == "fail", row
+    assert row["suggested_action"] != gar.POLICY_REFUSAL_REMEDY, row
+    assert "allowed_domains" not in row["suggested_action"], row
+
+
+def test_explain_profile_expansion_prints_no_notice(tmp_path):
+    conf = _tree(tmp_path, {"receiver": _OK})
+    res = _run(_EXPLAIN, "--config-dir", str(conf), "--show-profile-expansion")
+    assert res.returncode == 0, res.stderr
+    assert gar.POLICY_NOT_APPLIED_NOTICE not in res.stderr

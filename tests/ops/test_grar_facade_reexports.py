@@ -52,6 +52,8 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "POLICY_NOT_APPLIED_NOTICE",
         "POLICY_REFUSAL_KIND",
         "POLICY_REFUSAL_REMEDY",
+        "POLICY_VERSION_REMEDY",
+        "PolicyVersionError",
         "PolicyInputError",  # #1556 supplied-but-unusable --policy
         "_extract_host",
         "_validate_profile_refs",

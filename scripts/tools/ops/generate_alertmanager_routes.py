@@ -1059,6 +1059,7 @@ def da_tools_version() -> str | None:
 # without loading this module.
 from _grar_validate import (  # noqa: E402,F401
     POLICY_HELP, POLICY_NOT_APPLIED_NOTICE, POLICY_REFUSAL_KIND, POLICY_REFUSAL_REMEDY,
+    POLICY_VERSION_REMEDY, PolicyVersionError,
 )
 
 
@@ -1094,7 +1095,7 @@ def resolve_policy(policy_path: str | None) -> ResolvedPolicy:
     doc = load_policy_document(policy_path)
     too_old = generator_version_problem(da_tools_version(), doc.min_generator_version)
     if too_old is not None:
-        raise PolicyInputError(f"--policy: {too_old}")
+        raise PolicyVersionError(f"--policy: {too_old}")
     return ResolvedPolicy(policy_path, doc.allowed_domains, doc.min_generator_version)
 
 

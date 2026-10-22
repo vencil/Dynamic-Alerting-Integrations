@@ -72,7 +72,7 @@ from _grar_validate import (  # noqa: E402
     routing_not_mapping_warning,
 )
 from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
-from _grar_routes import enforced_route_tenants  # noqa: E402
+from _grar_routes import _build_enforced_routes, enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
@@ -177,18 +177,32 @@ def rendered_tenant_routes(tenant: str, merged: dict,
 
 
 def policy_refused_slots(tenant: str, merged: dict,
-                         allowed_domains: list[str] | None) -> list[dict]:
+                         allowed_domains: list[str] | None,
+                         enforced: dict | None = None) -> list[dict]:
     """Every receiver slot of *tenant* the --policy domain allowlist refuses
     (#3142) — the main receiver (``receiver``) included, whose refusal takes
-    the tenant's whole route out — read from the generator's per-slot
-    verdict and the refusal's ``kind``, never from its text."""
-    if not allowed_domains or not isinstance(merged, dict):
+    the tenant's whole route out, and the platform's enforced (NOC) receiver
+    (``_routing_enforced.receiver``) for *enforced* (the enabled
+    ``_routing_enforced``) — read from the generator's own verdicts and the
+    refusal's ``kind``, never from its text."""
+    if not allowed_domains:
         return []
-    verdicts: list[SlotVerdict] = []
-    _build_tenant_routes({tenant: merged}, allowed_domains, verdicts=verdicts)
-    return [{"source": v.slot, "status": STATUS_POLICY_REFUSED,
-             "detail": str(v.reason).strip(), "remedy": POLICY_REFUSAL_REMEDY}
-            for v in verdicts if not v.rendered and is_policy_refusal(v.reason)]
+    refused: list[dict] = []
+    if isinstance(merged, dict):
+        verdicts: list[SlotVerdict] = []
+        _build_tenant_routes({tenant: merged}, allowed_domains, verdicts=verdicts)
+        refused += [{"source": v.slot, "status": STATUS_POLICY_REFUSED,
+                     "detail": str(v.reason).strip(), "remedy": POLICY_REFUSAL_REMEDY}
+                    for v in verdicts if not v.rendered and is_policy_refusal(v.reason)]
+    if isinstance(enforced, dict):
+        _r, _recv, warnings = _build_enforced_routes(
+            enforced, {tenant: merged if isinstance(merged, dict) else {}},
+            allowed_domains, tenants=[tenant])
+        refused += [{"source": "_routing_enforced.receiver",
+                     "status": STATUS_POLICY_REFUSED,
+                     "detail": str(w).strip(), "remedy": POLICY_REFUSAL_REMEDY}
+                    for w in warnings if is_policy_refusal(w)]
+    return refused
 
 def explain_tenant_routing(
     parsed: dict,
@@ -280,7 +294,10 @@ def explain_tenant_routing(
         # #2490: values the generator replaced (blocking under --validate).
         "replaced_values": [str(w) for w in replaced],
         # #3142: slots the --policy domain allowlist refuses.
-        "policy_refused": policy_refused_slots(tenant, merged, allowed_domains),
+        "policy_refused": policy_refused_slots(
+            tenant, merged, allowed_domains,
+            enforced if (isinstance(enforced, dict)
+                         and enforced.get("enabled") is not False) else None),
     }
 
 
@@ -1383,7 +1400,9 @@ def main(argv: list[str] | None = None) -> int:
         policy = resolve_policy(args.policy)
     except PolicyInputError as exc:
         raise CallerError(str(exc), reason="policy_unusable") from None
-    if not policy.applied:
+    # --show-profile-expansion lists profiles, not receivers: nothing there is
+    # judged by the allowlist, so there is nothing to say about it either.
+    if not policy.applied and not args.show_profile_expansion:
         print(POLICY_NOT_APPLIED_NOTICE, file=sys.stderr)
     allowed_domains = policy.allowed_domains
 

@@ -218,7 +218,7 @@ from _lib_tenant_values import (  # noqa: E402
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
 # #3142: the deployment --policy's remedy, shared with the tools that take it.
-from _grar_validate import POLICY_REFUSAL_REMEDY  # noqa: E402
+from _grar_validate import POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY  # noqa: E402
 
 # ============================================================
 # Check results
@@ -912,7 +912,9 @@ def check_routes(
             # types…"), which sends the operator to look at tenant YAML for a
             # problem that is entirely in their own argv.
             return _argv_error_row("routes", str(exc),
-                                   _POLICY_ROUTES_ROW_HINT)
+                                   POLICY_VERSION_REMEDY
+                                   if isinstance(exc, gen.PolicyVersionError)
+                                   else _POLICY_ROUTES_ROW_HINT)
 
     # Capture stderr for warnings
     import io
@@ -1033,7 +1035,10 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     try:
         allowed_domains = gen.resolve_policy(policy_file).allowed_domains
     except gen.PolicyInputError as exc:
-        return _argv_error_row("policy", str(exc), _POLICY_ROW_HINT)
+        return _argv_error_row("policy", str(exc),
+                               POLICY_VERSION_REMEDY
+                               if isinstance(exc, gen.PolicyVersionError)
+                               else _POLICY_ROW_HINT)
     if not allowed_domains:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
@@ -1059,7 +1064,16 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
                      "not in allowed_domains" in w]
 
     if domain_issues:
-        return _make_result("policy", FAIL, domain_issues)
+        # #3208: the allowlist advice only when the allowlist is what refused
+        # (the finding's kind); the substring filter above also picks up
+        # routing lines that merely mention "domain" — those carry the
+        # routes advice, which is what they are about.
+        if any(gen.is_policy_refusal(w) for w in domain_issues):
+            return _make_result("policy", FAIL, domain_issues)
+        row = _make_result("policy", FAIL, domain_issues,
+                           hint=_CHECK_HINTS["routes"][0])
+        row["hint_docs"] = _CHECK_HINTS["routes"][1]
+        return row
     return _make_result("policy", PASS,
                         [f"All webhook URLs comply with "
                          f"{len(allowed_domains)} allowed domain(s)"])

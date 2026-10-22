@@ -893,6 +893,12 @@ class PolicyInputError(ValueError):
     """
 
 
+class PolicyVersionError(PolicyInputError):
+    """The --policy file is usable, but names a ``min_generator_version``
+    this generator does not meet (ADR-036 §6): a caller error whose fix is
+    the da-tools version, not the file (#3142)."""
+
+
 class PolicyDocument(NamedTuple):
     """What the generator reads from a ``--policy`` file."""
 
@@ -957,8 +963,15 @@ POLICY_NOT_APPLIED_NOTICE = (
 #: what to do about a receiver the allowlist refuses.
 POLICY_REFUSAL_REMEDY = (
     "Add the receiver's host to `allowed_domains` in the --policy file, or "
-    "correct the tenant's receiver URL (see docs/cli-reference.md § "
-    "validate-config).")
+    "correct the receiver URL (the tenant's `_routing`, or the platform's "
+    "`_routing_enforced`; see docs/cli-reference.md § validate-config).")
+
+#: what to do about a policy whose min_generator_version this generator
+#: does not meet (PolicyVersionError): the file itself is usable.
+POLICY_VERSION_REMEDY = (
+    "Run a da-tools at least as new as the policy's `min_generator_version` "
+    "(raise the image tag); the --policy file itself is usable, and lowering "
+    "its minimum means judging by rules its author did not mean.")
 
 #: the `kind` of the finding that drops a receiver for the allowlist.
 POLICY_REFUSAL_KIND = "receiver_domain_not_allowed"
