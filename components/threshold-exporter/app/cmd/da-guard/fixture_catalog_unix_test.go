@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -86,6 +87,33 @@ func buildCatalogRow(t *testing.T, c fixtureCatalog, row catalogRow, dir string)
 	return filepath.Join(dir, c.Root)
 }
 
+// assertValidationClass holds the row's `matrix` class to da-guard's
+// validation exit on the same tree — the behaviour matrix's oracle: control
+// → 0 (every tool must exit 0 on it), flagged → 3 or 4 (every tool must
+// fail and name what the report names). go_only rows are content kinds the
+// matrix does not run; refused rows are judged by parse-tree's exit 2.
+func assertValidationClass(t *testing.T, row catalogRow, conf string) {
+	t.Helper()
+	var want []int
+	switch row.Matrix {
+	case "control":
+		want = []int{exitOK}
+	case "flagged":
+		want = []int{exitParseFailed, exitUndetermined}
+	default:
+		return
+	}
+	var out, errOut strings.Builder
+	code := run([]string{"--config-dir", conf, "--format", "json", "--cardinality-limit", "0"}, &out, &errOut)
+	for _, w := range want {
+		if code == w {
+			return
+		}
+	}
+	t.Errorf("matrix %q: validation exit %d, want one of %v (the matrix's oracle): %s",
+		row.Matrix, code, want, errOut.String())
+}
+
 // TestFixtureCatalog_RecipesGiveTheirEntries: each catalogue recipe, built
 // and walked as uid 65534 (re-executed under setpriv when run as root, so a
 // mode bit really denies), gives exactly the entries the row expects — path,
@@ -132,6 +160,7 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 			if code != exitOK {
 				t.Fatalf("exit %d: %s", code, msg)
 			}
+			assertValidationClass(t, row, conf)
 			want := map[string]string{}
 			expected := row.Expect.Entries
 			if row.Base {
