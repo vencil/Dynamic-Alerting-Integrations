@@ -21,10 +21,16 @@ import { apiFixture } from './helpers/api-fixture';
 const listBody = (views: unknown[]) => JSON.stringify(apiFixture('ViewResponse[]', views));
 const EMPTY_LIST = listBody([]);
 
-function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+type FetchCall = { method: string; url: string };
+
+/** Stubs fetch and returns the list of calls it receives, as `{ method, url }`. */
+function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): FetchCall[] {
+  const calls: FetchCall[] = [];
   globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ method: init?.method || 'GET', url: String(url) });
     return handler(String(url), init);
   }) as unknown as typeof fetch;
+  return calls;
 }
 
 describe('useSavedViews', () => {
@@ -105,7 +111,7 @@ describe('useSavedViews', () => {
     let callCount = 0;
     let putBody: unknown = null;
     const afterSave = listBody([{ id: 'my-view', label: 'My View', filters: {} }]);
-    mockFetch((url, init) => {
+    const calls = mockFetch((url, init) => {
       callCount += 1;
       if (init?.method === 'PUT') {
         putBody = init.body ? JSON.parse(String(init.body)) : null;
@@ -124,6 +130,9 @@ describe('useSavedViews', () => {
     });
 
     expect(ok).toBe(true);
+    // The PUT goes to the view's own id (#3231: not a list position such as /0).
+    // The id charset ([a-zA-Z0-9_-]) leaves encodeURIComponent nothing to encode.
+    expect(calls.filter(c => c.method === 'PUT')).toEqual([{ method: 'PUT', url: '/api/v1/views/my-view' }]);
     expect((putBody as { label: string }).label).toBe('My View');
     expect((putBody as { filters: Record<string, string> }).filters).toEqual({ environment: 'prod' });
     await waitFor(() => expect(result.current.views.map((v: { id: string }) => v.id)).toContain('my-view'));
@@ -145,11 +154,9 @@ describe('useSavedViews', () => {
     expect(onError).toHaveBeenCalledWith(expect.stringContaining('letters, digits'));
   });
 
-  it('remove() sends DELETE and reloads', async () => {
-    let deleteCalled = false;
-    mockFetch((url, init) => {
+  it('remove() sends DELETE to /api/v1/views/<id> and reloads', async () => {
+    const calls = mockFetch((url, init) => {
       if (init?.method === 'DELETE') {
-        deleteCalled = true;
         return new Response(JSON.stringify({ status: 'ok', view_id: 'some-view' }), { status: 200 });
       }
       return new Response(EMPTY_LIST, { status: 200 });
@@ -162,6 +169,11 @@ describe('useSavedViews', () => {
       await result.current.remove('some-view');
     });
 
-    expect(deleteCalled).toBe(true);
+    // Initial list, the DELETE on the view's own id (#3231: not /0), the reload.
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/v1/views' },
+      { method: 'DELETE', url: '/api/v1/views/some-view' },
+      { method: 'GET', url: '/api/v1/views' },
+    ]);
   });
 });

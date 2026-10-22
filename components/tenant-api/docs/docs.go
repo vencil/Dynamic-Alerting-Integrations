@@ -3611,6 +3611,11 @@ const docTemplate = `{
         },
         "internal_handler.ViewResponse": {
             "type": "object",
+            "required": [
+                "filters",
+                "id",
+                "label"
+            ],
             "properties": {
                 "created_by": {
                     "type": "string"
