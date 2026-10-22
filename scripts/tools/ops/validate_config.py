@@ -901,6 +901,13 @@ def check_routes(
     import generate_alertmanager_routes as gen
 
     tree = gen.load_tenant_tree(config_dir)
+    # #3284: `--validate` refuses the whole tree on a field-type finding (a
+    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
+    # has `--validate` semantics, does not report routes such a run never
+    # generates as WARN / PASS. The schema row lists the same lines.
+    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
+    if refusal:
+        return _make_result("routes", FAIL, [line.strip() for line in refusal])
     routing = tree.routing_configs
     dedup = tree.dedup_configs
     enforced_routing = tree.enforced_routing

@@ -149,7 +149,8 @@ FINDING_KINDS: dict[str, str] = {
         "A matcher value YAML does not read as a string (quote it).",
     "routing_group_by_invalid":
         "A group_by element that is not a non-empty string, repeats a label "
-        "or mixes '...' with labels.",
+        "or mixes '...' with labels; or a group_by that is not a list (e.g. "
+        "group_by: alertname), which refuses the whole tree in every mode.",
     # receivers and sub-route entries
     "missing_receiver_field":
         "A receiver, or a field it requires, is missing or not an object; "
