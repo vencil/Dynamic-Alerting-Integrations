@@ -112,6 +112,7 @@ import pytest
 
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
 from _platform_fs import DIR_WRITE_ERROR
+from _go_refusal import assert_refused  # (#3206)
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
@@ -1090,8 +1091,10 @@ def test_a_bad_source_entry_does_not_blame_the_output_flag(tmp_path):
         "a source-side failure was mis-attributed to the output flag:\n"
         + proc.stderr[-1500:])
     assert "cannot copy into" not in proc.stderr, proc.stderr[-1500:]
-    # And it is still recognisably the source that failed.
-    assert str(src / "x.yaml") in proc.stderr, proc.stderr[-1500:]
+    # And it is still recognisably the source that failed: since #3206 the
+    # shared conf.d refusal, naming the entry under the source tree.
+    assert_refused(proc.returncode, proc.stderr, ["x.yaml"])
+    assert f"the conf.d at {src} holds" in proc.stderr, proc.stderr[-1500:]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

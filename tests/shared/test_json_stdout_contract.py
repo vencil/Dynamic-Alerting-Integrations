@@ -554,7 +554,9 @@ def _confd_with_webhook(tmp: Path, stub: str) -> str:
     Slack/PagerDuty endpoint.
     """
     d = tmp / "confd_webhook"
-    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: '100'\n")
+    # A number, not '100': a root default the exporter cannot serve is a tree
+    # no conf.d tool reads (#3206), and that is not what this fixture is for.
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 100\n")
     _write(d / "tenant-one.yaml",
            "tenants:\n"
            "  tenant-one:\n"
@@ -1296,12 +1298,12 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--policy", _policy_file(t), "--json"]),
     # #2115 0-B: a file the exporter drops — rc 2 before any rule is checked,
-    # with the caller-error envelope.
+    # with the caller-error envelope; since #3206 the shared conf.d refusal's.
     R("policy_engine", "exporter-drops-a-file",
       lambda t, s: ["--config-dir", _confd_the_exporter_drops(t),
                     "--policy", _policy_file(t), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("yaml_file_unreadable")),
+      doc_check=_caller_error_doc("conf_d_not_servable")),
 
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
