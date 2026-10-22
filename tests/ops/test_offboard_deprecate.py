@@ -410,12 +410,20 @@ def test_extract_value_map_no_tenant_label():
     vmap = validate_migration.extract_value_map(results)
     assert "__no_label__" in vmap
 
-def test_extract_value_map_null_value():
-    """測試空值。"""
-    results = [
-        {"metric": {"tenant": "db-a"}, "value": [0, None]},
-    ]
-    vmap = validate_migration.extract_value_map(results)
+def test_a_null_sample_is_refused_upstream():
+    """#3133：樣本值是 null 時，查詢在上游就被拒（rc 2），不會以「缺值」
+    進到 extract_value_map（以前讀成 None，報成單邊缺值、rc 1）。"""
+    import _lib_prometheus
+    body = {"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"tenant": "db-a"}, "value": [0, None]}]}}
+    with pytest.raises(_lib_prometheus.QueryError, match=r"result\[0\]\.value"):
+        _lib_prometheus._vector_rows(body)
+
+
+def test_extract_value_map_histogram_row_is_none():
+    """只有 histogram 的列沒有浮點樣本，記為 None。"""
+    vmap = validate_migration.extract_value_map(
+        [{"metric": {"tenant": "db-a"}, "histogram": [0, {}]}])
     assert vmap["db-a"] is None
 
 def test_extract_value_map_empty_results():
