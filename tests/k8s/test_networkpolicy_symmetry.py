@@ -50,15 +50,41 @@ _EXPECTED_WORKLOADS = frozenset({"alertmanager", "prometheus", "maintenance-sche
 
 _WORKLOAD_KINDS = {"Deployment", "DaemonSet", "StatefulSet", "CronJob", "Job"}
 
+def _edge_key(policy: str, dst_ns: str | None, selector: dict | None) -> tuple:
+    """The identity of one egress edge: policy, destination ns AND destination pods.
+
+    (policy, ns) alone is not an identity: one policy can name two different
+    pod selectors in the same namespace, and an exception or lookup keyed
+    without the selector would let one of them stand in for the other (#3270).
+    matchLabels are canonicalised to a sorted tuple so key order in the YAML
+    does not matter. matchExpressions are refused, not dropped: a key that
+    ignored them would make two different selectors collide, which is the
+    masking this key exists to prevent.
+    """
+    selector = selector or {}
+    if _uses_match_expressions(selector):
+        pytest.fail(
+            f"{policy} -> ns={dst_ns}: _edge_key cannot identify a podSelector "
+            f"with matchExpressions ({selector}) — teach it (and _selects) about "
+            "them instead of letting two selectors collide")
+    return (policy, dst_ns,
+            tuple(sorted((selector.get("matchLabels") or {}).items())))
+
+
+def _uses_match_expressions(selector: dict | None) -> bool:
+    return bool(selector and selector.get("matchExpressions"))
+
+
 # Raw egress edges whose destination is deployed ONLY by a helm chart, so no
-# workload under k8s/ can resolve it. (policy name, destination ns) -> (chart,
-# extra helm args, reason). Each is still checked end to end, by rendering the
+# workload under k8s/ can resolve it. _edge_key(policy, destination ns,
+# destination podSelector) -> (chart, extra helm args, reason). Each is still checked end to end, by rendering the
 # chart into the destination namespace: the rendered pods must match the
 # egress selector AND the rendered ingress must admit the raw source workload
 # (test_helm_resident_destinations_are_symmetric). Exit-locked: an entry whose
 # edge resolves to a raw workload again fails, so the map can only shrink.
 _HELM_RESIDENT_DESTINATIONS = {
-    ("allow-threshold-govern-egress", "tenant-api"): (
+    _edge_key("allow-threshold-govern-egress", "tenant-api",
+              {"matchLabels": {"app.kubernetes.io/name": "tenant-api"}}): (
         "helm/tenant-api",
         # the chart refuses to render until writeBack.mode is chosen (#2855);
         # the shared baseline adds no NetworkPolicy or pod label
@@ -117,10 +143,6 @@ def _selects(selector: dict | None, labels: dict) -> bool:
     return all(labels.get(k) == v for k, v in (selector.get("matchLabels") or {}).items())
 
 
-def _uses_match_expressions(selector: dict | None) -> bool:
-    return bool(selector and selector.get("matchExpressions"))
-
-
 def _ports(rule: dict) -> set[str]:
     return {str(p.get("port")) for p in (rule.get("ports") or []) if p.get("port") is not None}
 
@@ -170,11 +192,23 @@ def _intra_cluster_egress_edges(policies, workloads):
                         if w["namespace"] == dst_ns
                         and _selects(peer["podSelector"], w["labels"])]
                 edges.append({
+                    "key": _edge_key(policy["metadata"]["name"], dst_ns,
+                                     peer["podSelector"]),
                     "policy": policy["metadata"]["name"], "path": path,
                     "selector": peer["podSelector"], "dst_ns": dst_ns,
                     "sources": sources, "destinations": dsts, "ports": ports,
                 })
     return edges
+
+
+def _edges_by_key(policies, workloads) -> dict[tuple, list[dict]]:
+    """Egress edges grouped by _edge_key. A list, not a single edge: two rules
+    of one policy may name the same peer (e.g. on different ports), and a plain
+    dict comprehension would silently keep only the last of them."""
+    grouped: dict[tuple, list[dict]] = {}
+    for e in _intra_cluster_egress_edges(policies, workloads):
+        grouped.setdefault(e["key"], []).append(e)
+    return grouped
 
 
 def _ingress_admits(policies, dst, src_workloads, ports) -> bool:
@@ -254,7 +288,7 @@ class TestNetworkPolicySymmetry:
             f'{e["policy"]} -> {e["selector"].get("matchLabels")} in ns={e["dst_ns"]}'
             for e in _intra_cluster_egress_edges(policies, workloads)
             if not e["destinations"]
-            and (e["policy"], e["dst_ns"]) not in _HELM_RESIDENT_DESTINATIONS
+            and e["key"] not in _HELM_RESIDENT_DESTINATIONS
         ]
         assert dangling == [], (
             "these egress rules name a pod selector that matches no workload "
@@ -262,46 +296,58 @@ class TestNetworkPolicySymmetry:
             "rule is now dead) or it lives in a helm chart (out of this gate's "
             f"scope, and the rule cannot be verified here): {dangling}")
 
+    def test_edge_key_distinguishes_destination_pods(self):
+        a = _edge_key("p", "ns", {"matchLabels": {"app": "a", "tier": "x"}})
+        assert a == _edge_key("p", "ns", {"matchLabels": {"tier": "x", "app": "a"}})
+        # same policy, same namespace, different pods: must NOT collide (#3270)
+        assert a != _edge_key("p", "ns", {"matchLabels": {"app": "b", "tier": "x"}})
+        with pytest.raises(pytest.fail.Exception, match="matchExpressions"):
+            _edge_key("p", "ns", {"matchExpressions": [
+                {"key": "app", "operator": "In", "values": ["a"]}]})
+
     def test_helm_resident_entries_are_exit_locked(self):
         policies, workloads = _load()
-        edges = {(e["policy"], e["dst_ns"]): e
-                 for e in _intra_cluster_egress_edges(policies, workloads)}
+        edges = _edges_by_key(policies, workloads)
         for key in _HELM_RESIDENT_DESTINATIONS:
             assert key in edges, (
                 f"{key} is listed as a helm-resident destination but no such raw "
                 "egress edge exists any more — delete the entry")
-            assert not edges[key]["destinations"], (
+            assert not any(e["destinations"] for e in edges[key]), (
                 f"{key} now resolves to a raw workload under k8s/ — delete it from "
                 "_HELM_RESIDENT_DESTINATIONS so the raw symmetry test covers it")
 
     @pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI not on PATH")
     def test_helm_resident_destinations_are_symmetric(self):
         policies, workloads = _load()
-        edges = {(e["policy"], e["dst_ns"]): e
-                 for e in _intra_cluster_egress_edges(policies, workloads)}
-        for (policy, ns), (chart, extra, _why) in sorted(_HELM_RESIDENT_DESTINATIONS.items()):
-            edge = edges[(policy, ns)]
-            assert edge["sources"], f"{policy}: no raw source workload resolved"
-            out = subprocess.run(
-                ["helm", "template", "t", str(_REPO_ROOT / chart), "-n", ns, *extra],
-                capture_output=True, text=True, encoding="utf-8", timeout=120)
-            assert out.returncode == 0, out.stderr
-            docs = [d for d in yaml.safe_load_all(out.stdout) if isinstance(d, dict)]
-            r_policies = [(Path(chart), d) for d in docs if d.get("kind") == "NetworkPolicy"]
-            dsts = []
-            for d in docs:
-                labels = _pod_template_labels(d)
-                if labels is not None and _selects(edge["selector"], labels):
-                    dsts.append({"name": d["metadata"]["name"], "namespace": ns,
-                                 "labels": labels})
-            assert dsts, (
-                f"{policy} selects {edge['selector']} in ns={ns}, but no pod "
-                f"{chart} renders carries those labels — the egress rule is dead")
-            for dst in dsts:
-                assert _ingress_admits(r_policies, dst, edge["sources"], edge["ports"]), (
-                    f"{policy} -> {chart} {dst['name']}: the chart's ingress does "
-                    f"not admit {[w['name'] for w in edge['sources']]} on "
-                    f"{sorted(edge['ports']) or '<all>'}")
+        edges = _edges_by_key(policies, workloads)
+        for key, (chart, extra, _why) in sorted(_HELM_RESIDENT_DESTINATIONS.items()):
+            policy, ns, _labels = key
+            for edge in edges[key]:
+                self._assert_helm_edge_symmetric(edge, policy, ns, chart, extra)
+
+    @staticmethod
+    def _assert_helm_edge_symmetric(edge, policy, ns, chart, extra):
+        assert edge["sources"], f"{policy}: no raw source workload resolved"
+        out = subprocess.run(
+            ["helm", "template", "t", str(_REPO_ROOT / chart), "-n", ns, *extra],
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert out.returncode == 0, out.stderr
+        docs = [d for d in yaml.safe_load_all(out.stdout) if isinstance(d, dict)]
+        r_policies = [(Path(chart), d) for d in docs if d.get("kind") == "NetworkPolicy"]
+        dsts = []
+        for d in docs:
+            labels = _pod_template_labels(d)
+            if labels is not None and _selects(edge["selector"], labels):
+                dsts.append({"name": d["metadata"]["name"], "namespace": ns,
+                             "labels": labels})
+        assert dsts, (
+            f"{policy} selects {edge['selector']} in ns={ns}, but no pod "
+            f"{chart} renders carries those labels — the egress rule is dead")
+        for dst in dsts:
+            assert _ingress_admits(r_policies, dst, edge["sources"], edge["ports"]), (
+                f"{policy} -> {chart} {dst['name']}: the chart's ingress does "
+                f"not admit {[w['name'] for w in edge['sources']]} on "
+                f"{sorted(edge['ports']) or '<all>'}")
 
     @pytest.mark.parametrize("peers,src_ns,admits", [
         # ipBlock admits IP ranges, not in-cluster pods. The first version read
