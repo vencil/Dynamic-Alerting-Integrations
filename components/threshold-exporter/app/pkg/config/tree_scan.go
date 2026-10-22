@@ -341,6 +341,17 @@ type TreeScan struct {
 	// nil when there is none, and always nil for the root-only modes.
 	NotFiles []NotFile
 
+	// Dirs is every directory under the root that the full walk enters,
+	// whose name is not a config file name (a config-named one is a NotFile,
+	// NotFileDirectory), sorted (#3206): with NotFiles, Unreadable and
+	// RootWalkErr the record of the walk is complete, so `parse-tree` gives
+	// every directory an entry (role "dir") and no reader lists a directory
+	// itself. A directory it enters but cannot list is in Unreadable
+	// (walk_error) instead; the root itself is never here — it appears (as
+	// ".") only when it cannot be listed (RootWalkErr). nil when there is
+	// none, and always nil for the root-only modes.
+	Dirs []string
+
 	// attrib is every tenant's FIRST declaring file in walk order, recorded
 	// even when the tree has a conflict. When Conflict is nil it is the very
 	// map exported as Tenants (no second allocation on the clean path).
@@ -683,6 +694,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	var entries []entry
 	var unreadable []UnreadableFile
 	var notFiles []NotFile
+	var dirs []string // TreeScan.Dirs
 	var rootWalkErr error
 	// fullTree: the modes that walk the whole tree (walkFull's rules).
 	fullTree := mode == walkFull || mode == walkListOnly || mode == walkNamesOnly
@@ -718,6 +730,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				// for it, which every reader refuses whole.
 				rel := relKey(path)
 				notFiles = slices.DeleteFunc(notFiles, func(nf NotFile) bool { return nf.RelKey == rel })
+				dirs = slices.DeleteFunc(dirs, func(d string) bool { return d == rel })
 				dropUnreadable(path, UnreadableWalkError)
 			} else {
 				rootWalkErr = werr
@@ -729,9 +742,12 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			if path != absRoot && (!fullTree || confdname.IsHidden(name)) {
 				return fs.SkipDir
 			}
-			// Descended like any directory; recorded only (TreeScan.NotFiles).
+			// Descended like any directory; recorded only (TreeScan.NotFiles,
+			// TreeScan.Dirs).
 			if path != absRoot && confdname.IsScanned(name) {
 				notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirectory})
+			} else if path != absRoot {
+				dirs = append(dirs, relKey(path))
 			}
 			return nil
 		}
@@ -1018,6 +1034,10 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	if len(notFiles) > 0 {
 		sort.Slice(notFiles, func(i, j int) bool { return notFiles[i].RelKey < notFiles[j].RelKey })
 		scan.NotFiles = notFiles
+	}
+	if len(dirs) > 0 {
+		sort.Strings(dirs)
+		scan.Dirs = dirs
 	}
 	// One buffer for every per-file hash (#1939): `Write([]byte(h))` made a
 	// fresh copy per file, because Write is an interface call the conversion

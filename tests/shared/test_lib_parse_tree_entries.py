@@ -114,7 +114,9 @@ def _build(box: Path) -> Path:
 _WANT_ROLES = {
     "b.yaml": "config", "noexec/t.yaml": "config", "zero.yaml": "config",
     "ok.yaml": "config", "broken.yaml": "config", "dir.yaml/in.yaml": "config",
-    "gone.yaml": "not_a_file", "dir.yaml": "not_a_file", "sealed": "unlistable_dir",
+    "gone.yaml": "not_a_file", "sealed": "unlistable_dir",
+    # Directories the walk enters, a config-named one included (#3206).
+    "dir.yaml": "dir", "noexec": "dir",
     # A config-named directory that cannot be listed: ONE entry (the walk
     # once recorded it twice, and the reader refused the whole document).
     "unlist.yaml": "unlistable_dir",
@@ -153,10 +155,12 @@ def test_config_file_is_the_role_and_nothing_else() -> None:
                  readers=("exporter", "generator"), not_read=None,
                  problem=("read_failure", "the path cannot be statted (stat_error)"))
     got = {role: lpt.Entry(**facts, role=role) for role in sorted(lpt.ROLES)}
-    assert {r: (e.config_file, e.not_a_file, e.unlistable_dir) for r, e in got.items()} == {
-        "config": (True, False, False),
-        "not_a_file": (False, True, False),
-        "unlistable_dir": (False, False, True),
+    assert {r: (e.config_file, e.is_dir, e.not_a_file, e.unlistable_dir)
+            for r, e in got.items()} == {
+        "config": (True, False, False, False),
+        "dir": (False, True, False, False),
+        "not_a_file": (False, False, True, False),
+        "unlistable_dir": (False, False, False, True),
     }
 
 
@@ -169,11 +173,15 @@ def test_list_tree_and_classify_names_read_the_same_reader(tmp_path, da_guard_en
     (conf / "team" / "_domain_policy.yaml").write_text("x: 1\n", encoding="utf-8")
     listing = lpt.list_tree(conf)
     assert [e.path for e in listing.entries] == [
-        "_defaults.yaml", "_defaults.yml", "t1.yaml", "team/_domain_policy.yaml"]
+        "_defaults.yaml", "_defaults.yml", "t1.yaml", "team", "team/_domain_policy.yaml"]
+    assert listing.entry("team").is_dir and listing.entry("team").problem is None
+    # A directory is no file a reader reads, and nothing is passed over.
+    assert (listing.entry("team").readers, listing.entry("team").not_read) == ((), None)
     assert dict(listing.defaults_carriers) == {".": "_defaults.yaml"}
     assert listing.entry("_defaults.yml").not_read == "unselected_defaults_carrier"
     assert listing.entry("team/_domain_policy.yaml").readers == ("generator",)
-    assert [e.path for e in listing.config_files()] == [e.path for e in listing.entries]
+    assert [e.path for e in listing.config_files()] == [
+        e.path for e in listing.entries if e.path != "team"]
     names = lpt.classify_names(["db-a.yaml", ".h.yaml", "_defaults-multidb.yaml", "n.txt"])
     assert {n: (e.cls, e.tenant_named, e.defaults_document, e.role, e.readers)
             for n, e in names.items()} == {
@@ -200,3 +208,55 @@ def test_a_list_document_is_no_tree_document() -> None:
     tree = {**listed, "mode": "tree", "files": {"t.yaml": {}}, "rendered_by": {}}
     with pytest.raises(lpt.ParseTreeError, match="list mode with 'files'"):
         lpt.read_document(json.dumps(tree).encode(), check=lpt._check_list("list"))
+
+
+@pytest.mark.parametrize("role, problem", [
+    ("dir", None), ("unlistable_dir", {"kind": "read_failure", "message": "x"})])
+def test_a_dir_entry_names_no_reader(role, problem) -> None:
+    """Roles `dir` and `unlistable_dir` are read by no reader and pass
+    nothing over: an entry that gives a directory readers, or a not_read
+    reason, is a document from a da-guard this reader does not understand,
+    refused whole."""
+    import json
+    base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
+            "defaults_document": False, "readers": [], "not_read": None,
+            "role": role, "problem": problem}
+    doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
+           "defaults_carriers": {}}
+    listing = lpt.read_document(json.dumps({**doc, "entries": [base]}).encode(),
+                                check=lpt._check_list("list"))
+    assert listing["entries"][0]["readers"] == []
+    for bad in ({"readers": ["exporter"]}, {"not_read": "unselected_defaults_carrier"}):
+        with pytest.raises(lpt.ParseTreeError, match=f"a {role} with readers"):
+            lpt.read_document(json.dumps({**doc, "entries": [{**base, **bad}]}).encode(),
+                              check=lpt._check_list("list"))
+
+
+@pytest.mark.parametrize("target", ["team", "team/sub", "_d", "sealed", "y.yaml"])
+def test_a_write_onto_a_directory_is_refused_not_a_da_guard_failure(unprivileged, target) -> None:
+    """F1: a write target that is a directory — entered (`team`, `team/sub`,
+    `_d`) or one this uid cannot list (`sealed/`, the config-named `y.yaml/`)
+    — is file mode's walk entry (role dir / unlistable_dir, no content), which
+    the reader accepts; the write check refuses it as `path_not_read`, never
+    as a document from an older da-guard (ParseTreeError). Run as uid 65534,
+    so the unlistable directories really are."""
+    import _lib_write_check as wc
+    box, _run = unprivileged
+    conf = box / "conf.d"
+    for d in ("team/sub", "_d", "sealed", "y.yaml"):
+        (conf / d).mkdir(parents=True)
+    for d in (conf, conf / "team", conf / "team/sub", conf / "_d"):
+        d.chmod(0o755)
+    (conf / "team" / "t.yaml").write_text("tenants: {t: {}}\n", encoding="utf-8")
+    (conf / "team" / "t.yaml").chmod(0o644)
+    for d in ("sealed", "y.yaml"):
+        (conf / d).chmod(0)
+    wrapper = box / "da-guard-as-run"
+    prefix = (f"{shutil.which('setpriv')} --reuid=65534 --regid=65534 --clear-groups "
+              if os.geteuid() == 0 else "")
+    wrapper.write_text(f'#!/bin/sh\nexec {prefix}"{box / "da-guard"}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    with pytest.raises(wc.WriteRefused) as ei:
+        wc.confirm(conf, target, "tenants: {x: {}}\n", {}, binary=str(wrapper))
+    assert ei.value.reason == wc.NOT_READ, ei.value
+    assert "directory" in str(ei.value) and "older" not in str(ei.value), ei.value

@@ -141,13 +141,14 @@ policy 檔的完整清單見 [#2759](https://github.com/vencil/Dynamic-Alerting-
 
 da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一份 JSON。另有單檔模式，用於寫入前的讀回確認（見本節「寫 conf.d 檔」）；只列檔模式（`--list-only`），不讀任何檔的內容；名稱模式（`--list-only --names`），只依名稱分類不在磁碟上的檔名（例如 ConfigMap 的鍵）。四種模式輸出同一種文件。
 
-**每個路徑一筆**：文件的 `entries` 對走訪記下的每個路徑各有一筆（走訪對一個路徑只留一筆紀錄：檔名像設定檔、但列不出內容的目錄是 `unlistable_dir`，不會另外再記成 `not_a_file`），整棵樹模式與只列檔模式由同一段程式產生，所以兩者對同一棵樹的每一筆逐欄相同，差別只在讀內容才發現得到的問題。每一筆寫出全部欄位，沒有值的是 `null`：
+**每個路徑一筆**：文件的 `entries` 對走訪記下的每個路徑各有一筆（走訪對一個路徑只留一筆紀錄：檔名像設定檔、但列不出內容的目錄是 `unlistable_dir`，不會另外再記成 `dir`；走訪會走進去的每個目錄都有一筆，讀取端不必自己列目錄），整棵樹模式與只列檔模式由同一段程式產生，所以兩者對同一棵樹的每一筆逐欄相同，差別只在讀內容才發現得到的問題。每一筆寫出全部欄位，沒有值的是 `null`：
 
 - `path`、`depth`（根目錄到它之間的目錄層數）、`class`（名稱決定的分類：`tenant`、`defaults`、`platform`，或 `directory`；單檔模式與名稱模式另有 `hidden`、`not_config_name`，走訪不會列出這兩類）、`tenant_named`（檔名帶的租戶 id；exporter 服務的租戶仍取自檔內 `tenants:` 的鍵）、`defaults_document`（檔名以 `_defaults` 開頭的平台預設文件，以 platform-defaults schema 驗證）。
 - `readers`：誰讀它（`exporter`、`generator`）；沒有讀取端讀時是空清單，`not_read` 寫原因。
 - `role`：這個路徑是什麼，由 Go 判定，讀取端照讀、不自己組合：
   - `config`：設定檔。讀得了或讀不了都算；讀不了時 `problem` 寫原因，讀取端讀它時明確失敗。
-  - `not_a_file`：exporter 的走訪在這裡碰不到一般檔：檔名像設定檔的目錄、指向目錄的 symlink、FIFO 等特殊檔，以及 stat 找不到東西（懸空連結、迴圈連結、超過 40 層的連結鏈）。
+  - `dir`：走訪會走進去、也列得出內容的目錄。檔名像設定檔的目錄（例如 `x.yaml/`）也是 `dir`——exporter 照樣走進去讀它底下的檔——另帶 `problem`（`not_regular_file`）說明它的名稱像檔案。
+  - `not_a_file`：exporter 的走訪在這裡碰不到一般檔，也不會走進去：指向目錄的 symlink、FIFO 等特殊檔，以及 stat 找不到東西（懸空連結、迴圈連結、超過 40 層的連結鏈）。
   - `unlistable_dir`：列不出內容的目錄（根目錄為 `.`），它底下的檔都沒看到，所以這份文件不完整。
   - 判定是白名單：只有上面列的情況是 `not_a_file`，其餘任何失敗（權限不足、EIO、名稱過長、之後新增的原因）一律是 `config`。反方向的預設會讓一份 stat 被權限擋下的租戶檔只留一行 WARN 就從清單上消失。
 - `problem`：讀它會失敗的原因，`{kind, message}`（見下方「讀不了的檔」）。
