@@ -154,7 +154,7 @@ tenants:
 
 Schema distinguishes between:
 
-- **Silent Mode** (`_silent_mode`): Suppress Alertmanager notifications; alerts still fire (TSDB records exist). The value (or the structured form's `target`) is `warning` / `critical` / `all`, or `disable` (aliases `disabled` / `off` / `false`) to turn it off — exactly the exporter's words, pinned by `TestSilentModeSchemaEnumsMatchReader` (#3227). The schema is narrower than the exporter in one way an enum cannot express: write `off` / `false` quoted, since a YAML 1.1 loader reads them unquoted as a boolean
+- **Silent Mode** (`_silent_mode`): Suppress Alertmanager notifications; alerts still fire (TSDB records exist). The value (or the structured form's `target`) is `warning` / `critical` / `all`, or `disable` (aliases `disabled` / `off` / `false`) to turn it off — exactly the exporter's words, pinned by `TestSilentModeSchemaEnumsMatchReader` (#3227). The schema is stricter than the exporter where an enum cannot follow it: it is case-sensitive, refuses an empty / null value (the exporter reads it as off), and needs `false` quoted — unquoted, yaml.v3 (the schema lint reads conf.d through da-guard parse-tree) reads it as a boolean and the lint says to quote it. An unquoted `off` is a string to yaml.v3; only a YAML 1.1 loader outside the repo reads it as a boolean
 - **Maintenance Mode** (`_state_maintenance`): Suppress alerts at PromQL level; no TSDB records; supports recurring schedules
 
 ```yaml

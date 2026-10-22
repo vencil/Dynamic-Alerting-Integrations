@@ -919,11 +919,13 @@ repos:
         entry: python3 -X utf8 scripts/tools/dx/sync_schema.py --check
         language: python
         pass_filenames: false
-        # The registry (pkg/config/reserved_keys.json) and the four files
-        # generated from it. The authoritative CI gate is the pytest
+        # The registry (pkg/config/reserved_keys.json), the files generated
+        # from it (the targets in sync_schema.py: the Python constants, the Go
+        # file, the two schemas, the portal's reserved-keys.json), and the
+        # tool itself. The authoritative CI gate is the pytest
         # tests/dx/test_sync_schema.py; this stays manual-stage as a fast
         # local mirror.
-        files: ^(components/|docs/|scripts/tools/_lib_constants\.py)
+        files: ^(components/|docs/|scripts/tools/_lib_constants\.py|scripts/tools/dx/sync_schema\.py|tools/portal/src/interactive/tools/_common/data/reserved-keys\.json)
         stages: [manual]
 
       - id: jsx-babel-check

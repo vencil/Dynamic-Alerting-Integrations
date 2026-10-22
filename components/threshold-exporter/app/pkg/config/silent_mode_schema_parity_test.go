@@ -13,6 +13,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,9 +22,8 @@ import (
 	"testing"
 )
 
-// silentModeSchemaEnums reads definitions.silentMode of the tenant schema:
-// the scalar branch's enum and the structured branch's target enum.
-func silentModeSchemaEnums(t *testing.T) (scalar, target []string) {
+// tenantSchemaRaw is docs/schemas/tenant-config.schema.json and its path.
+func tenantSchemaRaw(t *testing.T) ([]byte, string) {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
 	// pkg/config → pkg → app → threshold-exporter → components → repo root
@@ -33,6 +33,16 @@ func silentModeSchemaEnums(t *testing.T) (scalar, target []string) {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
+	return raw, path
+}
+
+// silentModeSchemaEnums reads definitions.silentMode of the tenant schema:
+// the scalar branch's enum and the structured branch's target enum. More
+// than one branch of a type is refused, not read as "the last one wins": a
+// second string branch would let the schema take words the test never saw.
+func silentModeSchemaEnums(t *testing.T) (scalar, target []string) {
+	t.Helper()
+	raw, path := tenantSchemaRaw(t)
 	var schema struct {
 		Definitions struct {
 			SilentMode struct {
@@ -53,9 +63,17 @@ func silentModeSchemaEnums(t *testing.T) (scalar, target []string) {
 	for _, branch := range schema.Definitions.SilentMode.OneOf {
 		switch branch.Type {
 		case "string":
+			if scalarSeen {
+				t.Fatalf("definitions.silentMode.oneOf has more than one string branch")
+			}
 			scalar, scalarSeen = branch.Enum, true
 		case "object":
+			if objectSeen {
+				t.Fatalf("definitions.silentMode.oneOf has more than one object branch")
+			}
 			target, objectSeen = branch.Properties["target"].Enum, true
+		default:
+			t.Fatalf("definitions.silentMode.oneOf has a branch of type %q; this test reads only string and object", branch.Type)
 		}
 	}
 	if !scalarSeen || !objectSeen || len(scalar) == 0 || len(target) == 0 {
@@ -110,5 +128,50 @@ func TestSilentModeSchemaEnumsMatchReader(t *testing.T) {
 					doc, r.canonical.Kind, r.problem, want)
 			}
 		}
+	}
+}
+
+// TestSilentModeSchemaPropertiesUseTheDefinition: every `_silent_mode`
+// property anywhere in the tenant schema is exactly a $ref to
+// definitions.silentMode, so the pinned enums are the only word list the
+// schema has — an inline copy would escape TestSilentModeSchemaEnumsMatchReader.
+func TestSilentModeSchemaPropertiesUseTheDefinition(t *testing.T) {
+	t.Parallel()
+	raw, path := tenantSchemaRaw(t)
+	var doc any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	found := 0
+	var walk func(v any, at string)
+	walk = func(v any, at string) {
+		switch n := v.(type) {
+		case map[string]any:
+			if props, ok := n["properties"].(map[string]any); ok {
+				if sm, ok := props["_silent_mode"]; ok {
+					found++
+					m, _ := sm.(map[string]any)
+					if m["$ref"] != "#/definitions/silentMode" {
+						t.Errorf("%s/properties/_silent_mode: want $ref #/definitions/silentMode, got %v", at, sm)
+					}
+					for k := range m {
+						if k != "$ref" && k != "title" && k != "description" && k != "$comment" {
+							t.Errorf("%s/properties/_silent_mode: keyword %q next to the $ref; keep the words in definitions.silentMode", at, k)
+						}
+					}
+				}
+			}
+			for k, c := range n {
+				walk(c, at+"/"+k)
+			}
+		case []any:
+			for i, c := range n {
+				walk(c, fmt.Sprintf("%s/%d", at, i))
+			}
+		}
+	}
+	walk(doc, "#")
+	if found == 0 {
+		t.Fatalf("%s: no _silent_mode property found", path)
 	}
 }
