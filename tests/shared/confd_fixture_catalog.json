@@ -1,0 +1,281 @@
+{
+  "_comment": [
+    "#3206 behaviour matrix: the conf.d trees it runs every tool on, and what da-guard parse-tree (tree mode) says about each, run as uid 65534 so a mode bit really denies.",
+    "Go is the authority on the expectations: components/threshold-exporter/app/cmd/da-guard/fixture_catalog_unix_test.go builds every recipe and requires parse-tree's entries to be exactly the row's (base_entries when the row says \"base\": true, plus expect.entries: path, role, problem kind), and fixture_catalog_test.go requires every (role, problem kind) parse-tree can write to appear in at least one row, and no row to expect one it cannot. The behaviour matrix that runs every conf.d tool on these trees never reads `expect`: it asks da-guard itself.",
+    "A recipe is `base` (when the row says \"base\": true) and then the row's `ops`, in order, relative to a fresh directory; the tree is its `conf.d`. Ops: mkdir {path}; write {path | path_hex, text | b64}; symlink {path, target} (target written as is); symlink_chain {path, via, length, target}: `length` links in directory `via` (via/l0 -> target, via/l<i> -> l<i-1>) and path -> via/l<length-1>, so a stat of path follows length + 1 links; mkfifo {path}; chmod {path, mode} (octal text; put these last).",
+    "`matrix`: control (no entry is flagged; every tool exits 0), flagged (the matrix's invariant applies), refused (parse-tree refuses the tree: every tool exits 2) or go_only (content kinds only tree mode decides, for the Go coverage check; the matrix's invariant is about the listing)."
+  ],
+  "root": "conf.d",
+  "base": [
+    {"op": "mkdir", "path": "conf.d"},
+    {"op": "write", "path": "conf.d/_defaults.yaml", "text": "defaults:\n  mysql_connections: 70\n"},
+    {"op": "write", "path": "conf.d/a.yaml", "text": "tenants:\n  a:\n    mysql_connections: \"80\"\n    _metadata:\n      db_type: mariadb\n"}
+  ],
+  "base_entries": [
+    {"path": "_defaults.yaml", "role": "config", "kind": null},
+    {"path": "a.yaml", "role": "config", "kind": null}
+  ],
+  "rows": [
+    {
+      "id": "control",
+      "matrix": "control",
+      "note": "a plain subdirectory beside the root's files: role dir, no problem",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/team"},
+        {"op": "write", "path": "conf.d/team/b.yaml", "text": "tenants:\n  b:\n    mysql_connections: \"60\"\n    _metadata:\n      db_type: mariadb\n"}
+      ],
+      "expect": {"entries": [
+        {"path": "team", "role": "dir", "kind": null},
+        {"path": "team/b.yaml", "role": "config", "kind": null}
+      ]}
+    },
+    {
+      "id": "hidden_entries",
+      "matrix": "control",
+      "note": "a hidden file and a hidden directory: the walk records neither",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/.snap"},
+        {"op": "write", "path": "conf.d/.snap/ghost.yaml", "text": "tenants:\n  ghost: {}\n"},
+        {"op": "write", "path": "conf.d/.ghost.yaml", "text": "tenants:\n  ghost2: {}\n"}
+      ],
+      "expect": {"entries": []}
+    },
+    {
+      "id": "mode_000_file",
+      "matrix": "flagged",
+      "note": "a config file whose open is refused: role config, read_failure",
+      "base": true,
+      "ops": [
+        {"op": "write", "path": "conf.d/zero.yaml", "text": "tenants:\n  zero: {}\n"},
+        {"op": "chmod", "path": "conf.d/zero.yaml", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "zero.yaml", "role": "config", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "link_into_000_dir",
+      "matrix": "flagged",
+      "note": "a link to a file inside a mode-000 directory: the stat is refused (EACCES), which proves nothing about what is there, so role config",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "locked"},
+        {"op": "write", "path": "locked/real.yaml", "text": "tenants:\n  bee: {}\n"},
+        {"op": "symlink", "path": "conf.d/bee.yaml", "target": "../locked/real.yaml"},
+        {"op": "chmod", "path": "locked", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "bee.yaml", "role": "config", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "link_to_000_dir",
+      "matrix": "flagged",
+      "note": "a link to a mode-000 directory: the target's stat succeeds, a directory link the walk does not follow",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "vault"},
+        {"op": "write", "path": "vault/v.yaml", "text": "tenants:\n  v: {}\n"},
+        {"op": "symlink", "path": "conf.d/vaultlink", "target": "../vault"},
+        {"op": "chmod", "path": "vault", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "vaultlink", "role": "not_a_file", "kind": "not_regular_file"}
+      ]}
+    },
+    {
+      "id": "dir_444",
+      "matrix": "flagged",
+      "note": "a directory that may be listed but not searched: listed (role dir), each file in it a config file whose stat is refused",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/noexec"},
+        {"op": "write", "path": "conf.d/noexec/t.yaml", "text": "tenants:\n  tee: {}\n"},
+        {"op": "chmod", "path": "conf.d/noexec", "mode": "444"}
+      ],
+      "expect": {"entries": [
+        {"path": "noexec", "role": "dir", "kind": null},
+        {"path": "noexec/t.yaml", "role": "config", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "dangling_link",
+      "matrix": "flagged",
+      "note": "a symlink to nothing",
+      "base": true,
+      "ops": [
+        {"op": "symlink", "path": "conf.d/gone.yaml", "target": "nowhere.yaml"}
+      ],
+      "expect": {"entries": [
+        {"path": "gone.yaml", "role": "not_a_file", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "looping_link",
+      "matrix": "flagged",
+      "note": "a symlink to itself (ELOOP)",
+      "base": true,
+      "ops": [
+        {"op": "symlink", "path": "conf.d/loop.yaml", "target": "loop.yaml"}
+      ],
+      "expect": {"entries": [
+        {"path": "loop.yaml", "role": "not_a_file", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "chain_41_links",
+      "matrix": "flagged",
+      "note": "41 links that end at a regular file: past the kernel's 40, ELOOP — the exporter's own stat fails the same way",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "outside"},
+        {"op": "write", "path": "outside/real.yaml", "text": "tenants:\n  deep: {}\n"},
+        {"op": "mkdir", "path": "chain"},
+        {"op": "symlink_chain", "path": "conf.d/deep.yaml", "via": "chain", "length": 40, "target": "../outside/real.yaml"}
+      ],
+      "expect": {"entries": [
+        {"path": "deep.yaml", "role": "not_a_file", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "fifo",
+      "matrix": "flagged",
+      "note": "a FIFO with a config name: never opened (a read would block)",
+      "base": true,
+      "ops": [
+        {"op": "mkfifo", "path": "conf.d/pipe.yaml"}
+      ],
+      "expect": {"entries": [
+        {"path": "pipe.yaml", "role": "not_a_file", "kind": "not_regular_file"}
+      ]}
+    },
+    {
+      "id": "config_named_dir",
+      "matrix": "flagged",
+      "note": "x.yaml/: a directory with a config file's name; the walk descends it",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/x.yaml"},
+        {"op": "write", "path": "conf.d/x.yaml/i.yaml", "text": "tenants:\n  eye:\n    mysql_connections: \"50\"\n    _metadata:\n      db_type: mariadb\n"}
+      ],
+      "expect": {"entries": [
+        {"path": "x.yaml", "role": "dir", "kind": "not_regular_file"},
+        {"path": "x.yaml/i.yaml", "role": "config", "kind": null}
+      ]}
+    },
+    {
+      "id": "unlistable_config_named_dir",
+      "matrix": "flagged",
+      "note": "y.yaml/ that cannot be listed",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/y.yaml"},
+        {"op": "write", "path": "conf.d/y.yaml/s.yaml", "text": "tenants:\n  ess: {}\n"},
+        {"op": "chmod", "path": "conf.d/y.yaml", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "y.yaml", "role": "unlistable_dir", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "unlistable_subdir",
+      "matrix": "flagged",
+      "note": "sealed/ that cannot be listed",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/sealed"},
+        {"op": "write", "path": "conf.d/sealed/s.yaml", "text": "tenants:\n  ess: {}\n"},
+        {"op": "chmod", "path": "conf.d/sealed", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "sealed", "role": "unlistable_dir", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "unlistable_reserved_dir",
+      "matrix": "flagged",
+      "note": "_d/ (a `_` name) that cannot be listed: a directory whatever its name",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "conf.d/_d"},
+        {"op": "write", "path": "conf.d/_d/s.yaml", "text": "tenants:\n  ess: {}\n"},
+        {"op": "chmod", "path": "conf.d/_d", "mode": "000"}
+      ],
+      "expect": {"entries": [
+        {"path": "_d", "role": "unlistable_dir", "kind": "read_failure"}
+      ]}
+    },
+    {
+      "id": "config_named_dir_link",
+      "matrix": "flagged",
+      "note": "linked.yaml -> a directory: a link the walk does not follow",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "outside"},
+        {"op": "write", "path": "outside/o.yaml", "text": "tenants:\n  oh: {}\n"},
+        {"op": "symlink", "path": "conf.d/linked.yaml", "target": "../outside"}
+      ],
+      "expect": {"entries": [
+        {"path": "linked.yaml", "role": "not_a_file", "kind": "not_regular_file"}
+      ]}
+    },
+    {
+      "id": "team_link_outside",
+      "matrix": "flagged",
+      "note": "team -> ../outside: a directory link without a config name, which may hide tenant files",
+      "base": true,
+      "ops": [
+        {"op": "mkdir", "path": "outside"},
+        {"op": "write", "path": "outside/o.yaml", "text": "tenants:\n  oh: {}\n"},
+        {"op": "symlink", "path": "conf.d/team", "target": "../outside"}
+      ],
+      "expect": {"entries": [
+        {"path": "team", "role": "not_a_file", "kind": "not_regular_file"}
+      ]}
+    },
+    {
+      "id": "non_utf8_name",
+      "matrix": "refused",
+      "note": "a file name that is not UTF-8: JSON cannot carry it, parse-tree refuses the whole tree (exit 2)",
+      "base": true,
+      "ops": [
+        {"op": "write", "path_hex": "636f6e662e642f6261642dff2e79616d6c", "text": "tenants:\n  bad: {}\n"}
+      ],
+      "expect": {"refused": true}
+    },
+    {
+      "id": "content_kinds",
+      "matrix": "go_only",
+      "note": "one readable file per content kind (tree mode only); the bytes are parse_tree_corpus.json's",
+      "base": true,
+      "ops": [
+        {"op": "write", "path": "conf.d/k-invalid-utf8.yaml", "b64": "IyDpCnRlbmFudHM6IHt9Cg=="},
+        {"op": "write", "path": "conf.d/k-bom.yaml", "text": "# \ufeff\ntenants: {}\n"},
+        {"op": "write", "path": "conf.d/k-syntax.yaml", "text": "tenants: {t1: [\n"},
+        {"op": "write", "path": "conf.d/k-multi.yaml", "text": "x: 1\n---\ny: 2\n"},
+        {"op": "write", "path": "conf.d/k-nonspecific.yaml", "text": "tenants:\n  t1:\n    a: ! 123\n"},
+        {"op": "write", "path": "conf.d/k-tag.yaml", "text": "tenants:\n  t1:\n    a: !foo x\n"},
+        {"op": "write", "path": "conf.d/k-seqkey.yaml", "text": "tenants:\n  ? [t1]\n  : {a: 1}\n"},
+        {"op": "write", "path": "conf.d/k-nullkey.yaml", "text": "tenants:\n  ~: {a: 1}\n"},
+        {"op": "write", "path": "conf.d/k-dupkey.yaml", "text": "tenants:\n  t1: {a: 1}\n  t1: {a: 2}\n"},
+        {"op": "write", "path": "conf.d/k-decode.yaml", "text": "tenants:\n  t1:\n    cpu: !!int abc\n"},
+        {"op": "write", "path": "conf.d/k-toplist.yaml", "text": "- t1\n"}
+      ],
+      "expect": {"entries": [
+        {"path": "k-bom.yaml", "role": "config", "kind": "bom_not_at_start"},
+        {"path": "k-decode.yaml", "role": "config", "kind": "decode_error"},
+        {"path": "k-dupkey.yaml", "role": "config", "kind": "duplicate_key"},
+        {"path": "k-invalid-utf8.yaml", "role": "config", "kind": "invalid_utf8"},
+        {"path": "k-multi.yaml", "role": "config", "kind": "multiple_documents"},
+        {"path": "k-nonspecific.yaml", "role": "config", "kind": "non_specific_tag"},
+        {"path": "k-nullkey.yaml", "role": "config", "kind": "null_key"},
+        {"path": "k-seqkey.yaml", "role": "config", "kind": "non_scalar_key"},
+        {"path": "k-syntax.yaml", "role": "config", "kind": "syntax_error"},
+        {"path": "k-tag.yaml", "role": "config", "kind": "tag_not_allowed"},
+        {"path": "k-toplist.yaml", "role": "config", "kind": "top_level_not_mapping"}
+      ]}
+    }
+  ]
+}
