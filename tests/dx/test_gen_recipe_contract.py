@@ -286,3 +286,20 @@ def test_shape_recipe_id_applies_the_rules():
     # data-plane fields are not the slug's business: same id with or without them
     base = {"recipe": "rate", "metric": "m", "window": "5m"}
     assert shape.recipe_id(base) == shape.recipe_id({**base, "name": "a", "threshold": "1"})
+
+
+@pytest.mark.parametrize("inst, missing", [
+    ({"recipe": "rate", "name": "a", "metric": "m", "threshold": "1"}, "window"),
+    ({"recipe": "forecast", "name": "a", "metric": "m", "threshold": "1"}, "horizon"),
+    ({"recipe": "ratio", "name": "a", "metric": "m", "window": "5m", "threshold": "1"}, "denominator_metric"),
+    ({"recipe": "slo_burn_rate", "name": "a", "metric": "m", "denominator_metric": "d"}, "objective"),
+])
+def test_python_entry_requires_the_contract_fields(inst, missing):
+    # entries.python_entry reads the required fields from the generated
+    # RECIPE_RULES, so a field the contract requires is named up front.
+    sys.path.insert(0, _DX)
+    from custom_alerts import entries  # noqa: E402
+
+    with pytest.raises(entries.CustomAlertConfigError,
+                       match=rf"missing required field\(s\) \['{missing}'\]"):
+        entries.python_entry("t", 0, inst)
