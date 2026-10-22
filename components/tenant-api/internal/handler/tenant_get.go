@@ -321,9 +321,12 @@ func GetTenant(d *Deps) http.HandlerFunc {
 
 		// #1231 1b: two-channel split — validation_warnings stays Errors-only
 		// (the blocking set), deprecation notices get their own field.
+		// #3227: a reserved value the exporter ignores is a notice here — the
+		// file is read as it is, and a write that leaves the value alone is
+		// not refused for it (SelfRatchetValues).
 		// #3039: the file may declare other tenants; messages about those the
 		// caller may not read are counted, not shown.
-		warnings, notices := gitops.DiscloseKeyValidation(tenantID, merged.ValidateTenantKeysByTenant(),
+		warnings, notices := gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
 			tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 		resolved := merged.ResolveAt(time.Now())
 
@@ -414,7 +417,7 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 	}
 	// #3039: the file may declare other tenants; messages about those the
 	// caller may not read are counted, not shown.
-	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, merged.ValidateTenantKeysByTenant(),
+	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
 		tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 	resolved := make([]cfg.ResolvedThreshold, 0)
 	for _, rt := range merged.ResolveAt(time.Now()) {

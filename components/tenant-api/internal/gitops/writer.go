@@ -2069,6 +2069,11 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 // path, so the compiler rejects one. That is the whole reason the parameters
 // were dropped rather than passed and ignored.
 //
+// ⚠️ A reserved key's VALUE (`_silent_mode`, #3227) is not judged here,
+// though the body alone shows it: whether a bad value blocks depends on the
+// file the write replaces (ratchetValues), and judging it without that base
+// would refuse a write that only leaves an existing value alone.
+//
 // ⚠️ It is NOT a weaker validate — it is a DIFFERENT question ("is this body
 // well-formed?"). The authoritative answer still comes from validate, run
 // against the tree the write lands on: every write path runs validate under
@@ -2183,6 +2188,12 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 		// the only behavior the parsed sibling omits — is unreachable here.
 		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
 		kv = merged.ValidateTenantKeysByTenant()
+	}
+	// #3227: a reserved value the exporter ignores blocks the write only when
+	// this write puts it there; one the file already holds, read alike, is a
+	// notice. configDir == "" has no base and stays strict.
+	if configDir != "" {
+		kv = ratchetValues(kv, baseRaw, baseErr)
 	}
 	// #3039: the body may declare other tenants (a flat file, or the whole
 	// file a PATCH merges into); what is said about them depends on whether

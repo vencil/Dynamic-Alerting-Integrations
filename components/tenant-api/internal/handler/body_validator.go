@@ -10,34 +10,25 @@ package handler
 // Customer's fail-fast surface was wrong.
 //
 // Design:
-//   - Hybrid approach. Fixed-shape fields (Label / Description / Members)
-//     use go-playground/validator struct tags. Variable-shape fields
-//     (`Patch map[string]string`) use a per-key validator registry —
-//     struct tags can't express "validation depends on map key".
+//   - Fixed-shape fields (Label / Description / Members) use
+//     go-playground/validator struct tags. Variable-shape fields
+//     (`Patch map[string]string`) are judged per key — struct tags can't
+//     express "validation depends on map key".
 //   - Both feed the same `Violation` shape. One JSON response format,
 //     one client-side parser.
-//   - "Soft whitelist" for `Patch` keys: known reserved keys (`_*`)
-//     get strict validation; unknown reserved keys pass through
-//     (avoids breaking when threshold-exporter introduces new keys
-//     before tenant-api's registry catches up). Misconfigs like
-//     `_silent_mod` (typo) DO slip through this layer — caught by
-//     threshold-exporter's downstream resolve as today. The wins are:
-//     (a) wrong-VALUE for known keys is fail-fast (the high-frequency
-//     misconfig class); (b) huge values are bounded so no
-//     resource-exhaustion vector via tenant-api boundary.
-//
-// Trade-offs vs. strict whitelist:
-//   - Strict whitelist would catch typo'd keys but couples tenant-api
-//     release cadence to threshold-exporter (every new key needs a
-//     tenant-api release). Soft is operationally simpler.
-//   - If/when threshold-exporter exports a stable key registry,
-//     `reservedKeyValidators` can become a generated subset of it.
+//   - What a patch KEY may be comes from the exporter's reserved-key
+//     registry (reserved_keys.json, ADR-038): a `_` key it does not list
+//     is refused (nothing reads it), and a key whose value is a mapping or
+//     a list cannot be set from a string (cfg.PatchableAsString). What a
+//     reserved VALUE may be is not judged here: the write gate judges it
+//     with the exporter's own reader (cfg.CheckReservedValue, #3227), the
+//     same for PUT, batch and dry-run — a copy of the reader's rules here
+//     is how this file used to drift from it.
 
 import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -167,95 +158,6 @@ const (
 	maxPatchValueLen = 1024
 )
 
-// reservedKeyValidator validates a single _*-prefixed reserved key value.
-// Returns "" if value is acceptable, or a non-empty reason string for
-// rejection. Each function is independent; key-aware bounds live here.
-type reservedKeyValidator func(value string) string
-
-// reservedKeyValidators maps known reserved-key names to their value
-// validators. Soft-whitelist semantics: keys NOT in this map pass
-// through without further checks (after the generic length cap).
-//
-// Source-of-truth for valid values: threshold-exporter's resolve /
-// metadata logic (e.g. config_resolve.go's `silent_mode` enum
-// `{warning, critical, all, disable}`). When extending this map,
-// cross-check the SOT or you'll create a doc/code drift class.
-//
-// Registry purposely small — only entries with confirmed production
-// validation rules go in. (Earlier draft included a hallucinated
-// `_quench_min` entry; removed in self-review.)
-var reservedKeyValidators = map[string]reservedKeyValidator{
-	"_silent_mode":     validateSilentMode,
-	"_timeout_ms":      validateNonNegativeIntCap(3_600_000), // ≤ 1h
-	"_routing_profile": validateProfileReference,
-	"_profile":         validateProfileReference,
-	"_metadata":        rejectMetadataPatch,
-}
-
-// rejectMetadataPatch refuses every batch patch of `_metadata` (#2859). A
-// patch value is a string and `_metadata` is a mapping; the write path
-// refuses the string form (validateShape), so a batch can never set it.
-// Refused here so the caller hears it as a 400 naming the field, before any
-// op is judged or written. Set it with PUT /api/v1/tenants/{id}.
-func rejectMetadataPatch(string) string {
-	return "_metadata is a mapping and a batch patch value is a string, so a batch cannot set it; " +
-		"write it as a mapping with PUT /api/v1/tenants/{id} (#2859)"
-}
-
-// validateSilentMode mirrors threshold-exporter's `config_resolve.go`
-// behavior: the value can be either the scalar enum form
-// (`"warning"` / `"critical"` / `"all"` / `"disable"`, case-insensitive)
-// OR a structured YAML form (`"target: warning\nexpires: ..."`). The
-// production code distinguishes via `strings.Contains(val, "target:")`
-// — we use the same heuristic so the boundary doesn't false-positive
-// on documented usage. Structured-form parsing details (RFC3339 expires
-// validation, etc.) live downstream — we just let it through here.
-func validateSilentMode(value string) string {
-	if strings.Contains(value, "target:") {
-		// Looks like a structured YAML mapping; defer to threshold-
-		// exporter's parser. Length cap (1024) already enforced upstream.
-		return ""
-	}
-	switch strings.ToLower(value) {
-	case "warning", "critical", "all", "disable":
-		return ""
-	default:
-		return fmt.Sprintf(
-			"must be one of {warning, critical, all, disable} (or structured YAML "+
-				"with `target: <mode>` form); got %q",
-			value,
-		)
-	}
-}
-
-func validateNonNegativeIntCap(maxVal int64) reservedKeyValidator {
-	return func(value string) string {
-		n, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return fmt.Sprintf("must be an integer; got %q (parse error: %v)", value, err)
-		}
-		if n < 0 {
-			return fmt.Sprintf("must be non-negative; got %d", n)
-		}
-		if n > maxVal {
-			return fmt.Sprintf("must be ≤ %d; got %d", maxVal, n)
-		}
-		return ""
-	}
-}
-
-// validateProfileReference enforces the length cap on a profile-name
-// reference (`_profile` / `_routing_profile`). Empty value is ALLOWED
-// — customers may patch the field to "" to clear the profile reference
-// (downstream interprets empty same as missing). Only oversize is
-// rejected (resource-exhaustion guard).
-func validateProfileReference(value string) string {
-	if len(value) > 256 {
-		return fmt.Sprintf("must not exceed 256 characters; got %d", len(value))
-	}
-	return ""
-}
-
 // lengthCapViolation enforces the generic key/value length caps shared by
 // patch and filter map validation (the key cap is maxPatchKeyLen for both;
 // the value cap differs per caller). It returns a Violation and true when
@@ -283,9 +185,15 @@ func lengthCapViolation(fieldPrefix, k, v string, maxValueLen int) (Violation, b
 }
 
 // validatePatchMap walks every key/value pair in a patch map and
-// returns Violations for both generic length-cap failures and
-// known-reserved-key value-rule failures. Returns the FULL list,
-// not first-only — caller can render once for the whole batch.
+// returns Violations for generic length-cap failures and for keys a patch
+// cannot set: a `_` key the registry does not list, an unknown routing key,
+// or a reserved key whose value is a mapping or a list. Returns the FULL
+// list, not first-only — caller can render once for the whole batch.
+//
+// ⚠️ A reserved key's VALUE is not judged here (#3227): the write gate does,
+// with the exporter's reader, per op — a batch op with `_silent_mode:
+// purple` fails as that op (422, op code BAD_REQUEST), not as a 400 for the
+// whole request.
 //
 // fieldPrefix lets callers nest the field path (e.g.
 // "operations[0].patch") so the response's `field` value points
@@ -308,14 +216,22 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 			})
 			continue
 		}
-		// Reserved-key strict validation (only for keys in the registry).
-		if validator, ok := reservedKeyValidators[k]; ok {
-			if reason := validator(v); reason != "" {
-				violations = append(violations, Violation{
-					Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
-					Reason: reason,
-				})
-			}
+		// #3227: the `_` namespace is the registry's; a key it does not list
+		// is read by nothing (`_timeout_ms`, `_silent_mod`).
+		if cfg.IsUnregisteredUnderscoreKey(k) {
+			violations = append(violations, Violation{
+				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
+				Reason: "unknown reserved key (typo?); nothing reads it",
+			})
+			continue
+		}
+		// A mapping or a list cannot be written from a string (`_metadata`,
+		// #2859; `_custom_alerts`, `_namespaces`).
+		if ok, reason := cfg.PatchableAsString(k); !ok {
+			violations = append(violations, Violation{
+				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
+				Reason: reason,
+			})
 		}
 	}
 	return violations
@@ -325,35 +241,27 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 // Batch `unset` ([]string) validation — B2 (#2341)
 // ─────────────────────────────────────────────────────────────────
 
-// unsetAllowedKeys are the keys a batch op's `unset` may remove. A strict
-// allowlist, unlike the patch's soft one: removing a key is not judged by any
-// value rule, so each key admitted here must be one whose removal the write
-// path is known to handle — `_routing`, whose removal resets the tenant to
-// `_routing_defaults` + its profile (the route generator judges the result,
-// #2903). Widening it is one entry here plus the docs — and, for
-// `_metadata` or `_profile`, touchesScopeMetadata, which judges only the patch.
-var unsetAllowedKeys = map[string]bool{
-	"_routing": true,
-	// #2983: the flat key tenant-api's batch patch used to write. Nothing
-	// renders it, so removing it changes no route and is not judged; while
-	// it is on disk, the write gate (ValidateTenantKeys) refuses every other
-	// write to the tenant, so a batch must be able to remove it.
-	"_routing_receiver_type": true,
-}
-
-// unsetAllowedList is unsetAllowedKeys sorted, for the violation text.
+// unsetAllowedList is the keys a batch op's `unset` may remove
+// (cfg.BatchUnsettableKeys: the registry's `batch.unset` keys and every
+// retired key), for the violation text. Removing a key is not judged by any
+// value rule, so each key the registry admits must be one whose removal the
+// write path is known to handle — `_routing`, whose removal resets the tenant
+// to `_routing_defaults` + its profile (the route generator judges the
+// result, #2903), and a retired key, which nothing reads and which, while it
+// is on disk, makes the write gate refuse every other write to the tenant
+// (#2983). Admitting `_metadata` or `_profile` would also have to widen
+// touchesScopeMetadata, which judges only the patch.
 func unsetAllowedList() string {
-	keys := make([]string, 0, len(unsetAllowedKeys))
-	for k := range unsetAllowedKeys {
-		keys = append(keys, strconv.Quote(k))
+	keys := cfg.BatchUnsettableKeys()
+	for i, k := range keys {
+		keys[i] = strconv.Quote(k)
 	}
-	sort.Strings(keys)
 	return strings.Join(keys, ", ")
 }
 
 // validateBatchEdit validates one batch op's patch and unset together:
 // validatePatchMap on the patch (field `<prefix>.patch[...]`), then each
-// unset key (field `<prefix>.unset[i]`) — in unsetAllowedKeys, not repeated,
+// unset key (field `<prefix>.unset[i]`) — cfg.BatchUnsettable, not repeated,
 // not also in the patch. prefix is "operations[i]" for /tenants/batch and ""
 // for /groups/{id}/batch. Returns every violation, like validatePatchMap.
 // An op with neither patch nor unset is NOT refused here: /tenants/batch
@@ -375,7 +283,7 @@ func validateBatchEdit(patch map[string]string, unset []string, prefix string) [
 				Reason: fmt.Sprintf("key length must not exceed %d characters; got %d", maxPatchKeyLen, len(k))})
 			continue
 		}
-		if !unsetAllowedKeys[k] {
+		if !cfg.BatchUnsettable(k) {
 			violations = append(violations, Violation{Field: at,
 				Reason: fmt.Sprintf("unset can only remove %s; got %q", unsetAllowedList(), k)})
 			continue

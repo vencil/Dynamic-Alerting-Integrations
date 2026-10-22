@@ -58,7 +58,8 @@ type ValidateResponse struct {
 // @Description in this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also
 // @Description declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
-// @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
+// @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —
+// @Description so a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.
 // @Description This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
 // @Description it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
 // @Description the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.
