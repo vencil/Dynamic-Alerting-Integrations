@@ -35,6 +35,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
@@ -275,10 +276,10 @@ func TestDryRun_AuthorizedCaller400s(t *testing.T) {
 		{"missing rbac_yaml", dryrunTenantLabeled, "", `{"candidate":{}}`, "", "candidate.rbac_yaml is required"},
 		{"candidate invalid — undeclared org-scope key", dryrunTenantLabeled, "",
 			dryRunBody(t, "groups:\n  - name: dryrun-x\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: team\n"),
-			CodeCandidateInvalid, "not declared in --identity-claim-headers"},
+			string(errcode.CandidateInvalid), "not declared in --identity-claim-headers"},
 		{"candidate invalid — unknown field", dryrunTenantLabeled, "",
 			dryRunBody(t, "groups:\n  - name: dryrun-x\n    tenants: [\"*\"]\n    permissions: [read]\n    typo-field: x\n"),
-			CodeCandidateInvalid, "candidate _rbac.yaml rejected"},
+			string(errcode.CandidateInvalid), "candidate _rbac.yaml rejected"},
 		{"rules over the ceiling", dryrunTenantLabeled, "", dryRunBody(t, bulk.String()), "", "dry-run limit"},
 	}
 	for _, tc := range cases {

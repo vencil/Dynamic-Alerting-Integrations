@@ -27,16 +27,18 @@ func newMintLimiter() *mintLimiter {
 	return &mintLimiter{hits: make(map[string][]time.Time)}
 }
 
-// allow records a mint attempt for tenantID at now and reports whether
-// it is within the rate limit. A denied attempt is not recorded, so a
-// client hammering the endpoint cannot push its own window further out.
+// admit records a mint attempt for tenantID at now and reports whether
+// it is within the rate limit; when it is not, wait is how long until the
+// oldest mint in the window ages out and the next attempt is admitted. A
+// denied attempt is not recorded, so a client hammering the endpoint cannot
+// push its own window further out.
 //
 // Every call also prunes *all* tenants' windows and drops any tenant
 // whose hits have fully aged out. Pruning only the calling tenant would
 // leak a map key for every tenant that ever minted once and never came
 // back; sweeping keeps l.hits bounded by the set of tenants with a mint
 // in the last mintWindow.
-func (l *mintLimiter) allow(tenantID string, now time.Time) bool {
+func (l *mintLimiter) admit(tenantID string, now time.Time) (ok bool, wait time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -55,9 +57,15 @@ func (l *mintLimiter) allow(tenantID string, now time.Time) bool {
 		}
 	}
 
-	if len(l.hits[tenantID]) >= maxMintsPerWindow {
-		return false
+	if hits := l.hits[tenantID]; len(hits) >= maxMintsPerWindow {
+		oldest := hits[0]
+		for _, t := range hits[1:] {
+			if t.Before(oldest) {
+				oldest = t
+			}
+		}
+		return false, oldest.Add(mintWindow).Sub(now)
 	}
 	l.hits[tenantID] = append(l.hits[tenantID], now)
-	return true
+	return true, 0
 }

@@ -448,6 +448,16 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 // holds once rel is written.
 func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc, error) {
 	doc := newParseTreeDoc("file")
+	// A directory the walk recorded (entered: role dir; could not list:
+	// unlistable_dir) is what tree mode says it is — the very entry, from
+	// the same walk and the same function (walkEntries), never a second
+	// verdict here. Its text is not read.
+	if d, err := walkedDirEntry(scan, rel); err != nil {
+		return nil, err
+	} else if d != nil {
+		doc.Entries = append(doc.Entries, *d)
+		return doc, nil
+	}
 	e := nameEntry(rel)
 	e.Role = config.RoleConfig
 	reason := ""
@@ -456,12 +466,6 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		reason = notReadHidden
 	case !confdname.IsScannedPath(rel):
 		reason = notReadNotConfigName
-		if d := dirOnDisk(scan.AbsRoot, rel); d != nil {
-			// An existing directory the walk enters: what tree mode gives it
-			// (role dir), not a config file no reader reads.
-			doc.Entries = append(doc.Entries, *d)
-			return doc, nil
-		}
 	default:
 		reason = parentsOnDisk(scan.AbsRoot, rel)
 	}
@@ -568,21 +572,20 @@ func fileOnDisk(root, rel string) *parseTreeEntry {
 	return nil
 }
 
-// dirOnDisk is tree mode's entry of rel when it is an existing directory the
-// walk enters (a real directory, every directory above it walked too): role
-// dir, readers [] — else nil. A config-named one is fileOnDisk's (it also
-// carries a problem); a hidden one is passed over by the walk and not here.
-func dirOnDisk(root, rel string) *parseTreeEntry {
-	if parentsOnDisk(root, rel) != "" {
-		return nil
+// walkedDirEntry is tree mode's entry of rel when the walk recorded rel as a
+// directory (role dir or unlistable_dir), else nil: walkEntries over the
+// same scan, so file and tree mode cannot disagree about a directory.
+func walkedDirEntry(scan *config.TreeScan, rel string) (*parseTreeEntry, error) {
+	idx := newParseTreeIndex("tree")
+	if err := walkEntries(scan, &idx); err != nil {
+		return nil, err
 	}
-	fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
-	if err != nil || !fi.IsDir() {
-		return nil
+	for _, e := range idx.Entries {
+		if e.Path == rel && (e.Role == config.RoleDir || e.Role == config.RoleUnlistableDir) {
+			return &e, nil
+		}
 	}
-	e := withRole(nameEntry(rel), config.RoleDir)
-	e.Readers = []string{}
-	return &e
+	return nil, nil
 }
 
 func unreadableEntry(u config.UnreadableFile) *parseTreeEntry {

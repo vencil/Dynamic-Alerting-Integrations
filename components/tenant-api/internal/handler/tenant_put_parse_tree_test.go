@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // ADR-036 §7 step 7 (#3206): a PUT body parse-tree refuses is the 400 every
@@ -125,7 +127,7 @@ func TestTenantFileNotLoadable_SaysWhoCanRepair(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 				t.Fatal(err)
 			}
-			if w.Code != http.StatusConflict || env["code"] != CodeTenantConfigNotLoadable {
+			if w.Code != http.StatusConflict || env["code"] != string(errcode.TenantConfigNotLoadable) {
 				t.Fatalf("status %d body %s", w.Code, w.Body.String())
 			}
 			if got, _ := env["parse_tree_kind"].(string); got != c.kind {

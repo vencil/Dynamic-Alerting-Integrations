@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
 
@@ -359,8 +360,8 @@ func TestWriteError(t *testing.T) {
 	}
 	// Unified-envelope migration: code is now always present (matches
 	// handler.ErrorResponse, whose OpenAPI schema declares it required).
-	if resp["code"] != codeForbidden {
-		t.Errorf("code = %q, want %q", resp["code"], codeForbidden)
+	if resp["code"] != string(errcode.Forbidden) {
+		t.Errorf("code = %q, want %q", resp["code"], errcode.Forbidden)
 	}
 }
 
@@ -404,8 +405,8 @@ func TestWriteError_NilRequest(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp["code"] != codeUnauthorized {
-		t.Errorf("code = %q, want %q", resp["code"], codeUnauthorized)
+	if resp["code"] != string(errcode.Unauthorized) {
+		t.Errorf("code = %q, want %q", resp["code"], errcode.Unauthorized)
 	}
 	if _, has := resp["request_id"]; has {
 		t.Errorf("request_id should be omitted for nil request, got %v", resp["request_id"])
@@ -431,8 +432,8 @@ func TestWriteForbidden_EnvelopeShape(t *testing.T) {
 	if resp["error"] != "insufficient permissions for tenant db-x" {
 		t.Errorf("error = %q", resp["error"])
 	}
-	if resp["code"] != codeForbidden {
-		t.Errorf("code = %q, want %q", resp["code"], codeForbidden)
+	if resp["code"] != string(errcode.Forbidden) {
+		t.Errorf("code = %q, want %q", resp["code"], errcode.Forbidden)
 	}
 	help, _ := resp["help"].(string)
 	if !strings.Contains(help, "governance-security") {

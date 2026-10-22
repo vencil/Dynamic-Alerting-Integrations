@@ -1,5 +1,5 @@
 {
-  "$comment": "The one list of top-level `_` keys in conf.d (ADR-038 decision 2). scripts/tools/dx/sync_schema.py --update GENERATES from it: the Python constants in scripts/tools/_lib_constants.py, pkg/config/reserved_keys_gen.go, and the `_` keys of docs/schemas/tenant-config.schema.json and platform-defaults.schema.json; --check fails CI when any of them is stale. Nothing reads this file at run time. `read_by` is what each reader reads, by layer, as measured: tests/shared/test_reserved_key_probes.py writes each key into each layer and fails when a reader declared here does not change its output, or when the exporter serves a key it is not declared to read. Sub-keys (`_routing.*`, `_metadata.*`, `_custom_alerts[].*`) are not listed: the code that reads them is their list.",
+  "$comment": "The one list of top-level `_` keys in conf.d (ADR-038 decision 2). scripts/tools/dx/sync_schema.py --update GENERATES from it: the Python constants in scripts/tools/_lib_constants.py, pkg/config/reserved_keys_gen.go, and the `_` keys of docs/schemas/tenant-config.schema.json and platform-defaults.schema.json; --check fails CI when any of them is stale. Nothing reads this file at run time. `read_by` is what each reader reads, by layer, as measured: tests/shared/test_reserved_key_probes.py writes each key into each layer and fails when a reader declared here does not change its output, or when the exporter serves a key it is not declared to read. Sub-keys (`_routing.*`, `_metadata.*`, `_custom_alerts[].*`) are not listed: the code that reads them is their list. `value` is the value's shape as its readers parse it (`scalar`, `mapping`, `list`, `scalar_or_mapping`; required for a key read in a tenant's config), optionally `check` (the name of the exporter-side function that judges the value, bound in pkg/config/reserved_values.go) and `refers_to` (the layer the value names an entry of). Allowed words and sub-keys are not listed here either: the reader's parser is their list. `batch.unset` lets a tenant-api batch op remove the key; a retired key can always be removed.",
   "layers": {
     "tenant": "a tenant's entry in its own tenant file",
     "platform_tenants": "a tenant's entry under `tenants:` in a root `_` file (the platform's per-tenant default; the tenant file wins)",
@@ -17,35 +17,43 @@
   "keys": {
     "_silent_mode": {
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
-      "description": "Suppress notifications for some severities while alerts still fire."
+      "description": "Suppress notifications for some severities while alerts still fire.",
+      "value": {"shape": "scalar_or_mapping"}
     },
     "_severity_dedup": {
       "read_by": {
         "exporter": ["tenant", "platform_tenants", "subtree_defaults"],
         "generator": ["tenant", "platform_tenants"]
       },
-      "description": "Whether a firing critical suppresses its warning twin."
+      "description": "Whether a firing critical suppresses its warning twin.",
+      "value": {"shape": "scalar"}
     },
     "_namespaces": {
       "read_by": {"annotation": ["tenant", "platform_tenants"]},
-      "description": "Kubernetes namespaces of the tenant, written by scaffold-tenant for N:1 tenant mapping tooling."
+      "description": "Kubernetes namespaces of the tenant, written by scaffold-tenant for N:1 tenant mapping tooling.",
+      "value": {"shape": "list"}
     },
     "_metadata": {
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
       "description": "Tenant metadata (owner, tier, runbook_url, ...) served as tenant_metadata_info.",
-      "note": "The route generator does not read it (#3043): nothing it renders uses the tenant metadata."
+      "note": "The route generator does not read it (#3043): nothing it renders uses the tenant metadata.",
+      "value": {"shape": "mapping"}
     },
     "_profile": {
       "read_by": {"exporter": ["tenant", "platform_tenants"]},
-      "description": "The threshold profile in `_profiles.yaml` the tenant inherits from."
+      "description": "The threshold profile in `_profiles.yaml` the tenant inherits from.",
+      "value": {"shape": "scalar", "refers_to": "profile"}
     },
     "_routing": {
       "read_by": {"generator": ["tenant", "platform_tenants"]},
-      "description": "The tenant's Alertmanager route and receiver."
+      "description": "The tenant's Alertmanager route and receiver.",
+      "value": {"shape": "scalar_or_mapping"},
+      "batch": {"unset": true}
     },
     "_routing_profile": {
       "read_by": {"generator": ["tenant", "platform_tenants"]},
-      "description": "A routing profile in `_routing_profiles.yaml` the tenant's route starts from."
+      "description": "A routing profile in `_routing_profiles.yaml` the tenant's route starts from.",
+      "value": {"shape": "scalar"}
     },
     "_custom_alerts": {
       "read_by": {
@@ -53,19 +61,23 @@
         "custom_alert_compiler": ["tenant", "platform_tenants", "profile"]
       },
       "description": "Tenant-authored alert recipes compiled into rule-pack-custom-alerts.yaml.",
-      "note": "The compiler compiles the exporter's own reading of the list (da-guard served-values), so the two read the same layers (#3042)."
+      "note": "The compiler compiles the exporter's own reading of the list (da-guard served-values), so the two read the same layers (#3042).",
+      "value": {"shape": "list"}
     },
     "_routing_defaults": {
       "read_by": {"generator": ["platform_top"]},
-      "description": "The route every tenant without its own `_routing` gets."
+      "description": "The route every tenant without its own `_routing` gets.",
+      "value": {"shape": "mapping"}
     },
     "_routing_enforced": {
       "read_by": {"generator": ["platform_top"]},
-      "description": "The platform-enforced (NOC) route rendered for every tenant."
+      "description": "The platform-enforced (NOC) route rendered for every tenant.",
+      "value": {"shape": "mapping"}
     },
     "_policies": {
       "read_by": {"policy_engine": ["platform_top"]},
-      "description": "Policy-as-Code rules; read from the root `_defaults.yaml` only."
+      "description": "Policy-as-Code rules; read from the root `_defaults.yaml` only.",
+      "value": {"shape": "list"}
     }
   },
   "prefixes": {

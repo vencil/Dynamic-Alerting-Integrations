@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -195,8 +196,8 @@ func TestWritePaths_RefuseGitManagedTenant(t *testing.T) {
 				}
 				before := foreignFile(t, f)
 				w := p.call(t, f, shared)
-				if w.Code != p.refused || !strings.Contains(w.Body.String(), CodeTenantGitManaged) {
-					t.Fatalf("status %d (want %d %s): %s", w.Code, p.refused, CodeTenantGitManaged, w.Body.String())
+				if w.Code != p.refused || !strings.Contains(w.Body.String(), string(errcode.TenantGitManaged)) {
+					t.Fatalf("status %d (want %d %s): %s", w.Code, p.refused, errcode.TenantGitManaged, w.Body.String())
 				}
 				assertNoOtherTenant(t, p.name, w.Body.Bytes(), shared)
 				if n := f.writes.Load(); n != 0 {
@@ -233,8 +234,8 @@ func TestPreviews_GitManagedVerdict(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &vr); err != nil || w.Code != http.StatusOK {
 		t.Fatalf("/validate: %d %s (%v)", w.Code, w.Body.String(), err)
 	}
-	if vr.Valid || vr.Code != CodeTenantGitManaged || len(vr.Warnings) != 1 || !strings.Contains(vr.Warnings[0], "git-managed (tenant_count)") {
-		t.Errorf("/validate = %+v, want valid false, code %s and the refusal", vr, CodeTenantGitManaged)
+	if vr.Valid || vr.Code != string(errcode.TenantGitManaged) || len(vr.Warnings) != 1 || !strings.Contains(vr.Warnings[0], "git-managed (tenant_count)") {
+		t.Errorf("/validate = %+v, want valid false, code %s and the refusal", vr, errcode.TenantGitManaged)
 	}
 	assertNoOtherTenant(t, "/validate", w.Body.Bytes(), shared)
 
@@ -248,8 +249,8 @@ func TestPreviews_GitManagedVerdict(t *testing.T) {
 
 	r := wFixture(t, "reader", shared)
 	w = wServe(r, DiffTenant(r.deps()), rbac.PermRead, "POST", ownBody, nil)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantGitManaged) {
-		t.Errorf("masked /diff: %d %s, want 409 %s", w.Code, w.Body.String(), CodeTenantGitManaged)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), string(errcode.TenantGitManaged)) {
+		t.Errorf("masked /diff: %d %s, want 409 %s", w.Code, w.Body.String(), errcode.TenantGitManaged)
 	}
 	assertNoOtherTenant(t, "masked /diff", w.Body.Bytes(), shared)
 }

@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
@@ -76,6 +77,20 @@ func TestParseTree_OneEntryPerPathUnderRealModes(t *testing.T) {
 		}
 		if len(got) != len(want) {
 			t.Errorf("%v: entries %v, want %v", mode, got, want)
+		}
+	}
+	// File mode on each directory gives tree mode's very entry — the
+	// unlistable ones too (#3206 F1/F2).
+	_, tree, _ := runPT(t, "", "--config-dir", conf)
+	treeEntries := entriesByPath(t, tree)
+	for _, p := range []string{"unlist.yaml", "sealed", "noexec", "dir.yaml"} {
+		_, doc, _ := runPT(t, "a: 1\n", "--config-dir", conf, "--path", p, "--input", "-")
+		got := doc["entries"].([]any)
+		if len(got) != 1 || !reflect.DeepEqual(got[0], any(treeEntries[p])) {
+			t.Errorf("file mode %s: %v; tree mode %v", p, got, treeEntries[p])
+		}
+		if len(doc["files"].(map[string]any)) != 0 {
+			t.Errorf("file mode %s: the text was read", p)
 		}
 	}
 }

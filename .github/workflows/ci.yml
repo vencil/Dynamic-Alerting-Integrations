@@ -171,6 +171,10 @@ jobs:
               #     skipped the leg that would catch the drift. Found by
               #     go_test_reads.py's first measurement (#1399).
               - "helm/tenant-api/values.yaml"
+              #   - helm/tenant-api/values.schema.json — TestChartSchemaWriteModesMatchTheBinary
+              #     (tenant-api cmd/server) pins its writeBack.mode enum to the
+              #     binary's --write-mode set (#1594).
+              - "helm/tenant-api/values.schema.json"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
               #   - the #1399 read check the Go legs run after their tests,
@@ -880,7 +884,10 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # tenant-api's too: the error-contract gate below builds it (#3202).
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/tenant-api/go.sum
 
       - name: RETIRE-ordering gate (#869 — no K8s-target delete with conf.d _metadata残留)
         # Unfiltered over HEAD (the pre-commit mirror's path filter can miss
@@ -1204,6 +1211,14 @@ jobs:
       # forget `make am-duration-json` → fail here.
       - name: "am-duration.json matches the schema's definitions.duration (HARD gate — #2711)"
         run: python scripts/tools/dx/gen_am_duration_json.py --check
+
+      # #3202: the portal's tenant-api-errors.json is DERIVED from tenant-api's
+      # internal/errcode and its error kind table. Add a code or change a
+      # kind's answer but forget `make error-contract` → fail here. Go comes
+      # from the da-guard setup step above (same go version as tenant-api).
+      - name: "tenant-api-errors.json matches errcode + the kind table (HARD gate — #3202)"
+        working-directory: components/tenant-api
+        run: go run ./cmd/gen-error-contract --check
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).

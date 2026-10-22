@@ -24,6 +24,7 @@ import (
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -113,7 +114,7 @@ func TestCustomAlerts_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		return servePopulatingRBAC(t, PutTenantCustomAlerts(deps), req, "alice@example.com", []string{"dba"})
 	}
 	rec := put(cfg.ComputeSourceHash([]byte(branchTenant)))
-	assertRetryable503(t, rec, CodeTreeNotOnBase, dir, refs)
+	assertRetryable503(t, rec, string(errcode.TreeNotOnBase), dir, refs)
 	assertNoPathLeak(t, rec, dir)
 
 	// The retry re-reads the tenant (now base's copy) and lands on main.
@@ -250,7 +251,7 @@ func TestPutTenantDirect_StrandedOnPRBranch_BranchReadsDoNotAnswer(t *testing.T)
 			}
 
 			rec := do()
-			assertRetryable503(t, rec, CodeTreeNotOnBase, dir, refs)
+			assertRetryable503(t, rec, string(errcode.TreeNotOnBase), dir, refs)
 			assertNoPathLeak(t, rec, dir)
 			if got := strings.TrimSpace(revParseSymbolic(t, dir)); got != "main" {
 				t.Fatalf("HEAD = %q after the 503, want main", got)

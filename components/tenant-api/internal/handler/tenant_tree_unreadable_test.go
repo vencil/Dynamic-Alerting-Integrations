@@ -9,6 +9,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"io"
 	"log"
@@ -115,7 +116,7 @@ func (f *treeFixture) head(t *testing.T) string {
 // envelope with one entry (assertTreeRefusalAs).
 func assertTreeRefusal(t *testing.T, w *httptest.ResponseRecorder, entry string, visible bool) {
 	t.Helper()
-	assertTreeRefusalAs(t, w, http.StatusConflict, CodeTenantTreeUnreadable, 1, entry, visible)
+	assertTreeRefusalAs(t, w, http.StatusConflict, string(errcode.TenantTreeUnreadable), 1, entry, visible)
 }
 
 // assertTreeRefusalAs checks a whole-tree refusal envelope: the status, the
@@ -158,8 +159,8 @@ func assertBatchTreeRefusal(t *testing.T, w *httptest.ResponseRecorder, entry st
 		t.Fatalf("batch = %+v, want rejected with one result", resp)
 	}
 	r := resp.Results[0]
-	if r.Status != "error" || r.Code != CodeTenantTreeUnreadable {
-		t.Errorf("result = %+v, want error %s", r, CodeTenantTreeUnreadable)
+	if r.Status != "error" || r.Code != errcode.TenantTreeUnreadable {
+		t.Errorf("result = %+v, want error %s", r, errcode.TenantTreeUnreadable)
 	}
 	if !strings.Contains(r.Message, msgTenantTreeUnreadable) || !strings.Contains(r.Message, "(unreadable entries: 1)") {
 		t.Errorf("message = %q, want the fixed text with the count", r.Message)
@@ -263,8 +264,8 @@ func TestTreeUnreadable_PreviewsGivePutsVerdict(t *testing.T) {
 				}
 				var de ErrorResponse
 				if err := json.Unmarshal(dw.Body.Bytes(), &de); err != nil || dw.Code != http.StatusConflict ||
-					de.Code != CodeTenantTreeUnreadable || de.Error != pe.Error {
-					t.Errorf("diff = %d %s, want PUT's 409 %s %q", dw.Code, dw.Body.String(), CodeTenantTreeUnreadable, pe.Error)
+					de.Code != errcode.TenantTreeUnreadable || de.Error != pe.Error {
+					t.Errorf("diff = %d %s, want PUT's 409 %s %q", dw.Code, dw.Body.String(), errcode.TenantTreeUnreadable, pe.Error)
 				}
 			})
 		}
@@ -298,9 +299,9 @@ func TestTreeUnreadable_AsyncBatchStoresNoEntryNames(t *testing.T) {
 	}
 	for _, poller := range []string{"platform", "team,readers"} {
 		got := f.do(t, GetTask(f.d), rbac.PermRead, poller, "GET", "/api/v1/tasks/"+taskID, taskID, "")
-		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), CodeTenantTreeUnreadable) ||
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), string(errcode.TenantTreeUnreadable)) ||
 			!strings.Contains(got.Body.String(), "(unreadable entries: 1)") {
-			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), CodeTenantTreeUnreadable)
+			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), errcode.TenantTreeUnreadable)
 		}
 		if strings.Contains(got.Body.String(), "secret-other-team-file") {
 			t.Errorf("%s polls: the stored result names the entry: %s", poller, got.Body.String())
@@ -339,9 +340,9 @@ func TestTreeUnreadable_AsyncGroupBatchStoresNoEntryNames(t *testing.T) {
 	}
 	for _, poller := range []string{"platform", "team,readers"} {
 		got := f.do(t, GetTask(f.d), rbac.PermRead, poller, "GET", "/api/v1/tasks/"+taskID, taskID, "")
-		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), CodeTenantTreeUnreadable) ||
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), string(errcode.TenantTreeUnreadable)) ||
 			!strings.Contains(got.Body.String(), "(unreadable entries: 1)") {
-			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), CodeTenantTreeUnreadable)
+			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), errcode.TenantTreeUnreadable)
 		}
 		if strings.Contains(got.Body.String(), "secret-other-team-file") {
 			t.Errorf("%s polls: the stored result names the entry: %s", poller, got.Body.String())
@@ -418,7 +419,7 @@ func TestTreeUnreadable_EACCESLinkElsewhereIsStoreFault(t *testing.T) {
 	if err := os.Symlink(filepath.Join(locked, "x.yaml"), filepath.Join(f.dir, "denied.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 1, "denied.yaml", true)
+	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, string(errcode.TenantStoreFault), 1, "denied.yaml", true)
 }
 
 // R5-N2 on /metrics: while the store walk fails (here: conf.d does not

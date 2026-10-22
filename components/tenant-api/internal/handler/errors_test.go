@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // requestWithID returns a *http.Request whose context carries the
@@ -37,8 +40,8 @@ func TestWriteJSONError_AddsCodeAndRequestID(t *testing.T) {
 	if resp["error"] != "thing not found" {
 		t.Errorf("error = %q, want %q", resp["error"], "thing not found")
 	}
-	if resp["code"] != CodeNotFound {
-		t.Errorf("code = %q, want %q", resp["code"], CodeNotFound)
+	if resp["code"] != string(errcode.NotFound) {
+		t.Errorf("code = %q, want %q", resp["code"], errcode.NotFound)
 	}
 	if resp["request_id"] != "req-abc-123" {
 		t.Errorf("request_id = %q, want req-abc-123", resp["request_id"])
@@ -76,8 +79,8 @@ func TestWriteValidationErrors_Shape(t *testing.T) {
 	if resp["error"] != "validation failed" {
 		t.Errorf("error = %q", resp["error"])
 	}
-	if resp["code"] != CodeInvalidBody {
-		t.Errorf("code = %q, want %s", resp["code"], CodeInvalidBody)
+	if resp["code"] != string(errcode.InvalidBody) {
+		t.Errorf("code = %q, want %s", resp["code"], errcode.InvalidBody)
 	}
 	if resp["request_id"] != "req-validate" {
 		t.Errorf("request_id = %q", resp["request_id"])
@@ -97,7 +100,7 @@ func TestErrorResponse_ExtraInlinedAtTopLevel(t *testing.T) {
 	r := requestWithID("POST", "/x", "req-extra")
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: "pending_pr_exists",
-		Code:  CodePendingPR,
+		Code:  errcode.PendingPR,
 		Extra: map[string]any{
 			"existing_pr_url": "https://github.com/o/r/pull/42",
 			"pr_number":       42,
@@ -119,7 +122,7 @@ func TestErrorResponse_ExtraInlinedAtTopLevel(t *testing.T) {
 	if resp["error"] != "pending_pr_exists" {
 		t.Errorf("error = %q", resp["error"])
 	}
-	if resp["code"] != CodePendingPR {
+	if resp["code"] != string(errcode.PendingPR) {
 		t.Errorf("code = %q", resp["code"])
 	}
 	if resp["request_id"] != "req-extra" {
@@ -131,17 +134,17 @@ func TestCodeFromStatus(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		status int
-		want   string
+		want   errcode.Code
 	}{
-		{http.StatusBadRequest, CodeBadRequest},
-		{http.StatusUnauthorized, CodeUnauthorized},
-		{http.StatusForbidden, CodeForbidden},
-		{http.StatusNotFound, CodeNotFound},
-		{http.StatusConflict, CodeConflict},
-		{http.StatusNotImplemented, CodeNotImplemented},
-		{http.StatusBadGateway, CodeUpstream},
-		{http.StatusServiceUnavailable, CodeUpstream},
-		{http.StatusInternalServerError, CodeInternal},
+		{http.StatusBadRequest, errcode.BadRequest},
+		{http.StatusUnauthorized, errcode.Unauthorized},
+		{http.StatusForbidden, errcode.Forbidden},
+		{http.StatusNotFound, errcode.NotFound},
+		{http.StatusConflict, ""}, // #3202: no one meaning — every 409 names its code
+		{http.StatusNotImplemented, errcode.NotImplemented},
+		{http.StatusBadGateway, errcode.Upstream},
+		{http.StatusServiceUnavailable, errcode.Upstream},
+		{http.StatusInternalServerError, errcode.Internal},
 		{http.StatusTeapot, ""}, // unmapped → empty (deliberate: surfaces as a contract-test failure, see codeFromStatus doc)
 	}
 	for _, c := range cases {
@@ -187,8 +190,8 @@ func TestRateLimit_EnvelopeShape(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if resp["code"] != CodeRateLimited {
-			t.Errorf("code = %q, want %s", resp["code"], CodeRateLimited)
+		if resp["code"] != string(errcode.RateLimited) {
+			t.Errorf("code = %q, want %s", resp["code"], errcode.RateLimited)
 		}
 		if !strings.Contains(resp["error"].(string), "rate limit exceeded") {
 			t.Errorf("error = %q", resp["error"])
@@ -207,7 +210,11 @@ func TestRateLimit_EnvelopeShape(t *testing.T) {
 func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	writeForgeDegraded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrForgeDegraded, errCtx{accept: kindsWriteFlow})
+	forgeDegradedRetryAfterS := kindSpecOf(errkind.ForgeDegraded).RetryAfterS
+	if forgeDegradedRetryAfterS <= 0 {
+		t.Fatal("kindTable gives ForgeDegraded no Retry-After")
+	}
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
@@ -219,8 +226,8 @@ func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp["code"] != CodeForgeUnavailable {
-		t.Errorf("code = %q, want %s", resp["code"], CodeForgeUnavailable)
+	if resp["code"] != string(errcode.ForgeUnavailable) {
+		t.Errorf("code = %q, want %s", resp["code"], errcode.ForgeUnavailable)
 	}
 	if v, _ := resp["retry_after_s"].(float64); int(v) != forgeDegradedRetryAfterS {
 		t.Errorf("retry_after_s = %v, want %d", resp["retry_after_s"], forgeDegradedRetryAfterS)
@@ -243,7 +250,11 @@ func TestWriteForgeDegraded_MachineActionable(t *testing.T) {
 func TestWriteOverloaded_MachineActionable(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	WriteOverloaded(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil))
+	writeErr(w, httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil), nil, gitops.ErrWriteOverloaded, errCtx{accept: kindsWriteFlow})
+	writeOverloadedRetryAfterS := kindSpecOf(errkind.WriteOverloaded).RetryAfterS
+	if writeOverloadedRetryAfterS <= 0 {
+		t.Fatal("kindTable gives WriteOverloaded no Retry-After")
+	}
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
@@ -255,8 +266,8 @@ func TestWriteOverloaded_MachineActionable(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp["code"] != CodeWriteOverloaded {
-		t.Errorf("code = %q, want %s", resp["code"], CodeWriteOverloaded)
+	if resp["code"] != string(errcode.WriteOverloaded) {
+		t.Errorf("code = %q, want %s", resp["code"], errcode.WriteOverloaded)
 	}
 	if v, _ := resp["retry_after_s"].(float64); int(v) != writeOverloadedRetryAfterS {
 		t.Errorf("retry_after_s = %v, want %d", resp["retry_after_s"], writeOverloadedRetryAfterS)

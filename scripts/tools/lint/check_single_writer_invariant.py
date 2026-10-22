@@ -4,9 +4,9 @@
 Codifies ADR-023's "機制強制（三層）" as a commit/CI-time STATIC guard
 (layer 2). Layer 1 is the Helm `fail` guard inside the chart template, which
 only fires when helm actually renders; this lint catches the same breach
-earlier and across BOTH deployment sources — the Helm chart AND the raw
-`k8s/04-tenant-api/deployment.yaml` — so a drift in either is a red CI, not a
-latent production foot-gun.
+earlier, at commit time, so a drift is a red CI rather than a latent production
+foot-gun. The Helm chart (`helm/tenant-api`) is tenant-api's only deployment
+source: the raw tenant-api manifests under `k8s/` were removed in #1594.
 
 WHY: tenant-api's write path (`internal/gitops/Writer`) serializes ALL writes
 on one in-process `sync.Mutex`, and PR-mode dedup ("one open PR per tenant")
@@ -19,16 +19,15 @@ nobody raises `replicaCount` and nobody drops `strategy: Recreate`. This lint
 turns "nobody does that" into "CI won't let you".
 
 WHAT THIS CHECKS (the two halves of the runtime invariant):
-  1. `replicaCount` / `spec.replicas` == 1 on every tenant-api Deployment
-     source (Helm values + raw manifest).
+  1. `replicaCount` == 1 in the chart's values.yaml.
   2. `strategy.type: Recreate` is present — replicaCount=1 ALONE is not enough:
      the default RollingUpdate surges a second Ready pod during a rollout, a
      phantom-writer window where two pods each hold their own write lock
-     (ADR-023 §A). Both the raw manifest and the Helm template must pin it.
+     (ADR-023 §A). The Helm template must pin it.
   3. The Helm template still carries the layer-1 `fail` guard (so removing the
      guard, not just bumping the value, is also caught).
   4. No autoscaler manifest (native HPA or KEDA ScaledObject/ScaledJob) is
-     shipped under the tenant-api deploy sources — it would drive replicas>1 and
+     shipped under the chart's templates — it would drive replicas>1 and
      bypass the replicaCount guard.
 
 WHAT THIS DOES **NOT** CHECK (deliberately):
@@ -45,13 +44,13 @@ WHAT THIS DOES **NOT** CHECK (deliberately):
     allow-list (`_TARGETS`), not a glob.
   - `writeMode`. ADR-023's original layer-1 spec gated the guard on
     `writeMode != read-only`, but the binary has NO read-only mode
-    (`--write-mode` ∈ {direct, pr, pr-github, pr-gitlab}) and values.yaml has no
+    (`--write-mode` ∈ {direct, pr-github, pr-gitlab}) and values.yaml has no
     such field — writes are ALWAYS on, so the guard is unconditional on
     replicaCount. (This lint codifies the corrected invariant; the ADR §A
     校正 records the same.)
 
 Exit codes:
-    0  All tenant-api Deployment sources honor the single-writer invariant
+    0  The tenant-api chart honors the single-writer invariant
     1  A source violates it (--ci)
     2  Error (a target file is missing / unparseable / no targets)
 
@@ -81,13 +80,12 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 
-# Explicit allow-list: the tenant-api Deployment sources that MUST honor the
+# Explicit allow-list: the tenant-api chart files that MUST honor the
 # single-writer invariant. NOT a glob — this is a named, single-component
 # invariant (see module docstring).
 _HELM_VALUES = "helm/tenant-api/values.yaml"
 _HELM_TEMPLATE = "helm/tenant-api/templates/deployment.yaml"
-_RAW_MANIFEST = "k8s/04-tenant-api/deployment.yaml"
-_TARGETS = [_HELM_VALUES, _HELM_TEMPLATE, _RAW_MANIFEST]
+_TARGETS = [_HELM_VALUES, _HELM_TEMPLATE]
 
 # `strategy:` block (optionally with a comment line) whose `type:` is Recreate.
 # DESIGN INTENT — Recreate MUST be hardcoded as a literal. A parameterized
@@ -115,34 +113,10 @@ _GUARD_RE = re.compile(
 # see — `kubectl scale`, an HPA a controller generates at runtime, a GitOps
 # controller reconciling a hand-patched `replicas`, or a Kustomize overlay
 # applied by Argo/Flux.
-_AUTOSCALER_SCAN_DIRS = ["helm/tenant-api/templates", "k8s/04-tenant-api"]
+_AUTOSCALER_SCAN_DIRS = ["helm/tenant-api/templates"]
 _AUTOSCALER_RE = re.compile(
     r"kind:\s*(HorizontalPodAutoscaler|ScaledObject|ScaledJob)\b"
 )
-
-
-def check_raw_deployment(data: dict) -> List[str]:
-    """Pure core: violations for a parsed k8s Deployment manifest dict.
-
-    Empty list = honors the invariant (replicas==1 AND strategy.type==Recreate).
-    A non-Deployment doc returns [] (caller filters by kind)."""
-    if not isinstance(data, dict) or data.get("kind") != "Deployment":
-        return []
-    out: List[str] = []
-    spec = data.get("spec") or {}
-    replicas = spec.get("replicas")
-    if replicas != 1:
-        out.append(
-            f"spec.replicas={replicas!r} (MUST be 1 — single-writer; "
-            f"multi-replica corrupts the shared git tree)"
-        )
-    strat = (spec.get("strategy") or {})
-    if strat.get("type") != "Recreate":
-        out.append(
-            f"spec.strategy.type={strat.get('type')!r} (MUST be 'Recreate' — "
-            f"RollingUpdate surges a phantom second writer, ADR-023 §A)"
-        )
-    return out
 
 
 def check_helm_values(values: dict) -> List[str]:
@@ -174,8 +148,8 @@ def has_autoscaler(text: str) -> bool:
 
 
 def find_autoscaler(repo: Path) -> List[str]:
-    """Violations for any autoscaler manifest shipped under the tenant-api deploy
-    sources. An autoscaler would drive replicas>1, bypassing the replicaCount
+    """Violations for any autoscaler manifest shipped under the tenant-api chart
+    templates. An autoscaler would drive replicas>1, bypassing the replicaCount
     guard. Covers committed HPA + KEDA specs; runtime-generated scaling is out of
     scope (→ Layer 3 Lease)."""
     out: List[str] = []
@@ -193,10 +167,6 @@ def find_autoscaler(repo: Path) -> List[str]:
                     f"it would drive replicas>1 and bypass the guard (ADR-023)"
                 )
     return out
-
-
-def _yaml_docs(path: Path):
-    return [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8")) if d]
 
 
 def check_targets(repo: Path) -> List[str]:
@@ -222,17 +192,7 @@ def check_targets(repo: Path) -> List[str]:
             f"(a removed guard lets a bad value render silently)"
         )
 
-    # 3. Raw manifest — Deployment replicas==1 + strategy Recreate
-    rpath = repo / _RAW_MANIFEST
-    deploys = [d for d in _yaml_docs(rpath) if isinstance(d, dict)
-               and d.get("kind") == "Deployment"]
-    if not deploys:
-        findings.append(f"{_RAW_MANIFEST}: no Deployment document found")
-    for d in deploys:
-        for v in check_raw_deployment(d):
-            findings.append(f"{_RAW_MANIFEST}: {v}")
-
-    # 4. No autoscaler (HPA / KEDA ScaledObject) may target tenant-api
+    # 3. No autoscaler (HPA / KEDA ScaledObject) may target tenant-api
     findings.extend(find_autoscaler(repo))
 
     return findings
@@ -266,12 +226,13 @@ def main() -> int:
         for f in findings:
             print(f"  ❌ {f}", file=sys.stderr)
         print("\nThe write plane is a single writer with no cross-pod "
-              "coordination. Keep replicaCount=1 + strategy: Recreate on every "
-              "Deployment source. To scale writes, implement a K8s Lease "
+              "coordination. Keep replicaCount=1 in values.yaml and strategy: "
+              "Recreate in the Deployment template. To scale writes, implement "
+              "a K8s Lease "
               "(ADR-023 Deferred option A3).", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
     print(f"✅ tenant-api single-writer invariant holds across {len(_TARGETS)} "
-          f"Deployment source(s) (replicaCount=1 + strategy: Recreate + guard).")
+          f"chart file(s) (replicaCount=1 + strategy: Recreate + guard).")
     return EXIT_OK
 
 

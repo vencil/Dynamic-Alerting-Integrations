@@ -540,19 +540,21 @@ def test_a_tenants_list_is_the_one_the_exporter_serves_replaced_not_unioned(tmp_
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_eleven_shapes():
+def test_example_fixture_compiles_to_twelve_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    # 11, not 12 (#3042): finance/_defaults.yaml's top-level ratio recipe is not
-    # served by the exporter (no tenant's list carries it), so it no longer
-    # compiles. It moves to a profile in a later stage of #3042.
-    assert pack["_meta"]["shapes"] == 11
     # shop-a: 10 own declarations (threshold/rate/ratio/p99/absence/forecast +
     # equals #810 + Shape-X ==/absence liveness pair #832 + slo_burn_rate ADR-031);
-    # pay-a: its own threshold. All served — nothing is left out.
+    # pay-a: the `finance` profile's ratio (#3042 — a recipe shared by a group
+    # of tenants lives in a profile, ADR-024 §3); pay-b binds the profile too
+    # but its own threshold replaces the profile's list. All served.
+    assert pack["_meta"]["shapes"] == 12
     per_tenant: dict = {}
     for e in pack["_meta"]["entries"]:
-        per_tenant[e.tenant] = per_tenant.get(e.tenant, 0) + 1
-    assert per_tenant == {"pay-a": 1, "shop-a": 10}
+        per_tenant.setdefault(e.tenant, set()).add(e.spec["name"])
+    assert sorted(per_tenant) == ["pay-a", "pay-b", "shop-a"]
+    assert per_tenant["pay-a"] == {"payment_failure_ratio"}
+    assert per_tenant["pay-b"] == {"pending_settlements_high"}
+    assert len(per_tenant["shop-a"]) == 10
     assert pack["_meta"]["not_compiled"] == []
 
 

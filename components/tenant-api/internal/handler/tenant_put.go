@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -83,14 +85,14 @@ type PutTenantResponse struct {
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); The flat _routing_receiver_type is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when parse-tree refuses the body, the error naming its kind (#3206, ADR-036): more than one YAML document (an empty trailing --- included), a tag outside !!str !!int !!float !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific ! tags included), a null or non-scalar key, a repeated key, a byte order mark past the start, or a syntax or decode error (nothing written). Also 400 when the body is not API-shaped (#3064): it declares a tenant besides {id}, several documents, or an anchor, alias, merge key or tagged key at the top level or directly under tenants: (nothing written). Also 400 when the current tenant file's tenants: block cannot be decoded for the end-of-life check and the caller lacks write permission on all tenants (#2405; nothing written)"
-// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id, and no PR/MR or branch is left"
+// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id, and no PR/MR or branch is left. Code FORBIDDEN for the caller's permission; in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the forge refuses tenant-api's own configured token the write scope to open the PR/MR — an operator must fix the token"
 // @Failure     409   {object} ErrorResponse "Conflict: code TENANT_GIT_MANAGED (#3064) when the tenant is git-managed — its conf.d file (on the latest base branch in PR write-back mode) is not API-shaped; tenant_id and git_managed_reason (not_tenant_document, several_documents, yaml_indirection, tenant_count, id_mismatch) in the envelope, naming no other tenant; judged before the base hash; nothing written. Or base hash mismatch (current_source_hash only when the current file is API-shaped: the hash GET /tenants/{id} shows), pending PR, ambiguous tenant file, the tenant is also declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE, a fixed text; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
-// @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
+// @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error: code INTERNAL_ERROR, among others when the commit or the file write fails (#1535: a fault of the server, not of the body; the detail is in the server log under request_id); or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the feature branch to the config repository failed, a timeout included: no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the feature branch to the config repository failed, a timeout included: no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying"
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -216,7 +218,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		}
 		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 			Error: "pending_pr_exists",
-			Code:  CodePendingPR,
+			Code:  errcode.PendingPR,
 			Extra: map[string]any{
 				"existing_pr_url": existingPR.WebURL,
 				"pr_number":       existingPR.Number,
@@ -267,7 +269,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
-		if writePRPutError(rw, r, d, err) {
+		if writePRPutError(rw, r, d, tenantID, err) {
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no
@@ -324,52 +326,28 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 // base — so the caller answers it 200 no_changes with the write's notices.
 // The order of the checks is the answer's: the fresh-base scope refusals
 // first (#2857), ErrNoChanges before every failure mapping.
-func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) (written bool) {
-	// #2857: the write scope refuses it on the fresh base, or the
-	// base's org file cannot be read.
-	var freshScope *freshBaseScopeError
-	if errors.As(err, &freshScope) {
-		writeFreshBaseScopeViolation(rw, r, freshScope)
-		return true
-	}
-	var freshOrgs *freshBaseOrgsError
-	if errors.As(err, &freshOrgs) {
-		writeFreshBaseOrgsError(rw, r, freshOrgs)
-		return true
-	}
-	if errors.Is(err, gitops.ErrNoChanges) {
-		return false
-	}
-	// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
-	// retry-hinting 503s (shared with the batch path).
-	if writeWriteFlowError(rw, r, d, err) {
-		return true
-	}
-	// #1724: the branch did not reach origin — 503 GIT_PUSH_FAILED, no
-	// PR/MR; the deferred ReleaseClaim frees the tenant for the retry.
-	if writePushFailed(rw, r, err) {
-		return true
-	}
-	// #795 F1: malformed body is a CLIENT error → 400 (matches the
-	// direct-write path), not a server 500.
-	if errors.Is(err, gitops.ErrValidation) {
-		WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-		return true
-	}
-	if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
-		return true
-	}
-	// No gitops.ErrMergeFailed check: WritePRChecked writes the body whole
-	// and never merges (only readMerge, behind WriteMerged / WriteBatch /
-	// WritePRBatch, returns it).
-	// #1724: cancelled, or a git command past its own deadline → the 503
-	// the direct path answers (#1535), not the generic 500.
-	if writeWriteCancelled(rw, r, err) {
-		return true
-	}
+func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID string, err error) (written bool) {
+	// #2857: the write scope refuses it on the fresh base, or the base's org
+	// file cannot be read; then ErrNoChanges; then the write-flow refusals,
+	// #1724's push failure (503 GIT_PUSH_FAILED, no PR/MR; the deferred
+	// ReleaseClaim frees the tenant for the retry), #795 F1's malformed body
+	// (a CLIENT error → 400, as the direct path), #2070's base restore, and
+	// #1724's cancellation (the 503 the direct path answers, #1535). No
+	// ErrMergeFailed: WritePRChecked writes the body whole and never merges.
 	// Anything else is an unexpected git failure → generic 500 (its text
 	// stays in the log — WriteErrorEnvelope, #1700).
-	WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
+	if h, _ := writeErr(rw, r, d, err, errCtx{accept: kindsFreshBase}); h {
+		return true
+	}
+	if isNoChanges(err) {
+		return false
+	}
+	writeErr(rw, r, d, err, errCtx{
+		accept:   kindsWriteFlow.union(kindsOutcome).with(errkind.GitPushFailed, errkind.Validation, errkind.BaseRestoreFailed),
+		fallback: fallbackInternal,
+		prefix:   "PR write failed: ",
+		tenantID: tenantID,
+	})
 	return true
 }
 

@@ -21,6 +21,7 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -271,7 +272,35 @@ func (h *Hub) Shutdown(reconnectDelay time.Duration) {
 // Handler with a per-request filter; this fail-closed form exists so that
 // mounting the hub directly can never stream other tenants' writes.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.serve(w, r, nil)
+	h.serve(w, r, nil, nil)
+}
+
+// The two refusals of a stream request (#3226), answered by the Refuse the
+// handler was built with.
+var (
+	// ErrStreamingUnsupported: the ResponseWriter cannot flush, so no SSE
+	// stream can be served through it (a middleware that hides
+	// http.Flusher). The server's failure, not the client's.
+	ErrStreamingUnsupported = errors.New("streaming not supported")
+	// ErrShuttingDown: the hub is shutting down and takes no new subscriber;
+	// the client should reconnect to the replacement pod.
+	ErrShuttingDown = errors.New("server shutting down")
+)
+
+// Refuse answers a stream request the hub refuses (ErrStreamingUnsupported,
+// ErrShuttingDown) before anything of the stream is written. It lets the
+// HTTP layer answer with its own error envelope; this package imports none
+// of it (depguard domain-no-handler).
+type Refuse func(w http.ResponseWriter, r *http.Request, err error)
+
+// plainRefuse is the Refuse of a handler built without one: http.Error with
+// the error's text.
+func plainRefuse(w http.ResponseWriter, _ *http.Request, err error) {
+	status := http.StatusServiceUnavailable
+	if errors.Is(err, ErrStreamingUnsupported) {
+		status = http.StatusInternalServerError
+	}
+	http.Error(w, err.Error(), status)
 }
 
 // Handler returns the SSE endpoint handler (GET /api/v1/events) whose
@@ -280,24 +309,27 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // a Filter that reads live state (the RBAC snapshot, the tenant→org mapping)
 // judges every event with the state current when that event is broadcast.
 func (h *Hub) Handler(filterFor FilterFor) http.HandlerFunc {
+	return h.HandlerRefusing(filterFor, nil)
+}
+
+// HandlerRefusing is Handler whose refusals refuse answers (#3226); nil
+// refuse answers them with plain http.Error text.
+func (h *Hub) HandlerRefusing(filterFor FilterFor, refuse Refuse) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var allow Filter
 		if filterFor != nil {
 			allow = filterFor(r)
 		}
-		h.serve(w, r, allow)
+		h.serve(w, r, allow, refuse)
 	}
 }
 
-func (h *Hub) serve(w http.ResponseWriter, r *http.Request, allow Filter) {
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
+func (h *Hub) serve(w http.ResponseWriter, r *http.Request, allow Filter, refuse Refuse) {
+	if refuse == nil {
+		refuse = plainRefuse
+	}
 	if _, ok := w.(http.Flusher); !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		refuse(w, r, ErrStreamingUnsupported)
 		return
 	}
 
@@ -335,13 +367,20 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, allow Filter) {
 	ch := h.Subscribe(allow)
 	if ch == nil {
 		// Shutdown already began — refuse the new stream so it can't miss the
-		// server_shutdown hint or keep srv.Shutdown waiting. http.Error overrides
-		// the staged text/event-stream Content-Type (nothing is flushed yet); the
-		// client should retry against the replacement pod.
-		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		// server_shutdown hint or keep srv.Shutdown waiting. Nothing of the
+		// stream is staged yet; the client should retry against the
+		// replacement pod.
+		refuse(w, r, ErrShuttingDown)
 		return
 	}
 	defer h.Unsubscribe(ch)
+
+	// SSE headers, staged only once the stream is admitted: a refusal above
+	// answers with its own Content-Type.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Send initial connection event. A failure here means the client is already
 	// gone — bail (deferred Unsubscribe cleans up).

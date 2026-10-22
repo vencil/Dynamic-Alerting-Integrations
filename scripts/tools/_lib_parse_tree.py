@@ -535,8 +535,13 @@ def check_shape(doc: dict) -> None:
         if doc["mode"] == "tree" and e.config_file and e.readers and e.problem is None \
                 and e.path not in doc["files"]:
             raise ValueError(f"{e.path!r}: a config file a reader reads, with neither content nor a problem")
-        if doc["mode"] == "file" and e.problem is None and e.path not in doc["files"]:
+        # A directory --path (role dir / unlistable_dir: the walk's own entry)
+        # is no file: file mode reads no text for it, and that is no gap.
+        if doc["mode"] == "file" and e.problem is None and e.path not in doc["files"] \
+                and e.role not in ("dir", "unlistable_dir"):
             raise ValueError(f"{e.path!r}: file mode gave neither content nor a problem")
+        if doc["mode"] == "file" and e.role in ("dir", "unlistable_dir") and e.path in doc["files"]:
+            raise ValueError(f"{e.path!r}: file mode read text for a directory")
 
 
 def is_scalar(v: Any) -> bool:

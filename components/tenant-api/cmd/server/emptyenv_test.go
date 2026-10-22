@@ -25,10 +25,10 @@ func TestResolveNonEmptyEnvContract(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "unset keeps the default", set: false, want: "direct"},
-		{name: "a value is kept as given", raw: "pr", set: true, want: "pr"},
+		{name: "a value is kept as given", raw: "pr-github", set: true, want: "pr-github"},
 		{name: "empty is refused, not read as unset", raw: "", set: true, wantErr: true},
 		{name: "whitespace only is refused", raw: "  \t", set: true, wantErr: true},
-		{name: "padding is left for the value's own parser", raw: " pr ", set: true, want: " pr "},
+		{name: "padding is left for the value's own parser", raw: " pr-github ", set: true, want: " pr-github "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveNonEmptyEnv(tc.raw, tc.set, "direct")

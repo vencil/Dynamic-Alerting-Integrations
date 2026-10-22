@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/platform"
 )
 
@@ -132,8 +133,8 @@ func TestGroupBatch_EmptyEditRefused(t *testing.T) {
 				w := f.post(t, body)
 				var bad ErrorResponse
 				_ = json.Unmarshal(w.Body.Bytes(), &bad)
-				if w.Code != http.StatusBadRequest || bad.Code != CodeBadRequest || bad.Error != "patch must not be empty" {
-					t.Errorf("status %d, body %s; want 400 %s \"patch must not be empty\"", w.Code, w.Body.String(), CodeBadRequest)
+				if w.Code != http.StatusBadRequest || bad.Code != errcode.BadRequest || bad.Error != "patch must not be empty" {
+					t.Errorf("status %d, body %s; want 400 %s \"patch must not be empty\"", w.Code, w.Body.String(), errcode.BadRequest)
 				}
 			})
 		}

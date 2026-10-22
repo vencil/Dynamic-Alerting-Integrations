@@ -55,10 +55,9 @@ victorialogs:
 # checkpoint namespace, split downstream by `origin_split` — see
 # templates/configmap.yaml.
 #
-# ⚠️ This selector matches `app.kubernetes.io/name`. Both helm/tenant-api and
-# (since #1234) k8s/04-tenant-api/deployment.yaml set that label on the pod, so
-# either deployment path is collected. If you run tenant-api from your own
-# manifests, that label is what puts it on the evidence channel.
+# ⚠️ This selector matches `app.kubernetes.io/name`, which helm/tenant-api sets
+# on the pod. If you run tenant-api from your own manifests, that label is what
+# puts it on the evidence channel.
 # ⛔ Narrowing this selector so tenant-api is no longer tailed PAGES within ~15m
 # — it is not a silent failure. An empty evidence channel would otherwise be
 # indistinguishable from "no revocations happened" (the reconciler gets zero rows

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -106,9 +107,9 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
 			switch {
 			case errors.Is(err, gitops.ErrTenantGitManaged):
-				code = CodeTenantGitManaged
+				code = string(errcode.TenantGitManaged)
 			case errors.Is(err, gitops.ErrTenantFileDirty):
-				code = CodeTenantFileDirty
+				code = string(errcode.TenantFileDirty)
 			}
 		}
 		writeJSON(w, http.StatusOK, ValidateResponse{
@@ -124,10 +125,16 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 // failure: those errors (e.g. the resolver's ReadDir) carry server paths.
 const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf.d; see the server log"
 
-// msgGitDriverConfigured is the fixed text for a dry-run refused because
-// the server's git config names a filter, diff or merge driver (#3175):
-// every write is refused for it too, as a 500 INTERNAL_ERROR.
+// msgGitDriverConfigured is the fixed text for a write or dry-run refused
+// because the server's git config names a filter, diff or merge driver
+// (#3175): a write answers it as 500 GIT_DRIVER_CONFIGURED (#3226), a
+// dry-run as valid: false.
 const msgGitDriverConfigured = "the server cannot check or write tenant files: its git configuration is refused; see the server log"
+
+// msgGitConfigUnreadable is the fixed text for a write refused because the
+// server's git config could not be read to check it for such a driver
+// (#3226): 503, retry.
+const msgGitConfigUnreadable = "the server could not read its git configuration to check it; nothing was written — please retry shortly"
 
 // dryRunRefusalMessage turns a refusal that would come BEFORE validation into
 // Warnings text. This route needs only read permission, so only two errors
@@ -176,6 +183,12 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 		// keys in the log.
 		slog.Error("tenant dry-run: refused, git config names a driver program", "error", err)
 		return msgGitDriverConfigured
+	case errors.Is(err, gitops.ErrGitConfigUnreadable):
+		// #3226: PreviewPut skips the HEAD check on it today, so it does
+		// not reach here; if it ever does, the fixed text, not the
+		// resolver's.
+		slog.Error("tenant dry-run: refused, the git config could not be read to check it for driver programs", "error", err)
+		return msgGitConfigUnreadable
 	default:
 		slog.Error("tenant dry-run: cannot resolve tenant file", "error", err)
 		return msgTenantFileUnresolved

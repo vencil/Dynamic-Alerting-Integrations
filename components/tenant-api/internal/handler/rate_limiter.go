@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // RateLimitConfig configures the per-caller request budget. A
@@ -338,7 +340,7 @@ func RateLimit(cfg RateLimitConfig, stopCh <-chan struct{}) (func(http.Handler) 
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 				WriteErrorEnvelope(w, r, http.StatusTooManyRequests, ErrorResponse{
 					Error:       fmt.Sprintf("rate limit exceeded for %s; try again in %ds", caller, retryAfter),
-					Code:        CodeRateLimited,
+					Code:        errcode.RateLimited,
 					RetryAfterS: retryAfter,
 				})
 				return

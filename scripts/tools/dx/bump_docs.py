@@ -398,21 +398,23 @@ def _build_tenant_api_rules():
         "pattern": r"^version:\s+" + _SEMVER,
         "replacement": lambda v: f"version: {v}",
     })
-    # ⚠️ There is deliberately NO rule for helm/tenant-api/Chart.yaml
-    # `appVersion`. Unlike every other chart here, tenant-api's appVersion is
-    # decoupled from its version ON PURPOSE: `version` tracks chart/template
-    # changes (and is gated against the git tag by the "Verify Chart.yaml
-    # version matches tag" step in .github/workflows/release.yaml), while appVersion
-    # names the last PUBLISHED binary, which release.yaml's L3 digest step
-    # probes as `:v${appVersion}` — see the ⚠️ comment above "Verify image
-    # digest" in the release-tenant-api job, and the Chart.yaml comment
-    # explaining why it is not bumped in feature PRs.
+    # helm/tenant-api/Chart.yaml appVersion — equal to `version` (#3228).
     #
-    # A rule was here (pattern `^appVersion:\s+<semver>`) and it never fired
-    # only because the value is quoted (`appVersion: "2.7.0"`). Had the quotes
-    # ever gone away, `--tenant-api X` would have silently overwritten the
-    # pinned binary version with the chart version and broken that invariant.
-    # Deleted rather than "fixed": the correct behaviour is no rule at all.
+    # release.yaml builds the tenant-api image from the same commit as the
+    # chart and pushes it as `:v<version>`; the deployment template defaults to
+    # `:v<appVersion>`. A separate appVersion number could only ever name an
+    # OLDER binary than the chart's own templates expect (it sat at 2.7.0 under
+    # chart 2.9.24, whose default render passes flags 2.7.0 does not have), so
+    # this line moves both together, like the exporter / portal /
+    # recipe-preview lines. The release job and
+    # tests/helm/test_image_tag_derivation.py both fail when the two differ.
+    rules.append({
+        "file": "helm/tenant-api/Chart.yaml",
+        "desc": "tenant-api Chart.yaml appVersion",
+        "pattern": r'^appVersion:\s*"' + _SEMVER + '"',
+        "replacement": lambda v: f'appVersion: "{v}"',
+        "require_match": True,
+    })
 
     # Dockerfile LABEL version
     rules.append({
@@ -469,15 +471,13 @@ def _build_tenant_api_rules():
     # row was the only one without, so it sat at v2.8.0 while this line's
     # SSOT said 2.9.20.
     #
-    # ⚠️ It tracks Chart.yaml `version:` (this line's SSOT), NOT `appVersion`.
-    # That distinction is the whole reason three OTHER stale-looking
-    # `tenant-api:v2.7.0` strings in this repo are correct and must be left
-    # alone: k8s/04-tenant-api/deployment.yaml, docs/assets/platform-data.json
-    # (which is GENERATED from the deploy SSOT — a rule here would fight
-    # generate_platform_data.py) and the portal's images.js are IMAGE-RUNTIME
-    # pins, and the chart deploys `:v${appVersion}` on purpose. This row is a
-    # RELEASE-LINE reference: it literally names the git tag `tenant-api/vX.Y.Z`,
-    # which release.yaml gates against `version:`.
+    # It tracks Chart.yaml `version:`, this line's SSOT (== appVersion since
+    # #3228). The image-runtime pins elsewhere get NO rule here, each for its
+    # own reason: docs/assets/platform-data.json is GENERATED from the chart's
+    # appVersion by generate_platform_data.py (a rule here would fight the
+    # generator), and the portal's images.js mirror is held to
+    # platform-data.json by images-fallback-drift.test.ts. After a bump,
+    # `make platform-data` and that mirror carry the new value.
     #
     # Version and tag sit on one line and are always equal, so one rule owns
     # both — the same shape as the 平台文件 row in _build_platform_rules().
@@ -1647,10 +1647,10 @@ def read_current_versions():
 
     # tenant-api version from helm/tenant-api/Chart.yaml `version:`.
     #
-    # `version:`, NOT `appVersion:` — the two are decoupled on purpose for
-    # this chart (see _build_tenant_api_rules). `version` is the release
-    # line's identity: .github/workflows/release.yaml gates it to equal the
-    # `tenant-api/v*` tag, and the image is pushed as `:v${that}`.
+    # `version:` is the release line's identity: .github/workflows/release.yaml
+    # gates it to equal the `tenant-api/v*` tag, and the image is pushed as
+    # `:v${that}`. appVersion equals it (#3228) and is written by a rule in
+    # _build_tenant_api_rules(), so reading either gives the same number.
     #
     # Omitting this line was not a cosmetic gap: read_current_versions() is
     # what `--check` iterates, so ALL tenant-api rules were unreachable and

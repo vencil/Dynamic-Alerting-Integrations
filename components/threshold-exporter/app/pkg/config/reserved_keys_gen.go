@@ -95,3 +95,39 @@ var reservedPrefixReaders = []prefixReaders{
 	}},
 	{"_routing", map[string][]string{}},
 }
+
+// reservedValueShapes is each key's value shape as its readers parse
+// it (`value.shape`): scalar, mapping, list or scalar_or_mapping.
+var reservedValueShapes = map[string]string{
+	"_custom_alerts":    "list",
+	"_metadata":         "mapping",
+	"_namespaces":       "list",
+	"_policies":         "list",
+	"_profile":          "scalar",
+	"_routing":          "scalar_or_mapping",
+	"_routing_defaults": "mapping",
+	"_routing_enforced": "mapping",
+	"_routing_profile":  "scalar",
+	"_severity_dedup":   "scalar",
+	"_silent_mode":      "scalar_or_mapping",
+}
+
+// reservedValueChecks names, per key, the exporter-side function that
+// judges its value (`value.check`; bound in valueChecks).
+var reservedValueChecks = map[string]string{}
+
+// batchUnsettableKeys are the keys a tenant-api batch op's `unset` may
+// remove: `batch.unset`, and every retired key — on purpose: nothing
+// reads a retired key, and while it is on disk the write gate refuses
+// every other write to the tenant.
+var batchUnsettableKeys = []string{
+	"_routing",
+	"_routing_receiver_type",
+}
+
+// scopeMetadataKeys are the keys whose value names an entry
+// (`value.refers_to`) of a layer the exporter reads `_metadata` in, so
+// they decide the tenant's environment/domain.
+var scopeMetadataKeys = []string{
+	"_profile",
+}

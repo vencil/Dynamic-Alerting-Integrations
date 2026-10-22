@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // DefaultTTL is the federation-token lifetime when none is configured.
@@ -162,9 +163,28 @@ const maxTokensPerTenant = 16
 // holds maxTokensPerTenant live tokens.
 var ErrTokenLimitReached = errors.New("federation: tenant federation-token limit reached")
 
-// ErrMintRateLimited is returned by Issue when a tenant mints tokens
-// faster than the per-tenant rate limit allows.
+// ErrMintRateLimited is what Issue's *MintRateLimitedError is (errors.Is):
+// a tenant mints tokens faster than the per-tenant rate limit allows.
 var ErrMintRateLimited = errors.New("federation: token mint rate limit exceeded")
+
+// MintRateLimitedError is Issue's refusal of a mint past the per-tenant rate
+// limit. Wait is how long until the limiter admits the tenant's next mint
+// (the oldest mint in the window ages out); the handler sends it as
+// Retry-After (#3226). Its text is ErrMintRateLimited's.
+type MintRateLimitedError struct {
+	Wait time.Duration
+}
+
+func (e *MintRateLimitedError) Error() string { return ErrMintRateLimited.Error() }
+
+// Is makes a MintRateLimitedError ErrMintRateLimited.
+func (e *MintRateLimitedError) Is(target error) bool { return target == ErrMintRateLimited }
+
+// ErrorKind is errkind.FederationMintRateLimited.
+func (e *MintRateLimitedError) ErrorKind() errkind.Kind { return errkind.FederationMintRateLimited }
+
+// RetryAfter is Wait: when the next mint is admitted.
+func (e *MintRateLimitedError) RetryAfter() time.Duration { return e.Wait }
 
 // Claims is the JWT payload of a federation token.
 //
@@ -319,8 +339,8 @@ func (m *Manager) issue(tenantID, issuedBy, description string, capability Capab
 		return "", Record{}, fmt.Errorf("federation: logs token requires a non-zero account_id")
 	}
 	now := time.Now()
-	if !m.mints.allow(tenantID, now) {
-		return "", Record{}, ErrMintRateLimited
+	if ok, wait := m.mints.admit(tenantID, now); !ok {
+		return "", Record{}, &MintRateLimitedError{Wait: wait}
 	}
 	tokenID, err := newTokenID()
 	if err != nil {

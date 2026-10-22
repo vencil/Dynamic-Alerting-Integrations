@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	gh "github.com/vencil/tenant-api/internal/github"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -106,8 +107,8 @@ func TestPutTenant_StaleBaseHashConflicts(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode envelope: %v (%s)", err, w.Body.String())
 	}
-	if env["code"] != CodeConflict {
-		t.Errorf("code = %v, want %q", env["code"], CodeConflict)
+	if env["code"] != string(errcode.Conflict) {
+		t.Errorf("code = %v, want %q", env["code"], errcode.Conflict)
 	}
 	if got := env["current_source_hash"]; got != current {
 		t.Errorf("current_source_hash = %v, want %q", got, current)

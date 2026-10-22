@@ -196,3 +196,22 @@ def test_subdirectory_policies_it_does_not_count_are_named(tmp_path):
     p = _run("--config-dir", d)
     assert p.returncode == 0, p.stderr
     assert "`_policies` are read from the root" in p.stderr and "sub/_defaults.yaml" in p.stderr
+
+
+def test_a_profile_key_no_tenant_binds_is_a_finding_with_no_tenant(tmp_path):
+    """#3042: a `_` key no reader reads in a profile is a finding on the
+    profile file even when no tenant binds it — `tenants` is `[]`, the table
+    says `no tenant` — and `--tenant` lists only findings reaching it."""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (d / "_profiles.yaml").write_text("profiles:\n  p1:\n    _unknown_thing: bad\n", encoding="utf-8")
+    (d / "db-b.yaml").write_text("tenants:\n  db-b:\n    mysql_connections: 60\n", encoding="utf-8")
+    p = _run("--config-dir", d, "--json")
+    assert p.returncode == 0, p.stderr
+    got = [(f["file"], f["key"], f["reason"], f["tenants"]) for f in _json(p)["findings"]]
+    assert got == [("_profiles.yaml", "_unknown_thing", "unregistered", [])]
+    p = _run("--config-dir", d)
+    assert "notice: unread: _unknown_thing in _profiles.yaml (unregistered) — no tenant" in p.stdout
+    p = _run("--config-dir", d, "--tenant", "db-b", "--json")
+    assert _json(p)["findings"] == []

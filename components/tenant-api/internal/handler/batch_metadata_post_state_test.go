@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/platform"
 )
 
@@ -202,7 +203,7 @@ func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
 		before := gitRev(t, f.bare, "main")
 		w := postTenantBatch(t, f.deps, ops)
 		// #2900 F4: refused per op on the fresh base, the batch rejected (422).
-		assertRejectedOp(t, w, 0, "db-a", CodeForbidden, "latest base branch")
+		assertRejectedOp(t, w, 0, "db-a", string(errcode.Forbidden), "latest base branch")
 		if f.prOpened {
 			t.Error("a PR was opened")
 		}

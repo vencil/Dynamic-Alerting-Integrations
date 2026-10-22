@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -65,12 +67,12 @@ func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 		// endpoints. An org-scoped "*" admin must not touch every tenant's
 		// AccountID.
 		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
+			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
 				"platform admin (non-org-scoped) permission required to backfill account IDs")
 			return
 		}
 		if d.Accounts == nil {
-			handler.WriteJSONError(w, r, http.StatusServiceUnavailable,
+			handler.WriteKind(w, r, errkind.FederationNotConfigured,
 				"logs federation is not configured on this server")
 			return
 		}

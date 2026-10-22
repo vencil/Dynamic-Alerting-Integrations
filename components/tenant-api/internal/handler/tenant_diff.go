@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/credmask"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 )
 
@@ -65,7 +66,7 @@ type DiffResponse struct {
 // @Success     200   {object} DiffResponse
 // @Failure     400   {object} ErrorResponse "Bad request: the PUT this previews would be refused with this 400 (#3062: the same body)"
 // @Failure     403   {object} ErrorResponse "Forbidden: the PUT this previews would be refused with this 403 (#3062: the same body) — the proposal moves {id} outside the caller's write scope"
-// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — code TENANT_GIT_MANAGED when the tenant is git-managed (#3064; as PUT's 409, for every caller), ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
+// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — code TENANT_GIT_MANAGED when the tenant is git-managed (#3064; as PUT's 409, for every caller), ambiguous tenant file (TENANT_FILE_AMBIGUOUS), TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews would get)"
@@ -163,7 +164,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 // writeMaskedPreviewUnavailable is the 422 for a masked preview one of whose
 // sides cannot be masked with certainty. which names the side.
 func writeMaskedPreviewUnavailable(rw http.ResponseWriter, r *http.Request, which string) {
-	WriteJSONErrorWithCode(rw, r, http.StatusUnprocessableEntity, CodeMaskedPreviewUnavailable,
+	WriteJSONErrorWithCode(rw, r, http.StatusUnprocessableEntity, errcode.MaskedPreviewUnavailable,
 		"a caller without write permission on the tenant is shown a preview with credentials masked, and "+
 			which+" cannot be masked with certainty (not YAML, several documents, or an anchor, alias or merge key)")
 }

@@ -230,3 +230,33 @@ def test_a_dir_entry_names_no_reader(role, problem) -> None:
         with pytest.raises(lpt.ParseTreeError, match=f"a {role} with readers"):
             lpt.read_document(json.dumps({**doc, "entries": [{**base, **bad}]}).encode(),
                               check=lpt._check_list("list"))
+
+
+@pytest.mark.parametrize("target", ["team", "team/sub", "_d", "sealed", "y.yaml"])
+def test_a_write_onto_a_directory_is_refused_not_a_da_guard_failure(unprivileged, target) -> None:
+    """F1: a write target that is a directory — entered (`team`, `team/sub`,
+    `_d`) or one this uid cannot list (`sealed/`, the config-named `y.yaml/`)
+    — is file mode's walk entry (role dir / unlistable_dir, no content), which
+    the reader accepts; the write check refuses it as `path_not_read`, never
+    as a document from an older da-guard (ParseTreeError). Run as uid 65534,
+    so the unlistable directories really are."""
+    import _lib_write_check as wc
+    box, _run = unprivileged
+    conf = box / "conf.d"
+    for d in ("team/sub", "_d", "sealed", "y.yaml"):
+        (conf / d).mkdir(parents=True)
+    for d in (conf, conf / "team", conf / "team/sub", conf / "_d"):
+        d.chmod(0o755)
+    (conf / "team" / "t.yaml").write_text("tenants: {t: {}}\n", encoding="utf-8")
+    (conf / "team" / "t.yaml").chmod(0o644)
+    for d in ("sealed", "y.yaml"):
+        (conf / d).chmod(0)
+    wrapper = box / "da-guard-as-run"
+    prefix = (f"{shutil.which('setpriv')} --reuid=65534 --regid=65534 --clear-groups "
+              if os.geteuid() == 0 else "")
+    wrapper.write_text(f'#!/bin/sh\nexec {prefix}"{box / "da-guard"}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    with pytest.raises(wc.WriteRefused) as ei:
+        wc.confirm(conf, target, "tenants: {x: {}}\n", {}, binary=str(wrapper))
+    assert ei.value.reason == wc.NOT_READ, ei.value
+    assert "directory" in str(ei.value) and "older" not in str(ei.value), ei.value

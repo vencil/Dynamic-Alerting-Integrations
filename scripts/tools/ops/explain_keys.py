@@ -199,7 +199,7 @@ def render_text(doc: dict[str, Any]) -> str:
                 f"{safe_label(k)} (from {safe_label(src or '?')})"
                 for k, src in zip(f["served_family"], f["served_from"])) if f["served_family"] else "")
             lines.append(f"  {f['severity']}: {f['kind']}: {safe_label(f['key'])} in "
-                         f"{safe_label(f['file'] or '?')}{why}{fam} — {who}")
+                         f"{safe_label(f['file'] or '?')}{why}{fam} — {who or 'no tenant'}")
     if doc["undecidable"]:
         lines.append("No root platform file was read: threshold keys are undecidable (ADR-038 decision 7).")
     return "\n".join(lines).rstrip("\n")

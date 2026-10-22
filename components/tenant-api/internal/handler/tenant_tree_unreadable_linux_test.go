@@ -13,6 +13,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"net/http"
 	"net/http/httptest"
@@ -67,8 +68,8 @@ func TestTreeUnreadable_LinuxShapes_PutAndBatch(t *testing.T) {
 				visible := group == "platform"
 				head := f.head(t)
 				start := time.Now()
-				assertTreeRefusalAs(t, f.put(t, group, "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 1, entry, visible)
-				assertTreeRefusalAs(t, f.batch(t, group, "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 1, entry, visible)
+				assertTreeRefusalAs(t, f.put(t, group, "tu-a"), http.StatusInternalServerError, string(errcode.TenantStoreFault), 1, entry, visible)
+				assertTreeRefusalAs(t, f.batch(t, group, "tu-a"), http.StatusInternalServerError, string(errcode.TenantStoreFault), 1, entry, visible)
 				if took := time.Since(start); took > 10*time.Second {
 					t.Errorf("answered after %v: a walk or read blocked", took)
 				}
@@ -115,14 +116,14 @@ func TestTreeUnreadable_UnreadableTargetNotLoadableForEveryCaller(t *testing.T) 
 				pw := f.put(t, group, "tu-x")
 				var pe map[string]any
 				if err := json.Unmarshal(pw.Body.Bytes(), &pe); err != nil || pw.Code != http.StatusConflict ||
-					pe["code"] != CodeTenantConfigNotLoadable || pe["config_error"] != shape.configError {
-					t.Fatalf("PUT = %d %s, want 409 %s config_error %s", pw.Code, pw.Body.String(), CodeTenantConfigNotLoadable, shape.configError)
+					pe["code"] != string(errcode.TenantConfigNotLoadable) || pe["config_error"] != shape.configError {
+					t.Fatalf("PUT = %d %s, want 409 %s config_error %s", pw.Code, pw.Body.String(), errcode.TenantConfigNotLoadable, shape.configError)
 				}
 				bw := f.batch(t, group, "tu-x")
 				var br BatchResponse
 				if err := json.Unmarshal(bw.Body.Bytes(), &br); err != nil || bw.Code != http.StatusUnprocessableEntity ||
-					len(br.Results) != 1 || br.Results[0].Code != CodeTenantConfigNotLoadable {
-					t.Fatalf("batch = %d %s, want 422 with the op %s", bw.Code, bw.Body.String(), CodeTenantConfigNotLoadable)
+					len(br.Results) != 1 || br.Results[0].Code != errcode.TenantConfigNotLoadable {
+					t.Fatalf("batch = %d %s, want 422 with the op %s", bw.Code, bw.Body.String(), errcode.TenantConfigNotLoadable)
 				}
 				vw := f.do(t, ValidateTenant(f.d), rbac.PermRead, group, "POST", "/api/v1/tenants/tu-x/validate", "tu-x",
 					"tenants:\n  tu-x:\n    _silent_mode: \"critical\"\n")
@@ -153,8 +154,8 @@ func TestTreeUnreadable_StoreFaultWinsOverDanglingLink_Handlers(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(f.dir, "stuck.yaml"), 0o644); err != nil {
 		t.Skipf("mkfifo: %v", err)
 	}
-	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 2, "stuck.yaml", true)
-	assertTreeRefusalAs(t, f.batch(t, "team,readers", "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 2, "stuck.yaml", false)
+	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, string(errcode.TenantStoreFault), 2, "stuck.yaml", true)
+	assertTreeRefusalAs(t, f.batch(t, "team,readers", "tu-a"), http.StatusInternalServerError, string(errcode.TenantStoreFault), 2, "stuck.yaml", false)
 }
 
 // D3a for a store fault in an async batch: the task's stored results carry
@@ -181,8 +182,8 @@ func TestTreeUnreadable_AsyncStoreFaultStoresNoEntryNames(t *testing.T) {
 	for _, poller := range []string{"platform", "team,readers"} {
 		got := f.do(t, GetTask(f.d), rbac.PermRead, poller, "GET", "/api/v1/tasks/"+taskID, taskID, "")
 		body := got.Body.String()
-		if got.Code != http.StatusOK || !strings.Contains(body, CodeTenantStoreFault) || !strings.Contains(body, "(unreadable entries: 1)") {
-			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, body, CodeTenantStoreFault)
+		if got.Code != http.StatusOK || !strings.Contains(body, string(errcode.TenantStoreFault)) || !strings.Contains(body, "(unreadable entries: 1)") {
+			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, body, errcode.TenantStoreFault)
 		}
 		if strings.Contains(body, "secret-other-team-fifo") {
 			t.Errorf("%s polls: the stored result names the entry: %s", poller, body)
@@ -241,7 +242,7 @@ func TestTreeUnreadable_StoreFaultWinsOverUnreadableTarget_AllEndpoints(t *testi
 	}
 	var want map[string]any
 	for name, w := range responses {
-		assertTreeRefusalAs(t, w, http.StatusInternalServerError, CodeTenantStoreFault, 1, "stuck.yaml", true)
+		assertTreeRefusalAs(t, w, http.StatusInternalServerError, string(errcode.TenantStoreFault), 1, "stuck.yaml", true)
 		var got map[string]any
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)

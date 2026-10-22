@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -125,8 +126,8 @@ func assertPushFailed503(t *testing.T, rec *httptest.ResponseRecorder, r *hookRe
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode: %v; body: %s", err, rec.Body.String())
 	}
-	if env.Code != CodeGitPushFailed || env.Error != msgGitPushFailed || env.RetryAfterS != 5 {
-		t.Errorf("envelope = %+v, want code %s, error %q, retry_after_s 5", env, CodeGitPushFailed, msgGitPushFailed)
+	if env.Code != errcode.GitPushFailed || env.Error != msgGitPushFailed || env.RetryAfterS != 5 {
+		t.Errorf("envelope = %+v, want code %s, error %q, retry_after_s 5", env, errcode.GitPushFailed, msgGitPushFailed)
 	}
 	body := rec.Body.String()
 	for _, leak := range []string{r.bare, r.dir, "secret-remote-detail", "tenant-api/", "pending_review", "results"} {

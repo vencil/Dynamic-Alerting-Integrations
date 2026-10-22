@@ -99,6 +99,29 @@ def test_template_derives_tag_from_appversion(repo_root: Path, chart_dir: str, r
     )
 
 
+@pytest.mark.parametrize("chart_dir,repo", _CHARTS)
+def test_appversion_equals_chart_version(repo_root: Path, chart_dir: str, repo: str) -> None:
+    """appVersion == version for every chart whose image this repo builds (#3228).
+
+    Each of these release lines builds its image from the tagged commit and
+    pushes it as ``:v<version>`` (release.yaml gates version == tag), while the
+    template above defaults to ``:v<appVersion>``. If the two differ, the
+    default install runs some other binary than the one built with these
+    templates — tenant-api's chart 2.9.24 defaulted to the 2.7.0 binary, which
+    does not know the flags the template passes, and could not start.
+
+    release.yaml's own appVersion gate only runs on a tag push; this is the
+    PR-time half.
+    """
+    chart = yaml.safe_load((repo_root / chart_dir / "Chart.yaml").read_text(encoding="utf-8"))
+    assert str(chart["appVersion"]) == str(chart["version"]), (
+        f"{chart_dir}/Chart.yaml appVersion ({chart['appVersion']}) != version "
+        f"({chart['version']}); the default image would be {repo}:v{chart['appVersion']}, "
+        f"not the image released with this chart. Move both with "
+        f"`bump_docs.py` (e.g. --tenant-api <ver>)"
+    )
+
+
 def test_da_portal_tiers_have_empty_tag(repo_root: Path) -> None:
     """tier1/tier2 overlays must not pin a (stale, no-v) image tag."""
     for tier in ("values-tier1.yaml", "values-tier2.yaml"):

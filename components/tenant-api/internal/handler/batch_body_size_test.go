@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -279,9 +280,9 @@ func TestBatchBudgetIsTighterThanTheGeneralBodyCap(t *testing.T) {
 // first status introduced without one.
 func TestOversizeBatchCarriesAnErrorCode(t *testing.T) {
 	t.Parallel()
-	if got := codeFromStatus(http.StatusRequestEntityTooLarge); got != CodePayloadTooLarge {
+	if got := codeFromStatus(http.StatusRequestEntityTooLarge); got != errcode.PayloadTooLarge {
 		t.Fatalf("codeFromStatus(413) = %q, want %q — an unmapped status omits "+
-			"the required `code` key", got, CodePayloadTooLarge)
+			"the required `code` key", got, errcode.PayloadTooLarge)
 	}
 	body := batchBodyOfSize(int(DefaultMaxBatchBodyBytes) + 1024)
 	configDir := t.TempDir()
@@ -296,8 +297,8 @@ func TestOversizeBatchCarriesAnErrorCode(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp["code"] != CodePayloadTooLarge {
-		t.Errorf("413 body has code=%v, want %q: %v", resp["code"], CodePayloadTooLarge, resp)
+	if resp["code"] != string(errcode.PayloadTooLarge) {
+		t.Errorf("413 body has code=%v, want %q: %v", resp["code"], errcode.PayloadTooLarge, resp)
 	}
 }
 

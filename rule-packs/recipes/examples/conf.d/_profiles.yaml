@@ -1,0 +1,14 @@
+# Custom Alerts example — a recipe shared by a group of tenants (ADR-024 §3).
+# The exporter serves a profile's _custom_alerts to every tenant that binds the
+# profile (`_profile: finance`) and writes no _custom_alerts of its own; a tenant
+# that writes its own list gets that list instead, never both.
+profiles:
+  finance:
+    _custom_alerts:
+      - recipe: ratio
+        name: payment_failure_ratio
+        metric: payment_failed_total
+        denominator_metric: payment_attempts_total
+        op: ">"
+        window: 5m
+        threshold: "0.01:critical"

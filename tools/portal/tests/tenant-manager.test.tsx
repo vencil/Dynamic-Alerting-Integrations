@@ -20,7 +20,7 @@
  * deterministic, backend-free render.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import TenantManager from '../src/interactive/tools/tenant-manager.jsx';
 import { DEMO_TENANTS, DEMO_GROUPS } from '../src/interactive/tools/tenant-manager/fixtures/demo-tenants.js';
 import { apiFixture } from './helpers/api-fixture';
@@ -717,5 +717,68 @@ describe('TenantManager — pending PRs link to web_url (#2833)', () => {
 
     const badge = await screen.findByText(/PR #101/);
     expect(badge.closest('a')?.getAttribute('href')).toBe(PRS.pending_prs[0].web_url);
+  });
+});
+
+/**
+ * #3202: the group PUT's 409 GROUP_ID_UNAVAILABLE (#3123: the id is held by a
+ * group the caller cannot see) means "pick another id". apiCall used to read
+ * every 409 as "updated by someone else — refresh", which can never succeed.
+ */
+describe('TenantManager — group write errors follow the code\'s remedy (#3202)', () => {
+  const ME = {
+    email: 'alice@example.com',
+    user: 'alice',
+    groups: ['production-dba'],
+    accessible_tenants: [],
+    accessible_domains: [],
+    permissions: { 'production-dba': ['read', 'write'] },
+  };
+
+  function stubFetch(groupStatus: number, groupBody: any) {
+    apiFixture('MeResponse', ME);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, opts?: any) => {
+        const u = String(url);
+        if (u.includes('/api/v1/me')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ME) } as any);
+        }
+        if (u.includes('/api/v1/groups/') && opts?.method === 'PUT') {
+          return Promise.resolve({
+            ok: false, status: groupStatus,
+            headers: { get: () => null },
+            json: () => Promise.resolve(groupBody),
+          } as any);
+        }
+        return Promise.reject(new Error('offline test'));
+      }),
+    );
+  }
+
+  async function createGroup(id: string) {
+    await renderAndSettle();
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    await waitFor(() => expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument());
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Create new group' }));
+    fireEvent.change(within(sidebar).getByLabelText('Group ID'), { target: { value: id } });
+    fireEvent.change(within(sidebar).getByLabelText('Display Label'), { target: { value: 'Taken' } });
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Create Group' }));
+  }
+
+  it('a 409 GROUP_ID_UNAVAILABLE says "choose another id", not "refresh", and reverts the group', async () => {
+    stubFetch(409, apiFixture('ErrorResponse', { error: 'group id is not available', code: 'GROUP_ID_UNAVAILABLE' }));
+    await createGroup('taken-id');
+    const toast = await screen.findByText(/Choose a different one/);
+    expect(toast.textContent).toContain('group id is not available');
+    expect(document.body.textContent).not.toMatch(/updated by someone else/);
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    await waitFor(() => expect(within(sidebar).queryByText('Taken')).toBeNull()); // optimistic add reverted
+  });
+
+  it('control: a 409 CONFLICT still says "refresh and try again"', async () => {
+    stubFetch(409, apiFixture('ErrorResponse', { error: 'updated', code: 'CONFLICT' }));
+    await createGroup('race-id');
+    expect(await screen.findByText(/updated by someone else/)).toBeInTheDocument();
   });
 });

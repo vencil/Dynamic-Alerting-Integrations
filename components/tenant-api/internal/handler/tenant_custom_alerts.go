@@ -30,6 +30,8 @@ import (
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -101,10 +103,10 @@ type PutCustomAlertsResponse struct {
 // @Failure     409   {object} ErrorResponse "Conflict: the tenant is git-managed (TENANT_GIT_MANAGED, #3064), base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
-// @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
+// @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error: code INTERNAL_ERROR, among others when the commit or the file write fails (#1535: a fault of the server, not of the body; the detail is in the server log under request_id); or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code UPSTREAM_ERROR with another message when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above it may already be committed, so refresh to see whether it was before retrying"
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
 func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +179,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 			return
 		case errors.Is(err, confd.ErrAmbiguousTenantFile):
-			WriteJSONError(w, r, http.StatusConflict, err.Error())
+			WriteKind(w, r, errkind.AmbiguousTenantFile, err.Error())
 			return
 		case err != nil:
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
@@ -198,7 +200,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// under the lock.
 		if d.Writer != nil {
 			if err := d.Writer.JudgeWrite(tenantID); err != nil {
-				if !writeTenantPlacementError(w, r, d, err) {
+				if h, _ := writeErr(w, r, d, err, errCtx{accept: kindsPlacement}); !h {
 					WriteJSONError(w, r, http.StatusInternalServerError, writeErrorText(r, err))
 				}
 				return
@@ -234,7 +236,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// based on them — and the conflict answer below would hand out the
 		// hash of a file GET does not show. Before the loadability check: a
 		// file that is not YAML is git-managed (its shape cannot be told).
-		if writeTenantGitManaged(w, r, gitops.CheckAPIManaged(tenantID, raw)) {
+		if h, _ := writeErr(w, r, d, gitops.CheckAPIManaged(tenantID, raw), errCtx{accept: kindsOf(errkind.TenantGitManaged)}); h {
 			return
 		}
 		var notLoadable *tenantFileNotLoadableError
@@ -264,9 +266,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// changed — no other tenant's content is in them to be overwritten.
 		currentHash := cfg.ComputeSourceHash(raw)
 		if req.BaseHash != currentHash {
-			WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
-				Error: "the tenant configuration was updated by someone else; refresh and retry",
-				Code:  CodeConflict,
+			// The table's PreconditionFailed answer (#3202), with the
+			// current hash: raw is API-shaped (checked above), so GET shows it.
+			spec := kindSpecOf(errkind.PreconditionFailed)
+			writeKindAnswer(w, r, spec, spec.RetryAfterS, ErrorResponse{
+				Error: msgPreconditionRefresh,
 				Extra: map[string]any{"current_source_hash": currentHash},
 			})
 			return
@@ -284,7 +288,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// #2903: the decode error's text may quote another tenant's
 			// value (the file can be shared); it goes to the log only.
 			slog.Warn("custom alerts: cannot merge into the tenant file", "tenant", tenantID, "error", err)
-			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.ConfigDecode,
 				"internal error: cannot merge into the tenant file (the details are in the server log)")
 			return
 		}
@@ -309,7 +313,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// The text describes the tenant file's content, not the
 			// server (#1700): its own code, so it is not withheld.
 			slog.Warn("custom alerts: merged config is not parseable", "tenant", tenantID, "error", err)
-			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.ConfigDecode,
 				"internal error: merged config is not parseable (the details are in the server log)")
 			return
 		}
@@ -334,7 +338,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// The text describes the tenant file's content, not the
 			// server (#1700): its own code, so it is not withheld.
 			slog.Warn("custom alerts: cannot read current custom alerts", "tenant", tenantID, "error", err)
-			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.ConfigDecode,
 				"internal error: cannot read current custom alerts (the details are in the server log)")
 			return
 		}
@@ -375,53 +379,17 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 // WriteIfUnchanged failed. It always writes the answer; fault reports a
 // failure that is the server's (#3054).
 func writeCustomAlertsWriteError(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, err error) (fault bool) {
-	// #2903: the generator container refused it (422 / 429 / 503).
-	if writeGeneratorError(w, r, d, err) {
-		return false
-	}
-	if errors.Is(err, gitops.ErrWriteOverloaded) {
-		WriteOverloaded(w, r)
-		return false
-	}
-	// #1723: the tree was on a PR branch and nothing was written —
-	// retryable, not the fallback below.
-	if errors.Is(err, gitops.ErrTreeNotOnBase) {
-		WriteTreeNotOnBase(w, r, err)
-		return false
-	}
-	// The base moved between the pre-check above and the lock. Same
-	// envelope as that pre-check so a client cannot tell which of the
-	// two rejected it — only that it must re-read and retry.
-	var pre *gitops.PreconditionError
-	if errors.As(err, &pre) {
-		extra := map[string]any{}
-		// #3064: the file changed under the lock; its new version
-		// may no longer be API-shaped, and GET shows no hash of such
-		// a file.
-		if pre.Current != "" && tenantFileAPIManaged(d, tenantID, pre.Current) {
-			extra["current_source_hash"] = pre.Current
-		}
-		WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
-			Error: "the tenant configuration was updated by someone else; refresh and retry",
-			Code:  CodeConflict,
-			Extra: extra,
-		})
-		return false
-	}
-	if errors.Is(err, gitops.ErrConflict) {
-		WriteJSONError(w, r, http.StatusConflict, err.Error())
-		return false
-	}
-	// No gitops.ErrForgeDegraded check: it comes only from the in-lock base
-	// fetch of the PR-mode writes (WritePRChecked / WritePRBatch), and this
-	// is a direct-mode WriteIfUnchanged.
-	// #2078: the id is also declared by another conf.d file (the
-	// exporter already rejects that tree) → 409, fixed message.
-	if writeTenantPlacementError(w, r, d, err) {
-		return false
-	}
-	// #1700 / #1535: as PutTenant's fallback — 400 with the error's
-	// own text only when it is about the request, else the server's
-	// 500 (#3054: counted as an error).
-	return writeTenantWriteFailure(w, r, err)
+	// The base moved between the pre-check above and the lock: the same
+	// envelope as that pre-check, so a client cannot tell which of the two
+	// rejected it — only that it must re-read and retry. No ErrForgeDegraded:
+	// it comes only from the in-lock base fetch of the PR-mode writes, and
+	// this is a direct-mode WriteIfUnchanged. #1700 / #1535: the fallback is
+	// PutTenant's — 400 with the error's own text only when it is about the
+	// request, else the server's 500 (#3054: counted as an error).
+	_, fault = writeErr(w, r, d, err, errCtx{
+		accept:   kindsDirectWrite,
+		fallback: fallbackWrite,
+		tenantID: tenantID,
+	})
+	return fault
 }

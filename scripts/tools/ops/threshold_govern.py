@@ -704,9 +704,12 @@ def _http_put_yaml(
 
 
 # The tenant-api PR-mode "a PR for this tenant is already open" 409 carries this
-# code (handler.CodePendingPR). A 409 WITHOUT it (e.g. direct-mode ErrConflict =
-# git HEAD moved during the write) is a transient error, NOT a dedup signal — so
-# don't silently skip it as "already pending".
+# code (errcode.PendingPR in tenant-api's internal/errcode). A 409 WITHOUT it is
+# some other refusal — CONFLICT (the base moved: refresh and retry), or one a
+# retry cannot pass (TENANT_GIT_MANAGED, TENANT_FILE_AMBIGUOUS, ...) — and is
+# reported as an error, NOT a dedup signal, so it is never silently skipped as
+# "already pending". This tool does not tell those apart; the code's remedy in
+# tenant-api's error contract (tenant-api-errors.json, #3202) would.
 _PENDING_PR_CODE = "PENDING_PR_EXISTS"
 
 

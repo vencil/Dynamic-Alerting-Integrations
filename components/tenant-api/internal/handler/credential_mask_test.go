@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/credmask"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -398,8 +399,8 @@ func TestCredentialMask_DiffRefusals(t *testing.T) {
 
 	alias := "tenants:\n  mask-probe:\n    _metadata: {owner: &h x}\n    _routing: {receiver: {type: slack, api_url: *h}}\n"
 	w := f.diff(t, "viewers", alias)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), CodeMaskedPreviewUnavailable) {
-		t.Errorf("viewer diff of an aliased proposal: %d %s, want 422 %s", w.Code, w.Body.String(), CodeMaskedPreviewUnavailable)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), string(errcode.MaskedPreviewUnavailable)) {
+		t.Errorf("viewer diff of an aliased proposal: %d %s, want 422 %s", w.Code, w.Body.String(), errcode.MaskedPreviewUnavailable)
 	}
 	if strings.Contains(w.Body.String(), "CANARY") {
 		t.Errorf("refusal leaks a credential: %s", w.Body.String())
