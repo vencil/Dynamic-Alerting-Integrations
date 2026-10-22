@@ -620,6 +620,8 @@ receivers:
             ca_file: /etc/alertmanager/tls/ca.crt
 ```
 
+This belongs in the platform's own base Alertmanager config. A receiver written in conf.d cannot carry `ca_file` or any other `*_file` / `*_ref` key: the route generator refuses it ([#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)).
+
 ### Config Reload Endpoint Security
 
 Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints for triggering configuration reload. This project runs a `config-reloader` sidecar on **both** sides to call those endpoints automatically: the Alertmanager one watches the routing config (#1243), the Prometheus one watches the Rule Pack directory `/etc/prometheus/rules` (added in #1246). The Prometheus side does **not** cover `prometheus.yml` — it is mounted with `subPath`, K8s does not propagate ConfigMap updates into a subPath mount, so changing it still requires a pod restart.

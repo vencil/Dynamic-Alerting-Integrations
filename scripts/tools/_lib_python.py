@@ -61,7 +61,6 @@ from _lib_validation import (  # noqa: F401
     positive_int,
     positive_int_seconds,
     format_duration,
-    is_disabled,
     validate_and_clamp,
     detect_cli_lang,
     i18n_text,

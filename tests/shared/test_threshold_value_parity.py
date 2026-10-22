@@ -7,15 +7,23 @@ from ``splitThresholdSeverity`` and ``ThresholdSeverities``, the one grammar
 the threshold rows and custom alerts share). Held to the same columns here:
 
 * ``_lib_validation.split_threshold_severity`` — the shared Python reader;
-* ``backtest_threshold.parse_threshold_value`` — how the backtest reads a
-  value written for a base key (a value the exporter cannot read raises);
+* ``_lib_validation.parse_threshold_number`` — the number half, finite only
+  (#3140), against ``float_ok`` (Go's parseThresholdNumber);
+* ``backtest_threshold._served_written`` — how ``backtest --tenant`` reads a
+  value written for a base key: from da-guard served-values (#3140 PR2), so
+  this checks the Python reading of served-values' answer against Go's
+  ``row_disabled`` / ``ok`` / ``float_ok`` columns, not a Python mirror
+  (``_lib_validation.is_disabled`` and ``parse_threshold_value``, the
+  mirrors it replaced, are gone);
 * ``check_threshold_unit_sanity._as_number`` — the number the unit-sanity
   lint judges (None for a value the exporter cannot read);
 * ``custom_alerts/shape.py`` ``parse_threshold`` — the custom-alert compiler;
-* ``_lib_validation.custom_alert_disabled`` and the two tools that read a
-  custom alert's opt-out through it (``config_diff._threshold_disabled``,
-  ``blast_radius._threshold_disabled``) — against the ``custom_alert_disabled``
-  column, which Go writes from ``resolveOneCustomAlert`` itself;
+* ``_lib_validation.custom_alert_disabled`` and the one tool that still reads
+  a custom alert's opt-out through it (``blast_radius._threshold_disabled``;
+  its input carries no served-values status) — against the
+  ``custom_alert_disabled`` column, which Go writes from
+  ``resolveOneCustomAlert`` itself (config_diff reads served-values'
+  ``custom_alerts[].status`` instead, #3140 PR2);
 * the severity sets those two compare against;
 * tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
   the suffix only (``ok`` is false only for a refused suffix), through ``re``
@@ -40,7 +48,6 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools"))
 import _lib_validation  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
 import blast_radius  # noqa: E402
-import config_diff  # noqa: E402
 import check_threshold_unit_sanity as unit_sanity  # noqa: E402
 from custom_alerts import shape  # noqa: E402
 
@@ -68,7 +75,7 @@ def _pattern() -> str:
 def test_matrix_is_written_by_go():
     m = _matrix()
     assert m["severities"], "no severities: regenerate with DA_REGEN_THRESHOLD_VALUE_MATRIX=1"
-    assert all({"value", "ok"} <= set(r) for r in m["rows"]), (
+    assert all({"value", "ok", "row_disabled"} <= set(r) for r in m["rows"]), (
         "a row without Go's verdict: regenerate with DA_REGEN_THRESHOLD_VALUE_MATRIX=1")
     assert _REQUIRED_SAMPLES <= {r["value"] for r in m["rows"]}
     assert {r["ok"] for r in m["rows"]} == {True, False}, "the table needs both verdicts"
@@ -90,30 +97,79 @@ def test_shared_reader_splits_as_the_exporter_does(row):
         row["value_part"], row["severity"]), row
 
 
+@pytest.mark.parametrize("row", [r for r in _rows() if r["ok"]], ids=lambda r: repr(r["value"]))
+def test_shared_number_reader_is_the_exporters(row):
+    """#3140: `float_ok` is Go's parseThresholdNumber — finite only."""
+    if not row["float_ok"]:
+        with pytest.raises(ValueError):
+            _lib_validation.parse_threshold_number(row["value_part"])
+        return
+    got = _lib_validation.parse_threshold_number(row["value_part"])
+    assert math.isfinite(got) and got == _number(row["value_part"]), row
+
+
+def _number(text):
+    """The number of a `value_part` Go's `float_ok` accepts: a hex float by
+    `float.fromhex`, anything else by `float` (both without the `_` Go and
+    Python allow between digits)."""
+    text = text.replace("_", "")
+    return float.fromhex(text) if "x" in text.lower() else float(text)
+
+
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
 def test_unit_sanity_lint_judges_the_number_the_exporter_serves(row):
+    """The number the exporter serves — and, owner ruling on #3140 (D), a
+    non-finite one too, which the exporter refuses but this lint judges
+    (±Inf is OUT-OF-DOMAIN)."""
     got = unit_sanity._as_number(row["value"])
+    if row["ok"] and "x" in row["value_part"].lower():
+        # A hex float, which the exporter reads: this lint never judged one
+        # and does not start to without an owner ruling (it would turn
+        # `--ci` from 0 to 1; see `_as_number`).
+        assert got is None, row
+        return
+    if row["ok"] and not row["float_ok"] and _non_finite_text(row["value_part"]):
+        want = float(row["value_part"])
+        assert got is not None and (got == want or (math.isnan(got) and math.isnan(want))), row
+        return
     if not (row["ok"] and row["float_ok"]):
         assert got is None, row
         return
-    want = float(row["value_part"])
-    assert got == want or (math.isnan(got) and math.isnan(want)), row
+    assert got == _number(row["value_part"]), row
 
 
+def _non_finite_text(text):
+    """Whether Python reads `text` as NaN or ±inf at all (`1e999` included)."""
+    try:
+        return not math.isfinite(float(text))
+    except ValueError:
+        return False
+
+
+@pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
 def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
+    """Judged by Go's columns alone (#3141): `row_disabled` is no row,
+    `ok` and `float_ok` a row of that number and severity, and anything else
+    a value the exporter refuses — which `backtest --tenant` either does not
+    backtest (`_NotRead`) or backtests at the platform default the exporter
+    serves instead (80, warning; #3140). Read through served-values (#3140
+    PR2): a reading of Go's answer, held to Go's own columns."""
     value = row["value"]
-    if bt.is_disabled(value):
-        assert bt.parse_threshold_value("mysql_connections", value) is None
-        return
-    if not (row["ok"] and row["float_ok"]):
-        with pytest.raises(ValueError):
-            bt.parse_threshold_value("mysql_connections", value)
-        return
-    got = bt.parse_threshold_value("mysql_connections", value)
-    want = float(row["value_part"])
-    assert got[1] == row["severity"], row
-    assert got[0] == want or (math.isnan(got[0]) and math.isnan(want)), row
+    try:
+        (got,) = bt._served_written("mysql_connections", (value,))
+    except bt._NotRead:
+        got = "not read"
+    if row["row_disabled"]:
+        assert got is None, row
+    elif row["ok"] and row["float_ok"] and bt._SPELLINGS_NOT_BACKTESTED.search(value):
+        # `1_000`, `0x1p4`: read by the exporter, not backtested by
+        # `--tenant` (as before #3140 PR2; `_SPELLINGS_NOT_BACKTESTED`).
+        assert got == "not read", row
+    elif row["ok"] and row["float_ok"]:
+        assert got == (float(row["value_part"]), row["severity"]), row
+    else:
+        assert got in ("not read", (80.0, "warning")), (row, got)
 
 
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
@@ -143,8 +199,33 @@ def test_schema_validator_refuses_exactly_the_refused_suffixes(row):
 def test_custom_alert_opt_out_is_read_as_the_exporter_reads_it(row):
     want = row["custom_alert_disabled"]
     assert _lib_validation.custom_alert_disabled(row["value"]) is want, row
-    assert config_diff._threshold_disabled(row["value"]) is want, row
     assert blast_radius._threshold_disabled({"threshold": row["value"]}) is want, row
+
+
+def test_matrix_carries_the_non_finite_and_row_disable_samples():
+    """#3140 / #3141: the samples the two rulings are about, with Go's
+    verdict on each."""
+    rows = {r["value"]: r for r in _rows()}
+    for v in ("NaN", "nan", "Inf", "+Inf", "-Inf", "infinity", "-inf:critical",
+              "NaN:warning", "Inf:critical", "1e999"):
+        assert rows[v]["ok"] and rows[v]["float_ok"] is False, v
+    assert rows["1e-400"]["float_ok"] is True
+    for v in ("disable:critical", "disable:warning", "off:critical", "disable\x1c", "disable\x1f"):
+        assert rows[v]["row_disabled"] is False, v
+    for v in ("disable", " disable ", "OFF", "false", "DİSABLE"):
+        assert rows[v]["row_disabled"] is True, v
+    assert rows["disable:critical"]["custom_alert_disabled"] is True  # #3042: unchanged
+
+
+def test_matrix_carries_the_go_number_spellings():
+    """#3140: what Go's ParseFloat reads beyond Python's `float` (a hex
+    float) and the `_` both read between digits — so the Python readers
+    are held to Go on them, not to a conservative refusal of their own."""
+    rows = {r["value"]: r for r in _rows()}
+    for v in ("1_000", "-1_0", "1e1_0", "0x1p4", "0x_1p4", "0x1.p1"):
+        assert rows[v]["ok"] and rows[v]["float_ok"] is True, v
+    for v in ("1__0", "_1", "1_", "0x10", "0x1p_4", "0x1p99999", "\u0661\u0660"):
+        assert rows[v]["ok"] and rows[v]["float_ok"] is False, v
 
 
 def test_matrix_carries_the_opt_out_samples():

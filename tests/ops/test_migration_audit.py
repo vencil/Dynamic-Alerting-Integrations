@@ -476,14 +476,16 @@ def test_every_rewrite_makes_both_readers_agree(tmp_path, corpus_tree, da_guard_
     assert not bad, bad
     assert tried >= 40, tried
     # No lossy spelling is offered: past-int64 integers and `tenants:` items
-    # get the quoted string only; a non-finite float gets `.inf`.
+    # get the quoted string only; so does a non-finite float (#3140: no
+    # `.inf` / `.nan`, which no threshold may be — it used to get `.inf`).
     by = {(e["file"], tuple(e["path"])): e for e in edge_report["values"]}
-    for key in (("edge/t.yaml", ("b",)), ("edge/t.yaml", ("c",)), ("edge/t.yaml", ("j",)),
+    for key in (("edge/t.yaml", ("a",)), ("edge/t.yaml", ("b",)), ("edge/t.yaml", ("c",)),
+                ("edge/t.yaml", ("j",)),
                 ("edge/_domain_policy.yaml", ("domain_policies", "fin", "tenants", 1)),
                 ("edge/_domain_policy.yaml", ("domain_policies", "fin", "tenants", 6))):
         assert [o["meaning"] for o in by[key]["rewrites"]] == ["string"], (key, by[key]["rewrites"])
-    assert {"meaning": "number", "text": ".inf"} in by[("edge/t.yaml", ("a",))]["rewrites"]
-    assert all("inf" != o["text"] for e in edge_report["values"] for o in e["rewrites"])
+    assert all(o["text"].lower().lstrip("+-") not in ("inf", ".inf", ".nan")
+               for e in edge_report["values"] for o in e["rewrites"])
 
 
 def test_tenants_list_items_are_compared_by_value(tmp_path, da_guard_binary) -> None:

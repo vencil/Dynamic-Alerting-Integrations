@@ -26,9 +26,14 @@ func TestRoleOfEachUnreadableReason(t *testing.T) {
 			t.Errorf("%+v: role %q, want %q", tc.u, got, tc.want)
 		}
 	}
-	for _, nf := range []NotFile{{RelKey: "d.yaml", Reason: NotFileDirectory}, {RelKey: "l.yaml", Reason: NotFileDirLink}} {
-		if got := nf.Role(); got != RoleNotAFile {
-			t.Errorf("%+v: role %q, want %q", nf, got, RoleNotAFile)
+	// A config-named directory is descended like any directory (role dir);
+	// a symlink to a directory is never followed (not_a_file).
+	for nf, want := range map[NotFile]Role{
+		{RelKey: "d.yaml", Reason: NotFileDirectory}: RoleDir,
+		{RelKey: "l.yaml", Reason: NotFileDirLink}:   RoleNotAFile,
+	} {
+		if got := nf.Role(); got != want {
+			t.Errorf("%+v: role %q, want %q", nf, got, want)
 		}
 	}
 	if RootWalkRole != RoleUnlistableDir {

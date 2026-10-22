@@ -236,10 +236,13 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
 # http_config keys Alertmanager accepts at most ONE of (#2295):
 # prometheus/common HTTPClientConfig.Validate refuses every pair, and the whole
 # config then fails to reload. basic_auth / oauth2 / authorization are mappings
-# (an empty mapping counts as set); bearer_token / bearer_token_file are strings
-# ("" counts as unset). Rows of receiver_presence_cases.json pin it.
+# (an empty mapping counts as set); bearer_token is a string ("" counts as
+# unset). Rows of receiver_presence_cases.json pin it. Alertmanager's fifth,
+# bearer_token_file, is not here: #3257 refuses every file-reference key of a
+# conf.d receiver before this rule is read
+# (_lib_validation.receiver_file_reference_problem).
 HTTP_CONFIG_AUTH_FIELDS: Final[tuple[str, ...]] = (
-    "basic_auth", "oauth2", "authorization", "bearer_token", "bearer_token_file",
+    "basic_auth", "oauth2", "authorization", "bearer_token",
 )
 HTTP_CONFIG_AUTH_MAPPINGS: Final[frozenset[str]] = frozenset(
     {"basic_auth", "oauth2", "authorization"})

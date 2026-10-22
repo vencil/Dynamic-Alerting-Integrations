@@ -32,6 +32,13 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "db-a.yaml")
+	// #3140: the root defaults declare mysql_connections, so validate refuses
+	// the non-finite row below for its value — without them it refused it
+	// as an unknown key, and the row held whether or not validate ran the
+	// predicate.
+	if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte("defaults:\n  mysql_connections: 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	bodyShaped := []struct{ name, body string }{
 		{"invalid YAML", "tenants:\n  db-a:\n   - ]["},
@@ -42,6 +49,9 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		// #3064: a second tenant section is a body-shaped defect now (the
 		// body is API-shaped or refused), no longer a tree-derived one.
 		{"a second tenant section (#3064)", smuggled},
+		// #3140: a non-finite threshold number — the exporter's predicate
+		// (cfg.NonFiniteThresholdWrites), body-shaped.
+		{"non-finite threshold (#3140)", "tenants:\n  db-a:\n    mysql_connections: \"-Inf\"\n"},
 		// ⛔ THE ONE THAT ACTUALLY GUARDS THE DUPLICATION. The two validators each
 		// call cfg.ValidateTenantCustomAlerts on their own line; every other row
 		// here rides on the shared validateShape and so cannot drift. Without this

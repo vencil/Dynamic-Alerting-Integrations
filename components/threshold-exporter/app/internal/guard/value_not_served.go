@@ -20,6 +20,12 @@ package guard
 // subtree_default_undeliverable, root_null_undeclared is
 // root_default_null_undeclared, root_defaults_unwrapped is the
 // finding of that name).
+//
+// A `_custom_alerts` entry whose `threshold:` the exporter refuses — the
+// same grammar and the same finite-number reader as a threshold row (#3209)
+// — is the same finding: the exporter's own verdict
+// (config.CustomAlertEntry.Refused), handed in as
+// CheckInput.CustomAlertsRefused.
 
 import (
 	"fmt"
@@ -32,9 +38,12 @@ import (
 // checkValuesNotServed reports one findingkind.FindingValueNotServed per (tenant, key) of
 // input.ValuesNotServed that config.ValueNotServedAsWritten selects (the
 // written-value reasons, on a threshold key), for the tenants in
-// input.EffectiveConfigs only.
+// input.EffectiveConfigs only — and, after a tenant's keys, one per entry of
+// input.CustomAlertsRefused: a custom alert whose `threshold:` the exporter
+// refuses is the same refusal as a threshold row's (#3209), so it is the
+// same finding (Field `_custom_alerts[<index>]`).
 func checkValuesNotServed(input CheckInput) []Finding {
-	if len(input.ValuesNotServed) == 0 {
+	if len(input.ValuesNotServed) == 0 && len(input.CustomAlertsRefused) == 0 {
 		return nil
 	}
 	var out []Finding
@@ -58,13 +67,52 @@ func checkValuesNotServed(input CheckInput) []Finding {
 				Message:  valueNotServedMessage(k, ns),
 			})
 		}
+		for _, ca := range input.CustomAlertsRefused[id] {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingValueNotServed,
+				TenantID: id,
+				Field:    fmt.Sprintf("_custom_alerts[%d]", ca.Index),
+				Message:  customAlertRefusedMessage(ca),
+			})
+		}
 	}
 	return out
 }
 
+// customAlertRefusedMessage is the value_not_served message of a custom
+// alert whose `threshold:` the exporter refuses (#3209): the threshold rows'
+// value_unparsed_dropped — no default to fall back to, no series — with the
+// entry and the exporter's own rejection text.
+func customAlertRefusedMessage(ca RefusedCustomAlert) string {
+	return fmt.Sprintf("value_unparsed_dropped: the tenant's `_custom_alerts[%d]` (%q) writes `threshold: %q`, a value that is "+
+		"not a finite number the exporter reads (e.g. `abc`, `NaN`, `-Inf`; #3140), or whose `:<severity>` is not "+
+		"`warning` or `critical` (e.g. `60:high`), so the exporter rejects this custom alert (%s: %s), /metrics "+
+		"serves no series for it and that alert can never fire. Write a number, optionally with `:warning` or "+
+		"`:critical` (e.g. `70` or `70:critical`), or `disable`.",
+		ca.Index, ca.Name, ca.Threshold, ca.Refused, ca.Reason)
+}
+
+// disableSuffixFix is the value_unparsed* messages' sentence on
+// `disable:<severity>` (#3141), which the exporter reads as no disable: the
+// two spellings it may have meant, for key k — the exporter's own text
+// (config.DisableWithSeverityHint, which its WARN carries too).
+func disableSuffixFix(k string) string {
+	return config.DisableWithSeverityHint(k) + "."
+}
+
+// sortedNotServedTenants is, sorted, the in-scope tenants of
+// input.ValuesNotServed and input.CustomAlertsRefused.
 func sortedNotServedTenants(input CheckInput) []string {
-	out := make([]string, 0, len(input.ValuesNotServed))
+	seen := make(map[string]bool, len(input.ValuesNotServed)+len(input.CustomAlertsRefused))
 	for id := range input.ValuesNotServed {
+		seen[id] = true
+	}
+	for id := range input.CustomAlertsRefused {
+		seen[id] = true
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
 		if _, inScope := input.EffectiveConfigs[id]; inScope {
 			out = append(out, id)
 		}
@@ -82,16 +130,18 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	}
 	switch ns.Reason {
 	case config.NotServedValueUnparsed:
-		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a number the exporter reads "+
-			"(e.g. `abc`, a list, `7O:critical`) or whose `:<severity>` is not `warning` or `critical` (e.g. `70:high`, "+
-			"`70:`; #3071), so /metrics serves the platform default for it instead and the "+
+		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a finite number the exporter reads "+
+			"(e.g. `abc`, a list, `7O:critical`, `NaN`, `-Inf`; #3140) or whose `:<severity>` is not `warning` or "+
+			"`critical` (e.g. `70:high`, `70:`; #3071), so /metrics serves the platform default for it instead and the "+
 			"alert fires at that default, not at the written threshold. Write a number, optionally with "+
-			"`:warning` or `:critical` (e.g. `70` or `70:critical`), or `disable`.", file, k)
+			"`:warning` or `:critical` (e.g. `70` or `70:critical`), or `disable`. "+disableSuffixFix(k), file, k)
 	case config.NotServedValueUnparsedDropped:
-		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a number the exporter "+
-			"reads (or whose `:<severity>` is not `warning` or `critical`, e.g. `60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional key or "+
-			"an `optional_overrides:` key), so /metrics serves no series for it and that alert can never fire. "+
-			"Write a number (e.g. `90`), or `disable`.", file, k)
+		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a finite number the exporter "+
+			"reads (e.g. `abc`, `NaN`, `-Inf`; #3140), or whose `:<severity>` is not `warning` or `critical` (e.g. "+
+			"`60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional "+
+			"key, an `optional_overrides:` key, or a key the root `defaults:` writes as a non-finite number), so "+
+			"/metrics serves no series for it and that alert can never fire. "+
+			"Write a number (e.g. `90`), or `disable`. "+disableSuffixFix(k), file, k)
 	case config.NotServedWindowInvalid:
 		return fmt.Sprintf("window_invalid: %s writes `%s` as a schedule with an override whose `window:` the "+
 			"exporter does not accept — not a UTC `HH:MM-HH:MM` (hours 00-23, minutes 00-59), missing, or a start "+

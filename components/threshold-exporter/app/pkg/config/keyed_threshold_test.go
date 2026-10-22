@@ -246,17 +246,40 @@ func TestCheckKeyed_RejectsAMissingPair(t *testing.T) {
 	}
 }
 
+// #3140: a NaN is no threshold. The tenant's "NaN" serves the default; a
+// root NaN serves no default row, and the tenant's own value is served. It
+// used to pin one NaN row.
 func TestResolveAtWithKeys_NaNThreshold(t *testing.T) {
 	t.Parallel()
-	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80},
-		Tenants:  map[string]map[string]ScheduledValue{"tenant-a": {"mysql_connections": {Default: "NaN"}}},
-	}
-	keyed, _, err := cfg.ResolveAtWithKeys(time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(keyed) != 1 || !math.IsNaN(keyed[0].Value) || keyed[0].Key != "mysql_connections" {
-		t.Fatalf("keyed = %+v, want one NaN row for mysql_connections", keyed)
+	for name, tc := range map[string]struct {
+		def    float64
+		tenant map[string]ScheduledValue
+		want   []float64
+	}{
+		"tenant NaN serves the default": {80, map[string]ScheduledValue{"mysql_connections": {Default: "NaN"}}, []float64{80}},
+		"root NaN, tenant value served": {math.NaN(), map[string]ScheduledValue{"mysql_connections": {Default: "70"}}, []float64{70}},
+		"root NaN, nothing written":     {math.NaN(), map[string]ScheduledValue{}, nil},
+		"root +Inf, tenant NaN dropped": {math.Inf(1), map[string]ScheduledValue{"mysql_connections": {Default: "NaN"}}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &ThresholdConfig{
+				Defaults: map[string]float64{"mysql_connections": tc.def},
+				Tenants:  map[string]map[string]ScheduledValue{"tenant-a": tc.tenant},
+			}
+			keyed, _, err := cfg.ResolveAtWithKeys(time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []float64
+			for _, k := range keyed {
+				if k.Key != "mysql_connections" {
+					t.Errorf("row of key %q: %+v", k.Key, k)
+				}
+				got = append(got, k.Value)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("values = %v, want %v (keyed %+v)", got, tc.want, keyed)
+			}
+		})
 	}
 }

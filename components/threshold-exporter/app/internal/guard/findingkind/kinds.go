@@ -55,6 +55,14 @@ var (
 	// `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
 	FindingRootDefaultsCriticalKey = register("root_defaults_critical_key",
 		"judges a `<metric>_critical` key in the conf.d root defaults")
+	// FindingRootDefaultNonFinite (error, TenantID ""; #3140): a threshold
+	// under the conf.d root carrier's `defaults:` mapping written as a
+	// non-finite number (`.nan`, `.inf`, `-.inf`). The exporter serves no
+	// default row for it — the key is served like an `optional_overrides:`
+	// one, a tenant's own value only (config.NonFiniteDefaultKeys). Field is
+	// `<file>:defaults.<key>`.
+	FindingRootDefaultNonFinite = register("root_default_non_finite",
+		"judges a non-finite number in the conf.d root defaults")
 	// FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
 	// Field, which the conf.d root `_defaults.yaml` writes as null — not
 	// declared — so the exporter serves no series for it. Field may also be a

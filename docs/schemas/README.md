@@ -198,7 +198,7 @@ tenants:
             routing_key: "xxxxx/xxxxx/xxxxx"
 ```
 
-receiver 的憑證欄位（webhook 的 `url`／`http_config`、Rocket.Chat 的 `url`、email 的 `auth_password`／`headers`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`）在 schema 上帶擴充關鍵字 `"x-credential": true`；這類欄位名必須都在 tenant-api 的遮罩名單內（[§3.7](../api/tenant-api-hardening.md)，由 `tests/ops/test_lib_redact.py` 守）。`definitions.secretRef`（`{secret: {name, key}}`，Kubernetes Secret 參照）已定義但**尚未接到任何欄位**（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。
+receiver 的憑證欄位（webhook 的 `url`／`http_config`、Rocket.Chat 的 `url`、email 的 `auth_password`／`headers`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`）在 schema 上帶擴充關鍵字 `"x-credential": true`；這類欄位名必須都在 tenant-api 的遮罩名單內（[§3.7](../api/tenant-api-hardening.md)，由 `tests/ops/test_lib_redact.py` 守）。`definitions.secretRef`（`{secret: {name, key}}`，Kubernetes Secret 參照）已定義但**尚未接到任何欄位**（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。receiver 不收檔案型欄位（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：`definitions.fileReferenceKey` 是一條規則（鍵名以 `_file`、`_ref` 結尾，或為 `files`），`definitions.fileReferenceFree` 把它套在 `definitions.receiver` 的每一層，`http_config` 各定義也不再列出 Alertmanager 的 `*_file`／`*_ref`／`files` 鍵；這類欄位會讓 Alertmanager 讀取它自己容器內的檔案。路由產生器以同一條規則（`_lib_validation.is_file_reference_key`）整棵樹拒收，兩邊由 `tests/shared/test_receiver_file_reference_rule.py` 釘在一起。
 
 ### Tenant Profiles (v1.12.0+)
 

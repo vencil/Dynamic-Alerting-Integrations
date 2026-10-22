@@ -6,9 +6,10 @@ package config
 //
 // splitThresholdSeverity is the one grammar of a threshold value's
 // `value[:severity]` suffix. The matrix's `ok` / `value_part` / `severity` /
-// `float_ok` columns are what it (and strconv.ParseFloat on the value half)
-// says about each `value`, and `severities` is ThresholdSeverities(); nobody
-// types them by hand:
+// `float_ok` columns are what it (and parseThresholdNumber on the value half:
+// finite only, #3140) says about each `value`, `row_disabled` is
+// thresholdRowDisabled's (#3141), `custom_alert_disabled` resolveOneCustomAlert's,
+// and `severities` is ThresholdSeverities(); nobody types them by hand:
 //
 //	DA_REGEN_THRESHOLD_VALUE_MATRIX=1 go test ./pkg/config -run TestThresholdValueMatrix
 //
@@ -32,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type thresholdValueRow struct {
@@ -43,6 +45,9 @@ type thresholdValueRow struct {
 	// CustomAlertDisabled: a custom alert with this threshold is the
 	// three-state opt-out (resolveOneCustomAlert's errCustomAlertDisabled).
 	CustomAlertDisabled *bool `json:"custom_alert_disabled,omitempty"`
+	// RowDisabled: a threshold row with this value switches its key off
+	// (thresholdRowDisabled, #3141) — `disable:<severity>` does not.
+	RowDisabled *bool `json:"row_disabled,omitempty"`
 }
 
 type thresholdValueMatrix struct {
@@ -66,14 +71,15 @@ func thresholdValueVerdict(value string) thresholdValueRow {
 	row.OK = &ok
 	if ok {
 		row.ValuePart, row.Severity = &v, &sev
-		_, ferr := strconv.ParseFloat(v, 64)
-		fok := ferr == nil
+		_, fok := parseThresholdNumber(v)
 		row.FloatOK = &fok
 	}
 	_, cerr := resolveOneCustomAlert("t", CustomAlertSpec{
 		Name: "a", Recipe: "threshold", Metric: "m", Op: ">", Window: "5m", Threshold: value})
 	off := errors.Is(cerr, errCustomAlertDisabled)
 	row.CustomAlertDisabled = &off
+	rowOff, _ := thresholdRowDisabled(value)
+	row.RowDisabled = &rowOff
 	return row
 }
 
@@ -167,11 +173,30 @@ func TestThresholdValueMatrix(t *testing.T) {
 				t.Errorf("parseCustomAlertThreshold(%q) = (%q, %q, %v), matrix %s", r.Value, cv, cs, cerr, gotJSON)
 			}
 			rowOK := *r.OK && *r.FloatOK
+			// Every threshold row resolver reads the value through the same
+			// two predicates (#3140, #3141): a disable switches the key off,
+			// anything else serves the base default only when it is a finite
+			// number with a readable severity.
+			gotRows := baseRowValues(t, r.Value)
+			switch {
+			case *r.RowDisabled:
+				if len(gotRows) != 0 {
+					t.Errorf("resolveBaseRows(%q) = %v, matrix says disabled: %s", r.Value, gotRows, gotJSON)
+				}
+			case rowOK:
+				if v, _ := strconv.ParseFloat(*r.ValuePart, 64); len(gotRows) != 1 || gotRows[0] != v {
+					t.Errorf("resolveBaseRows(%q) = %v, want [%v]: %s", r.Value, gotRows, v, gotJSON)
+				}
+			default:
+				if len(gotRows) != 1 || gotRows[0] != 80 {
+					t.Errorf("resolveBaseRows(%q) = %v, want the default [80]: %s", r.Value, gotRows, gotJSON)
+				}
+			}
 			_, rs, pok := parseThresholdValue(r.Value)
 			if pok != rowOK || (pok && rs != *r.Severity) {
 				t.Errorf("parseThresholdValue(%q) = (%q, %v), matrix %s", r.Value, rs, pok, gotJSON)
 			}
-			if scalar := thresholdScalar(r.Value); scalar != (rowOK || isDisabled(strings.ToLower(strings.TrimSpace(r.Value)))) {
+			if scalar := thresholdScalar(r.Value); scalar != (rowOK || *r.RowDisabled) {
 				t.Errorf("thresholdScalar(%q) = %v, matrix %s", r.Value, scalar, gotJSON)
 			}
 		})
@@ -186,4 +211,18 @@ func TestThresholdValueMatrix(t *testing.T) {
 	if accepted == 0 || refused == 0 {
 		t.Errorf("matrix has %d accepted and %d refused rows; it needs both", accepted, refused)
 	}
+}
+
+// baseRowValues is the values resolveBaseRows serves for one tenant writing
+// value for a key whose platform default is 80.
+func baseRowValues(t *testing.T, value string) []float64 {
+	t.Helper()
+	c := &ThresholdConfig{}
+	rows := c.resolveBaseRows("t", map[string]float64{"mysql_connections": 80},
+		map[string]ScheduledValue{"mysql_connections": {Default: value}}, time.Now(), nil, discardLogf, nil)
+	var out []float64
+	for _, r := range rows {
+		out = append(out, r.Value)
+	}
+	return out
 }

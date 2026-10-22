@@ -1,8 +1,9 @@
-"""#2341 R5：schema 裡 `_routing` 的停用字串 pattern 與 `_lib_validation.is_disabled` 同一集合。
+"""#2341 R5：schema 裡 `_routing` 的停用字串 pattern 與 `_lib_validation.routing_disabled` 同一集合。
 
 `docs/schemas/tenant-config.schema.json` 的租戶 `_routing` 是 `oneOf: [routing
 mapping, 停用字串]`，後者的 pattern 手寫成大小寫不敏感的四個字。這裡逐值比對
-pattern（jsonschema 的 `pattern` 是 re.search 語意）與 is_disabled 的判定：刪掉任
+pattern（jsonschema 的 `pattern` 是 re.search 語意）與 routing_disabled（route generator
+的讀法；#3140 PR2 刪掉閾值列的鏡像 is_disabled 前這裡比的是它）的判定：刪掉任
 一段、少了前後空白或錨點，都會在下面某一格轉紅。
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
-from _lib_validation import is_disabled  # noqa: E402
+from _lib_validation import routing_disabled  # noqa: E402
 
 _SCHEMA = json.loads((REPO / "docs" / "schemas" / "tenant-config.schema.json")
                      .read_text(encoding="utf-8"))
@@ -62,11 +63,11 @@ def test_there_is_exactly_one_pattern():
 
 
 @pytest.mark.parametrize("value", _POSITIVE + _NEGATIVE)
-def test_pattern_accepts_exactly_what_is_disabled_accepts(value):
+def test_pattern_accepts_exactly_what_routing_disabled_accepts(value):
     (pattern,) = _routing_disable_patterns()
-    assert bool(re.search(pattern, value)) == is_disabled(value), value
+    assert bool(re.search(pattern, value)) == routing_disabled(value), value
 
 
 def test_the_corpus_has_both_verdicts():
-    assert all(is_disabled(v) for v in _POSITIVE)
-    assert not any(is_disabled(v) for v in _NEGATIVE)
+    assert all(routing_disabled(v) for v in _POSITIVE)
+    assert not any(routing_disabled(v) for v in _NEGATIVE)

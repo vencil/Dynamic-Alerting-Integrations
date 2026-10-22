@@ -376,21 +376,34 @@ class TestBacktestChange:
         assert result["risk"] == "HIGH"
 
     def test_disable_transition(self, monkeypatch):
-        """啟用→停用：MEDIUM 風險。"""
+        """啟用→停用：MEDIUM 風險。變更的值是 exporter 送的（served-values 的讀法，
+        #3140 PR2）：沒有 row 的一邊是 None，不是寫法上的 `disable`。"""
         values = self._make_values([80, 90])
         monkeypatch.setattr(bt, "query_range",
                             lambda *a, **kw: [{"values": values}])
-        change = {"tenant": "db-a", "metric": "cpu", "old_value": "70", "new_value": "disable"}
+        change = {"tenant": "db-a", "metric": "cpu", "old_value": "70", "new_value": None}
         result = bt.backtest_change("http://prom", change, 86400)
         assert result["risk"] == "MEDIUM"
         assert "disabled" in result["message"]
+
+    def test_a_row_lost_to_a_refused_value_is_high(self, monkeypatch):
+        """#3140 PR2：新的一邊沒有 row 是因為 exporter 拒收非有限值（`new_refused`，
+        served-values 的答案）——設定錯誤讓告警失聲，判 HIGH，不是停用的 MEDIUM。"""
+        values = self._make_values([80, 90])
+        monkeypatch.setattr(bt, "query_range",
+                            lambda *a, **kw: [{"values": values}])
+        change = {"tenant": "db-a", "metric": "cpu", "old_value": "70", "new_value": None,
+                  "new_refused": "non_finite"}
+        result = bt.backtest_change("http://prom", change, 86400)
+        assert (result["status"], result["risk"], result["new_breach_count"]) == ("analyzed", "HIGH", 0)
+        assert result["message"].startswith("Value refused by the exporter (non_finite)")
 
     def test_enable_transition(self, monkeypatch):
         """停用→啟用：根據觸發比例決定風險。"""
         values = self._make_values([80, 90, 50, 60, 70, 85, 95, 75, 65, 55])
         monkeypatch.setattr(bt, "query_range",
                             lambda *a, **kw: [{"values": values}])
-        change = {"tenant": "db-a", "metric": "cpu", "old_value": "disable", "new_value": "70"}
+        change = {"tenant": "db-a", "metric": "cpu", "old_value": None, "new_value": "70"}
         result = bt.backtest_change("http://prom", change, 86400)
         assert result["status"] == "analyzed"
         assert result["new_breach_count"] > 0
@@ -411,8 +424,8 @@ class TestBacktestChangeNaN:
 
     @pytest.mark.parametrize("old,new", [
         ("70", "65"),          # 一般變更（main 上是 analyzed / LOW）
-        ("disable", "70"),     # 新啟用（main 上是 analyzed / LOW）
-        ("70", "disable"),     # 停用（main 上是 analyzed / MEDIUM）
+        (None, "70"),          # 新啟用（main 上是 analyzed / LOW）
+        ("70", None),          # 停用（main 上是 analyzed / MEDIUM）
     ])
     def test_all_nan_is_no_data(self, monkeypatch, old, new):
         result = self._run(monkeypatch, ["NaN"] * 50, old, new)
@@ -433,14 +446,14 @@ class TestBacktestChangeNaN:
         釘住 owner 的語意選擇：pct = 佔整段回看時間的比例；NaN 那段告警不會響。
         """
         result = self._run(monkeypatch, ["NaN"] * 900 + ["95"] * 100,
-                           "disable", "70")
+                           None, "70")
         assert result["status"] == "analyzed"
         assert result["risk"] == "MEDIUM"
         assert result["data_points"] == 1000
         assert result["new_breach_count"] == 100
 
     def test_only_hot_points_new_enable_is_high(self, monkeypatch):
-        result = self._run(monkeypatch, ["95"] * 100, "disable", "70")
+        result = self._run(monkeypatch, ["95"] * 100, None, "70")
         assert result["risk"] == "HIGH"
         assert result["data_points"] == 100
 
@@ -453,7 +466,7 @@ class TestBacktestChangeNaN:
 
     def test_inf_mixed_with_nan_counts(self, monkeypatch):
         """NaN 混 +Inf 的新啟用：+Inf 算觸發、也留在分母。"""
-        result = self._run(monkeypatch, ["NaN"] * 9 + ["+Inf"], "disable", "70")
+        result = self._run(monkeypatch, ["NaN"] * 9 + ["+Inf"], None, "70")
         assert result["status"] == "analyzed"
         assert result["data_points"] == 10
         assert result["new_breach_count"] == 1
@@ -898,11 +911,11 @@ class TestAlertComparison:
         assert r["message"].startswith("6 fewer firing points")
 
     def test_lower_bound_disable_counts_old_below(self, monkeypatch):
-        r, _ = self._run(monkeypatch, "rabbitmq_consumers", [0, 0, 1, 5], "1", "disable")
+        r, _ = self._run(monkeypatch, "rabbitmq_consumers", [0, 0, 1, 5], "1", None)
         assert (r["risk"], r["old_breach_count"]) == ("MEDIUM", 2)
 
     def test_lower_bound_enable_counts_new_below(self, monkeypatch):
-        r, _ = self._run(monkeypatch, "kafka_active_controllers", [0, 1, 1, 1], "disable", "1")
+        r, _ = self._run(monkeypatch, "kafka_active_controllers", [0, 1, 1, 1], None, "1")
         assert r["new_breach_count"] == 1
 
     def test_upper_bound_key_unchanged(self, monkeypatch):
@@ -934,7 +947,7 @@ class TestAlertComparison:
         assert (r["status"], r["message"]) == ("no_data", message)
         assert asked == [r["query"]] == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
 
-    @pytest.mark.parametrize("old,new", [("70", "85"), ("70", "disable"), ("disable", "70")])
+    @pytest.mark.parametrize("old,new", [("70", "85"), ("70", None), (None, "70")])
     def test_every_analyzed_result_carries_its_query(self, monkeypatch, old, new):
         r, asked = self._run(monkeypatch, "mysql_connections", [60, 80, 90], old, new)
         assert r["status"] == "analyzed" and r["query"] == asked[0]
@@ -1115,6 +1128,7 @@ class TestObservedMapMissing:
 # ── 寫在檔裡的值：`N:critical`、讀不懂的值（#3017 review）────────────
 
 
+@pytest.mark.usefixtures("da_guard_env")
 class TestWrittenValues:
     """`--tenant` 給的是寫法上的值。exporter 對 `70:critical` 的
     讀法（`pkg/config/resolve.go`：切最後一個 `:`，前段是數字、後段是 severity）
@@ -1147,38 +1161,141 @@ class TestWrittenValues:
         ("mysql_connections", "70:Critical", (70.0, "critical")),
         ("mysql_connections_critical", "95", (95.0, "critical")),
         ("mysql_connections", "disable", None),
+        ("mysql_connections", "dİsable", None),
         ("mysql_connections", None, None),
-        ("mysql_connections", "NaN", (float("nan"), "warning")),
-        # Spellings Go's ParseFloat accepts too (measured).
-        ("mysql_connections", "Inf", (float("inf"), "warning")),
-        ("mysql_connections", "-inf:critical", (float("-inf"), "critical")),
-        ("mysql_connections_critical", "+Inf", (float("inf"), "critical")),
-        ("mysql_connections", "infinity", (float("inf"), "warning")),
         ("mysql_connections", "1e-400", (0.0, "warning")),
     ])
-    def test_parse_threshold_value(self, key, raw, want):
-        got = bt.parse_threshold_value(key, raw)
-        if want is None or want[0] == want[0]:
-            assert got == want
-        else:
-            assert got[0] != got[0] and got[1] == want[1]
+    def test_each_side_is_what_the_exporter_serves(self, key, raw, want):
+        """#3140 PR2：每一邊是 exporter 對這個值送的 row（da-guard served-values），
+        Python 不再自己切 severity、判停用、讀數字。"""
+        assert bt._served_written(key, (raw,)) == [want]
+
+    @pytest.mark.parametrize("key,raw,want", [
+        # base key：exporter 改送平台預設值（:critical 跟著被拒的值走，#2377）。
+        ("mysql_connections", "NaN", (80.0, "warning")),
+        ("mysql_connections", "Inf", (80.0, "warning")),
+        ("mysql_connections", "-inf:critical", (80.0, "warning")),
+        ("mysql_connections", "infinity", (80.0, "warning")),
+        ("mysql_connections", "NaN:critical", (80.0, "warning")),
+        # `_critical`／optional_overrides key：沒有預設值可退，不送 row。
+        ("mysql_connections_critical", "+Inf", bt._REFUSED_NO_ROW),
+        ("oracle_process_count", "-Inf", bt._REFUSED_NO_ROW),
+    ])
+    def test_a_non_finite_number_is_read_from_the_exporters_refusal(self, key, raw, want):
+        """#3140：Go 的 ParseFloat 讀得懂 NaN／Inf，但 exporter 拒收；拒收後送什麼是
+        served-values 的 `keys[].refused` 與送出的值，不是這裡的鏡像判定。"""
+        assert bt._served_written(key, (raw,)) == [want]
+
+    @pytest.mark.parametrize("metric,old,new,want", [
+        # base key: the exporter serves the platform default (80) instead.
+        ("mysql_connections", "70", "NaN", [("mysql_connections", "70", "80", None)]),
+        ("mysql_connections", "70", "-Inf", [("mysql_connections", "70", "80", None)]),
+        # the `:critical` goes with the refused value (#2377): a warning row.
+        ("mysql_connections", "70", "-inf:critical", [("mysql_connections", "70", "80", None)]),
+        ("mysql_connections", "NaN", "70", [("mysql_connections", "80", "70", None)]),
+        ("mysql_connections", "80", "+Inf", []),
+        # no default to fall back to: no row, marked refused (judged HIGH).
+        ("mysql_connections_critical", "95", "+Inf",
+         [("mysql_connections_critical", "95", None, "non_finite")]),
+        ("oracle_process_count", "70", "-Inf", [("oracle_process_count", "70", None, "non_finite")]),
+        # refused on the OLD side: no row there, nothing marked (a newly served row).
+        ("oracle_process_count", "-Inf", "70", [("oracle_process_count", None, "70", None)]),
+    ])
+    def test_tenant_reads_a_non_finite_side_as_what_the_exporter_serves(
+            self, capsys, metric, old, new, want):
+        """#3140：`--tenant` 的非有限值改用 exporter 實際送的值計算：base key
+        是平台預設值，`_critical`／`optional_overrides:` key 沒有 row（帶
+        `new_refused`）。stderr 說明改用了什麼。"""
+        rows = bt.written_changes("t-x", metric, old, new)
+        assert [(r["metric"], r["old_value"], r["new_value"], r.get("new_refused"))
+                for r in rows] == want
+        assert "is not a finite number" in capsys.readouterr().err
+
+    def test_tenant_non_finite_on_a_key_without_a_known_default_is_not_read(self):
+        """A key the registry does not know: its default is unknown here, so
+        the change is the values as written (not backtested)."""
+        assert bt.written_changes("t-x", "no_such_key", "70", "-Inf") == [
+            {"tenant": "t-x", "metric": "no_such_key", "old_value": "70", "new_value": "-Inf",
+             "unread": "value '-Inf': this backtest cannot read it the way the exporter does"}]
+
+    def test_a_key_the_registry_does_not_know_is_served_as_written(self):
+        """未登錄的 key 在 `--tenant` 的樹裡宣告成沒有預設值的 key，exporter 照讀。"""
+        assert bt._served_written("no_such_key", ("70", "60:critical")) == [
+            (70.0, "warning"), (60.0, "critical")]
+
+    def test_a_non_finite_new_value_is_backtested_at_the_default(
+            self, monkeypatch, capsys, cli_argv):
+        """#3140：70 → NaN 回測的是 exporter 改送的預設值 80（2/4 點越界），
+        不是 NaN（0 點，以前判 HIGH、rc 1）。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", "NaN")
+        assert [(r["metric"], r["old_value"], r["new_value"], r["new_breach_count"])
+                for r in rows] == [("mysql_connections", "70", "80", 2)]
+        assert rc == 0
+
+    @pytest.mark.parametrize("metric,raw", [
+        ("mysql_connections_critical", "+Inf"), ("oracle_process_count", "-Inf")])
+    def test_a_row_lost_to_a_refused_non_finite_value_is_high(
+            self, monkeypatch, capsys, cli_argv, metric, raw):
+        """#3140 PR2：`_critical`／宣告 key 寫非有限值，exporter 拒收且不送 row——
+        PR1 暫時判成「Metric disabled」MEDIUM（rc 0）；現在依 served-values 的
+        `keys[].refused` 判 HIGH，rc 回到 1。"""
+        rc, rows, _asked = self._main(monkeypatch, capsys, cli_argv,
+                                      ["--tenant", "t-x", "--metric", metric,
+                                       "--old-value", "70", f"--new-value={raw}"])
+        assert [(r["new_value"], r["risk"]) for r in rows] == [(None, "HIGH")]
+        assert rows[0]["message"].startswith("Value refused by the exporter (non_finite)")
+        assert rc == 1
+
+    def test_tenant_without_da_guard_is_rc2_named(self, monkeypatch, capsys, cli_argv, tmp_path):
+        """#3140 PR2：`--tenant` 的值由 da-guard 讀，找不到 da-guard 是結束碼 2
+        （`served_values_unavailable`），不是靜默回到 Python 自己讀。"""
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+                 "--old-value", "70", "--new-value", "50", "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        out = capsys.readouterr()
+        assert (ei.value.code, json.loads(out.out)["reason"]) == (2, "served_values_unavailable"), out.err
+
+    def test_disable_is_still_medium(self, monkeypatch, capsys, cli_argv):
+        """對照組：寫 `disable` 是停用（`keys[].reason` "disabled"），維持 MEDIUM、rc 0。"""
+        rc, rows, _asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                        "mysql_connections_critical", "70", "disable")
+        assert [(r["new_value"], r["risk"]) for r in rows] == [(None, "MEDIUM")]
+        assert rc == 0
 
     @pytest.mark.parametrize("key,raw", [
-        ("mysql_connections", "7O"), ("mysql_connections", "1_000"),
+        ("mysql_connections", "7O"),
         ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
         ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
         ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
-        ("mysql_connections", "0x1p4"),
+        ("mysql_connections", "1e999"),
         ("mysql_connections", "70:info"), ("mysql_connections", "70:"),
-    ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key",
-            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float",
-            "unselected-severity", "empty-severity"])
-    def test_values_this_backtest_cannot_read_are_refused(self, key, raw):
-        """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）、規則不選的
-        severity（#3071：`70:info`、`70:` 整個值讀不懂）。Go 接受但這裡保守拒絕：
-        `1_000`、`0x1p4`（實測 go run strconv.ParseFloat）。"""
-        with pytest.raises(ValueError):
-            bt.parse_threshold_value(key, raw)
+        ("mysql_connections", "disable:critical"), ("mysql_connections", "disable\x1c"),
+        ("no_such_key", "NaN"),
+    ], ids=["typo", "non-ascii-digit", "suffix-on-critical-key",
+            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "overflow-1e999",
+            "unselected-severity", "empty-severity", "disable-with-severity", "go-space",
+            "unknown-key-non-finite"])
+    def test_values_the_exporter_refuses_as_unreadable_are_not_backtested(self, key, raw):
+        """served-values 說 exporter 讀不懂（`keys[].refused` "unparsed"，或沒有已知預設
+        值的 key 寫非有限值）：不回測，結束碼與 PR2 前相同。"""
+        with pytest.raises(bt._NotRead, match="this backtest cannot read it the way the exporter does"):
+            bt._served_written(key, (raw,))
+
+    @pytest.mark.parametrize("raw,served", [("1_000", 1000.0), ("0x1p4", 16.0)])
+    def test_a_spelling_the_exporter_reads_but_this_backtest_does_not(
+            self, tmp_path, raw, served):
+        """`1_000`、`0x1p4`：exporter 讀得懂（served-values 送 1000／16），但 `--tenant`
+        照 PR2 之前不回測（`_SPELLINGS_NOT_BACKTESTED`），不在本 PR 改結束碼。"""
+        import _lib_tenant_values as tvlib
+        bt._written_tree(str(tmp_path), "mysql_connections", (raw,))
+        got = tvlib.load_served_tree(str(tmp_path)).tenants[bt._WRITTEN_TENANTS[0]]
+        assert got.values["mysql_connections"] == served
+        with pytest.raises(bt._NotRead):
+            bt._served_written("mysql_connections", (raw,))
 
     def test_a_severity_change_is_two_rows(self, monkeypatch, capsys, cli_argv):
         """#3111：70 → 95:critical 是兩條 /metrics row（同目錄比對）：warning 告警
@@ -1968,6 +2085,97 @@ class TestTenantAndTreesAgree:
         _rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                              "--prometheus", p.url, "--json")
         assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)
+
+    @pytest.mark.parametrize("key,old,new,risk", [
+        ("mysql_connections_critical", "95", "+Inf", "HIGH"),
+        ("mysql_connections_critical", "95", "NaN", "HIGH"),
+        ("mysql_connections", "70", "NaN", "MEDIUM"),
+        ("mysql_connections_critical", "95", "disable", "MEDIUM"),
+    ])
+    def test_a_refused_value_reads_the_same_from_both(self, tmp_path, cli_argv, capsys, fake_prom,
+                                                     key, old, new, risk):
+        """#3140 PR2：被拒收的非有限值，`--tenant` 讀 `keys[].refused`、兩棵樹讀
+        schedule／keys 的 `value_non_finite`——同一個 exporter 答案、同一列、同一個風險。"""
+        fields = ("metric", "old_value", "new_value", "risk", "message")
+        p = fake_prom(values=(60, 80, 90, 100))
+        rc_t, out = _run_main(cli_argv, capsys, "--tenant", "db-a", "--metric", key,
+                              "--old-value", old, f"--new-value={new}",
+                              "--prometheus", p.url, "--json")
+        tenant = self._rows(out, *fields)
+        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
+                          {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
+        rc_d, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                              "--prometheus", p.url, "--json")
+        assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)
+        assert [r[3] for r in tenant] == [risk]
+        assert rc_t == rc_d == (1 if risk == "HIGH" else 0)
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestRefusedRowsFromTwoTrees:
+    """#3140 PR2：兩棵樹時，row 在 PR 側消失的原因讀 served-values：被拒收的非有限值
+    （`value_non_finite`）判 HIGH；讀不懂的值（`value_unparsed`）與 `disable` 維持
+    「Metric disabled」MEDIUM（結束碼與 PR2 前相同）。"""
+
+    def _run(self, tmp_path, cli_argv, capsys, fake_prom, before, after):
+        p = fake_prom(values=(60, 80, 90, 100))
+        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", before)},
+                          {**_D, "db-a.yaml": _tenant_file("db-a", after)})
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        return rc, [(r["metric"], r["old_value"], r["new_value"], r["risk"], r.get("window"))
+                    for r in json.loads(out.out)["changes"]]
+
+    @pytest.mark.parametrize("new,risk,rc", [
+        ("'NaN'", "HIGH", 1), ("'-Inf'", "HIGH", 1),
+        ("'7O'", "MEDIUM", 0), (".nan", "MEDIUM", 0), ("'disable'", "MEDIUM", 0)])
+    def test_why_the_critical_row_is_gone(self, tmp_path, cli_argv, capsys, fake_prom, new, risk, rc):
+        """`.nan` 不加引號：exporter 讀成讀不懂的字串（`value_unparsed`），不是非有限數。"""
+        got = self._run(tmp_path, cli_argv, capsys, fake_prom,
+                        "    mysql_connections_critical: '95'\n",
+                        f"    mysql_connections_critical: {new}\n")
+        assert got == (rc, [("mysql_connections_critical", "95", None, risk, None)])
+
+    @pytest.mark.parametrize("root", [".nan", ".inf", "-.inf"])
+    def test_a_row_lost_to_a_non_finite_root_default_is_high(
+            self, tmp_path, cli_argv, capsys, fake_prom, root):
+        """根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列，served-values
+        標 `root_default_non_finite`，判 HIGH（不是「Metric disabled」MEDIUM）。"""
+        p = fake_prom(values=(60, 80, 90, 100))
+        tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
+        cur, base = _dirs(tmp_path, {**_D, **tenant},
+                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mysql_connections: 80",
+                                                                    f"mysql_connections: {root}"),
+                           **tenant})
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+                for r in json.loads(out.out)["changes"]]
+        assert (rc, rows) == (1, [("mysql_connections", "80", None, "HIGH")]), out.out
+
+    def test_a_non_finite_root_default_under_a_retired_alias_is_high(
+            self, tmp_path, cli_argv, capsys, fake_prom):
+        """根檔仍寫退役別名（`mysql_cpu`，正名 `mysql_threads_running`）：served-values
+        以正名標 `root_default_non_finite`，所以照樣判 HIGH（審查 Finding A）。"""
+        p = fake_prom(values=(60, 80, 90, 100))
+        tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
+        cur, base = _dirs(tmp_path,
+                          {"_defaults.yaml": _CRIT_DEFAULTS + "  mysql_cpu: 80\n", **tenant},
+                          {"_defaults.yaml": _CRIT_DEFAULTS + "  mysql_cpu: .nan\n", **tenant})
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+                for r in json.loads(out.out)["changes"]]
+        assert (rc, rows) == (1, [("mysql_threads_running", "80", None, "HIGH")]), out.out
+
+    def test_a_refusal_in_part_of_the_day_is_high_in_that_window(
+            self, tmp_path, cli_argv, capsys, fake_prom):
+        """排程裡只有夜間時段寫 NaN：那段的 segment 帶 `value_non_finite`，只有那段判 HIGH。"""
+        sched = ("    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n"
+                 "        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")
+        got = self._run(tmp_path, cli_argv, capsys, fake_prom,
+                        sched.format(night="90"), sched.format(night="NaN"))
+        assert got == (1, [("mysql_connections_critical", "90", None, "HIGH", ["01:00-09:00"])])
 
 
 @pytest.mark.usefixtures("da_guard_env")

@@ -43,11 +43,7 @@ from typing import NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import (  # noqa: E402
-    format_json_report,
-    is_disabled as _is_disabled,
-)
-from _lib_validation import custom_alert_disabled  # noqa: E402  (#3071)
+from _lib_python import format_json_report  # noqa: E402
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
@@ -359,8 +355,12 @@ def _platform_view(old_dir, new_dir, timeout):
     return rd.ViewResult("computed", ""), old_doc, new_doc
 
 
-def classify_change(old_val, new_val):
+def classify_change(old_val, new_val, old_disabled=False, new_disabled=False):
     """Classify a single metric change.
+
+    `old_disabled` / `new_disabled`: whether the exporter switches the key
+    off on that side — served-values' `keys[].reason` "disabled"
+    (`served_metric_diff`, #3140 PR2), never a reading of the value here.
 
     Returns one of: 'tighter', 'looser', 'added', 'removed', 'toggled', 'modified'.
     """
@@ -368,9 +368,6 @@ def classify_change(old_val, new_val):
         return "added"
     if new_val is None:
         return "removed"
-
-    old_disabled = _is_disabled(old_val)
-    new_disabled = _is_disabled(new_val)
 
     if old_disabled and not new_disabled:
         return "toggled"  # re-enabled
@@ -395,12 +392,17 @@ def classify_change(old_val, new_val):
     return "modified"
 
 
-def compute_diff(old_configs, new_configs):
+def compute_diff(old_configs, new_configs, disabled=None):
     """Compare two sets of tenant configs.
+
+    `disabled`: `{"old": {tenant: {key, ...}}, "new": {...}}`, the keys the
+    exporter switches off on each side (`served_disabled_keys`); none when
+    omitted.
 
     Returns {tenant: [{"key", "old", "new", "change"}]}.
     Only tenants with actual changes are included.
     """
+    disabled = disabled or {}
     all_tenants = set(old_configs.keys()) | set(new_configs.keys())
     diffs = {}
 
@@ -416,7 +418,8 @@ def compute_diff(old_configs, new_configs):
             if old_val == new_val:
                 continue
 
-            change_type = classify_change(old_val, new_val)
+            off = [key in disabled.get(side, {}).get(tenant, ()) for side in ("old", "new")]
+            change_type = classify_change(old_val, new_val, *off)
             if change_type == "unchanged":
                 continue
 
@@ -523,24 +526,14 @@ def _code_span(val):
     return f"`{_format_recipe_value(val)}`"
 
 
-def _threshold_disabled(val):
-    """Is a custom-alert threshold a three-state opt-out? The exporter's
-    reading (custom_alert.go), shared with blast_radius: `custom_alert_disabled`
-    splits the optional `:severity` with the one grammar (#3071) and tests the
-    value part against the disabled set — so `off`/`disabled`/`false` and
-    ``disable:warning`` are caught, while ``disable:bogus`` (a parse error in
-    Go, the alert is not opted out) is not."""
-    return custom_alert_disabled(val)
-
-
 def _field_change_annotation(field, old, new):
     """Flag field changes that SILENCE an alert — high-regret and easy to miss
     behind a plain ``[modified]`` line (Reef 1: ``disable``/``silent`` semantic
-    camouflage). A `threshold` flipped to a disabled value or `mode` flipped to
-    ``silent`` is effectively a delete/silence wearing a 'modified' disguise.
+    camouflage): `mode` flipped to ``silent`` is effectively a silence wearing
+    a 'modified' disguise. A recipe the exporter switches off serves no row,
+    so it is a removal, and its note says so (`_removed_note`, read from
+    served-values' `custom_alerts[].status`, #3140 PR2).
     """
-    if field == "threshold" and _threshold_disabled(new) and not _threshold_disabled(old):
-        return " — :warning: **DISABLED (alert silenced)**"
     if field == "mode" and str(new) == "silent" and str(old) != "silent":
         return " — :warning: **mode→silent (paging suppressed)**"
     return ""
@@ -640,6 +633,13 @@ SERVED_STATE_FILTERS_KEY = "state_filters"
 SERVED_TIME_BOXES_KEY = "time_boxes"
 SERVED_REMOVED_NOTE = ("no longer served: the recipe was deleted, its threshold "
                        "disabled, or the exporter rejected it (see da-guard's stderr)")
+# #3140 PR2: which of them, when served-values' `custom_alerts[]` says
+# (`_removed_note`).
+SERVED_DELETED_NOTE = "no longer served: no entry of the tenant's `_custom_alerts` names it"
+SERVED_DISABLED_NOTE = (":warning: **DISABLED (alert silenced)**: the exporter reads its "
+                        "threshold as switched off and serves no row")
+SERVED_REFUSED_NOTE = ("no longer served: the exporter refuses its threshold ({refused}) and "
+                       "serves no row; da-guard reports it as value_not_served")
 
 
 def _served_number(value):
@@ -688,11 +688,35 @@ def served_metric_configs(tenants):
     return out
 
 
+def _switched_off(tv, key):
+    """Whether the exporter switches `key` off for `tv`: served-values'
+    `keys[].reason` "disabled" (#3140 PR2), not a reading of the value."""
+    entry = (tv.keys or {}).get(key)
+    return entry is not None and entry.reason == "disabled"
+
+
+def served_disabled_keys(tenants):
+    """{tenant: {key, ...}}: the threshold keys the exporter switches off
+    for each tenant (`_switched_off`), for compute_diff's `disabled`."""
+    return {tenant: {str(k) for k in (tv.keys or {}) if _switched_off(tv, k)}
+            for tenant, tv in tenants.items()}
+
+
 def _not_served(tv, key):
     """True when `key` is a threshold key `tv` writes but /metrics does not
     serve: in `unserved` and not switched off (a "disable" is an intended
-    no-row, and reads as written)."""
-    return key in (tv.unserved or {}) and not _is_disabled(tv.unserved[key])
+    no-row, and reads as written; `_switched_off`) — or (#3140) a key it
+    does not write whose root `defaults:` value the exporter refuses as
+    non-finite (`_root_refused`)."""
+    return (key in (tv.unserved or {}) and not _switched_off(tv, key)) or _root_refused(tv, key)
+
+
+def _root_refused(tv, key):
+    """served-values' `keys[].reason` "root_default_non_finite" (#3140): the
+    root `defaults:` writes `key` as a non-finite number and the tenant does
+    not write it, so no row is served — not a removal of the key."""
+    entry = (tv.keys or {}).get(key)
+    return entry is not None and entry.reason == "root_default_non_finite"
 
 
 def served_metric_diff(old_tenants, new_tenants):
@@ -708,13 +732,21 @@ def served_metric_diff(old_tenants, new_tenants):
         so a credential copied into such a value is still masked whole;
       * a key that starts being served is `added`, one that stops is
         `removed`, whether or not its number changed (an unchanged number
-        is a change here, and the one that matters).
+        is a change here, and the one that matters);
+      * every change on a side the exporter switches off (`_switched_off`)
+        carries `disabled` (the sides), which the table prints as
+        "disabled" (#3140 PR2: served-values' answer, not the value's).
     The readings themselves stay as served-values gives them."""
     old_cfg, new_cfg = served_metric_configs(old_tenants), served_metric_configs(new_tenants)
-    diff = compute_diff(old_cfg, new_cfg)
+    disabled = {"old": served_disabled_keys(old_tenants), "new": served_disabled_keys(new_tenants)}
+    diff = compute_diff(old_cfg, new_cfg, disabled)
     for tenant in set(old_tenants) | set(new_tenants):
         tvs = {"old": old_tenants.get(tenant), "new": new_tenants.get(tenant)}
         changes = {c["key"]: c for c in diff.get(tenant, [])}
+        for key, c in changes.items():
+            off = [side for side in ("old", "new") if key in disabled[side].get(tenant, ())]
+            if off:
+                c["disabled"] = off
         keys = {str(k) for tv in tvs.values() if tv is not None
                 for k in [*(tv.unserved or {}), *tv.severities] if not str(k).startswith("_")}
         for key in sorted(keys):
@@ -819,15 +851,37 @@ def served_custom_alerts(tenants):
     return out
 
 
+def _removed_note(tv, name):
+    """Why the recipe `name` is no longer served for the tenant `tv` (the PR
+    side), as served-values' `custom_alerts[]` says (#3140 PR2): no entry
+    names it (deleted), every entry naming it is switched off (`status`
+    "disabled"), or rejected for its threshold (`refused`). Anything else —
+    or a da-guard older than `custom_alerts`, or the tenant gone — is
+    SERVED_REMOVED_NOTE, which does not tell them apart."""
+    entries = None if tv is None else tv.custom_alerts
+    if entries is None:
+        return SERVED_REMOVED_NOTE
+    named = [e for e in entries if isinstance(e.spec, dict) and str(e.spec.get("name")) == name]
+    if not named:
+        return SERVED_DELETED_NOTE
+    statuses = {e.status for e in named}
+    if statuses == {"disabled"}:
+        return SERVED_DISABLED_NOTE
+    refused = sorted({e.refused for e in named if e.refused is not None})
+    if statuses == {"rejected"} and refused and all(e.refused for e in named):
+        return SERVED_REFUSED_NOTE.format(refused=", ".join(refused))
+    return SERVED_REMOVED_NOTE
+
+
 def served_custom_alert_diff(old_tenants, new_tenants):
     """compute_custom_alert_diff over served rows; a removed recipe carries
-    SERVED_REMOVED_NOTE as its `note`."""
+    its `note` (`_removed_note`)."""
     diff = compute_custom_alert_diff(served_custom_alerts(old_tenants),
                                      served_custom_alerts(new_tenants))
-    for changes in diff.values():
+    for tenant, changes in diff.items():
         for c in changes:
             if c["change"] == "removed":
-                c["note"] = SERVED_REMOVED_NOTE
+                c["note"] = _removed_note(new_tenants.get(tenant), c["name"])
     return diff
 
 
@@ -850,16 +904,18 @@ def estimate_affected_alerts(metric_key):
 
 def _format_side(change, side):
     """`_format_value` of one side of a threshold change, with "(not served)"
-    when that side is written but not served (`served_metric_diff`)."""
-    text = _format_value(change[side])
+    when that side is written but not served, and "disabled" when the
+    exporter switches it off (`served_metric_diff`)."""
+    text = _format_value(change[side], side in change.get("disabled", ()))
     return f"{text} (not served)" if side in change.get("not_served", ()) else text
 
 
-def _format_value(val):
-    """Format a config value for display."""
+def _format_value(val, disabled=False):
+    """Format a config value for display; `disabled`: the exporter switches
+    the key off on this side (served-values' answer, `_switched_off`)."""
     if val is None:
         return "—"
-    if _is_disabled(val):
+    if disabled:
         return "disabled"
     if isinstance(val, dict):
         return "(scheduled)"
@@ -1265,7 +1321,8 @@ def _render_custom_alerts(custom_alert_diffs, lines):
         "> Read from the rows the exporter serves: `threshold` is "
         "`<value>:<severity>`, and an `op` / `window` / `for` change shows as a "
         "`recipe_id` change. A recipe no longer served may have been deleted, "
-        "disabled or rejected; which of them is not told apart here."
+        "disabled or rejected; the note under it says which when the exporter's "
+        "reading of the tenant's `_custom_alerts` tells them apart."
     )
     lines.append("")
     for c, tenants in _group_per_tenant(custom_alert_diffs):

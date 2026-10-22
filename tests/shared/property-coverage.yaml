@@ -47,16 +47,23 @@ modules:
     covered:
       - parse_duration_seconds
       - format_duration
-      - is_disabled
       - validate_and_clamp
       - detect_cli_lang
       - i18n_text
     excluded:
+      _go_lower: "#3141 helper of custom_alert_disabled (Go's strings.ToLower); table-covered by threshold_value_matrix.json's custom_alert_disabled column (written by Go, DİSABLE rows included), which the case-folding mutation is checked against"
+      parse_threshold_number: "#3140 table-covered by threshold_value_matrix.json (float_ok, written by Go's parseThresholdNumber)"
+      _go_underscores_ok: "#3140 port of Go's strconv.underscoreOK behind parse_threshold_number; table-covered by threshold_value_matrix.json (`1_000`, `1__0`, `_1`, `0x_1p4`, `0x1p_4` rows, float_ok written by Go)"
+      routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
       receiver_required_problem: "#2180 required receiver fields by the schema's type + pattern (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _find_tenant_schema: "#2180 file locator (I/O); same two-layout shape as _grar_validate._find_platform_rules_configmap, exercised by every receiver_required_problem call"
       _receiver_field_schemas: "#2180 schema reader (I/O + cache); its output is pinned by tests/shared/test_receiver_spec_parity.py"
+      is_file_reference_key: "#3257 the file-reference key rule (suffix _file / _ref, or files); pinned key by key against the schema's definitions.fileReferenceKey pattern by tests/shared/test_receiver_file_reference_rule.py"
+      file_reference_paths: "#3257 recursive walk naming every rule-matching key of a receiver; example-pinned at every depth (http_config, nested auth blocks, header lists, list items) by tests/shared/test_receiver_file_reference_rule.py"
+      file_reference_problem: "#3257 message helper (the paths joined into one problem string); no law to property-test"
+      receiver_file_reference_problem: "#3257 composition of file_reference_paths + file_reference_problem; example-pinned by tests/shared/test_receiver_file_reference_rule.py and receiver_presence_cases.json via receiver_optional_problem"
       receiver_optional_problem: "#2295 optional receiver values by the schema's boolean properties + httpConfig (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _http_config_problem: "#2295 http_config auth-count + proxy_url rule; table-covered by receiver_presence_cases.json via receiver_optional_problem"
       _type_name: "#2295 message helper (type name for a problem string); no law to property-test"
@@ -175,6 +182,7 @@ modules:
       GoBinaryDispatcher.binary_missing_message: "Error-message templating; asserted by the missing-binary tests of the shims and _lib_tenant_values"
       GoBinaryDispatcher.resolve_binary: "The resolution step of _resolve_binary (covered), split out so _lib_tenant_values resolves da-guard the same way"
       GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
+      _may_be_file: "Filesystem probe (Path.is_file under OSError); its EACCES case is pinned in tests/shared/test_lib_godispatch.py (#3214)"
 
   # ── DX tools (doc/changelog/scaffold) ─────────────────────────────
 
@@ -348,6 +356,7 @@ modules:
       is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config schema row FAIL)"
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"
       value_type_text: "#2906 message helper (type + value of a decoded value); no law to property-test"
+      routing_block_file_reference_errors: "#3257 whole-block walk of a routing block with _lib_validation.file_reference_paths (match label names exempt); every block and every rendered receiver position example-pinned by tests/shared/test_receiver_file_reference_rule.py, incl. the subset test against routing_block_receivers"
       receiver_bool_type_errors: "#2906 closed walk (routing_block_receivers) over the schema's boolean receiver fields, type test only; every field and block position example-pinned by test_grar_field_types.py"
       unknown_receiver_type_entries: "#3116 membership filter of a list against the RECEIVER_TYPES keys; every entry shape (unknown name, opsgenie, bool, number, null, mapping) example-pinned by test_grar_policy_unusable.py"
       unknown_receiver_types_text: "#3116 message helper (the bad entries via value_type_text + the sorted RECEIVER_TYPES); no law to property-test"

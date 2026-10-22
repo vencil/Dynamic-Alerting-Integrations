@@ -64,6 +64,18 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 _EXIT_CALLER_ERROR = EXIT_CALLER_ERROR
 
 
+def _may_be_file(path: str) -> bool:
+    """False only when *path* is known not to name a file. ``Path.is_file``
+    raises for what it cannot look at — EACCES on a directory the caller
+    cannot enter (#3214) — and that is not "no such binary": the path goes
+    on to be run, where the OS names the actual reason (``could not be run
+    (…): Permission denied``) instead of an internal error."""
+    try:
+        return Path(path).is_file()
+    except OSError:
+        return True
+
+
 @dataclass
 class GoBinaryDispatcher:
     """Config-driven dispatcher for a da-tools subcommand wrapping a Go binary.
@@ -152,14 +164,10 @@ class GoBinaryDispatcher:
             i += 1
 
         if explicit:
-            return (
-                explicit if Path(explicit).is_file() else None
-            ), cleaned
+            return (explicit if _may_be_file(explicit) else None), cleaned
         env_override = os.environ.get(self.env_var, "").strip()
         if env_override:
-            return (
-                env_override if Path(env_override).is_file() else None
-            ), cleaned
+            return (env_override if _may_be_file(env_override) else None), cleaned
         return shutil.which(self.binary_name), cleaned
 
     def resolve_binary(self, explicit: str | None = None) -> str | None:

@@ -253,22 +253,25 @@ MUTATIONS: list[Mutation] = [
         old="    if seconds >= 60 and seconds % 60 == 0:",
         new="    if seconds >= 60:",
     ),
-    # ── is_disabled (_lib_validation) ─────────────────────────────
+    # ── custom_alert_disabled / split_threshold_severity (_lib_validation) ──
+    # #3140 PR2: is_disabled is gone (the threshold row's switch-off is read
+    # from served-values); these two helpers remain for custom_alert_disabled
+    # and the unit-sanity lint, held to Go by the matrix parity test.
     Mutation(
         target_file="scripts/tools/_lib_validation.py",
-        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
-        label="is_disabled: drop case-folding (.lower() removed)",
-        fn_name="is_disabled",
-        old="    return value.strip().lower() in _DISABLED_VALUES",
-        new="    return value.strip() in _DISABLED_VALUES",
+        test_file="tests/shared/test_threshold_value_parity.py",
+        label="custom_alert_disabled: drop Go case-folding (.lower() removed)",
+        fn_name="_go_lower",
+        old='    return "".join("i" if c == "\\u0130" else c.lower() for c in text)',
+        new="    return text",
     ),
     Mutation(
         target_file="scripts/tools/_lib_validation.py",
-        test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
-        label="is_disabled: drop whitespace strip",
-        fn_name="is_disabled",
-        old="    return value.strip().lower() in _DISABLED_VALUES",
-        new="    return value.lower() in _DISABLED_VALUES",
+        test_file="tests/shared/test_threshold_value_parity.py",
+        label="split_threshold_severity: drop Go whitespace strip",
+        fn_name="split_threshold_severity",
+        old="    text = str(raw).strip(GO_SPACE)",
+        new="    text = str(raw)",
     ),
     # ── validate_and_clamp (_lib_validation) ──────────────────────
     Mutation(
@@ -449,7 +452,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop isfile check on explicit (missing path returns string)",
         fn_name="_resolve_binary",
-        old="        if explicit:\n            return (\n                explicit if Path(explicit).is_file() else None\n            ), cleaned",
+        old="        if explicit:\n            return (explicit if _may_be_file(explicit) else None), cleaned",
         new="        if explicit:\n            return explicit, cleaned",
     ),
     Mutation(
@@ -465,7 +468,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop env-var fallback (only flag + PATH consulted)",
         fn_name="_resolve_binary",
-        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if Path(env_override).is_file() else None\n            ), cleaned',
+        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (env_override if _may_be_file(env_override) else None), cleaned',
         new='        env_override = ""\n        if env_override:\n            return None, cleaned',
     ),
     # ── _substitute_tenant (_grar_merge) ─────────────────────────

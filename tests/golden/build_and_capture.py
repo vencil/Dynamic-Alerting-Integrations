@@ -582,6 +582,14 @@ def s_served_disable():
 # Scenario 17: an unquoted date inherited from `_defaults.yaml` (Go:
 # "2026-12-31T00:00:00Z") beside a tenant datetime with a fraction and an
 # offset (RFC 3339, fraction's trailing zero dropped, offset kept).
+#
+# ⚠️ The tenant's `_silent_mode: {reason: ...}` (no `target:`) is here only to
+# carry the inherited date into the described (deep-merged) view. The
+# exporter's `_silent_mode` reader does not merge with `defaults:` — it reads
+# the tenant's own value, ignores it with a WARN, and silences nothing — so
+# the exporter's key validation flags it and tenant-api's write gate would
+# refuse it as a new value (#3227). That is not what this row pins; it is
+# left as is so the golden rows stay byte-identical.
 def s_yaml_date():
     d = reset("mixed-mode") / "yaml-date"
     write(d / "_defaults.yaml", """defaults:

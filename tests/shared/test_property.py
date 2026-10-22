@@ -5,7 +5,6 @@
   1. parse_duration_seconds() — 任何合法 duration 字串必回傳正數
   2. validate_and_clamp() — 任何輸入必回傳在 guardrail 範圍內的值
   3. format_duration() — 與 parse_duration_seconds 互為反函式
-  4. is_disabled() — 布林行為不變式
 """
 
 import pytest
@@ -157,29 +156,3 @@ class TestFormatDurationRoundtrip:
         formatted = lib.format_duration(seconds)
         reparsed = lib.parse_duration_seconds(formatted)
         assert reparsed == seconds
-
-
-# ============================================================
-# is_disabled properties
-# ============================================================
-
-class TestIsDisabledProperties:
-    """is_disabled() 不變式。"""
-
-    @given(text=st.text(min_size=0, max_size=50))
-    @settings(max_examples=500)
-    def test_always_returns_bool(self, text):
-        """任何字串輸入永遠回傳布林值。"""
-        result = lib.is_disabled(text)
-        assert isinstance(result, bool)
-
-    @given(variant=st.sampled_from([
-        "disable", "disabled", "off", "false",
-        "DISABLE", "DISABLED", "OFF", "FALSE",
-        "Disable", "Disabled", "Off", "False",
-    ]))
-    def test_known_disabled_variants(self, variant):
-        """已知 disabled 變體永遠回傳 True。"""
-        assert lib.is_disabled(variant) is True
-        # 含前後空白也要成立
-        assert lib.is_disabled(f"  {variant}  ") is True

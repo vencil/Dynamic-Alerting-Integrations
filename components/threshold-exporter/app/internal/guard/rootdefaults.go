@@ -275,3 +275,40 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 	}
 	return out
 }
+
+// checkRootDefaultsNonFinite reports findingkind.FindingRootDefaultNonFinite
+// for each threshold under the conf.d root carrier's `defaults:` mapping
+// written as a non-finite number (#3140). The predicate is the exporter's
+// (config.NonFiniteDefaultKeys), so the keys named are the ones the resolver
+// serves no default row for. A file in ParseFailed is skipped, as
+// checkRootCriticalKeys does: a quoted `"NaN"` there is not a number at all
+// and the whole file is dropped (exit 3).
+func checkRootDefaultsNonFinite(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		for _, k := range config.NonFiniteDefaultKeys(config.ExtractDefaultsBlock(doc)) {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDefaultNonFinite,
+				Field:    f.Name + ":defaults." + k,
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` is not a finite number (`.nan`, "+
+					"`.inf` or `-.inf`): an alert compared against it never fires (NaN, or the infinity on the side "+
+					"the alert compares) or always fires. The exporter serves no default row for `%s`; only a "+
+					"tenant's own value is served, as for an `optional_overrides:` key. Write a finite number, or "+
+					"list `%s` under `optional_overrides:` instead.", f.Name, k, k, k),
+			})
+		}
+	}
+	return out
+}

@@ -38,7 +38,7 @@ PromRule corpus → da-parser → Profile Builder（library）→ da-batchpr app
 ### Scale Foundation III + Tenant API hardening ✅
 
 - 1000-tenant synthetic baseline land：`make benchmark-report` 17 benches × count=6 跑 nightly cron；mixed-mode flat+hierarchy benches 加入 trend tracking
-- Tenant API hardening：rate limit per-pod + `X-Request-ID` middleware + tenant-scoped authz + body-content range validation（go-playground/validator + struct tags + reservedKeyValidators registry）
+- Tenant API hardening：rate limit per-pod + `X-Request-ID` middleware + tenant-scoped authz + body-content range validation（go-playground/validator + struct tags；patch key 依保留鍵登錄表判定，保留鍵的值由寫入關卡以 exporter 讀取函式判定，#3227）
 - Mixed-mode duplicate tenant ID：WARN → typed `*DuplicateTenantError` hard error + state preservation invariant
 
 ### Server-side Search / Tenant Manager virtualization / Master Onboarding / Smart Views ✅
