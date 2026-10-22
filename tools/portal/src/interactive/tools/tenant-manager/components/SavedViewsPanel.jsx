@@ -42,7 +42,9 @@ purpose: |
     - canWrite:        bool — derived from /api/v1/me; hides Save and
                        Delete controls when false
     - savedViews:      hook return — { views, loading, reachable,
-                                       reload, save, remove }
+                                       reload, save, remove }; `views`
+                       is the GET /api/v1/views array (ViewResponse[]),
+                       each entry carrying its own `id` (#3231)
 ---
 
 // TRK-233: ESM dist-bundle chunk order is non-deterministic;
@@ -77,9 +79,10 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
   const [newDescription, setNewDescription] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
-  // Sorted list of views for stable rendering.
-  const viewEntries = useMemo(() => {
-    return Object.entries(views || {}).sort(([a], [b]) => a.localeCompare(b));
+  // Sorted by view id for stable rendering. The id is the view's own
+  // `id` field — never a position in the list (#3231).
+  const sortedViews = useMemo(() => {
+    return [...views].sort((a, b) => a.id.localeCompare(b.id));
   }, [views]);
 
   // S#94 LL §12a discipline: hide the entire panel when the backend
@@ -127,7 +130,7 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
         </span>
       )}
 
-      {!loading && viewEntries.length === 0 && (
+      {!loading && sortedViews.length === 0 && (
         <span
           data-testid="saved-views-empty"
           style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)', fontStyle: 'italic' }}
@@ -136,14 +139,14 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
         </span>
       )}
 
-      {!loading && viewEntries.length > 0 && (
+      {!loading && sortedViews.length > 0 && (
         <select
           data-testid="saved-views-select"
           aria-label={t('套用已存視圖', 'Apply saved view')}
           onChange={(e) => {
             const id = e.target.value;
             if (!id) return;
-            const view = views[id];
+            const view = sortedViews.find((v) => v.id === id);
             if (view) onApplyView(view.filters || {});
             // Reset to placeholder so the same view can be re-applied.
             e.target.value = '';
@@ -159,9 +162,9 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
           <option value="" disabled>
             {t('選擇視圖…', 'Select a view…')}
           </option>
-          {viewEntries.map(([id, view]) => (
-            <option key={id} value={id}>
-              {view.label || id}
+          {sortedViews.map((view) => (
+            <option key={view.id} value={view.id}>
+              {view.label || view.id}
             </option>
           ))}
         </select>
@@ -179,7 +182,7 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
         </button>
       )}
 
-      {canWrite && viewEntries.length > 0 && (
+      {canWrite && sortedViews.length > 0 && (
         <select
           data-testid="saved-views-delete-select"
           aria-label={t('刪除已存視圖', 'Delete saved view')}
@@ -199,9 +202,9 @@ function SavedViewsPanel({ currentFilters, onApplyView, canWrite, savedViews }) 
           <option value="" disabled>
             {t('刪除…', 'Delete…')}
           </option>
-          {viewEntries.map(([id, view]) => (
-            <option key={id} value={id}>
-              {view.label || id}
+          {sortedViews.map((view) => (
+            <option key={view.id} value={view.id}>
+              {view.label || view.id}
             </option>
           ))}
         </select>
