@@ -455,3 +455,32 @@ describe('validateConfig — routing timing values (#2711)', () => {
     expect(timingIssues({ group_wait: '' })).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// validateConfig — reserved `_` keys come from the registry (#3227)
+// ─────────────────────────────────────────────────────────────────────
+
+describe('validateConfig — reserved `_` keys (#3227)', () => {
+  type Issue = { level: string; field: string; msg: string };
+  const unknownKeys = (config: Record<string, unknown>): string[] =>
+    validateConfig(config, []).issues
+      .filter((i: Issue) => i.msg.startsWith('Unknown reserved key'))
+      .map((i: Issue) => i.field);
+
+  it('every reserved tenant key of the generated registry copy is known', async () => {
+    const { default: REG } = await import('../src/interactive/tools/_common/data/reserved-keys.json');
+    expect(REG.reserved_keys.length).toBeGreaterThan(0);
+    for (const key of REG.reserved_keys) {
+      expect(unknownKeys({ [key]: 'x' }), key).toEqual([]);
+    }
+    for (const prefix of REG.open_prefixes) {
+      expect(unknownKeys({ [`${prefix}anything`]: 'x' }), prefix).toEqual([]);
+    }
+  });
+
+  it('a platform-level key under a tenant is unknown, as the tenant schema has it', () => {
+    for (const key of ['_routing_defaults', '_routing_enforced', '_domain_policy', '_instance_mapping', '_silentmode']) {
+      expect(unknownKeys({ [key]: 'x' }), key).toEqual([key]);
+    }
+  });
+});
