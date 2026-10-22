@@ -61,7 +61,7 @@ v3.0.1 到 v3.0.5 的原始碼差異：`decode.go` 只差上面這段修正；`p
 `Marshal`，兩邊也逐 byte 相同。
 
 寫法有一處不同：值以換行開頭的字串寫成 literal block 時，v3.0.1 的 emitter 漏寫開頭的空行
-（`"\nteam"` 寫成 `|4-` 加 `team`，讀回是 `"team"`），v3.0.5 會寫出來、讀回不變。受影響的是
+（`"\nteam"` 寫成 `|N-` 加 `team`，N 是隨巢狀深度而變的縮排指示，讀回是 `"team"`），v3.0.5 會寫出來、讀回不變。受影響的是
 tenant-api 的 custom alerts 合併（`internal/customalerts` 的 `literalBlockKeeps` 先試寫再讀回，
 不一致才改用雙引號）：這種字串過去寫成 `"\nteam"`，現在寫成 literal block；兩種寫法讀回都是同一個字串。
 同一個原因，tenant-api 的部分更新（批次 patch、`PUT .../custom-alerts`）遇到開頭有空行的 block scalar，

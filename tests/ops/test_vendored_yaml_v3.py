@@ -423,10 +423,16 @@ def test_a_byte_inside_the_hunk_is_caught(scratch: Path) -> None:
 
 
 def test_reverting_upstreams_unhashable_fix_is_caught(scratch: Path) -> None:
+    """Undo one of upstream's call sites (merge()'s write to d.mergedFields,
+    as v3.0.1 had it): the hash must move, and it must be this edit that
+    moved it — the call site was there once and is gone."""
+    fixed = b"d.setPossiblyUnhashableKey(d.mergedFields, k.Interface(), true)"
     f = scratch / "decode.go"
-    f.write_bytes(f.read_bytes().replace(
-        b"d.setPossiblyUnhashableKey(d.mergedFields, k.Interface(), true)",
-        b"d.mergedFields[k.Interface()] = true"))
+    before = f.read_bytes()
+    assert before.count(fixed) == 1, "upstream's call site is not in the vendored decode.go once"
+    f.write_bytes(before.replace(fixed, b"d.mergedFields[k.Interface()] = true"))
+    after = f.read_bytes()
+    assert fixed not in after and after.count(b"d.mergedFields[k.Interface()] = true") == 1
     assert _reverted_h1(_tree(scratch)) != _UPSTREAM_H1
 
 
