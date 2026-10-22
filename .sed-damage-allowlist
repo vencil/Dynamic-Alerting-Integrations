@@ -207,3 +207,6 @@ scripts/tools/dx/describe_tenant.py
 # the tree walk, cap and quarantine left the loader, which keeps only the walk
 # describe_tenant still shows (until #3042 B2).
 scripts/tools/dx/custom_alerts/loader.py
+# #3206 option A: the conf.d AST gate shrinks to forbidding _lib_confd's name
+# predicates only (path judgement moves to the behaviour matrix) — a real shrink.
+tests/shared/test_confd_tools_no_python_judgement.py
