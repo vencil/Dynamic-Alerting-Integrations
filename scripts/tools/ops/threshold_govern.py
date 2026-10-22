@@ -1482,7 +1482,11 @@ def main() -> None:
         try:
             _error_remedies()
         except ErrorContractError as exc:
-            print(f"threshold-govern: {exc}", file=sys.stderr)
+            msg = (f"--apply 需要 tenant-api 錯誤契約才能判讀被拒的寫入: {exc}"
+                   if _LANG == "zh" else
+                   f"--apply needs tenant-api's error contract to classify a "
+                   f"refused write: {exc}")
+            print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
     result = run(args)

@@ -260,9 +260,14 @@ def _synth_tenant_yaml(tenant):
     return f'tenants:\n  {tenant}:\n    mysql_connections: "2000"\n'
 
 
+# More PUTs than any bounded path sends for one tenant (the first + one retry).
+_PUT_CAP = 3
+
+
 def _patch_http(monkeypatch, *, get_raw=FIXTURE, get_err=None,
                 put_result=(200, {}, None), per_tenant=False):
     calls = {"put_body": None, "put_count": 0, "put_url": None, "get_headers": None}
+    per_url = {}
 
     def fake_get(url, *, timeout=10, headers=None):
         calls["get_headers"] = headers
@@ -275,6 +280,10 @@ def _patch_http(monkeypatch, *, get_raw=FIXTURE, get_err=None,
 
     def fake_put(url, yaml_body, headers, timeout):
         calls["put_count"] += 1
+        # A runaway retry loop must fail here, not hang until a CI timeout.
+        per_url[url] = per_url.get(url, 0) + 1
+        assert per_url[url] <= _PUT_CAP, (
+            f"{per_url[url]} PUTs to {url} — the retry bound is gone")
         calls["put_body"] = yaml_body
         calls["put_url"] = url
         return put_result
@@ -433,23 +442,35 @@ def test_one_code_per_contract_remedy_drives_the_expected_outcome(monkeypatch, r
 
 def test_refresh_retry_refetches_and_succeeds_on_the_second_put(monkeypatch):
     # CONFLICT (refresh_retry): the base moved under the PUT. The retry re-GETs
-    # (a fresh raw_yaml), re-merges, re-verifies and PUTs again.
+    # (a fresh raw_yaml), re-merges, re-verifies and PUTs again — the second
+    # PUT carries the SECOND base, never the first attempt's merged body.
     conflict = next(r for r in _contract_rows() if r["remedy"] == "refresh_retry")
     answers = iter([
         (409, {"code": conflict["code"], "error": "conflict"}, None),
         (200, {"status": "pending_review", "pr_url": "https://gh/7", "pr_number": 7}, None),
     ])
-    gets = []
+    moved = FIXTURE.replace("# headline tenant — do not delete this comment",
+                            "# headline tenant — base moved upstream")
+    assert moved != FIXTURE
+    bases = iter([FIXTURE, moved])
+    puts = []
 
     def fake_get(url, *, timeout=10, headers=None):
-        gets.append(url)
-        return {"raw_yaml": FIXTURE}, None
+        return {"raw_yaml": next(bases)}, None
+
+    def fake_put(url, yaml_body, headers, timeout):
+        puts.append(yaml_body)
+        assert len(puts) <= _PUT_CAP, "the retry bound is gone"
+        return next(answers)
 
     monkeypatch.setattr(tg, "http_get_json", fake_get)
-    monkeypatch.setattr(tg, "_http_put_yaml", lambda *a: next(answers))
+    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
     out = tg.open_governance_pr(_plan(), _args())
     assert out.status == "pr_opened" and out.pr_url == "https://gh/7"
-    assert len(gets) == 2
+    assert len(puts) == 2
+    assert "base moved upstream" not in puts[0]
+    assert "base moved upstream" in puts[1]
+    assert '    mysql_connections: "45"            # warning threshold' in puts[1]
 
 
 @pytest.mark.parametrize("why, remedies, body", [
@@ -467,16 +488,22 @@ def test_unknown_code_or_remedy_fails_closed(monkeypatch, why, remedies, body):
     assert body["code"] in out.message
 
 
-def test_missing_contract_is_rc2_before_any_write(monkeypatch, tmp_path):
+def test_missing_contract_is_rc2_before_any_write(monkeypatch, tmp_path, capsys):
+    # The --apply pre-check must refuse BEFORE run(): a run reaching tenant-api
+    # without the contract could not tell a pending PR from any other 409.
     monkeypatch.setattr(tg, "_ERROR_REMEDIES", None)
     monkeypatch.setattr(tg, "_find_error_contract", lambda: None)
-    calls = _patch_http(monkeypatch)
+
+    def no_run(_args):
+        raise AssertionError("run() reached without an error contract")
+
+    monkeypatch.setattr(tg, "run", no_run)
     args = _args(apply=True, config_dir=str(tmp_path))
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
     with pytest.raises(SystemExit) as exc:
         tg.main()
     assert exc.value.code == 2
-    assert calls["put_count"] == 0
+    assert "tenant-api-errors.json not found" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("doc", ['{"codes": []}', '{"codes": [{"code": "X"}]}', "not json"])
