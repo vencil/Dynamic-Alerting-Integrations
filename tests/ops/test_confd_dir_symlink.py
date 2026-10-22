@@ -43,8 +43,11 @@ DESCRIBE = REPO / "scripts" / "tools" / "dx" / "describe_tenant.py"
 PATH_META = REPO / "scripts" / "tools" / "lint" / "check_path_metadata_consistency.py"
 COMPILE = REPO / "scripts" / "tools" / "dx" / "compile_custom_alerts.py"
 
-SYMLINK_REASON = ("is a symlink to a directory — threshold-exporter does not "
-                  "follow it, so the config files under it are NOT loaded")
+# #3206 R7: da-guard's kind and message (`_lib_confd.unusable_reason`), the
+# same words in every Python reader.
+SYMLINK_REASON = ("cannot be read as a config file (not_regular_file): a symlink "
+                  "to a directory the walk does not follow — the config files under "
+                  "it are NOT loaded")
 PT_SYMLINK_REASON = "a symlink to a directory the walk does not follow (not_regular_file)"
 TENANT = 'tenants:\n  t-sym:\n    cpu_pct: "70"\n'
 DEFAULTS = "defaults:\n  cpu_pct: 50\n"
@@ -123,7 +126,7 @@ def test_list_config_tree_names_the_directory_link(nested: Path):
         "a directory symlink went missing from `unusable` — the tenants "
         "under it are lost with no signal again")
     assert [p.name for p in listing.files] == ["_defaults.yaml"]
-    assert unusable_reason(listing.unusable[0]) == SYMLINK_REASON
+    assert unusable_reason(listing.unusable[0], listing.listing) == SYMLINK_REASON
 
 
 def test_list_config_tree_flat_kubelet_layout_is_unchanged(flat: Path):

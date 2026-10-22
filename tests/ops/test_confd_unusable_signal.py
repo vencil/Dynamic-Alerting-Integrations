@@ -101,7 +101,8 @@ def test_routing_parser_still_names_the_unusable_entry(confd_with_dir_named_yaml
     # [Errno 21] …", i.e. an errno from an `open()` that should never have
     # been attempted; asserting the wording is what makes a revert to
     # `os.listdir()` + `open()` fail here instead of passing quietly.
-    assert "is a directory, not a config file" in stderr
+    # #3206 R7: da-guard's kind and words, the same in every reader.
+    assert "cannot be read as a config file (not_regular_file): a directory with a config file name" in stderr
 
 
 def test_routing_parser_reads_the_tree(tmp_path: pathlib.Path):
@@ -251,7 +252,7 @@ def test_both_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
         _parse_config_files(str(root))
     vc_report = vc.check_yaml_syntax(str(root))
 
-    phrase = "is a directory, not a config file"
+    phrase = "cannot be read as a config file (not_regular_file): a directory with a config file name"  # #3206 R7: da-guard's
     grar_line = [ln for ln in grar_err.getvalue().splitlines() if "beta.yaml" in ln]
     vc_line = [d for d in vc_report["details"] if "beta.yaml" in d]
     assert grar_line, "routing parser went silent about beta.yaml"
@@ -263,19 +264,6 @@ def test_both_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
 
 
 # ── the sentence the gate prints has to be true (#1469 follow-up) ────────
-
-
-def _deny_scandir(monkeypatch: pytest.MonkeyPatch, target: pathlib.Path) -> None:
-    """Unlistable directory at any uid — `chmod 000` is invisible to root."""
-    import os
-    real = os.scandir
-
-    def fake(path=".", *a, **kw):  # noqa: ANN001
-        if os.fspath(path) == os.fspath(target):
-            raise PermissionError(13, "Permission denied", os.fspath(target))
-        return real(path, *a, **kw)
-
-    monkeypatch.setattr(os, "scandir", fake)
 
 
 def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
@@ -316,7 +304,7 @@ def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
 
 
 def test_an_untraversable_directory_says_the_report_is_incomplete(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path, unlistable_dir,
 ):
     """`pass` on a tree half of which was never opened is the #1911 shape."""
     root = tmp_path / "conf.d"
@@ -326,7 +314,7 @@ def test_an_untraversable_directory_says_the_report_is_incomplete(
     (root / "_defaults.yaml").write_text(
         "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
 
-    _deny_scandir(monkeypatch, locked)
+    unlistable_dir(root, locked)  # da-guard's walk-error entry (#3206)
 
     res = vc.check_yaml_syntax(str(root))
     assert res["status"] == "fail", "a partially-unread tree must not pass"
@@ -378,11 +366,13 @@ def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path)
     errs = result["policy_file_errors"]
     assert errs, "a policy file that cannot be read must block --strict"
     assert "_domain_policy.yaml" in errs[0]
-    assert "is a directory, not a config file" in errs[0]
+    # #3206 R7: da-guard's kind and words.
+    assert ("cannot be read as a config file (not_regular_file): a directory "
+            "with a config file name") in errs[0]
 
 
 def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path, unlistable_dir,
 ):
     """⛔ "Unreadable" must never reach the caller as "no tenants".
 
@@ -411,16 +401,9 @@ def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
     (root / "acme.yaml").write_text(
         "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
 
-    # #2326: the reader walks the tree (`list_config_tree` → `os.walk` →
-    # `os.scandir`), so the root is made unlistable where the walk lists it.
-    real_scandir = os.scandir
-
-    def deny(path="."):
-        if os.fspath(path) == os.fspath(root):
-            raise PermissionError(13, "Permission denied", os.fspath(path))
-        return real_scandir(path)
-
-    monkeypatch.setattr(os, "scandir", deny)
+    # #2326 / #3206: the reader lists the tree through da-guard
+    # (`list_config_tree`), so the root is made unlistable there.
+    unlistable_dir(root, root)
 
     err = io.StringIO()
     with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as exc:

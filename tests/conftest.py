@@ -180,6 +180,62 @@ def _disarm_crash_envelope():
         ec.reset_exit_state()
 
 
+@pytest.fixture
+def unlistable_dir(monkeypatch):
+    """`deny(root, target)`: from now on, every da-guard document (any mode)
+    whose root is *target* or a directory above it says *target* cannot be
+    listed — one entry, role `unlistable_dir`, class `directory`, problem
+    `read_failure`, nothing under it ("." when the document is of *target*
+    itself) — exactly the entry `parse-tree` writes for a walk error (#3206).
+
+    For an in-process test of a Python reader: the walk is da-guard's, so a
+    `chmod 000` is invisible to uid 0 and patching `os.scandir` no longer
+    reaches it. What the walk itself does with an unlistable directory is
+    pinned in Go (pkg/config role tests) and run for real as uid 65534
+    (`tests/shared/test_lib_parse_tree_entries.py`); this stands in only for
+    its verdict. The document is rewritten BEFORE the reader checks it, so
+    the reader's own whole-document checks still run."""
+    import json as _json
+    import _lib_parse_tree as pt
+    real = pt.read_document
+    real_run = pt._run
+    targets: list[str] = []
+
+    def _run(args, binary, timeout, stdin=None, *, check=None, what=pt.SUBCOMMAND):
+        out = real_run(args, binary, timeout, stdin, check=lambda d: None, what=what)
+        if "--config-dir" in args and "--path" not in args:
+            root = os.path.realpath(args[args.index("--config-dir") + 1])
+            for target in targets:
+                rel = os.path.relpath(target, root).replace(os.sep, "/")
+                if rel == os.pardir or rel.startswith(os.pardir + "/"):
+                    continue
+                under = (lambda p, rel=rel: rel == "." or p == rel or p.startswith(rel + "/"))
+                out["entries"] = [e for e in out["entries"] if not under(e["path"])]
+                if "files" in out:
+                    out["files"] = {f: c for f, c in out["files"].items() if not under(f)}
+                    out["rendered_by"] = {f: c for f, c in out["rendered_by"].items()
+                                          if not under(f)}
+                out["defaults_carriers"] = {d: c for d, c in out["defaults_carriers"].items()
+                                            if not under(c)}
+                out["entries"].append({
+                    "path": rel, "depth": 0 if rel == "." else rel.count("/"),
+                    "class": "directory", "tenant_named": None, "defaults_document": False,
+                    "readers": [], "not_read": None,
+                    "role": "unlistable_dir",
+                    "problem": {"kind": "read_failure",
+                                "message": "the directory cannot be listed; nothing under "
+                                           "it is read (walk_error)"}})
+                out["entries"].sort(key=lambda e: e["path"])
+        return real(_json.dumps(out).encode("utf-8"), check=check, what=what)
+
+    def deny(root, target):
+        del root  # every document above *target* is rewritten, the root's too
+        targets.append(os.path.realpath(target))
+        monkeypatch.setattr(pt, "_run", _run)
+
+    return deny
+
+
 # ── Session-scoped constant fixtures ──────────────────────────────────
 
 @pytest.fixture(scope="session")

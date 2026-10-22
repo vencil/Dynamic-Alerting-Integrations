@@ -109,6 +109,12 @@ class _PyYamlReader:
     def require(self) -> None:
         pass
 
+    def listing(self):
+        """Which files there are: da-guard's listing (#3206) — the walk the
+        generator shared with this reader; only the CONTENT is PyYAML's."""
+        from _lib_parse_tree import list_tree
+        return list_tree(self.root)
+
     def read(self, path, mode=None):
         rel = Path(path).relative_to(self.root).as_posix()
         try:

@@ -185,13 +185,22 @@ def load_yaml_file_for_rewrite(path: Optional[str], default: Any = None) -> Any:
     BACK: plain scalar values are ``_lib_yaml_keys.RawPlain`` (their source
     text), so dumping with ``dump_for_rewrite`` does not retype them (#2220).
 
-    Same missing / empty / unreadable contract and the same pure parser; not
-    strict. ⚠️ Only for the rewrite path: the values are text, not numbers.
+    Same missing / empty contract and the same pure parser; not strict.
+    ⚠️ Only for the rewrite path: the values are text, not numbers.
+
+    ⛔ *default* only for a path that does not exist (#3206): a file whose
+    stat or read is refused, or a directory, raises the ``OSError`` — never
+    the default, which would read an existing file as empty (``isfile``
+    answers False for a file it may not stat).
     """
-    if not (path and os.path.isfile(path)):
+    if not path:
         return default
     try:
-        text_stream = io.StringIO(Path(path).read_bytes().decode("utf-8"))
+        raw = Path(path).read_bytes()
+    except FileNotFoundError:
+        return default
+    try:
+        text_stream = io.StringIO(raw.decode("utf-8"))
         text_stream.name = str(path)   # marks name the real file
         loaded = load_for_rewrite(text_stream)
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
@@ -480,18 +489,26 @@ def load_confd_file(config_dir: "str | os.PathLike[str]", path: Optional[str],
     `_lib_parse_cache.ConfdReader` of *config_dir* to read through instead
     (one built with an explicit da-guard binary).
 
-    *default* for a path that is not a file, as `load_yaml_file_strict`. A
-    file parse-tree cannot read raises :class:`YamlFileError` (``cause`` is
-    the `_lib_parse_tree.FileUnreadable`, whose ``kind`` names why), so a
-    caller's "cannot read this file" path reports it with no new branch. An
-    empty file is ``{}``. No usable da-guard raises
-    `_lib_parse_tree.ParseTreeError`, never a default."""
-    if not (path and Path(path).is_file()):
+    *default* for a path that is no config file of the tree — one the
+    reader's listing does not hold (an absent `_routing_profiles.yaml`), or
+    one Go's `role` says is no file (a directory, a dangling link). ⛔ Not
+    `is_file()` (#3206): it raised for a path under a directory this uid may
+    not search, and answered False for a file it may not stat; a config file
+    whose read fails raises. A file parse-tree cannot read raises
+    :class:`YamlFileError` (``cause`` is the `_lib_parse_tree.FileUnreadable`,
+    whose ``kind`` names why), so a caller's "cannot read this file" path
+    reports it with no new branch. An empty file is ``{}``. No usable
+    da-guard raises `_lib_parse_tree.ParseTreeError`, never a default."""
+    if not path:
         return default
     import _lib_parse_cache  # lazy: it runs da-guard through modules importing this one
     from _lib_parse_tree import FileUnreadable
+    reader = reader or _lib_parse_cache.reader_for(config_dir)
+    entry = reader.entry(path)
+    if entry is None or not entry.config_file:
+        return default
     try:
-        return (reader or _lib_parse_cache.reader_for(config_dir)).read(
+        return reader.read(
             path, mode if mode is not None else _lib_parse_cache.VALUES)
     except FileUnreadable as exc:
         raise YamlFileError(str(path), exc) from exc

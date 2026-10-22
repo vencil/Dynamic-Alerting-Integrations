@@ -126,13 +126,16 @@ def registered_readers(key: str) -> tuple[dict[str, tuple[str, ...]], bool]:
     return {}, False
 
 
-def root_platform_files(conf_d: str | os.PathLike[str]) -> list[str]:
-    """The `_` config files directly in `conf_d` (names, sorted): the shared
-    walk of the whole tree (hidden entries left out as everywhere), kept to
-    the root level."""
-    root = Path(conf_d)
-    return sorted(p.name for p in _lib_confd.iter_config_files(conf_d)
-                  if p.parent == root and _lib_confd.is_reserved_name(p.name))
+def root_platform_files(conf_d: str | os.PathLike[str], reader: Any = None) -> list[str]:
+    """The `_` config files directly in `conf_d` (names, sorted): the
+    config files (Go's `role`) of class `defaults` / `platform` at the root
+    level of *reader*'s listing — the snapshot it reads the tree from (the
+    run's reader of `conf_d` when None; #3206)."""
+    import _lib_parse_cache
+    reader = reader if reader is not None else _lib_parse_cache.reader_for(conf_d)
+    listing = _lib_confd.config_listing(conf_d, reader=reader)
+    return [] if listing is None else sorted(
+        e.path for e in listing.config_files() if e.depth == 0 and e.reserved)
 
 
 class PolicyHead(NamedTuple):
@@ -166,7 +169,16 @@ def _named_by_policy(tenant: str, key: str, heads: list[PolicyHead],
                for h in heads)
 
 
-def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None) -> list[Any]:
+def _reader_for(conf_d: str | os.PathLike[str], binary: str | None) -> Any:
+    """The reader `judge_tree` reads `conf_d` through: the run's, or one with
+    the caller's da-guard."""
+    import _lib_parse_cache
+    return (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
+            else _lib_parse_cache.reader_for(conf_d))
+
+
+def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None,
+                reader: Any = None) -> list[Any]:
     """The `_policies` of the root `_defaults.yaml`, as Policy-as-Code loads
     them; [] when there is none. *binary*: the da-guard to read it with (None:
     `$DA_GUARD_BINARY`, then `$PATH`)."""
@@ -183,42 +195,52 @@ def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None) -> li
     # `da-guard parse-tree` (the run's reader of `conf_d`, or one with the
     # caller's binary), not PyYAML; and the carrier is the one parse-tree
     # says the root's chain selects (#2906 review), not a Python selection.
-    import _lib_parse_cache
-    reader = (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
-              else _lib_parse_cache.reader_for(conf_d))
+    reader = reader if reader is not None else _reader_for(conf_d, binary)
     path = reader.carrier(conf_d)
-    if path is None or not path.is_file():
+    # #3206: no `is_file()` here — it answered False for a carrier it may not
+    # stat and so read "no policies". The carrier is parse-tree's selection;
+    # one whose read fails fails the read.
+    if path is None:
         return []
     return pe.load_policies(str(path), config_dir=str(conf_d), reader=reader)
 
 
-def note_root_only_policies(conf_d: str | os.PathLike[str]) -> None:
+def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) -> None:
     """Print, once, Policy-as-Code's own note naming the subdirectory
     `_defaults.yaml` files whose `_policies` it does not read — and so this
     verdict does not count — for a caller with no Policy-as-Code row of its
-    own to say it (explain-keys). Nothing when there is none."""
+    own to say it (explain-keys). Nothing when there is none. *reader*: the
+    caller's reader of `conf_d` — the one `judge_tree` reads too (#3206)."""
     ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops")
     if ops not in sys.path:
         sys.path.insert(0, ops)
     import policy_engine as pe
-    _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE)
+    _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE,
+                                     reader=reader if reader is not None
+                                     else _reader_for(conf_d, None))
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
                timeout: float = tv.DEFAULT_TIMEOUT,
-               effective_tree: tv.EffectiveTree | None = None) -> TreeVerdict:
+               effective_tree: tv.EffectiveTree | None = None,
+               reader: Any = None) -> TreeVerdict:
     """The verdict on every key of every tenant of the tree at `conf_d`.
     `effective_tree`, given, is a `load_effective_tree` of the same tree the
-    caller already has (validate-config shares one run among its rows)."""
+    caller already has (validate-config shares one run among its rows);
+    `reader`, given, is the caller's `_lib_parse_cache.ConfdReader` of it
+    (#3206: one parse-tree document for the run)."""
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                disable_effects=disable_effects)
     effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
-    all_rules = list(_tree_rules(conf_d, binary)) + list(rules or [])
+    if reader is None:
+        reader = _reader_for(conf_d, binary)  # one snapshot for the rules and the root files
+    all_rules = list(_tree_rules(conf_d, binary, reader)) + list(rules or [])
     heads = policy_targets(all_rules)
     verdict = judge(tree.tenants, effective, heads, aliases=tree.aliases,
-                    undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
-    by_profile = profile_layer_findings(_root_profiles(conf_d, binary), effective)
+                    undecidable=not root_platform_files(conf_d, reader),
+                    disable_effects=disable_effects)
+    by_profile = profile_layer_findings(_root_profiles(conf_d, reader), effective)
     return verdict._replace(findings=_merge_profile_findings(verdict, by_profile))
 
 
@@ -245,16 +267,14 @@ def _merge_profile_findings(verdict: TreeVerdict, by_profile: list[Finding]) -> 
     return _sorted_findings(kept + [f for f in by_profile if (f.file, f.key) not in theirs])
 
 
-def _root_profiles(conf_d: str | os.PathLike[str],
-                   binary: str | None = None) -> dict[str, dict[str, Any]]:
+def _root_profiles(conf_d: str | os.PathLike[str], reader: Any) -> dict[str, dict[str, Any]]:
     """file → the `profiles:` mapping of each root platform file that has
     one (the files the exporter takes profiles from), read through `da-guard
-    parse-tree` as the rest of the tree is (ADR-036 step 4)."""
+    parse-tree` as the rest of the tree is (ADR-036 step 4) — by *reader*,
+    the run's one snapshot (#3206), which also names the files."""
     import _lib_parse_cache
-    reader = (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
-              else _lib_parse_cache.reader_for(conf_d))
     out = {}
-    for name in root_platform_files(conf_d):
+    for name in root_platform_files(conf_d, reader):
         try:
             doc = reader.read(Path(conf_d) / name)
         except _lib_parse_cache.NotSelected:

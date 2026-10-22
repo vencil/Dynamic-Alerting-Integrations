@@ -434,12 +434,18 @@ def test_a_document_without_a_mode_names_an_older_da_guard() -> None:
 
 
 def test_content_on_an_entry_that_is_no_config_file_is_refused() -> None:
-    """Tree mode reads only config files: content beside a `not_a_file`
-    entry is a document wrong somewhere, refused whole."""
+    """Tree mode reads only config files: content beside a `dir` entry is a
+    document wrong somewhere, refused whole. (A `not_a_file` entry always
+    carries a problem, so content beside one is "content and a problem".)"""
     doc = _doc()
-    doc["entries"][2]["problem"] = None
+    doc["entries"][2].update(role="dir", problem=None, readers=[], not_read=None,
+                             tenant_named=None, **{"class": "directory"})
     doc["files"]["gone.yaml"] = {}
-    with pytest.raises(lpt.ParseTreeError, match="content but role 'not_a_file'"):
+    with pytest.raises(lpt.ParseTreeError, match="content but role 'dir'"):
+        lpt.tree_of(doc)
+    doc = _doc()
+    doc["files"]["gone.yaml"] = {}
+    with pytest.raises(lpt.ParseTreeError, match="content and a problem"):
         lpt.tree_of(doc)
 
 

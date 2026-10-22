@@ -49,13 +49,25 @@ TOOLS = REPO / "scripts" / "tools"
 
 # `list_config_tree` (#2054) is `_lib_confd`'s one recursive walk; unlike
 # `iter_config_files` it has no `recursive=` knob, so its name settles it.
-_RECURSIVE_CALLS = {"rglob", "walk", "list_config_tree"}
+# #3206: the walk under it is da-guard's per-path index — a `--list-only`
+# run (`_lib_parse_tree.list_tree`, `_lib_confd.config_listing`) or the
+# entries of a tree-mode document a reader holds (`ConfdReader.listing`):
+# all of them the exporter's recursive walk, so a caller of any of them is
+# recursive — unless it keeps only the top level (`_LISTING_CALLS`).
+# (`_listing` is `_lib_confd`'s own "the caller's snapshot, else
+# config_listing" helper.)
+_RECURSIVE_CALLS = {"rglob", "walk", "list_config_tree",
+                    "list_tree", "config_listing", "listing", "listing_of", "_listing"}
 # Every way a caller can list ONE directory level. Enumerated deliberately
 # and kept in one place — an enumerated guard is only as good as its list,
 # so both analysers below read this same function rather than each keeping
 # their own copy (the duplication that let `iterdir` slip through review).
 _FLAT_CALLS = {"listdir", "iterdir", "scandir"}
 _GUARD_CALLS = {"warn_nested", "nested_yaml_warning", "nested_yaml_files"}
+# Calls whose answer is da-guard's RECURSIVE listing, so a `depth == 0`
+# filter over it in the same scope is a flat read (#3206).
+_LISTING_CALLS = {"list_tree", "config_listing", "listing", "listing_of", "_listing",
+                  "list_config_tree"}
 
 
 def _call_kind(node: ast.Call) -> str | None:
@@ -68,7 +80,7 @@ def _call_kind(node: ast.Call) -> str | None:
         return "recursive"
     if name in _FLAT_CALLS:
         return "flat"
-    if name == "iter_config_files":
+    if name in ("iter_config_files", "unusable_config_paths"):
         # The shared helper has a `recursive=` knob, so the call name alone
         # does not settle it: `iter_config_files(d, recursive=False)` is a
         # flat read wearing a recursive-looking name.
@@ -105,13 +117,116 @@ def _own_scope_calls(fn: ast.AST):
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _is_depth0(node: ast.AST) -> bool:
+    """`<x>.depth == 0` (either side), `<x>.depth < 1` or `<x>.depth <= 0` —
+    keeping only the top level of a da-guard listing (#3206)."""
+    if not (isinstance(node, ast.Compare) and len(node.ops) == 1):
+        return False
+    left, op, right = node.left, node.ops[0], node.comparators[0]
+    if isinstance(right, ast.Attribute) and isinstance(left, ast.Constant):
+        left, right = right, left
+        op = {ast.Lt: ast.Gt(), ast.Gt: ast.Lt(), ast.LtE: ast.GtE(),
+              ast.GtE: ast.LtE()}.get(type(op), op)
+    if not (isinstance(left, ast.Attribute) and left.attr == "depth"
+            and isinstance(right, ast.Constant) and isinstance(right.value, int)):
+        return False
+    v = right.value
+    return ((isinstance(op, ast.Eq) and v == 0) or (isinstance(op, ast.Lt) and v == 1)
+            or (isinstance(op, ast.LtE) and v == 0))
+
+
+def _knobs(scope: ast.AST) -> "set[str]":
+    """The parameter names of a function scope (none for a module)."""
+    a = getattr(scope, "args", None)
+    if a is None:
+        return set()
+    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+
+
+def _flat_listing_filters(scope: ast.AST) -> bool:
+    """A `depth == 0` filter in this scope that is not the caller's knob.
+
+    ⛔ (#3206) Taking the top level of da-guard's RECURSIVE listing is a flat
+    read wearing a recursive call's name, like `iter_config_files(d,
+    recursive=False)`. The one exemption: an `or` whose every other operand
+    is a bare NAME that is a parameter of this function (`recursive or
+    e.depth == 0`) — a library's own `recursive=` knob, whose flat use is
+    caught at the call site. ⛔ Only a parameter: an attribute
+    (`e.depth == 0 or e.not_a_file`) or a local is no knob, and the filter
+    counts as flat — the first version exempted any attribute, so a
+    predicate passed as a knob.
+
+    ⚠️ A TEXT-LEVEL HEURISTIC over one scope's AST, not a dataflow
+    analysis. Known shapes it does NOT see (deliberately not chased one by
+    one): the depth read through a variable (`d = e.depth; if d == 0`) or a
+    helper, a negation (`not e.depth`, `e.depth != 0` in an `else`),
+    `min(depth) == 0`, a `filter(lambda e: …)` (a lambda is its own scope),
+    slicing a list sorted by depth, and a filter on `path.count("/") == 0`
+    or `"/" not in e.path` instead of `depth`. A flat reader written that way
+    passes this gate; review is the backstop."""
+    knobs = _knobs(scope)
+    stack: list[ast.AST] = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            for k, v in enumerate(node.values):
+                others = node.values[:k] + node.values[k + 1:]
+                if _is_depth0(v) and not all(isinstance(o, ast.Name) and o.id in knobs
+                                             for o in others):
+                    return True
+                if not _is_depth0(v):
+                    stack.append(v)
+            continue
+        if _is_depth0(node):
+            return True
+        stack.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _name_of(node: ast.Call) -> str:
+    fn = node.func
+    return fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+
+
+def _scope_kinds(scope: ast.AST, calls) -> set[str]:
+    """The kinds of one scope's calls, with a flat listing filter turning the
+    listing call it narrows from recursive into flat."""
+    calls = list(calls)
+    kinds = {_call_kind(c) for c in calls}
+    if _flat_listing_filters(scope):
+        kinds.add("flat")
+        others = [c for c in calls if _call_kind(c) == "recursive"
+                  and _name_of(c) not in _LISTING_CALLS]
+        if not others:
+            kinds.discard("recursive")
+    return {k for k in kinds if k}
+
+
+#: Functions whose top-level filter is the QUESTION, not a flat read of the
+#: tree — reviewed one by one, with why nothing below the root bears on it.
+_ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
+    ("_lib_key_verdict.py", "root_platform_files"):
+        "asks whether the conf.d ROOT holds any platform (`_`) file — the "
+        "`undecidable` switch of the key verdict (ADR-038); a `_` file below "
+        "the root is no root platform file, so there is nothing to skip",
+}
+
+
 def _enumeration_kinds(path: pathlib.Path) -> set[str]:
-    """Every `_call_kind` this file's AST contains — {} if unparseable."""
+    """Every `_call_kind` this file's AST contains — {} if unparseable —
+    plus "flat" for a top-level filter over da-guard's listing (#3206)."""
     tree = parse(path)
     if tree is None:
         return set()
-    return {k for k in (_call_kind(n) for n in ast.walk(tree)
-                        if isinstance(n, ast.Call)) if k}
+    kinds = {k for k in (_call_kind(n) for n in ast.walk(tree)
+                         if isinstance(n, ast.Call)) if k}
+    if any(_flat_listing_filters(fn) for fn in ast.walk(tree)
+           if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+           and (path.name, fn.name) not in _ROOT_ONLY_BY_DEFINITION):
+        kinds.add("flat")
+    return kinds
 
 
 def _classify(path: pathlib.Path):
@@ -162,7 +277,9 @@ def _flat_scopes_without_guard(path: pathlib.Path) -> list[str]:
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        kinds = {_call_kind(c) for c in _own_scope_calls(fn)}
+        if (path.name, fn.name) in _ROOT_ONLY_BY_DEFINITION:
+            continue
+        kinds = _scope_kinds(fn, _own_scope_calls(fn))
         # Recursing is the other valid answer, so it counts as guarded.
         if "flat" in kinds and not ({"guard", "recursive"} & kinds):
             bad.append(fn.name)
@@ -228,6 +345,53 @@ _BYPASS_CASES = {
         "def scan(config_dir):\n"
         "    for p in iter_config_files(config_dir, recursive=False):\n        pass\n"
     ),
+    # #3206: the top level of da-guard's recursive listing is a flat read;
+    # without a warning it must turn the gate red.
+    "listing_depth0_without_warning": (
+        "from _lib_confd import config_listing\n"
+        "def scan(d):\n"
+        "    for e in config_listing(d).entries:\n"
+        "        if e.depth == 0:\n            pass\n"
+    ),
+    "reader_listing_depth0_without_warning": (
+        "import _lib_parse_cache\n"
+        "def scan(d):\n"
+        "    return [e for e in _lib_parse_cache.reader_for(d).listing().entries\n"
+        "            if e.depth == 0]\n"
+    ),
+    # An `or` whose other operand is a predicate, not a knob, is a flat
+    # read too — an attribute included (the first exemption let
+    # `e.depth == 0 or e.not_a_file` through).
+    "listing_depth0_or_predicate": (
+        "from _lib_confd import config_listing\n"
+        "def scan(d):\n"
+        "    return [e for e in config_listing(d).entries\n"
+        "            if e.depth == 0 or e.cls == 'directory']\n"
+    ),
+    "listing_depth0_or_attribute": (
+        "from _lib_confd import config_listing\n"
+        "def scan(d):\n"
+        "    return [e for e in config_listing(d).entries\n"
+        "            if e.depth == 0 or e.not_a_file]\n"
+    ),
+    # A bare name that is not this function's parameter is no knob either.
+    "listing_depth0_or_local_name": (
+        "from _lib_confd import config_listing\n"
+        "def scan(d):\n"
+        "    everything = False\n"
+        "    return [e for e in config_listing(d).entries\n"
+        "            if everything or e.depth == 0]\n"
+    ),
+    "listing_depth0_comprehension": (
+        "from _lib_parse_tree import list_tree\n"
+        "def scan(d):\n"
+        "    return [e for e in list_tree(d).entries if 0 == e.depth]\n"
+    ),
+    "unusable_config_paths_recursive_false": (
+        "from _lib_confd import unusable_config_paths\n"
+        "def scan(d):\n"
+        "    return unusable_config_paths(d, recursive=False)\n"
+    ),
     # A guard inside an inner function that nobody calls emits nothing at
     # runtime, but `ast.walk` used to count it for the enclosing scope.
     "guard_in_uncalled_inner_function": (
@@ -248,6 +412,20 @@ _ACCEPTED_CASES = {
         "def scan(config_dir):\n"
         "    w = nested_yaml_warning(config_dir, tool='x')\n"
         "    for f in os.listdir(config_dir):\n        pass\n"
+    ),
+    "listing_depth0_with_warning": (
+        "from _lib_confd import config_listing, warn_nested\n"
+        "def scan(d):\n"
+        "    listing = config_listing(d)\n"
+        "    warn_nested(d, listing=listing)\n"
+        "    return [e for e in listing.entries if e.depth == 0]\n"
+    ),
+    # The library's own knob: flat only when the caller asks for it, which
+    # the call site's `recursive=False` answers.
+    "listing_recursive_knob": (
+        "from _lib_confd import config_listing\n"
+        "def scan(d, recursive=True):\n"
+        "    return [e for e in config_listing(d).entries if recursive or e.depth == 0]\n"
     ),
 }
 
@@ -451,3 +629,50 @@ def test_population_keys_synthetic_controls(name, tmp_path: pathlib.Path):
             "a flat reader with no population key must surface in the "
             "reconciliation set — that is the only place it can turn red"
         )
+
+
+# ── `warn_nested` without the caller's snapshot (#3206) ─────────────────
+
+#: The tools that call `warn_nested` with neither `listing=` nor `reader=`,
+#: so its nested files come from a Python walk with `_lib_confd`'s own name
+#: predicates (`_python_nested_files`): the tools that do not need da-guard
+#: yet. ⛔ TRANSITIONAL — ADR-036 §7 step 9 moves them onto da-guard and
+#: empties this set.
+_WARN_NESTED_WITHOUT_SNAPSHOT = {"ops/config_history.py", "ops/drift_detect.py",
+                                 "ops/migrate_to_operator.py"}
+
+
+def _warn_nested_without_snapshot(root: pathlib.Path) -> set[str]:
+    out = set()
+    for p in root.rglob("*.py"):
+        if p.name == "_lib_confd.py":
+            continue
+        tree = parse(p)
+        if tree is None:
+            continue
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Call) and _name_of(n) == "warn_nested"
+                    and not {"listing", "reader"} & {k.arg for k in n.keywords}):
+                out.add(p.relative_to(root).as_posix())
+    return out
+
+
+def test_warn_nested_without_a_snapshot_has_exactly_its_callers():
+    """A reader that calls `warn_nested` with no snapshot gets its nested
+    files from a second, Python walk — a second answer to "which files are
+    there" beside da-guard's. Pinned by set equality: a new caller is red
+    (pass it `listing=` / `reader=`), and a moved tool must leave the set."""
+    assert _warn_nested_without_snapshot(TOOLS) == _WARN_NESTED_WITHOUT_SNAPSHOT
+
+
+def test_warn_nested_without_a_snapshot_is_detected(tmp_path: pathlib.Path):
+    """Anti-vacuity for the pin above: a synthetic caller without a snapshot
+    is found, one with `listing=` or `reader=` is not."""
+    (tmp_path / "bare.py").write_text(
+        "from _lib_confd import warn_nested\ndef f(d):\n    warn_nested(d, tool='x')\n",
+        encoding="utf-8")
+    (tmp_path / "held.py").write_text(
+        "from _lib_confd import warn_nested\n"
+        "def f(d, l, r):\n    warn_nested(d, listing=l)\n    warn_nested(d, reader=r)\n",
+        encoding="utf-8")
+    assert _warn_nested_without_snapshot(tmp_path) == {"bare.py"}

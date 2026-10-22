@@ -124,8 +124,10 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     walk — `.yaml` / `.yml` in any case, `.`-prefixed entries skipped, a
     `_`-prefixed platform file never a tenant file, #1603 / #2360), read by
     yaml.v3 (keys as source text, #2216), except the examples/ subtree (dev
-    templates, never shipped). A tenant file parse-tree cannot read raises
-    YamlFileError naming it (exit 2): which tenants it declares is unknown.
+    templates, never shipped). A tenant file parse-tree cannot read, or a
+    path that is or may hide one (`_lib_parse_tree.TenantScope.unknown`),
+    raises YamlFileError naming it (exit 2): which tenants the tree
+    declares is unknown.
 
     WHICH db_type: `_metadata.db_type` as /metrics serves it (`da-guard
     served-values`, #2858) — the value collectTenantExpectedExporter reads,
@@ -136,12 +138,15 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     and ParseTreeError for no usable parse-tree (exit 2).
     """
     reader = _lib_parse_cache.reader_for(config_dir)
-    files = [rel for rel in _lib_parse_cache.tenant_files(reader.tree())
-             # Skip the examples/ dev-template subtree (not part of a real deployment).
-             if "examples" not in rel.split("/")]
-    declared, unreadable = _lib_parse_cache.declared_tenants(reader, files)
-    if unreadable:
-        raise YamlFileError(str(config_dir / unreadable[0].file), unreadable[0])
+    # Both halves of the tenant set's scope (#3206): a path that is or may
+    # hide a tenant file (a link to a directory, a directory Go could not
+    # list) leaves the set unknown exactly as an unreadable tenant file does.
+    # The examples/ dev-template subtree is left out of both (not part of a
+    # real deployment).
+    declared, unknown = _lib_parse_cache.declared_tenants(
+        reader, exclude=lambda rel: "examples" in rel.split("/"))
+    if unknown:
+        raise YamlFileError(str(config_dir / unknown[0].file), unknown[0])
     judged: Set[str] = set(declared)
     if not judged:
         return {}

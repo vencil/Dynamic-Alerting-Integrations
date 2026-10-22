@@ -211,15 +211,18 @@ def collect_tenant_ids_from_config_dir(config_dir: str) -> set[str]:
     ADR-036 step 4 (#2906): the files are the ones `da-guard parse-tree`
     selects, and the ids the keys of each `tenants:` mapping as yaml.v3 keys
     the exporter's map — source text (#2216: `010:` is tenant "010", not 8).
-    A file parse-tree cannot read raises YamlFileError (rc 2): what it
-    declares is unknown, so the validation could not be answered. A file
+    A file parse-tree cannot read, or a path that is or may hide a tenant
+    file (a link to a directory, a directory Go could not list: both halves
+    of `_lib_parse_cache.declared_tenants`' `unknown`, #3206), raises
+    YamlFileError (rc 2): what the tree declares is unknown, so the
+    validation could not be answered. A file
     with no `tenants:` mapping declares no tenant — the exporter serves none
     from it (the flat format is not read).
     """
-    declared, unreadable = _lib_parse_cache.declared_tenants(
+    declared, unknown = _lib_parse_cache.declared_tenants(
         _lib_parse_cache.reader_for(config_dir))
-    if unreadable:
-        first = unreadable[0]
+    if unknown:
+        first = unknown[0]
         raise YamlFileError(str(Path(config_dir) / first.file), first)
     return set(declared)
 
