@@ -30,27 +30,29 @@ import { test, expect, Page } from '@playwright/test';
 import './fixtures/diagnostic-matchers';
 import { checkA11y, formatA11yViolations, waitForPageReady } from './fixtures/axe-helper';
 
-const VIEWS_FIXTURE = {
-  views: {
-    'prod-finance': {
-      label: 'Production Finance',
-      description: 'All production tenants in finance domain',
-      created_by: 'admin@example.com',
-      filters: {
-        environment: 'production',
-        domain: 'finance',
-      },
-    },
-    'critical-silent': {
-      label: 'Critical + Silent',
-      created_by: 'sre@example.com',
-      filters: {
-        tier: 'tier-1',
-        operational_mode: 'silent',
-      },
+// GET /api/v1/views returns ViewResponse[] — an array, each entry carrying
+// its own `id` (#3231; components/tenant-api/internal/handler/view.go).
+const VIEWS_FIXTURE = [
+  {
+    id: 'prod-finance',
+    label: 'Production Finance',
+    description: 'All production tenants in finance domain',
+    created_by: 'admin@example.com',
+    filters: {
+      environment: 'production',
+      domain: 'finance',
     },
   },
-};
+  {
+    id: 'critical-silent',
+    label: 'Critical + Silent',
+    created_by: 'sre@example.com',
+    filters: {
+      tier: 'tier-1',
+      operational_mode: 'silent',
+    },
+  },
+];
 
 /**
  * Standard mocks: backend reachable, mock /api/v1/me as write-permitted,
@@ -112,7 +114,7 @@ test.describe('Saved Views (Smart Views) @critical', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ views: {} }),
+        body: JSON.stringify([]),
       });
     });
 
@@ -175,11 +177,12 @@ test.describe('Saved Views (Smart Views) @critical', () => {
     await page.route('**/api/v1/views', async (route) => {
       listCallCount += 1;
       const body = listCallCount === 1
-        ? { views: {} }
-        : { views: { 'my-new-view': {
+        ? []
+        : [{
+            id: 'my-new-view',
             label: 'My New View',
             filters: { environment: 'staging' },
-          } } };
+          }];
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -195,7 +198,7 @@ test.describe('Saved Views (Smart Views) @critical', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ ok: true }),
+        body: JSON.stringify({ status: 'ok', view_id: 'my-new-view' }),
       });
     });
 
@@ -243,7 +246,11 @@ test.describe('Saved Views (Smart Views) @critical', () => {
     await page.route('**/api/v1/views/prod-finance', async (route) => {
       if (route.request().method() === 'DELETE') {
         deleteCalled = true;
-        await route.fulfill({ status: 204, body: '' });
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'ok', view_id: 'prod-finance' }),
+        });
         return;
       }
       await route.fallback();

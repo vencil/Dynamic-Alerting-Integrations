@@ -4,13 +4,19 @@
  * RTL render. window.__t provided via test-setup.ts.
  * The panel takes `savedViews` as a prop (the hook return), so tests
  * pass plain objects rather than mocking the hook itself.
+ *
+ * `views` is the GET /api/v1/views body, so it goes through
+ * `apiFixture('ViewResponse[]', …)` (#2833 / #3231).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { SavedViewsPanel } from '../src/interactive/tools/tenant-manager/components/SavedViewsPanel.jsx';
+import { apiFixture } from './helpers/api-fixture';
+
+const views = (list: unknown[]) => apiFixture('ViewResponse[]', list);
 
 const baseHookReturn = {
-  views: {},
+  views: views([]),
   loading: false,
   reachable: true,
   reload: vi.fn(),
@@ -37,7 +43,7 @@ describe('SavedViewsPanel', () => {
         currentFilters={{}}
         onApplyView={() => {}}
         canWrite={true}
-        savedViews={{ ...baseHookReturn, views: {} }}
+        savedViews={{ ...baseHookReturn, views: views([]) }}
       />,
     );
     expect(screen.getByTestId('saved-views-panel')).toBeInTheDocument();
@@ -53,10 +59,10 @@ describe('SavedViewsPanel', () => {
         canWrite={true}
         savedViews={{
           ...baseHookReturn,
-          views: {
-            'prod-finance': { label: 'Production Finance', filters: { environment: 'production' } },
-            'critical-silent': { label: 'Critical + Silent', filters: { tier: 'tier-1' } },
-          },
+          views: views([
+            { id: 'prod-finance', label: 'Production Finance', filters: { environment: 'production' } },
+            { id: 'critical-silent', label: 'Critical + Silent', filters: { tier: 'tier-1' } },
+          ]),
         }}
       />,
     );
@@ -67,6 +73,48 @@ describe('SavedViewsPanel', () => {
     expect(select.querySelector('option[value="critical-silent"]')).not.toBeNull();
   });
 
+  // #3231: the option value and the applied / deleted view are the view's
+  // `id`, not its position in the list — reading the array as an id map
+  // made them '0' / '1' and sent apply and delete to the wrong view.
+  const twoViews = views([
+    { id: 'prod-finance', label: 'Production Finance', filters: { environment: 'production' } },
+    { id: 'critical-silent', label: 'Critical + Silent', filters: { tier: 'tier-1' } },
+  ]);
+
+  it('applies the filters of the view whose id was picked', () => {
+    const onApplyView = vi.fn();
+    render(
+      <SavedViewsPanel
+        currentFilters={{}}
+        onApplyView={onApplyView}
+        canWrite={false}
+        savedViews={{ ...baseHookReturn, views: twoViews }}
+      />,
+    );
+    const select = screen.getByTestId('saved-views-select') as HTMLSelectElement;
+    const values = Array.from(select.options).map(o => o.value).filter(Boolean);
+    expect(values).toEqual(['critical-silent', 'prod-finance']);
+    fireEvent.change(select, { target: { value: 'prod-finance' } });
+    expect(onApplyView).toHaveBeenCalledWith({ environment: 'production' });
+  });
+
+  it('deletes the view whose id was picked', async () => {
+    const remove = vi.fn(() => Promise.resolve(true));
+    render(
+      <SavedViewsPanel
+        currentFilters={{}}
+        onApplyView={() => {}}
+        canWrite={true}
+        savedViews={{ ...baseHookReturn, views: twoViews, remove }}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('saved-views-delete-select'), { target: { value: 'critical-silent' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('saved-views-delete-confirm'));
+    });
+    expect(remove).toHaveBeenCalledWith('critical-silent');
+  });
+
   it('hides Save / Delete controls when canWrite=false (RBAC)', () => {
     render(
       <SavedViewsPanel
@@ -75,7 +123,7 @@ describe('SavedViewsPanel', () => {
         canWrite={false}
         savedViews={{
           ...baseHookReturn,
-          views: { 'a': { label: 'A', filters: {} } },
+          views: views([{ id: 'a', label: 'A', filters: {} }]),
         }}
       />,
     );
@@ -93,7 +141,7 @@ describe('SavedViewsPanel', () => {
         canWrite={true}
         savedViews={{
           ...baseHookReturn,
-          views: { 'a': { label: 'A', filters: {} } },
+          views: views([{ id: 'a', label: 'A', filters: {} }]),
         }}
       />,
     );
