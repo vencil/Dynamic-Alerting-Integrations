@@ -812,8 +812,8 @@ def test_a_broken_stderr_under_redirect_stdout_is_not_a_lost_stdout(tmp_path, bu
 def test_the_lost_stdout_exit_honours_an_explicit_code(tmp_path, size, buffering):
     """N1: `die_caller_error(..., code=7)` from a stdout-loss handler keeps 7
     — also with bytes still buffered for the broken stdout (small output,
-    buffered), which the exit must point at the null device or the final
-    flush fails again and replaces 7 with the caller-error code."""
+    buffered), which the exit must drop or the final flush fails again and
+    replaces 7 with the caller-error code."""
     n = 100 if size == "small" else 1_000_000
     body = _armed(f"try:\n    print('x' * {n})\n    sys.stdout.flush()\nexcept OSError:\n"
                   "    _lib_exitcodes.die_caller_error('ERROR: x', reason='r', code=7)\n")
@@ -854,8 +854,7 @@ def test_the_final_flush_is_of_the_original_stdout_not_a_rebound_one(tmp_path):
     """S3 at exit: `sys.stdout` is still bound to stderr when the process
     ends, and the ORIGINAL stdout's reader has left with output pending. The
     original stdout is the one flushed (else the interpreter's own flush
-    makes it 120), and the failed stream is the one pointed at the null
-    device (else the named line, written to stderr, would be lost)."""
+    makes it 120), and the line naming its failure goes to stderr."""
     body = "print('partial report')\nsys.stdout = sys.stderr\nsys.exit(0)\n"
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert rc == 2, err
@@ -907,9 +906,27 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
 
 
 @pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
+def test_probe_leaves_a_failing_stdout_armed(monkeypatch):
+    """Armed with a stream whose flush fails, no failure recorded: the reset
+    takes no collection for it, so nothing but undoing the tap keeps the
+    stream's last flush from recording in the next test."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    ns: dict = {}
+    exec(_BROKEN_STREAM, ns)
+    monkeypatch.setattr(sys, "stdout", ns["Broken"]())
+    ec.arm_crash_envelope()
+
+
+@pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
+    # The previous test's fake stdout dies in a reference cycle (its tapped
+    # flush refers to it): collect it here, not at whatever later moment the
+    # collector happens to run, so a stale record cannot hide behind timing.
+    import gc
+    gc.collect()
     assert ec._lost_envelope is None
     assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
             ec._stdout_closed_reported, ec.get_crash_exit_code(),
@@ -918,7 +935,9 @@ def test_probe_sees_clean_exit_state():
                                             ec._IMPORT_CALLER_ERROR_CODE)
 
 
-def test_exit_state_does_not_leak_between_tests():
+@pytest.mark.parametrize("dirty", ["test_probe_leaves_every_piece_of_exit_state_dirty",
+                                   "test_probe_leaves_a_failing_stdout_armed"])
+def test_exit_state_does_not_leak_between_tests(dirty):
     """M1/S2: a green pytest run must not end at rc 2 because one test left
     a failing stream armed (order-dependent: measured on
     test_patch_config_verify -k "test_w1 and EPIPE and json"), and no test
@@ -926,7 +945,7 @@ def test_exit_state_does_not_leak_between_tests():
     me = Path(__file__)
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
-         f"{me}::test_probe_leaves_every_piece_of_exit_state_dirty",
+         f"{me}::{dirty}",
          f"{me}::test_probe_sees_clean_exit_state"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300, cwd=str(REPO_ROOT), env=dict(os.environ, **{_STATE_PROBE: "1"}))
@@ -990,6 +1009,54 @@ def test_raise_from_none_cuts_the_chain(tmp_path):
         "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert "ERROR: render failed" in err, err
+
+
+def test_a_reset_after_an_arm_alone_takes_no_collection(monkeypatch):
+    """#3156: an arm with no failure recorded is undone without a full
+    collection (one per such test cost ~0.4 s, the bulk of the suite's time),
+    and the stream gets its own write / flush back."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    import gc
+    ns: dict = {}
+    exec(_BROKEN_STREAM, ns)
+    fake = ns["Broken"]()
+    monkeypatch.setattr(sys, "stdout", fake)
+    ec.arm_crash_envelope()
+    assert "flush" in vars(fake) and fake._da_stdout_tap
+    calls = []
+    monkeypatch.setattr(gc, "collect", lambda *a: calls.append(a) or 0)
+    ec.reset_exit_state()
+    assert calls == []
+    assert "write" not in vars(fake) and "flush" not in vars(fake)
+    assert not getattr(fake, "_da_stdout_tap", False)
+
+
+def test_a_reset_keeps_the_import_time_tap_of_the_original_stdout():
+    """Unarmed, a failure of the original stdout is recorded (the import-time
+    tap); a reset that undoes the taps must leave that one as import made it."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    ec.reset_exit_state()
+    assert getattr(sys.__stdout__, "_da_stdout_tap", False)
+    assert "flush" in vars(sys.__stdout__)
+
+
+def test_a_reset_gives_back_a_streams_own_instance_flush(monkeypatch):
+    """A stream whose flush was already an instance attribute gets that one
+    back, not the class's."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    import io
+    fake = io.StringIO()
+    own = fake.flush
+    fake.flush = own
+    monkeypatch.setattr(sys, "stdout", fake)
+    ec.arm_crash_envelope()
+    assert vars(fake)["flush"] is not own
+    ec.reset_exit_state()
+    assert vars(fake)["flush"] is own
+    assert "write" not in vars(fake)
 
 
 def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
@@ -1087,3 +1154,415 @@ def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
     assert "ERROR: At least one phase input is required." in err, err
     assert (err.count(STDOUT_CLOSED_LINE)
             + err.count("ERROR: cannot write to stdout:")) == 1, err
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #3156 — three edges of the stdout-failure handling
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("size", sorted(_SIZES))
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_crash_raised_from_another_error_in_a_broken_pipe_handler_keeps_its_code(
+        tmp_path, buffering, size):
+    """#3156 (1): the handler's crash is ``raise ... from <unrelated>``. Its
+    ``__cause__`` is the unrelated error, so stdout's failure sits only on
+    the ``__context__`` chain; both chains must be walked so the failed
+    stream counts as answered for, or the exit flush replaces the crash code (70) and adds
+    the stdout-closed line."""
+    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
+            "def main():\n"
+            f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n"
+            "        raise RuntimeError('render failed') from ValueError('unrelated')\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert f"{CRASH_MARK} (RuntimeError)" in err, err
+    assert rc == 70, err
+    assert STDOUT_CLOSED_LINE not in err, err
+
+
+def test_failures_in_chain_walks_both_chains_and_stops_on_a_cycle(monkeypatch):
+    """#3156 (1), in-process: the failure is reached through ``__context__``
+    of a ``__cause__``; a cycle in the chain ends the walk."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    failure = BrokenPipeError(32, "Broken pipe")
+    stream = object()
+    monkeypatch.setattr(ec, "_stdout_failures", [(failure, stream)])
+    top = RuntimeError("top")
+    cause = ValueError("unrelated")
+    cause.__context__ = top  # a cycle back to the top
+    top.__cause__ = cause
+    top.__context__ = failure  # only on the context link of the top
+    assert ec._failures_in_chain(top) == [stream]
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_still_closed_fd_1_keeps_the_tools_own_code(tmp_path, buffering):
+    """#3156 (3), the other side: fd 1 was closed when stdout failed and is
+    still closed when the tool leaves with its own code (5). The final flush
+    of the failed stream must not run again, or it fails and replaces that
+    code. (Red before #3156: with fd 1 closed, the null device opened for
+    the old redirect GOT fd 1, and closing it afterwards closed fd 1
+    again.)"""
+    body = ("os.close(1)\n"
+            "def main():\n"
+            "    try:\n        print('x' * 100)\n        sys.stdout.flush()\n"
+            "    except OSError:\n"
+            "        try:\n            open('/nonexistent/d/f', 'w')\n"
+            "        except OSError as e:\n"
+            "            _lib_exitcodes.die_caller_error(f'ERROR: cannot write --output: {e}', "
+            "reason='output_unwritable', code=5)\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    assert "ERROR: cannot write --output" in err, err
+    assert proc.returncode == 5, err
+    assert STDOUT_CLOSED_LINE not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_caller_error_reaching_the_excepthook_after_a_broken_pipe_prints_one_line(
+        tmp_path, buffering):
+    """#3156 (2): a tool without ``run()`` raises ``CallerError`` while
+    handling stdout's failure; it reaches the module excepthook, where
+    ``sys.exc_info()`` is empty. The exception must be handed on explicitly,
+    so the failed stream counts as answered for: its own line only, its caller-error
+    code (3 here)."""
+    body = ("_lib_exitcodes.set_caller_error_code(3)\n"
+            "try:\n    print('x' * 100)\n    sys.stdout.flush()\n"
+            "except BrokenPipeError:\n"
+            "    raise _lib_exitcodes.CallerError('my own reason')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert "ERROR: my own reason" in err, err
+    assert rc == 3, err
+    assert STDOUT_CLOSED_LINE not in err, err
+    assert CRASH_MARK not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_reused_fd_1_gets_neither_the_null_device_nor_stale_bytes(tmp_path, buffering):
+    """#3156 (3): stdout failed while fd 1 was closed; the tool then opened a
+    file, which got fd 1. Pointing "stdout's fd" at the null device now
+    would discard that file's output, so no fd is touched (#3156 v2: the
+    library writes to no fd 0/1/2 on exit). And the bytes still buffered for the failed
+    stdout must not land in the tool's file either: it holds its own line
+    only."""
+    out = tmp_path / "out.txt"
+    body = ("os.close(1)\n"
+            "try:\n    print('old')\n    sys.stdout.flush()\n"
+            "except OSError:\n"
+            f"    f = open({str(out)!r}, 'w')\n"
+            "    assert f.fileno() == 1, f.fileno()\n"
+            "    f.write('mine\\n')\n"
+            "    _lib_exitcodes.die_caller_error('ERROR: x')\n")
+    proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    content = out.read_text(encoding="utf-8")
+    assert "old" not in content, content
+    assert content == "mine\n", err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_file_dup2ed_onto_fd_1_after_a_broken_pipe_gets_no_stale_bytes(
+        tmp_path, buffering):
+    """#3156 (3), review F1: after stdout's EPIPE the tool ``dup2``-s a file of
+    its own onto fd 1 and writes to it. No fd is redirected, and the bytes still buffered for the broken
+    stdout are discarded, not flushed into that file at exit."""
+    out = tmp_path / "out.txt"
+    body = ("def main():\n"
+            "    try:\n        print('old' * 40)\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n"
+            f"        fd = os.open({str(out)!r}, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+            "        os.dup2(fd, 1)\n        os.close(fd)\n"
+            "        os.write(1, b'mine\\n')\n"
+            "        _lib_exitcodes.die_caller_error('ERROR: mine', code=5)\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 5, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    content = out.read_text(encoding="utf-8")
+    assert "old" not in content, content
+    assert content == "mine\n", err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_closed_stderr_and_a_broken_pipe_end_at_the_caller_error_code(tmp_path, buffering):
+    """#3156, review S1: fd 2 closed before the run, then stdout's reader
+    leaves. Before #3156 the null device opened for the redirect got fd 2
+    (the lowest free one) and closing it after the dup2 closed fd 2 again,
+    so the final flush failed and the process ended at the interpreter's
+    120."""
+    body = ("os.close(2)\n"
+            "def main():\n    print('x' * 100)\n    sys.stdout.flush()\n    return 0\n"
+            "_lib_exitcodes.run(main)\n")
+    rc, _err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 2
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_the_excepthook_runs_every_atexit_handler_before_leaving_a_failed_stdout(
+        tmp_path, buffering):
+    """#3156 v2, M5: a tool without ``run()`` crashes with output still owed to
+    a stdout whose reader left. The excepthook settles stdout itself
+    (``_finalize_and_exit``: names the failure, seals the stream) and hands
+    the exit back, so ALL atexit handlers run — also one registered before
+    this module was imported (coverage's own is one). Left to the
+    import-time fallback, the failure would only be met at exit, where the
+    fallback has to ``os._exit`` before that handler runs."""
+    mark = tmp_path / "mark.txt"
+    script = tmp_path / "tool.py"
+    script.write_text(
+        "import atexit, os, sys\n"
+        f"atexit.register(lambda: open({str(mark)!r}, 'w', encoding='utf-8').write('ran'))\n"
+        f"sys.path.insert(0, {str(TOOLS_DIR)!r})\n"
+        "import _lib_exitcodes\n"
+        "print('x' * 100)\n"
+        "raise RuntimeError('boom')\n", encoding="utf-8")
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        proc = _run(script, stdout=w, env=_BUFFERING[buffering])
+    finally:
+        os.close(w)
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    assert mark.read_text(encoding="utf-8") == "ran", err
+
+
+def test_a_failed_stdout_still_waits_for_non_daemon_threads(tmp_path):
+    """#3156 v2: on the failure path too, the exit goes back to the
+    interpreter's shutdown, which waits for non-daemon threads — an
+    ``os._exit`` would kill one mid-work."""
+    mark = tmp_path / "mark.txt"
+    body = ("import threading, time\n"
+            "def late():\n    time.sleep(0.3)\n"
+            f"    open({str(mark)!r}, 'w', encoding='utf-8').write('done')\n"
+            "def main():\n    threading.Thread(target=late).start()\n"
+            "    print('x' * 100)\n    return 0\n"
+            "_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    assert rc == 2, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    assert mark.read_text(encoding="utf-8") == "done", err
+
+
+def test_a_clean_exit_goes_back_to_the_interpreter(tmp_path):
+    """#3156 v2 (variant B): when stdout and stderr flush cleanly, ``run()``
+    hands the exit back as ``SystemExit`` instead of ``os._exit``. An
+    embedding caller (``runpy`` + ``except SystemExit``) carries on, and a
+    ``NamedTemporaryFile`` the tool still holds is deleted at shutdown."""
+    tool = _script(tmp_path, (
+        "import tempfile\n"
+        "HELD = tempfile.NamedTemporaryFile(prefix='held-', dir={d!r}, delete=True)\n"
+        "def main():\n    print('report')\n    return 3\n"
+        "_lib_exitcodes.run(main)\n").format(d=str(tmp_path)))
+    host = tmp_path / "host.py"
+    host.write_text(
+        "import runpy, sys\n"
+        "try:\n"
+        f"    runpy.run_path({str(tool)!r}, run_name='__main__')\n"
+        "except SystemExit as done:\n"
+        "    print('after', done.code)\n", encoding="utf-8")
+    proc = _run(host)
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, proc.stderr
+    assert out == "report\nafter 3\n", out
+    assert not list(tmp_path.glob("held-*")), list(tmp_path.glob("held-*"))
+
+
+# ── #3156 v2 review round: seal, never redirect ─────────────────────────
+_LATE = "import time\ntime.sleep(0.3)\n"  # let `| true` leave first
+
+
+def _run_reader_gone(tmp_path: Path, body: str, buffering: str = "buffered") -> tuple[int, str]:
+    """*body* after the prelude, with a stdout whose reader has left;
+    (rc, stderr)."""
+    script = _script(tmp_path, body)
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        proc = subprocess.run([sys.executable, str(script)], stdout=w,
+                              stderr=subprocess.PIPE, timeout=60, env=_BUFFERING[buffering])
+    finally:
+        os.close(w)
+    return proc.returncode, proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_caught_lib_exit_does_not_decide_the_final_code(tmp_path, buffering):
+    """Review F1: a tool without ``run()`` catches the lib's stdout-lost exit
+    (``except SystemExit``), carries on, and ends with its own verdict (1).
+    That verdict is the exit code — the caught exit decided nothing."""
+    body = (_LATE + "try:\n    try:\n        print('x' * 100000)\n"
+            "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed', code=5)\n"
+            "except SystemExit:\n    pass\nsys.exit(1)\n")
+    rc, err = _run_reader_gone(tmp_path, body, buffering)
+    assert rc == 1, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("where", ["after-caught-exit", "atexit"])
+def test_stdout_still_takes_writes_after_its_failure_was_handled(tmp_path, buffering, where):
+    """Review F2: once stdout's failure is handled, ``sys.stdout`` still takes
+    writes (dropped, as the null device would) — a ``json.dump`` after a
+    caught exit, or an atexit handler, is not an AttributeError crash."""
+    if where == "atexit":
+        body = ("import atexit\natexit.register(lambda: sys.stdout.write('summary\\n'))\n"
+                + _LATE + "print('x' * 100000)\n")
+        want = 2
+    else:
+        body = (_LATE + "import json\ntry:\n    try:\n        print('x' * 100000)\n"
+                "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
+                "except SystemExit:\n    pass\njson.dump({'v': 1}, sys.stdout)\nsys.exit(0)\n")
+        want = 0
+    rc, err = _run_reader_gone(tmp_path, body, buffering)
+    assert rc == want, err
+    assert "Traceback" not in err and "Exception ignored" not in err, err
+
+
+@pytest.mark.parametrize("how", ["swallowed", "atexit-after-run"])
+def test_a_stderr_whose_reader_left_never_makes_it_120(tmp_path, how):
+    """Review F3: stderr's reader left with a line still buffered. Without
+    ``run()`` the tool swallowed the write error; with it, an atexit handler
+    wrote after the clean exit was handed back. Either way stderr loses its
+    lines and nothing else: the tool's own 0, not the interpreter's 120."""
+    if how == "swallowed":
+        body = (_LATE + "try:\n    sys.stderr.write('partial')\n    sys.stderr.flush()\n"
+                "except BrokenPipeError:\n    pass\n")
+    else:
+        body = ("import atexit\ndef main():\n    atexit.register(lambda: sys.stderr.write('late'))\n"
+                + "".join("    " + ln + "\n" for ln in _LATE.splitlines())
+                + "    return 0\n_lib_exitcodes.run(main)\n")
+    script = _script(tmp_path, body)
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.DEVNULL,
+                              stderr=w, timeout=60, env=_ENV)
+    finally:
+        os.close(w)
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize("entry", ["run", "excepthook"])
+def test_a_crash_with_stderr_gone_still_ends_at_the_crash_code(tmp_path, entry):
+    """Review F3 (c): the crash report cannot be written (stderr's reader
+    left; stdout is fine). The crash code (70) still says what happened —
+    not the interpreter's 1 for an error in the report, nor 120."""
+    crash = "raise ValueError('boom ' * 2000)"
+    if entry == "run":
+        body = ("_lib_exitcodes.set_crash_exit_code(70)\ndef main():\n"
+                + "".join("    " + ln + "\n" for ln in _LATE.splitlines())
+                + f"    print('out')\n    {crash}\n_lib_exitcodes.run(main)\n")
+    else:
+        body = "_lib_exitcodes.set_crash_exit_code(70)\n" + _LATE + f"print('out')\n{crash}\n"
+    script = _script(tmp_path, body)
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.DEVNULL,
+                              stderr=w, timeout=60, env=_ENV)
+    finally:
+        os.close(w)
+    assert proc.returncode == 70
+
+
+def test_a_second_wrapper_on_a_failed_stdout_leaks_nothing_into_a_reused_fd(tmp_path):
+    """Review F4: a second ``TextIOWrapper`` shares the failed stdout's
+    buffer; fd 1 is then reused by the tool's log file. Sealing drops
+    writes at every layer (not the fd), so neither wrapper flushes stale
+    bytes into the log at exit."""
+    log = tmp_path / "log.txt"
+    body = ("import io\nkeep = []\ndef main():\n"
+            "    w = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')\n    keep.append(w)\n"
+            "    w.write('REPORT-VIA-W\\n')\n    print('stale stdout bytes')\n    os.close(1)\n"
+            "    try:\n        sys.stdout.flush()\n    except OSError:\n"
+            f"        f = open({str(log)!r}, 'w')\n        keep.append(f)\n"
+            "        f.write('tool log line\\n')\n"
+            "        raise _lib_exitcodes.CallerError('cannot write report')\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    proc = _run(_script(tmp_path, body))
+    assert proc.returncode == 2, proc.stderr
+    assert log.read_text(encoding="utf-8") == "tool log line\n"
+
+
+def test_an_exit_status_beyond_a_c_long_is_handed_back_unmasked(tmp_path):
+    """Review F5: ``run()`` hands the tool's status back as given — 2**70 ends
+    the way the interpreter ends it (255), never masked to 0 (success)."""
+    proc = _run(_script(tmp_path, "_lib_exitcodes.run(lambda: 2 ** 70)\n"))
+    assert proc.returncode == 255, proc.stderr
+
+
+_HELD = {
+    "saved-reference": "print('late', file=SAVED)\n",
+    "__stdout__": "print('late', file=sys.__stdout__)\nsys.__stdout__.flush()\n",
+    "buffer": "sys.stdout.buffer.write(b'late')\n",
+    "logging": "logging.getLogger().warning('late')\n",
+    "redirect-restored": None,  # built below
+}
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("held", sorted(_HELD))
+def test_code_still_holding_a_sealed_stdout_writes_to_nowhere(tmp_path, buffering, held):
+    """Review 2, F1: after stdout's failure is handled (the lib's exit
+    caught), code still holding the ORIGINAL stream — a saved reference,
+    ``sys.__stdout__``, its buffer, a logging handler, ``redirect_stdout``
+    restoring it — writes as onto the null device: no ValueError crash, the
+    tool's own 0."""
+    prelude = ("import logging\nSAVED = sys.stdout\n"
+               "logging.basicConfig(stream=sys.stdout)\n" + _LATE)
+    handle = ("    try:\n        print('x' * 100000)\n        sys.stdout.flush()\n"
+              "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n")
+    if held == "redirect-restored":
+        body = (prelude + "import contextlib, io\ntry:\n"
+                "    with contextlib.redirect_stdout(io.StringIO()):\n"
+                "        try:\n            SAVED.write('x' * 100000)\n            SAVED.flush()\n"
+                "        except OSError:\n"
+                "            _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
+                "except SystemExit:\n    pass\nprint('summary')\nsys.exit(0)\n")
+    else:
+        body = (prelude + "try:\n" + handle + "except SystemExit:\n    pass\n"
+                + _HELD[held] + "sys.exit(0)\n")
+    rc, err = _run_reader_gone(tmp_path, body, buffering)
+    if buffering == "unbuffered" and held == "redirect-restored":
+        pass  # the write fails before the handler: a separate path
+    else:
+        assert rc == 0, err
+    assert "Traceback" not in err and "Logging error" not in err, err
+    assert CRASH_MARK not in err, err
+
+
+def test_a_string_exit_status_is_still_printed_when_stdout_is_lost(tmp_path):
+    """Review 2, F2: ``run()``'s tool ends with ``sys.exit("bad thing")`` and
+    the last flush of stdout fails: the exit is the stdout-lost one (rc 2),
+    and the tool's own message is still printed, as the interpreter would."""
+    body = "def main():\n    print('x' * 100)\n    sys.exit('bad thing')\n_lib_exitcodes.run(main)\n"
+    rc, err = _run_reader_gone(tmp_path, body)
+    assert rc == 2, err
+    assert "bad thing" in err and STDOUT_CLOSED_LINE in err, err
+
+
+def test_a_string_exit_status_is_printed_on_a_clean_exit(tmp_path):
+    """Review 2, mutation C: the clean path hands ``sys.exit("msg")`` back
+    as given — the interpreter prints it and ends at 1."""
+    proc = _run(_script(tmp_path, "def main():\n    sys.exit('bad thing')\n_lib_exitcodes.run(main)\n"))
+    assert proc.returncode == 1
+    assert b"bad thing" in proc.stderr
+
+
+def test_a_healthy_stderr_that_cannot_encode_is_not_sealed(tmp_path):
+    """Review 2, F3: a strict-ASCII stderr raises UnicodeEncodeError (a
+    ValueError) on the crash report. That stderr has not failed — it must
+    not be sealed: a later line on it still appears."""
+    body = ("import atexit\natexit.register(lambda: print('atexit note', file=sys.stderr))\n"
+            "sys.stderr.reconfigure(encoding='ascii', errors='strict')\n"
+            "def main():\n    raise ValueError('caf\\u00e9 failed')\n_lib_exitcodes.run(main)\n")
+    proc = _run(_script(tmp_path, body))
+    assert b"atexit note" in proc.stderr, proc.stderr
