@@ -569,8 +569,9 @@ def test_label_names_under_match_are_not_judged():
                   "receiver": {"type": "webhook", "url": _URL,
                                "http_config": {"http_headers": {"match": {"files": ["/f"]}}}}}]},
      ["_routing.routes[0].receiver.http_config.http_headers.match.files"]),
-    # _routing_enforced carries `match` at its root: still label names
-    ({"match": {"log_file": "x"}, "receiver": {"type": "webhook", "url": _URL}}, []),
+    # outside a receiver `match` is still a label map, whatever the depth
+    ({"routes": [{"match": {"log_file": "x"},
+                  "receiver": {"type": "webhook", "url": _URL}}]}, []),
 ])
 def test_match_is_a_label_map_only_outside_a_receiver(block, want):
     from _grar_validate import routing_block_file_reference_errors
