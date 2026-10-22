@@ -43,7 +43,7 @@ lang: zh
 |---|---|---|---|---|---|
 | PE | bootstrap 平台 | `init_project` · `operator_generate` · Helm · `federation_keygen`/`federation_check` | 數十條 pre-commit + CI required（iac-lint、secret-scan、rulepack-drift、single-writer-invariant） | 🟢 | reuse；缺**一個宣告式入口**（ArgoCD ApplicationSet bundle） |
 | TA | 上線自己 tenant | `scaffold_tenant` · tenant-api PUT · portal wizard | `body_validator`（patch key 依保留鍵登錄表）· 寫入關卡 `CheckReservedValue`（保留鍵的值，#3227）· `ValidateTenantCustomAlerts` · `CheckTenantRootKeys` | 🟢🟡 | reuse |
-| SRE | 整合進既有 stack / cutover | `onboard_platform` · `migrate_rule` · `validate_migration` · `cutover_tenant` · `shadow_verify` | promtool · `blast_radius` | 🟡 | reuse（判斷重→GUIDED）；缺打包成 golden path |
+| SRE | 整合進既有 stack / cutover | `onboard_platform` · `migrate_rule` · `validate_migration` · `cutover_tenant` · `shadow_verify` | promtool · `config_diff` | 🟡 | reuse（判斷重→GUIDED）；缺打包成 golden path |
 | DE | 寫 rule-pack | `rule-packs/` YAML · `lint_custom_rules` | promtool unit · pint · deny-list/required-labels · `hardcode-tenant-check` | 🟢 | reuse |
 | SEC | 上線時驗隔離 | RBAC · federation admission（label-enrichment）· CODEOWNERS | admission validators | 🔴 | reuse |
 
@@ -51,7 +51,7 @@ lang: zh
 
 | 角色 | 動作 | 工具/機制 | Gate（已存在） | Disp | Reuse/Gap |
 |---|---|---|---|---|---|
-| PE | 調 defaults/routing | `patch_config` · `generate_alertmanager_routes` · `explain_route` · `config_diff` | `generate-routes --validate --strict`（路由判定）· `blast_radius` PR 留言 · GitOps PR | 🟡 | reuse |
+| PE | 調 defaults/routing | `patch_config` · `generate_alertmanager_routes` · `explain_route` · `config_diff` | `generate-routes --validate --strict`（路由判定）· config-diff PR 留言（`config-diff-advisory`）· GitOps PR | 🟡 | reuse |
 | TA | 調自己 threshold/routing | tenant-api PUT · portal | admission validators · SHA-256 hot-reload | 🟢🟡 | reuse |
 | SRE | 健康/診斷/品質 | `diagnose` · `batch_diagnose` · `alert_quality` · `alert_correlate` · `runtime_audit` · `check_alert` | （唯讀為主） | 🟡 | reuse |
 | DE | threshold 治理 | `threshold_recommend` · `backtest_threshold` · **`threshold_govern` CronJob**（recommend→gate→PR） | `ha-max-threshold-aggregation` · `guard/cardinality.go` | 🟢 | reuse（自動調參迴路**典範**，他階段可仿） |
@@ -79,7 +79,7 @@ lang: zh
 ## Gap Register（可執行輸出：net-new vs reuse，按優先）
 
 1. **病 — 平台 liveness 類 maintenance-aware 抑制**：見 [ADR-026](../adr/026-node-maintenance-liveness-suppression.md)（窄 PARTIAL、`tenant_metadata_info` anti-join、HA-exporter-first）。cordon-aware 為 defer。
-2. **死 — 退役安全（最高 blast-radius，目前 0 hard gate）**：級聯 teardown + orphan 清理編排 + **一條 HARD pre-merge gate** + 「移除/靜音 monitoring」audit。重用 `blast_radius` + `silencer_drift_check` + `orphan/detector`，但**升級成 enforcing 而非 advisory**。**具體首個失敗模式（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md) 外審揪出）**：退役時若先刪 exporter 部署、conf.d 還在 → `up` 斷但 `tenant_metadata_info` 仍發 → liveness 規則對退役租戶噴 critical。⇒ 第一條 hard-gate 即「**禁止 PR 只刪 K8s target 卻殘留 conf.d**」（強制 conf.d 先移或兩者同移，先切斷 metadata 源）。
+2. **死 — 退役安全（最高 blast-radius，目前 0 hard gate）**：級聯 teardown + orphan 清理編排 + **一條 HARD pre-merge gate** + 「移除/靜音 monitoring」audit。重用 `config_diff` + `silencer_drift_check` + `orphan/detector`，但**升級成 enforcing 而非 advisory**。**具體首個失敗模式（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md) 外審揪出）**：退役時若先刪 exporter 部署、conf.d 還在 → `up` 斷但 `tenant_metadata_info` 仍發 → liveness 規則對退役租戶噴 critical。⇒ 第一條 hard-gate 即「**禁止 PR 只刪 K8s target 卻殘留 conf.d**」（強制 conf.d 先移或兩者同移，先切斷 metadata 源）。
 3. **治理 audit 缺口**：silencing / `threshold:"disable"` / `_silent_mode` 的 delta 無 hard gate / 無 audit → 升進 CI-blocking，接 `policy_opa_bridge`。
 4. **跨切：系統持有「lifecycle 狀態」**（doc 崩塌的核心引擎）：per-tenant/per-cluster 生命週期狀態面，讓角色**查「我在哪階段 / 下一步合法動作」**而非讀文件。可騎 tenant-api `configwatcher` + customalerts `status` pattern。
 

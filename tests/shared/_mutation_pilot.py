@@ -253,18 +253,11 @@ MUTATIONS: list[Mutation] = [
         old="    if seconds >= 60 and seconds % 60 == 0:",
         new="    if seconds >= 60:",
     ),
-    # ── custom_alert_disabled / split_threshold_severity (_lib_validation) ──
+    # ── split_threshold_severity (_lib_validation) ──
     # #3140 PR2: is_disabled is gone (the threshold row's switch-off is read
-    # from served-values); these two helpers remain for custom_alert_disabled
-    # and the unit-sanity lint, held to Go by the matrix parity test.
-    Mutation(
-        target_file="scripts/tools/_lib_validation.py",
-        test_file="tests/shared/test_threshold_value_parity.py",
-        label="custom_alert_disabled: drop Go case-folding (.lower() removed)",
-        fn_name="_go_lower",
-        old='    return "".join("i" if c == "\\u0130" else c.lower() for c in text)',
-        new="    return text",
-    ),
+    # from served-values); #3230: custom_alert_disabled went with its last
+    # reader, blast_radius. The grammar reader remains for the unit-sanity
+    # lint, held to Go by the matrix parity test.
     Mutation(
         target_file="scripts/tools/_lib_validation.py",
         test_file="tests/shared/test_threshold_value_parity.py",

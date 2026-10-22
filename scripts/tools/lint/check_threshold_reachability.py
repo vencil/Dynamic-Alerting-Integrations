@@ -1753,9 +1753,9 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
     # Rather than fold case here — `conf_d_root` is shared with the
     # guard-defaults workflow (#1219), and the repo's other references to
     # `conf.d` — the confd-schema hooks in `.pre-commit-config.yaml`, and the
-    # `blast-radius`, `config-diff`, `backtest` and `guard-defaults-impact`
-    # workflows — would stay case-sensitive, so this gate would be demanding
-    # registration for a tree nothing else can see. ⚠️ An earlier wording put a
+    # `config-diff`, `backtest` and `guard-defaults-impact` workflows — would
+    # stay case-sensitive, so this gate would be demanding registration for a
+    # tree nothing else can see. ⚠️ An earlier wording put a
     # COUNT here ("89 references across 8 CI files"); blind review could not
     # reproduce it under any of four definitions (80/8, 66/7, 50/6, 105/10) and
     # it was self-contradicting besides ("other than" excludes a file that the
@@ -1778,7 +1778,7 @@ def _tracked_confd_roots(paths: list[str] | None = None) -> set[str]:
             f"{CONF_D!r} only by case: {near_miss}. Every conf.d-aware check in "
             "this repo spells it in lower case, so a tree named this way is "
             "invisible to all of them at once — this floor, the confd-schema "
-            "hooks, blast-radius, config-diff, backtest, and the "
+            "hooks, config-diff, backtest, and the "
             "guard-defaults workflow. It is not a supported layout, and the "
             "silence it buys is the whole failure this floor exists to end.\n"
             "  RENAME the directory to lower case. Registering it under this "

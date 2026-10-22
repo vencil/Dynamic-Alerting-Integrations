@@ -1,22 +1,21 @@
 r"""A comparison baseline must never be silently replaced by an empty one.
 
-#1419. Three workflows build a BASELINE — the "before" side of a comparison —
+#1419. Two workflows build a BASELINE — the "before" side of a comparison —
 and hand it to a consumer that cannot tell *empty because nothing was there*
 from *empty because the command that built it failed*:
 
     .github/workflows/config-diff.yaml
         `Extract base branch configs`     -> /tmp/old-conf.d/
-    .github/workflows/blast-radius.yml
-        `Generate base effective configs` -> /tmp/base-effective.json
     .github/workflows/guard-defaults-impact.yml
         `Run da-guard`                    -> steps.guard.outputs.exit
 
+(`blast-radius.yml` was a third, with its `{}` effective-config baseline,
+until #3230 retired it.)
+
 An empty baseline is not a neutral value. Against an empty conf.d baseline
-every threshold in the PR reads as newly added; a `{}` effective-config
-baseline does the same
-for blast radius; and a missing `steps.guard.outputs.exit` used to take the
-whole verdict step with it, so the job went green having validated nothing.
-All three are reports a human reads to decide whether a config change is
+every threshold in the PR reads as newly added; and a missing
+`steps.guard.outputs.exit` used to take the whole verdict step with it, so
+the job went green having validated nothing. Both are reports a human reads to decide whether a config change is
 safe. A report that is confidently wrong is worse than no report.
 
 What this module asserts — and what it deliberately does not
@@ -43,11 +42,9 @@ spelling of a swallow shows up, because what is measured is the verdict, not
 the text. Each shape also gets its opposite: a healthy producer must still
 exit 0, so the fix cannot degenerate into "always red".
 
-⚠️ Two paths must STAY tolerant, and are pinned in both directions here:
-a base branch with no `conf.d/` at all (an empty baseline is then correct),
-and a base branch predating `describe_tenant.py` (pre-v2.7.0, `{}` is the
-honest answer). Tightening those would be the same defect with the sign
-flipped.
+⚠️ One path must STAY tolerant, and is pinned in both directions here:
+a base branch with no `conf.d/` at all (an empty baseline is then correct).
+Tightening it would be the same defect with the sign flipped.
 
 ⚠️ Coverage boundary. `Run da-guard`'s verdict is a workflow-graph property,
 not a shell one, so it is checked structurally — the step that renders the
@@ -70,10 +67,10 @@ earlier draft claimed "ten" for that last variant; no definition reproduces it.
 That is this paragraph's own point turned on itself — print the predicate, or
 do not print the number.
 
-⚠️ None of the three workflows is a required status check (`gh api
+⚠️ Neither workflow is a required status check (`gh api
 repos/{owner}/{repo}/branches/main/protection` lists nineteen contexts, and the
-one active ruleset carries only a `deletion` rule; `Config Diff`, `Blast Radius
-Report` and `Defaults Impact Guard` are not among them). So the damage is a
+one active ruleset carries only a `deletion` rule; `Config Diff` and `Defaults
+Impact Guard` are not among them). So the damage is a
 wrong report in front of a reviewer, not a bypassed merge gate.
 
 ⚠️ Cost. The module spawns bash and git for real, so the figure is dominated
@@ -148,14 +145,12 @@ from test_ci_aggregate_gate_contract import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIFF = ROOT / ".github/workflows/config-diff.yaml"
-BLAST_RADIUS = ROOT / ".github/workflows/blast-radius.yml"
 GUARD_DEFAULTS = ROOT / ".github/workflows/guard-defaults-impact.yml"
 
 needs_bash = pytest.mark.skipif(
     BASH is None, reason="needs bash to execute the step script")
 
 EXPORTER_CONF_D = "components/threshold-exporter/config/conf.d"
-DESCRIBE_TENANT = "scripts/tools/dx/describe_tenant.py"
 
 # ── the step names this module pins, in ONE place ──────────────────────────
 #
@@ -170,34 +165,22 @@ DESCRIBE_TENANT = "scripts/tools/dx/describe_tenant.py"
 # they are a dated snapshot; beside code they expire silently and then read as
 # measured.
 # ⚠️ These are pins, not a classifier — the closed thing is "the steps in these
-# three files", so enumerating them here is the right shape (a new or renamed
-# step forces one review of this block, which is the point).
-#
-# ⚠️ DISCLOSED ASYMMETRY, because the sibling PR answers the same edit
-# differently: `tests/ops/test_blast_radius.py` locates its one step by an
-# ANCHOR (a distinctive `changed_raw=` assignment) rather than by name, so
-# renaming that step is green there and red here. Neither is the better design
-# in general — an anchor is itself an identifier that can be renamed (measured
-# on that side: renaming the variable reds), so the choice is which identifier
-# to pin, not whether to pin one. This module locates seven distinct steps
-# across three files and most of them have no comparably distinctive statement,
-# which is why it pins names. The cost here is one constant per rename, and the
-# failure message says which one.
+# two files", so enumerating them here is the right shape (a new or renamed
+# step forces one review of this block, which is the point). Most of these
+# steps have no distinctive statement to anchor on, which is why it pins
+# names. The cost here is one constant per rename, and the failure message
+# says which one.
 _S_EXTRACT_BASE = "Extract base branch configs"
 _S_RUN_CONFIG_DIFF = "Run config diff"
-_S_BASE_EFFECTIVE = "Generate base effective configs"
-_S_PR_EFFECTIVE = "Generate PR effective configs"
-_S_COMPUTE_BLAST = "Compute blast radius"
 _S_RUN_DA_GUARD = "Run da-guard"
-# ⛔ Per workflow, not one shared string, even though both files spell it the
-# same way today. Measured while checking the repair cost above: renaming the
-# step in ONE file and updating a single shared constant left two tests red —
-# for the workflow nobody had touched. Two files that happen to agree are not
-# one fact, and a constant that pretends they are turns an edit to one file
-# into a false red about the other.
+# ⛔ Per workflow, not one shared string. Measured while checking the repair
+# cost above (when blast-radius.yml spelt it the same way, until #3230):
+# renaming the step in ONE file and updating a single shared constant left
+# two tests red — for the workflow nobody had touched. Two files that happen
+# to agree are not one fact, and a constant that pretends they are turns an
+# edit to one file into a false red about the other.
 _S_DETECT = {
     GUARD_DEFAULTS: "Detect conf.d path",
-    BLAST_RADIUS: "Detect conf.d path",
 }
 
 # ⚠️ The scope step is deliberately NOT in that list: it is found by role (see
@@ -411,14 +394,14 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 _TEMPLATE_ROOT: Path | None = None
-_TEMPLATES: dict[tuple[bool, bool, bool], Path] = {}
+_TEMPLATES: dict[tuple[bool, bool], Path] = {}
 
 
-def _template(conf_d: bool, base_ref: bool, describe_tenant: bool) -> Path:
+def _template(conf_d: bool, base_ref: bool) -> Path:
     """Build each repo shape once per process, then hand out copies.
 
     Every fixture repo costs six to nine `git` spawns, and on a Windows host
-    those dominated the module (~30s per blast-radius test, ~6 min overall).
+    those dominated the module (~30s per test, ~6 min overall).
     Copying a prepared tree is one filesystem operation. The shapes are
     immutable by construction — callers get their own copy and are free to
     commit into it.
@@ -427,23 +410,21 @@ def _template(conf_d: bool, base_ref: bool, describe_tenant: bool) -> Path:
     if _TEMPLATE_ROOT is None:
         _TEMPLATE_ROOT = Path(tempfile.mkdtemp(prefix="ci-baseline-templates-"))
         atexit.register(shutil.rmtree, _TEMPLATE_ROOT, True)
-    key = (conf_d, base_ref, describe_tenant)
+    key = (conf_d, base_ref)
     if key not in _TEMPLATES:
-        dest = _TEMPLATE_ROOT / f"{int(conf_d)}{int(base_ref)}{int(describe_tenant)}"
-        _build_repo(dest, conf_d=conf_d, base_ref=base_ref,
-                    describe_tenant=describe_tenant)
+        dest = _TEMPLATE_ROOT / f"{int(conf_d)}{int(base_ref)}"
+        _build_repo(dest, conf_d=conf_d, base_ref=base_ref)
         _TEMPLATES[key] = dest
     return _TEMPLATES[key]
 
 
 def _base_repo(tmp: Path, *, conf_d: bool = True, base_ref: bool = True) -> Path:
     repo = tmp / "repo"
-    shutil.copytree(_template(conf_d, base_ref, False), repo)
+    shutil.copytree(_template(conf_d, base_ref), repo)
     return repo
 
 
-def _build_repo(repo: Path, *, conf_d: bool, base_ref: bool,
-                describe_tenant: bool) -> Path:
+def _build_repo(repo: Path, *, conf_d: bool, base_ref: bool) -> Path:
     """A repo whose `origin/main` looks like the base of a config PR."""
     (repo / EXPORTER_CONF_D / "examples").mkdir(parents=True)
     _git(repo, "init", "-q", ".")
@@ -472,10 +453,6 @@ def _build_repo(repo: Path, *, conf_d: bool, base_ref: bool,
     else:
         (repo / "README.md").write_text("no conf.d here\n",
                                         encoding="utf-8", newline="\n")
-    if describe_tenant:
-        target = repo / DESCRIBE_TENANT
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# stubbed\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     if base_ref:
@@ -521,7 +498,6 @@ case "$sub" in
   # comment. Injecting the 128 is the only way a test can tell them apart.
   merge-base) [ -n "${FAIL_GIT_MERGE_BASE:-}" ] && { echo "fatal: injected bad object" >&2; exit 128; } ;;
 
-  checkout)  [ -n "${FAIL_GIT_CHECKOUT:-}" ]  && { echo "fatal: injected" >&2; exit 128; } ;;
 esac
 exec "$REAL_GIT" "$@"
 """
@@ -625,80 +601,6 @@ def test_config_diff_accepts_a_base_that_has_no_confd(tmp_path) -> None:
     assert not any((tmp_path / "old-conf.d").iterdir())
 
 
-# ══ blast-radius.yml — `Generate base effective configs` ═══════════════════
-
-_PY_OK = """#!/usr/bin/env bash
-# Records --conf-d as well as --output. Recording only --output made the
-# rework's central change unfalsifiable: pointing the tool back at the PR
-# worktree instead of the rebuilt baseline left the whole suite green, because
-# every assertion looked at the directory that had been built rather than at
-# which directory was then READ.
-out=""
-confd=""
-while [ $# -gt 0 ]; do
-  if [ "$1" = "--output" ]; then out="$2"; fi
-  if [ "$1" = "--conf-d" ]; then confd="$2"; fi
-  shift
-done
-[ -n "${PY_ARGV_LOG:-}" ] && printf '%s' "$confd" > "$PY_ARGV_LOG"
-[ -n "${PY_WRITES_NOTHING:-}" ] || printf '{"db-a": {"cpu": 90}}' > "$out"
-echo "wrote $out"
-"""
-
-_PY_FAIL = """#!/usr/bin/env bash
-echo "Traceback (most recent call last): injected" >&2
-exit 1
-"""
-
-
-def _base_effective_script(tmp: Path) -> tuple[Step, str]:
-    step = _step(BLAST_RADIUS, _S_BASE_EFFECTIVE)
-    script = _render(_sandbox(step.script, tmp), {
-        "github.base_ref": "main",
-        "steps.detect.outputs.conf_d": EXPORTER_CONF_D,
-    })
-    return step, script
-
-
-def _blast_repo(tmp: Path, *, describe_tenant: bool = True,
-                base_ref: bool = True, conf_d_in_base: bool = True) -> Path:
-    """Like `_base_repo`, but `describe_tenant.py` is COMMITTED when asked.
-
-    The base side now asks the base COMMIT whether the tool exists
-    (`git cat-file -e origin/<base>:...`) rather than looking at the worktree,
-    so a file that merely exists on disk no longer stands in for one the base
-    branch actually shipped.
-    """
-    repo = tmp / "repo"
-    shutil.copytree(_template(conf_d_in_base, base_ref, describe_tenant), repo)
-    return repo
-
-
-def _blast_env(tmp: Path) -> dict[str, str]:
-    return {
-        "BASE_REF": "main",
-        "CONF_D": EXPORTER_CONF_D,
-        "REAL_GIT": shutil.which("git") or "git",
-    }
-
-
-def _py_stub_dir(tmp: Path, body: str) -> Path:
-    bin_dir = _git_stub_dir(tmp)
-    _stub(bin_dir, "python3", body)
-    return bin_dir
-
-
-@needs_bash
-def test_blast_radius_baseline_is_written_on_a_healthy_base(tmp_path) -> None:
-    repo = _blast_repo(tmp_path)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert (tmp_path / "base-effective.json").read_text(
-        encoding="utf-8") == '{"db-a": {"cpu": 90}}'
-
-
 @needs_bash
 @pytest.mark.skipif(os.name == "nt",
                     reason="POSIX file modes; the runner is Linux")
@@ -735,7 +637,8 @@ def test_the_extracted_baseline_is_readable_by_the_consuming_container(
 @needs_bash
 def test_config_diff_baseline_skips_entries_that_are_not_regular_files(
         tmp_path) -> None:
-    """Same hardening as blast-radius, which had a test while this did not.
+    """Same hardening as blast-radius.yml had (retired, #3230), which had a
+    test while this did not.
 
     Matching on `blob` alone accepts mode 120000, whose "content" is the
     symlink TARGET PATH. That lands in the baseline as a non-mapping document,
@@ -842,285 +745,11 @@ def test_config_diff_declares_what_it_cannot_compare(tmp_path) -> None:
     assert "1 file(s) in sub-directories" in published, published
 
 
-@needs_bash
-def test_blast_radius_baseline_excludes_files_the_pr_added(tmp_path) -> None:
-    """The baseline must be the BASE, not "the PR worktree with base painted on".
-
-    `git checkout <ref> -- .` updates the paths that exist in <ref> and does not
-    delete anything else, so a tenant the PR ADDED survived into the "base"
-    side. Both sides then held the same file, the diff was empty, and the report
-    told the reviewer that a brand-new tenant changed nothing. No command had to
-    fail for this; it was the ordinary success path.
-    """
-    repo = _blast_repo(tmp_path)
-    added = repo / EXPORTER_CONF_D / "db-new.yaml"
-    added.write_text("tenants:\n  db-new:\n    cpu: 50\n",
-                     encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "PR adds a tenant")   # origin/main deliberately NOT moved
-
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-
-    landed = sorted(p.name for p in (tmp_path / "base-conf.d").rglob("*") if p.is_file())
-    assert "db-new.yaml" not in landed, (
-        f"a tenant that exists only in the PR reached the baseline: {landed}. "
-        f"The two sides then agree and the report says nothing changed.")
-    assert "db-a.yaml" in landed, landed
-    # Hierarchy matters: conf.d is an inheritance chain (ADR-016/017), so a
-    # flat extraction would silently drop the sub-tree's defaults.
-    assert (tmp_path / "base-conf.d" / "examples" / "redis.yaml").is_file()
-
-
-@needs_bash
-def test_blast_radius_reads_the_rebuilt_baseline_not_the_pr_worktree(
-        tmp_path) -> None:
-    """Building the baseline is worthless if the tool is then pointed elsewhere.
-
-    Rebuilding the base tree and then running `describe_tenant --conf-d
-    "$CONF_D"` restores the exact pre-fix behaviour (base ≡ PR) while leaving
-    the extraction loop, and every assertion about it, perfectly green. The
-    directory that gets READ is the load-bearing one.
-    """
-    repo = _blast_repo(tmp_path)
-    argv_log = tmp_path / "conf-d-seen"
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_blast_env(tmp_path), "PY_ARGV_LOG": str(argv_log.as_posix())},
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-
-    seen = argv_log.read_text(encoding="utf-8")
-    assert seen.endswith("base-conf.d"), (
-        f"describe-tenant was pointed at {seen!r}, not the rebuilt baseline. "
-        f"If that is the PR's own conf.d, the two sides of the comparison are "
-        f"the same tree again.")
-    assert EXPORTER_CONF_D not in seen, seen
-
-
-@needs_bash
-def test_blast_radius_baseline_skips_entries_that_are_not_regular_files(
-        tmp_path) -> None:
-    """A gitlink has no blob; a symlink's blob is its target path.
-
-    `--name-only` threw away the column that distinguishes them. A gitlink then
-    killed the run with a message about a "truncated baseline", and a symlink
-    would have been materialised as a regular file whose contents are a path —
-    a config-shaped lie sitting in the baseline.
-    """
-    repo = _blast_repo(tmp_path)
-    _git(repo, "update-index", "--add", "--cacheinfo",
-         f"120000,{_blob(repo, '../../../../etc/passwd')},"
-         f"{EXPORTER_CONF_D}/link.yaml")
-    _git(repo, "commit", "-qm", "symlink in conf.d")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert not (tmp_path / "base-conf.d" / "link.yaml").exists(), (
-        "a symlink entry was materialised into the baseline as a regular file")
-    assert "skipping non-file entry" in proc.stdout + proc.stderr
-
-
 def _blob(repo: Path, content: str) -> str:
     return subprocess.run(
         ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=120, check=True).stdout.strip()
-
-
-@needs_bash
-def test_blast_radius_accepts_a_base_that_has_no_confd(tmp_path) -> None:
-    """The other direction of the tolerant path, which was pinned for
-    config-diff but not for this workflow.
-
-    A base with no conf.d/ genuinely has no baseline, so `{}` is correct and
-    the step must stay green — tightening it would be the same defect with the
-    sign flipped.
-    """
-    repo = _blast_repo(tmp_path, describe_tenant=True, conf_d_in_base=False)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert (tmp_path / "base-effective.json").read_text(encoding="utf-8").strip() == "{}"
-
-
-@needs_bash
-def test_blast_radius_baseline_fails_when_the_base_ref_is_missing(
-        tmp_path) -> None:
-    """A shallow clone has no origin/<base>; that is not an empty baseline."""
-    repo = _blast_repo(tmp_path, base_ref=False)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode != 0, f"{proc.stdout}\n{proc.stderr}"
-    assert "fetch-depth" in proc.stdout + proc.stderr
-
-
-@needs_bash
-def test_blast_radius_baseline_fails_when_git_cannot_answer(tmp_path) -> None:
-    """"The base predates describe-tenant" must not absorb "git is broken".
-
-    ⚠️ `git cat-file -e` cannot carry this distinction: it returns 128 for a
-    MISSING PATH as well as for a broken object store. A first attempt at this
-    branch classified rc from `cat-file` and was caught immediately by the
-    opposite-direction pin (`test_blast_radius_keeps_the_pre_v270_empty_base`),
-    which is exactly why that pin exists. The probe is `ls-tree` instead:
-    absent is rc=0 with empty output, broken is rc!=0.
-    """
-    repo = _blast_repo(tmp_path)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_blast_env(tmp_path), "FAIL_GIT_LS_TREE": "1"},
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode != 0, f"{proc.stdout}\n{proc.stderr}"
-    assert "predates describe-tenant" not in proc.stdout, (
-        "a broken git was reported as an old base branch")
-
-
-@needs_bash
-def test_blast_radius_baseline_leaves_the_worktree_alone(tmp_path) -> None:
-    """The step must not rewrite the checkout it is running in.
-
-    It used to overlay the base branch onto the worktree and then restore with
-    `git checkout - -- .`, which needs an `@{-1}` a detached PR checkout does
-    not have (measured: rc=128 every run). The tree stayed on BASE content, and
-    the very next step runs `blast_radius.py` FROM the tree — so a PR touching
-    both conf.d/ and that script had its report computed by the old tool.
-    """
-    def status() -> str:
-        return subprocess.run(
-            ["git", "status", "--porcelain"], cwd=repo, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=120).stdout
-
-    repo = _blast_repo(tmp_path)
-    # An uncommitted PR-side edit: exactly what the old overlay clobbered.
-    marker = repo / EXPORTER_CONF_D / "db-a.yaml"
-    marker.write_text("tenants:\n  db-a:\n    cpu: 999\n",
-                      encoding="utf-8", newline="\n")
-    before = status()
-
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert marker.read_text(encoding="utf-8") == "tenants:\n  db-a:\n    cpu: 999\n", (
-        "the step rewrote the worktree it was running in")
-    # Compare before/after rather than asserting a clean tree: the fixture edit
-    # above is legitimately dirty, and `_step.sh` is the harness's own file.
-    after = [ln for ln in status().splitlines() if "_step.sh" not in ln]
-    assert after == before.splitlines(), (
-        f"the step changed the worktree/index state:\nbefore={before!r}\nafter={after!r}")
-
-
-@needs_bash
-def test_blast_radius_baseline_survives_a_non_ascii_tenant_filename(tmp_path) -> None:
-    """`git ls-tree` C-quotes non-ASCII paths unless told not to.
-
-    The failure was loud rather than silent, but its message blamed the git
-    object instead of the quoting — which sends the reader somewhere the bug
-    is not.
-    """
-    repo = _blast_repo(tmp_path)
-    exotic = repo / EXPORTER_CONF_D / "\u6e2c\u8a66\u79df\u6236.yaml"
-    exotic.write_text("tenants:\n  exotic:\n    cpu: 42\n",
-                      encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "non-ascii tenant")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    landed = sorted(p.name for p in (tmp_path / "base-conf.d").rglob("*") if p.is_file())
-    assert "\u6e2c\u8a66\u79df\u6236.yaml" in landed, landed
-
-
-@needs_bash
-def test_blast_radius_pr_side_fails_when_the_tool_writes_nothing(tmp_path) -> None:
-    """The two sides of a comparison need the same checks.
-
-    Only the base side had the non-empty check, so an exit-0 run that wrote
-    nothing on the PR side left it empty against a full baseline — flipping the
-    report into "every tenant was deleted".
-    """
-    repo = _blast_repo(tmp_path)
-    step = _step(BLAST_RADIUS, _S_PR_EFFECTIVE)
-    script = _render(_sandbox(step.script, tmp_path),
-                     {"steps.detect.outputs.conf_d": EXPORTER_CONF_D})
-    proc = _run(step, script, repo,
-                {**_blast_env(tmp_path), "PY_WRITES_NOTHING": "1"},
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode != 0, f"{proc.stdout}\n{proc.stderr}"
-
-
-@needs_bash
-def test_blast_radius_baseline_fails_when_describe_tenant_crashes(tmp_path) -> None:
-    repo = _blast_repo(tmp_path)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_FAIL))
-    assert proc.returncode != 0, (
-        "describe-tenant crashed and the step still succeeded — the blast "
-        f"radius would be computed against an empty base:\n{proc.stdout}")
-    written = tmp_path / "base-effective.json"
-    if written.exists():
-        assert written.read_text(encoding="utf-8").strip() != "{}", (
-            "the crash must not leave the `{}` fallback behind: downstream "
-            "reads it as 'the base had no tenants'")
-
-
-@needs_bash
-def test_blast_radius_baseline_does_not_go_through_git_checkout_at_all(
-        tmp_path) -> None:
-    """The nastiest shape, closed structurally rather than by failing loudly.
-
-    This assertion used to be "if the base checkout fails, the step fails" —
-    which pinned the injected-failure half of the problem and left the ordinary
-    success path (an overlay that keeps PR-added files) wide open. The step now
-    builds the baseline from git objects, so `git checkout` is not on its path
-    at all: breaking checkout must change nothing.
-    """
-    repo = _blast_repo(tmp_path)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_blast_env(tmp_path), "FAIL_GIT_CHECKOUT": "1"},
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode == 0, (
-        "the step still routes through `git checkout`, so it can still overlay "
-        f"the base onto the PR worktree:\n{proc.stdout}\n{proc.stderr}")
-    assert (tmp_path / "base-effective.json").exists()
-
-
-@needs_bash
-def test_blast_radius_baseline_fails_when_the_tool_writes_nothing(tmp_path) -> None:
-    repo = _blast_repo(tmp_path)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_blast_env(tmp_path), "PY_WRITES_NOTHING": "1"},
-                _py_stub_dir(tmp_path, _PY_OK))
-    assert proc.returncode != 0, (
-        "exit 0 with no file written is still an absent baseline:\n"
-        f"{proc.stdout}\n{proc.stderr}")
-
-
-@needs_bash
-def test_blast_radius_keeps_the_pre_v270_empty_base(tmp_path) -> None:
-    """⚠️ MUST stay tolerant: a base predating describe-tenant has no
-    effective configs to compute, and `{}` is the honest answer."""
-    repo = _blast_repo(tmp_path, describe_tenant=False)
-    step, script = _base_effective_script(tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_FAIL))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert (tmp_path / "base-effective.json").read_text(
-        encoding="utf-8").strip() == "{}"
 
 
 # ══ guard-defaults-impact.yml — the verdict step ═══════════════════════════
@@ -1377,23 +1006,6 @@ for f in $(git ls-tree --name-only "origin/$BASE_REF" components/threshold-expor
 done
 """
 
-_PRE_FIX_BASE_EFFECTIVE = """\
-git stash --include-untracked || true
-git checkout "origin/$BASE_REF" -- . 2>/dev/null || true
-
-if [ -f "scripts/tools/dx/describe_tenant.py" ]; then
-  python3 scripts/tools/dx/describe_tenant.py \\
-    --all \\
-    --conf-d "CONF_D_PLACEHOLDER" \\
-    --output /tmp/base-effective.json || echo "{}" > /tmp/base-effective.json
-else
-  echo "{}" > /tmp/base-effective.json
-fi
-
-git checkout - -- . 2>/dev/null || true
-git stash pop 2>/dev/null || true
-"""
-
 
 @needs_bash
 def test_control_the_pre_fix_extraction_left_zero_byte_configs(tmp_path) -> None:
@@ -1432,24 +1044,6 @@ def test_control_the_pre_fix_probe_collapsed_git_failure_into_no_confd(
     assert not list(Path(old).glob("*")), (
         "the control must show the empty baseline the probe's `exit 0` left "
         "behind on a base branch that really did have three configs")
-
-
-@needs_bash
-def test_control_the_pre_fix_base_effective_swallowed_a_crash(tmp_path) -> None:
-    repo = _blast_repo(tmp_path)
-    step = _step(BLAST_RADIUS, _S_BASE_EFFECTIVE)
-    out = (tmp_path / "base-effective.json").as_posix()
-    script = _sandbox(
-        _PRE_FIX_BASE_EFFECTIVE.replace("CONF_D_PLACEHOLDER", EXPORTER_CONF_D),
-        tmp_path)
-    proc = _run(step, script, repo, _blast_env(tmp_path),
-                _py_stub_dir(tmp_path, _PY_FAIL))
-
-    assert proc.returncode == 0, (
-        f"the pre-fix control did not reproduce the swallow:\n{proc.stdout}")
-    assert Path(out).read_text(encoding="utf-8").strip() == "{}", (
-        "the control must show the `{}` baseline that made every tenant read "
-        "as brand new")
 
 
 @needs_bash
@@ -1774,19 +1368,15 @@ def test_control_the_verdict_rule_rejects_the_shapes_it_was_written_for(
 
 @needs_bash
 @pytest.mark.parametrize("workflow, event, must_fail", [
-    # blast-radius accepts pull_request only, so it has no second arm and no
-    # other event to assert. Parametrising it over workflow_dispatch/schedule
-    # pinned behaviour for events that workflow cannot receive.
-    (BLAST_RADIUS, "pull_request", True),
     (GUARD_DEFAULTS, "pull_request", True),
     (GUARD_DEFAULTS, "workflow_dispatch", False),
-], ids=["blast-radius-pr", "guard-defaults-pr", "guard-defaults-dispatch"])
+], ids=["guard-defaults-pr", "guard-defaults-dispatch"])
 def test_detect_refuses_to_find_nothing_on_a_pull_request(
         tmp_path, workflow: Path, event: str, must_fail: bool) -> None:
     """"Nothing to validate" is a manual-run answer, not a PR answer.
 
-    Both workflows gate every later step on this output, and neither has any
-    step that fires when it is empty. So on a PR — where the `paths:` filter
+    The workflow gates every later step on this output, and has no step that
+    fires when it is empty. So on a PR — where the `paths:` filter
     already established that the very tree in question changed — an empty
     value meant a green run that analysed nothing. Manual runs against a repo
     with a different layout keep the old warning.
@@ -1805,8 +1395,7 @@ def test_detect_refuses_to_find_nothing_on_a_pull_request(
 
 
 @needs_bash
-@pytest.mark.parametrize("workflow", [BLAST_RADIUS, GUARD_DEFAULTS],
-                         ids=["blast-radius", "guard-defaults"])
+@pytest.mark.parametrize("workflow", [GUARD_DEFAULTS], ids=["guard-defaults"])
 def test_detect_still_resolves_a_present_tree_on_a_pull_request(
         tmp_path, workflow: Path) -> None:
     """…and the refusal above must not fire when the tree is there."""
@@ -2224,8 +1813,7 @@ def test_control_the_sandbox_is_fail_closed_on_an_assembled_path(tmp_path, scrip
 
 @pytest.mark.parametrize("workflow, producer_name, consumer_name", [
     (CONFIG_DIFF, _S_EXTRACT_BASE, _S_RUN_CONFIG_DIFF),
-    (BLAST_RADIUS, _S_BASE_EFFECTIVE, _S_COMPUTE_BLAST),
-], ids=["config-diff", "blast-radius"])
+], ids=["config-diff"])
 def test_the_baseline_the_producer_writes_is_the_one_the_consumer_reads(
         workflow: Path, producer_name: str, consumer_name: str) -> None:
     """A producer/consumer split is invisible to every behavioural test above.
@@ -3526,9 +3114,9 @@ _SYNTHETIC_UPLOAD_CASES = [
 
 @pytest.mark.parametrize(
     "workflow, synthetic",
-    [(GUARD_DEFAULTS, None), (BLAST_RADIUS, None)]
+    [(GUARD_DEFAULTS, None)]
     + [(None, case) for case in _SYNTHETIC_UPLOAD_CASES],
-    ids=["guard-defaults", "blast-radius"]
+    ids=["guard-defaults"]
     + [case[0] for case in _SYNTHETIC_UPLOAD_CASES])
 def test_the_report_artifact_is_not_gated_on_the_producer_reporting(
         workflow: Path | None, synthetic) -> None:
@@ -3833,10 +3421,10 @@ def _shell_commands(workflow: Path) -> list[str]:
 _DISPLAY_ONLY_LISTINGS: set[str] = set()
 
 
-@pytest.mark.parametrize("workflow", [CONFIG_DIFF, BLAST_RADIUS, GUARD_DEFAULTS],
-                         ids=["config-diff", "blast-radius", "guard-defaults"])
+@pytest.mark.parametrize("workflow", [CONFIG_DIFF, GUARD_DEFAULTS],
+                         ids=["config-diff", "guard-defaults"])
 def test_no_path_listing_lets_git_encode_the_paths(workflow: Path):
-    """⛔ EVERY path listing in all three files, exemptions named one by one.
+    """⛔ EVERY path listing in both files, exemptions named one by one.
 
     git encodes non-ASCII paths unless given `-z`, and the readers here split
     on the raw bytes — measured on the scope helper, that yields a target on a
@@ -3900,7 +3488,7 @@ def test_control_the_display_only_exemption_is_not_stale():
     cheaper-but-worse repair is how a guard gets disarmed by someone doing what
     it told them.
     """
-    live = {ln for wf in (CONFIG_DIFF, BLAST_RADIUS, GUARD_DEFAULTS)
+    live = {ln for wf in (CONFIG_DIFF, GUARD_DEFAULTS)
             for ln in _shell_commands(wf)}
     assert _DISPLAY_ONLY_LISTINGS <= live, (
         f"exempted listing(s) no longer exist verbatim: "

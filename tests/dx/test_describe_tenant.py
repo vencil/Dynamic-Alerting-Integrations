@@ -2,12 +2,12 @@
 """Tests for describe_tenant.py — every value is `da-guard effective`'s (ADR-036).
 
 The tool reads no conf.d file with a YAML parser of its own (#2906): the
-effective config, the chain, the overlays and the hashes are Go's, and the
-custom-alert compiler's `_custom_alerts` view reads conf.d through
-`da-guard parse-tree`. The Python imitation of the exporter these tests
-used to pin against Go (deep_merge, the yaml.v3-imitating loaders, the Go
-JSON / key renderers, `_canonical_hash`) is gone; what is pinned now is the
-tool's own behavior and that it shows Go's values as Go writes them.
+effective config, the chain, the overlays and the hashes are Go's, and
+`custom_alerts` is da-guard served-values' judgement of each element. The
+Python imitation of the exporter these tests used to pin against Go
+(deep_merge, the yaml.v3-imitating loaders, the Go JSON / key renderers,
+`_canonical_hash`) is gone; what is pinned now is the tool's own behavior
+and that it shows Go's values as Go writes them.
 """
 
 import json
@@ -805,98 +805,215 @@ class TestLinkTargetOutsideConfD:
 
 
 # ---------------------------------------------------------------------------
-# Test: _custom_alerts UNION inheritance (#772)
+# Test: `custom_alerts` — the exporter's judgement of each element (#3230)
 # ---------------------------------------------------------------------------
 
-class TestCustomAlertsUnionInheritance:
-    """#772: `_custom_alerts` follows ADR-024 UNION (own + inherited), NOT the
-    generic array-REPLACE of every other field — so an override tenant's effective
-    view KEEPS the inherited platform/domain policy recipe (deep_merge alone would
-    drop it, blinding blast_radius to the highest-blast-radius change class). The
-    resolution is delegated to the compiler's own walker (the SSOT)."""
+class TestCustomAlertsAsTheExporterServes:
+    """#3230: `effective_config` is da-guard effective's value as is — its
+    `_custom_alerts` is the one list the exporter resolves (no union across
+    directory levels, no `_custom_alerts_resolution`). Beside it, the
+    default output, `--show-sources` and `--all` carry `custom_alerts`:
+    each element with the status da-guard served-values gives it."""
 
-    def _repro_tree(self, tmp_path):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        # platform/domain policy: `_custom_alerts` at the _defaults.yaml TOP level
-        # (where the compiler's collect_instances reads inherited recipes).
-        (conf_d / "_defaults.yaml").write_text(yaml.dump({
-            "_custom_alerts": [
-                {"recipe": "threshold", "name": "platform_policy",
-                 "metric": "policy_metric", "op": ">", "window": "5m",
-                 "threshold": "200:critical"},
-            ],
-        }), encoding="utf-8")
-        # an OVERRIDE tenant (has own _custom_alerts) + an INHERIT tenant (none).
-        (conf_d / "tenants.yaml").write_text(yaml.dump({
-            "tenants": {
-                "t-override": {"_custom_alerts": [
-                    {"recipe": "threshold", "name": "own_alert",
-                     "metric": "own_metric", "op": ">", "window": "5m",
-                     "threshold": "100:warning"}]},
-                "t-inherit": {"cpu": "80"},
-            },
-        }), encoding="utf-8")
-        return conf_d
+    FILES = {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    _custom_alerts:\n"
+                          "      - {recipe: threshold, name: from_profile, metric: pm, op: '>', window: 5m,"
+                          " threshold: '5:warning'}\n",
+        # A subdirectory `_defaults.yaml` `_custom_alerts` the exporter serves
+        # to nobody (the old union view showed it on every tenant below).
+        "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n_custom_alerts:\n"
+                               "  - {recipe: threshold, name: team_policy, metric: policy_metric, op: '>',"
+                               " window: 5m, threshold: '200:critical'}\n",
+        "team/a.yaml": "tenants:\n"
+                       "  ta:\n    _custom_alerts:\n"
+                       "      - {recipe: threshold, name: s1, metric: m1, op: '>', window: 5m, threshold: '80:critical'}\n"
+                       "      - {recipe: threshold, name: d1, metric: m2, op: '>', window: 5m, threshold: disable}\n"
+                       "      - {recipe: threshold, name: r1, metric: m3, op: '~', window: 5m, threshold: '1'}\n"
+                       "      - {recipe: threshold, name: s1dup, metric: m1, op: '>', window: 5m, threshold: '80:critical'}\n"
+                       "  tp:\n    _profile: std\n"
+                       "  tn:\n    redis_memory: '50'\n"
+                       "  te:\n    _custom_alerts: 'not: [a list'\n",
+    }
 
-    def test_override_tenant_keeps_inherited_policy(self, tmp_path):
-        # The #772 root cause: under array-REPLACE the override tenant would show
-        # ONLY own_alert; under ADR-024 UNION it must show BOTH.
-        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
-        eff = scanner.effective_config("t-override")
-        names = {a["name"] for a in eff["_custom_alerts"]}
-        assert names == {"own_alert", "platform_policy"}
-        res = {r["name"]: r for r in eff["_custom_alerts_resolution"]}
-        assert res["own_alert"]["is_own"] is True
-        assert res["platform_policy"]["is_own"] is False  # inherited, NOT wiped
+    def _run(self, conf_d, *args):
+        return subprocess.run([sys.executable, DESCRIBE, *args, "--conf-d", str(conf_d)],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
 
-    def test_inherit_tenant_gets_policy(self, tmp_path):
-        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
-        eff = scanner.effective_config("t-inherit")
-        names = {a["name"] for a in eff["_custom_alerts"]}
-        assert names == {"platform_policy"}
+    def _main(self, monkeypatch, capsys, conf_d, *args):
+        monkeypatch.setattr(sys, "argv", ["describe_tenant", *args, "--conf-d", str(conf_d)])
+        code = 0
+        try:
+            dt.main()
+        except SystemExit as exc:
+            code = exc.code or 0
+        out, err = capsys.readouterr()
+        return code, out, err
 
-    def test_no_custom_alerts_field_when_none(self, tmp_path):
-        # A tenant with neither own nor inherited custom alerts must not carry a
-        # `_custom_alerts` key (matches the compiler — no phantom field).
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "tenants.yaml").write_text(
-            yaml.dump({"tenants": {"plain": {"cpu": "80"}}}), encoding="utf-8")
-        eff = dt.ConfDScanner(conf_d).effective_config("plain")
-        assert "_custom_alerts" not in eff
-        assert "_custom_alerts_resolution" not in eff
+    @staticmethod
+    def _count_served_values(monkeypatch):
+        """Count `da-guard served-values` runs, from any importer (the call
+        goes through `_lib_tenant_values._run_da_guard`)."""
+        import _lib_tenant_values as tv
+        calls = []
+        real = tv._run_da_guard
 
-    def test_resolver_unavailable_falls_back_to_deep_merge_not_wipe(self, tmp_path, monkeypatch):
-        # Self-review (Attack 4): if the compiler resolver is unavailable / raised,
-        # a tenant's OWN `_custom_alerts` must FALL BACK to the deep_merge value, not
-        # be wiped. (An earlier draft popped the field whenever resolution was empty
-        # → a single parse error would have dropped it from EVERY tenant.)
-        monkeypatch.setattr(dt, "_ca_loader", None)
-        eff = dt.ConfDScanner(self._repro_tree(tmp_path)).effective_config("t-override")
-        names = {a["name"] for a in eff["_custom_alerts"]}
-        assert names == {"own_alert"}                    # deep_merge REPLACE kept, not wiped
-        assert "_custom_alerts_resolution" not in eff    # no compiler resolution available
+        def counting(subcommand, *a, **kw):
+            if subcommand == tv.SUBCOMMAND:
+                calls.append(subcommand)
+            return real(subcommand, *a, **kw)
 
-    def test_returned_recipes_are_isolated_copies(self, tmp_path):
-        # Self-review (Attack 1): mutating a returned recipe must not corrupt the
-        # shared resolver map (deep_merge returns deepcopies; we must match).
-        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
-        eff = scanner.effective_config("t-override")
+        monkeypatch.setattr(tv, "_run_da_guard", counting)
+        return calls
+
+    def test_each_status_is_the_exporters(self, tmp_path):
+        r = self._run(_write(tmp_path, self.FILES), "ta")
+        assert r.returncode == 0, r.stderr
+        rows = json.loads(r.stdout)["custom_alerts"]
+        assert [(a["index"], a["name"], a["recipe"], a["status"]) for a in rows] == [
+            (0, "s1", "threshold", "served"), (1, "d1", "threshold", "disabled"),
+            (2, "r1", "threshold", "rejected"), (3, "s1dup", "threshold", "duplicate")]
+        # recipe_id for served / disabled, reason for rejected / duplicate.
+        assert rows[0]["recipe_id"] and rows[1]["recipe_id"]
+        assert "reason" not in rows[0] and "reason" not in rows[1]
+        assert rows[2]["reason"] and rows[3]["reason"]
+        assert "recipe_id" not in rows[2]
+
+    def test_beside_effective_config_never_inside_it(self, tmp_path):
+        conf_d = _write(tmp_path, self.FILES)
+        out = json.loads(self._run(conf_d, "ta").stdout)
+        eff = out["effective_config"]
+        assert "custom_alerts" not in eff and "_custom_alerts_resolution" not in eff
+        # effective_config is da-guard effective's, as is.
+        assert eff == _go_effective(conf_d)[1]["tenants"]["ta"]["effective_config"]
+        assert list(out).index("custom_alerts") == list(out).index("effective_config") + 1
+
+    def test_a_subdirectory_defaults_recipe_is_not_shown_a_profiles_is(self, tmp_path):
+        conf_d = _write(tmp_path, self.FILES)
+        tp = json.loads(self._run(conf_d, "tp").stdout)
+        assert [a["name"] for a in tp["custom_alerts"]] == ["from_profile"]
+        assert [a["name"] for a in tp["effective_config"]["_custom_alerts"]] == ["from_profile"]
+        ta = json.loads(self._run(conf_d, "ta").stdout)
+        names = [a["name"] for a in ta["custom_alerts"]] + [
+            a["name"] for a in ta["effective_config"]["_custom_alerts"]]
+        assert "team_policy" not in names
+
+    def test_omitted_without_an_element_and_the_error_when_it_does_not_decode(self, tmp_path):
+        conf_d = _write(tmp_path, self.FILES)
+        tn = json.loads(self._run(conf_d, "tn").stdout)
+        assert "custom_alerts" not in tn and "custom_alerts_error" not in tn
+        te = json.loads(self._run(conf_d, "te").stdout)
+        assert "custom_alerts" not in te
+        assert "cannot parse _custom_alerts" in te["custom_alerts_error"]
+
+    @pytest.mark.parametrize("mode", [["ta"], ["ta", "--show-sources"], ["--all"]],
+                             ids=lambda m: " ".join(m))
+    def test_the_three_modes_carry_it_from_one_served_values_run(self, tmp_path, monkeypatch, capsys, mode):
+        conf_d = _write(tmp_path, self.FILES)
+        calls = self._count_served_values(monkeypatch)
+        code, out, err = self._main(monkeypatch, capsys, conf_d, *mode)
+        assert code == 0, err
+        doc = json.loads(out)
+        ta = doc["ta"] if "--all" in mode else doc
+        assert [a["status"] for a in ta["custom_alerts"]] == ["served", "disabled", "rejected", "duplicate"]
+        if "--all" in mode:
+            assert [a["name"] for a in doc["tp"]["custom_alerts"]] == ["from_profile"]
+            assert "custom_alerts" not in doc["tn"]
+            assert all("custom_alerts" not in t["effective_config"] for t in doc.values())
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("mode", ["diff", "what-if"])
+    def test_diff_and_what_if_run_no_served_values(self, tmp_path, monkeypatch, capsys, mode):
+        conf_d = _write(tmp_path, self.FILES)
+        if mode == "diff":
+            args = ["ta", "--diff", "tp"]
+        else:
+            draft = tmp_path / "draft.yaml"
+            draft.write_text("defaults:\n  mysql_connections: 60\n", encoding="utf-8")
+            args = ["ta", "--what-if", str(draft), "--replaces", str(conf_d / "team" / "_defaults.yaml")]
+        calls = self._count_served_values(monkeypatch)
+        code, out, err = self._main(monkeypatch, capsys, conf_d, *args)
+        assert code == 0, err
+        assert "custom_alerts" not in json.loads(out)
+        assert calls == []
+
+    def test_tenant_verify_runs_no_served_values(self, tmp_path, monkeypatch, capsys):
+        import tenant_verify
+        conf_d = _write(tmp_path, self.FILES)
+        calls = self._count_served_values(monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["tenant_verify", "--all", "--conf-d", str(conf_d)])
+        assert tenant_verify.main() == 0, capsys.readouterr().err
+        assert calls == []
+
+    def test_a_failing_served_values_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
+        conf_d = _write(tmp_path, self.FILES)
+
+        def fail(*a, **kw):
+            raise dt.DaGuardError("da-guard served-values exited 1", 1, "boom")
+
+        monkeypatch.setattr(dt, "load_served_tree", fail)
+        code, out, err = self._main(monkeypatch, capsys, conf_d, "ta")
+        assert code == 0, err
+        assert "custom_alerts" not in json.loads(out)
+        warns = [line for line in err.splitlines() if "custom_alerts not shown" in line]
+        assert len(warns) == 1 and warns[0].startswith("WARN: "), err
+        # #1822: da-guard's own lines are passed on whole.
+        assert any(line.startswith(dt.DA_GUARD_PREFIX) and "boom" in line for line in err.splitlines()), err
+
+    def test_declared_but_none_served_is_an_empty_list(self, tmp_path):
+        """`_custom_alerts` the effective config carries but the exporter takes
+        nothing from (under a subdirectory `defaults:`) reads as `[]`, apart
+        from a tenant that declares none (the field omitted)."""
+        conf_d = _write(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n  _custom_alerts:\n"
+                                   "    - {recipe: threshold, name: tp, metric: m, op: '>', window: 5m,"
+                                   " threshold: '1:warning'}\n",
+            "team/a.yaml": "tenants:\n  tq:\n    redis_memory: '50'\n",
+            "b.yaml": "tenants:\n  tn:\n    redis_memory: '50'\n"})
+        tq = json.loads(self._run(conf_d, "tq").stdout)
+        assert tq["effective_config"].get("_custom_alerts"), tq
+        assert tq["custom_alerts"] == []
+        assert "custom_alerts" not in json.loads(self._run(conf_d, "tn").stdout)
+
+    def test_a_defaults_carrier_no_plane_reads_is_named_once_by_both_tools(self, tmp_path, monkeypatch, capsys):
+        """#1674: the carrier its directory's chain does not select is named,
+        once, by describe_tenant and by tenant_verify alike."""
+        import tenant_verify
+        conf_d = _write(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+            "team/_defaults.yml": "defaults:\n  mysql_connections: 60\n",
+            "team/a.yaml": "tenants:\n  tx:\n    redis_memory: '50'\n"})
+        code, _out, err = self._main(monkeypatch, capsys, conf_d, "tx")
+        assert code == 0, err
+        assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
+        monkeypatch.setattr(sys, "argv", ["tenant_verify", "tx", "--conf-d", str(conf_d)])
+        tenant_verify.main()
+        err = capsys.readouterr().err
+        assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
+
+    def test_a_da_guard_without_the_field_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
+        conf_d = _write(tmp_path, self.FILES)
+        real = dt.load_served_tree
+
+        def stale(*a, **kw):
+            tree = real(*a, **kw)
+            return tree._replace(tenants={t: v._replace(custom_alerts=None, custom_alerts_error=None)
+                                          for t, v in tree.tenants.items()})
+
+        monkeypatch.setattr(dt, "load_served_tree", stale)
+        code, out, err = self._main(monkeypatch, capsys, conf_d, "--all")
+        assert code == 0, err
+        assert all("custom_alerts" not in t for t in json.loads(out).values())
+        assert sum("older than this tool" in line for line in err.splitlines()) == 1, err
+
+    def test_effective_config_is_an_isolated_copy(self, tmp_path):
+        scanner = dt.ConfDScanner(_write(tmp_path, self.FILES))
+        eff = scanner.effective_config("ta")
         eff["_custom_alerts"][0]["threshold"] = "MUTATED"
-        again = scanner.effective_config("t-override")
+        again = scanner.effective_config("ta")
         assert all(a["threshold"] != "MUTATED" for a in again["_custom_alerts"])
-
-    def test_resolve_flag_false_uses_raw_replace_for_what_if(self, tmp_path):
-        # CodeRabbit: with resolve_custom_alerts=False (the --what-if baseline) the
-        # override tenant gets the RAW deep_merge (own-only) _custom_alerts, so the
-        # baseline matches its REPLACE-built simulated side — no spurious diff when
-        # the what-if edit is unrelated to custom alerts. (union view = normal mode.)
-        scanner = dt.ConfDScanner(self._repro_tree(tmp_path))
-        eff = scanner.effective_config("t-override", resolve_custom_alerts=False)
-        names = {a["name"] for a in eff["_custom_alerts"]}
-        assert names == {"own_alert"}                    # REPLACE, not union
-        assert "_custom_alerts_resolution" not in eff
 
 
 class TestConfDSearchIsBounded:
@@ -1664,21 +1781,6 @@ class TestTreesGoDoesNotResolve:
         assert res.returncode == EXIT_CALLER_ERROR, res.stderr
         assert "the draft does not decode there" in res.stderr, res.stderr
 
-    def test_a_root_document_not_a_mapping_leaves_custom_alerts_resolved(self, tmp_path):
-        """The custom-alert walker reads the root carrier through parse-tree:
-        a document that is not a mapping is one file it quarantines, not a
-        resolver failure — the subtree's policy still resolves."""
-        conf_d = _write(tmp_path, {"_defaults.yaml": "- 1\n",
-                                   "team/_defaults.yaml": yaml.dump({"_custom_alerts": [
-                                       {"recipe": "threshold", "name": "team_policy", "metric": "policy_metric",
-                                        "op": ">", "window": "5m", "threshold": "200:critical"}]}),
-                                   "team/tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
-        res = self._run("tx", "--conf-d", str(conf_d))
-        assert res.returncode == 0, res.stderr
-        assert "inheritance resolution failed" not in res.stderr, res.stderr
-        eff = json.loads(res.stdout)["effective_config"]
-        assert [a["name"] for a in eff["_custom_alerts"]] == ["team_policy"]
-
 
 class TestNoPythonYamlReadOfConfD:
     """ADR-036 tool closure (#2906): one run reads conf.d one way. Every
@@ -1736,3 +1838,80 @@ class TestNoPythonYamlReadOfConfD:
         """Must-fire control: the patch really stops a PyYAML parse."""
         with pytest.raises(AssertionError, match="PyYAML parse"):
             yaml.safe_load("a: 1\n")
+
+
+# ---------------------------------------------------------------------------
+# Test: `_custom_alerts` and merged_hash (#1549; moved here from
+# tests/ops/test_custom_alerts_merged_hash.py when #3230 retired blast_radius)
+# ---------------------------------------------------------------------------
+
+class TestCustomAlertsAndMergedHash:
+    """#1549：`_custom_alerts` 不讓 describe_tenant 的 merged_hash 與 Go 不同。
+
+    樹：`_defaults.yaml` 有 `defaults: {cpu: 70}` 與頂層 `_custom_alerts` 一條
+    `plat_cpu`（exporter 不送出它）；t1 寫 cpu "80" 並有自己的 `_custom_alerts`
+    （own_q）；t2 只寫 cpu "60"。`ctl` 是沒有任何 `_custom_alerts` 的對照樹。"""
+
+    VERIFY = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "tenant_verify.py")
+    _PLAT = ('  - {recipe: threshold, name: plat_cpu, metric: node_cpu, op: ">", '
+             'window: 5m, threshold: "%s:warning"}\n')
+    _T1 = ('tenants:\n  t1:\n    cpu: "80"\n    _custom_alerts:\n'
+           '      - {recipe: threshold, name: own_q, metric: queue_depth, op: ">", '
+           'window: 5m, threshold: "100:warning"}\n')
+    _T2 = 'tenants:\n  t2:\n    cpu: "60"\n'
+
+    def _tree(self, root, *, plat="90", with_t1=True):
+        root.mkdir(parents=True)
+        defaults = "defaults:\n  cpu: 70\n"
+        if plat is not None:
+            defaults += "_custom_alerts:\n" + self._PLAT % plat
+        (root / "_defaults.yaml").write_text(defaults, encoding="utf-8")
+        if with_t1:
+            (root / "t1.yaml").write_text(self._T1, encoding="utf-8")
+        (root / "t2.yaml").write_text(self._T2, encoding="utf-8")
+        return root
+
+    def _describe_all(self, conf_d):
+        p = subprocess.run([sys.executable, DESCRIBE, "--all", "--conf-d", str(conf_d)],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert p.returncode == 0, p.stderr
+        return json.loads(p.stdout)
+
+    def test_describe_merged_hash_and_effective_config_are_da_guards(self, tmp_path):
+        conf_d = self._tree(tmp_path / "a")
+        got = self._describe_all(conf_d)
+        go = _go_effective(conf_d)[1]["tenants"]
+        assert set(got) == {"t1", "t2"}
+        for t in got:
+            assert got[t]["merged_hash"] == go[t]["merged_hash"], t
+            assert got[t]["effective_config"] == go[t]["effective_config"], t
+        # 不空洞：`_defaults.yaml` 頂層的 plat_cpu 不在任何一處（#3230 前的
+        # 聯集視圖把它放進 t2 的 effective_config）；t1 只有自己的 own_q。
+        assert "_custom_alerts" not in got["t2"]["effective_config"]
+        assert "custom_alerts" not in got["t2"]
+        assert [(a["name"], a["status"]) for a in got["t1"]["custom_alerts"]] == [("own_q", "served")]
+        assert "merged_hash_error" not in got["t1"]
+
+    def test_tree_without_custom_alerts_is_unchanged(self, tmp_path):
+        """對照組 ctl：沒有 `_custom_alerts` 時，effective_config 與 merged_hash 就是 Go 的。"""
+        conf_d = self._tree(tmp_path / "ctl", plat=None, with_t1=False)
+        got = self._describe_all(conf_d)["t2"]
+        go = _go_effective(conf_d)[1]["tenants"]["t2"]
+        assert got["merged_hash"] == go["merged_hash"]
+        assert got["effective_config"] == go["effective_config"]
+        assert "custom_alerts" not in got
+
+    def test_without_da_guard(self, tmp_path, monkeypatch):
+        """da-guard 不可用：describe 結束碼 2、stdout 不輸出（不給 Python 自算的值）；
+        tenant-verify 回 1（不是 rollback checklist 讀成 mismatch 的 2）。"""
+        a = self._tree(tmp_path / "a")
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        p = subprocess.run([sys.executable, DESCRIBE, "--all", "--conf-d", str(a)],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert p.returncode == 2, (p.returncode, p.stderr)
+        assert p.stdout == ""
+        assert "da-guard binary not found" in p.stderr, p.stderr
+        v = subprocess.run([sys.executable, self.VERIFY, "t1", "--conf-d", str(a), "--json"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert v.returncode == 1, (v.returncode, v.stdout, v.stderr)
+        assert "da-guard binary not found" in v.stderr, v.stderr

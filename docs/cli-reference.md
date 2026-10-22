@@ -3141,7 +3141,7 @@ da-tools parser allowlist --format json
 
 #### tenant-verify
 
-印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner`，繼承鏈、`source_hash` 與 `merged_hash` 全部讀自 `da-guard effective`（與 tenant-api `/effective`、exporter 同一個值，不在 Python 端自算，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)），所以需要 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`；da-tools 映像已內建）。本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
+印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner`，繼承鏈、`source_hash` 與 `merged_hash` 全部讀自 `da-guard effective`（與 tenant-api `/effective`、exporter 同一個值，不在 Python 端自算，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)），所以需要 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`；da-tools 映像已內建）。本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。同一目錄有不止一個 defaults 載體時，沒被選上、任何一層都不讀的那份在 stderr 以一行 `WARN: <檔> is ignored on every plane (#1674)` 點名，與 `describe_tenant.py` 同一句，結束碼不變（[#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)）。
 
 ```bash
 # 印單一 tenant 的 effective config + merged_hash

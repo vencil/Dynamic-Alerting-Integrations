@@ -29,7 +29,6 @@ sys.path.insert(0, _DX)
 import compile_custom_alerts as cc  # noqa: E402
 from custom_alerts import entries as ent  # noqa: E402
 from custom_alerts import shape as shp  # noqa: E402
-from custom_alerts import loader as ld  # noqa: E402
 
 # #3042: the notices are of the entries the exporter serves (da-guard served-values).
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -132,14 +131,14 @@ def test_notice_truncates_large_tenant_list():
     # A deprecated/eol recipe shared by many tenants must not emit an unbounded
     # multi-kilobyte single-line warning (some log collectors truncate mid-line).
     # Lead with the count + a bounded sample of names.
-    summary = ld._summarize_tenants({f"t{i:02d}" for i in range(25)})
+    summary = ent._summarize_tenants({f"t{i:02d}" for i in range(25)})
     assert summary.startswith("25 tenant(s) (")
     assert "t00" in summary                          # first names shown
-    assert f"and {25 - ld._NOTICE_TENANT_SAMPLE} more" in summary
+    assert f"and {25 - ent._NOTICE_TENANT_SAMPLE} more" in summary
     assert "t24" not in summary                       # beyond the sample → counted only
-    assert summary.count(",") <= ld._NOTICE_TENANT_SAMPLE   # never the full 25-name join
+    assert summary.count(",") <= ent._NOTICE_TENANT_SAMPLE   # never the full 25-name join
 
 
 def test_notice_small_list_not_truncated():
-    assert ld._summarize_tenants({"beta", "alpha"}) == "2 tenant(s) (alpha, beta)"
-    assert "more" not in ld._summarize_tenants({"alpha", "beta"})
+    assert ent._summarize_tenants({"beta", "alpha"}) == "2 tenant(s) (alpha, beta)"
+    assert "more" not in ent._summarize_tenants({"alpha", "beta"})

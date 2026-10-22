@@ -79,7 +79,7 @@ conf.d/
 兩個例外：
 
 - **`_metadata` 不繼承**：上層寫的 `_metadata` 不會出現在租戶的最終設定裡。根目錄平台檔的 `tenants.<id>._metadata` 不屬於這條鏈，它與租戶檔的 `_metadata` 逐鍵合併（[#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370)，規則見 [config-driven](../design/config-driven.md)）。
-- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 顯示的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單，另附每一條的名稱、宣告所在的檔與是否為租戶自己的；tenant-api 與 da-guard 只取一處：租戶自己的，否則根目錄平台檔的 `tenants:` 條目，否則綁定的 profile，否則子目錄 `_defaults.yaml` 的那份（標 `not_served`，不送出）。`merged_hash` 不受這個差異影響：`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 印出的是 da-guard 算的值，與 tenant-api 相同，也不隨檔名改變。爆炸半徑報告以 `merged_hash` 判斷設定值有沒有變，自訂告警另外比對聯集裡每一條的內容、名稱與是否為租戶自己的，不比宣告所在的檔：只搬檔不算變更，平台改一條 recipe 的門檻，繼承它的租戶都會列出（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。這個聯集不是 exporter 送出的：exporter 不送 `_defaults.yaml` 裡的 `_custom_alerts`，每個租戶只取一處來源（見 ADR-024 §3「宣告位置」）。依 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)「後果」，`describe_tenant` 改為只顯示 exporter 送出的清單，爆炸半徑報告退役、由 config-diff 取代（[#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)）。
+- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）不跨層合併**：每個租戶只取一處，租戶自己的，否則根目錄平台檔的 `tenants:` 條目，否則綁定的 profile；子目錄 `_defaults.yaml` 的那份標 `not_served`，不送出（見 ADR-024 §3「宣告位置」）。tenant-api、da-guard 與 `describe_tenant.py` 都照這條規則：`describe_tenant.py` 顯示的最終設定就是 da-guard 算的那份，另在最終設定旁列出 `custom_alerts`，也就是 exporter 取得的那份清單裡每一條的判定（名稱、recipe 與狀態：送出 `served`、關閉 `disabled`、拒絕 `rejected`、與前面某條重複 `duplicate`）；標 `not_served` 的那份不在其中。`merged_hash` 也是 da-guard 算的值，與 tenant-api 相同，不隨檔名改變。「這次 conf.d 變更影響了誰」由 config-diff 回答（[ADR-037](037-config-diff-compares-rendered-output.md)）；先前讀 `describe_tenant` 輸出回答同一問題的爆炸半徑報告已退役。
 
 ### 3. 範例
 
@@ -209,7 +209,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 **重新載入的時機**：exporter 每 30 秒（`-reload-interval`）掃描一次 conf.d/。偵測到變動後等 300 毫秒（`-scan-debounce`）再重新載入：這段等待叫去抖動（debounce），把短時間內接連發生的變動合成一次，`git pull` 一次改了 20 個檔也只重新載入一次。
 
-**每次重新載入都重建全部設定。** 兩個雜湊決定的是這次變更記成什麼，供 metrics 與爆炸半徑（blast radius，一次變更影響多少租戶）報告使用：
+**每次重新載入都重建全部設定。** 兩個雜湊決定的是這次變更記成什麼，供 metrics 使用，包括受影響租戶數（`da_config_blast_radius_tenants_affected`，一次變更影響多少租戶）：
 
 ```
 租戶檔的 source_hash 變了            → applied（reason=source；新租戶 reason=new；檔案刪除 reason=delete）
@@ -235,7 +235,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 ### 8. 有些頂層鍵的變更，最終設定看不到
 
-例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_defaults.yaml` 裡 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
 - **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
@@ -279,18 +279,17 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ## 後果
 
-- **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，爆炸半徑報告看得出一次變更真正影響了誰。
+- **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，受影響租戶數的 metrics 看得出一次變更真正影響了誰。
 - **代價**：
   - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
-  - `_custom_alerts` 在 `describe_tenant.py` 顯示的最終設定與 Go 實作之間不一致（決策 2）；`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 取 Go 的值，不受影響（`--what-if` 的兩個 `merged_hash` 也是 da-guard 的，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。
 
 ## 考量過的替代方案
 
 ### A：只用一個雜湊（只看租戶檔）
 
-❌ 預設值變更時分不出哪些租戶真的受影響，只能把所有租戶都記成受影響，爆炸半徑報告就失去意義。exporter 每次重新載入都重建全部設定，所以雙雜湊省下的不是載入工作，而是正確的歸因。
+❌ 預設值變更時分不出哪些租戶真的受影響，只能把所有租戶都記成受影響，受影響租戶數的 metrics 就失去意義。exporter 每次重新載入都重建全部設定，所以雙雜湊省下的不是載入工作，而是正確的歸因。
 
 ### B：用檔案系統事件（inotify / fsnotify）取代週期掃描
 

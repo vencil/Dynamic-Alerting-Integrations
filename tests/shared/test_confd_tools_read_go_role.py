@@ -148,7 +148,7 @@ def test_a_reader_with_a_tree_lists_no_second_time(tmp_path, da_guard_binary,
 
 
 @pytest.mark.parametrize("tool", ["deprecate_rule", "offboard_tenant", "migrate_conf_d",
-                                  "check_confd_schema", "custom_alerts"])
+                                  "check_confd_schema"])
 def test_a_tool_holding_the_tree_lists_no_second_time(tool, tmp_path, da_guard_binary,
                                                       monkeypatch, capsys) -> None:
     """The tools that read the content from a tree-mode document take their
@@ -185,13 +185,10 @@ def test_a_tool_holding_the_tree_lists_no_second_time(tool, tmp_path, da_guard_b
         elif tool == "migrate_conf_d":
             import migrate_conf_d as m
             m.plan_migration(root, _lib_parse_cache.reader_for(root))
-        elif tool == "check_confd_schema":
+        else:
             import check_confd_schema as m
             m.validate_dir(str(root), {"type": "object"}, pytest.importorskip("jsonschema"),
                            unreadable=[])
-        else:
-            from custom_alerts import loader as m
-            m.collect_instances(root)
     assert [r for r in runs if "--list-only" in r] == [], runs
     assert len(runs) == 1, runs
 

@@ -219,8 +219,11 @@ def test_assemble_check_flat_kubelet_layout_is_silent(flat: Path, tmp_path: Path
 def test_describe_tenant_and_path_metadata_name_it_consistently(nested: Path):
     d = _run(DESCRIBE, "--conf-d", nested, "t-sym")
     assert d.returncode == 2  # t-sym is not loaded — same as the exporter
-    # Once: describe_tenant and the custom-alerts loader it runs both see it.
-    assert (d.stdout + d.stderr).count(f"team-a — {SYMLINK_REASON}") == 1, d.stderr
+    # Once, in parse-tree's words — the same listing path-metadata reads, so
+    # both readers name it alike (#3230 removed the custom-alerts loader that
+    # used to name it a second way).
+    assert (d.stdout + d.stderr).count(f"team-a — {PT_SYMLINK_REASON}") == 1, d.stderr
+    assert SYMLINK_REASON not in d.stdout + d.stderr, d.stderr
     m = _run(PATH_META, "--config-dir", nested)
     assert m.returncode == 0
     # #2906: its listing is `da-guard parse-tree`'s, which names the link
@@ -242,7 +245,7 @@ def test_underscore_directory_link_is_named_by_name_filtering_readers(shared: Pa
     directory LINK is a lost subtree (the exporter descends `_` dirs) and
     must be named like `unscannable` is."""
     d = _run(DESCRIBE, "--conf-d", shared, "t-sym")
-    assert f"_shared — {SYMLINK_REASON}" in d.stdout + d.stderr, d.stderr
+    assert (d.stdout + d.stderr).count(f"_shared — {PT_SYMLINK_REASON}") == 1, d.stderr
     m = _run(PATH_META, "--config-dir", shared)
     assert m.returncode == 0
     assert f"_shared:0: warning: not checked — {PT_SYMLINK_REASON}" in m.stdout + m.stderr

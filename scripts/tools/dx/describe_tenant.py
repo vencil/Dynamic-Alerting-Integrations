@@ -13,9 +13,20 @@ Every value comes from `da-guard effective` (ADR-036: conf.d is parsed only
 by Go) — the effective config, the defaults chain, the platform and profile
 overlays, source_file / source_hash and merged_hash are tenant-api's
 /effective answer for the tenant, written as Go writes them. This tool reads
-no conf.d file with a YAML parser of its own. The one field it adds is the
-custom-alert compiler's view of `_custom_alerts` (ADR-024 UNION, below),
-whose files the compiler reads through `da-guard parse-tree`.
+no conf.d file with a YAML parser of its own. `effective_config` is
+da-guard effective's value as is: its `_custom_alerts` is the one list the
+exporter resolves for the tenant (its own, its root platform file's
+`tenants:` entry, or its profile's — never a union across directory levels).
+
+Beside `effective_config` (not inside it), the default output, `--show-sources`
+and `--all` add `custom_alerts`: every element of that list as the exporter
+judges it, from `da-guard served-values` — `{index, name, recipe, status}`,
+plus `reason` / `recipe_id` when the exporter gives one; status is `served`,
+`disabled`, `rejected` or `duplicate` (#3230). It is omitted for a tenant
+with no element; `custom_alerts_error` says why a tenant's list does not
+decode. served-values runs once, only for those three modes; when it fails
+(or the da-guard predates the field) a WARN line goes to stderr, the field
+is omitted, and the exit code is unchanged.
 
 `--what-if` asks Go about "these bytes at this tree path": `--replaces F`
 stands the draft in for the tree file F, `--at P` adds it as a new file at P
@@ -40,7 +51,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout, find_project_root  # noqa: E402
 from _lib_confd import duplicate_declarations, tenant_declarations  # noqa: E402  (#2049)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write, safe_label  # noqa: E402  (#1789)
+from _lib_io import YamlFileError, exit_on_output_write_error, output_write, safe_label  # noqa: E402  (#1789)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: one parse-tree document per run)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
@@ -48,7 +59,9 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     EffectiveRun,
+    ParseFailedError,
     run_effective,
+    load_served_tree,
     print_load_error,
 )
 
@@ -56,19 +69,6 @@ try:
     import yaml  # output only (--format yaml): never a conf.d read
 except ImportError:
     yaml = None
-
-# #772: `_custom_alerts` does NOT follow generic array-REPLACE (ADR-017) — ADR-024
-# defines it as UNION across the inheritance chain (a tenant's own list ADDS to
-# inherited platform/domain policy recipes; a tenant must NOT silently wipe a
-# platform policy). Go's effective config (REPLACE) would drop the inherited
-# policy from an override tenant's effective view, blinding blast_radius. So we
-# delegate THIS one field to the compiler's own inheritance resolver
-# (`collect_instances`, which reads conf.d through `da-guard parse-tree`) — the
-# single source of truth — instead of forking the union logic here.
-try:
-    from custom_alerts import loader as _ca_loader  # noqa: E402
-except Exception:  # pragma: no cover - compiler package unavailable → graceful fallback
-    _ca_loader = None
 
 # #1549: `merged_hash_error`, when there is no merged_hash. Fixed words that
 # name no file: the cause, with da-guard's own lines, is on stderr.
@@ -135,13 +135,10 @@ class ConfDScanner:
         # skips (`parse_failed` / `unreadable`) and what parse-tree cannot read
         # (a directory with a config name among them) — root-relative → why.
         self.skipped_entries: "dict[str, str]" = {}
-        # #772: tenant_id → [(recipe, origin, is_own), ...] — the ADR-024 UNION
-        # resolution of `_custom_alerts` from the compiler's own walker. Computed
-        # ONCE (collect_instances scans the whole tree).
-        self._custom_alerts_resolved: dict = {}
-        # Set when the compiler resolver raised — `_custom_alerts` is then Go's
-        # (REPLACE) value; callers can detect it.
-        self.custom_alerts_resolution_error: "str | None" = None
+        # #1674: every file no plane reads (a defaults carrier its
+        # directory's chain does not select), root-relative → parse-tree's
+        # `not_read` reason. Named by `main`, not here: tenant_verify scans too.
+        self.not_read: "dict[str, str]" = {}
         dup_error: "DaGuardError | None" = None
         with _lib_parse_cache.session():
             try:
@@ -154,7 +151,9 @@ class ConfDScanner:
                 dup_error, run = exc, None
             try:
                 declared, _unread = tenant_declarations(self.conf_d)
-                pt_unreadable = _lib_parse_cache.reader_for(self.conf_d).tree().unreadable
+                pt_tree = _lib_parse_cache.reader_for(self.conf_d).tree()
+                pt_unreadable = pt_tree.unreadable
+                self.not_read = dict(sorted(pt_tree.not_read.items()))
             except ParseTreeError as exc:
                 raise DescribeError([f"da-guard parse-tree failed: {exc}"]) from exc
             for rel, (kind, message) in sorted(pt_unreadable.items()):
@@ -185,32 +184,6 @@ class ConfDScanner:
             for u in self.unreadable:
                 self.skipped_entries.setdefault(u.file, f"the exporter's load cannot read it ({u.reason})")
             self.stderr_lines = list(run.stderr_lines)
-            self._resolve_custom_alerts()
-
-    def _resolve_custom_alerts(self) -> None:
-        """Build the per-tenant `_custom_alerts` UNION resolution via the compiler's
-        SSOT walker (#772). No-op if the compiler package is unavailable — then
-        effective_config() keeps Go's (REPLACE) value."""
-        if _ca_loader is None:
-            return
-        try:
-            # collect_instances returns (triples, file_errors) (#1008 Part B fail-soft);
-            # describe_tenant only needs the triples — unloadable files surface in the
-            # compiler's own skip report, not here.
-            triples, _file_errors = _ca_loader.collect_instances(self.conf_d)
-            for tenant, recipe, origin, is_own in triples:
-                self._custom_alerts_resolved.setdefault(tenant, []).append(
-                    (recipe, origin, is_own))
-        except Exception as e:  # noqa: BLE001
-            # Do NOT silently swallow: the `_custom_alerts` view degrades to Go's
-            # REPLACE value (own-only for override tenants), which is the exact
-            # #772 blind spot — so warn loudly + record a marker.
-            self._custom_alerts_resolved = {}
-            self.custom_alerts_resolution_error = str(e)
-            print(f"WARN: _custom_alerts inheritance resolution failed "
-                  f"({_ca_loader.__name__}.collect_instances: {e}); "
-                  f"showing da-guard effective's (REPLACE) value — override tenants may "
-                  f"show only own recipes (#772).", file=sys.stderr)
 
     @property
     def dropped(self) -> bool:
@@ -244,33 +217,11 @@ class ConfDScanner:
                 f"them — run validate-config, and keep the tenant in "
                 f"exactly one file.")
 
-    def effective_config(self, tenant_id: str, resolve_custom_alerts: bool = True) -> dict:
-        """The tenant's effective config, da-guard effective's.
-
-        `resolve_custom_alerts` (#772): when True (default, the normal/blast_radius
-        view) `_custom_alerts` is the ADR-024 compiler UNION. `--what-if` sets it
-        False: both of its sides are Go's values, compared as Go resolves them."""
+    def effective_config(self, tenant_id: str) -> dict:
+        """The tenant's effective config, da-guard effective's, as is (a copy)."""
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found in {self.conf_d}")
-        merged = copy.deepcopy(self.tenants[tenant_id].effective_config)
-        # #772: when the compiler resolved any `_custom_alerts` for this tenant,
-        # OVERWRITE the array-REPLACE value with the ADR-024 UNION (own +
-        # inherited). This field FOLLOWS UNION INHERITANCE, unlike every other
-        # array (which stays REPLACE); `_custom_alerts_resolution` makes that
-        # explicit per entry.
-        #
-        # A Go `_custom_alerts` is kept when the resolver returned nothing: it
-        # may be unavailable or have raised, and "no resolution" must not wipe
-        # a real declaration.
-        resolved = self._custom_alerts_resolved.get(tenant_id) if resolve_custom_alerts else None
-        if resolved:
-            merged["_custom_alerts"] = [copy.deepcopy(recipe) for recipe, _o, _own in resolved]
-            merged["_custom_alerts_resolution"] = [
-                {"name": (recipe.get("name") if isinstance(recipe, dict) else None),
-                 "origin": origin, "is_own": is_own}
-                for recipe, origin, is_own in resolved
-            ]
-        return merged
+        return copy.deepcopy(self.tenants[tenant_id].effective_config)
 
     def merged_hash(self, tenant_id: str) -> "tuple[str | None, str | None]":
         """`(merged_hash, None)` — da-guard effective's — or `(None, reason)`
@@ -337,6 +288,87 @@ class ConfDScanner:
             f"only_in_{id_b}": only_b,
             "different": different,
         }
+
+
+def warn_not_read(scanner: "ConfDScanner") -> None:
+    """One WARN line per file no plane reads (#1674): a defaults carrier its
+    directory's chain does not select. describe_tenant and tenant_verify
+    both say it, in these words (the custom-alert loader's walk did until
+    #3230 removed it)."""
+    for rel, why in scanner.not_read.items():
+        print(f"WARN: {safe_label(rel)} is ignored on every plane (#1674): da-guard "
+              f"parse-tree does not read it ({safe_label(why)})", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# custom_alerts: the exporter's judgement of each `_custom_alerts` element
+# ---------------------------------------------------------------------------
+
+def custom_alerts_fields(conf_d: Path,
+                         declared: "dict[str, Any] | None" = None) -> "dict[str, dict] | None":
+    """`{tenant_id: fields}` — what the default output, `--show-sources` and
+    `--all` add beside `effective_config` (#3230), from one `da-guard
+    served-values` run over `conf_d` (`partial`: a file the load skips leaves
+    the rest of the tree): `custom_alerts`, one `{index, name, recipe,
+    status[, reason][, recipe_id]}` per element of the tenant's
+    `_custom_alerts` as the exporter judges it, and `custom_alerts_error`
+    when the list does not decode. A tenant with neither has no entry —
+    unless `declared` (tenant → its effective config) gives it a
+    `_custom_alerts` the exporter takes nothing from: then `custom_alerts`
+    is `[]`, so "declared, none served" reads apart from "not declared".
+
+    None, with one WARN line on stderr, when served-values fails; a tenant
+    whose da-guard is older than the field has no entry, with one WARN line.
+    The caller omits what is missing; the exit code does not change.
+
+    ⛔ Not a `ConfDScanner` method on purpose: `tenant_verify` calls
+    `source_info` per tenant, and must not pay a second da-guard run for a
+    field it does not read."""
+    try:
+        tree = load_served_tree(conf_d, partial=True)
+    except (DaGuardError, DaGuardNotFoundError, YamlFileError) as exc:
+        # YamlFileError: `partial` makes a file the load skips no error, but
+        # whatever served-values raises only costs this field (#1654 lint).
+        lines = (_load_error_lines(exc)
+                 if isinstance(exc, (DaGuardError, DaGuardNotFoundError, ParseFailedError))
+                 else [str(exc)])
+        print(f"WARN: custom_alerts not shown — da-guard served-values failed: "
+              f"{safe_label(lines[0] if lines else str(exc))}", file=sys.stderr)
+        # #1822: a caller that goes on after the failure passes da-guard's
+        # own lines on whole.
+        for line in lines[1:]:
+            print(line if line.startswith(DA_GUARD_PREFIX) else f"{DA_GUARD_PREFIX}{safe_label(line)}",
+                  file=sys.stderr)
+        return None
+    out: "dict[str, dict]" = {}
+    stale = False
+    for tid, tv in tree.tenants.items():
+        fields: dict = {}
+        if tv.custom_alerts is None:
+            stale = True
+        elif not tv.custom_alerts:
+            if (declared or {}).get(tid, {}).get("_custom_alerts") and tv.custom_alerts_error is None:
+                fields["custom_alerts"] = []
+        else:
+            rows = []
+            for e in tv.custom_alerts:
+                row = {"index": e.index, "name": e.spec.get("name"),
+                       "recipe": e.spec.get("recipe"), "status": e.status}
+                if e.reason is not None:
+                    row["reason"] = e.reason
+                if e.recipe_id is not None:
+                    row["recipe_id"] = e.recipe_id
+                rows.append(row)
+            fields["custom_alerts"] = rows
+        if tv.custom_alerts_error is not None:
+            fields["custom_alerts_error"] = tv.custom_alerts_error
+        if fields:
+            out[tid] = fields
+    if stale:
+        print("WARN: custom_alerts not shown — this da-guard's served-values gives no "
+              "custom_alerts (it is older than this tool): upgrade or rebuild it",
+              file=sys.stderr)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +534,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--show-sources", "-s", action="store_true",
-        help="Show inheritance chain sources for each field",
+        help="Show inheritance chain sources for each field. This output, the default "
+             "one and --all also carry custom_alerts beside effective_config: each "
+             "_custom_alerts element as the exporter judges it (da-guard served-values)",
     )
     parser.add_argument(
         "--diff", "-d", type=str, default=None, metavar="TENANT_ID_2",
@@ -630,6 +664,7 @@ def main() -> None:
     # own words (da-guard's lines follow behind its prefix).
     for rel, why in scanner.skipped_entries.items():
         print(f"WARNING: skipped {safe_label(rel)} — {safe_label(why)}", file=sys.stderr)
+    warn_not_read(scanner)
     if scanner.dropped:
         print("WARN: the exporter's load skips or cannot read file(s) of this tree (named "
               "above): their tenants and values are absent, and merged_hash is not "
@@ -689,6 +724,12 @@ def main() -> None:
                 continue
             if tid in scanner.tenants:
                 result[tid] = scanner.source_info(tid)
+        if result:
+            # Beside effective_config, never inside it (#3230).
+            declared = {t: scanner.tenants[t].effective_config for t in result}
+            for tid, fields in (custom_alerts_fields(scanner.conf_d, declared) or {}).items():
+                if tid in result:
+                    result[tid].update(fields)
         if scanner.refused is not None:
             print(f"❌ no other tenant is described: {scanner.refused}.", file=sys.stderr)
         elif not result and scanner.dropped:
@@ -746,6 +787,9 @@ def main() -> None:
         if profile:
             result["profile_overlay"] = profile
         result["effective_config"] = scanner.effective_config(tid)
+    # Beside effective_config, never inside it: that one is Go's value as is (#3230).
+    declared = {tid: scanner.tenants[tid].effective_config}
+    result.update((custom_alerts_fields(scanner.conf_d, declared) or {}).get(tid, {}))
     print(_output(result))
 
 

@@ -284,6 +284,7 @@ def main() -> int:
         for line in lines[1:]:
             print(line, file=sys.stderr)
         return EXIT_USAGE_ERROR
+    describe_mod.warn_not_read(scanner)
     if scanner.refused is not None or scanner.dropped:
         # The exporter rejects the whole tree, or skips / cannot read a file
         # of it: no merged_hash anywhere. da-guard's own reason, once.

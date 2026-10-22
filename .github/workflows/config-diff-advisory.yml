@@ -71,7 +71,7 @@ permissions:
 
 # ⛔ One run per pull request (#1518). Why the PR number and not the ref, and
 # why other events never cancel: see the block of the same shape in
-# blast-radius.yml. `tests/ops/test_pr_report_workflow_concurrency.py`
+# guard-defaults-impact.yml. `tests/ops/test_pr_report_workflow_concurrency.py`
 # evaluates both expressions per event.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
@@ -212,7 +212,7 @@ jobs:
             const body0 = report.trim()
               ? report
               : `_config-diff exited ${rc} and wrote no report; see the run log._\n`;
-            // ⛔ Provenance — see the equivalent block in blast-radius.yml.
+            // ⛔ Provenance — see the equivalent block in guard-defaults-impact.yml.
             const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
             const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
             const stamp = '\n<sub>commit `' + sha + '` • [run log](' + runUrl + ')</sub>\n';

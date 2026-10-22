@@ -191,7 +191,7 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     empty `70:`) raises ValueError: the exporter cannot read the value
     either. The value half is returned as written (trimmed); whether it is a
     number is the caller's question. The Python readers of the grammar
-    (check_threshold_unit_sanity, `custom_alert_disabled`) call this one —
+    (check_threshold_unit_sanity) calls this one —
     backtest_threshold and config_diff read the exporter's own answer from
     served-values instead (#3140 PR2);
     custom_alerts/shape.py keeps its own stdlib-only copy. All are held to
@@ -205,12 +205,6 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     if severity not in THRESHOLD_SEVERITIES:
         raise ValueError(f"threshold severity {suffix!r} must be warning or critical")
     return value.strip(GO_SPACE), severity
-
-
-def _go_lower(text: str) -> str:
-    """`text` lower-cased per character as Go's strings.ToLower does (U+0130
-    → `i`, which Python's full mapping turns into two characters)."""
-    return "".join("i" if c == "\u0130" else c.lower() for c in text)
 
 
 class NonFiniteThresholdError(ValueError):
@@ -288,27 +282,6 @@ def parse_threshold_number(text: Any) -> float:
         raise NonFiniteThresholdError(text)
     return value
 
-
-def custom_alert_disabled(threshold: Any) -> bool:
-    """Whether a custom alert with this `threshold` is the three-state
-    opt-out, exactly as resolveOneCustomAlert decides it (#3071): the value
-    half of `split_threshold_severity` is a disabled word (`disable`,
-    `disable:critical`, `OFF`), lower-cased as Go does.
-    A suffix the grammar refuses (`disable:bogus`, `disable:`) is a parse
-    error in Go, not an opt-out. Unlike a threshold row (#3141), a custom
-    alert's `disable:<severity>` IS its opt-out (#3042). Pinned
-    against Go by tests/shared/threshold_value_matrix.json's
-    `custom_alert_disabled` column.
-
-    ⚠️ A mirror of Go's verdict, kept for its one remaining reader,
-    blast_radius, whose input (describe-tenant's ADR-024 union of
-    recipes) carries no served-values `custom_alerts[].status` (#3140
-    PR2); config_diff reads that status instead."""
-    try:
-        value, _severity = split_threshold_severity(threshold)
-    except ValueError:
-        return False
-    return _go_lower(value) in _DISABLED_VALUES
 
 
 def is_valid_tenant_id(tenant: Any) -> bool:

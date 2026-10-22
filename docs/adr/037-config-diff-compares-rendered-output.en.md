@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the carriers that CI checks own, and how files neither renderer reads are listed. On 2026-10-14 decision 3 started reading where each key is read from parse-tree, which turns on "fully covered, no difference: a note only". On 2026-10-17 the table of deferred carriers in decision 3 was updated: `_custom_alerts` at the top of a `_` file no longer has a reader.
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the carriers that CI checks own, and how files neither renderer reads are listed. On 2026-10-14 decision 3 started reading where each key is read from parse-tree, which turns on "fully covered, no difference: a note only". On 2026-10-17 the table of deferred carriers in decision 3 was updated: `_custom_alerts` at the top of a `_` file no longer has a reader. On 2026-10-22 the platform's blast-radius report was retired: "who does this change affect" is answered by config-diff alone.
 
 ## Summary
 
@@ -31,7 +31,7 @@ These are exactly the sole semantic implementations named by [ADR-036](./036-sin
 
 The platform changes the default route's `group_wait` from 30s to 99s (`_routing_defaults` in `_defaults.yaml`). The real effect: every tenant with neither its own `_routing` nor a routing profile now waits longer before its alerts go out.
 
-Today config-diff can only say "`_defaults.yaml` changed but was not compared"; it cannot say who is affected. The platform CI also runs a blast-radius report, which reads each tenant's merged config. That merge sees the values under `defaults:`, but under [ADR-017](./017-defaults-yaml-inheritance-dual-hash.en.md) it excludes keys at the same level as `defaults:` (`_routing_defaults` is one), so it does not see this change either.
+Today config-diff can only say "`_defaults.yaml` changed but was not compared"; it cannot say who is affected. The platform CI also ran a blast-radius report (`blast_radius.py`, now retired), which read each tenant's merged config. That merge sees the values under `defaults:`, but under [ADR-017](./017-defaults-yaml-inheritance-dual-hash.en.md) it excludes keys at the same level as `defaults:` (`_routing_defaults` is one), so it does not see this change either.
 
 ### What each renderer sees
 
@@ -195,7 +195,7 @@ db-b sets `container_memory` to 90 itself, so it is unaffected.
 - **Sibling nodes with identical matchers** are paired by order; if their order changes, the report may show one removal and one addition.
 - **Loosening or removing a rule does not show**: `domain_policies` and `_policies` are listed as notes only, so loosening or removing a rule is not blocked by CI and does not raise the exit code; a violated `_policies` rule of `severity: warning` does not fail CI either.
 - **Routing-layer keys written in a threshold profile** (`_routing`, `_severity_dedup`, …): neither reader applies them, so the report lists such a change as having no effect (no_effect); why is under [`routing_in_unread_location`](../cli-reference.en.md#guard).
-- **The platform's blast-radius report** (`blast_radius.py`) overlaps with this decision; retiring it is evaluated separately.
+- **The platform's blast-radius report** (`blast_radius.py`) overlapped with this decision and is retired: "who does this change affect" is answered by config-diff alone.
 
 ## Rejected alternatives
 

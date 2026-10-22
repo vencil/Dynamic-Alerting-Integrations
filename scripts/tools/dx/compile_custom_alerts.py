@@ -97,8 +97,7 @@ sys.path.insert(0, _THIS_DIR)
 from custom_alerts import entries as _entries  # noqa: E402
 from custom_alerts import recipes as _recipes  # noqa: E402
 from custom_alerts import shape as _shape  # noqa: E402
-from custom_alerts.entries import CustomAlertParityError  # noqa: E402
-from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
+from custom_alerts.entries import CustomAlertConfigError, CustomAlertParityError  # noqa: E402
 
 
 PACK_NAME = "custom-alerts"

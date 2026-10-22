@@ -16,10 +16,11 @@ source) FIRST, or remove both together — NEVER K8s-target-only.
 
 This gate enforces that statically at PR time. It is a NET-NEW conf.d↔K8s set
 comparison; the repo had ZERO prior build-time link between the two (they aligned
-only by db-a/db-b naming coincidence). The matrix's "reuse blast_radius /
-silencer_drift / orphan-detector" note is a CONCEPTUAL reuse (the "detect orphan,
-don't auto-mutate" idiom) — none of those compare conf.d↔K8s, so there is no
-advisory check to merely flip to enforcing.
+only by db-a/db-b naming coincidence). The matrix's "reuse config_diff /
+silencer_drift / orphan-detector" note (blast_radius until #3230) is a
+CONCEPTUAL reuse (the "detect orphan, don't auto-mutate" idiom) — none of
+those compare conf.d↔K8s, so there is no advisory check to merely flip to
+enforcing.
 
 What "a tenant" means here
 --------------------------

@@ -13,24 +13,24 @@ lang: en
 
 ## Overview
 
-As the platform grows from dozens to hundreds or even thousands of tenants, operational patterns that were sufficient at small scale encounter efficiency bottlenecks. This document describes how to use the v2.7.0 toolchain to effectively manage large-scale tenant environments in the Dynamic Alerting platform:
+As the platform grows from dozens to hundreds or even thousands of tenants, operational patterns that were sufficient at small scale encounter efficiency bottlenecks. This document describes how to use the existing toolchain to effectively manage large-scale tenant environments in the Dynamic Alerting platform:
 
-- **Blast Radius estimation**: Understand the impact scope before changing `_defaults.yaml`
+- **Impact estimation**: Understand the impact scope with `config-diff` before changing `_defaults.yaml`
 - **Batch querying and filtering**: Quickly locate tenants by domain, region, or environment
 - **Inheritance chain tracing**: Confirm the source of each tenant's effective configuration
-- **Safe change workflow**: PR → Blast Radius CI Bot → Review → Merge
+- **Safe change workflow**: PR → CI posts the config-diff report → Review → Merge
 
 ## Prerequisites
 
 - Completed `conf.d/` hierarchical structure migration (see [multi-domain-conf-layout](multi-domain-conf-layout.en.md)) or at least partial domain hierarchy (mixed mode)
-- Tools installed: `scripts/tools/dx/describe_tenant.py`, `scripts/tools/ops/blast_radius.py`, `scripts/tools/dx/migrate_conf_d.py`; every value `describe_tenant.py` writes (the effective config, the chain, `merged_hash`) is read from `da-guard effective` (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it, and `make da-guard-build` builds it to `.build/da-guard` in this repo); without da-guard it exits 2 with no output ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)). When the tree holds a file the exporter cannot decode or read, `merged_hash` is `null`, and `blast_radius.py` compares field by field and says so on stderr
-- GitHub Actions `blast-radius.yml` workflow enabled
+- Tools installed: `da-tools config-diff` (`scripts/tools/ops/config_diff.py`), `scripts/tools/dx/describe_tenant.py`, `scripts/tools/dx/migrate_conf_d.py`. Both read `da-guard` (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it, and `make da-guard-build` builds it to `.build/da-guard` in this repo): every value `describe_tenant.py` writes (the effective config, the chain, `merged_hash`) is read from `da-guard effective`, and without da-guard it exits 2 with no output ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)); `config-diff` compares the two trees as `da-guard served-values` and the route generator render them ([ADR-037](../adr/037-config-diff-compares-rendered-output.en.md))
+- Reports on PRs: the CI `da-tools init` generates runs config-diff on a PR and posts the report (see [GitOps CI integration](gitops-ci-integration.en.md))
 
-## Scenario 1: Assess Blast Radius Before Changing Domain Defaults
+## Scenario 1: Assess the Impact Before Changing Domain Defaults
 
 ### Problem
 
-You need to raise the `MariaDBHighConnections` threshold from 90 to 95 for all Finance domain tenants. In an environment with 200+ Finance tenants, you want to confirm before making changes:
+You need to raise the `MariaDBHighConnections` threshold from 90 to 95 for all tenants in the Finance domain. In an environment with 200+ Finance tenants, you want to confirm before making changes:
 
 1. How many tenants will be affected?
 2. Which tenants have already overridden this threshold (unaffected)?
@@ -38,12 +38,10 @@ You need to raise the `MariaDBHighConnections` threshold from 90 to 95 for all F
 
 ### Steps
 
-#### A. Generate Current Effective Config Snapshot
+#### A. Keep the conf.d From Before the Change
 
 ```bash
-python scripts/tools/dx/describe_tenant.py --all \
-  --conf-d conf.d/ \
-  --output /tmp/before.json
+cp -r conf.d/ conf.d.before/
 ```
 
 #### B. Modify Domain Defaults
@@ -59,57 +57,47 @@ defaults:
 > so one key can drive several alerts. Platform values here are unquoted numbers
 > (`map[string]float64`); tenant overrides are quoted strings.
 
-#### C. Generate Post-Change Effective Config Snapshot
+#### C. Run config-diff
 
 ```bash
-python scripts/tools/dx/describe_tenant.py --all \
-  --conf-d conf.d/ \
-  --output /tmp/after.json
+da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/
 ```
 
-#### D. Run Blast Radius Analysis
+Exit code 0 is no change, 1 is a change (or something not compared), 2 is no result (a tool or the PR side failed).
 
-```bash
-python3 scripts/tools/ops/blast_radius.py \
-  --base /tmp/before.json \
-  --pr /tmp/after.json \
-  --format markdown \
-  --changed-files "finance/_defaults.yaml"
-```
-
-Example output:
+Example output (a tree of three finance tenants, `tenant-fin-003` writing its own `mysql_connections: "98"`; run with `--at 2026-10-22T00:00:00Z`):
 
 ```
-### Blast Radius: this PR modifies `finance/_defaults.yaml`
+# Config Diff Report
 
-| Metric | Count |
-|--------|-------|
-| Total tenants scanned | 500 |
-| Affected tenants | 187 |
-| Tier A (threshold/routing) | 187 |
+Comparing: `conf.d.before/` → `conf.d/`
 
-> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
+Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows are read at this instant, on both sides)
 
-<details>
-<summary>Tier A (threshold/routing): 187 tenants</summary>
+## Platform Settings
 
-- `tenant-fin-001`
-- `tenant-fin-002`
-...
-</details>
+> Top-level keys of `_`-prefixed files whose value changed (comments and formatting are not changes), and `_` files no reader reads whose bytes changed. The renders compare what a setting does; a setting they do not show is listed here to review directly.
+
+**Rendered (see the sections below)** (1)
+
+- `finance/_defaults.yaml` `defaults` (modified)
+  - the renders that read it changed; which of those changes come from this key is not told apart
+
+## Threshold Changes
+
+| Metric | Before | After | Change | Affected Alerts | Tenants |
+|--------|--------|-------|--------|-----------------|---------|
+| mysql_connections | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
+
+---
+Summary: 2 tenant(s) changed, 2 metric change(s)
 ```
 
-⚠️ 187 > `SUMMARY_MODE_TENANT_THRESHOLD` (50), so the layout is a tenant list
-plus the artifact, not per-tenant expansion. An earlier version showed
-`Substantive changes: 187 tenants` with per-field diffs — a layout the renderer
-structurally cannot produce. The PR Comment example further down was the same
-class; both were fixed together ([#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419)).
+Note: a tenant that already overrides `mysql_connections` (`tenant-fin-003` here) is not in the affected list — the override is keyed by the metric key, not the alert name. When routes or receivers change, the report has sections for those too. For a machine-readable result use `--format json`.
 
-Note: Tenants that have already overridden `mysql_connections` themselves (e.g., set to 98) will not appear in the affected list — the override key is the metric key, not the alert name.
+### D. Submit PR After Confirmation
 
-### E. Submit PR After Confirmation
-
-The Blast Radius CI Bot will automatically post a report on the PR, allowing reviewers to confirm the impact scope before merging.
+CI posts the same config-diff report on the PR, so reviewers can confirm the impact scope before merging.
 
 ## Scenario 2: Trace Configuration Sources for a Single Tenant
 
@@ -193,96 +181,46 @@ Example output:
 
 The differences come from region-level defaults (US-East vs EU-West).
 
-## Scenario 4: CI Automation — Blast Radius Bot Workflow
+## Scenario 4: CI Automation — the config-diff Report on a PR
 
 ### Trigger Conditions
 
-The GitHub Actions workflow `blast-radius.yml` triggers automatically when a PR modifies files under `conf.d/**`.
+The workflow `da-tools init` generates (GitHub Actions / GitLab) runs config-diff when a PR changes `conf.d/`; the GitHub one posts the report as a PR comment, the GitLab one prints it in the job log and uploads it as an artifact. Step details, how the exit code is handled and the GitLab differences are in [GitOps CI integration](gitops-ci-integration.en.md).
 
 ### Flow
 
 ```
-PR submitted → CI triggers blast-radius.yml
-  ├── 1. Checkout base + PR
-  ├── 2. Run describe_tenant.py --all on each
-  ├── 3. blast_radius.py diff + classify
-  ├── 4. Post PR comment (Tier A/B/C summary)
-  └── 5. Upload JSON report artifact (for audit)
+PR submitted → CI runs the config-diff step
+  ├── 1. extract the base branch's conf.d/ into conf.d.base/
+  ├── 2. da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/
+  │      (each side rendered by da-guard served-values and the route generator, then compared)
+  └── 3. exit 0 or 1: post the report; 2: the step fails, and the GitHub version posts a "NOT COMPUTED" comment over the old report
 ```
 
-### PR Comment Example
-
-```
-### Blast Radius: this PR modifies `finance/_defaults.yaml`
-
-| Metric | Count |
-|--------|-------|
-| Total tenants scanned | 500 |
-| Affected tenants | 347 |
-| Tier A (threshold/routing) | 347 |
-
-> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
-
-<details>
-<summary>Tier A (threshold/routing): 347 tenants</summary>
-
-- `tenant-fin-000`
-- `tenant-fin-001`
-...
-- _…and 147 more (see artifact)_
-
-</details>
-```
-
-⚠️ This block is the ACTUAL output of `blast_radius.py`, not hand-written. An
-earlier version showed `Tier A | 12` / `Tier C (format-only) | 335` — that was
-the output of the very defect [#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419) fixed, where inherited threshold changes were
-reported as having no impact. And 347 affected tenants crosses the
-inline-detail threshold (50), so the layout is a tenant list plus the artifact,
-not per-tenant expansion.
-
-### Tier Classification Logic
-
-| Tier | Definition | PR Comment Behavior |
-|------|-----------|-------------------|
-| **A** | Threshold value changes, routing receiver changes | Counted as highlights; in **per-tenant mode** it is a bullet inside the same `<details>` as Tier B, but **carries the old and new value** |
-| **B** | Other alerting field changes (severity, rules, etc.) | A bullet in that same `<details>`; ⚠️ on add/remove it prints **the field name only, not the value** |
-| **C** | Comment fields (`_comment` / `_comments` / `_description` / `_metadata`) and a pure reorder of **both** recipe fields | Count only, not expanded |
-
-⚠️ **A and B differ less in layout than this table used to claim.** The old wording said "A highlighted, details expanded / B listed"; in fact `_tenant_change_summary` emits both as the same two-space-indented `-` bullets. The real difference is the **value**: a Tier B add/remove prints only the field name, so a switch like `_silent_mode: "all"` never shows what it was set to. **In summary mode Tier A gets no per-field detail at all** — just the tenant list.
-
-⚠️ Tier C is the **provably harmless** category, not the bucket for whatever was not classified: unrecognised fields land in Tier B (listed, not highlighted), because Tier C renders as "no threshold/routing/alerting impact" — a positive claim. A key inside `effective_config` that does not start with `_` is a **threshold**, i.e. Tier A (#1419) — except the platform document's own structural keys (`profiles`, `tenants`, `optional_overrides`, `state_filters`, `max_metrics_per_tenant`), which are structural AT THEIR OWN LEVEL and land in Tier B; paths beneath them are still thresholds.
-
-⚠️ Two cells in this table are worth calling out: **(1) `_metadata`, which the real pipeline cannot reach**: `deep_merge` skips the `_metadata` each override layer brings (a value already in the base is kept), so changing a tenant's `_metadata.db_type` produces no diff; the Tier C carriers that are reachable today are `_comment` / `_comments` / `_description`. **(2) A pure reorder, which is reachable**: `describe_tenant` writes `_custom_alerts` and `_custom_alerts_resolution` from the same `resolved` list in order, so a reorder always reorders both; the downgrade rule names both fields, so a pure reorder lands in Tier C.
+The report reads like the example output in Scenario 1: sections for changed platform settings, thresholds, routes, receivers and so on, each change with the tenants it affects. The comparison rules are in [ADR-037](../adr/037-config-diff-compares-rendered-output.en.md).
 
 ## Scenario 5: Post-Migration Verification at Scale
 
 ### Problem
 
-You just migrated 200 Finance tenants from flat to hierarchical structure and need to verify that effective configs are unchanged.
+You've just migrated 200 Finance tenants from flat structure to hierarchical structure and need to verify that each tenant's effective configuration hasn't changed before and after migration.
 
 ### Steps
 
 ```bash
-# 1. Pre-migration snapshot
-python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/pre-migration.json
+# 1. Keep the conf.d from before the migration
+cp -r conf.d/ conf.d.pre-migration/
 
 # 2. Execute migration
 python scripts/tools/dx/migrate_conf_d.py --apply \
   --conf-d conf.d/ \
   --infer-from metadata
 
-# 3. Post-migration snapshot
-python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/post-migration.json
-
-# 4. Compare: expect 0 affected tenants
-python3 scripts/tools/ops/blast_radius.py \
-  --base /tmp/pre-migration.json \
-  --pr /tmp/post-migration.json \
-  --format json
+# 3. Compare: there should be no change
+da-tools config-diff --old-dir conf.d.pre-migration/ --new-dir conf.d/
 ```
 
-Expected result: `"affected_tenants": 0`. Moving or renaming files — including the ones declaring `_custom_alerts` — is not a change: `merged_hash` does not depend on file names, and custom alerts are compared by recipe content, name and whether the tenant owns the recipe, not by the file declaring it ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)). Any non-zero result indicates configuration semantics changed during migration and requires individual investigation.
+Expected result: exit code 0 and the report `No changes detected.`. config-diff compares rendered output, not files, so only moving or renaming files (including files declaring `_custom_alerts`) is not a change. Any change means configuration semantics shifted during migration and need to be investigated one by one.
 
 ## Tool Quick Reference
 
@@ -291,7 +229,7 @@ Expected result: `"affected_tenants": 0`. Moving or renaming files — including
 | `describe_tenant.py <id>` | View single tenant effective config | `python scripts/tools/dx/describe_tenant.py tenant-a --show-sources` |
 | `describe_tenant.py --all` | Export all tenants' effective config JSON | `python scripts/tools/dx/describe_tenant.py --all --output snap.json` |
 | `describe_tenant.py --diff` | Compare two tenants' config differences | `python scripts/tools/dx/describe_tenant.py tid-1 --diff tid-2` |
-| `blast_radius.py` | Diff two snapshots and classify impact | `python scripts/tools/ops/blast_radius.py --base a.json --pr b.json` |
+| `da-tools config-diff` | Compare what two conf.d trees render to, with the tenants affected | `da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/` |
 | `migrate_conf_d.py` | Flat→hierarchical migration | `python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run` |
 | `da-tools validate-config` | Config correctness validation | `da-tools validate-config --config-dir conf.d/` |
 

@@ -218,17 +218,12 @@ _GO_BLOB = (_GO + "; reads git blobs of one fixed-name file (`git show`) in pars
 #: named after the `;` in its row.
 _PROSE_ONLY = ("only mentions a conf.d in prose (docstring / comment / help / output text) "
                "— the K3 text net; reads no tenant conf.d")
-#: blast_radius reads two `describe-tenant --all --output` JSON files, never a
-#: conf.d: their values are da-guard effective's, through dx/describe_tenant.py
-#: (its own `_GO` row).
-_GO_VIA_DESCRIBE = (_GO + "; indirectly — it reads `describe-tenant --all` JSON "
-                    "(dx/describe_tenant.py), never a conf.d file")
 _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
-    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB, "dx/custom_alerts/__init__.py": _LIB,
-    "dx/custom_alerts/loader.py": _LIB, "dx/custom_alerts/entries.py": _GO, "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
+    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB,
+    "dx/custom_alerts/entries.py": _GO, "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
     "ops/_observed_map_lib.py": _LIB, "ops/_registry_lib.py": _LIB, "ops/_render_diff.py": _LIB,
@@ -251,7 +246,6 @@ _NOT_PROBED: dict[str, str] = {
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
-    "ops/blast_radius.py": _GO_VIA_DESCRIBE,
     "ops/generate_rule_pack_split.py": _PROSE_ONLY + "; reads rule packs",
     "ops/cutover_tenant.py": _PROSE_ONLY + "; reads a readiness JSON and drives kubectl",
     "ops/baseline_discovery.py": _PROSE_ONLY + "; reads Prometheus",

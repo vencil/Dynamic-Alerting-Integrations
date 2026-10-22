@@ -78,7 +78,6 @@ __all__ = [
     "ConfigTreeListing",
     "list_config_tree",
     "readable_carriers",
-    "warn_dir_symlink_once",
     "is_dir_symlink",
     "config_listing",
     "not_config_files",
@@ -203,7 +202,7 @@ def has_yaml_extension(
     the set they already accept; the default is both.
 
     ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
-    `custom_alerts/loader`, `generate_tenant_metadata` and
+    `custom_alerts/loader` (since removed, #3230), `generate_tenant_metadata` and
     `check_path_metadata_consistency` and `operator_generate`, and the
     axis reaches call sites
     that list never had (it was drawn from one spelling of the narrowing —
@@ -332,27 +331,6 @@ def readable_carriers(carriers: "Iterable[Path]"
             continue
         readable.append(Path(p))
     return readable, unreadable
-
-
-# Directory symlinks whose skip WARNING this process has already printed.
-_DIR_LINK_WARNED: set[str] = set()
-
-
-def warn_dir_symlink_once(link: Path, reason: str) -> None:
-    """Name a directory symlink the walk skipped, at most ONCE per link per
-    process (#1972). describe_tenant names it from its own listing AND calls
-    the custom-alerts loader over the same tree (and compile_custom_alerts
-    runs the loader more than once): each printing its own copy named every
-    link two times — the #1674 once-per-directory shape.
-    Keyed by the LINK's own absolute path (not its target, which is what
-    two different links may share). *reason* is the caller's wording of it
-    from the snapshot it listed the link in (`unusable_reason(link,
-    listing)` / `unusable_text(kind, message, dir_link=True)`)."""
-    key = os.path.abspath(link)
-    if key in _DIR_LINK_WARNED:
-        return
-    _DIR_LINK_WARNED.add(key)
-    print(f"WARNING: skipped {link} — {reason}", file=sys.stderr)
 
 
 def config_stem(name: str) -> str:
@@ -927,7 +905,6 @@ def reset_warned_for_test() -> None:
     "last cleanup wins" and would undo a parallel test's writes.
     """
     _WARNED.clear()
-    _DIR_LINK_WARNED.clear()
 
 
 class FlatRead(NamedTuple):

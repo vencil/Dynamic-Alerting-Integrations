@@ -686,8 +686,9 @@ def check_tool_map_coverage() -> List[Issue]:
     read as all of it. It does not — and the subdirectories are covered by
     a different mechanism, not by nothing: `generate_tool_map --check
     --lang all` regenerates the whole document and compares. Measured with
-    `ops/blast_radius.py`'s row deleted: this function reports nothing,
-    while that command exits 1 with `(missing: blast_radius.py)`, and
+    one `ops/` tool's row deleted (it was `blast_radius.py`, since retired):
+    this function reports nothing, while that command exits 1 with
+    `(missing: <tool>.py)`, and
     `ci.yml`'s `lint` job runs it as `pre-commit run tool-map-check
     --all-files` with no `if:`, `needs:` or `continue-on-error`.
 

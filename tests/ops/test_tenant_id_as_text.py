@@ -881,7 +881,6 @@ def test_patch_config_apply_sends_one_patch_for_the_colliding_pair(capsys):
 
 _ID_SPELLINGS = {"UNQ": "010", "QUOTED": "'010'"}
 _T2216 = "tenants:\n  {id}:\n    mysql_connections: '70'\n"
-_CA2216 = "tenants:\n  {id}:\n    _custom_alerts:\n      - name: x\n"
 _META2216 = ("tenants:\n  {id}:\n    _metadata:\n      domain: db\n"
              "      environment: prod\n      db_type: postgres\n")
 
@@ -907,13 +906,6 @@ def _ids_backtest(d, spell):
         "        name: q\n        metric: m\n        op: '>'\n        window: 5m\n"
         "        threshold: '150:warning'\n")})
     return set(m.changed_recipe_tenants(m.load_trees(str(d / "cur"), str(d / "base"))))
-
-
-def _ids_custom_alerts(d, spell):
-    from custom_alerts import loader
-    _tree(d, {"t.yaml": _CA2216.format(id=spell)})
-    triples, _errors = loader.collect_instances(d)
-    return {t[0] for t in triples}
 
 
 def _ids_migrate(d, spell):
@@ -950,7 +942,6 @@ _READERS_2216 = {
     "generate_tenant_mapping_rules": _ids_mapping_rules,
     "generate_tenant_metadata": _ids_tenant_metadata,
     "backtest_threshold": _ids_backtest,
-    "custom_alerts_loader": _ids_custom_alerts,
     "migrate_conf_d": _ids_migrate,
     "check_path_metadata_consistency": _ids_path_metadata,
     "check_retire_drift": _ids_retire_drift,

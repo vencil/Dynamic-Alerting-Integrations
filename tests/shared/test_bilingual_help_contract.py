@@ -122,7 +122,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "assemble_config_dir.py": _R_OPS,
     "backtest_threshold.py": _R_OPS,
     "batch_diagnose.py": _R_OPS,
-    "blast_radius.py": _R_OPS,
     "blind_spot_discovery.py": _R_OPS,
     "byo_check.py": _R_OPS,
     "config_diff.py": _R_OPS,

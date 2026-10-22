@@ -74,7 +74,7 @@ The order is root → each level downwards → tenant file; what is applied late
 Two exceptions:
 
 - **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config. A root platform file's `tenants.<id>._metadata` is not part of this chain: it merges with the tenant file's `_metadata` key by key ([#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370); the rule is in [config-driven](../design/config-driven.en.md)).
-- **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` shows is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list, with each entry's name, the file declaring it and whether the tenant owns it; tenant-api and da-guard take one place only: the tenant's own, else its `tenants:` entry in a root platform file, else the bound profile, else a subdirectory `_defaults.yaml`'s (marked `not_served`, not served). `merged_hash` is not affected: `describe_tenant.py --show-sources` / `--all` and `tenant-verify` print the value da-guard computes, the same as tenant-api's, and it does not change with file names. The blast-radius report takes "did the values change" from `merged_hash` and compares custom alerts separately, by each union entry's content, name and whether the tenant owns it — not by the file declaring it: moving a file is not a change, while retuning a platform recipe's threshold lists every tenant inheriting it ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)). This union is not what the exporter serves: the exporter does not serve `_custom_alerts` from a `_defaults.yaml` and takes each tenant's from one source only (see ADR-024 §3 "Where a recipe is declared"). Per [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) Consequences, `describe_tenant` moves to showing only the list the exporter serves, and the blast-radius report is retired in favour of config-diff ([#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)).
+- **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) is not merged across levels**: each tenant takes it from one place only — its own, else its `tenants:` entry in a root platform file, else the bound profile; a subdirectory `_defaults.yaml`'s list is marked `not_served` and not served (see ADR-024 §3 "Where a recipe is declared"). tenant-api, da-guard and `describe_tenant.py` all follow this rule: the effective config `describe_tenant.py` shows is the one da-guard computes, and beside it the tool lists `custom_alerts` — the exporter's verdict on each entry of the list the exporter takes (name, recipe and status: `served`, switched off `disabled`, `rejected`, or `duplicate` of an earlier entry); a list marked `not_served` is not among them. `merged_hash` is da-guard's value too, the same as tenant-api's, and does not change with file names. "What does this conf.d change affect" is answered by config-diff ([ADR-037](037-config-diff-compares-rendered-output.en.md)); the blast-radius report that answered the same question by reading `describe_tenant`'s output is retired.
 
 ### 3. Example
 
@@ -204,7 +204,7 @@ So `sha256sum` of any file never matches a `merged_hash`. And because `merged_ha
 
 **When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
 
-**Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics and for the blast-radius report (how many tenants one change affected):
+**Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics, including the affected-tenant count (`da_config_blast_radius_tenants_affected`, how many tenants one change affected):
 
 ```
 the tenant file's source_hash changed  → applied (reason=source; a new tenant reason=new; a deleted file reason=delete)
@@ -230,7 +230,7 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 
 ### 8. Changes to some top-level keys are invisible in the effective config
 
-For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
+For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
 - **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
@@ -274,18 +274,17 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 
 ## Consequences
 
-- **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the blast-radius report shows whom a change really affected.
+- **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the affected-tenant metrics show whom a change really affected.
 - **Costs**:
   - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
-  - `_custom_alerts` differs between the effective config `describe_tenant.py` shows and the Go implementation (Decision 2); the `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is Go's value and is not affected (the two `merged_hash` values of `--what-if` are da-guard's too, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)).
   - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree.
 
 ## Alternatives Considered
 
 ### A: A single hash (tenant file only)
 
-❌ When defaults change, it cannot tell which tenants were really affected and must record every tenant as affected, which makes the blast-radius report meaningless. The exporter rebuilds the whole config on every reload, so what the dual hash buys is correct attribution, not saved loading work.
+❌ When defaults change, it cannot tell which tenants were really affected and must record every tenant as affected, which makes the affected-tenant metrics meaningless. The exporter rebuilds the whole config on every reload, so what the dual hash buys is correct attribution, not saved loading work.
 
 ### B: File-system events (inotify / fsnotify) instead of periodic scans
 

@@ -51,7 +51,6 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
-      _go_lower: "#3141 helper of custom_alert_disabled (Go's strings.ToLower); table-covered by threshold_value_matrix.json's custom_alert_disabled column (written by Go, DİSABLE rows included), which the case-folding mutation is checked against"
       parse_threshold_number: "#3140 table-covered by threshold_value_matrix.json (float_ok, written by Go's parseThresholdNumber)"
       _go_underscores_ok: "#3140 port of Go's strconv.underscoreOK behind parse_threshold_number; table-covered by threshold_value_matrix.json (`1_000`, `1__0`, `_1`, `0x_1p4`, `0x1p_4` rows, float_ok written by Go)"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
@@ -74,7 +73,6 @@ modules:
       tenant_id_rule: "ADR-035 schema reader (definitions.tenantId pattern + description, cached, fail-closed); pinned against the schema and the Go copy's case table by tests/shared/test_tenant_id_rule.py"
       duration_rule: "#2490 schema reader (definitions.duration pattern + minLength + description, cached, fail-closed); pinned against Go model.ParseDuration by tests/shared/test_am_duration_parity.py"
       am_duration_seconds: "#2490 Alertmanager duration parser; its law is Go model.ParseDuration, so it is table-pinned row by row against tests/shared/am_duration_matrix.json (written by Go) in tests/shared/test_am_duration_parity.py rather than re-derived by a generator"
-      custom_alert_disabled: "#3071 custom-alert opt-out as resolveOneCustomAlert decides it; table-pinned row by row against the Go-written custom_alert_disabled column of tests/shared/threshold_value_matrix.json in tests/shared/test_threshold_value_parity.py"
       split_threshold_severity: "#3071 threshold value:severity grammar; its law is Go's splitThresholdSeverity, so it is table-pinned row by row against tests/shared/threshold_value_matrix.json (written by Go) in tests/shared/test_threshold_value_parity.py rather than re-derived by a generator"
       positive_seconds: "#2942 argparse type: accepts a value iff float() parses it to a finite number above 0; boundary table in tests/shared/test_lib_python.py::TestPositiveSeconds"
       non_negative_seconds: "#2966 argparse type: accepts a value iff float() parses it to a finite number from 0 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestNonNegativeSeconds"
