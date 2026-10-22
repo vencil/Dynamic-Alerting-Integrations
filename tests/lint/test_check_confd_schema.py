@@ -557,6 +557,144 @@ class TestRoutingNullAndDefaultsOverrides:
         assert len(viol) == 1 and expect in viol[0], viol
 
 
+class TestRootPlatformTenantsBlock:
+    """#2743: a ROOT platform file's `tenants:` block is the platform's
+    per-tenant default — the exporter (platform_overlay.go) and the route
+    generator merge it as the tenant's own values, the tenant file winning
+    per key. Each `tenants.<id>` entry there is therefore held to the SAME
+    tenant-entry definition as a tenant file (tenant-config.schema.json's
+    `tenants`), and named `<file>: … @ /tenants/<id>/…`. Which files count is
+    Go's verdict (da-guard parse-tree: a `_` file at the root that the
+    exporter reads), not a name rule here."""
+
+    _ENTRY = ("  t1:\n    _routing:\n      receiver: {type: webhook, url: 'https://h.example.com/x'}\n"
+              "      group_by: alertname\n")
+    _TENANT = "tenants:\n  t1:\n    mysql_connections: \"70\"\n"
+
+    def _lint(self, confd, schema, platform_schema):
+        return validate_dir(confd, schema, jsonschema, platform_schema)
+
+    def test_the_issue_shape_is_a_violation_named_by_file_and_path(
+            self, confd, schema, platform_schema):
+        _write(confd, "_defaults.yaml",
+               "defaults:\n  mysql_connections: 80\ntenants:\n" + self._ENTRY)
+        _write(confd, "t1.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema)
+        assert viol == ["ERROR: _defaults.yaml: 'alertname' is not of type 'array', "
+                        "'null' @ /tenants/t1/_routing/group_by"], viol
+
+    def test_same_verdict_as_the_same_entry_in_a_tenant_file(
+            self, confd, schema, platform_schema):
+        """One definition: the message, file name aside, is the tenant file's."""
+        with tempfile.TemporaryDirectory() as other:
+            _write(confd, "_defaults.yaml", "tenants:\n" + self._ENTRY)
+            _write(confd, "t1.yaml", self._TENANT)
+            _write(other, "t1.yaml", "tenants:\n" + self._ENTRY)
+            _c, plat, _s = self._lint(confd, schema, platform_schema)
+            _c, ten, _s = self._lint(other, schema, platform_schema)
+        assert [v.replace("_defaults.yaml", "F") for v in plat] == \
+               [v.replace("t1.yaml", "F") for v in ten], (plat, ten)
+
+    @pytest.mark.parametrize("entry, named", [
+        ("  T1:\n    mysql_connections: \"70\"\n", "/tenants"),          # tenant-id rule
+        ("  t1:\n    _routng: {}\n", "unknown key '_routng'"),          # closed `_` namespace
+        ("  t1:\n    _metadata:\n      dbType: mariadb\n", "dbType"),   # #880 shape
+        ("  t1: [a]\n", "@ /tenants/t1"),
+    ], ids=["tenant-id", "reserved-key-typo", "metadata", "entry-not-a-mapping"])
+    def test_each_tenant_entry_rule_applies(self, confd, schema, platform_schema,
+                                            entry, named):
+        _write(confd, "_defaults.yaml", "tenants:\n" + entry)
+        _write(confd, "t1.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema)
+        assert len(viol) == 1 and viol[0].startswith("ERROR: _defaults.yaml: ") \
+            and named in viol[0], viol
+
+    def test_a_valid_block_passes(self, confd, schema, platform_schema):
+        _write(confd, "_defaults.yaml",
+               "tenants:\n  t1:\n    mysql_connections: \"60\"\n    _severity_dedup: disable\n"
+               "    _metadata: {owner: dba}\n    _profile: std\n"
+               "profiles:\n  std: {}\n")
+        _write(confd, "t1.yaml", self._TENANT)
+        assert self._lint(confd, schema, platform_schema)[1] == []
+
+    def test_every_root_defaults_document_is_held(self, confd, schema, platform_schema):
+        """`_defaults-multidb.yaml` is a root platform file to the exporter too."""
+        _write(confd, "_defaults-multidb.yaml", "tenants:\n" + self._ENTRY)
+        _write(confd, "t1.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema)
+        assert [v.split(": ", 2)[1] for v in viol] == ["_defaults-multidb.yaml"], viol
+
+    def test_another_root_platform_file_is_held_too(self, confd, schema, platform_schema):
+        """Not only `_defaults*`: the exporter overlays the `tenants:` block of
+        any root `_` file it reads (`isRootPlatformKey`) — `_profiles.yaml`
+        here, whose own shape stays another validator's (still listed as
+        skipped)."""
+        _write(confd, "_profiles.yaml", "profiles:\n  std: {}\ntenants:\n" + self._ENTRY)
+        _write(confd, "t1.yaml", self._TENANT)
+        _c, viol, skipped = self._lint(confd, schema, platform_schema)
+        assert viol == ["ERROR: _profiles.yaml: 'alertname' is not of type 'array', "
+                        "'null' @ /tenants/t1/_routing/group_by"], viol
+        assert skipped == ["_profiles.yaml"]
+
+    def test_a_nested_platform_file_is_not_held(self, confd, schema, platform_schema):
+        """Control: below the root no plane reads the block (#1576)."""
+        os.mkdir(os.path.join(confd, "sub"))
+        _write(confd, "sub/_defaults.yaml", "tenants:\n" + self._ENTRY)
+        _write(confd, "sub/_profiles.yaml", "tenants:\n" + self._ENTRY)
+        _write(confd, "sub/t1.yaml", self._TENANT)
+        assert self._lint(confd, schema, platform_schema)[1] == []
+
+    def test_an_unselected_carrier_is_not_held(self, confd, schema, platform_schema):
+        """Control: a carrier the root's chain does not select is read by no
+        reader (parse-tree's `not_read`)."""
+        _write(confd, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+        _write(confd, "_defaults.yml", "tenants:\n" + self._ENTRY)
+        _write(confd, "t1.yaml", self._TENANT)
+        assert self._lint(confd, schema, platform_schema)[1] == []
+
+    def test_which_files_are_root_platform_files_is_gos_verdict(self, confd):
+        """`Entry.root_platform_file` over a real parse-tree listing: a root
+        `_` file the exporter reads; not a tenant file, not a nested `_`
+        file, not the carrier the root's chain does not select."""
+        import _lib_parse_cache
+        os.mkdir(os.path.join(confd, "sub"))
+        for rel in ("_defaults.yaml", "_defaults.yml", "_profiles.yaml",
+                    "t1.yaml", "sub/_defaults.yaml", "sub/_profiles.yaml"):
+            _write(confd, rel, "{}\n")
+        with _lib_parse_cache.session():
+            got = {e.path: e.root_platform_file
+                   for e in _lib_parse_cache.reader_for(confd).listing().config_files()}
+        assert got == {"_defaults.yaml": True, "_defaults.yml": False,
+                       "_profiles.yaml": True, "t1.yaml": False,
+                       "sub/_defaults.yaml": False, "sub/_profiles.yaml": False}, got
+
+    def test_cli_says_a_skipped_files_tenants_block_was_checked(self, confd):
+        """Review nit: `_profiles.yaml` is skipped for its own shape, yet its
+        `tenants:` block is checked and counted — the output says both, and
+        the count does not call it a tenant file."""
+        _write(confd, "_profiles.yaml",
+               "profiles:\n  std: {}\ntenants:\n  t1:\n    mysql_connections: \"60\"\n")
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stderr
+        lines = result.stdout.splitlines()
+        assert lines[0].startswith("skipped 1 meta-file(s) ") and lines[0].endswith(
+            ": _profiles.yaml"), lines
+        assert lines[1] == ("  of which 1 root platform file(s) had their `tenants:` block "
+                            "checked against tenant-config.schema.json: _profiles.yaml"), lines
+        assert lines[2] == ("OK: 2 conf.d file(s) valid against the tenant-config / "
+                            "platform-defaults / routing-profiles schemas"), lines
+
+    def test_cli_exit_one(self, confd):
+        _write(confd, "_defaults.yaml",
+               "defaults:\n  mysql_connections: 80\ntenants:\n" + self._ENTRY)
+        _write(confd, "t1.yaml", self._TENANT)
+        result = _run(confd)
+        assert result.returncode == EXIT_VIOLATION, (result.stdout, result.stderr)
+        assert "ERROR: _defaults.yaml: 'alertname' is not of type 'array', 'null' " \
+               "@ /tenants/t1/_routing/group_by" in result.stderr, result.stderr
+
+
 class TestPlatformSchemaDriftGuard:
     """platform-defaults.schema.json's enumerated _* keys must stay a superset of
     the reserved-key SSOT (_lib_constants.py) — else a newly added reserved key
@@ -689,7 +827,7 @@ class TestUnresolvableCrossFileRef:
         _write(confd, "t1.yaml", self._TENANT)
         result = _run_with_schema(confd, _SCHEMA)
         assert result.returncode == EXIT_OK, result.stdout + result.stderr
-        assert "OK: 2 tenant conf.d file(s)" in result.stdout
+        assert "OK: 2 conf.d file(s) valid" in result.stdout
 
     def test_checked_registry_resolves_every_repo_ref(self, schema, platform_schema):
         from check_confd_schema import _cross_file_refs, checked_schema_registry
@@ -718,7 +856,7 @@ class TestHiddenEntries:
         _write(confd, ".ghost.yaml", "a: [1, 2\n")
         result = _run(confd)
         assert result.returncode == EXIT_OK, result.stdout + result.stderr
-        assert "OK: 1 tenant conf.d file(s)" in result.stdout
+        assert "OK: 1 conf.d file(s) valid" in result.stdout
 
     def test_control_broken_yaml_in_visible_subdir_is_still_read(self, confd):
         """Sensitivity control: the same file under a VISIBLE directory must
