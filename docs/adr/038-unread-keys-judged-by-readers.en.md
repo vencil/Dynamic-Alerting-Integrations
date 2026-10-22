@@ -24,6 +24,8 @@ Revised 2026-10-17: the custom alert compiler compiles the exporter's own readin
 
 Revised 2026-10-21: the generator half follows the registry's declarations, kept consistent with the code by the two-way probe, rather than measuring the generator's output on every verdict (decisions 1 and 5); Go's write check keeps only its value and structure checks and leaves key names to the shared verdict (decision 2); a `_` key in a profile is judged directly from the registry's profile layer, not through tenants (decision 4); before the generator container is wired to the shared verdict, served-values must be able to compute only the named tenants, within the memory and time budget of ADR-036 §3 (decisions 5 and 11).
 
+Revised 2026-10-22: the registry also records each key's value shape, which exporter-side function judges the value, and whether a batch operation may remove the key (decision 2); for a key the exporter reads, the write gate judges the value with the exporter's own parser (decision 1); new decision 12 sets how a bad value already on disk is handled.
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -111,6 +113,8 @@ A key's readers come only from measurement (for the generator half, the measurem
 
 No separate piece of code describing "which keys the generator reads" is written for other readers to imitate; the registry is only a declaration, checked both ways by the probe against the generator's actual output. Whether a value is valid under the generator's semantics (for example, whether the profile that `_routing_profile` points to exists) is still judged only by the generator, consistent with [ADR-036](./036-single-parser-effective-config.en.md).
 
+Values follow the same principle. For a key the exporter reads, whether its value is valid is judged at the write gate by the exporter's own parser: the write check calls the same code the exporter reads the value with, and no separate word list or rule is written. For a key the generator reads, the value is still judged only by the generator; the write gate does not copy the generator's rules.
+
 ### 2. The reserved-key registry
 
 Facts that cannot be measured go in one JSON registry, kept inside the exporter's Go module (`components/threshold-exporter/app/pkg/config/`). Its content is limited to the top-level `_` namespace:
@@ -119,6 +123,13 @@ Facts that cannot be measured go in one JSON registry, kept inside the exporter'
 - **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: for example, the registry declares `_severity_dedup` under `defaults:` of a subdirectory's `_defaults.yaml` as read by the exporter and not by the generator.
 - **Retired keys** and the hint text for users.
 - Description text (for the schema description and the explain output).
+- Each key's **value**:
+  - Shape: `scalar`, `mapping`, `list`, or `scalar_or_mapping` (both forms are read, for example `_silent_mode: warning` and `_silent_mode: {target: warning}`). Required for a key read in a tenant's config; a key read only at the top level of a root platform file may leave it out.
+  - `check`: which exporter-side function judges the value. Only a key the exporter reads can have one; Go binds the function under the same name, and a Go test requires every name the registry uses to be bound and every binding to be used by some key.
+  - `refers_to`: which layer the value names an entry of; for example, `_profile`'s value is the name of a profile in the profile layer.
+- **Whether a batch operation may remove the key** (`batch.unset`): whether a tenant-api batch operation can unset it. A retired key can always be removed without saying so: no reader reads it, so removing it changes no output, and while it stays in the file the write check refuses every other write to the tenant, so a batch must be able to remove it. A key that decides the tenant's scope (`_metadata`, and the keys derived in the next paragraph) cannot be made removable; generating the constants refuses such a registry.
+
+tenant-api derives two lists from these fields instead of keeping its own: a key whose shape is `mapping` or `list` cannot be set by a batch patch's string value; and a key whose `refers_to` layer is one the exporter reads `_metadata` in changes the tenant's `_metadata`, that is, its environment and domain, so it decides the tenant's scope (today only `_profile`).
 
 Today's three reserved-key lists are instead generated from the registry. CI regenerates them and diffs; any difference turns it red:
 
@@ -138,6 +149,8 @@ Today's three reserved-key lists are instead generated from the registry. CI reg
 | `expires:` on a key declared only in `optional_overrides`, with no platform default | `read` | blocks |
 | `expires:` on a `_critical` key, a dimension key or a reserved key (never takes effect, never reverts) | `read` | blocks |
 
+Value checks go the same way: the function a registry `check` names is called by the Go write check (decision 1). For example, the exporter reads `_silent_mode: purple` (the verdict is `read`) but does not know the value and silences nothing; what blocks it is this value check, not the key-name verdict. How a bad value already on disk is handled is decision 12.
+
 The key-name part means: a `_` key the registry does not list, a `_` key the registry lists but that is not read at the tenant layer (such as `_policies` or `_routing_defaults` in a tenant file), a key under the `_routing` prefix the generator does not read, a threshold key in neither the platform defaults nor `optional_overrides` (dimension keys aside, see the next paragraph), and a `_critical` key whose base has no platform default. No reader reads these and the shared verdict judges them `unread`, so it judges them instead, and one place decides each question. The check on the value of a dimension key's `version` label is a value check and stays in Go; the rename hints for old key names are migration notes that block nothing, and stay in Go too.
 
 A dimension key whose base is in neither the platform defaults nor `optional_overrides` is blocked by Go today, but the exporter serves it anyway and the verdict is `read`. Go's block is a false one: once that part is deleted, tenant-api accepts such a key; its problem is that no rule reads it, which decision 10 reports (only ever advisory).
@@ -146,7 +159,7 @@ The Go key-name part on the tenant-api entry point is deleted in the same step a
 
 At run time each tool reads the generated constants, not this JSON, so the da-tools image does not need to carry an extra file. The registry sits inside the Go module so that if the Go side later embeds it directly, none of the three Go programs (exporter, da-guard, tenant-api) has to copy it again.
 
-**The scope is top-level key names only.** Sub-key tables follow the program that reads them: the sub-keys of `_routing` and `_metadata` are defined by code, and the schema and other sides are pinned by tests; the fields of `_custom_alerts` entries are written in Go's recipe contract file, from which the schema is generated:
+**The scope is top-level key names and value shapes only.** Which words a value accepts (for example, which modes `_silent_mode` knows) and the sub-key tables follow the program that reads them and stay out of the registry: the sub-keys of `_routing` and `_metadata` are defined by code, and the schema and other sides are pinned by tests; the fields of `_custom_alerts` entries are written in Go's recipe contract file, from which the schema is generated:
 
 | Sub-keys | Source of truth |
 |---|---|
@@ -274,6 +287,19 @@ Each item can ship on its own:
 
 Changing the gates to "block when judged" is not part of this ADR and is driven by [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016). The hand-written key-name checks are deleted in the same step as, or after, the gate on the same entry point starts blocking. The one exception is a verdict that does not complete (da-guard failing or timing out, or `undecidable`): under decision 5 it is only a notice and never blocks, so once tenant-api's Go key-name check is deleted, a misspelt key blocked today is accepted on that path; apart from it, no intermediate release is looser than the one before. This degraded path is listed under "Consequences and known limits", and whether to keep it is decided separately before the Go key-name check is deleted.
 
+### 12. Bad values already on disk
+
+When the write gate gains a value check, the repo may already hold values that fail it. Blocking them as usual would refuse every change a tenant makes to any other key because of an old value nobody touched. The approach follows Kubernetes CRD validation ratcheting (KEP-4008: when an object is updated, a newly added validation rule applies only to the fields the update changes, and old values left unchanged pass):
+
+- **"Unchanged" is judged on what the reader parses**, not on the raw text. Quoting, key order in a mapping, comments, or case that the reader ignores anyway do not count as a change as long as the exporter parses the same result. For example, `Purple` changed to `purple` reads the same to the exporter and is unchanged; `purple` changed to `orange` is a change.
+- **An unchanged bad value becomes a notice and the write is accepted**; a bad value that is new or changed is blocked.
+- **When the file before the write cannot be read, the check is strict**: a new tenant, a missing file, or one that cannot be parsed leaves nothing to compare against, so everything is blocked as usual.
+- **It applies only to the newly added value checks.** The existing checks (for example, `_profile` naming a profile that does not exist, or a scheduled value's `expires:` not being an RFC3339 time) are not relaxed by it.
+- **It applies to every tenant in the file**: one file can hold several tenants, and when one of them is written, an untouched bad value of another is also only a notice.
+- Reading a tenant's config (GET) uses the content on disk as its own baseline and reports an existing bad value as a notice.
+
+This differs from how the generator gate treats a problem that was already there before the write. The generator gate marks it `pre_existing` but blocks all the same. The difference is in the failure direction and the blast radius: a bad `_silent_mode` makes the exporter silence nothing, so alerts are still sent, which fails on the safe side and affects only that one key; blocking would leave the tenant unable to change anything until it is fixed. Some of the problems the generator blocks make the whole conf.d refuse to render (for example, a `_severity_dedup` value the generator does not know), so letting them through costs far more.
+
 ## Example
 
 For the example in the Background section above, the verdict output (the people-readable version of explain, excerpt; the levels are those that apply once the gates change to "block when judged"):
@@ -291,6 +317,17 @@ db-a
 
 The input and today's measured output are in "Background"; this table is the verdict this ADR specifies, with each column produced per decisions 1, 4, 8 and 9.
 
+Value checks and decision 12: the exporter does not know `_silent_mode: purple` (it logs one line, `WARN: unknown silent mode "purple" for tenant=…` (abridged), and silences nothing). Once the write gate has the value check, this ADR specifies tenant-api's results for it as follows:
+
+| Write | Before, on disk | Result |
+|---|---|---|
+| PUT the tenant config with `_silent_mode: purple` | no such key, or `warning` | refused (400) |
+| PUT the tenant config changing only another key | `_silent_mode: purple` | written, the response carries a notice |
+| PUT the tenant config changing `_silent_mode` to `orange` | `_silent_mode: purple` | refused (400) |
+| Batch patch `_silent_mode: purple` | no such key | that operation fails, nothing written |
+| Batch patch of another key | `_silent_mode: purple` | written, that result carries a notice |
+| GET the tenant config | `_silent_mode: purple` | the response carries a notice |
+
 ## Consequences and known limits
 
 - **The reserved-key list has only one source left**: adding a reserved key only changes the registry, followed by regeneration; each reader's own key-name checks are replaced by the shared verdict.
@@ -299,6 +336,8 @@ The input and today's measured output are in "Background"; this table is the ver
 - **tenant-api accepts when the verdict does not complete**: once tenant-api's Go key-name check is deleted, a write while da-guard fails or times out carries only a notice and is accepted (decision 5), so a misspelt key that Go blocks today reaches the repo on that path.
 - **Typos and intentional omissions are not told apart**: for a threshold key the platform has not declared, the verdict does not know whether the tenant misspelled it or the platform forgot to declare it; both are reported with the same reason.
 - **Rule reads are based on the rule packs in the repo**: if the customer's own rules read a threshold, it will be reported as "no rule reads it" unless declared as an external reader. That is why this item is always advisory only.
+- **The schema is narrower than the reader**: the JSON schema is a hint for editors; the reader judges the value. The exporter reads `_silent_mode` case-insensitively, trims surrounding whitespace, and also knows disabling words such as `disabled`, `off` and `false`; the schema's enum has none of these spellings. An unquoted YAML `false` or `off` is a boolean to some parsers, which a string enum cannot express. So a value the schema flags is not necessarily wrong; the reader decides.
+- **An unchanged bad value stays**: under decision 12 an untouched bad value is only a notice, so it stays in the file until someone changes that key, and meanwhile it still silences nothing.
 - **The probe does not cover two kinds**: annotation keys (`_namespaces`), and keys that are read but do not change the output. These rely on explicit marks in the registry.
 - **Cost of counterfactual recomputation**: the number of recomputation rounds equals the most `disable`s any single tenant has, and each round is one served-values. It does not go into the write check.
 - **Problems found while measuring, handled separately**:
@@ -317,6 +356,7 @@ The input and today's measured output are in "Background"; this table is the ver
 ## Where it is implemented
 
 - Registry: `components/threshold-exporter/app/pkg/config/reserved_keys.json`; `scripts/tools/dx/sync_schema.py --update` generates, `--check` diffs (run in CI by `tests/dx/test_sync_schema.py`).
+- Lookups of value shapes, check bindings, the keys a batch may remove and the keys that decide a tenant's scope: `components/threshold-exporter/app/pkg/config/reserved_values.go`.
 - Probe: `tests/shared/test_reserved_key_probes.py`.
 - Shared function: a new module under `scripts/tools/`, called by validate-config, the generator and the generator container.
 - Exporter measurement: `da-guard served-values` (`components/threshold-exporter/app/cmd/da-guard/served_values.go`).

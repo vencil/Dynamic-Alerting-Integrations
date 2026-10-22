@@ -26,16 +26,19 @@ var operationalLogTree = map[string]string{
 	"tc.yaml":        "tenants:\n  tc:\n    _silent_mode:\n      target: all\n      expires: \"nope\"\n",
 	"td.yaml":        "tenants:\n  td:\n    _state_maintenance: \"expires: [\"\n",
 	"te.yaml":        "tenants:\n  te:\n    _state_maintenance:\n      expires: \"nope\"\n",
+	// #3227: an unknown structured target used to be dropped with no WARN.
+	"tg.yaml": "tenants:\n  tg:\n    _silent_mode:\n      target: purple\n",
 	// A healthy tenant, so the states compared below are not empty.
 	"tf.yaml": "tenants:\n  tf:\n    _silent_mode: critical\n",
 }
 
 var operationalLogLines = []string{
-	`WARN: unknown silent mode "bogus" for tenant=ta`,
+	`WARN: unknown silent mode "bogus" for tenant=ta, ignoring (valid: warning, critical, all, disable)`,
 	`WARN: failed to parse structured _silent_mode for tenant=tb`,
 	`WARN: invalid expires "nope" in _silent_mode for tenant=tc`,
 	`WARN: failed to parse structured _state_maintenance for tenant=td`,
 	`WARN: invalid expires "nope" in _state_maintenance for tenant=te`,
+	`WARN: unknown silent mode target "purple" in structured _silent_mode for tenant=tg, ignoring (valid: warning, critical, all, disable)`,
 }
 
 // sortedStates makes two readings comparable: the resolvers walk maps.
