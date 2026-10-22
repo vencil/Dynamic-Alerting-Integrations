@@ -61,3 +61,38 @@ func TestLoad_SingleFile_WarnsScheduledReserved(t *testing.T) {
 		t.Errorf("log = %q", got)
 	}
 }
+
+// A subtree `_defaults.yaml` is named too — same judgement, same line,
+// "<file>: defaults.<key>" — on the cold load and on a reload that changes
+// only a tenant file.
+func TestLoad_DirMode_WarnsSubtreeScheduledReserved(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  key_0: 10\n")
+	writeTestYAML(t, filepath.Join(dir, "sub", "_defaults.yaml"), "defaults:\n"+
+		"  _severity_dedup: {default: disable, overrides: [{window: \"03:00-04:00\", value: enable}]}\n"+
+		"  _silent_mode: {default: disable, expires: \"2099-01-01T00:00:00Z\"}\n"+
+		"  _metadata: {default: x, owner: team-a}\n")
+	writeTestYAML(t, filepath.Join(dir, "sub", "t-a.yaml"), "tenants:\n  t-a:\n    key_0: \"1\"\n")
+
+	var buf syncBuffer
+	m := NewConfigManagerWithDebounce(dir, 0)
+	m.SetLogger(log.New(&buf, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := "WARN: 2 config entries write a reserved key with a time window or expires (`overrides:` / `expires:` / `reason:`, #3269): " +
+		"sub/_defaults.yaml: defaults._severity_dedup, sub/_defaults.yaml: defaults._silent_mode —"
+	if got := buf.String(); !strings.Contains(got, want) {
+		t.Fatalf("log = %q, want %q", got, want)
+	}
+
+	writeTestYAML(t, filepath.Join(dir, "sub", "t-a.yaml"), "tenants:\n  t-a:\n    key_0: \"2\"\n")
+	before := len(buf.String())
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := buf.String()[before:]; !strings.Contains(got, want) {
+		t.Errorf("reload log = %q, want %q", got, want)
+	}
+}

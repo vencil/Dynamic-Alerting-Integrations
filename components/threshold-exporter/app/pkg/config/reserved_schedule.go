@@ -28,6 +28,7 @@ package config
 //     value is exactly as it was, schedule included.
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -163,4 +164,31 @@ func sameSchedule(a, b ScheduledValue) bool {
 		return false
 	}
 	return a.Expiry == nil || *a.Expiry == *b.Expiry
+}
+
+// SubtreeScheduledReserved is ScheduledReservedEntries for the subtree
+// defaults files of a tree (#3269): every reserved key a conf.d subtree
+// `_defaults.yaml` writes with a schedule, as "<root-relative path>:
+// defaults.<key>", sorted (nil when none). parsed is the defaults-chain
+// cache (absolute path → the file's defaults level, as applySubtreeDefaults
+// reads it); the conf.d root's own `_defaults.yaml` is skipped by path, as
+// there (its `defaults:` is decoded by the typed decode, which refuses a
+// mapping there). The judgement is rawServedValue's — scheduledReserved —
+// so the overlay takes the same values' `default` alone (or refuses a
+// windowed `_state_` key outright, #1569).
+func SubtreeScheduledReserved(root string, parsed map[string]map[string]any) []string {
+	rootDir := AbsScanRoot(root)
+	var out []string
+	for path, level := range parsed {
+		if filepath.Dir(filepath.Clean(path)) == rootDir {
+			continue
+		}
+		for k, v := range level {
+			if _, ok := rawServedValue(k, v); ok {
+				out = append(out, subtreeRelPath(rootDir, path)+": defaults."+k)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

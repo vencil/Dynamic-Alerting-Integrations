@@ -4,6 +4,8 @@ import (
 	"log"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // scheduledReservedOf lists, sorted, the entries of the config being
@@ -18,16 +20,15 @@ import (
 // so an unchanged file is named on a reload as on the cold load); single
 // file mode reads cfg, which is that file's own decode.
 //
-// ⚠️ A subtree `_defaults.yaml` is not a partial: a schedule it writes on
-// `_silent_mode` / `_severity_dedup` / a `_state_` key is dropped by the
-// subtree overlay the same way (servedValue) without a line here — da-guard
-// already names every reserved key in a subtree defaults file
-// (subtree_default_reserved_key).
-func scheduledReservedOf(cfg *ThresholdConfig, flatScan *flatScanState) []string {
+// A subtree `_defaults.yaml` is not a partial: its entries come from the
+// defaults-chain cache the overlay reads (subtree, the committed
+// hierarchy's parsedDefaults), judged by the same function
+// (config.SubtreeScheduledReserved), as "<file>: defaults.<key>".
+func scheduledReservedOf(cfg *ThresholdConfig, flatScan *flatScanState, root string, subtree map[string]map[string]any) []string {
 	if flatScan == nil {
 		return append([]string(nil), cfg.ScheduledReservedEntries()...)
 	}
-	var out []string
+	out := config.SubtreeScheduledReserved(root, subtree)
 	for name := range flatScan.configs {
 		c := flatScan.configs[name]
 		for _, e := range c.ScheduledReservedEntries() {
@@ -55,7 +56,7 @@ func warnScheduledReserved(logger *log.Logger, entries []string) {
 	}
 	logger.Printf("WARN: %d config entries write a reserved key with a time window or expires "+
 		"(`overrides:` / `expires:` / `reason:`, #3269): %s%s — a reserved key does not support them: "+
-		"only each value's `default` is read and the rest is ignored. Remove them (tenant-api refuses "+
+		"only each value's `default` is ever read and the rest is ignored. Remove them (tenant-api refuses "+
 		"to write this form; for a recurring maintenance window use `_state_maintenance` with `recurring:`)",
 		len(entries), strings.Join(shown, ", "), more)
 }

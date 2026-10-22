@@ -269,3 +269,32 @@ func TestScheduledReserved_WriteAndRead(t *testing.T) {
 		}
 	})
 }
+
+// The ratchet compares the expiry field by field: on a file holding
+// `{default, expires, reason}`, a PUT that changes only `expires:` or only
+// `reason:` is a change (400); the same value is a notice.
+func TestScheduledReserved_ExpiryChangeIsRefused(t *testing.T) {
+	t.Parallel()
+	doc := func(expires, reason string) string {
+		return "tenants:\n  t-a:\n    _silent_mode: {default: disable, expires: \"" + expires + "\", reason: \"" + reason + "\"}\n"
+	}
+	const sched = "_silent_mode writes `expires:` and `reason:`"
+	onDisk := doc("2099-01-01T00:00:00Z", "r1")
+	for _, c := range []struct {
+		name, body string
+		code       int
+	}{
+		{"unchanged", onDisk, http.StatusOK},
+		{"expires only", doc("2099-02-01T00:00:00Z", "r1"), http.StatusBadRequest},
+		{"reason only", doc("2099-01-01T00:00:00Z", "r2"), http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSilentModeFixture(t, onDisk)
+			w := putTenantIn(t, f, "t-a", c.body)
+			if w.Code != c.code || !strings.Contains(w.Body.String(), sched) {
+				t.Errorf("%d %s, want %d naming %q", w.Code, w.Body.String(), c.code, sched)
+			}
+		})
+	}
+}

@@ -518,7 +518,10 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	publishMetadataStringForm(m.getMetrics(), m.getLogger(), metadataStringFormOf(cfg, flatScan))
 	// #3269: the reserved keys written with a schedule, whose `default`
 	// alone is read.
-	warnScheduledReserved(m.getLogger(), scheduledReservedOf(cfg, flatScan))
+	m.mu.RLock()
+	parsedDefaults := m.hierarchy.parsedDefaults
+	m.mu.RUnlock()
+	warnScheduledReserved(m.getLogger(), scheduledReservedOf(cfg, flatScan, m.path, parsedDefaults))
 	// #2914: routing-layer keys in a threshold profile, which the expansion
 	// ignores.
 	publishProfileRoutingKeys(m.getMetrics(), m.getLogger(), profileRoutingKeysOf(cfg, flatScan, m.path))

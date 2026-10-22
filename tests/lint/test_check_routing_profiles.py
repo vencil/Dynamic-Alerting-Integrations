@@ -584,3 +584,54 @@ class TestTreeShapes:
         }
         msgs = validate(data, strict=True)
         assert not any("unknown profile" in m for m in msgs), msgs
+
+
+# ===========================================================================
+# #3269: a `_routing_profile` that is not a name — the generator's verdict
+# ===========================================================================
+
+class TestRoutingProfileNotAName:
+    """The lint reads `_routing_profile` with the route generator's own
+    function (`_grar_parse.routing_profile_ref`): a value that is no name is
+    an ERROR whatever --strict says, worded as the generator's
+    routing_profile_invalid — it used to be skipped in silence."""
+
+    @pytest.mark.parametrize("value", [
+        {"default": "p1", "overrides": [{"window": "01:00-02:00", "value": "p2"}]},
+        {"default": "p1"}, 1, True, ["p1"],
+    ])
+    def test_is_the_generators_error(self, config_dir, value):
+        sys.path.insert(0, os.path.join(_REPO, 'scripts', 'tools', 'ops'))
+        from _grar_parse import load_tenant_tree  # noqa: E402
+        _write(config_dir, '_routing_profiles.yaml',
+               {'routing_profiles': {'p1': {'receiver': {'type': 'slack'}}}})
+        _write(config_dir, 't-a.yaml', {'tenants': {'t-a': {'_routing_profile': value}}})
+        data = _collect_data(config_dir)
+        assert data["profile_refs"] == {}
+        errors = [m for m in validate(data) if m.startswith("ERROR")]
+        gen = [e.message for e in load_tenant_tree(config_dir).field_type_errors
+               if e.kind == "routing_profile_invalid"]
+        assert len(gen) == 1, gen
+        assert errors == [f"ERROR: {gen[0]}"], errors
+
+    def test_cli_exits_1_without_strict(self, config_dir):
+        import subprocess
+        _write(config_dir, '_routing_profiles.yaml',
+               {'routing_profiles': {'p1': {'receiver': {'type': 'slack'}}}})
+        _write(config_dir, 't-a.yaml',
+               {'tenants': {'t-a': {'_routing_profile': {'default': 'p1'}}}})
+        script = os.path.join(_REPO, 'scripts', 'tools', 'lint', 'check_routing_profiles.py')
+        result = subprocess.run(  # subprocess-timeout: ignore
+            [sys.executable, script, '--config-dir', config_dir],
+            capture_output=True, text=True, encoding='utf-8')
+        assert result.returncode == 1, result.stderr
+        assert "_routing_profile must be a routing profile name" in result.stderr
+
+    @pytest.mark.parametrize("value", ["p1", " p1 ", None])
+    def test_a_name_or_null_is_no_error(self, config_dir, value):
+        _write(config_dir, '_routing_profiles.yaml',
+               {'routing_profiles': {'p1': {'receiver': {'type': 'slack'}}}})
+        _write(config_dir, 't-a.yaml', {'tenants': {'t-a': {'_routing_profile': value}}})
+        data = _collect_data(config_dir)
+        assert data["profile_ref_errors"] == []
+        assert data["profile_refs"] == ({} if value is None else {"t-a": "p1"})

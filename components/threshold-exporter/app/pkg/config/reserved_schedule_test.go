@@ -421,3 +421,30 @@ func TestMergeTenantOverRootPlatform_ScheduledReserved(t *testing.T) {
 		})
 	}
 }
+
+// The expiry is compared field by field: a write that changes only
+// `expires:` or only `reason:` is a change and still blocks; the same pair
+// is a notice.
+func TestRatchet_ScheduledReservedExpiry(t *testing.T) {
+	t.Parallel()
+	val := func(expires, reason string) string {
+		return rsDoc("_silent_mode", fmt.Sprintf(`{default: disable, expires: %q, reason: %q}`, expires, reason))
+	}
+	prev := PriorValues(gateDecode(t, val("2099-01-01T00:00:00Z", "r1")).Tenants)
+	for _, c := range []struct {
+		name, body string
+		blocks     bool
+	}{
+		{"unchanged", val("2099-01-01T00:00:00Z", "r1"), false},
+		{"expires only", val("2099-02-01T00:00:00Z", "r1"), true},
+		{"reason only", val("2099-01-01T00:00:00Z", "r2"), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := gateDecode(t, c.body).ValidateTenantKeys().Ratchet(prev)
+			if blocked := len(got.Errors) == 1 && strings.Contains(got.Errors[0], "_silent_mode writes `expires:` and `reason:`"); blocked != c.blocks {
+				t.Errorf("errors %q notices %q, want blocking=%v", got.Errors, got.Notices, c.blocks)
+			}
+		})
+	}
+}
