@@ -227,3 +227,62 @@ def test_the_schema_refuses_what_the_go_rules_refuse():
          "objective": "99.9", "op": "<"},
     ):
         assert list(v.iter_errors(bad)), bad
+
+
+def test_empty_group_by_is_none_on_every_side():
+    # schema, shape.py and Go (pkg/config TestEmptyGroupByIsNone) all read
+    # `group_by: []` as "none"; a non-empty list on absence is refused by all.
+    import jsonschema
+    sys.path.insert(0, _DX)
+    from custom_alerts import shape  # noqa: E402
+
+    schema = json.loads((_REPO / gen.SCHEMA_REL).read_text(encoding="utf-8"))
+    inst = dict(schema["definitions"]["customAlertInstance"])
+    inst["definitions"] = schema["definitions"]
+    v = jsonschema.Draft7Validator(inst)
+    base = {"recipe": "absence", "name": "a", "metric": "m", "window": "5m", "threshold": "1"}
+    assert not list(v.iter_errors({**base, "group_by": []}))
+    shape.recipe_id({**base, "group_by": []})
+    eq = {**base, "recipe": "threshold", "op": "==", "group_by": []}
+    assert not list(v.iter_errors(eq))
+    shape.recipe_id(eq)
+    pvc = {**base, "group_by": ["persistentvolumeclaim"]}
+    assert list(v.iter_errors(pvc))
+    with pytest.raises(shape.RecipeError):
+        shape.recipe_id(pvc)
+
+
+def test_shape_rules_come_from_the_contract(tmp_path):
+    # Editing a per-recipe rule in the contract reaches shape.py's table, and
+    # shape.py's checks read that table (no hand-written per-recipe ifs).
+    root = _tree(tmp_path)
+
+    def loosen(d):
+        next(r for r in d["recipes"] if r["name"] == "absence")["group_by"] = True
+        del next(r for r in d["recipes"] if r["name"] == "slo_burn_rate")["fixed_op"]
+
+    _edit_contract(root, loosen)
+    r = _cli(root, "--check")
+    assert f"STALE: {gen.SHAPE_REL}" in r.stdout
+    assert _cli(root, "--update").returncode == 0
+    text = (root / gen.SHAPE_REL).read_text(encoding="utf-8")
+    assert '"absence": (("window", "threshold"), {}, None, True)' in text
+    assert '"slo_burn_rate": (("denominator_metric", "objective"), {"threshold"' in text
+    assert '}, None, False)' in text
+
+
+def test_shape_recipe_id_applies_the_rules():
+    sys.path.insert(0, _DX)
+    from custom_alerts import shape  # noqa: E402
+
+    with pytest.raises(shape.RecipeError, match="missing required field denominator_metric"):
+        shape.recipe_id({"recipe": "ratio", "metric": "m", "window": "5m"})   # was a KeyError
+    with pytest.raises(shape.RecipeError, match="not settable"):
+        shape.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                         "objective": "99.9", "op": "<"})
+    with pytest.raises(shape.RecipeError, match="does not take threshold"):
+        shape.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
+                         "objective": "99.9", "threshold": "1"})
+    # data-plane fields are not the slug's business: same id with or without them
+    base = {"recipe": "rate", "metric": "m", "window": "5m"}
+    assert shape.recipe_id(base) == shape.recipe_id({**base, "name": "a", "threshold": "1"})

@@ -109,6 +109,9 @@ from typing import Dict, List, Tuple
 #       the recipe's usage.
 #   _FORECAST_CURRENT_BAND / _FORECAST_RATIO_FLOOR_MIN — see
 #       validate_forecast_ratio_threshold.
+#   BASE_REQUIRED / RECIPE_RULES / DATA_PLANE_FIELDS — the per-recipe
+#       declaration rules _check_recipe_fields applies (the same ones
+#       custom_alert.go checkRecipeFields applies).
 # BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
 # block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
 RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate")
@@ -160,6 +163,18 @@ SLO_BURN_WINDOWS = {
 }
 _FORECAST_CURRENT_BAND = 0.5
 _FORECAST_RATIO_FLOOR_MIN = 0
+BASE_REQUIRED = ("recipe", "name", "metric")
+DATA_PLANE_FIELDS = frozenset({"name", "threshold"})
+# recipe -> (required, forbidden field -> hint, fixed op or None, takes group_by)
+RECIPE_RULES = {
+    "threshold": (("window", "threshold"), {}, None, True),
+    "rate": (("window", "threshold"), {}, None, True),
+    "ratio": (("denominator_metric", "window", "threshold"), {}, None, True),
+    "absence": (("window", "threshold"), {}, None, False),
+    "p99_latency": (("window", "threshold"), {}, None, True),
+    "forecast": (("horizon", "threshold"), {}, None, True),
+    "slo_burn_rate": (("denominator_metric", "objective"), {"threshold": "it takes objective; severity is fixed by the recipe (fast burn critical, slow burn warning)"}, ">", False),
+}
 # END GENERATED recipe contract
 
 
@@ -493,18 +508,48 @@ def assemble_selector(inst: dict) -> str:
     return "{" + ", ".join(parts) + "}"
 
 
+def _missing(value) -> bool:
+    return value is None or value == "" or (isinstance(value, (list, tuple, dict)) and not value)
+
+
+def _check_recipe_fields(inst: dict, recipe: str, op: str) -> None:
+    """The contract's per-recipe declaration rules (RECIPE_RULES): required
+    fields present, forbidden ones absent, the fixed op (if any) the one used,
+    group_by only where the recipe takes it. The data-plane fields (name,
+    threshold) are not the slug's business and are skipped, as
+    custom_alert.go RecipeID skips them."""
+    required, forbidden, fixed_op, takes_group_by = RECIPE_RULES[recipe]
+    for field in BASE_REQUIRED + required:
+        if field not in DATA_PLANE_FIELDS and _missing(inst.get(field)):
+            raise RecipeError(
+                f"missing required field {field} (the {recipe} recipe requires "
+                f"{'/'.join(BASE_REQUIRED + required)})")
+    for field, hint in forbidden.items():
+        if field in inst:
+            raise RecipeError(f"{recipe} does not take {field}: {hint}")
+    if fixed_op is not None and op != fixed_op:
+        raise RecipeError(
+            f"op {op!r} is not settable for {recipe} (the recipe fixes {fixed_op!r}); omit `op`")
+    if not takes_group_by and not _missing(inst.get("group_by")):
+        raise RecipeError(
+            f"group_by (per-dimension eval) is not supported for the {recipe} recipe — "
+            f"it applies only to value-crossing recipes (ADR-024 §Addendum)")
+
+
 def recipe_id(inst: dict) -> str:
     """Compute the deterministic shape slug (cross-language contract)."""
-    recipe = inst["recipe"]
+    recipe = inst.get("recipe")
     if recipe not in RECIPES:
         raise RecipeError(f"unknown recipe {recipe!r} (known: {list(RECIPES)})")
+    op = inst.get("op", DEFAULT_OP)
+    _check_recipe_fields(inst, recipe, op)
     metric = inst["metric"]
     validate_metric_name(metric, "metric")
 
     parts: List[str] = [recipe, metric]
 
-    for op, key, value in _selector_items(inst):
-        prefix = "sre" if op == "=~" else "s"
+    for sel_op, key, value in _selector_items(inst):
+        prefix = "sre" if sel_op == "=~" else "s"
         parts.append(f"{prefix}_{key}_{value}")
 
     # `==` gate runs BEFORE the absence short-circuit so it also rejects
@@ -512,20 +557,10 @@ def recipe_id(inst: dict) -> str:
     # gate strict here matches the JSON-schema if/then editor-guard — otherwise
     # an API/GitOps-submitted absence+"==" the imperative gate silently accepted
     # would later fail to render in the Portal form (front/back brain-split).
-    op = inst.get("op", DEFAULT_OP)
     if op == "==" and recipe not in _EQ_RECIPES:
         raise RecipeError(
             f"op '==' is only allowed for the threshold recipe (exact match on a "
             f"raw-gauge status/error code, #810); {recipe!r} does not support it"
-        )
-    # slo_burn_rate fixes op '>' (a burn RATE exceeding its budget threshold is
-    # the only meaningful direction). An explicit different op is a semantic
-    # error, not a knob — reject loudly rather than silently compile `gt`.
-    # MUST match custom_alert.go (Wave 2).
-    if recipe == "slo_burn_rate" and op != ">":
-        raise RecipeError(
-            f"op {op!r} is not settable for slo_burn_rate (the recipe fixes '>' — "
-            f"burn rate exceeding the objective-derived threshold); omit `op`"
         )
     if recipe == "absence":
         parts.append("absent")
@@ -552,22 +587,11 @@ def recipe_id(inst: dict) -> str:
         # like forecast). `objective` replaces `threshold` (its VALUE rides the
         # data plane via user_threshold; the exporter derives the per-severity
         # burn thresholds from it at resolve time) — so `threshold` present is a
-        # declaration error, rejected loudly, and objective/slo_period are
-        # validated here (ADR-029 dual-side duty) but NEVER enter the slug.
-        if "threshold" in inst:
-            raise RecipeError(
-                "slo_burn_rate takes `objective` (SLO target percentage), not "
-                "`threshold` — severity is fixed by the recipe (fast→critical, "
-                "slow→warning), so a value:severity threshold has no meaning here"
-            )
+        # declaration error (RECIPE_RULES forbids it), and objective/slo_period
+        # are validated here (ADR-029 dual-side duty) but NEVER enter the slug.
         _validate_objective(inst)
         _normalize_slo_period(inst)
-        den = inst.get("denominator_metric")
-        if not den:
-            raise RecipeError(
-                "slo_burn_rate recipe requires `denominator_metric` (the "
-                "TOTAL-events counter; `metric` is the BAD-events counter)"
-            )
+        den = inst["denominator_metric"]  # required by RECIPE_RULES
         validate_metric_name(den, "denominator_metric")
         parts.append("den_" + str(den))
         # min_events IS a shape component (the compiler writes the literal into
@@ -587,7 +611,7 @@ def recipe_id(inst: dict) -> str:
             _validate_quantile(quantile)
             parts.append("q" + quantile)
         if recipe == "ratio":
-            den = inst["denominator_metric"]
+            den = inst["denominator_metric"]  # required by RECIPE_RULES
             validate_metric_name(den, "denominator_metric")
             parts.append("den_" + den)
 
@@ -618,15 +642,12 @@ def recipe_id(inst: dict) -> str:
     #   tenant may legitimately want group_by:[pod] + op:'==' ("any pod's errno == X")
     #   — then relax this rejection AND thread group_by into _eq_core_record's
     #   `max by(...)`. MUST match custom_alert.go.
+    # Which recipes take group_by at all is RECIPE_RULES' (_check_recipe_fields).
     group_by = _normalize_group_by(inst)
-    if group_by and (recipe == "absence" or op == "==" or recipe == "slo_burn_rate"):
-        what = ("the absence recipe" if recipe == "absence"
-                else "the slo_burn_rate recipe (the SLI is a per-tenant aggregate "
-                     "by design — a per-dimension SLO is a distinct declaration)"
-                if recipe == "slo_burn_rate" else "op '=='")
+    if group_by and op == "==":
         raise RecipeError(
-            f"group_by (per-dimension eval) is not supported for {what} — it "
-            f"applies only to value-crossing recipes (ADR-024 §Addendum)"
+            "group_by (per-dimension eval) is not supported for op '==' — it "
+            "applies only to value-crossing recipes (ADR-024 §Addendum)"
         )
     for gb in group_by:
         parts.append("gb_" + gb)

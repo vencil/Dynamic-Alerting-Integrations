@@ -145,6 +145,11 @@ def schema_members(c):
     ]
 
 
+# "No group_by" means none listed: an empty list is accepted, as Go
+# (len(spec.GroupBy) > 0) and shape.py accept it.
+_NO_GROUP_BY = {"maxItems": 0}
+
+
 def _recipe_is(names):
     cond = {"const": names[0]} if len(names) == 1 else {"enum": names}
     return {"properties": {"recipe": cond}, "required": ["recipe"]}
@@ -164,12 +169,12 @@ def schema_all_of(c):
         out.append({"if": _recipe_is([r["name"]]), "then": then})
     out.append({
         "if": {"properties": {"op": {"const": "=="}}, "required": ["op"]},
-        "then": {"properties": {"recipe": {"enum": c["op"]["eq_recipes"]}},
-                 "not": {"required": ["group_by"]}},
+        "then": {"properties": {"recipe": {"enum": c["op"]["eq_recipes"]},
+                                "group_by": _NO_GROUP_BY}},
     })
     no_group_by = [r["name"] for r in c["recipes"] if not r["group_by"]]
     if no_group_by:
-        out.append({"if": _recipe_is(no_group_by), "then": {"not": {"required": ["group_by"]}}})
+        out.append({"if": _recipe_is(no_group_by), "then": {"properties": {"group_by": _NO_GROUP_BY}}})
     out[0] = {"$comment": f"GENERATED from {CONTRACT_REL} by scripts/tools/dx/gen_recipe_contract.py "
                           "--update — DO NOT EDIT. The per-recipe declaration rules, the same ones "
                           "custom_alert.go checkRecipeFields applies.", **out[0]}
@@ -282,6 +287,11 @@ def render_python(c):
     slo = c["slo_burn_rate"]
     statuses = "".join(f"    {_py(r['name'])}: {_py(r['status'])},\n" for r in c["recipes"])
     slugs = ", ".join(f"{_py(k)}: {_py(v)}" for k, v in c["op"]["slug"].items())
+    rules = "".join(
+        f"    {_py(r['name'])}: ({_py_tuple(r['required'])}, "
+        f"{{{', '.join(f'{_py(k)}: {_py(v)}' for k, v in sorted((r.get('forbidden') or {}).items()))}}}, "
+        f"{_py(r['fixed_op']) if r.get('fixed_op') else 'None'}, {r['group_by']}),\n"
+        for r in c["recipes"])
     windows = "".join(f"    {_py(t['severity'])}: ({_py(t['long'])}, {_py(t['short'])}, "
                       f"{t['min_events_factor']}),\n" for t in slo["tiers"])
     lines = [
@@ -317,6 +327,10 @@ def render_python(c):
         "SLO_BURN_WINDOWS = {\n" + windows + "}",
         f"_FORECAST_CURRENT_BAND = {c['forecast']['current_band']}",
         f"_FORECAST_RATIO_FLOOR_MIN = {c['forecast']['ratio_floor_exclusive_minimum']}",
+        f"BASE_REQUIRED = {_py_tuple(c['base_required'])}",
+        f"DATA_PLANE_FIELDS = {_py_fset([f['name'] for f in c['fields'] if f.get('data_plane')])}",
+        "# recipe -> (required, forbidden field -> hint, fixed op or None, takes group_by)",
+        "RECIPE_RULES = {\n" + rules + "}",
         PY_END,
     ]
     return "\n".join(lines) + "\n"

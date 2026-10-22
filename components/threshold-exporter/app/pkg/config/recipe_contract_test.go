@@ -69,6 +69,13 @@ func TestParseRecipeContract_FailsClosed(t *testing.T) {
 		"fixed_op not an op": mutateContract(t, func(m map[string]any) {
 			recipeEntry(m, "slo_burn_rate")["fixed_op"] = "!="
 		}),
+		"eq recipe not a recipe": mutateContract(t, func(m map[string]any) {
+			sub(m, "op")["eq_recipes"] = []any{"threshold", "thresold"}
+		}),
+		"recipe listed twice": mutateContract(t, func(m map[string]any) {
+			rs := m["recipes"].([]any)
+			m["recipes"] = append(rs, rs[0])
+		}),
 		"base_required not a field": mutateContract(t, func(m map[string]any) {
 			m["base_required"] = []any{"recipe", "nme"}
 		}),
@@ -224,5 +231,39 @@ func TestForecastRatioFloor_FromContract(t *testing.T) {
 		if (err == nil) != wantOK {
 			t.Errorf("threshold %s: err=%v, want accepted=%v", thr, err, wantOK)
 		}
+	}
+}
+
+// RecipeID (the shape slug) checks the contract's required fields except the
+// data-plane ones: a declaration without its window has no shape, while one
+// without name or threshold still has one — the same as with them.
+func TestRecipeID_RequiredFieldsSkipDataPlane(t *testing.T) {
+	full := CustomAlertSpec{Recipe: "rate", Name: "a", Metric: "m", Window: "5m", Threshold: "1", Mode: "silent"}
+	want, err := RecipeID(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := full
+	bare.Name, bare.Threshold, bare.Mode = "", "", ""
+	if got, err := RecipeID(bare); err != nil || got != want {
+		t.Errorf("RecipeID without data-plane fields = %q, %v; want %q, nil", got, err, want)
+	}
+	noWindow := full
+	noWindow.Window = ""
+	if _, err := RecipeID(noWindow); err == nil || !strings.Contains(err.Error(), "missing required field window") {
+		t.Errorf("RecipeID without window: err=%v, want missing required field window", err)
+	}
+	slo := CustomAlertSpec{Recipe: "slo_burn_rate", Metric: "m", Objective: taggedScalar{value: "99.9", tag: "!!str"}}
+	if _, err := RecipeID(slo); err == nil || !strings.Contains(err.Error(), "missing required field denominator_metric") {
+		t.Errorf("RecipeID slo without denominator: err=%v", err)
+	}
+}
+
+// An empty group_by list means "none": accepted on a recipe that takes no
+// group_by, the same answer the schema and shape.py give.
+func TestEmptyGroupByIsNone(t *testing.T) {
+	spec := CustomAlertSpec{Recipe: "absence", Name: "a", Metric: "m", Window: "5m", Threshold: "1", GroupBy: []string{}}
+	if _, err := resolveOneCustomAlert("t", spec); err != nil {
+		t.Errorf("absence with group_by: []: %v", err)
 	}
 }

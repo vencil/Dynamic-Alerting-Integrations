@@ -534,7 +534,7 @@ func specFieldSet(spec CustomAlertSpec, field string) bool {
 // base_required + the recipe's required fields present, its forbidden fields
 // absent, its fixed op (if any) the one used, and group_by only where the
 // recipe takes it. withDataPlane=false skips the data-plane fields (name,
-// threshold, objective …) the shape slug does not need.
+// threshold) the shape slug does not need.
 func checkRecipeFields(spec CustomAlertSpec, op string, withDataPlane bool) error {
 	r, ok := contractRecipe(spec.Recipe)
 	if !ok {
@@ -583,8 +583,8 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	if op == "" {
 		op = contract.Op.Default
 	}
-	// The shape slug needs the identity fields only: name, threshold and the
-	// other data-plane values are checked by the resolve paths.
+	// The shape slug needs the identity fields only: the data-plane ones
+	// (name, threshold) are checked by the resolve paths.
 	if err := checkRecipeFields(spec, op, false); err != nil {
 		return "", err
 	}

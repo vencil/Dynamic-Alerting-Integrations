@@ -43,8 +43,10 @@ type recipeContractRecipe struct {
 type recipeContractField struct {
 	Name          string `json:"name"`
 	QuotedExample string `json:"quoted_example" optional:"true"`
-	// DataPlane marks a value that rides the user_threshold series rather
-	// than the rule identity: RecipeID (the shape slug) does not need it.
+	// DataPlane marks a required field the shape slug does not need (it
+	// rides the user_threshold series, not the rule identity): RecipeID skips
+	// it, so a declaration's slug is the same with or without it. Only a
+	// required field can carry it observably.
 	DataPlane bool `json:"data_plane"`
 }
 
@@ -158,6 +160,21 @@ func parseRecipeContract(data []byte) (recipeContract, error) {
 	for _, f := range c.BaseRequired {
 		if !fieldNames[f] {
 			return c, fmt.Errorf("base_required %q is not a field", f)
+		}
+	}
+	// A duplicate name would make the generated schema rules disagree with
+	// contractRecipe's first-match lookup; an eq recipe that is not a recipe
+	// would put a name the exporter does not know into the schema and portal.
+	recipeNames := map[string]bool{}
+	for _, r := range c.Recipes {
+		if recipeNames[r.Name] {
+			return c, fmt.Errorf("recipe %q is listed twice", r.Name)
+		}
+		recipeNames[r.Name] = true
+	}
+	for _, r := range c.Op.EqRecipes {
+		if !recipeNames[r] {
+			return c, fmt.Errorf("op.eq_recipes %q is not a recipe", r)
 		}
 	}
 	for _, r := range c.Recipes {

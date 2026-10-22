@@ -1309,8 +1309,8 @@
         {"if": {"properties": {"recipe": {"const": "p99_latency"}}, "required": ["recipe"]}, "then": {"required": ["window", "threshold"]}},
         {"if": {"properties": {"recipe": {"const": "forecast"}}, "required": ["recipe"]}, "then": {"required": ["horizon", "threshold"]}},
         {"if": {"properties": {"recipe": {"const": "slo_burn_rate"}}, "required": ["recipe"]}, "then": {"required": ["denominator_metric", "objective"], "not": {"anyOf": [{"required": ["threshold"]}]}, "properties": {"op": {"const": ">"}}}},
-        {"if": {"properties": {"op": {"const": "=="}}, "required": ["op"]}, "then": {"properties": {"recipe": {"enum": ["threshold"]}}, "not": {"required": ["group_by"]}}},
-        {"if": {"properties": {"recipe": {"enum": ["absence", "slo_burn_rate"]}}, "required": ["recipe"]}, "then": {"not": {"required": ["group_by"]}}}
+        {"if": {"properties": {"op": {"const": "=="}}, "required": ["op"]}, "then": {"properties": {"recipe": {"enum": ["threshold"]}, "group_by": {"maxItems": 0}}}},
+        {"if": {"properties": {"recipe": {"enum": ["absence", "slo_burn_rate"]}}, "required": ["recipe"]}, "then": {"properties": {"group_by": {"maxItems": 0}}}}
       ],
       "properties": {
         "recipe": {
