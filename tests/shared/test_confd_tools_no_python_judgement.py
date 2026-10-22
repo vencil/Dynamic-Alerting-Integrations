@@ -23,8 +23,22 @@ behaviour matrix (#3206, the PR after this one) — run as nobody against a
 tree built for every (role, problem kind) Go can write. Until then the
 known places are named in ADR-036 §7 step 9's progress line.
 
-⚠️ Not caught: a name reached by `getattr(_lib_confd, "…")` or through a
-module that re-exports it under another name.
+⚠️ WHAT THE GATE CANNOT CATCH (it reads import statements and names, not
+intent): `from _lib_confd import *`; the module bound another way —
+`from tools import _lib_confd`, `from . import _lib_confd`, or
+`import tools._lib_confd` without `as` (used as `tools._lib_confd.x`); the
+function stored in a variable first (`f = _lib_confd.is_reserved_name` in
+an allowed place, `f(n)` elsewhere is caught only as the first use); a name
+fetched with `getattr(_lib_confd, "…")`; the private helpers
+(`_is_hidden`, `_is_config`, …), which are not in `NAME_RULES`; a name
+re-exported through another module, including an allowed one; and a second
+call of the same name inside a function already allowed one (entries are
+per function and name, not per call). Those are review's, and the behaviour
+matrix's, to catch.
+
+`configmap_key_problem` is not in `NAME_RULES` on purpose: it is
+Kubernetes' rule for a ConfigMap key (no `..` prefix, a key's character
+set), not the walk's name rule, and 9b-3 does not delete it.
 """
 from __future__ import annotations
 
@@ -50,14 +64,14 @@ LIB = SCRIPTS / "tools" / "_lib_confd.py"
 NAME_RULES = frozenset({
     "is_reserved_name", "is_hidden_name", "has_yaml_extension", "is_defaults_name",
     "is_defaults_document_name", "select_defaults_carrier", "config_stem",
-    "is_dir_symlink", "CONFIG_SUFFIXES",
+    "is_dir_symlink", "CONFIG_SUFFIXES", "LEGACY_STATE_FILES", "legacy_state_files",
 })
 
 
-def uses(tree: ast.AST) -> "tuple[dict[str, int], set[str]]":
-    """(`<function>:<name>` → how many uses of a name rule — a call, a
-    reference, `_lib_confd.<name>` — the function holds, {names imported
-    from `_lib_confd`})."""
+def uses(tree: ast.AST) -> "tuple[set[str], set[str]]":
+    """({`<function>:<name>` of every function holding a use of a name rule
+    — a call, a reference, `_lib_confd.<name>`}, {names imported from
+    `_lib_confd`})."""
     imported: "dict[str, str]" = {}   # local name -> rule
     modules: "set[str]" = set()       # local names of the `_lib_confd` module
     for node in ast.walk(tree):
@@ -69,7 +83,7 @@ def uses(tree: ast.AST) -> "tuple[dict[str, int], set[str]]":
             for a in node.names:
                 if a.name.split(".")[-1] == "_lib_confd":
                     modules.add(a.asname or a.name)
-    out: "dict[str, int]" = {}
+    out: "set[str]" = set()
 
     def visit(node: ast.AST, scope: "list[str]") -> None:
         for child in ast.iter_child_nodes(node):
@@ -85,8 +99,7 @@ def uses(tree: ast.AST) -> "tuple[dict[str, int], set[str]]":
                   and isinstance(child.value, ast.Name) and child.value.id in modules):
                 rule = child.attr
             if rule is not None:
-                key = f"{'.'.join(scope) or '<module>'}:{rule}"
-                out[key] = out.get(key, 0) + 1
+                out.add(f"{'.'.join(scope) or '<module>'}:{rule}")
                 continue
             visit(child, scope)
     visit(tree, [])
@@ -116,19 +129,19 @@ def _actual() -> "tuple[set[str], set[str]]":
 PR_BETA2 = "a conf.d reader not migrated in PR-β1: reads Go's entries in PR-β2 (#3206 step 9)"
 ROUTE_GENERATOR = ("route generator: `_` / carrier test of a path the reader listed; Go's "
                    "class answers the same — threading Entry through its helpers is PR-β2")
-CONFIGMAP = ("a ConfigMap's keys, not a path on disk; names mode (classify_names) answers "
-             "them — PR-β2")
-GIT = "a git tree being materialised (no listing exists yet) — PR-β2"
+CONFIGMAP = ("ConfigMaps (their keys, or dump files of them), not a conf.d walk; names mode "
+             "(classify_names) answers a name — PR-β2")
 OWN_RULE = ("the conf.d predicate used on a path that is no conf.d (docs); takes a rule "
             "of its own before 9b-3 deletes it — PR-β2")
 AUDIT = ("migration_audit's \"today\" side IS the old Python selection, by design; it "
          "retires with the tool (ADR-036 §7)")
-REASONS = frozenset({PR_BETA2, ROUTE_GENERATOR, CONFIGMAP, GIT, OWN_RULE, AUDIT})
+REASONS = frozenset({PR_BETA2, ROUTE_GENERATOR, CONFIGMAP, OWN_RULE, AUDIT})
 
 ALLOWED = {
     "tools/dx/run_chaos_soak.py:trigger_reload:has_yaml_extension": PR_BETA2,
     "tools/dx/run_chaos_soak.py:trigger_reload:is_hidden_name": PR_BETA2,
     "tools/dx/run_chaos_soak.py:trigger_reload:is_reserved_name": PR_BETA2,
+    "tools/dx/generate_tenant_metadata.py:_load_custom_groups:legacy_state_files": PR_BETA2,
     "tools/lint/check_frontmatter_versions.py:scan_docs:is_hidden_name": OWN_RULE,
     "tools/ops/_grar_parse.py:_apply_tenant_entries:is_reserved_name": ROUTE_GENERATOR,
     "tools/ops/_grar_parse.py:_parse_config_files:is_defaults_name": ROUTE_GENERATOR,
@@ -154,10 +167,12 @@ ALLOWED = {
     "tools/ops/drift_detect.py:compute_dir_manifest:is_hidden_name": PR_BETA2,
     "tools/ops/init_project.py:_ConfdTree.root_defaults:is_defaults_name": PR_BETA2,
     "tools/ops/init_project.py:_kustomize_carrier_files:is_defaults_name": PR_BETA2,
-    "tools/ops/migrate_to_operator.py:parse_configmap_rules:has_yaml_extension": PR_BETA2,
+    "tools/ops/migrate_to_operator.py:parse_configmap_rules:has_yaml_extension": CONFIGMAP,
     "tools/ops/migration_audit.py:read_tree_today:is_defaults_name": AUDIT,
     "tools/ops/migration_audit.py:read_tree_today:select_defaults_carrier": AUDIT,
+    "tools/ops/offboard_tenant.py:_legacy_refs:LEGACY_STATE_FILES": PR_BETA2,
     "tools/ops/offboard_tenant.py:find_config_file:config_stem": PR_BETA2,
+    "tools/ops/offboard_tenant.py:load_all_configs:LEGACY_STATE_FILES": PR_BETA2,
     "tools/ops/patch_config.py:exporter_reads:has_yaml_extension": CONFIGMAP,
     "tools/ops/patch_config.py:exporter_reads:is_hidden_name": CONFIGMAP,
     "tools/ops/patch_config.py:find_defaults_key:is_defaults_name": CONFIGMAP,
@@ -243,7 +258,7 @@ def test_each_use_is_caught(src, want) -> None:
     "from _lib_confd import printable_name\ndef f(n):\n    return printable_name(n)\n",
 ])
 def test_reading_the_entry_is_not_flagged(src) -> None:
-    assert uses(ast.parse(src))[0] == {}
+    assert uses(ast.parse(src))[0] == set()
 
 
 # ── the tenant set is one answer (#3206 M-A) ─────────────────────────
@@ -256,7 +271,8 @@ HALF_SCOPE_CALLERS = {
     "tools/ops/patch_config.py": "a ConfigMap's keys: no directory, link or special file can exist",
     "tools/ops/gitops_check.py": "reads every selected entry itself and names each it cannot read",
     "tools/lint/check_path_metadata_consistency.py": "names every unreadable entry from the same "
-                                                     "document (its own `_` rule: PR_BETA2 above)",
+                                                     "document itself (with a `_` rule of its "
+                                                     "own — ADR-036 step 9, not this gate's)",
 }
 
 

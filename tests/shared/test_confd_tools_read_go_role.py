@@ -921,19 +921,23 @@ def test_deprecate_rule_takes_go_s_class_not_the_name(tmp_path, monkeypatch) -> 
     other way round) makes `deprecate_rule` clear `_x.yaml`'s tenant key and
     leave `y.yaml`'s alone — what the AST gate cannot see (`name[:1] == "_"`)
     a behaviour test does."""
-    root = _write(tmp_path / "conf.d", {"_x.yaml": "x: 1\n", "y.yaml": "x: 1\n"})
+    root = _write(tmp_path / "conf.d", {"_x.yaml": "x: 1\n", "y.yaml": "x: 1\n",
+                                        "z.yaml": "x: 1\n"})
     five = {"text": "5", "tag": "!!str", "value": "5"}
     body = {"tenants": {"a": {"mysql_connections": five}}}
     tenant = _entry("_x.yaml")
     tenant["tenant_named"] = "_x"
     platform = _entry("y.yaml", cls="platform")
-    doc = {**_list_doc([tenant, platform], mode="tree"),
-           "files": {"_x.yaml": body, "y.yaml": body}, "rendered_by": {}}
+    # Class `defaults` is a platform file too (`Entry.reserved`): a reader
+    # that knew only `platform` would clear `z.yaml` as a tenant file.
+    defaults = _entry("z.yaml", cls="defaults")
+    doc = {**_list_doc([tenant, platform, defaults], mode="tree"),
+           "files": {"_x.yaml": body, "y.yaml": body, "z.yaml": body}, "rendered_by": {}}
     monkeypatch.setenv("DA_GUARD_BINARY", _emit(tmp_path, doc))
     import deprecate_rule as dr
     with _lib_parse_cache.session():
         found = {f["filename"]: f["reserved"]
                  for f in dr.scan_for_metric("mysql_connections", str(root))}
         removed = dr.remove_from_tenants("mysql_connections", str(root))
-    assert found == {"_x.yaml": False, "y.yaml": True}
+    assert found == {"_x.yaml": False, "y.yaml": True, "z.yaml": True}
     assert [(f, t, k) for f, t, k, _v in removed] == [("_x.yaml", "a", "mysql_connections")]
