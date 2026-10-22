@@ -35,6 +35,10 @@ source = ["scripts/tools", "components/da-tools/app"]
 # 當成現況：那是 child config 還直接重讀 pyproject 的舊接線下量到的，該接線已被 #1885 換掉。
 # ⚠️ 連帶：任何裸 `coverage report/xml` 前必須先 `coverage combine`；pytest-cov 會自己 combine。
 parallel = true
+# os._exit 之前先存檔（coverage ≥ 7.10；pytest-cov 7.1.0 已要求 ≥ 7.10.6）。_lib_exitcodes 在
+# stdout 失敗路徑以 os._exit 結束（#3156），沒有這一行那些子行程的量測整筆遺失。
+# 守衛：tests/dx/test_subprocess_coverage_wiring.py 的 os._exit 兩格。
+patch = ["_exit"]
 omit = [
     "tests/*",
     "*/__pycache__/*",
