@@ -88,7 +88,7 @@ func silentModeSchemaEnums(t *testing.T) (scalar, target []string) {
 // without a WARN: a target silences, a disabled word turns silent mode off.
 func TestSilentModeSchemaEnumsMatchReader(t *testing.T) {
 	t.Parallel()
-	reader := append(append([]string{}, silentModeTargets...), disabledWords()...)
+	reader := append(append([]string{}, silentModeTargets...), disabledWords(t)...)
 	sort.Strings(reader)
 
 	scalar, target := silentModeSchemaEnums(t)
