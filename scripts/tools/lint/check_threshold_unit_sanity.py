@@ -177,6 +177,12 @@ def _as_number(raw) -> float | None:
     so ±Inf stays OUT-OF-DOMAIN wherever it is written — a tenant string,
     platform-data, a rule pack (owner ruling on #3140, D). A NaN compares
     false with every bound, as before.
+
+    ⚠️ A hex float (`0x1p4`) is None, although the exporter reads it (16):
+    this lint has never judged one (it read numbers with Python's `float`,
+    which has no hex), and judging it now would turn `--ci` from 0 to 1 for
+    a value no owner ruling names. An `_` between digits (`1_000`) is judged:
+    the exporter reads it, and so did this lint before #3140.
     """
     if isinstance(raw, bool):
         return None
@@ -188,6 +194,8 @@ def _as_number(raw) -> float | None:
         text, _severity = split_threshold_severity(raw)
     except ValueError:
         return None
+    if "x" in text.lower():
+        return None  # a hex float: see the docstring
     try:
         return parse_threshold_number(text)
     except NonFiniteThresholdError:

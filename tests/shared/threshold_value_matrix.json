@@ -7,7 +7,7 @@
     "parseThresholdNumber reads `value_part` as a finite number (#3140: NaN / Inf refused);",
     "`custom_alert_disabled` is whether resolveOneCustomAlert reads the threshold as the",
     "opt-out (errCustomAlertDisabled); `row_disabled` is whether a threshold row with the",
-    "value switches its key off (thresholdRowDisabled, #3141: `disable:<severity>` does not);",
+    "value switches its key off (thresholdRowDisabled, #3141: `disable:\u003cseverity\u003e` does not);",
     "`severities` is config.ThresholdSeverities().",
     "⛔ Never hand-edit those columns: add a row with only `value`, then run",
     "`DA_REGEN_THRESHOLD_VALUE_MATRIX=1 go test ./pkg/config -run TestThresholdValueMatrix`",
@@ -15,10 +15,10 @@
     "Go half: pkg/config/threshold_value_parity_test.go (the file says what Go says; the",
     "row resolvers, custom alerts and the subtree overlay agree). Python half:",
     "tests/shared/test_threshold_value_parity.py (_lib_validation.split_threshold_severity,",
-    "parse_threshold_number, is_disabled and custom_alert_disabled,",
-    "backtest_threshold.parse_threshold_value, the unit-sanity",
-    "lint, config_diff _threshold_disabled, custom_alerts/shape.py",
-    "parse_threshold, the severity sets and the schema's thresholdScalar pattern agree)."
+    "parse_threshold_number, backtest --tenant's reading of served-values,",
+    "the unit-sanity lint,",
+    "custom_alerts/shape.py parse_threshold, the severity sets and the schema's",
+    "thresholdScalar pattern agree)."
   ],
   "severities": [
     "warning",
@@ -82,6 +82,24 @@
     {"value":"+nan","ok":true,"value_part":"+nan","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
     {"value":"off:critical","ok":true,"value_part":"off","severity":"critical","float_ok":false,"custom_alert_disabled":true,"row_disabled":false},
     {"value":"disable\u001c","ok":true,"value_part":"disable\u001c","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
-    {"value":"false","ok":true,"value_part":"false","severity":"warning","float_ok":false,"custom_alert_disabled":true,"row_disabled":true}
+    {"value":"false","ok":true,"value_part":"false","severity":"warning","float_ok":false,"custom_alert_disabled":true,"row_disabled":true},
+    {"value":"1_000","ok":true,"value_part":"1_000","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"-1_0","ok":true,"value_part":"-1_0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1_000.0_1:critical","ok":true,"value_part":"1_000.0_1","severity":"critical","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1e1_0","ok":true,"value_part":"1e1_0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1__0","ok":true,"value_part":"1__0","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1.f_fp0","ok":true,"value_part":"0x1.f_fp0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0xa_bp0","ok":true,"value_part":"0xa_bp0","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"_1","ok":true,"value_part":"_1","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"1_","ok":true,"value_part":"1_","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p4","ok":true,"value_part":"0x1p4","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0X1P-2:critical","ok":true,"value_part":"0X1P-2","severity":"critical","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"-0x1.8p1","ok":true,"value_part":"-0x1.8p1","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x_1p4","ok":true,"value_part":"0x_1p4","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1.p1","ok":true,"value_part":"0x1.p1","severity":"warning","float_ok":true,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x10","ok":true,"value_part":"0x10","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p_4","ok":true,"value_part":"0x1p_4","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"0x1p99999","ok":true,"value_part":"0x1p99999","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false},
+    {"value":"١٠","ok":true,"value_part":"١٠","severity":"warning","float_ok":false,"custom_alert_disabled":false,"row_disabled":false}
   ]
 }

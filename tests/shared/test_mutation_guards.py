@@ -17,7 +17,6 @@ from _lib_python import (
     parse_duration_seconds,
     format_duration,
     validate_and_clamp,
-    is_disabled,
     load_yaml_file,
     GUARDRAILS,
 )
@@ -143,31 +142,6 @@ class TestValidateAndClampMutationGuards:
         low_result, _ = validate_and_clamp("group_wait", "0s", "t")
         high_result, _ = validate_and_clamp("group_wait", "9999h", "t")
         assert parse_duration_seconds(low_result) < parse_duration_seconds(high_result)
-
-
-# ── is_disabled: 回傳值不翻轉 ────────────────────────────────
-
-
-class TestIsDisabledMutationGuards:
-    """確保 is_disabled 不會因 not mutation 而翻轉。"""
-
-    @pytest.mark.parametrize("value", ["disable", "disabled", "Disable", "DISABLE", "DISABLED"])
-    def test_known_disabled_values_true(self, value):
-        """已知 disable 變體一律回傳 True。"""
-        assert is_disabled(value) is True
-
-    @pytest.mark.parametrize("value", ["enable", "enabled", "true", "yes", 1, 42, "custom"])
-    def test_non_disabled_values_false(self, value):
-        """非 disable 值一律回傳 False。"""
-        assert is_disabled(value) is False
-
-    def test_none_returns_false(self):
-        """None 回傳 False，不是 True。"""
-        assert is_disabled(None) is False
-
-    def test_empty_string_returns_false(self):
-        """空字串回傳 False。"""
-        assert is_disabled("") is False
 
 
 # ── load_yaml_file: 安全性 mutation guards ────────────────────

@@ -98,7 +98,7 @@
             {
               "type": "string",
               "pattern": "^\\s*([Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd]?|[Oo][Ff][Ff]|[Ff][Aa][Ll][Ss][Ee])\\s*$",
-              "description": "Turns this tenant's routing off: disable / disabled / off / false, case-insensitive, surrounding whitespace ignored (the set _lib_validation.is_disabled accepts). Must be a YAML string: an unquoted off / false is a boolean, which the route generator refuses (#2341) — quote it ('off')."
+              "description": "Turns this tenant's routing off: disable / disabled / off / false, case-insensitive, surrounding whitespace ignored (the set _lib_validation.routing_disabled accepts). Must be a YAML string: an unquoted off / false is a boolean, which the route generator refuses (#2341) — quote it ('off')."
             }
           ],
           "title": "Alert Routing Configuration",

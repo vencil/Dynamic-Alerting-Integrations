@@ -6,11 +6,10 @@ pytest style：使用 plain assert + conftest fixtures。
 驗證:
   1. parse_duration_seconds() — Prometheus duration 解析
   2. format_duration() — seconds → duration 格式化
-  3. is_disabled() — 三態 disable 判定
-  4. load_yaml_file() — YAML 載入 + 錯誤處理
-  5. validate_and_clamp() — timing guardrails
-  6. http_get_json / http_post_json / http_request_with_retry — HTTP helpers
-  7. write_text_secure / write_json_secure — SAST-compliant file writes
+  3. load_yaml_file() — YAML 載入 + 錯誤處理
+  4. validate_and_clamp() — timing guardrails
+  5. http_get_json / http_post_json / http_request_with_retry — HTTP helpers
+  6. write_text_secure / write_json_secure — SAST-compliant file writes
 """
 
 import json
@@ -273,33 +272,6 @@ class TestFormatDuration:
     def test_format_values(self, seconds, expected):
         """秒數正確格式化為 duration 字串。"""
         assert lib.format_duration(seconds) == expected
-
-
-# ============================================================
-# is_disabled
-# ============================================================
-
-class TestIsDisabled:
-    """is_disabled() 三態判定測試。"""
-
-    @pytest.mark.parametrize("val", [
-        "disable", "disabled", "off", "false",
-        "Disable", "DISABLED", " OFF ", "False",
-    ])
-    def test_disable_variants(self, val):
-        """各種 disable 變體正確判定為停用。"""
-        assert lib.is_disabled(val) is True
-
-    @pytest.mark.parametrize("val", ["enable", "warning", "critical", "all", "true", "on"])
-    def test_non_disabled(self, val):
-        """非 disable 值正確判定為未停用。"""
-        assert lib.is_disabled(val) is False
-
-    def test_empty_and_none(self):
-        """空字串、None 及非字串型別皆判定為未停用。"""
-        assert lib.is_disabled("") is False
-        assert lib.is_disabled(None) is False
-        assert lib.is_disabled(42) is False
 
 
 # ============================================================
