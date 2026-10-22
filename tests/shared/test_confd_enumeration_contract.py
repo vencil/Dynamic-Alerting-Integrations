@@ -211,6 +211,11 @@ _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
         "asks whether the conf.d ROOT holds any platform (`_`) file — the "
         "`undecidable` switch of the key verdict (ADR-038); a `_` file below "
         "the root is no root platform file, so there is nothing to skip",
+    ("_lib_parse_tree.py", "root_platform_file"):
+        "a predicate on ONE entry, not a listing: whether that entry is a "
+        "root platform file (Go's isRootPlatformKey, #2743) — a `_` file "
+        "below the root is not one by definition (no plane reads its "
+        "`tenants:` block, #1576), so nothing is skipped",
 }
 
 
