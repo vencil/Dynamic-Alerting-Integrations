@@ -67,7 +67,7 @@ func TestStateFilterSchemaMatchesReader(t *testing.T) {
 	// The words, both ways.
 	got := append([]string{}, def.StateFilterScalar.Enum...)
 	sort.Strings(got)
-	want := append([]string{"enable"}, disabledWords...)
+	want := append([]string{"enable"}, disabledWords(t)...)
 	sort.Strings(want)
 	if def.StateFilterScalar.Type != "string" || !slices.Equal(got, want) {
 		t.Errorf("definitions.stateFilterScalar = type %q enum %q, want string %q (enable + disabledWords)",
