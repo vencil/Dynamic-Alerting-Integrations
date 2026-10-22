@@ -948,10 +948,23 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                             f"dict, ignoring",
                     field="domain_policies")
         else:
-            # setdefault: tests may call this helper with a hand-built dict.
-            result.setdefault("policy_misplacements", []).append(fname)
-            print(f"  WARN: domain_policies in {_f} ignored "
-                  "(only allowed in _domain_policy.yaml)", file=sys.stderr)
+            # #3126: a block in a file policies are not read from is as
+            # unenforceable as one the generator cannot parse, so it is the
+            # same `domain_policy_unusable` field-type error — the whole tree
+            # is refused in every mode. It used to be a stderr WARN plus a
+            # --strict-only ERROR, so a lenient run rendered at rc 0 with the
+            # policy silently off. The KEY decides, not its value: nothing in
+            # this file is ever read as a policy, an empty block included.
+            target = str(PurePosixPath(fname).parent / "_domain_policy.yaml")
+            _field_type_error(
+                result, "domain_policy_unusable",
+                f"{fname}: a domain_policies block is not read from this "
+                f"file — domain policies are read only from "
+                f"_domain_policy.yaml / _domain_policy.yml (the conf.d root, "
+                f"or a subdirectory for its subtree), so no policy in it is "
+                f"enforced — fix: move the domain_policies block into "
+                f"{target}",
+                file=fname, field="domain_policies")
 
 
 # #2906: the `_severity_dedup` words, as the exporter reads them
@@ -989,6 +1002,27 @@ def severity_dedup_mode(value: object) -> str | None:
     return None
 
 
+def routing_profile_ref(tenant: str, value: object) -> tuple[str | None, str | None]:
+    """#3269: a tenant's ``_routing_profile`` as ``(name, error)``.
+
+    A profile NAME, so a string: ``(value.strip(), None)`` — an empty string
+    names nothing, ``(None, None)``, as does null (not set). Any other value —
+    a mapping such as ``{default: p1, overrides: [...]}`` (a time window no
+    reserved key supports), a number, a boolean, a list — is ``(None,
+    message)``: the generator refuses the whole tree on it
+    (``routing_profile_invalid``) and check_routing_profiles reports the same
+    message. It used to be skipped in silence, the tenant falling back to the
+    default route while the file read as if it named a profile.
+    """
+    if isinstance(value, str):
+        return (value.strip() if value else None), None
+    if value is None:
+        return None, None
+    return None, (f"tenant '{tenant}': _routing_profile must be a routing profile "
+                  f"name (a string), got {value_type_text(value)} — a reserved key "
+                  f"takes no time window or expires (#3269); write the name alone")
+
+
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
@@ -1005,9 +1039,14 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     _record_unknown_routing_keys(result, overrides, layer="tenant", where=tenant, tenant=tenant)
 
     # v2.1.0 ADR-007: Extract _routing_profile reference
-    rp_ref = overrides.get("_routing_profile")
-    if rp_ref and isinstance(rp_ref, str):
-        result["tenant_profile_refs"][tenant] = rp_ref.strip()
+    # ⛔ #3269: judged by `routing_profile_ref` (check_routing_profiles reads
+    # it too); a value that is not a name refuses the whole tree.
+    rp_name, rp_error = routing_profile_ref(tenant, overrides.get("_routing_profile"))
+    if rp_name is not None:
+        result["tenant_profile_refs"][tenant] = rp_name
+    if rp_error is not None:
+        _field_type_error(result, "routing_profile_invalid", rp_error,
+                          tenant=tenant, field="_routing_profile")
 
     # Severity dedup: default "enable", explicit "disable" to opt out.
     # ⛔ #2906: judged by type and value (`severity_dedup_mode`); a value it
@@ -1083,7 +1122,6 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "routing_profiles": {},      # v2.1.0 ADR-007: named routing configs
         "domain_policies": {},       # v2.1.0 ADR-007: domain compliance constraints
         "tenant_profile_refs": {},   # v2.1.0 ADR-007: tenant → profile name
-        "policy_misplacements": [],  # ADR-007 --strict: domain_policies in wrong file
         "policy_file_errors": [],    # ADR-007: unusable _domain_policy.yaml (#3116: refused in every mode)
         # #1460: whole-file accounting. `files_read` counts config files this
         # reader parsed (a mapping, or an empty document); `files_skipped`
@@ -1728,11 +1766,9 @@ def load_tenant_tree(
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))
 
-    # ADR-007 --strict fail-open closure: a domain_policies block in a
-    # wrongly named file makes every policy in it silently vanish (validation
-    # stays green); strict mode surfaces it as a blocking ERROR, non-strict
-    # keeps the legacy stderr WARN only. (#3116: a _domain_policy.yaml that
-    # cannot be used is refused in every mode instead — field_type_errors.)
+    # (#3116 / #3126: a _domain_policy.yaml that cannot be used, and a
+    # domain_policies block in a file policies are not read from, are not
+    # --strict ERRORs here: both are field_type_errors, refused in every mode.)
     # #2431: a matcher value (`routes[i].match.<label>`, `overrides[i].
     # alertname` / `metric_group`) of the RESOLVED routing that PyYAML does
     # not read as a string is a blocking ERROR too (tenant-api's writes get
@@ -1787,13 +1823,6 @@ def load_tenant_tree(
                 f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}",
                 kind="routing_group_by_invalid", blocks="strict",
                 field=f"_routing_enforced.group_by[{idx}]"))
-        for fname in parsed.get("policy_misplacements", []):
-            schema_warnings.append(unclassified(
-                f"  {POLICY_ERROR_PREFIX} domain_policies block in "
-                f"'{fname}' is ignored (only _domain_policy.yaml is "
-                f"loaded), so those policies are not enforced — fix: move "
-                f"the domain_policies block into _domain_policy.yaml",
-                blocks="strict"))
 
     return TenantTree(
         routing_configs, parsed["dedup_configs"], schema_warnings,

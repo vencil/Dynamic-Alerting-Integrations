@@ -41,8 +41,11 @@ type valueCheck struct {
 var valueChecks = map[string]valueCheck{
 	"silent_mode": {
 		problem: silentModeProblem,
-		reading: func(sv ScheduledValue) any { return silentModeOf(sv).canonical },
-		effect:  "nothing is silenced while it is set",
+		reading: func(sv ScheduledValue) any {
+			r := silentModeOf(sv)
+			return r.canonical()
+		},
+		effect: "nothing is silenced while it is set",
 	},
 }
 

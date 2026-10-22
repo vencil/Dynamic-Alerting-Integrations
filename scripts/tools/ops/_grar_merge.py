@@ -90,7 +90,9 @@ FINDING_KINDS: dict[str, str] = {
         "A domain policy file, policy or constraint cannot be enforced as "
         "written (wrong shape or type, an entry that is no receiver type or "
         "tenant id, an unreadable duration bound, a file that cannot be "
-        "used); the whole tree is refused in every mode.",
+        "used, a domain_policies block in a file other than "
+        "_domain_policy.yaml / .yml); the whole tree is refused in every "
+        "mode.",
     "domain_policy_out_of_scope":
         "A subtree domain policy names a tenant outside its subtree; that "
         "entry is not enforced.",
@@ -139,6 +141,10 @@ FINDING_KINDS: dict[str, str] = {
     "severity_dedup_invalid":
         "A tenant's _severity_dedup is neither a boolean nor one of the "
         "enable / disable words; the whole tree is refused in every mode.",
+    "routing_profile_invalid":
+        "A tenant's _routing_profile is neither a profile name (a string) "
+        "nor null — a mapping such as a time-window schedule included; the "
+        "whole tree is refused in every mode.",
     "routing_enforced_match_invalid":
         "_routing_enforced.match is written but is not a list of matcher "
         "strings (e.g. a {severity: critical} mapping); no enforced route "

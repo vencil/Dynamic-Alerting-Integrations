@@ -425,6 +425,17 @@ class Entry:
         """A `_`-prefixed config name (class defaults or platform)."""
         return self.cls in RESERVED_CLASSES
 
+    @property
+    def root_platform_file(self) -> bool:
+        """A root platform file (#2743): a `_`-prefixed config file at the
+        conf.d root that the exporter reads — Go's `isRootPlatformKey`
+        (flat_build.go), whose `tenants:` block is the platform's per-tenant
+        default (platform_overlay.go). Go's three fields, composed: class
+        (reserved), depth 0, `exporter` among the readers (an unselected
+        carrier has none; parse_tree.go `readersFor`). False in names mode."""
+        return (self.reserved and self.depth == 0
+                and self.readers is not None and "exporter" in self.readers)
+
 
 def _entry_of(e: Any, i: int, mode: str) -> Entry:
     """One raw entry, checked whole. A field absent from it is a da-guard

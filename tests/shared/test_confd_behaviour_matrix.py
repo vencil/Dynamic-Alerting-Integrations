@@ -94,7 +94,7 @@ for _p in (HERE, TESTS):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from _platform_fs import unprivileged_sandbox  # noqa: E402
+from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
 
 CATALOG_PATH = HERE / "confd_fixture_catalog.json"
 CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
@@ -123,15 +123,15 @@ def build(base: pathlib.Path, row: dict) -> pathlib.Path:
             with open(p, "wb") as fh:
                 fh.write(data)
         elif kind == "symlink":
-            os.symlink(op["target"], p)
+            symlink_or_skip(op["target"], p)
         elif kind == "symlink_chain":
             via = os.path.join(os.fsencode(base), op["via"].encode("utf-8"))
             prev = op["target"]
             for i in range(op["length"]):
-                os.symlink(prev, os.path.join(via, b"l%d" % i))
+                symlink_or_skip(prev, os.path.join(via, b"l%d" % i))
                 prev = f"l{i}"
             rel_via = os.path.relpath(os.fsdecode(via), os.path.dirname(os.fsdecode(p)))
-            os.symlink(os.path.join(rel_via, prev), p)
+            symlink_or_skip(os.path.join(rel_via, prev), p)
         elif kind == "mkfifo":
             os.mkfifo(p)
         elif kind == "chmod":

@@ -46,7 +46,9 @@ const (
 	// key. Field is the key's dotted path.
 	undeterminedRoutingKey = "routing_key"
 	// undeterminedDomainPolicy: a `_domain_policy.yaml` / `.yml` file, any
-	// level. Field is "".
+	// level (Field is ""), or a top-level `domain_policies` key in any other
+	// file the generator reads (Field is "domain_policies"): the generator
+	// refuses the whole tree on such a block in every mode (#3126).
 	undeterminedDomainPolicy = "domain_policy"
 	// undeterminedRoutingProfilesFile: a `_routing_profiles.yaml` / `.yml`
 	// file, any level. Field is "".
@@ -150,6 +152,9 @@ func undeterminedFromParseTree(doc *parseTreeDoc, reported map[string]bool) []un
 		case routingProfilesNames[base]:
 			out = append(out, undeterminedItem{File: rel, Reason: undeterminedRoutingProfilesFile})
 			continue
+		}
+		if _, ok := content["domain_policies"]; ok {
+			out = append(out, undeterminedItem{File: rel, Field: "domain_policies", Reason: undeterminedDomainPolicy})
 		}
 		if tenants, ok := content["tenants"].(map[string]any); ok {
 			for id := range tenants {

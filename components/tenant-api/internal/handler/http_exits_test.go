@@ -198,8 +198,8 @@ func TestRecoverer_PanicAfterFlushFailsAChunkedRead(t *testing.T) {
 func TestWriteJSON_BytesAsEncoderWrote(t *testing.T) {
 	t.Parallel()
 	for _, v := range []any{
-		ErrorResponse{Error: `<script>alert("x")</script> & 'q'`, Code: errcode.NotFound, RequestID: "r1",
-			Extra: map[string]any{"group_id": "<img src=x onerror=1>", "n": 2}},
+		ErrorResponse{Error: `<script>alert("x")</script> & 'q'`, Code: errcode.PendingPR, RequestID: "r1",
+			Extra: map[string]any{"existing_pr_url": "<img src=x onerror=1>", "pr_number": 2}},
 		map[string]any{"html": "</b> ", "list": []int{1, 2}},
 		[]string{},
 		nil,
