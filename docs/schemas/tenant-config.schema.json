@@ -117,6 +117,10 @@
         ]
       },
       "patternProperties": {
+        "^_state_(?!maintenance$)": {
+          "$ref": "#/definitions/stateFilterScalar",
+          "$comment": "#3269: every _state_<filter> but _state_maintenance (a property of its own). Without it such a key fell to additionalProperties and its scheduled form passed."
+        },
         "^[a-z_][a-z0-9_]*\\{.*\\}$": {
           "oneOf": [
             { "$ref": "#/definitions/thresholdScalar" },
@@ -320,17 +324,19 @@
         }
       ]
     },
+    "stateFilterScalar": {
+      "$comment": "#3269: the scalar every _state_<filter> key takes (_state_maintenance's scalar branch too, via maintenanceMode). The enum is the exporter's state-filter reader (pkg/config/resolve.go resolveStateFiltersAt): 'enable', plus the words that switch a key off (pkg/config/parse.go disabledWords). TestStateFilterSchemaMatchesReader pins it in both directions. The reader also takes any other non-empty value as on; the schema names 'enable' alone for that (stricter, so it fails closed). A reserved key takes no schedule: the {default, overrides} / expires form is refused here as tenant-api's write gate refuses it, and the exporter reads its default alone.",
+      "type": "string",
+      "title": "State Filter (Scalar)",
+      "description": "'enable' turns this tenant's state filter on (for maintenance: the tenant is in maintenance, its alerts are suppressed via the user_state_filter{filter=\"maintenance\"} unless-join); 'disable' (or 'disabled', 'off', a quoted 'false') turns it off. A reserved key takes no time window or expires: the scheduled form ({default, overrides}) is not read and is refused (#3269). For one-time expiry or recurring windows of maintenance use _state_maintenance's structured object form.",
+      "enum": ["enable", "disable", "disabled", "off", "false"]
+    },
     "maintenanceMode": {
       "title": "Maintenance Mode Configuration",
       "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Distinct from silent_mode. Accepts the scalar state-filter shorthand ('enable'/'disable', like every other _state_* filter) OR the structured object (one-time expiry / recurring schedules).",
       "$comment": "oneOf[scalar, object] mirrors silentMode. The scalar form is what the exporter actually accepts for any _state_* filter (resolve.go ResolveStateFiltersAt: any non-'disable' value enables; the structured branch is taken only when the value contains 'expires:'). Modelling it object-only previously rejected the valid scalar form at schema-validation time (#880 surfaced this on examples/redis-tenant.yaml).",
       "oneOf": [
-        {
-          "type": "string",
-          "title": "Maintenance State (Scalar shorthand)",
-          "description": "'enable' = this tenant is in maintenance (its alerts are suppressed via the user_state_filter{filter=\"maintenance\"} unless-join); 'disable' = inactive. For one-time expiry or recurring windows use the structured object form below.",
-          "enum": ["enable", "disable"]
-        },
+        { "$ref": "#/definitions/stateFilterScalar" },
         {
           "type": "object",
           "title": "Maintenance Mode (Structured)",
