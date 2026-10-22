@@ -107,45 +107,33 @@ def plan_migration(conf_d: Path, reader: "_lib_parse_cache.ConfdReader | None" =
     """
     actions = []
     reader = reader or _lib_parse_cache.ConfdReader(conf_d)
+    # #3206: the run's index, whose taking is the fail-closed exit
+    # (`ConfdReader.tree`): a tree Go names paths on — a directory it cannot
+    # list, a link to a directory, a dangling link, a FIFO, a directory with
+    # a config file's name (`x.yaml/`), a file the exporter cannot decode —
+    # ends the run there, every such path named, exit 2: nothing is planned
+    # or moved.
     tree = reader.tree()
-    # #3206: which entries this level holds and what each one is (Go's
-    # `role`) are the entries of the document the content is read from —
-    # no second walk, no verdict of this tool's own.
+    # Which entries this level holds and what each one is (Go's `role`) are
+    # the entries of the document the content is read from — no second
+    # walk, no verdict of this tool's own.
     listing = reader.listing()
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(conf_d, tool="migrate_conf_d", listing=listing)
-    for e in listing.entries:
-        if e.not_a_file or e.unlistable_dir:
-            # Refused, whatever its name or depth (#3206): a directory it
-            # cannot list makes the plan incomplete (what is under it is
-            # unknown); a link to a directory is NOT "already nested" — the
-            # exporter does not follow it, nothing under it is loaded; a
-            # dangling link or a FIFO is nothing to move. Named; nothing is
-            # planned or moved.
-            kind, message = e.problem or ("read_failure", e.role or "")
-            raise FileUnreadable(e.path, kind, message)
     top_entries = [e for e in listing.entries if e.depth == 0]
     top = sorted(e.path for e in top_entries if e.config_file)
 
-    # The directories the walk enters (Go's role `dir`, a config-named one
-    # included: its files are read like any directory's) — already nested.
+    # The directories the walk enters (Go's role `dir`) — already nested.
     for e in top_entries:
         if not e.is_dir:
             continue
-        action = {
+        actions.append({
             "source": e.path + "/",
             "target": e.path + "/",
             "tenant_id": None,
             "metadata": None,
             "status": "skip_already_nested",
-        }
-        if e.problem is not None:
-            # A directory with a config file's name (`x.yaml/`): Go's problem
-            # on a `dir` entry. The exporter enters it, but the name says
-            # "file" — named in the summary, not silently counted.
-            action["reason"] = (f"the exporter enters it, but its name looks like a "
-                                f"file's ({e.problem[0]}: {' '.join(e.problem[1].split())})")
-        actions.append(action)
+        })
 
     reserved = {e.path for e in top_entries if e.reserved}
     for name in top:
@@ -347,9 +335,6 @@ def main() -> None:
     print(f"   Skip (unplaceable): {len(skipped_unplaceable)}")
     for a in skipped_unplaceable:
         print(f"     {a['source']}: {a['reason']} — move it by hand")
-    for a in skipped_nested:
-        if a.get("reason"):
-            print(f"     {a['source']}: {a['reason']}")
     print()
 
     if args.output_plan:

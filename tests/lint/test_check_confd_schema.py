@@ -16,6 +16,10 @@ import sys
 import tempfile
 
 import pytest
+
+#: The schema lint is a judge (#3206): its functions read trees Go names
+#: paths on as their own findings (`judging_run`; its `main` enters it too).
+pytestmark = pytest.mark.usefixtures("judging_run")
 import yaml
 
 jsonschema = pytest.importorskip("jsonschema")

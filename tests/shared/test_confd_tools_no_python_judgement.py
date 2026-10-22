@@ -291,3 +291,37 @@ def test_only_the_named_readers_take_half_the_tenant_scope() -> None:
     assert callers.get("tenant_files", set()) == set(HALF_SCOPE_CALLERS), callers
     assert callers.get("tenant_file_paths", set()) == {"tools/_lib_parse_tree.py",
                                                         "tools/_lib_parse_cache.py"}, callers
+
+
+# ── who may read a tree Go names paths on (#3206) ────────────────────
+
+#: The runs whose verdict on the tree IS their output, so the reader's
+#: fail-closed exit (`_lib_parse_cache.ConfdReader.tree`) stands aside for
+#: them (`_lib_parse_cache.judging`). Each names every such path as its own
+#: finding and fails — the behaviour matrix holds that.
+JUDGES = {
+    "tools/ops/validate_config.py": "the validator: a path Go names is its finding (exit 1)",
+    "tools/ops/generate_alertmanager_routes.py": "the route generator refuses such a tree itself",
+    "tools/lint/check_routing_profiles.py": "runs the route generator; its refusal is the finding",
+    "tools/ops/config_diff.py": "names a PR side it cannot read (exit 2) and leaves a broken "
+                                "base side uncompared (exit 1), so a repairing PR is not blocked",
+    "tools/lint/check_confd_schema.py": "the schema lint: names every entry it cannot read after "
+                                        "the violations of the rest of the tree, exit 2",
+}
+
+
+def test_only_the_judges_enter_judging() -> None:
+    """A tool that enters `judging()` reads a tree Go names paths on without
+    the shared refusal: exactly the files in `JUDGES` may, both ways."""
+    callers = set()
+    for p in sorted(p for root in ROOTS for p in root.rglob("*.py")):
+        tree = parse(p)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+                if name == "judging":
+                    callers.add(p.relative_to(SCRIPTS).as_posix())
+    assert callers == set(JUDGES), callers

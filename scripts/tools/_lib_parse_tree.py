@@ -506,6 +506,64 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
                  not_read=not_read, role=role, problem=problem, verdict=verdict)
 
 
+# ── the fail-closed exit (ADR-036 §7 step 9, #3206) ─────────────────
+
+#: Each `verdict`, in the words the refusal prints.
+VERDICT_WORDS = {
+    "unservable": ("the exporter cannot read or decode it, so the tree cannot be served "
+                   "(da-guard validation exits 3)"),
+    "tree_refused": ("the route generator refuses the whole tree on it "
+                     "(da-guard validation exits 4)"),
+}
+#: The `reason` of the `--json` envelope the refusal prints.
+REFUSAL_REASON = "conf_d_not_servable"
+
+
+def refused_entries(entries: "Iterable[Entry]") -> "tuple[Entry, ...]":
+    """Every entry Go gives a verdict (`verdict` not None), in order."""
+    return tuple(e for e in entries if e.verdict is not None)
+
+
+def refusal_lines(entries: "Iterable[Entry]", root: "Path | str") -> "list[str]":
+    """The refusal's stderr lines for *entries* (each with a verdict): one
+    `ERROR:` line per entry — every one, none elided: a reader must name
+    every path validation names — then one naming the tree. Every name is
+    escaped for the terminal (`safe_label`)."""
+    from _lib_io import safe_label  # lazy: _lib_io imports this module lazily too
+    bad = list(entries)
+    lines = []
+    for e in bad:
+        why = f" ({e.problem[0]}: {' '.join(e.problem[1].split())})" if e.problem else ""
+        lines.append(f"ERROR: {safe_label(e.path)}: {VERDICT_WORDS[e.verdict]}{safe_label(why)}")
+    lines.append(f"ERROR: the conf.d at {safe_label(str(root))} holds {len(bad)} path(s) "
+                 "da-guard validation names; this tool cannot read its whole input and "
+                 "stops before it reads or writes anything (fix or remove them, then "
+                 "run it again)")
+    return lines
+
+
+def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
+    """THE fail-closed exit of a conf.d tool run (#3206): when any of a
+    tree-mode document's *entries* has a `verdict`, print `refusal_lines`
+    to stderr and end the process with the caller-error code (2, the tool
+    could not read its whole input; `_lib_exitcodes.exit_caller_error`, so a
+    `--json` run prints its one envelope, reason `REFUSAL_REASON`). Returns
+    only when no entry has one.
+
+    ⛔ Tree mode only: list mode knows only the walk's half of the verdict
+    and file mode judges only its `--path` (see the module docstring). The
+    tools reach this through `_lib_parse_cache.ConfdReader.tree`, which every
+    accessor of a run's index goes through; nothing calls it by hand."""
+    bad = refused_entries(entries)
+    if not bad:
+        return
+    lines = refusal_lines(bad, root)
+    for line in lines:
+        print(line, file=sys.stderr)
+    from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
+    exit_caller_error(lines[-1], REFUSAL_REASON)
+
+
 def entries_of(doc: dict) -> "tuple[Entry, ...]":
     """The `entries` of a document `check_shape` (or a list check) accepted,
     as `Entry` objects. Raises ValueError for one it would not accept."""
@@ -707,7 +765,8 @@ class Tree:
     (content or a problem) → its readers; `unreadable`, path → (kind,
     message) of every entry with a problem; `not_read`, path → why no reader
     reads it. `rendered_by`: file → key → readers. `defaults_carriers`:
-    directory ("." for the root) → the one defaults carrier its chain reads."""
+    directory ("." for the root) → the one defaults carrier its chain reads.
+    `da_guard_version`: the version the document names."""
     selected: Mapping[str, tuple[str, ...]]
     unreadable: Mapping[str, tuple[str, str]]
     not_read: Mapping[str, str]
@@ -715,6 +774,7 @@ class Tree:
     _files: Mapping[str, Any]
     defaults_carriers: Optional[Mapping[str, str]] = None
     entries: "tuple[Entry, ...]" = ()
+    da_guard_version: Optional[str] = None
 
     def node(self, rel: str) -> Any:
         """File `rel`'s content as parse-tree's tagged nodes (shared with this
@@ -754,6 +814,7 @@ def tree_of(doc: dict) -> Tree:
         _files=MappingProxyType(dict(files)),
         defaults_carriers=MappingProxyType(dict(doc["defaults_carriers"])),
         entries=entries,
+        da_guard_version=doc["da_guard_version"],
     )
 
 

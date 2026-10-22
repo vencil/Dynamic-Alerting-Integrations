@@ -314,10 +314,6 @@ NOT_IN_MATRIX: dict[str, str] = {
 #: Table rows outside the population's root (`scripts/tools`).
 OUTSIDE_POPULATION = {"ops/configmap_assemble.py"}
 
-_X_EXIT = "X: shared fail-closed exit — a path Go names does not fail the tool (next PR)"
-_X_NAME = "X: shared fail-closed exit — a path Go names is not named (next PR)"
-_X_CRASH = "X: traceback — the tool crashes on a path Go names (next PR)"
-_X_UTF8 = "X: a file name that is not UTF-8 is not refused with exit 2 (next PR)"
 _B2 = "β2: migrates to da-guard"
 
 
@@ -328,26 +324,6 @@ def _cells(tool: str, reason: str, *rows: str) -> dict[tuple[str, str], str]:
 #: Cells that break the invariant today, measured against this contract.
 #: Each is strict: a fixed cell XPASSes and goes red until it is deleted.
 XFAIL: dict[tuple[str, str], str] = {
-    **_cells("configmap_assemble", _X_EXIT, "link_to_000_dir", "dir_444", "dangling_link", "looping_link",
-             "chain_41_links", "fifo", "config_named_dir", "unlistable_config_named_dir",
-             "unlistable_subdir", "unlistable_reserved_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("migrate_conf_d", _X_EXIT, "dir_444", "config_named_dir"),
-    **_cells("assemble_config_dir", _X_EXIT, "link_to_000_dir", "dir_444", "dangling_link", "looping_link",
-             "chain_41_links", "fifo", "config_named_dir", "unlistable_config_named_dir",
-             "unlistable_subdir", "unlistable_reserved_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("deprecate_rule", _X_EXIT, "link_to_000_dir", "dangling_link", "looping_link",
-             "chain_41_links", "fifo", "config_named_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("offboard_tenant", _X_EXIT, "link_to_000_dir", "dir_444", "dangling_link", "looping_link",
-             "chain_41_links", "fifo", "config_named_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("explain_keys", _X_NAME, "link_to_000_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("explain_keys", _X_EXIT, "config_named_dir"),
-    **_cells("init_project", _X_EXIT, "mode_000_file", "link_to_000_dir", "dangling_link", "looping_link",
-             "chain_41_links", "fifo", "config_named_dir", "unlistable_config_named_dir",
-             "unlistable_subdir", "unlistable_reserved_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("init_project", _X_CRASH, "link_into_000_dir", "dir_444"),
-    **_cells("compile_custom_alerts", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("compile_custom_alerts", _X_NAME, "config_named_dir"),
     **_cells("config_history", _B2, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
              "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
@@ -360,69 +336,16 @@ XFAIL: dict[tuple[str, str], str] = {
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
              "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
              "config_named_dir_link", "team_link_outside"),
-    **_cells("describe_tenant", _X_EXIT, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("describe_tenant --replaces", _X_EXIT, "mode_000_file", "link_into_000_dir", "link_to_000_dir",
-             "dir_444", "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("tenant_verify", _X_NAME, "link_to_000_dir", "config_named_dir_link"),
-    **_cells("tenant_verify", _X_EXIT, "config_named_dir", "team_link_outside"),
-    **_cells("generate_tenant_metadata", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("generate_tenant_metadata", _X_NAME, "config_named_dir"),
-    **_cells("check_path_metadata_consistency", _X_EXIT, "mode_000_file", "link_into_000_dir",
-             "link_to_000_dir", "dir_444", "dangling_link", "looping_link", "chain_41_links", "fifo",
-             "config_named_dir", "unlistable_config_named_dir", "unlistable_subdir",
-             "unlistable_reserved_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("analyze_rule_pack_gaps", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("analyze_rule_pack_gaps", _X_NAME, "config_named_dir"),
-    **_cells("explain_route", _X_EXIT, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("maintenance_scheduler", _X_NAME, "link_to_000_dir", "config_named_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("migration_audit", _X_EXIT, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("policy_engine", _X_NAME, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("policy_engine", _X_EXIT, "unlistable_reserved_dir"),
-    **_cells("policy_opa_bridge", _X_EXIT, "link_to_000_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("policy_opa_bridge", _X_NAME, "config_named_dir"),
-    **_cells("gitops_check", _X_NAME, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("blind_spot_discovery", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("blind_spot_discovery", _X_NAME, "config_named_dir"),
-    **_cells("threshold_recommend", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("threshold_recommend", _X_NAME, "config_named_dir"),
-    **_cells("threshold_govern", _X_EXIT, "link_to_000_dir", "config_named_dir_link", "team_link_outside"),
-    **_cells("threshold_govern", _X_NAME, "config_named_dir"),
-    **_cells("backtest_threshold", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
-             "team_link_outside"),
-    **_cells("backtest_threshold", _X_NAME, "config_named_dir"),
-    # da-guard's own subcommands refuse such a tree since #3206 (utf8_names.go),
-    # and every tool that asks one of them now does; this one asks none.
-    ("tenant_verify", "non_utf8_name"): _X_UTF8,
+    # tenant_verify's documented contract (cli-reference §tenant-verify, the
+    # rollback checklist) gives exit 2 to a FAILED verification and 1 to an
+    # input error, which a tree da-guard refuses is: it exits 1 here. Exit 2
+    # would read as "hash mismatch" to the checklist — the owner's call.
+    ("tenant_verify", "non_utf8_name"): ("X: tenant_verify's inverted exit contract (2 = "
+                                         "verification failed) — owner decision pending"),
     # A file the exporter cannot decode (validation's parse_failed).
-    **{(t, r): reason
+    **{(t, r): _B2
        for r in ("yaml_syntax_error", "multi_document_file")
-       for t, reason in (("init_project", _X_EXIT), ("describe_tenant", _X_EXIT),
-                         ("describe_tenant --replaces", _X_EXIT), ("migration_audit", _X_EXIT),
-                         ("check_path_metadata_consistency", _X_EXIT), ("explain_route", _X_EXIT),
-                         ("policy_engine", _X_NAME), ("gitops_check", _X_NAME),
-                         ("run_chaos_soak", _B2), ("drift_detect", _B2), ("config_history", _B2))},
+       for t in ("run_chaos_soak", "drift_detect", "config_history")},
 }
 
 # ── running one cell ────────────────────────────────────────────────────

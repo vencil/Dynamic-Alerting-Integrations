@@ -44,6 +44,24 @@ from assemble_config_dir import (
 
 # ── Helpers ───────────────────────────────────────────────────
 
+def _refused(capsys, fn, *args):
+    """*fn(*args)* ends the run through the shared fail-closed exit (#3206):
+    exit 2; its stderr, for the paths it names."""
+    with pytest.raises(SystemExit) as ei:
+        fn(*args)
+    assert ei.value.code == 2
+    return capsys.readouterr().err
+
+
+def _rc():
+    """`main()`'s exit: its return, or the code of a `SystemExit` (the
+    shared refusal ends the run from inside the reader, #3206)."""
+    try:
+        return main()
+    except SystemExit as exc:
+        return exc.code
+
+
 def _write_file(path, content="a: 1"):
     """寫入檔案並設定安全權限。"""
     p = Path(path)
@@ -295,12 +313,12 @@ class TestValidateMerged:
         issues = validate_merged(Path(config_dir))
         assert issues == []
 
-    def test_invalid_yaml(self, config_dir):
-        """無效 YAML 報告 parse error。"""
+    def test_invalid_yaml(self, config_dir, capsys):
+        """無效 YAML：讀它的那一刻就是共用的拒絕（#3206），點名該檔、exit 2。"""
         _write_file(os.path.join(config_dir, "bad.yaml"),
                      ":\n  - [invalid")
-        issues = validate_merged(Path(config_dir))
-        assert any("parse error" in i for i in issues)
+        err = _refused(capsys, validate_merged, Path(config_dir))
+        assert "ERROR: bad.yaml:" in err and "syntax_error" in err, err
 
     def test_empty_yaml(self, config_dir):
         """空 YAML 報告 empty 警告。"""
@@ -334,13 +352,13 @@ class TestValidateMerged:
         ("tenants:\n  t-a: {}\n---\ntenants: {}\n", "multiple_documents"),
         ("tenants:\n  t-a:\n    x: !!binary ODA=\n", "tag_not_allowed"),
     ])
-    def test_the_artifact_is_read_as_the_exporter_reads_it(self, config_dir, body, kind):
+    def test_the_artifact_is_read_as_the_exporter_reads_it(self, config_dir, body, kind,
+                                                           capsys):
         """#2906: through `da-guard parse-tree` — a file the exporter's yaml.v3
-        refuses is an ERROR naming parse-tree's kind."""
+        refuses refuses the run (#3206), naming parse-tree's kind."""
         _write_file(os.path.join(config_dir, "a.yaml"), body)
-        issues = validate_merged(Path(config_dir))
-        assert len(issues) == 1 and issues[0].startswith(
-            f"ERROR: a.yaml parse error ({kind}): "), issues
+        err = _refused(capsys, validate_merged, Path(config_dir))
+        assert "ERROR: a.yaml:" in err and f"({kind}:" in err, err
 
     def test_no_da_guard_raises_not_a_clean_result(self, config_dir, monkeypatch):
         """#2906: no usable da-guard is `ParseTreeError` (main: exit 2), never
@@ -352,11 +370,11 @@ class TestValidateMerged:
         with pytest.raises(_lib_parse_tree.BinaryMissing):
             validate_merged(Path(config_dir))
 
-    def test_non_dict_yaml(self, config_dir):
-        """頂層非 dict 的 YAML 報告 ERROR。"""
+    def test_non_dict_yaml(self, config_dir, capsys):
+        """頂層非 dict 的 YAML：exporter 不服務它，共用的拒絕點名它（#3206）。"""
         _write_file(os.path.join(config_dir, "list.yaml"), "- item1\n- item2\n")
-        issues = validate_merged(Path(config_dir))
-        assert any("not a mapping" in i for i in issues)
+        err = _refused(capsys, validate_merged, Path(config_dir))
+        assert "ERROR: list.yaml:" in err and "top_level_not_mapping" in err, err
 
     def test_no_yaml_files(self, config_dir):
         """無 YAML 檔案回傳空清單。"""
@@ -364,28 +382,28 @@ class TestValidateMerged:
         assert issues == []
 
     @pytest.mark.parametrize("carrier", ["bad.yml", "BAD.YAML"])
-    def test_validates_yml_and_upper_case_the_same_as_yaml(self, config_dir, carrier):
+    def test_validates_yml_and_upper_case_the_same_as_yaml(self, config_dir, carrier,
+                                                           capsys):
         """#1603 — the file `discover_yamls` now copies must also be the one
-        validated; a broken `.yml` in the output is a parse error like a
-        broken `.yaml`. Control: the same body under `.txt` is not a YAML
-        carrier and produces no issue.
+        validated; a broken `.yml` in the output is refused like a broken
+        `.yaml` (#3206). Control: the same body under `.txt` is not a YAML
+        carrier and is not named.
         """
         _write_file(os.path.join(config_dir, carrier), ":\n  - [invalid")
         _write_file(os.path.join(config_dir, "notes.txt"), ":\n  - [invalid")
-        issues = validate_merged(Path(config_dir))
-        assert [i for i in issues if carrier in i and "parse error" in i], issues
-        assert not [i for i in issues if "notes.txt" in i], issues
+        err = _refused(capsys, validate_merged, Path(config_dir))
+        assert f"ERROR: {carrier}:" in err, err
+        assert "notes.txt" not in err, err
 
     @pytest.mark.parametrize("shape", ["directory", "dangling-symlink"])
-    def test_an_unreadable_config_named_entry_is_a_warn_not_a_crash(
-            self, config_dir, shape):
+    def test_an_unreadable_config_named_entry_refuses_not_crashes(
+            self, config_dir, shape, capsys):
         """A YAML-named entry the exporter cannot read (a directory called
-        `stale.yaml`, a symlink to nowhere) must be NAMED as a WARN, not
-        opened: `open()` on it raises `IsADirectoryError` /
-        `FileNotFoundError`, which the parse-error handler does not catch.
-        The production change that reddens this: validating `visible`
-        without the `unusable_config_entries` split. Control: the good file
-        next to it is still validated clean and the result has no ERROR.
+        `stale.yaml`, a symlink to nowhere) is a path da-guard validation
+        names: the read refuses the run (#3206), naming it — never an
+        `open()` on it (`IsADirectoryError` / `FileNotFoundError`), and never
+        a WARN beside an artifact one tenant short. Control: the good file
+        next to it is not named.
         """
         if shape == "directory":
             os.mkdir(os.path.join(config_dir, "stale.yaml"))
@@ -394,12 +412,9 @@ class TestValidateMerged:
                             os.path.join(config_dir, "stale.yaml"))
         _write_file(os.path.join(config_dir, "good.yaml"),
                      "tenants:\n  t-a:\n    x: '1'")
-        issues = validate_merged(Path(config_dir))
-        named = [i for i in issues if "stale.yaml" in i]
-        assert len(named) == 1 and named[0].startswith("WARN: "), issues
-        assert "not validated" in named[0], named[0]
-        assert not has_errors(issues), issues
-        assert not [i for i in issues if "good.yaml" in i], issues
+        err = _refused(capsys, validate_merged, Path(config_dir))
+        assert "ERROR: stale.yaml:" in err, err
+        assert "good.yaml" not in err, err
 
 
 # ============================================================
@@ -668,10 +683,10 @@ class TestDuplicateTenantRefusal:
         real_run = subprocess.run
 
         def run(*a, **k):
-            # #3206: the conf.d listing is a da-guard subprocess too
-            # (`parse-tree --list-only`); only the validator is faked.
+            # #3206: the conf.d read is a da-guard subprocess too
+            # (`parse-tree`); only the validator is faked.
             cmd = a[0] if a else k.get("args")
-            if isinstance(cmd, (list, tuple)) and "--list-only" in cmd:
+            if isinstance(cmd, (list, tuple)) and "parse-tree" in cmd:
                 return real_run(*a, **k)
             return _R()
 
@@ -702,28 +717,24 @@ class TestValidateCanFail:
         _write_file(s / "broken.yaml", "tenants:\n  - [unclosed\n")
         out = Path(config_dir) / "output"
         cli_argv("assemble", "--sources", str(s), "--output", str(out))
-        assert main() == 2
+        assert _rc() == 2
         assert not out.exists()
 
-    def test_validate_still_covers_what_the_gate_cannot_see(
-            self, config_dir, cli_argv):
-        """⛔ The two are NOT redundant, and this pair is the proof.
-
-        A non-mapping top level parses fine, so `check_tenant_uniqueness`
-        skips it and answers `pass` — measured: rc 0, carrier written. Only
-        `--validate` reports it. Without this pair, deleting `--validate`
-        would look free.
+    def test_a_non_mapping_carrier_is_refused_before_the_gate(
+            self, config_dir, cli_argv, capsys):
+        """A non-mapping top level parses fine, so `check_tenant_uniqueness`
+        skips it — but the exporter does not serve it (`top_level_not_mapping`
+        is a path da-guard validation names), so reading the source refuses
+        the run (#3206), with or without `--validate`, nothing written.
         """
         s = _shard(config_dir, "team-a", ("db-a.yaml", "db-a", 50))
         _write_file(s / "scalar.yaml", "just-a-string\n")
         out = Path(config_dir) / "output"
-
-        cli_argv("assemble", "--sources", str(s), "--output", str(out))
-        assert main() == 0, "the gate is blind to this shape; that is the point"
-
-        cli_argv("assemble", "--sources", str(s), "--output", str(out),
-                 "--validate")
-        assert main() == 2
+        for extra in ((), ("--validate",)):
+            cli_argv("assemble", "--sources", str(s), "--output", str(out), *extra)
+            assert _rc() == 2
+            assert "ERROR: scalar.yaml:" in capsys.readouterr().err
+            assert not out.exists()
 
     def test_a_warn_only_issue_does_not_fail(self, config_dir, cli_argv):
         """CONTROL — an empty carrier is a placeholder, not a broken one."""
@@ -1042,18 +1053,20 @@ class TestANonRegularCarrierIsAnInputFactNotAFailedMeasurement:
         s = self._tree(config_dir)
         symlink_or_skip("../gone/dangling.yaml", (s / "dangling.yaml"))
         cli_argv("assemble", "--sources", str(s), "--check")
-        assert main() == 0
-        assert "dangling.yaml" in capsys.readouterr().err, (
-            "dropped without naming it — that is the silent loss this family "
-            "is about")
+        # #3206: a path validation names refuses the run (exit 2), named —
+        # neither dropped in silence nor "could not measure".
+        assert _rc() == 2
+        err = capsys.readouterr().err
+        assert "ERROR: dangling.yaml:" in err, err
+        assert "could not measure" not in err, err
 
     def test_a_directory_named_like_a_carrier_does_not_become_an_error(
             self, config_dir, capsys, cli_argv):
         s = self._tree(config_dir)
         (s / "subteam.yaml").mkdir()
         cli_argv("assemble", "--sources", str(s), "--check")
-        assert main() == 0
-        assert "subteam.yaml" in capsys.readouterr().err
+        assert _rc() == 2
+        assert "ERROR: subteam.yaml:" in capsys.readouterr().err
 
     def test_a_real_unreadable_stage_is_still_could_not_measure(
             self, config_dir, cli_argv, monkeypatch):
@@ -1107,14 +1120,17 @@ class TestZeroCarriersIsAMisPointedSources:
 
         Its fixture is a source whose only config-named entry is a DIRECTORY
         called `x.yaml`. Dropping unreadable entries (blind review) made that
-        tree assemble zero files and exit 0; this arm is what keeps it loud.
+        tree assemble zero files and exit 0; since #3206 it is a path
+        da-guard validation names, so the run is refused (exit 2), nothing
+        written.
         """
         s = Path(config_dir) / "team"
         s.mkdir()
         (s / "x.yaml").mkdir()
         out = Path(config_dir) / "out"
         cli_argv("assemble", "--sources", str(s), "--output", str(out))
-        assert main() == 1
+        assert _rc() == 2
+        assert not out.exists()
 
     def test_a_defaults_only_source_is_still_allowed(self, config_dir,
                                                      cli_argv):
@@ -1670,12 +1686,16 @@ class TestValidateReadsWhatTheExporterReads:
 
     def test_the_same_file_unhidden_still_fails_validation(
             self, config_dir, capsys, cli_argv):
-        """MUST-FIRE CONTROL — `--validate` still has teeth on a carrier the
-        exporter WILL read: same body, no dot, rc 2 and named in the issues."""
-        rc = self._run(config_dir, "stale.yaml", cli_argv)
+        """MUST-FIRE CONTROL — a carrier the exporter WILL read: same body,
+        no dot. The output is read before anything is written, and the file
+        is one da-guard validation names: rc 2, named (#3206)."""
+        try:
+            rc = self._run(config_dir, "stale.yaml", cli_argv)
+        except SystemExit as exc:
+            rc = exc.code
         captured = capsys.readouterr()
         assert rc == 2
-        assert f"ERROR: {self._ISSUE}" in captured.out
+        assert "ERROR: stale.yaml:" in captured.err, captured.err
         assert "skipped" not in captured.err, captured.err
 
     def test_validate_merged_itself_skips_and_names(self, config_dir, capsys):
@@ -1690,14 +1710,13 @@ class TestValidateReadsWhatTheExporterReads:
 
     def test_validate_merged_itself_still_rejects_the_unhidden_file(
             self, config_dir, capsys):
-        """Unit control: same body, no dot — the ERROR is there."""
+        """Unit control: same body, no dot — refused, named (#3206)."""
         out = Path(config_dir) / "out"
         out.mkdir()
         _write_file(out / "ok.yaml", _TENANT_DOC.format(t="ok", v=1))
         _write_file(out / "stale.yaml", self._BROKEN)
-        issues = validate_merged(out)
-        assert issues == [f"ERROR: {self._ISSUE}"]
-        assert "skipped" not in capsys.readouterr().err
+        err = _refused(capsys, validate_merged, out)
+        assert "ERROR: stale.yaml:" in err and "skipped" not in err, err
 
 
 class TestManifestOnlyNamesTheMissingFlag:
@@ -1791,24 +1810,28 @@ class TestCheckRefusesFlagsItCannotHonour:
         assert doc == {"status": "caller_error",
                        "reason": "check_with_validate"}
 
-    def test_check_alone_still_passes(self, config_dir, cli_argv):
-        """CONTROL — `--check` by itself is a file-selection preview; the
-        broken carrier is not its question."""
+    def test_check_alone_refuses_the_source(self, config_dir, cli_argv, capsys):
+        """CONTROL — `--check` by itself reads the source too, and the broken
+        carrier is a path da-guard validation names: rc 2, named (#3206),
+        not the flag refusal above."""
         cli_argv("assemble", "--sources", str(self._src(config_dir)),
                  "--check")
-        assert main() == EXIT_OK
+        assert _rc() == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "ERROR: notmap.yaml:" in err and "--validate" not in err, err
 
     def test_validate_does_fire_on_this_source(self, config_dir, capsys,
                                                cli_argv):
-        """CONTROL — the fixture is one `--validate` rejects, so the refusal
-        above is not passing on a source that would have validated anyway."""
+        """CONTROL — the fixture is one the tool rejects, so the refusal
+        above is not passing on a source that would have validated anyway:
+        reading it refuses the run (#3206), nothing written."""
         s = self._src(config_dir)
+        out = Path(config_dir) / "out"
         cli_argv("assemble", "--sources", str(s),
-                 "--output", str(Path(config_dir) / "out"), "--validate",
-                 "--json")
-        assert main() == 2   # the module's validation-error exit
-        doc = json.loads(capsys.readouterr().out)
-        assert doc["status"] == "validation_error"
+                 "--output", str(out), "--validate")
+        assert _rc() == 2
+        assert "ERROR: notmap.yaml:" in capsys.readouterr().err
+        assert not out.exists()
 
     def test_assembly_without_output_is_refused_with_a_document(
             self, config_dir, capsys, cli_argv):

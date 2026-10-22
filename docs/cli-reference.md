@@ -105,6 +105,10 @@ da-tools <command> --help
 
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。消費端請把 `2` 當「工具沒跑」處理，不要與 `1` 合併判定。
 
+#### conf.d refusal
+
+**conf.d 上有讀不了的路徑：每支 conf.d 工具同一個拒絕**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)，[ADR-036](adr/036-single-parser-effective-config.md) §7 步驟 9）：讀 `--config-dir`（或 `--conf-d`、`--sources`、`--output` 指到的既有 conf.d）的工具，在讀內容、寫任何東西之前，先取這次執行的整棵樹索引（`da-guard parse-tree`）。只要有一條路徑是 `da-guard` 驗證會點名的（`verdict` 為 `unservable`：exporter 讀不了或解不開，例如 YAML 語法錯、一個檔多份文件、懸空或迴圈的 symlink、FIFO、列不出內容的目錄；或 `tree_refused`：路由產生器因它拒收整棵樹，例如指向目錄的 symlink、名稱像設定檔的目錄 `x.yaml/`），工具就在 stderr 逐條印 `ERROR: <路徑>: <原因>`（**全部列出、不截斷**），最後一行點名那棵樹，然後以 `2` 結束，什麼都不寫；帶 `--json` 時 stdout 是一份 envelope，`reason` 為 `conf_d_not_servable`。`tenant-verify` 以它的輸入錯誤碼 `1` 結束（它的 `2` 是驗證不一致）。以前這些路徑在多支工具只印 `WARN`／`NOTE` 就照常結束碼 `0`（`configmap-assemble`、`assemble_config_dir`、`init`、`offboard`、`deprecate`、`migrate_conf_d` 的 `x.yaml/` 等），現在都是這個拒絕。例外是判定本身就是輸出的工具：`validate-config`（結束碼 `1`）、`generate-routes`、`check_routing_profiles`、`check_confd_schema`、`config-diff`，它們自己點名這些路徑並失敗，見各自章節；`da-tools guard` 本身照舊以 `3`／`4` 結束。
+
 ---
 
 ## 命令分類
@@ -1278,7 +1282,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
-在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名：檔中 `tenants:` 的 key 算宣告；init 讀不透的檔（讀法見下段）視為可能宣告每一個要求的租戶，跳過訊息會寫出原因與怎麼讓 init 讀得透。這種「讀不透」不會觸發下述並存拒絕：若 init 自有的 `conf.d/<t>.yaml` 已存在**且本身宣告 t**，init 照常重寫它並點名該檔請你用 guard 確認；自有檔存在但沒有宣告 t（例如佔位檔）時則視同沒有自有檔，跳過 t、不改寫它。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個讀得透的檔以 `tenants:` 的 key 宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
+在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名：檔中 `tenants:` 的 key 算宣告。conf.d 上有 init 讀不了的路徑（讀法見下段；例如解不開的檔、懸空 symlink、名稱像設定檔的目錄）時，init 在寫入任何檔之前拒絕執行，逐條點名、rc 2（見[共用的拒絕](#confd-refusal)，`--dry-run` 亦同）；以前這種檔被當成「可能宣告每一個要求的租戶」。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶、讀得了的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個讀得透的檔以 `tenants:` 的 key 宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
 
 **讀法與寫入前確認（ADR-036 §2，#2906）**：另一個檔「宣告了哪些租戶」取自 `da-guard parse-tree`（yaml.v3 的讀法，與 exporter 的讀法相同，不再以文字搜尋近似）；parse-tree 讀不了的檔（語法錯、重複鍵、不在允許清單的 tag、非 UTF-8 等）視為可能宣告每一個要求的租戶。寫入任何檔之前，產生的 `conf.d/_defaults.yaml` 與 `conf.d/<tenant>.yaml` 都以 parse-tree 在要寫入的路徑讀回，內容必須正是產生的內容，否則結束碼 `1`、一個檔都不寫。`conf.d/` 已存在時、或要寫 conf.d 檔時都需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。
 
@@ -1571,10 +1575,10 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 |------|------|
 | `values` | 兩邊讀成不同的值：檔案、行號、路徑、兩邊的讀法、建議寫法（例如 `on` 要布林就寫 `true`、要字串就寫 `"on"`）。`rewrites` 逐一列出可替換的寫法（`meaning`、`text`），`span` 是值寫在哪一行哪幾欄（含型別標記，不含錨點）；每一種寫法照做之後兩邊都讀成一樣，不會給有損的寫法（超出 int64 的整數、`tenants:` 清單裡的項目只給加引號的字串）；非有限數不給數字寫法、只給加引號的字串——門檻必須是有限數，不再建議 `.inf`／`.nan`（[#3140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3140)） |
 | `keys` | 只有一邊有的鍵 |
-| `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一） |
+| `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一）。⚠️ #3206 起永遠是空的：樹上有這種檔時整次稽核以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)）；鍵保留，schema 不變 |
 | `becomes_readable` | 今天整份拒收、`parse-tree` 讀得到的檔，附今天的錯誤與 yaml.v3 讀成的內容 |
 | `selection` | 只有一邊會讀的檔 |
-| `still_unreadable` | 兩邊都讀不了的檔（不是變化，不影響結束碼） |
+| `still_unreadable` | 兩邊都讀不了的檔。⚠️ 同上，永遠是空的 |
 | `files_compared` | 兩邊都讀得到、逐值比對過的檔（文字輸出在第二行列出），讓「沒有差異」與「什麼都沒比」分得開 |
 
 行號取自 PyYAML 的讀法：值標在它寫的那一行，鍵標在鍵所在行；經別名或合併取得的值，標在錨點或被合併 mapping 的定義行——改那一行會同時影響所有引用處。只有 yaml.v3 有的鍵標在父層的鍵那一行。
@@ -1587,7 +1591,7 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 
 | Code | 含義 |
 |------|------|
-| 0 | 兩邊讀法相同（`still_unreadable` 可能非空） |
+| 0 | 兩邊讀法相同 |
 | 1 | 列出了差異 |
 | 2 | caller error（`--config-dir` 不存在或讀不了、找不到 da-guard、da-guard 失敗或輸出不是可讀的 parse-tree 文件）；`--json` 時 stdout 仍是一份 JSON，`status: "caller_error"` 並帶 `reason` |
 
@@ -2407,7 +2411,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
-| `1` | pre-check 未通過（找不到租戶檔、有 parse-tree 讀不了的設定檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
+| `1` | pre-check 未通過（找不到租戶檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179）。conf.d 上有 parse-tree 讀不了的路徑時不到這一步：pre-check 之前就以 `2` 拒絕（[共用的拒絕](#confd-refusal)，#3206） |
 | `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；找不到可用的 da-guard |
 
 ---

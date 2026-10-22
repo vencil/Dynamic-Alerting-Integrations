@@ -1135,7 +1135,9 @@ def main(argv: list[str] | None = None) -> None:
     try:
         args = parser.parse_args(argv)
         # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.
-        with _lib_parse_cache.session():
+        # A judge (#3206): it refuses a tree Go names paths on as its own
+        # finding, so the reader's fail-closed exit stands aside.
+        with _lib_parse_cache.session(), _lib_parse_cache.judging():
             _run(args, findings)
         code = EXIT_OK
     except SystemExit as exc:

@@ -99,7 +99,6 @@ from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer
 )
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_defaults_name,
-    unusable_reason,
     warn_nested,
 )
 
@@ -485,9 +484,8 @@ def _declared_texts(declared):
 
 def _top_files(config_dir, reader):
     """parse-tree 選到的這一層（不含子目錄）的設定檔名，排序。Go 判定不是設定檔的
-    項目（目錄、目錄 symlink、FIFO、懸空連結）不在其中——`main` 以
-    `unusable_reason` 具名略過；stat／開檔被拒的照列，讀的時候以 unreadable 具名
-    （#3206）。"""
+    項目（目錄、目錄 symlink、FIFO、懸空連結）不在其中——有這種項目的樹在取得索引
+    時就被拒絕（#3206）。"""
     selected = reader.tree().selected
     return sorted(n for n, e in _top(reader).items() if e.config_file and n in selected)
 
@@ -553,8 +551,6 @@ def out_of_reach(config_dir, plane="root"):
     tree = reader.tree()
     out = []
     for name, listed in sorted(_top(reader).items()):
-        if listed.flagged:
-            continue                           # `main` 已以 `unusable_reason` 具名
         if listed.is_dir:
             out.append((f"{name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
                                     "`--config-dir <子樹> --plane subtree`"))
@@ -1029,17 +1025,12 @@ def _main():
     # 平面列舉同一個 scope；列舉失敗就讓它失敗，`scan_for_metric` 會用同一個目錄。
     base = Path(args.config_dir)
     reader = _reader(args.config_dir)
-    # #3206：這一輪只有一份索引——`reader` 讀內容的那份文件——警告、略過與原因
-    # 都取自它。
+    # #3206：這一輪只有一份索引——`reader` 讀內容的那份文件。取得它就是共用的
+    # fail-closed 出口（`ConfdReader.tree`）：樹上有 da-guard 驗證會點名的路徑
+    # （列不出內容的目錄、懸空連結、名字像設定檔的目錄、exporter 解不開的檔……）
+    # 就在任何寫入之前逐條點名、rc 2——不再「略過」或結尾列為未完成。
     listing = reader.listing()
     warn_nested(base, tool="deprecate_rule", listing=listing)
-    for e in listing.entries:
-        if e.depth == 0 and e.flagged:
-            print(f"  ⚠️  略過 {safe_label(e.name)}——{unusable_reason(base / e.path, listing)}",
-                  file=sys.stderr)
-    # 列不出內容的目錄（任何一層、任何名字）：底下的檔沒被掃描，下架完成與否無從判定，
-    # 結尾列為未完成、rc 1——報告不完整就不給 rc 0（#3206）。
-    blind = [e.path for e in listing.entries if e.unlistable_dir]
     unreachable = out_of_reach(base, args.plane)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
@@ -1301,9 +1292,6 @@ def _main():
                                _health_reason(key, raw, kind)))
     if refused is not None:
         incomplete.append(("寫入前確認", refused[0], refused[1]))
-    for rel in blind:
-        incomplete.append(("走訪", rel, "da-guard 列不出這個目錄的內容，底下的檔沒有被掃描，"
-                                        "無從判定該處是否仍有殘留；請修好權限後重跑"))
 
     # 總結
     print(f"\n{'='*60}")

@@ -1663,6 +1663,16 @@ def build_parser():
 
 
 def main():
+    """Entry point: `_main` as a judge (#3206) — a side with a path Go names
+    is this tool's own finding (a PR side: exit 2, named; a base side: that
+    view is not compared, exit 1, so a PR that repairs it is not blocked),
+    so the reader's fail-closed exit stands aside."""
+    import _lib_parse_cache  # noqa: PLC0415
+    with _lib_parse_cache.judging():
+        return _main()
+
+
+def _main():
     """Entry point.
 
     Exit codes (SSOT: ``scripts/tools/_lib_exitcodes.py``): 0 no change,

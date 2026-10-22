@@ -732,6 +732,15 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
             proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
 
+    # ⛔ The run's fail-closed exit (#3206): the tenants come from a tree
+    # Go serves, or from none. served-values carries only exit 3's half of
+    # Go's per-path verdict; the whole of it is parse-tree's, read once per
+    # tree and run (`reader_for`, the reader every other read of this tree
+    # in the run shares), with the da-guard and the limit this run used.
+    # A judge (`judging()`) reads such a tree on purpose, and runs no
+    # parse-tree for it here; nor does a run whose reader already read it.
+    import _lib_parse_cache  # lazy: it imports modules that import this one
+    _lib_parse_cache.require_servable(conf_d, binary=exe, timeout=timeout)
     if (parse_failed or unreadable) and not dropped_ok:
         clauses = []
         if parse_failed:

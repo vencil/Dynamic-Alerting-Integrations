@@ -51,9 +51,6 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     list_config_tree,
     select_defaults_carrier,
-    unusable_config_entries,
-    unusable_entry,
-    unusable_reason,
     warn_nested,
 )
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
@@ -124,8 +121,7 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     Returns every entry the walk lists at this level (any role); whether
     each is a config file is the caller's question, asked of *listing* — the
     caller's snapshot of `dir_path` (`config_listing(dir_path)` when None),
-    the one it also words each unusable entry from (#3206) — which the
-    nested warning reads too.
+    the one the nested warning reads too (#3206).
     """
     if listing is None:
         listing = config_listing(dir_path)
@@ -145,10 +141,6 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
                   f"does not read it", file=sys.stderr)
     return [] if listing is None else [dir_path / e.path for e in listing.entries
                                        if e.depth == 0]
-
-
-class SourceUnreadable(FileNotFoundError):
-    """A source directory the exporter's walk cannot list (`main` → rc 2)."""
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
@@ -192,30 +184,20 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # learns WHICH tenant just lost its carrier instead of finding out from
     # a missing alert. The listing (and the nested-config guard) is the
     # shared one — `validate_merged` reads the artifact through it too.
+    #
+    # ⛔ #3206: taking the listing is the run's fail-closed exit
+    # (`_lib_parse_cache.ConfdReader.tree`): a source Go names paths on — a
+    # shard's broken symlink, a directory called `subteam.yaml`, a source it
+    # cannot list, a file the exporter cannot decode — ends the run there,
+    # every such path named, exit 2, before anything is staged or written.
+    # (These were a WARN and "not merged": the generator refuses such a
+    # tree, so the artifact would not have been served either.)
     listing = config_listing(source_dir)
-    root = None if listing is None else listing.entry(".")
-    if root is not None and root.unlistable_dir:
-        # #3206: the source itself cannot be listed — nothing of it can be
-        # merged, and an empty merge would read as "no tenants": rc 2, named.
-        raise SourceUnreadable(f"source directory cannot be listed: {source_dir} — "
-                               f"{unusable_reason(source_dir, listing)}")
     named = list_visible_config_entries(source_dir, listing)
-
-    # ⛔ A config-NAMED entry that is not a readable file (a shard's broken
-    # symlink, a directory called `subteam.yaml`) is a fact about the input,
-    # not a failure to measure: the exporter logs a WARN and serves the tree,
-    # and the sibling producer passes it. Without this filter the gate stages
-    # it, the copy raises, and `sharded-check` answers "could not measure".
-    # Named, not silently dropped — `unusable_config_entries` is the shared
-    # wording so this reader phrases it like every other one.
-    unusable = set(unusable_config_entries(named, listing=listing))
-    for p in sorted(unusable):
-        print(f"WARN: {p} {unusable_reason(p, listing)} — not merged",
-              file=sys.stderr)
-    # #3206: a config file is what Go's `role` says is one — not `is_file()`,
-    # which answers False for a file it may not stat and so dropped a tenant
-    # with no word. One it cannot read fails at the copy.
-    return [p for p in named if p not in unusable and _config_file_in(listing, p)]
+    # A config file is what Go's `role` says is one — not `is_file()`, which
+    # answers False for a file it may not stat and so dropped a tenant with
+    # no word.
+    return [p for p in named if _config_file_in(listing, p)]
 
 
 def _config_file_in(listing: Any, p: Path) -> bool:
@@ -429,21 +411,12 @@ def validate_merged(output_dir: Path) -> List[str]:
     reader = _lib_parse_cache.ConfdReader(output_dir)
     reader.require()
     listing = config_listing(output_dir, reader=reader)
-    visible = list_visible_config_entries(output_dir, listing)
     # A config-NAMED entry the exporter cannot read (a directory called
-    # `stale.yaml`, a dangling symlink) is a fact about the artifact, not a
-    # reason to crash: `open()` on it raises outside `yaml.YAMLError`. Same
-    # predicate `discover_yamls` applies to the sources, and the same
-    # non-fatal wording — the exporter WARNs and serves the rest of the tree,
-    # so this face must not turn that into a traceback or an ERROR.
-    unusable = set(unusable_config_entries(visible, listing=listing))
-    for p in sorted(unusable):
-        issues.append(
-            f"{WARN_PREFIX}{p.name} {unusable_reason(p, listing)} — not validated, "
-            f"the exporter cannot read it either")
+    # `stale.yaml`, a dangling symlink) never reaches here: `require()` is the
+    # run's fail-closed exit (#3206), and the sources and the output were
+    # both read through it before the copy.
+    visible = list_visible_config_entries(output_dir, listing)
     for f in visible:
-        if f in unusable:
-            continue
         # #2906 review: parse-tree decides which files the exporter reads —
         # one it lists as `not_read` (the `_defaults` spelling a directory
         # does not select) is not validated, and said so; not an ERROR: the
@@ -654,50 +627,15 @@ def main() -> int:
     #
     # ⚠️ `--check` without `--output` cannot see that second half, and says so
     # below rather than implying it answered for the artifact.
-    # ⛔ `iter_config_files` walks with `onerror=None`, so a subdirectory it
-    # cannot enumerate disappears silently — and a second declaration of one of
-    # our tenants can be sitting in it. Measured as a non-root user (as root the
-    # mode bits are ignored, so the first probe wrongly showed nothing): with
-    # the subtree unreadable the gate answered rc 0 and said nothing, while the
-    # same tree readable was correctly refused. A subtree we could not read is
-    # "could not measure", which is the one thing this gate must never round
-    # down to clean. An unreadable FILE is different and only gets named: the
-    # exporter cannot read it either, so it declares nothing we would miss.
-    #
-    # A DIRECTORY SYMLINK is not blind (#1972): the exporter does not follow
-    # it, so nothing under it is read and nothing under it can be a second
-    # declaration. It is named, like an unreadable file, and not counted
-    # as "could not measure".
-    # #3206: "could not measure" is Go's `unlistable_dir` (a directory the
-    # walk could not list), not a stat of this tool's — a config-named
-    # directory the walk DID list is named, and its files are in the listing.
+    # #3206: the output directory is read through the run's index, whose
+    # taking is the fail-closed exit (`_lib_parse_cache.ConfdReader.tree`): a
+    # subtree Go could not list ("could not measure"), a dangling link or a
+    # directory with a config file's name there ends the run, every such
+    # path named, exit 2 — before anything is written. (They were a WARN, or
+    # the UNMEASURED verdict, here.)
     out_tree = None
     if output_dir is not None:
         out_tree = list_config_tree(output_dir)
-        blind = list(out_tree.unscannable)
-        unreadable_files = [p for p in out_tree.unusable if p not in blind]
-        for p in sorted(unreadable_files):
-            # A directory link's reason already says what the exporter does.
-            entry = unusable_entry(p, out_tree.listing)
-            tail = ("" if entry is not None and entry.dir_link
-                    else " — the exporter cannot read it either")
-            print(f"WARN: {p} {unusable_reason(p, out_tree.listing)}{tail}", file=sys.stderr)
-        if blind:
-            print(f"\n❌ cannot answer the duplicate-tenant question for "
-                  f"{output_dir}: " +
-                  ", ".join(f"{p} {unusable_reason(p, out_tree.listing)}"
-                            for p in sorted(blind)),
-                  file=sys.stderr)
-            print("   This is 'could not measure', NOT 'measured clean' — a "
-                  "second declaration of one of these tenants could be in "
-                  "there.", file=sys.stderr)
-            if args.json:
-                print(format_json_report({
-                    "status": tu.UNMEASURED,
-                    "reason": f"unreadable subtree under {output_dir}",
-                    "details": [str(p) for p in sorted(blind)],
-                }))
-            return tu.EXIT_FOR[tu.UNMEASURED]
 
     preexisting = (carriers_already_in(output_dir, out_tree.listing)
                    if output_dir and out_tree is not None else {})
