@@ -146,7 +146,9 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 		}
 		t.Setenv(fixtureCatalogEnv, copyPath)
 		// Nor pkg/config's source: hand it the records that source allows.
-		t.Setenv(walkRecordsEnv, strings.Join(possibleWalkRecords(t), ","))
+		records := possibleWalkRecords(t)
+		t.Setenv(walkRecordsEnv, strings.Join(records, ","))
+		t.Setenv(walkRecordsCountEnv, strconv.Itoa(len(records)))
 	}
 	if !testutil.RunUnprivileged(t, "TestFixtureCatalog_RecipesGiveTheirEntries") {
 		return
@@ -216,7 +218,15 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 	var missing []string
 	possible := possibleWalkRecords
 	if env := os.Getenv(walkRecordsEnv); env != "" {
-		possible = func(*testing.T) []string { return strings.Split(env, ",") }
+		// Handed over by the parent run: held to the count it sent and to a
+		// floor, so a smaller set set from outside cannot pass.
+		recs := strings.Split(env, ",")
+		n, err := strconv.Atoi(os.Getenv(walkRecordsCountEnv))
+		if err != nil || n != len(recs) || n < minWalkRecords {
+			t.Fatalf("%s holds %d records (count %q, floor %d): not the set the parent computed",
+				walkRecordsEnv, len(recs), os.Getenv(walkRecordsCountEnv), minWalkRecords)
+		}
+		possible = func(*testing.T) []string { return recs }
 	}
 	for _, rec := range possible(t) {
 		if len(seen[rec]) == 0 {
@@ -232,7 +242,13 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 
 // walkRecordsEnv carries possibleWalkRecords to the run as uid 65534, which
 // cannot read pkg/config's source in a 0700 home.
-const walkRecordsEnv = "VIBE_CONFD_WALK_RECORDS"
+const (
+	walkRecordsEnv      = "VIBE_CONFD_WALK_RECORDS"
+	walkRecordsCountEnv = "VIBE_CONFD_WALK_RECORDS_N"
+	// minWalkRecords: four Unreadable* reasons (stat_error split in two) and
+	// two NotFile* reasons today; fewer means the set was not pkg/config's.
+	minWalkRecords = 6
+)
 
 // walkRecordsOf is every record the exporter's full walk (config.ScanDirTreeFiles)
 // writes for the tree at conf, as possibleWalkRecords spells them.

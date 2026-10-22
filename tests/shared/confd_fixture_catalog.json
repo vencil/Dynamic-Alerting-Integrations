@@ -236,6 +236,30 @@
       ]}
     },
     {
+      "id": "yaml_syntax_error",
+      "matrix": "flagged",
+      "note": "a tenant file that is not YAML: the exporter cannot decode it (validation's parse_failed, exit 3)",
+      "base": true,
+      "ops": [
+        {"op": "write", "path": "conf.d/broken.yaml", "text": "tenants: {t1: [\n"}
+      ],
+      "expect": {"entries": [
+        {"path": "broken.yaml", "role": "config", "kind": "syntax_error"}
+      ]}
+    },
+    {
+      "id": "multi_document_file",
+      "matrix": "flagged",
+      "note": "a tenant file holding two YAML documents: refused like any content kind (validation's parse_failed, exit 3)",
+      "base": true,
+      "ops": [
+        {"op": "write", "path": "conf.d/multi.yaml", "text": "tenants:\n  m: {}\n---\ntenants:\n  n: {}\n"}
+      ],
+      "expect": {"entries": [
+        {"path": "multi.yaml", "role": "config", "kind": "multiple_documents"}
+      ]}
+    },
+    {
       "id": "non_utf8_name",
       "matrix": "refused",
       "note": "a file name that is not UTF-8: JSON cannot carry it, parse-tree refuses the whole tree (exit 2)",

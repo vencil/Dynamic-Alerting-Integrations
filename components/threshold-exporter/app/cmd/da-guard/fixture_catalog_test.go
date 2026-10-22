@@ -264,6 +264,17 @@ func TestFixtureCatalog_CoversEveryRoleAndKind(t *testing.T) {
 	if len(unknown) > 0 {
 		t.Errorf("catalogue rows expect pairs parse-tree cannot write: %v", unknown)
 	}
+	// The other direction of the Roles() check in emittableRoleKinds: every
+	// role Go has is one some row's tree produces.
+	for _, r := range config.Roles() {
+		produced := false
+		for rk, ids := range got {
+			produced = produced || (rk.Role == r && len(ids) > 0)
+		}
+		if !produced {
+			t.Errorf("role %q is in config.Roles() and no catalogue row produces it", r)
+		}
+	}
 	ids := map[string]bool{}
 	matrix := map[string]bool{"control": true, "flagged": true, "refused": true, "go_only": true}
 	for _, row := range c.Rows {

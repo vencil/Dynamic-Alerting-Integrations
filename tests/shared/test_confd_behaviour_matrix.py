@@ -79,6 +79,7 @@ import dataclasses
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 import tempfile
@@ -273,8 +274,8 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/batch_diagnose.py": "takes ConfigMap keys (a flat mapping fetched from a cluster), "
                                    "not a conf.d tree",
     "tools/ops/patch_config.py": "reads a ConfigMap through kubectl (flat keys), not a conf.d tree",
-    "tools/ops/diagnose.py": "a live health check of one tenant: without a Prometheus a clean tree "
-                             "exits 2, so its control cell cannot hold",
+    "tools/ops/diagnose.py": ("reads conf.d, but needs a live Prometheus: without one it exits 2 "
+                              "whatever the tree (a precondition the sandbox does not provide)"),
     "tools/ops/cutover_tenant.py": "drives a cluster (kubectl); takes no conf.d operand",
     "tools/ops/byo_check.py": "queries a live Prometheus / Alertmanager; takes no conf.d operand",
     "tools/ops/baseline_discovery.py": "queries a live Prometheus and writes suggestions; reads no conf.d",
@@ -399,7 +400,8 @@ XFAIL: dict[tuple[str, str], str] = {
     **_cells("policy_opa_bridge", _X_NAME, "config_named_dir"),
     **_cells("gitops_check", _X_NAME, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "config_named_dir_link"),
+             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
+             "config_named_dir_link", "team_link_outside"),
     **_cells("blind_spot_discovery", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
              "team_link_outside"),
     **_cells("blind_spot_discovery", _X_NAME, "config_named_dir"),
@@ -415,6 +417,14 @@ XFAIL: dict[tuple[str, str], str] = {
        for t in ("compile_custom_alerts", "tenant_verify", "generate_tenant_metadata",
                  "analyze_rule_pack_gaps", "guard_dispatch", "blind_spot_discovery",
                  "backtest_threshold")},
+    # A file the exporter cannot decode (validation's parse_failed).
+    **{(t, r): reason
+       for r in ("yaml_syntax_error", "multi_document_file")
+       for t, reason in (("init_project", _X_EXIT), ("describe_tenant", _X_EXIT),
+                         ("describe_tenant --replaces", _X_EXIT), ("migration_audit", _X_EXIT),
+                         ("check_path_metadata_consistency", _X_EXIT), ("explain_route", _X_EXIT),
+                         ("policy_engine", _X_NAME), ("gitops_check", _X_NAME),
+                         ("run_chaos_soak", _B2), ("drift_detect", _B2), ("config_history", _B2))},
 }
 
 # ── running one cell ────────────────────────────────────────────────────
@@ -518,7 +528,9 @@ def go_named(doc: dict) -> list[str]:
 
 
 def run_cell(box: pathlib.Path, run, tool: str, row: str) -> Cell:
-    cell = pathlib.Path(tempfile.mkdtemp(prefix=f"{tool.replace(' ', '_')}-{row}-",
+    # A neutral name: a cell directory named after its row would put the
+    # row's words (`team`, `_d`, ...) into every path the tool echoes.
+    cell = pathlib.Path(tempfile.mkdtemp(prefix="c-",
                                          dir=box / "cells"))
     try:
         conf = build(cell, ROWS[row])
@@ -543,15 +555,30 @@ def run_cell(box: pathlib.Path, run, tool: str, row: str) -> Cell:
         env_path = f"PATH={box / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
         r = run([*_TIMEOUT, shutil.which("env") or "/usr/bin/env", env_path, *argv])
         return Cell(tool, row, oracle.returncode, oracle.stdout[-800:] + oracle.stderr[-800:],
-                    named, r.returncode, r.stdout + r.stderr)
+                    named, r.returncode, _masked(r.stdout + r.stderr, box, cell, conf))
     finally:
         _open_up(cell)
         shutil.rmtree(cell, ignore_errors=True)
 
 
-def _named(out: str, path: str, conf_name: str) -> bool:
-    base = conf_name if path == "." else path.rsplit("/", 1)[-1]
-    return base in out
+def _masked(out: str, box: pathlib.Path, cell: pathlib.Path, conf: pathlib.Path) -> str:
+    """*out* with the cell's own location replaced by placeholders, so that
+    only what the tool says about the tree's entries can name one."""
+    for where, mark in ((str(conf), "<CONF>"), (str(cell), "<CELL>"),
+                        (os.path.relpath(cell, box), "<CELL>"), (str(box), "<BOX>")):
+        out = out.replace(where, mark)
+    return out
+
+
+def _named(out: str, path: str) -> bool:
+    """Whether *out* names the tree entry *path* (root-relative) — as the
+    path itself or its base name, as a whole token: not inside a longer
+    name (`_d` is not named by `reserved_dir`)."""
+    for word in {path, path.rsplit("/", 1)[-1]}:
+        # A sentence's full stop after the name still ends it.
+        if re.search(r"(?<![\w.-])" + re.escape(word) + r"(?![\w-]|\.[\w-])", out):
+            return True
+    return False
 
 
 def oracle_problems(c: Cell) -> list[str]:
@@ -586,7 +613,7 @@ def violations(c: Cell) -> list[str]:
     elif c.rc == 0:
         bad.append(f"exit 0, want non-zero (Go exits {c.oracle_rc} naming {c.named})")
     for path in c.named:
-        if not _named(c.out, path, CATALOG["root"]):
+        if not _named(c.out, path):
             bad.append(f"{path} (named by Go) is not named")
     if _TRACEBACK in c.out:
         bad.append("a Python traceback in the output")
@@ -597,7 +624,8 @@ def _cases():
     for tool in TOOLS:
         for row in MATRIX_ROWS:
             reason = XFAIL.get((tool, row))
-            marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
+            marks = ([pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
+                     if reason else [])
             yield pytest.param(tool, row, id=f"{tool}-{row}", marks=marks)
 
 
@@ -605,8 +633,11 @@ def _cases():
 def test_tool_follows_go_on_the_tree(box, tool, row):
     b, run = box
     c = run_cell(b, run, tool, row)
+    # Not an assertion: a cell whose oracle cannot judge fails even where
+    # the cell is an expected failure (xfail catches AssertionError only).
     bad = oracle_problems(c)
-    assert not bad, "\n".join(bad)
+    if bad:
+        pytest.fail("\n".join(bad))
     bad = violations(c)
     assert not bad, f"{tool} on {row}:\n" + "\n".join(bad)
 
