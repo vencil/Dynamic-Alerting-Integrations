@@ -294,7 +294,7 @@ When the write gate gains a value check, the repo may already hold values that f
 - **"Unchanged" is judged on what the reader parses**, not on the raw text. Quoting, key order in a mapping, comments, or case that the reader ignores anyway do not count as a change as long as the exporter parses the same result. For example, `Purple` changed to `purple` reads the same to the exporter and is unchanged; `purple` changed to `orange` is a change.
 - **An unchanged bad value becomes a notice and the write is accepted**; a bad value that is new or changed is blocked.
 - **When the file before the write cannot be read, the check is strict**: a new tenant, a missing file, or one that cannot be parsed leaves nothing to compare against, so everything is blocked as usual.
-- **It applies only to the newly added value checks.** The existing checks (for example, `_profile` naming a profile that does not exist, or `expires:` not being an RFC3339 time) are not relaxed by it.
+- **It applies only to the newly added value checks.** The existing checks (for example, `_profile` naming a profile that does not exist, or a scheduled value's `expires:` not being an RFC3339 time) are not relaxed by it.
 - **It applies to every tenant in the file**: one file can hold several tenants, and when one of them is written, an untouched bad value of another is also only a notice.
 - Reading a tenant's config (GET) uses the content on disk as its own baseline and reports an existing bad value as a notice.
 
@@ -317,7 +317,7 @@ db-a
 
 The input and today's measured output are in "Background"; this table is the verdict this ADR specifies, with each column produced per decisions 1, 4, 8 and 9.
 
-Value checks and decision 12: the exporter does not know `_silent_mode: purple` (it logs one line, `WARN: unknown silent mode "purple"`, and silences nothing). This ADR specifies tenant-api's results for it as follows:
+Value checks and decision 12: the exporter does not know `_silent_mode: purple` (it logs one line, `WARN: unknown silent mode "purple" for tenant=…` (abridged), and silences nothing). Once the write gate has the value check, this ADR specifies tenant-api's results for it as follows:
 
 | Write | Before, on disk | Result |
 |---|---|---|

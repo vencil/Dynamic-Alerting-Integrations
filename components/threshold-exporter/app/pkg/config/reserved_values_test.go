@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// The lists tenant-api keeps by hand today (handler/body_validator.go
-// unsetAllowedKeys, handler/batch_common.go scopeMetadataKeys); the registry's
+// The lists tenant-api keeps by hand today (tenant-api internal/handler/body_validator.go
+// unsetAllowedKeys, internal/handler/batch_common.go scopeMetadataKeys); the registry's
 // derivation must give the same keys before tenant-api reads it instead.
 func TestBatchUnsettableKeys_EqualTheHandlerList(t *testing.T) {
 	t.Parallel()

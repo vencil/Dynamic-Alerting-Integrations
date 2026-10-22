@@ -254,7 +254,7 @@ class TestRegistryShape:
 
 class TestValueAndBatchDerivations:
     """What tenant-api will read from the registry instead of its own lists
-    (handler/body_validator.go unsetAllowedKeys, handler/batch_common.go
+    (tenant-api internal/handler/body_validator.go unsetAllowedKeys, internal/handler/batch_common.go
     scopeMetadataKeys): derived, so a registry change moves them."""
 
     def test_the_committed_registry_gives_today_s_handler_lists(self):
