@@ -65,6 +65,14 @@ READERS = ("exporter", "generator", "custom_alert_compiler", "policy_engine", "a
 #: The layers that end up in a tenant's own config: a key read in one of them
 #: is a reserved TENANT key.
 TENANT_LAYERS = frozenset({"tenant", "platform_tenants", "profile"})
+#: A key's value shape, as its readers parse it (`value.shape`).
+SHAPES = ("scalar", "mapping", "list", "scalar_or_mapping")
+VALUE_FIELDS = frozenset({"shape", "check", "refers_to"})
+BATCH_FIELDS = frozenset({"unset"})
+#: The key whose content is the tenant's scope (environment/domain): a key
+#: whose value names an entry in a layer the exporter reads it from decides
+#: the tenant's scope too (``scope_metadata_keys``).
+METADATA_KEY = "_metadata"
 
 PY_BEGIN = "# BEGIN GENERATED reserved keys"
 PY_END = "# END GENERATED reserved keys"
@@ -89,6 +97,12 @@ def load_registry(path):
             reg = json.load(f)
     except (OSError, UnicodeDecodeError, ValueError) as e:
         raise RegistryError(f"{path}: cannot read: {e}") from e
+    return check_registry(reg, path)
+
+
+def check_registry(reg, path="registry"):
+    """*reg* (the registry's parsed JSON), checked as load_registry checks
+    it; *path* names it in the messages."""
     if not isinstance(reg, dict):
         raise RegistryError(f"{path}: not a JSON object")
     want = {"$comment", "layers", "readers", "keys", "prefixes", "retired"}
@@ -103,8 +117,9 @@ def load_registry(path):
             where = f"{section}.{name}"
             if not name.startswith("_") or name != name.strip():
                 raise RegistryError(f"{where}: a name must start with '_'")
-            if not isinstance(entry, dict) or not set(entry) <= {"read_by", "description", "note"}:
-                raise RegistryError(f"{where}: allowed fields are read_by, description, note")
+            allowed = ("read_by", "description", "note") + (("value", "batch") if section == "keys" else ())
+            if not isinstance(entry, dict) or not set(entry) <= set(allowed):
+                raise RegistryError(f"{where}: allowed fields are {', '.join(allowed)}")
             if not isinstance(entry.get("description"), str) or not entry["description"]:
                 raise RegistryError(f"{where}: description must be a non-empty string")
             read_by = entry.get("read_by")
@@ -119,12 +134,77 @@ def load_registry(path):
                         or any(l not in LAYERS for l in layers)
                         or len(set(layers)) != len(layers)):
                     raise RegistryError(f"{where}.read_by.{reader}: a non-empty list of distinct layers")
+    for name, entry in reg["keys"].items():
+        _check_value(f"keys.{name}", entry)
+        _check_batch(f"keys.{name}", entry)
     for name, hint in reg["retired"].items():
         if not name.startswith("_") or name in reg["keys"]:
             raise RegistryError(f"retired.{name}: must start with '_' and not be a key")
         if not isinstance(hint, str) or not hint:
             raise RegistryError(f"retired.{name}: the hint must be a non-empty string")
+    # A batch op that removes a scope key would move the tenant's scope with
+    # no post-state authorization (tenant-api touchesScopeMetadata judges only
+    # what a patch sets); `_metadata` itself is the scope.
+    for name in sorted(scope_metadata_keys(reg)) + [METADATA_KEY]:
+        if reg["keys"].get(name, {}).get("batch", {}).get("unset"):
+            raise RegistryError(f"keys.{name}.batch.unset: {name} decides the tenant's scope, "
+                                "so a batch cannot remove it")
     return reg
+
+
+def _check_value(where, entry):
+    """`value`: required for a key read in a tenant's config (tenant-api
+    decides from its shape whether a batch patch's string can set it); the
+    platform-top-only keys may leave it out."""
+    if "value" not in entry:
+        if _layers(entry) & TENANT_LAYERS:
+            raise RegistryError(f"{where}: a key read in a tenant's config needs value.shape")
+        return
+    value = entry["value"]  # an explicit null is refused below, not taken as absent
+    if not isinstance(value, dict) or not set(value) <= VALUE_FIELDS:
+        raise RegistryError(f"{where}.value: allowed fields are {', '.join(sorted(VALUE_FIELDS))}")
+    if value.get("shape") not in SHAPES:
+        raise RegistryError(f"{where}.value.shape: must be one of {', '.join(SHAPES)}")
+    if "check" in value:
+        if not isinstance(value["check"], str) or not value["check"]:
+            raise RegistryError(f"{where}.value.check: must be a non-empty string")
+        # The check is bound to a function of the exporter's parser
+        # (pkg/config/reserved_values.go): a key the exporter does not read
+        # has no parser there to judge it.
+        if "exporter" not in entry["read_by"]:
+            raise RegistryError(f"{where}.value.check: only a key the exporter reads can name a check")
+    if "refers_to" in value and value["refers_to"] not in LAYERS:
+        raise RegistryError(f"{where}.value.refers_to: must be one of {', '.join(LAYERS)}")
+
+
+def _check_batch(where, entry):
+    """`batch`: what a tenant-api batch op may do to the key."""
+    if "batch" not in entry:
+        return
+    batch = entry["batch"]  # an explicit null is refused below, not taken as absent
+    if not isinstance(batch, dict) or not set(batch) <= BATCH_FIELDS:
+        raise RegistryError(f"{where}.batch: allowed fields are {', '.join(sorted(BATCH_FIELDS))}")
+    if "unset" in batch and batch["unset"] is not True:
+        raise RegistryError(f"{where}.batch.unset: must be true (or left out)")
+
+
+def scope_metadata_keys(reg):
+    """The keys whose value names an entry (`value.refers_to`) of a layer the
+    exporter reads `_metadata` in: the tenant's scope then comes from that
+    entry's `_metadata` when no layer writes its own (`_profile`)."""
+    meta = reg["keys"].get(METADATA_KEY, {}).get("read_by", {}).get("exporter", [])
+    return sorted(k for k, e in reg["keys"].items()
+                  if e.get("value", {}).get("refers_to") in meta)
+
+
+def batch_unsettable_keys(reg):
+    """The keys a batch op's `unset` may remove: `batch.unset`, and every
+    retired key. A retired key is unsettable on purpose: nothing reads it,
+    so removing it changes no output, and while it is on disk the write gate
+    refuses every other write to the tenant — a batch must be able to
+    remove it."""
+    return sorted({k for k, e in reg["keys"].items() if e.get("batch", {}).get("unset")}
+                  | set(reg["retired"]))
 
 
 def is_routing_key(k):
@@ -159,6 +239,11 @@ def derive(reg):
         # caller (ADR-038 decision 5).
         "read_by": {k: e["read_by"] for k, e in keys.items()},
         "prefix_read_by": {p: e["read_by"] for p, e in reg["prefixes"].items()},
+        "value_shapes": {k: e["value"]["shape"] for k, e in sorted(keys.items()) if "value" in e},
+        "value_checks": {k: e["value"]["check"] for k, e in sorted(keys.items())
+                         if "check" in e.get("value", {})},
+        "batch_unsettable": batch_unsettable_keys(reg),
+        "scope_metadata_keys": scope_metadata_keys(reg),
     }
 
 
@@ -238,6 +323,16 @@ def render_go(d):
                           for k, rb in sorted(d["read_by"].items()))
     prefix_readers = "".join(f"\t{{{_go_str(p)}, map[string][]string{readers(rb)}}},\n"
                              for p, rb in d["prefix_read_by"].items())
+
+    def str_map(m):
+        width = max((len(_go_str(k)) for k in m), default=0)
+        body = "".join(f"\t{_go_str(k)}:{' ' * (width - len(_go_str(k)) + 1)}{_go_str(v)},\n"
+                       for k, v in m.items())
+        return f"map[string]string{{\n{body}}}" if body else "map[string]string{}"
+
+    def str_slice(items):
+        return f"[]string{{\n{lines(items)}}}" if items else "[]string{}"
+
     return (
         "// Code generated by scripts/tools/dx/sync_schema.py; DO NOT EDIT.\n"
         f"// Source: {REGISTRY_REL} (ADR-038 decision 2).\n"
@@ -271,6 +366,25 @@ def render_go(d):
         f"var reservedKeyReaders = map[string]map[string][]string{{\n{key_readers}}}\n"
         "\n"
         f"var reservedPrefixReaders = []prefixReaders{{\n{prefix_readers}}}\n"
+        "\n"
+        "// reservedValueShapes is each key's value shape as its readers parse\n"
+        "// it (`value.shape`): scalar, mapping, list or scalar_or_mapping.\n"
+        f"var reservedValueShapes = {str_map(d['value_shapes'])}\n"
+        "\n"
+        "// reservedValueChecks names, per key, the exporter-side function that\n"
+        "// judges its value (`value.check`; bound in valueChecks).\n"
+        f"var reservedValueChecks = {str_map(d['value_checks'])}\n"
+        "\n"
+        "// batchUnsettableKeys are the keys a tenant-api batch op's `unset` may\n"
+        "// remove: `batch.unset`, and every retired key — on purpose: nothing\n"
+        "// reads a retired key, and while it is on disk the write gate refuses\n"
+        "// every other write to the tenant.\n"
+        f"var batchUnsettableKeys = {str_slice(d['batch_unsettable'])}\n"
+        "\n"
+        "// scopeMetadataKeys are the keys whose value names an entry\n"
+        "// (`value.refers_to`) of a layer the exporter reads `_metadata` in, so\n"
+        "// they decide the tenant's environment/domain.\n"
+        f"var scopeMetadataKeys = {str_slice(d['scope_metadata_keys'])}\n"
     )
 
 
