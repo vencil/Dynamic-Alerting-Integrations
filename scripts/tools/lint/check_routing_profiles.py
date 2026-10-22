@@ -42,6 +42,8 @@ from _lib_confd import (  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'ops'))
 # #2326: the directory-scope rules of the route generator, not a copy of them.
 from _grar_merge import ROOT_LEVEL, chain_levels, level_contains  # noqa: E402
+# #3269: the route generator's own reading of `_routing_profile`, not a copy.
+from _grar_parse import routing_profile_ref  # noqa: E402
 
 _LANG = detect_cli_lang()
 
@@ -65,6 +67,7 @@ def _collect_data(config_dir: str) -> dict:
     policies: dict = {}
     tenant_ids: set[str] = set()
     profile_refs: dict[str, str] = {}  # tenant → profile name
+    profile_ref_errors: list[str] = []  # #3269: a `_routing_profile` that is no name
     profiles_by_dir: dict[str, dict] = {}
     profile_origin: dict = {}
     profile_duplicates: list[tuple[str, str, str]] = []
@@ -167,9 +170,11 @@ def _collect_data(config_dir: str) -> dict:
         entries, lambda: declared_tenant_ids(config_dir, reader))
     for tenant, overrides in merged.items():
         tenant_ids.add(tenant)
-        ref = overrides.get("_routing_profile")
-        if ref and isinstance(ref, str):
-            profile_refs[tenant] = ref.strip()
+        ref, ref_error = routing_profile_ref(tenant, overrides.get("_routing_profile"))
+        if ref is not None:
+            profile_refs[tenant] = ref
+        if ref_error is not None:
+            profile_ref_errors.append(ref_error)
 
     return {
         "profiles": profiles,
@@ -177,6 +182,7 @@ def _collect_data(config_dir: str) -> dict:
         "platform_orphans": platform_orphans,
         "tenant_ids": tenant_ids,
         "profile_refs": profile_refs,
+        "profile_ref_errors": sorted(profile_ref_errors),
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
         # #3206: which of them is a platform (`_`) file is Go's class.
@@ -254,6 +260,11 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
             f"ERROR: routing_profile '{pname}' is defined in both {first} "
             f"and {second} — a profile name must be unique across the whole "
             f"conf.d tree")
+    # #3269: a `_routing_profile` that is not a name is an error whatever
+    # --strict says — the route generator refuses the tree on it
+    # (routing_profile_invalid), with this message.
+    for msg in data.get("profile_ref_errors", []):
+        messages.append(f"ERROR: {msg}")
     origin = data.get("profile_origin", {})
     if not profiles_unreadable:
         for tenant, ref in sorted(profile_refs.items()):

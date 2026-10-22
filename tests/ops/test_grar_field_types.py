@@ -14,6 +14,9 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，�
 * 拒收＝所有模式（render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`、
   `--strict`）rc 1、不寫出、不套用，走 `tree_refusal` 那一條路；validate-config 的
   schema 列 FAIL。
+* 租戶的 `_routing_profile` 只收 profile 名稱（字串）或 null（#3269）：mapping（例如帶時間窗
+  的 `{default: p1, overrides: [...]}`）、數字、布林、list 一律拒收；過去整個值被靜默略過，
+  租戶落回預設路由。
 * 未加引號的 `enabled: yes`、`send_resolved: off`、`_severity_dedup: no` 是字串，
   同樣拒收（步驟 4 之前 PyYAML 讀成布林、照收）；`_severity_dedup: off` 是 exporter
   也認得的詞，照收。
@@ -71,6 +74,14 @@ def _dedup(value: str) -> dict[str, str]:
     return {"t-a.yaml": _tenant("t-a", f"    _severity_dedup: {value}\n")}
 
 
+def _routing_profile(value: str) -> dict[str, str]:
+    """#3269: a tenant's `_routing_profile` (a profile name)."""
+    return {"t-a.yaml": _tenant("t-a", f"    _routing_profile: {value}\n"),
+            "_routing_profiles.yaml": (
+                "routing_profiles:\n  p1:\n    receiver:\n      type: webhook\n"
+                "      url: https://hooks.example.com/p1\n")}
+
+
 def _send_resolved(value: str) -> dict[str, str]:
     return {"t-a.yaml": _tenant("t-a", receiver=_HOOK + f"        send_resolved: {value}\n")}
 
@@ -122,6 +133,12 @@ FIELDS = {
         _dedup, "severity_dedup_invalid", "_severity_dedup",
         ["enable", "disable", '"Disabled"', "' off '", "off", "false", "~"],
         ['"no"', '"yes"', "no", "yes", "''", "1", "maybe", "[disable]"]),
+    "_routing_profile": (
+        _routing_profile, "routing_profile_invalid", "_routing_profile",
+        ["p1", "' p1 '", "~"],
+        ['{default: p1, overrides: [{window: "01:00-02:00", value: p2}]}',
+         '{default: p1, expires: "2099-01-01T00:00:00Z"}', "{default: p1}",
+         "1", "true", "[p1]"]),
     "send_resolved": (
         _send_resolved, "invalid_receiver_field", "receiver.send_resolved",
         ["true", "false", "~"], ['"yes"', '"true"', "yes", "'Off'", "maybe", "1"]),
@@ -218,6 +235,7 @@ _MODES = {
 # One quoted string per field: the form this PR newly refuses.
 _QUOTED = {"routing_enforced.enabled": '"true"', "require_critical_escalation": '"true"',
            "_severity_dedup": '"no"', "send_resolved": '"yes"', "require_tls": '"true"',
+           "_routing_profile": '{default: p1, overrides: [{window: "01:00-02:00", value: p2}]}',
            "proxy_from_environment": '"yes"', "routing_defaults.send_resolved": '"false"',
            "routing_profile.send_resolved": '"no"', "override.send_resolved": '"true"'}
 

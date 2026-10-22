@@ -1544,7 +1544,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// (resolveBaseRows is the only resolution path with the fail-safe hook).
 			// Warn when it appears elsewhere (silent no-op) or is malformed (would
 			// never auto-revert) — fail-loud per dev-rule #5.
-			if sv.Expiry != nil && sv.Expiry.Expires != "" {
+			//
+			// #3269: not on a reserved key's schedule — the reserved branch
+			// below refuses it as one finding (scheduledReserved), naming
+			// every field the readers ignore, with the ratchet a value
+			// finding gets. Two messages for one value would be one too many.
+			if sv.Expiry != nil && sv.Expiry.Expires != "" && !scheduledReserved(canonKey, sv) {
 				// ⛔ Order matters, and it is defaults-first — matching the
 				// _critical branch below. Nothing forbids a key from being in
 				// BOTH sets (mergePartialInto only unions the list; no schema
@@ -1609,6 +1614,15 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// not Ratchet stays strict.
 				if problem := CheckReservedValue(canonKey, sv); problem != "" {
 					f := newValueFinding(tenant, canonKey, sv, problem)
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
+				// #3269: a schedule on a reserved key is read by no one —
+				// every reader takes the `default` alone (servedValue).
+				// Refused where it is written; an unchanged one already on
+				// disk is a notice (Ratchet compares it as written).
+				if scheduledReserved(canonKey, sv) {
+					f := newScheduleFinding(tenant, canonKey, sv)
 					v.Errors = append(v.Errors, f.Message)
 					v.Values = append(v.Values, f)
 				}

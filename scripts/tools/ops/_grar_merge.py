@@ -141,6 +141,10 @@ FINDING_KINDS: dict[str, str] = {
     "severity_dedup_invalid":
         "A tenant's _severity_dedup is neither a boolean nor one of the "
         "enable / disable words; the whole tree is refused in every mode.",
+    "routing_profile_invalid":
+        "A tenant's _routing_profile is neither a profile name (a string) "
+        "nor null — a mapping such as a time-window schedule included; the "
+        "whole tree is refused in every mode.",
     "routing_enforced_match_invalid":
         "_routing_enforced.match is written but is not a list of matcher "
         "strings (e.g. a {severity: critical} mapping); no enforced route "
