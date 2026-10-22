@@ -508,8 +508,10 @@ class TestProfilesCheck:
             result = vc.check_profiles(d)
             assert result["status"] == vc.PASS, result
 
-    def test_other_reserved_key_in_profile_still_warns(self):
-        """Out of #2914's scope: `_silent_mode` in a profile stays a WARN."""
+    def test_other_reserved_key_in_profile_passes(self):
+        """#3042: `_silent_mode` in a profile is read by the exporter (the
+        registry's `profile` layer), and whether a `_` key is read is the
+        `unread_keys` row's verdict, not this row's — no WARN here."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
                 "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
@@ -517,9 +519,7 @@ class TestProfilesCheck:
                 "_defaults.yaml": "defaults: {}\n",
             })
             result = vc.check_profiles(d)
-            assert result["status"] == vc.WARN, result
-            assert any("reserved key \"_silent_mode\"" in detail
-                       for detail in result["details"]), result
+            assert result["status"] == vc.PASS, result
 
     def test_empty_profile_warns(self):
         """Empty profile should warn."""
@@ -700,18 +700,24 @@ class TestProfilesExtended:
             assert any("_profiles.yaml" in detail and "do not decode" in detail
                        for detail in result["details"]), result
 
-    def test_unknown_reserved_key_in_profile(self):
-        """Profile with unknown reserved key should warn."""
+    def test_profile_row_judges_no_key_names(self):
+        """A `_` key in a profile is not this row's to judge (#3042): the
+        `unread_keys` row's shared verdict is (ADR-038 decision 3). Neither
+        `_custom_alerts` — read in a profile (ADR-024 §3) — nor a key the
+        registry does not list makes the row WARN."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"p1": {
                     "mysql_connections": 80,
+                    "_custom_alerts": [{"recipe": "threshold", "name": "q", "metric": "m",
+                                        "op": ">", "window": "5m", "threshold": "1:warning"}],
                     "_unknown_thing": "bad",
                 }}}, f)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
-            assert result["status"] == vc.WARN
+            assert result["status"] == vc.PASS, result
+            assert not any("reserved key" in line for line in result["details"]), result
 
     def test_tenant_without_profile_ref(self):
         """Tenant without _profile doesn't cause issues."""
