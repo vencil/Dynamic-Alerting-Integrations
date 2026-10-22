@@ -71,6 +71,15 @@ _SHAPES = {
         "status": "success",
         "data": {"resultType": "matrix",
                  "result": [good, {"metric": {"tenant": "t2"}, "values": [[1]]}]}},
+    # #3213: a sample value the lib cannot read is the answer's defect, named
+    "sample_not_number": lambda good: {
+        "status": "success",
+        "data": {"resultType": "matrix",
+                 "result": [good, {"metric": {"tenant": "t2"}, "values": [[1, "abc"]]}]}},
+    "sample_not_string": lambda good: {
+        "status": "success",
+        "data": {"resultType": "matrix",
+                 "result": [good, {"metric": {"tenant": "t2"}, "values": [[1, 1]]}]}},
     "result_type_vector": lambda good: {
         "status": "success",
         "data": {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}]}},
@@ -250,8 +259,9 @@ def test_alertmanager_answered_is_measured():
 
 @pytest.mark.parametrize("am", [
     ("refused",), ("500",), ("body", {"alerts": []}), ("body", ["x"]),
-    ("body", [{"labels": "x"}]),
-], ids=["refused", "http-500", "object-body", "item-not-object", "labels-not-object"])
+    ("body", [{"labels": "x"}]), ("body", [{"labels": {"tenant": 1}}]),
+], ids=["refused", "http-500", "object-body", "item-not-object", "labels-not-object",
+        "label-value-not-string"])
 @pytest.mark.parametrize("extra", [[], ["--min-score", "75"]], ids=["ci", "ci-min-score"])
 def test_alertmanager_not_measured_is_rc2(am, extra):
     """#3073: an asked-for Alertmanager that did not answer is not "0
@@ -275,3 +285,70 @@ def test_alertmanager_not_measured_text_modes_print_no_report(extra):
     assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
     assert proc.stdout == "", proc.stdout
     assert "Alertmanager query failed" in proc.stderr, proc.stderr
+
+
+# ── non-finite samples (#3213) ───────────────────────────────────────
+
+_NON_FINITE = ["+Inf", "-Inf", "NaN"]
+
+
+@pytest.mark.parametrize("value", _NON_FINITE)
+def test_alert_quality_drops_and_discloses_non_finite(value):
+    """ALERTS is 0 / 1: a non-finite sample is no state. Left out, counted,
+    rc by the analysis (0) — not an internal error (rc 2) nor a silent skip."""
+    row = {"metric": {"alertname": "HostDown", "tenant": "tenant-one"},
+           "values": [[_NOW - 180, "1"], [_NOW - 120, value], [_NOW - 60, "1"]]}
+    body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
+    with _fake(body) as url:
+        proc = _run("alert_quality", *_argv("alert_quality", url))
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+    doc = json.loads(proc.stdout)
+    assert doc["summary"]["non_finite_samples_dropped"] == 1, doc["summary"]
+    (alert,) = doc["tenants"][0]["alerts"]
+    assert (alert["non_finite_samples_dropped"], alert["total_alerts"]) == (1, 2), alert
+    with _fake(body) as url:
+        text = _run("alert_quality", "--prometheus", url)
+    assert "1 non-finite sample value(s)" in text.stdout, text.stdout
+
+
+@pytest.mark.parametrize("value", _NON_FINITE)
+def test_cardinality_drops_and_discloses_non_finite(value):
+    good = _GOOD_ROW["cardinality_forecasting"]
+    row = dict(good, values=good["values"][:-1] + [[good["values"][-1][0], value]])
+    body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
+    with _fake(body) as url:
+        proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url))
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+    doc = json.loads(proc.stdout)
+    assert doc["summary"]["non_finite_samples_dropped"] == 1, doc["summary"]
+    (t,) = doc["tenants"]
+    assert (t["data_points"], t["current_cardinality"]) == (len(good["values"]) - 1, 10), t
+    with _fake(body) as url:
+        text = _run("cardinality_forecasting", "--prometheus", url)
+    assert "1 non-finite sample value(s)" in text.stdout, text.stdout
+
+
+def test_cardinality_all_non_finite_is_no_data_and_says_how_many():
+    row = {"metric": {"tenant": "tenant-one"},
+           "values": [[_NOW - d * 86400, "NaN"] for d in range(5, 0, -1)]}
+    body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
+    with _fake(body) as url:
+        proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url))
+    assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+    doc = json.loads(proc.stdout)
+    assert (doc["status"], doc["reason"]) == ("no_data", "no_cardinality_data"), doc
+    assert doc["summary"]["non_finite_samples_dropped"] == 5, doc["summary"]
+    assert "Traceback" not in proc.stderr
+
+
+def test_backtest_keeps_inf_as_a_sample(tmp_path):
+    """backtest compares +Inf like Alertmanager would: it is a breach of an
+    upper threshold, not a gap (#2963); NaN alone stays no_data."""
+    row = {"metric": {}, "values": [[i, "40"] for i in range(9)] + [[9, "+Inf"]]}
+    body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
+    with _fake(body) as url:
+        proc = _run("backtest_threshold", *_argv("backtest_threshold", url, tmp_path / "o.json"))
+    assert proc.returncode in (0, 1), (proc.returncode, proc.stdout, proc.stderr)
+    change = json.loads(proc.stdout)["changes"][0]
+    assert (change["status"], change["data_points"]) == ("analyzed", 10), change
+    assert (change["old_breach_count"], change["new_breach_count"]) == (1, 1), change

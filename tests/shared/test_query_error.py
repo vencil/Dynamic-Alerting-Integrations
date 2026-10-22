@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
 import subprocess
 import sys
@@ -87,6 +88,43 @@ def test_matrix_rows_names_the_defect(body, defect):
     assert (exc.value.source, exc.value.reason) == ("Prometheus", "prometheus_query_error")
 
 
+@pytest.mark.parametrize("raw,want", [
+    ("1", 1.0), ("-2.5", -2.5), ("1e3", 1000.0), ("+Inf", math.inf), ("-Inf", -math.inf),
+])
+def test_sample_value_reads_prometheus_samples(raw, want):
+    assert lp.sample_value(raw) == want
+
+
+def test_sample_value_nan():
+    assert math.isnan(lp.sample_value("NaN"))
+
+
+@pytest.mark.parametrize("raw", ["abc", "", 1, 1.5, None, [1]])
+def test_sample_value_refuses_what_is_not_a_sample_string(raw):
+    """#3213: the API writes every sample as a string; a number or garbage is
+    not an answer, refused at the one reading."""
+    with pytest.raises(ValueError):
+        lp.sample_value(raw)
+
+
+@pytest.mark.parametrize("value", ["abc", 1, None])
+def test_matrix_rows_names_an_unreadable_sample(value):
+    body = _ok([_ROW, {"metric": {}, "values": [[1, "1"], [2, value]]}])
+    with pytest.raises(lp.QueryError, match=r"result\[1\]\.values\[1\] is "):
+        lp._matrix_rows(body)
+
+
+def test_matrix_rows_does_not_read_histogram_samples_as_floats():
+    lp._matrix_rows(_ok([{"histograms": [[1, {"count": "x"}]]}]))
+
+
+def test_finite_row_samples_drops_and_counts():
+    row = {"values": [[1, "1"], [2, "+Inf"], [3, "NaN"], [4, "-Inf"], [5, "0"]]}
+    assert lp.finite_row_samples(row) == ([(1.0, 1.0), (5.0, 0.0)], 3)
+    assert [v for _, v in lp.row_samples(row)][1] == math.inf
+    assert lp.finite_row_samples({"histograms": []}) == ([], 0)
+
+
 @pytest.mark.parametrize("body,message", [
     ({"status": "error", "error": "bad_data: parse error"}, "bad_data: parse error"),
     ({"status": "error"}, "Unknown Prometheus error"),
@@ -118,7 +156,9 @@ def test_prometheus_range_encodes_the_query_once(monkeypatch):
     (({"alerts": []}, None), "malformed Alertmanager response: body is not a JSON array"),
     ((["x"], None), "malformed Alertmanager response: alert[0] is not an object"),
     (([{"labels": []}], None), "malformed Alertmanager response: alert[0].labels"),
-], ids=["error", "empty-body", "object", "item-string", "labels-list"])
+    (([{"labels": {"tenant": 1}}], None),
+     "malformed Alertmanager response: alert[0].labels.tenant is not a string"),
+], ids=["error", "empty-body", "object", "item-string", "labels-list", "label-value-int"])
 def test_alertmanager_alerts_raises(monkeypatch, answer, defect):
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=15: answer)
     with pytest.raises(lp.QueryError) as exc:

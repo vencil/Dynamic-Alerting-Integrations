@@ -472,11 +472,15 @@ class TestBacktestChangeNaN:
         assert result["new_breach_count"] == 1
         assert result["risk"] == "MEDIUM"
 
-    def test_unparseable_values_are_not_nan(self, monkeypatch):
-        """讀不懂的值不算 NaN：不得報成「Only NaN」（交給 count_threshold_breaches 跳過）。"""
-        result = self._run(monkeypatch, ["oops", "n/a"], "70", "65")
-        assert result.get("message") != "Only NaN samples in lookback window"
-        assert result["status"] == "analyzed"
+    def test_unparseable_values_never_reach_the_backtest(self, monkeypatch):
+        """#3213：讀不懂的樣本值由 lib 拒收整份回答（具名 QueryError，rc 2），
+        不會被當成 NaN、也不會被 count_threshold_breaches 悄悄跳過。"""
+        import _lib_prometheus as lp
+        body = {"status": "success", "data": {"resultType": "matrix", "result": [
+            {"metric": {}, "values": [[1, "80"], [2, "oops"]]}]}}
+        monkeypatch.setattr(lp, "http_get_json", lambda *a, **kw: (body, None))
+        with pytest.raises(lp.QueryError, match=r"result\[0\]\.values\[1\]"):
+            bt.query_range("http://prom", "q", 86400)
 
     def test_all_finite_unchanged(self, monkeypatch):
         result = self._run(monkeypatch, ["60", "80", "90"], "85", "70")

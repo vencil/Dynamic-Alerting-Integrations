@@ -37,6 +37,8 @@ from _lib_python import (  # noqa: E402
     prometheus_range,
     safe_label,
 )
+# #3213: a sample is read once, by the lib (+Inf / -Inf / NaN included).
+from _lib_prometheus import finite_row_samples  # noqa: E402
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -92,6 +94,9 @@ class AlertQualityMetrics:
     suppression_grade: str = GRADE_GOOD
     # Overall
     overall_grade: str = GRADE_GOOD
+    # #3213: ALERTS samples that were +Inf / -Inf / NaN, left out of every
+    # count above (ALERTS is 0 / 1; a non-finite value is no state).
+    non_finite_samples_dropped: int = 0
 
 
 @dataclass
@@ -382,22 +387,19 @@ def analyze_from_prometheus(
                 "last_fired_ts": 0.0,
                 "durations": [],
                 "total": 0,
+                "dropped": 0,
             }
 
-        values = series.get("values", [])
+        values, dropped = finite_row_samples(series)
+        alert_data[key]["dropped"] += dropped
         if not values:
             continue
 
         # 計算 fire transitions（0→1 轉換次數）
         prev_val = 0
         fire_start = 0.0
-        for ts, val_str in values:
-            try:
-                val = int(float(val_str))
-            except (ValueError, TypeError):
-                continue
-
-            ts_f = float(ts)
+        for ts_f, sample in values:
+            val = int(sample)
             alert_data[key]["total"] += 1
 
             if val == 1 and prev_val == 0:
@@ -460,6 +462,7 @@ def analyze_from_prometheus(
 
         # Overall
         m.overall_grade = compute_overall_grade(m)
+        m.non_finite_samples_dropped = data["dropped"]
         metrics_list.append(m)
 
     return metrics_list
@@ -521,6 +524,8 @@ def generate_report(
         "overall_score": round(
             sum(t["score"] for t in report.tenants) / max(len(report.tenants), 1), 1,
         ),
+        # #3213: disclosed, not hidden: samples no count above includes.
+        "non_finite_samples_dropped": sum(m.non_finite_samples_dropped for m in metrics),
     }
 
     return report
@@ -549,6 +554,11 @@ def print_text_report(report: QualityReport) -> None:
           f"{summary.get('bad', 0)} BAD")
     score_label = "綜合分數" if lang == "zh" else "Overall Score"
     print(f"  {score_label}: {summary.get('overall_score', 0)}/100")
+    dropped = summary.get("non_finite_samples_dropped", 0)
+    if dropped:
+        print(f"  略過 {dropped} 個非有限樣本值（+Inf／-Inf／NaN），未計入上列評估"
+              if lang == "zh" else
+              f"  {dropped} non-finite sample value(s) (+Inf / -Inf / NaN) left out of the grades above")
     print()
 
     for t in report.tenants:
