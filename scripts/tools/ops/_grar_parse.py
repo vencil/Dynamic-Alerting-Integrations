@@ -1005,9 +1005,23 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     _record_unknown_routing_keys(result, overrides, layer="tenant", where=tenant, tenant=tenant)
 
     # v2.1.0 ADR-007: Extract _routing_profile reference
+    # ⛔ #3269: a profile NAME, so a string (null = not set). A mapping —
+    # `{default: p1, overrides: [...]}`, a time window the exporter's reserved
+    # keys do not support either — or any other type used to be skipped in
+    # silence: the tenant fell back to the default route while the file read
+    # as if it named a profile. It refuses the whole tree now, as
+    # `_severity_dedup` does.
     rp_ref = overrides.get("_routing_profile")
-    if rp_ref and isinstance(rp_ref, str):
-        result["tenant_profile_refs"][tenant] = rp_ref.strip()
+    if isinstance(rp_ref, str):
+        if rp_ref:
+            result["tenant_profile_refs"][tenant] = rp_ref.strip()
+    elif rp_ref is not None:
+        _field_type_error(
+            result, "routing_profile_invalid",
+            f"tenant '{tenant}': _routing_profile must be a routing profile "
+            f"name (a string), got {value_type_text(rp_ref)} — a reserved key "
+            f"takes no time window or expires (#3269); write the name alone",
+            tenant=tenant, field="_routing_profile")
 
     # Severity dedup: default "enable", explicit "disable" to opt out.
     # ⛔ #2906: judged by type and value (`severity_dedup_mode`); a value it

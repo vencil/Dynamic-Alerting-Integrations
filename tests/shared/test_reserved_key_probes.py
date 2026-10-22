@@ -318,3 +318,60 @@ def test_served_values_keys_agree_with_the_registry(readers, name, layer):
         f"served-values keys[{key}] = {entry} with {key} in {layer}; reserved_keys.json says "
         f"the exporter {'reads' if declared else 'does not read'} it there")
     assert entry.get("registered") is True, entry
+
+
+# #3269: a reserved key has no schedule — its readers read the `default`
+# alone. Per key the exporter reads, written in the schedule form (two
+# windows covering the whole UTC day, each switching it to another value the
+# reader acts on), the exporter serves exactly what the default alone
+# serves; a window that took effect would change the output.
+_SCHEDULE_OTHER = {"_silent_mode": "disable", "_severity_dedup": "enable",
+                   "_profile": "p1", "_state_": "enable"}
+
+# The one layer where the schedule form is not read as its default: the
+# subtree defaults overlay refuses a windowed `_state_<filter>` outright
+# (#1569, keyBypassesTheDeclaredSurface), so it serves as if not written.
+_SCHEDULE_REFUSED = {("_state_", "subtree_defaults")}
+
+
+def _scheduled(value, other):
+    return ("{default: %s, overrides: [{window: \"00:00-12:00\", value: %s}, "
+            "{window: \"11:59-00:00\", value: %s}]}" % (value, other, other))
+
+
+_SCHED_CASES = [(name, layer) for name, read_by in _registered() if name in _SCHEDULE_OTHER
+                for layer in read_by.get("exporter", [])]
+
+
+@pytest.mark.parametrize("name,layer", _SCHED_CASES, ids=[f"{n}@{l}" for n, l in _SCHED_CASES])
+def test_a_scheduled_reserved_key_serves_its_default(readers, tmp_path, name, layer):
+    key, value = _SENTINELS[name]
+    plain = str(tmp_path / "plain")
+    _tree(plain, name, layer, False)
+    _SENTINELS[name] = (key, _scheduled(value, _SCHEDULE_OTHER[name]))
+    try:
+        sched = str(tmp_path / "sched")
+        _tree(sched, name, layer, False)
+    finally:
+        _SENTINELS[name] = (key, value)
+    want = _baseline(readers, name, "exporter", False) if (name, layer) in _SCHEDULE_REFUSED \
+        else readers.exporter(plain)
+    assert readers.exporter(sched) == want, (
+        f"{key} written with a schedule in {layer} serves differently from "
+        f"{'the tree without it' if (name, layer) in _SCHEDULE_REFUSED else 'its default alone'}")
+
+
+def test_a_scheduled_routing_profile_is_refused_by_the_generator(readers, tmp_path):
+    """The route generator reads `_routing_profile` as a name: the schedule
+    form (a mapping) refuses the whole tree (routing_profile_invalid) — it
+    used to be skipped in silence, falling back to the default route."""
+    key, value = _SENTINELS["_routing_profile"]
+    _SENTINELS["_routing_profile"] = (key, _scheduled(value, "rp1"))
+    try:
+        d = str(tmp_path / "sched")
+        _tree(d, "_routing_profile", "tenant", True)
+    finally:
+        _SENTINELS["_routing_profile"] = (key, value)
+    p = _run([sys.executable, _GEN, "--config-dir", d, "--validate"], readers.env)
+    assert p.returncode == 1, p.stderr[-800:]
+    assert "_routing_profile must be a routing profile name" in p.stderr, p.stderr[-800:]

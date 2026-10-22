@@ -125,6 +125,30 @@ class TestValidateDir:
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _state_custom_x: "enable"\n')
         assert validate_dir(confd, schema, jsonschema)[1] == []
 
+    @pytest.mark.parametrize("key", ["_state_crashloop", "_state_maintenance", "_silent_mode",
+                                     "_severity_dedup", "_profile", "_routing_profile"])
+    @pytest.mark.parametrize("form", [
+        '{default: "disable", overrides: [{window: "03:00-04:00", value: "enable"}]}',
+        '{default: "disable", expires: "2099-01-01T00:00:00Z"}',
+    ])
+    def test_a_scheduled_reserved_key_is_rejected(self, confd, schema, key, form):
+        """#3269: a reserved key takes no time window or expires — the
+        exporter reads its default alone and tenant-api refuses the form.
+        `_state_<filter>` other than maintenance used to fall to
+        additionalProperties (thresholdScalar | scheduledValue) and pass."""
+        _write(confd, "t-a.yaml", f"tenants:\n  t-a:\n    {key}: {form}\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert viol, f"{key}: {form} passed the schema"
+        assert all(v.endswith(f"@ /tenants/t-a/{key}") or f"/tenants/t-a/{key}" in v for v in viol), viol
+
+    @pytest.mark.parametrize("key", ["_state_crashloop", "_state_maintenance"])
+    @pytest.mark.parametrize("value", ["enable", "disable", "disabled", "off", '"false"'])
+    def test_a_state_filter_word_the_reader_reads_passes(self, confd, schema, key, value):
+        """#3269: stateFilterScalar is the reader's words (Go
+        TestStateFilterSchemaMatchesReader pins them)."""
+        _write(confd, "t-a.yaml", f"tenants:\n  t-a:\n    {key}: {value}\n")
+        assert validate_dir(confd, schema, jsonschema)[1] == []
+
     def test_key_typo_rejected(self, confd, schema):
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      dbType: mariadb\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)

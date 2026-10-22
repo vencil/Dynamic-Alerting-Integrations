@@ -443,6 +443,7 @@ tenants:
 - **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
+- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
 
 ### 2.7 三態運營模式 (Operational Modes)
 
@@ -514,7 +515,7 @@ tenants:
 
 可用的 `_silent_mode` 值：`warning`、`critical`、`all`、`disable`（關閉的別名 `disabled`／`off`／`false` 也接受；`false` 須加引號：未加引號時 yaml.v3 讀成布林，schema lint 會拒收並提示加引號。未加引號的 `off` 在 yaml.v3 是字串，只有 repo 外的 YAML 1.1 loader 會讀成布林）。未設定等同 Normal。
 
-**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串），帶 `expires` RFC3339 時戳（如 `"2099-04-01T00:00:00Z"`；exporter 解析不了時印 WARN 並**忽略這筆設定**——不靜音、maintenance 不生效，告警照常發；[#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。
+**自動失效 **：`_silent_mode` 和 `_state_maintenance` 支援結構化物件（向後相容純量字串；⚠️ 是 `target:` 這種物件，不是閾值的 `{default, overrides}` 排程形式——保留鍵不支援時間窗，見 §2.6），帶 `expires` RFC3339 時戳（如 `"2099-04-01T00:00:00Z"`；exporter 解析不了時印 WARN 並**忽略這筆設定**——不靜音、maintenance 不生效，告警照常發；[#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)）。Go 引擎 `time.Now().After(expires)` 過期即停止 emit sentinel metric，alert 自動恢復正常。失效時產出瞬時 gauge `da_config_event{event="silence_expired"}` 搭配 `TenantConfigEvent` alert rule 通知。
 
 ```yaml
 tenants:

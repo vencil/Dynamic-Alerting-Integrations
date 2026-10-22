@@ -257,7 +257,13 @@ func applySubtreeDefaults(
 					filled++ // count keys filled, not times overwritten
 				}
 				inherited[key] = struct{}{}
-				overrides[key] = value
+				// #3269: a reserved key's schedule is read by no one —
+				// the `default` alone, as ParseConfigFile hands a tenant's
+				// own value over (servedValue). Taken here, after the
+				// reachability verdict above, so what is applied does not
+				// change: the `_state_` arm still refuses a windowed value
+				// (whose window could only ever have been ignored).
+				overrides[key] = servedValue(key, value)
 				if subtreeDefaultsRefusedKey(key) {
 					if refusedSource == nil {
 						refusedSource = map[string]SubtreeRefusedVerdict{}
