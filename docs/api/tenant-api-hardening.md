@@ -170,6 +170,16 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 **單一來源**：所有 `code` 寫在 tenant-api 的 `internal/errcode`（handler、RBAC 中介層、產生器 client、非同步 task 都從這裡取，不再各自抄字串）。OpenAPI 的 `ErrorResponse.code` 因此成為列舉（`ErrorCode`）。契約檔 `tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json`（portal 經 `_common/api/classify-error.js` 讀取，依碼的 `remedy` 決定顯示的訊息；缺少或不在契約內的碼當作未知，不套用任何處理方式的文案：有伺服器訊息就顯示它，沒有才顯示通用訊息）由 `make error-contract` 從同一份表、錯誤種類表，以及 handler／中介層直接寫出的回應（掃描原始碼取得；status 或 code 不是字面常數的寫法會讓產生器直接失敗。這道 fail-closed 只涵蓋經 `errcode` 常數、且經已列出的寫入函式寫出的回應：沒有 `code` 的回應（`http.Error`、`WriteHeader` 加 `Write`）與用字串字面量寫的 code 都不在契約內，portal 會把它們當作未知）產生，逐碼列出 `remedy`、`retryable`（`always`／`never`）、會出現的 status、預設的 `retry_after_s` 與對應的錯誤種類；`make error-contract-check`、pre-commit 與 CI 擋漂移。`SIMULATE_NOT_PROVIDED` 不在其中：那是 portal 部署自己的 nginx 501，不是 tenant-api 發出的。
 
+### 2.7 錯誤回應的附加欄位由錯誤碼宣告（[#3272](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3272)）
+
+錯誤回應除了固定欄位（`error`、`code`、`request_id`、`violations`、`retry_after_s`、`help`、`action`），有些碼會在同一層帶自己的欄位，例如 `PENDING_PR_EXISTS` 的 `existing_pr_url`、`pr_number`。每個碼可以帶哪些欄位、各是什麼 JSON 型別，宣告在 tenant-api 的 `internal/errcode`，每個欄位只宣告一次，所以同名欄位在每個碼底下都是同一個型別：
+
+- **只送宣告過的欄位**：回應只帶該碼宣告過的欄位，其他的丟掉並寫錯誤 log。`INTERNAL_ERROR` 不宣告任何欄位，所以內部錯誤只回固定訊息與 `request_id`（§2.4）；宣告的欄位不能與固定欄位同名，所以蓋不掉 `code`、`error`。值為零的欄位照送（看不到的 PR/MR 是 `existing_pr_url: ""`、`pr_number: 0`；直接寫入批次的衝突是 `committed: false`；沒有可顯示的 finding 是 `findings: []`）。
+- **契約與 OpenAPI**：`tenant-api-errors.json` 每個碼多一個 `extra`，列出欄位名、型別與陣列元素的型別。OpenAPI 的 `ErrorResponse` 列出所有碼的欄位聯集（Swagger 2.0 沒有 `oneOf`，一個回應只能有一個 schema），每個欄位的說明寫明哪些碼會帶它。
+- **擋在出貨前**：`make error-contract`（`make api-docs` 在 swag 之後也會跑它）從型別檢查過的原始碼讀出每個 handler 設定的欄位與值的 Go 型別；設了該碼沒宣告的欄位、值的 JSON 型別與宣告不符、宣告了卻沒有 handler 設、宣告了固定欄位的名字，或 Extra 的 map 被傳進函式、複製、取址而讀不出最後有哪些鍵，產生器都直接失敗。pre-commit 與 CI 擋漂移。
+
+宣告涵蓋現有的所有欄位，所以現有回應的內容不變。`GET /api/v1/tasks/{id}` 也補進了 OpenAPI。
+
 ---
 
 ## 3. Tenant-Scoped Authorization
