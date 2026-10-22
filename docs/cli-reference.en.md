@@ -106,7 +106,7 @@ The exit-code table in each command section lists the main triggers and is **not
 
 #### conf.d refusal
 
-**A path on the conf.d nothing can be read from: one refusal for every conf.d tool** ([#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206), [ADR-036](adr/036-single-parser-effective-config.en.md) §7 step 9): a tool that reads `--config-dir` (or `--conf-d`, `--sources`, or an existing conf.d at `--output`) first takes the run's whole-tree index (`da-guard parse-tree`), before it reads content or writes anything. When any path is one `da-guard` validation names (`verdict` `unservable`: the exporter cannot read or decode it — a YAML syntax error, several documents in one file, a dangling or looping symlink, a FIFO, a directory that cannot be listed; or `tree_refused`: the route generator refuses the whole tree on it — a symlink to a directory, a directory with a config file's name such as `x.yaml/`), the tool prints one `ERROR: <path>: <reason>` line per path on stderr (**all of them, none elided**) and a last line naming the tree, then exits `2` and writes nothing; with `--json`, stdout holds one envelope with `reason` `conf_d_not_servable`. `tenant-verify` exits with its input-error code `1` (its `2` means a verification mismatch). Several tools used to print a `WARN` / `NOTE` for such paths and exit `0` (`configmap-assemble`, `assemble_config_dir`, `init`, `offboard`, `deprecate`, `migrate_conf_d` on `x.yaml/`, …); they all refuse now. The exceptions are the tools whose verdict on the tree is their output: `validate-config` (exit `1`), `generate-routes`, `check_routing_profiles`, `check_confd_schema` and `config-diff` name such paths themselves and fail (see their sections); `da-tools guard` itself still exits `3` / `4`.
+**A path on the conf.d nothing can be read from: one refusal for every conf.d tool** ([#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206), [ADR-036](adr/036-single-parser-effective-config.en.md) §7 step 9): a tool that reads `--config-dir` (or `--conf-d`, `--sources`, or an existing conf.d at `--output`) first takes the run's whole-tree index (`da-guard parse-tree`), before it reads content or writes anything. When any path is one `da-guard` validation names (`verdict` `unservable`: the exporter cannot read or decode it — a YAML syntax error, several documents in one file, a dangling or looping symlink, a FIFO, a directory that cannot be listed; or `tree_refused`: the route generator refuses the whole tree on it — a symlink to a directory, a directory with a config file's name such as `x.yaml/`), the tool prints one `ERROR: <path>: <reason>` line per path on stderr (**all of them, none elided**) and a last line naming the tree, then exits `2` and writes nothing; with `--json`, stdout holds one envelope with `reason` `conf_d_not_servable`. `tenant-verify` exits with its input-error code `1` (its `2` means a verification mismatch). Several tools used to print a `WARN` / `NOTE` for such paths and exit `0` (`configmap-assemble`, `assemble_config_dir`, `init`, `offboard`, `deprecate`, `migrate_conf_d` on `x.yaml/`, …); they all refuse now. The exceptions are the tools whose verdict on the tree is their output: `validate-config` (exit `1`), `generate-routes`, `check_routing_profiles`, `check_confd_schema` and `config-diff` name such paths themselves and fail (see their sections); `deprecate --plane subtree` also stands aside from this refusal (a known gap, see [deprecate](#deprecate)); `da-tools guard` itself still exits `3` / `4`. Every file `assemble_config_dir --validate` used to call an ERROR (a top level that is not a mapping, a parse error) is now stopped by this refusal before assembly, with or without `--validate`; the flag is left with WARN lines only.
 
 ---
 
@@ -263,6 +263,8 @@ da-tools check-alert MariaDBHighConnections db-a
 #### diagnose
 
 Health check for a single tenant: the MariaDB Pod's status, the exporter's `mysql_up`, the operational mode (maintenance / silent), and, when `--config-dir` is given, the profile and inheritance chain.
+
+When `--config-dir` is given and that conf.d holds a path da-guard validation names, this tool refuses with `2` before any check, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod and exporter checks are written for MariaDB. The Pod check looks for an `app=mariadb` Pod in the namespace named after the tenant; it needs `kubectl` and cluster access, and the da-tools image does not ship `kubectl`. The exporter check queries `mysql_up{instance="<tenant>"}`. The tool first reads the tenant's `db_type` from Prometheus via `tenant_expected_exporter{tenant="<tenant>"}`; that series exists only when the tenant declares `_metadata.db_type`. Both checks run only when `db_type` is `mariadb`. For any other database, or a tenant that declares none, they are listed under `skipped` with a reason and `status` is `unchecked`: neither `healthy` nor `error`. A MariaDB tenant that does not declare `db_type` therefore skips them too; declare `mariadb` in `_metadata.db_type` to have them checked. ⚠️ The v2.9.0 image still has the old behavior: it ignores `db_type`, and every non-MariaDB tenant comes back `status: error` (`Pod not found`). <!-- image-caveat: v2.9.0 -->
 
@@ -580,6 +582,8 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 
 Scan Prometheus cluster's active targets, cross-reference with tenant config to find blind spots (exporter present but no tenant config).
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Regular post-migration health check; ensure new exporters are managed.
 
 **Syntax**
@@ -637,6 +641,8 @@ On exit 2, every line below the `ERROR` line starts with the prefix `da-guard|` 
 
 Evaluate the `_state_maintenance.recurring[]` schedules and create an Alertmanager silence for every tenant currently inside a maintenance window.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Automate scheduled maintenance windows; designed to run as a K8s CronJob every 5 minutes.
 
 **Syntax**
@@ -688,6 +694,8 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 #### backtest
 
 Execute historical backtest of PR threshold changes.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)); both trees (`--config-dir` and `--baseline`). With `--json`, the stdout envelope's `reason` is `conf_d_not_servable`; neither `-o` nor `--markdown-output` is written (this path used to be `served_values_unavailable`, with both files written).
 
 **Purpose**: Validate threshold adjustment impacts; estimate expected alert changes from PR.
 
@@ -1328,6 +1336,8 @@ da-tools init --ci both --tenants db-a --dry-run
 
 GitOps Native Mode readiness validation — checks Git repo accessibility, local config structure, and git-sync sidecar deployment status.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 ```bash
 da-tools gitops-check <subcommand> [options]
 ```
@@ -1611,6 +1621,8 @@ da-tools migration-audit --config-dir conf.d/ --json | jq '.values[] | {file, li
 
 Generate Kubernetes Operator CRDs (PrometheusRule, AlertmanagerConfig, ServiceMonitor) from Rule Packs and Tenant configuration.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
 
 **Syntax**
@@ -1675,6 +1687,8 @@ da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 #### migrate-to-operator
 
 Read existing ConfigMap-based Prometheus rules and produce equivalent CRD YAML files with a migration checklist.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Purpose**: Migrate from ConfigMap native format to Operator native CRD; GitOps-friendly conversion; pre-migration validation and preview.
 
@@ -2375,6 +2389,8 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 Offboard tenant configuration and related resources.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Cleanup when tenant lifecycle ends.
 
 **Syntax**
@@ -2431,6 +2447,8 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 #### deprecate
 
 Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)). That includes a carrier the exporter drops only because of a key this round would delete (for example `old_metric: disable` under `defaults:`): this tool no longer repairs such a tree; fix that file by hand first, then run it again. ⚠️ `--plane subtree` stands aside from this refusal: `da-guard parse-tree` judges the directory it is given as a root, where a subtree carrier's valid string value reads as unservable, so that plane keeps its own checks (a known gap).
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2597,6 +2615,8 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 
 Compare custom rules with Rule Pack, find duplicates/gaps.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Evaluate Rule Pack coverage; decide if custom rule can be deleted.
 
 **Syntax**
@@ -2733,6 +2753,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 
 Declarative policy engine — evaluate tenant configuration compliance using built-in DSL, zero external dependencies.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Usage**
 
 ```bash
@@ -2792,6 +2814,8 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 #### opa-evaluate
 
 OPA (Open Policy Agent) policy evaluation bridge — converts tenant configs to OPA input JSON, evaluates via OPA REST API or local binary, and returns results compatible with evaluate-policy format.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Usage**
 
@@ -3162,6 +3186,8 @@ da-tools parser allowlist --format json
 
 Print a tenant's effective config + `merged_hash` (v2.8.0). Supports the verification checklist in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures item 6: after a rollback wave, every tenant's `merged_hash` must return to the pre-Base-PR snapshot. Reuses `describe_tenant.py`'s `ConfDScanner`, whose inheritance chain, `source_hash` and `merged_hash` are all read from `da-guard effective` (the values tenant-api `/effective` and the exporter have, never computed in Python, [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549), [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)), so da-guard is required (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it). This tool is a thin CLI ergonomics layer (terse output + exit code). When a directory holds more than one defaults carrier, the one not selected, which no plane reads, is named on stderr in one `WARN: <file> is ignored on every plane (#1674)` line, the same line as `describe_tenant.py`'s; the exit code is unchanged ([#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)).
 
+When the conf.d holds a path da-guard validation names, this tool refuses with its input-error code `1` before it reads any value, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206); `2` still means only a verification mismatch).
+
 ```bash
 # Print effective config + merged_hash for one tenant
 da-tools tenant-verify db-fin-a --conf-d conf.d/
@@ -3199,6 +3225,8 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 #### threshold-recommend
 
 Threshold recommendation engine — recommends optimal thresholds based on historical Prometheus P50/P95/P99 percentiles.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Usage**
 
@@ -3278,6 +3306,8 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 
 Threshold governance loop (Renovate-for-thresholds, #656) — turns `threshold-recommend`'s output into an **active loop**: gate on rot magnitude, then open one approvable per-tenant proposed-PR via the tenant-api (single-writer, ADR-011/023) instead of a nudge. **Dry-run by default** — pass `--apply` to actually open PRs.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Usage**
 
 ```bash
@@ -3323,6 +3353,8 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 #### test-notification
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. The list tested is the generator's own verdict on each slot (the main receiver, `overrides[i]`, `routes[i]`); this tool does not walk `_routing` itself ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)). Only receivers the generator renders are sent; a slot it does not render is still listed, never sent, and counts as failed — `INVALID_URL` / `INVALID_CONFIG` when the generator (`build_receiver_config`) refuses the receiver's **own config**, `NOT_RENDERED` with the generator's reason when it skips the slot at the routing level (for example an override with no `alertname` / `metric_group`, `routes[i]` with an unsupported key, and every `overrides` / `routes` entry of a tenant whose main receiver is refused or missing). This tool has no `--policy`, so what the generator skips under `--policy` for `allowed_domains` is not part of the verdict. To check whether the generator accepts the whole config, run `generate-routes --validate`.
 
@@ -3397,6 +3429,8 @@ da-tools test-notification --config-dir conf.d/ --ci
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 `overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). Both lists come from the generator's verdict on each slot, the same source `test-notification` reads; when a tenant's main receiver is missing or refused, the generator renders no sub-route, and each `overrides` / `routes` entry is listed with a "main receiver not rendered" reason of its own ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076); before, nothing was listed when the main receiver was missing or refused). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. A duration Alertmanager does not accept is rendered as the platform default (and `--validate` fails); those lines are listed in a "Replaced by the generator" section (main route and sub-routes alike), under `replaced_values` in `--json`, apart from `skipped_sub_routes` — those entries are still rendered, with another value ([#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)). `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
 
 **Usage**
@@ -3451,6 +3485,8 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --sever
 #### explain-keys
 
 Explain a tenant's keys ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 9). For each tenant it lists every key of its config: the layer and file it comes from (`da-guard effective`), which readers read it (the exporter as measured by `da-guard served-values`; the route generator, the custom-alert compiler, Policy-as-Code and annotations as the reserved-key registry declares for that layer; a key a `_policies` rule that applies to the tenant names as `target` (or `when.target`) counts as read by Policy-as-Code: either #1231 spelling matches, a wildcard names no key, and a `_` key must be one the registry lists), the verdict and its severity, what a `disable` does (judged by resolving again without it), the value as written and what `/metrics` serves. The verdict is the shared one every gate uses. The tools report what they can; whether a value is what you meant is yours to check with this output, and to pin in your own CI with `--assert`.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 ```bash
 da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]
