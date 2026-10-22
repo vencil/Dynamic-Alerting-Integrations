@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
@@ -319,8 +320,8 @@ func TestIssue3123_PutGroup_InvisibleExistingGroupIs409(t *testing.T) {
 	}
 	var env ErrorResponse
 	_ = json.Unmarshal(w1.Body.Bytes(), &env)
-	if env.Code != CodeGroupIDUnavailable {
-		t.Errorf("code = %q, want %q", env.Code, CodeGroupIDUnavailable)
+	if env.Code != errcode.GroupIDUnavailable {
+		t.Errorf("code = %q, want %q", env.Code, errcode.GroupIDUnavailable)
 	}
 	if strings.Contains(w1.Body.String(), orgEnfTenantOut) || strings.Contains(w1.Body.String(), "cannot view") {
 		t.Errorf("409 says something about the stored members: %s", w1.Body.String())

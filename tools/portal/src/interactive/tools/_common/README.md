@@ -26,6 +26,8 @@ to author files *in this directory*.
 ```text
 _common/
 ├── README.md          ← you are here
+├── api/              ← tenant-api answer handling
+│   └── classify-error.js  ← error code → remedy + UI message (#3202; reads data/tenant-api-errors.json)
 ├── hooks/             ← reusable React hooks
 │   ├── useCopyToClipboard.js
 │   ├── useDebouncedValue.js

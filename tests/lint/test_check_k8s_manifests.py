@@ -8,13 +8,14 @@ Pinned contracts (engine integration is covered by the CI "Container SAST L4
 2. **Severity routing** (reused L2 classify): CRITICAL => BLOCK no-escape;
    registered HIGH => baseline-WARN; unregistered HIGH => BLOCK; LOW => INFO.
 3. **De-dup**: two findings sharing (path, check) collapse to one entry.
-4. **EXEMPTIONS**: the 1 known baseline-High (path, check) is registered
-   (the maintenance-scheduler CronJob's 2 were cleared by a hardened
-   securityContext — TRK-314 follow-up — and de-registered).
+4. **EXEMPTIONS**: the registry is empty. Its last entry (the raw tenant-api
+   Deployment) went with that manifest in #1594; the maintenance-scheduler
+   CronJob's 2 were cleared earlier by a hardened securityContext (TRK-314
+   follow-up). The routing of a registered HIGH is still pinned, against a
+   synthetic entry.
 5. **main() exit codes**: 0 clean / 1 block (--ci) / 3 engine-required-missing.
-6. **Baseline**: routing the REAL kube-linter report shape (2 findings in 1
-   workload) yields 0 BLOCK / 1 baseline-High; a live engine run (when
-   available) confirms the repo ships at 0 BLOCK.
+6. **Baseline**: the repo's expected kube-linter report is empty; a live engine
+   run (CI "Container SAST" job) confirms the repo ships at 0 BLOCK.
 """
 from __future__ import annotations
 
@@ -31,18 +32,27 @@ sys.path.insert(0, _TOOLS_DIR)
 import check_k8s_manifests as k8s  # noqa: E402
 
 
-# The REAL kube-linter report shape for the repo (2 findings, 1 workload) —
-# pinned so routing is tested against ground truth without invoking the engine.
-# The maintenance-scheduler CronJob's 2 findings were eliminated by a hardened
-# securityContext (TRK-314 follow-up), leaving only tenant-api's pair.
-_REAL_REPORTS = [
-    {"Check": "no-read-only-root-fs",
-     "Diagnostic": {"Message": 'container "git-clone" does not have a read-only root file system'},
-     "Object": {"Metadata": {"FilePath": "/repo/k8s/04-tenant-api/deployment.yaml"}}},
-    {"Check": "no-read-only-root-fs",
-     "Diagnostic": {"Message": 'container "tenant-api" does not have a read-only root file system'},
-     "Object": {"Metadata": {"FilePath": "/repo/k8s/04-tenant-api/deployment.yaml"}}},
+# The kube-linter report the repo is expected to produce: empty. The last two
+# findings (one workload, two containers) were the raw tenant-api Deployment,
+# removed in #1594; the maintenance-scheduler CronJob's two were eliminated
+# earlier by a hardened securityContext (TRK-314 follow-up).
+_REAL_REPORTS: list = []
+
+# A synthetic registered exemption, so routing of a baseline-High stays pinned
+# while the real registry is empty.
+_EXEMPT_PATH = "k8s/90-synthetic/deployment.yaml"
+_EXEMPT_CHECK = "no-read-only-root-fs"
+_TWO_CONTAINER_REPORTS = [
+    {"Check": _EXEMPT_CHECK,
+     "Diagnostic": {"Message": f'container "{c}" does not have a read-only root file system'},
+     "Object": {"Metadata": {"FilePath": f"/repo/{_EXEMPT_PATH}"}}}
+    for c in ("init", "app")
 ]
+
+
+@pytest.fixture
+def synthetic_exemption(monkeypatch):
+    monkeypatch.setitem(k8s.EXEMPTIONS, (_EXEMPT_PATH, _EXEMPT_CHECK), "synthetic rationale")
 
 
 # ---------------------------------------------------------------------------
@@ -50,13 +60,13 @@ _REAL_REPORTS = [
 # ---------------------------------------------------------------------------
 class TestNormalizeRelpath:
     @pytest.mark.parametrize("raw", [
-        "/repo/k8s/04-tenant-api/deployment.yaml",                 # docker mount
-        "/home/runner/work/repo/repo/k8s/04-tenant-api/deployment.yaml",  # abs host
-        "k8s/04-tenant-api/deployment.yaml",                       # binary, cwd=repo
-        "C:\\Users\\x\\repo\\k8s\\04-tenant-api\\deployment.yaml", # windows sep
+        "/repo/k8s/03-monitoring/deployment-prometheus.yaml",                 # docker mount
+        "/home/runner/work/repo/repo/k8s/03-monitoring/deployment-prometheus.yaml",  # abs host
+        "k8s/03-monitoring/deployment-prometheus.yaml",                       # binary, cwd=repo
+        "C:\\Users\\x\\repo\\k8s\\03-monitoring\\deployment-prometheus.yaml", # windows sep
     ])
     def test_all_normalise_to_repo_relative(self, raw):
-        assert k8s.normalize_relpath(raw) == "k8s/04-tenant-api/deployment.yaml"
+        assert k8s.normalize_relpath(raw) == "k8s/03-monitoring/deployment-prometheus.yaml"
 
     def test_no_k8s_segment_falls_back(self):
         assert k8s.normalize_relpath("/repo/helm/x/values.yaml") == "repo/helm/x/values.yaml"
@@ -70,15 +80,16 @@ class TestNormalizeRelpath:
 # EXEMPTIONS registry
 # ---------------------------------------------------------------------------
 class TestExemptions:
-    @pytest.mark.parametrize("relpath,check", [
-        ("k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs"),
-    ])
-    def test_known_baseline_high_registered(self, relpath, check):
-        assert k8s.is_exempt(relpath, check) is True
-        assert (relpath, check) in k8s.EXEMPTIONS
+    def test_registry_is_empty(self):
+        # Adding an exemption is a deliberate, reviewed act: it must come with a
+        # row in docs/internal/iac-lint-baseline.md (L4 table) and an edit here.
+        assert k8s.EXEMPTIONS == {}
 
-    def test_unregistered_not_exempt(self):
-        assert k8s.is_exempt("k8s/04-tenant-api/deployment.yaml", "run-as-non-root") is False
+    def test_registered_entry_is_exempt(self, synthetic_exemption):
+        assert k8s.is_exempt(_EXEMPT_PATH, _EXEMPT_CHECK) is True
+
+    def test_unregistered_not_exempt(self, synthetic_exemption):
+        assert k8s.is_exempt(_EXEMPT_PATH, "run-as-non-root") is False
         assert k8s.is_exempt("k8s/new-thing.yaml", "no-read-only-root-fs") is False
 
     def test_maintenance_scheduler_no_longer_exempt(self):
@@ -106,15 +117,15 @@ class TestEmitRouting:
         k8s._emit(f, "k8s/x.yaml", "host-network", "uses host net", seen)
         assert any("host-network" in x and "CRITICAL" in x for x in f["BLOCK"])
 
-    def test_registered_high_is_baseline_warn(self):
+    def test_registered_high_is_baseline_warn(self, synthetic_exemption):
         f, seen = _fresh(), set()
-        k8s._emit(f, "k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs", "x", seen)
+        k8s._emit(f, _EXEMPT_PATH, _EXEMPT_CHECK, "x", seen)
         assert f["BLOCK"] == []
         assert any("baseline-exempt" in x for x in f["WARN"])
 
-    def test_unregistered_high_blocks(self):
+    def test_unregistered_high_blocks(self, synthetic_exemption):
         f, seen = _fresh(), set()
-        k8s._emit(f, "k8s/04-tenant-api/deployment.yaml", "run-as-non-root", "x", seen)
+        k8s._emit(f, _EXEMPT_PATH, "run-as-non-root", "x", seen)
         assert any("UNREGISTERED" in x for x in f["BLOCK"])
 
     def test_low_is_info(self):
@@ -123,11 +134,11 @@ class TestEmitRouting:
         assert any("dangling-service" in x for x in f["INFO"])
         assert f["BLOCK"] == []
 
-    def test_dedup_same_path_check(self):
+    def test_dedup_same_path_check(self, synthetic_exemption):
         f, seen = _fresh(), set()
         # two containers, same (path, check) — collapses to one WARN
-        k8s._emit(f, "k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs", "git-clone", seen)
-        k8s._emit(f, "k8s/04-tenant-api/deployment.yaml", "no-read-only-root-fs", "tenant-api", seen)
+        k8s._emit(f, _EXEMPT_PATH, _EXEMPT_CHECK, "init", seen)
+        k8s._emit(f, _EXEMPT_PATH, _EXEMPT_CHECK, "app", seen)
         assert len(f["WARN"]) == 1
 
 
@@ -142,12 +153,20 @@ def _stub_engine(monkeypatch, reports):
 
 class TestCollectFindings:
     def test_real_report_shape_ships_at_zero(self, monkeypatch):
-        """The repo's actual 2 findings (1 workload) => 0 BLOCK / 1 WARN."""
+        """The repo's expected (empty) report => 0 BLOCK / 0 WARN."""
         _stub_engine(monkeypatch, _REAL_REPORTS)
         f = k8s.collect_findings(strict=True)
         assert f["BLOCK"] == []
-        assert len(f["WARN"]) == 1  # tenant-api's 2 containers collapse to 1
+        assert f["WARN"] == []
         assert "__engine_error__" not in f
+
+    def test_registered_two_container_report_is_one_warn(self, monkeypatch,
+                                                         synthetic_exemption):
+        """Two containers of one registered workload => 0 BLOCK / 1 WARN."""
+        _stub_engine(monkeypatch, _TWO_CONTAINER_REPORTS)
+        f = k8s.collect_findings(strict=True)
+        assert f["BLOCK"] == []
+        assert len(f["WARN"]) == 1
 
     def test_injected_critical_blocks(self, monkeypatch):
         _stub_engine(monkeypatch, _REAL_REPORTS + [
@@ -311,7 +330,6 @@ class TestPssLabelRule:
 class TestDiscovery:
     def test_finds_known_manifests(self):
         rels = {p.relative_to(k8s.REPO_ROOT).as_posix() for p in k8s.find_manifest_files()}
-        assert "k8s/04-tenant-api/deployment.yaml" in rels
         assert "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml" in rels
         assert "k8s/03-monitoring/secret-grafana.yaml" in rels
         # nested dir (crd/) is reached by rglob
@@ -332,7 +350,7 @@ class TestMainExitCodes:
         assert k8s.main() == 0
 
     def test_clean_zero(self, monkeypatch):
-        _stub_engine(monkeypatch, _REAL_REPORTS)  # all exempt => 0 BLOCK
+        _stub_engine(monkeypatch, _REAL_REPORTS)  # no findings => 0 BLOCK
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 0
 

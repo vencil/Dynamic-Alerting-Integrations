@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -325,4 +327,32 @@ func readRegistry(t *testing.T, configDir string) *account.Registry {
 		t.Fatalf("parse committed registry: %v", perr)
 	}
 	return reg
+}
+
+// #3226: logs federation not configured on this server (no account
+// registry) is a deployment setting, answered by its own error kind:
+// 503 UPSTREAM_ERROR with no Retry-After — no retry finds it configured.
+func TestLogsFederationNotConfigured_IsNotRetryable(t *testing.T) {
+	t.Parallel()
+	d, _ := newLogsFederationDeps(t, platformAdminRBAC, map[string]string{"db-a.yaml": "tenants:\n  db-a: {}\n"})
+	d.Accounts = nil
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"backfill": executeWithRBAC(t, BackfillAccounts(d), fedReq(t, "POST", "/api/v1/federation/accounts/backfill", "", "", "")),
+		"logs token": executeWithRBAC(t, CreateFederationToken(d),
+			fedReq(t, "POST", "/api/v1/federation/tokens", "", "", `{"tenant_id":"db-a","capability":"logs"}`)),
+	} {
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status %d, want 503; body %s", name, w.Code, w.Body.String())
+			continue
+		}
+		var env handler.ErrorResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if env.Code != errcode.FederationNotConfigured || env.RetryAfterS != 0 || w.Header().Get("Retry-After") != "" ||
+			env.Error != "logs federation is not configured on this server" {
+			t.Errorf("%s: envelope %+v Retry-After %q, want %s with no Retry-After",
+				name, env, w.Header().Get("Retry-After"), errcode.FederationNotConfigured)
+		}
+	}
 }

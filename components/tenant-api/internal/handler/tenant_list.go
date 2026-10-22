@@ -13,6 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -276,6 +278,10 @@ func (e *tenantFileNotLoadableError) Error() string {
 		"end-of-life check cannot read the current file — then %s", head, gitops.MsgPlatformWriteRepair)
 }
 
+// ErrorKind: TENANT_CONFIG_NOT_LOADABLE (#3226) — the per-op result of a
+// batch op refused for it.
+func (e *tenantFileNotLoadableError) ErrorKind() errkind.Kind { return errkind.TenantConfigNotLoadable }
+
 // Unwrap lets package gitops recognise the refusal (errors.Is) without
 // importing this package: WritePRBatch's pre-flight tolerates it.
 func (e *tenantFileNotLoadableError) Unwrap() error { return gitops.ErrMergeBaseNotLoadable }
@@ -304,7 +310,7 @@ func writeTenantFileNotLoadable(w http.ResponseWriter, r *http.Request, e *tenan
 	}
 	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
 		Error: e.Error(),
-		Code:  CodeTenantConfigNotLoadable,
+		Code:  errcode.TenantConfigNotLoadable,
 		Extra: extra,
 	})
 }

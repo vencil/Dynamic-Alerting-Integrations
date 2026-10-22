@@ -67,6 +67,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -233,7 +234,7 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 		// 1. LOCKED bar, before anything request-derived — the SAME constant
 		// 403 as the GET endpoint, byte for byte.
 		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
-			WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden, auditReverseForbiddenMsg)
+			WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden, auditReverseForbiddenMsg)
 			return
 		}
 
@@ -287,7 +288,7 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 		// the caller already passed the platform-admin bar.
 		cfg, err := rbac.ParseCandidateConfig(candBytes, d.ClaimHeaders)
 		if err != nil {
-			WriteJSONErrorWithCode(w, r, http.StatusBadRequest, CodeCandidateInvalid,
+			WriteJSONErrorWithCode(w, r, http.StatusBadRequest, errcode.CandidateInvalid,
 				"candidate _rbac.yaml rejected: "+err.Error())
 			return
 		}

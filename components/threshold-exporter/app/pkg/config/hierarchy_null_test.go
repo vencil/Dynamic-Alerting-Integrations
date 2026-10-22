@@ -57,20 +57,21 @@ func TestDeepMerge_NullOnReservedKey_StillDeletes(t *testing.T) {
 	// kept separate on purpose — an earlier comment collapsed them and got the
 	// reachability claim wrong in BOTH directions:
 	//
-	//   (a) `_`-prefixed sibling keys DO reach deepMerge's override map from a
-	//       shipped _defaults.yaml. extractDefaultsBlock falls through and
-	//       returns the WHOLE document whenever the assertion on m["defaults"]
-	//       fails — no `defaults:` key at all, or one that is explicitly null.
-	//       rule-packs/recipes/examples/conf.d/finance/_defaults.yaml does this
-	//       today via `_custom_alerts` — whose value is a LIST, so it merges
-	//       normally and never reaches the delete below.
+	//   (a) `_`-prefixed sibling keys CAN reach deepMerge's override map from a
+	//       _defaults.yaml. extractDefaultsBlock falls through and returns the
+	//       WHOLE document whenever the assertion on m["defaults"] fails — no
+	//       `defaults:` key at all, or one that is explicitly null — so a
+	//       top-level `_` key of such a file is merged. No shipped
+	//       `_defaults*.yaml` has that shape today (the recipes example's
+	//       finance/_defaults.yaml did, via `_custom_alerts`, until #3042 moved
+	//       its recipe into a profile).
 	//
 	//   (b) This delete branch additionally requires that key's value to be an
 	//       explicit null. Measured: 0 of the 17 shipped `_defaults*.yaml` files
 	//       currently carry a `_`-prefixed key with a null value.
 	//
-	// So: the path into this branch exists in shipped data (a); the triggering
-	// value does not occur in the repo today (b). No config file exercises it,
+	// So: the path into this branch exists (a); neither it nor the triggering
+	// value occurs in shipped data today (b). No config file exercises it,
 	// which means THIS hand-constructed test is the only thing holding the
 	// branch in place — remove the branch and this test, and nothing else in
 	// the repo goes red. That is why it is pinned here.

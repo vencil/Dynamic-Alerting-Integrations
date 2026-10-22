@@ -99,17 +99,89 @@ linters:
       # layer must not depend on the HTTP handler layer. Keeps the core verifiable,
       # testable, and regenerable independently of the volatile HTTP boundary.
       # Currently satisfied — this pins it so an AI rewrite cannot silently invert it.
+      #
+      # ⛔ internal/rbac/import_direction_test.go reads domain-no-handler's
+      # `files:` from THIS file (the one list; #3226) and runs the same check
+      # without golangci-lint, so dropping depguard from `linters.enable` does
+      # not retire the rule. Each entry must stay of the form
+      # "**/internal/<dir>/**" — the test fails on any other shape rather than
+      # guess what it covers.
       rules:
         domain-no-handler:
           list-mode: lax
+          # The list's criterion (#3226): EVERY package under internal/ is
+          # listed, except two that cannot be:
+          #   - internal/handler and its subpackages — the layer this denies;
+          #   - internal/federation/orphan — its external test package
+          #     (enumerator_parity_test.go, #1680) imports handler on purpose
+          #     to compare GET /tenants with the orphan scans. Its non-test
+          #     code cannot import handler anyway: handler imports orphan, so
+          #     that is an import cycle the compiler rejects.
+          # Most of the listed packages are also imported by handler, so a
+          # non-test file of theirs importing it is already a cycle; the rule
+          # adds their external `_test` packages and the ones handler does not
+          # import (github, gitlab, statemigrate, staterestore, testutil). A
+          # new internal package goes here unless it has a reason like
+          # orphan's — import_direction_test fails on a package directory
+          # that is neither listed nor one of those two exemptions.
           files:
-            - "**/internal/rbac/**"
+            - "**/internal/async/**"
+            - "**/internal/boundedcall/**"
+            - "**/internal/confd/**"
+            - "**/internal/configwatcher/**"
+            - "**/internal/credmask/**"
             - "**/internal/customalerts/**"
+            - "**/internal/errcode/**"
+            - "**/internal/errkind/**"
+            - "**/internal/federation/account/**"
+            - "**/internal/federation/fedpolicy/**"
+            - "**/internal/federation/token/**"
+            - "**/internal/generator/**"
+            - "**/internal/github/**"
+            - "**/internal/gitlab/**"
+            - "**/internal/gitops/**"
             - "**/internal/groups/**"
+            - "**/internal/platform/**"
+            - "**/internal/rbac/**"
+            - "**/internal/statemigrate/**"
+            - "**/internal/staterestore/**"
+            - "**/internal/statestore/**"
+            - "**/internal/tenantorg/**"
+            - "**/internal/testutil/**"
             - "**/internal/views/**"
+            - "**/internal/ws/**"
           deny:
             - pkg: github.com/vencil/tenant-api/internal/handler
               desc: domain packages must not import the HTTP handler layer
+        # #3226: errkind names the kinds of failure for both sides of the
+        # boundary — the domain errors say which they are, the handler's table
+        # answers them. It stays a leaf: nothing of this module (a cycle with
+        # every domain package waiting to happen) and not net/http (a status
+        # code belongs in the handler's table, not in the names).
+        errkind-leaf:
+          list-mode: lax
+          files:
+            - "**/internal/errkind/**"
+          deny:
+            - pkg: github.com/vencil/tenant-api/internal
+              desc: errkind is a leaf — it imports nothing of tenant-api (#3226)
+            - pkg: net/http
+              desc: errkind holds names only; statuses and codes are the handler's kindTable (#3226)
+        # #3202: errcode is the one list of the error codes — the handler, the
+        # RBAC middleware, the generator client and the async task store all
+        # name a code from it instead of a copy of its string. That holds only
+        # while every one of them may import it: a leaf, nothing of this module
+        # (a code knows no kind, no status, no handler) and not net/http (which
+        # status a code is answered with is the handler's kindTable).
+        errcode-leaf:
+          list-mode: lax
+          files:
+            - "**/internal/errcode/**"
+          deny:
+            - pkg: github.com/vencil/tenant-api/internal
+              desc: errcode is a leaf — it imports nothing of tenant-api (#3202)
+            - pkg: net/http
+              desc: errcode holds codes and remedies only; statuses are the handler's kindTable (#3202)
   exclusions:
     rules:
       - path: _test\.go

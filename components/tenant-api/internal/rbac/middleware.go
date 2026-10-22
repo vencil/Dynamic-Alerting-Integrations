@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 // Middleware returns an HTTP middleware that reads IdP identity from
@@ -207,33 +208,22 @@ func observeSafely(a MachineIdentityAuditor, r *http.Request, header *VerifiedPr
 	a.Observe(r, header)
 }
 
-// Machine-readable error codes for the middleware's own responses. The rbac
-// package sits in the domain layer and must NOT import the HTTP handler layer
-// (depguard domain-no-handler ratchet, .golangci.yml), so these mirror
-// handler.CodeUnauthorized / handler.CodeForbidden BY VALUE instead of by
-// reference. Alignment is pinned from the allowed dependency direction
-// (handler → rbac): the envelope-shape tests in
-// internal/handler/access_test.go route a request through this real
-// middleware and compare the emitted `code` against the handler constants.
-const (
-	codeUnauthorized = "UNAUTHORIZED"
-	codeForbidden    = "FORBIDDEN"
-)
-
 // errorEnvelope is a package-local copy of the wire shape of
 // handler.ErrorResponse, restricted to the fields this middleware emits
-// (error / code / request_id / help / action). Duplicated for the same
-// depguard reason as the codes above; the access_test.go assertions pin the
-// two shapes in sync. `error` and `code` are always set (the OpenAPI schema
+// (error / code / request_id / help / action). The rbac package sits in the
+// domain layer and must NOT import the HTTP handler layer (depguard
+// domain-no-handler ratchet, .golangci.yml), so the shape is duplicated; the
+// codes are not — they are internal/errcode's (#3202). The access_test.go
+// assertions pin the two shapes in sync. `error` and `code` are always set (the OpenAPI schema
 // declares them required); request_id comes from the chi RequestID
 // middleware, which runs router-wide before any RBAC middleware
 // (cmd/server/routes.go), and is omitted when absent (bare test harnesses).
 type errorEnvelope struct {
-	Error     string `json:"error"`
-	Code      string `json:"code,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-	Help      string `json:"help,omitempty"`
-	Action    string `json:"action,omitempty"`
+	Error     string       `json:"error"`
+	Code      errcode.Code `json:"code,omitempty"`
+	RequestID string       `json:"request_id,omitempty"`
+	Help      string       `json:"help,omitempty"`
+	Action    string       `json:"action,omitempty"`
 }
 
 // writeEnvelope stamps the request ID and renders the envelope. Mirrors
@@ -251,12 +241,12 @@ func writeEnvelope(w http.ResponseWriter, r *http.Request, status int, env error
 // The message content is unchanged from the pre-envelope bare
 // {"error": msg} map — the migration only ADDS code + request_id.
 func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	var code string
+	var code errcode.Code
 	switch status {
 	case http.StatusUnauthorized:
-		code = codeUnauthorized
+		code = errcode.Unauthorized
 	case http.StatusForbidden:
-		code = codeForbidden
+		code = errcode.Forbidden
 	default:
 		// TRIPWIRE (fail-loud, dev-rules #5): `code` is a REQUIRED field of
 		// the OpenAPI ErrorResponse schema, and the contract fuzz CANNOT
@@ -278,7 +268,7 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) 
 func (m *Manager) writeForbiddenAnyTenant(w http.ResponseWriter, r *http.Request, want Permission) {
 	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{
 		Error: "insufficient permissions: no tenant grants " + string(want),
-		Code:  codeForbidden,
+		Code:  errcode.Forbidden,
 		Help:  "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
 		Action: "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) +
 			"' permission for at least one tenant.",
@@ -310,7 +300,7 @@ func (m *Manager) writeForbidden(w http.ResponseWriter, r *http.Request, tenantI
 	}
 	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{
 		Error:  "insufficient permissions for tenant " + tenantID,
-		Code:   codeForbidden,
+		Code:   errcode.Forbidden,
 		Help:   "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
 		Action: action + ".",
 	})

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/errcode"
 )
 
 func TestTenantFileDirty_PutAndBatchAnswers(t *testing.T) {
@@ -33,8 +35,8 @@ func TestTenantFileDirty_PutAndBatchAnswers(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Code != CodeTenantFileDirty || env.Error != msgTenantFileDirty {
-		t.Errorf("PUT envelope = %+v, want %s with the fixed text", env, CodeTenantFileDirty)
+	if env.Code != errcode.TenantFileDirty || env.Error != msgTenantFileDirty {
+		t.Errorf("PUT envelope = %+v, want %s with the fixed text", env, errcode.TenantFileDirty)
 	}
 	if strings.Contains(w.Body.String(), dir) || strings.Contains(w.Body.String(), "t-a.yaml") {
 		t.Errorf("PUT body names a path: %s", w.Body.String())
@@ -48,9 +50,9 @@ func TestTenantFileDirty_PutAndBatchAnswers(t *testing.T) {
 	if err := json.Unmarshal(bw.Body.Bytes(), &br); err != nil {
 		t.Fatal(err)
 	}
-	if br.Status != batchStatusRejected || len(br.Results) != 1 || br.Results[0].Code != CodeTenantFileDirty ||
+	if br.Status != batchStatusRejected || len(br.Results) != 1 || br.Results[0].Code != errcode.TenantFileDirty ||
 		br.Results[0].Message != msgTenantFileDirty {
-		t.Errorf("batch = %+v, want rejected with the op carrying %s", br, CodeTenantFileDirty)
+		t.Errorf("batch = %+v, want rejected with the op carrying %s", br, errcode.TenantFileDirty)
 	}
 
 	if gitHead(t, dir) != head {

@@ -943,6 +943,15 @@ class TestCredentialsAreNotPrinted:
         inside -= closure({d for d, _ in sites if d in inside - roots})
         schema = {k: v for k, v in schema.items() if k != "definitions"}
         schema["definitions"] = {k: v for k, v in defs.items() if k not in inside}
+        # secretRef（#1560）的子欄位 `secret` / `key` 是 Secret 的座標（名稱與
+        # data key），不是憑證值本身：持有 secretRef 的欄位名本來就在遮罩名單、
+        # 整包遮。把 `secret` / `key` 加進名單會讓 credmask 去遮任何叫 key 的
+        # 欄位，所以這裡以定義名明列略過。先斷言它還在：改名後豁免不會空轉。
+        not_credential_defs = {"secretRef"}
+        assert not_credential_defs <= set(schema["definitions"]), \
+            not_credential_defs - set(schema["definitions"])
+        for name in not_credential_defs:
+            del schema["definitions"][name]
         names = set()
 
         def walk(node):

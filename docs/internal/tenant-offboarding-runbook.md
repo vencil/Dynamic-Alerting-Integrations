@@ -56,7 +56,7 @@ curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
 
 ### 2. 移除 federation subset 紀錄
 
-subset 存在 tenant-api 的 state store，不在 conf.d git 樹裡；tenant-api 沒有刪除 subset 的 API，直接移除該 key（以下 namespace 用 `k8s/04-tenant-api` 的 `tenant-api`，Helm 安裝請換成 release 所在的 namespace）：
+subset 存在 tenant-api 的 state store，不在 conf.d git 樹裡；tenant-api 沒有刪除 subset 的 API，直接移除該 key（以下 namespace 用標準的 `tenant-api`，請換成 `helm/tenant-api` release 實際所在的 namespace；ConfigMap 名稱取自 chart 的 `state.configMapName`，預設 `tenant-api-state`）：
 
 ```sh
 kubectl -n tenant-api get configmap tenant-api-state -o jsonpath='{.data._federation\.<tenant>\.yaml}'   # 先看有沒有

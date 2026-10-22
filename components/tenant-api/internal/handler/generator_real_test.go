@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/generator"
 )
 
@@ -199,7 +200,7 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	w = putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"73\"\n    _routing:\n      receiver:\n"+
 		"        type: webhook\n        url: https://evil.example.org/hook\n", "admins", nil)
 	m := genEnvelope(t, w)
-	if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorFindings || m["findings_compared_with_base"] != true {
+	if w.Code != http.StatusUnprocessableEntity || m["code"] != string(errcode.GeneratorFindings) || m["findings_compared_with_base"] != true {
 		t.Fatalf("findings: status %d body %s", w.Code, w.Body.String())
 	}
 	fs, _ := m["findings"].([]any)
@@ -267,8 +268,8 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 	kinds := func(w *httptest.ResponseRecorder) map[string]bool {
 		t.Helper()
 		m := genEnvelope(t, w)
-		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorFindings {
-			t.Fatalf("status %d body %s; want 422 %s", w.Code, w.Body.String(), CodeGeneratorFindings)
+		if w.Code != http.StatusUnprocessableEntity || m["code"] != string(errcode.GeneratorFindings) {
+			t.Fatalf("status %d body %s; want 422 %s", w.Code, w.Body.String(), errcode.GeneratorFindings)
 		}
 		out := map[string]bool{}
 		fs, _ := m["findings"].([]any)
@@ -310,10 +311,10 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 	for _, f := range br.Findings {
 		batchKinds[f["kind"].(string)] = true
 	}
-	if w.Code != http.StatusUnprocessableEntity || len(br.Results) != 1 || br.Results[0].Code != CodeGeneratorFindings ||
+	if w.Code != http.StatusUnprocessableEntity || len(br.Results) != 1 || br.Results[0].Code != string(errcode.GeneratorFindings) ||
 		!batchKinds["routing_not_mapping"] {
 		t.Errorf("batch _routing patch: status %d body %s; want 422, %s with routing_not_mapping",
-			w.Code, w.Body.String(), CodeGeneratorFindings)
+			w.Code, w.Body.String(), errcode.GeneratorFindings)
 	}
 	// The repo's policy file unreadable: the generator's finding, refusing
 	// even a threshold-only write — not tenant-api's 503.

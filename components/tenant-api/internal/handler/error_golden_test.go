@@ -12,10 +12,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -114,6 +117,7 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 		{"gitops.ErrBatchRejected", gitops.ErrBatchRejected},
 		{"gitops.ErrPushFailed", gitops.ErrPushFailed},
 		{"gitops.ErrGitDriverConfigured", gitops.ErrGitDriverConfigured},
+		{"gitops.ErrGitConfigUnreadable", gitops.ErrGitConfigUnreadable},
 		// confd / statestore / platform / context.
 		{"confd.ErrAmbiguousTenantFile", confd.ErrAmbiguousTenantFile},
 		{"confd.ErrNotRegularFile", confd.ErrNotRegularFile},
@@ -140,6 +144,10 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("leavePRBranch(back on base, retry)", fmt.Errorf(
 		"%w: HEAD was PR branch %q; the tree is back on base %q, but this write was prepared on the branch, so nothing was written — retry",
 		gitops.ErrTreeNotOnBase, "da-tenant/tu-b-1", "main"))
+	add("leavePRBranch(back on base, git config unreadable)", fmt.Errorf("on base %q: %w", "main",
+		fmt.Errorf("%w: %v", gitops.ErrGitConfigUnreadable, errors.New("exit status 128"))))
+	add("TreeOnBase(ErrTreeNotOnBase %w GitDriverError)", fmt.Errorf("%w: %w", gitops.ErrTreeNotOnBase,
+		&gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "local", Key: "diff.x.textconv"}}}))
 	add("ErrForgeDegraded fetch timeout", fmt.Errorf("git fetch origin %s timed out after %s: %w", "main", "5s", gitops.ErrForgeDegraded))
 	add("ErrGitTimeout %w DeadlineExceeded", fmt.Errorf("%w: %w", gitops.ErrGitTimeout, context.DeadlineExceeded))
 	add("ErrValidation %w ErrInvalidTenantID", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrInvalidTenantID))
@@ -152,6 +160,13 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("ErrValidation %w ErrNoChanges", fmt.Errorf("%w: %w", gitops.ErrValidation, gitops.ErrNoChanges))
 	add("freshBaseScopeError %w ErrNoChanges", fmt.Errorf("%w: %w", &freshBaseScopeError{TenantID: goldenTenant, Put: true}, gitops.ErrNoChanges))
 	add("ErrMergeFailed %w merge error", fmt.Errorf("%w for %s: %w", gitops.ErrMergeFailed, goldenTenant, errors.New("yaml: line 3: mapping values are not allowed")))
+	// A conf.d scan or a stranded tree wrapping the git error that stopped it
+	// (gitops' prResolveOnBase, TreeOnBase, leavePRBranch): the order of the
+	// placement guards against the write-flow sentinels (#3226 kindRules).
+	add("ErrTenantTreeScan %w ErrWriteOverloaded", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrWriteOverloaded))
+	add("ErrTenantTreeScan %w ErrGitTimeout", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrGitTimeout))
+	add("ErrTenantTreeScan %w ErrTreeNotOnBase", fmt.Errorf("%w: tenant %s: %w", gitops.ErrTenantTreeScan, goldenTenant, gitops.ErrTreeNotOnBase))
+	add("ErrTreeNotOnBase %w ErrWriteOverloaded", fmt.Errorf("%w: %w", gitops.ErrTreeNotOnBase, gitops.ErrWriteOverloaded))
 
 	// Typed errors.
 	add("PreconditionError{Current=API file hash}", &gitops.PreconditionError{TenantID: goldenTenant, Expected: "0123456789abcdef", Current: apiHash})
@@ -210,6 +225,13 @@ type goldenEntry struct {
 	call     func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (ret string, fault bool)
 }
 
+// writeErrHandled is writeErr's handled: the golden sections of the kind
+// sets the entries are built from, answered alone.
+func writeErrHandled(w http.ResponseWriter, r *http.Request, d *Deps, err error, ec errCtx) bool {
+	h, _ := writeErr(w, r, d, err, ec)
+	return h
+}
+
 func goldenEntries() []goldenEntry {
 	handled := func(b bool) (string, bool) { return fmt.Sprintf("handled=%t", b), false }
 	written := func(b bool) (string, bool) { return fmt.Sprintf("written=%t", b), false }
@@ -220,7 +242,7 @@ func goldenEntries() []goldenEntry {
 			return fault(writePutDirectError(w, r, d, goldenTenant, err))
 		}},
 		{"writePRPutError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return written(writePRPutError(w, r, d, err))
+			return written(writePRPutError(w, r, d, goldenTenant, err))
 		}},
 		{"writeCustomAlertsWriteError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
 			return fault(writeCustomAlertsWriteError(w, r, d, goldenTenant, err))
@@ -232,14 +254,14 @@ func goldenEntries() []goldenEntry {
 		{"writePRBatchError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
 			return written(writePRBatchError(w, r, d, err))
 		}},
-		{"writeWriteFlowError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeWriteFlowError(w, r, d, err))
+		{"writeErr(kindsWriteFlow)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsWriteFlow}))
 		}},
-		{"writeTenantPlacementError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeTenantPlacementError(w, r, d, err))
+		{"writeErr(kindsPlacement)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsPlacement}))
 		}},
-		{"writeGeneratorError", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
-			return handled(writeGeneratorError(w, r, d, err))
+		{"writeErr(kindsGenerator)", true, func(w http.ResponseWriter, r *http.Request, d *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, d, err, errCtx{accept: kindsGenerator}))
 		}},
 		{"writeForgeCreateError(GitHub)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
 			writeForgeCreateError(w, r, "GitHub", err)
@@ -255,20 +277,20 @@ func goldenEntries() []goldenEntry {
 		{"writeTenantWriteFailure", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
 			return fault(writeTenantWriteFailure(w, r, err))
 		}},
-		{"writeWriteCancelled", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeWriteCancelled(w, r, err))
+		{"writeErr(kindsOutcome)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOutcome}))
 		}},
-		{"writePushFailed", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writePushFailed(w, r, err))
+		{"writeErr(git_push_failed)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.GitPushFailed)}))
 		}},
-		{"writeBaseRestoreFailed(\"PR write failed: \")", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeBaseRestoreFailed(w, r, "PR write failed: ", err))
+		{"writeErr(base_restore_failed, prefix \"PR write failed: \")", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.BaseRestoreFailed), prefix: "PR write failed: "}))
 		}},
-		{"writeTenantTargetUnreadable", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeTenantTargetUnreadable(w, r, err))
+		{"writeErr(tenant_file_unreadable)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.TenantFileUnreadable)}))
 		}},
-		{"writeTenantGitManaged", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
-			return handled(writeTenantGitManaged(w, r, err))
+		{"writeErr(tenant_git_managed)", false, func(w http.ResponseWriter, r *http.Request, _ *Deps, err error) (string, bool) {
+			return handled(writeErrHandled(w, r, nil, err, errCtx{accept: kindsOf(errkind.TenantGitManaged)}))
 		}},
 	}
 }
@@ -369,7 +391,7 @@ func renderBatchResult(res BatchResult) string {
 	if res.Status != "error" {
 		head += "status=" + res.Status + " "
 	}
-	return fmt.Sprintf("%scode=%s message=%s", head, orDash(res.Code), goldenText(res.Message))
+	return fmt.Sprintf("%scode=%s message=%s", head, orDash(string(res.Code)), goldenText(res.Message))
 }
 
 // goldenTexts are the fixed client texts the golden names instead of
@@ -398,7 +420,7 @@ var goldenTreeEntries = []cfg.UnreadableFile{{RelKey: "tu-b.yaml", Reason: cfg.U
 
 // goldenComposedTexts are client texts the production helpers compose for
 // the corpus's errors, computed by those helpers (or, for the findings
-// texts written inline in writeGeneratorError, copied): named like
+// texts written inline in renderKind, copied): named like
 // goldenTexts, with their values in the legend.
 func goldenComposedTexts() []struct{ name, text string } {
 	type nt = struct{ name, text string }
@@ -638,7 +660,93 @@ func buildErrorGolden(t *testing.T) string {
 		line := gate(s.f())
 		renderVariants(&b, s.name, func(bool) string { return line })
 	}
+
+	b.WriteString("\n## Part 3: the error kind table and its precedence (#3226)\n")
+	b.WriteString("\n### kindTable (kind => status code, then the attributes that are set)\n")
+	for _, sp := range kindTable {
+		line := fmt.Sprintf("%s => %d %s", sp.Kind, sp.Status, orDash(string(sp.Code)))
+		if sp.Retryable {
+			line += " retryable"
+		}
+		if sp.ClientError {
+			line += " client_error"
+		}
+		if sp.RetryAfterS > 0 {
+			line += fmt.Sprintf(" retry_after_s=%d", sp.RetryAfterS)
+		}
+		if sp.Fault {
+			line += " fault"
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString("\n### kindRules precedence: each rule's sample wrapped around the next rule's sample\n")
+	b.WriteString("### (\"a > b\": an error that is both is answered as a; the winner when no entry narrows the kinds)\n")
+	for i := 0; i+1 < len(kindRules); i++ {
+		a, next := kindRules[i].Kind, kindRules[i+1].Kind
+		// The later rule's error outermost, so errors.As order alone would
+		// pick it: the winner is the table's order, not the wrapping.
+		both := fmt.Errorf("%w: %w", kindSample(next), kindSample(a))
+		got, _ := firstKind(both, nil)
+		fmt.Fprintf(&b, "%s > %s => %s\n", a, next, got)
+	}
 	return b.String()
+}
+
+// kindSample is one error of kind k as kindRules reads it: the typed error
+// for a typed rule, the sentinel for the rest.
+func kindSample(k errkind.Kind) error {
+	switch k {
+	case errkind.FreshBaseScope:
+		return &freshBaseScopeError{TenantID: goldenTenant, Put: true}
+	case errkind.FreshBaseOrgs:
+		return &freshBaseOrgsError{Err: errors.New("parse")}
+	case errkind.GeneratorFindings:
+		return &generator.FindingsError{RC: 1}
+	case errkind.GeneratorRejectedRetryable:
+		return &generator.RejectedError{Reason: generator.ReasonBusy}
+	case errkind.GeneratorRejected:
+		return &generator.RejectedError{Reason: generator.ReasonMemory}
+	case errkind.ValidatorUnavailable:
+		return &generator.UnavailableError{Code: generator.CodeValidatorUnavailable, Reason: generator.ReasonUnreachable}
+	case errkind.PolicyUnavailable:
+		return &generator.UnavailableError{Code: generator.CodePolicyUnavailable, Reason: generator.ReasonPolicyUnusable}
+	case errkind.TenantTreeUnreadable:
+		return &gitops.TreeUnreadableError{Entries: goldenTreeEntries}
+	case errkind.TenantStoreFault:
+		return &gitops.TreeUnreadableError{Entries: goldenTreeEntries, StoreFault: true}
+	case errkind.TenantFileUnreadable:
+		return &gitops.TargetUnreadableError{TenantID: goldenTenant, RelKey: "tu-a.yaml", Reason: cfg.UnreadableReadError}
+	case errkind.TenantGitManaged:
+		return &gitops.GitManagedError{TenantID: goldenTenant, Reason: "tenant_count"}
+	case errkind.TenantConfigNotLoadable:
+		return &tenantFileNotLoadableError{TenantID: goldenTenant, Reason: "malformed_yaml"}
+	case errkind.GitDriverConfigured:
+		return &gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "local", Key: "filter.x.clean"}}}
+	case errkind.PreconditionFailed:
+		return &gitops.PreconditionError{TenantID: goldenTenant}
+	case errkind.BatchCommitted:
+		return &gitops.BatchCommittedError{Commit: "c0ffee", Cause: errors.New("reset")}
+	case errkind.GitPushFailed:
+		return &gitops.PushError{Branch: "b", Cause: errors.New("rejected")}
+	case errkind.BaseRestoreFailed:
+		return &gitops.BaseRestoreError{Branch: "b", Cause: errors.New("checkout")}
+	case errkind.Validation:
+		return gitops.ErrValidation
+	case errkind.ConfigFileParse:
+		return &configFileParseError{errors.New("yaml")}
+	case errkind.FederationMintRateLimited:
+		return &token.MintRateLimitedError{Wait: time.Second}
+	case errkind.WriteOutcomeUnknown:
+		return &gitops.WriteOutcomeUnknownError{Commit: "c0ffee", Cause: errors.New("update-ref")}
+	case errkind.WriteCancelled:
+		return context.Canceled
+	}
+	for _, rl := range kindRules {
+		if rl.Kind == k && len(rl.sentinels) > 0 {
+			return rl.sentinels[0]
+		}
+	}
+	panic("kindSample: no sample for " + string(k))
 }
 
 // TestErrorResponses_Golden compares buildErrorGolden with

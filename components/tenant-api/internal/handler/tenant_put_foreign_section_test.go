@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -164,8 +165,8 @@ func TestPutTenant_ForeignSectionInSharedFile(t *testing.T) {
 			wantStatus int
 			wantText   string
 		}{
-			{"own_body_refused", foreignSharedFile, foreignBodyOmitOut, false, http.StatusConflict, CodeTenantGitManaged},
-			{"own_body_refused_when_caller_writes_both", foreignSharedFile, foreignBodyOmitOut, true, http.StatusConflict, CodeTenantGitManaged},
+			{"own_body_refused", foreignSharedFile, foreignBodyOmitOut, false, http.StatusConflict, string(errcode.TenantGitManaged)},
+			{"own_body_refused_when_caller_writes_both", foreignSharedFile, foreignBodyOmitOut, true, http.StatusConflict, string(errcode.TenantGitManaged)},
 			{"rewrite_out_refused", foreignSharedFile, foreignBodyRewriteOut, false, http.StatusBadRequest, "and no other tenant"},
 			{"rewrite_both_refused_when_caller_writes_both", foreignSharedFile, foreignBodyRewriteBoth, true, http.StatusBadRequest, "and no other tenant"},
 			{"own_file_accepted", ownFile, foreignBodyOmitOut, false, http.StatusOK, ""},

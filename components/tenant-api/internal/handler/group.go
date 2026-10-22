@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
@@ -118,7 +119,7 @@ const msgGroupIDUnavailable = "group id is not available; choose another id"
 // What it no longer tells is anything about the group: its members, whether
 // the caller could see some of them, or that it is empty.
 func writeGroupIDUnavailable(w http.ResponseWriter, r *http.Request) {
-	WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeGroupIDUnavailable, msgGroupIDUnavailable)
+	WriteJSONErrorWithCode(w, r, http.StatusConflict, errcode.GroupIDUnavailable, msgGroupIDUnavailable)
 }
 
 // errGroupIDUnavailable is PutGroup's transform error for writeGroupIDUnavailable.

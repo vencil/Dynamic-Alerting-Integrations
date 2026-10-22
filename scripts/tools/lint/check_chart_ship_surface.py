@@ -163,6 +163,12 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
     "helm/tenant-api": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
+        "values.schema.json": (
+            SHIP,
+            "#1594: helm validates the customer's values against it at install "
+            "— a misspelled key or writeBack.mode fails the render instead of "
+            "being silently ignored. Useless unless it ships.",
+        ),
         ".helmignore": (SHIP, "helm's own packing control file"),
         "values-scope-enforce.yaml": (
             EXCLUDE,

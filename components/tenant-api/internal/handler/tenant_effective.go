@@ -48,6 +48,8 @@ import (
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/credmask"
+	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // GetTenantEffective handles GET /api/v1/tenants/{id}/effective.
@@ -104,7 +106,7 @@ import (
 // @Success     200  {object} TenantEffectiveResponse
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
-// @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file"
+// @Failure     409  {object} ErrorResponse "Conflict: code TENANT_FILE_AMBIGUOUS when the tenant's own top-level spellings (<id>.yaml and <id>.yml) both exist, or TENANT_DECLARED_ELSEWHERE when it is declared by more than one conf.d file otherwise"
 // @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/effective [get]
 func GetTenantEffective(d *Deps) http.HandlerFunc {
@@ -139,7 +141,8 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 				// to the log only (#2511: they used to reach the body as a 500).
 				slog.Warn("tenant effective: tenant declared by more than one conf.d file",
 					"tenant", tenantID, "error", err)
-				WriteJSONError(w, r, http.StatusConflict, effectiveDuplicateMessage(d.ConfigDir, tenantID, dup))
+				k, msg := effectiveDuplicate(d.ConfigDir, tenantID, dup)
+				WriteKind(w, r, k, msg)
 			case errors.As(err, &decodeErr):
 				// Its text is the decoder's own (`parse defaults[i]: …` /
 				// `parse tenant: …`) and names no path — pinned by
@@ -163,7 +166,7 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 					slog.Warn("tenant effective: decode error withheld", "tenant", tenantID, "error", err)
 					msg = msgEffectiveDecodeWithheld
 				}
-				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, msg)
+				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, errcode.ConfigDecode, msg)
 			default:
 				// Walker and read failures carry server paths (a missing root
 				// answers `stat "/…/conf.d": …`): fixed text, full error logged.
@@ -243,25 +246,26 @@ const msgEffectiveDecodeWithheld = "the tenant's effective config does not decod
 // carry server paths, which only the log may see.
 const msgEffectiveUnresolved = "cannot resolve the tenant's effective config from conf.d; see the server log"
 
-// effectiveDuplicateMessage is the 409 text for a *DuplicateTenantError.
+// effectiveDuplicate is the 409 kind and text for a *DuplicateTenantError.
 //
 // When both declaring files are the tenant's own top-level spellings
-// (`<id>.yaml` beside `<id>.yml`, directly in conf.d), the text is
-// GET /tenants/{id}'s ambiguity message — the same sentinel wording, base
-// names only — since both names follow from the id the caller already holds.
-// Any other pair (a subdirectory copy, including both spellings inside a
-// subdirectory, or a shared file's `tenants:` entry) gets the fixed text the
-// write plane uses: the other file's name or location is not this caller's
-// to learn.
-func effectiveDuplicateMessage(configDir, tenantID string, dup *cfg.DuplicateTenantError) string {
+// (`<id>.yaml` beside `<id>.yml`, directly in conf.d), it is GET
+// /tenants/{id}'s ambiguity answer — errkind.AmbiguousTenantFile, the same
+// sentinel wording, base names only — since both names follow from the id
+// the caller already holds. Any other pair (a subdirectory copy, including
+// both spellings inside a subdirectory, or a shared file's `tenants:` entry)
+// is the write plane's answer, errkind.TenantDeclaredElsewhere with its
+// fixed text: the other file's name or location is not this caller's to
+// learn.
+func effectiveDuplicate(configDir, tenantID string, dup *cfg.DuplicateTenantError) (errkind.Kind, string) {
 	a, okA := topLevelTenantFileName(configDir, tenantID, dup.PathA)
 	b, okB := topLevelTenantFileName(configDir, tenantID, dup.PathB)
 	if !okA || !okB {
-		return msgTenantDeclaredElsewhere
+		return errkind.TenantDeclaredElsewhere, msgTenantDeclaredElsewhere
 	}
 	names := []string{a, b}
 	sort.Strings(names)
-	return fmt.Errorf("%w: %q is claimed by %v", confd.ErrAmbiguousTenantFile, tenantID, names).Error()
+	return errkind.AmbiguousTenantFile, fmt.Errorf("%w: %q is claimed by %v", confd.ErrAmbiguousTenantFile, tenantID, names).Error()
 }
 
 // topLevelTenantFileName returns path's base name when path sits directly in

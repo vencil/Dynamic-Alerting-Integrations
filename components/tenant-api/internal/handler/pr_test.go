@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	gh "github.com/vencil/tenant-api/internal/github"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -623,7 +624,7 @@ func TestBatchTenants_PRMode_PendingPRRegistered(t *testing.T) {
 
 // TestBatchTenants_PRMode_ForgeForbidden is the batch-path mirror of
 // TestPutTenant_PRMode_ForgeForbidden: a forge 403 at PR-creation time (read-
-// scoped token) must map to a clean HTTP 403 with CodeForbidden, never a generic
+// scoped token) must map to a clean HTTP 403 with errcode.ForgeForbidden, never a generic
 // 503. Regression guard for the unified writeForgeCreateError dispatch — before
 // it, the batch path was missing the ErrForbidden branch and leaked a 503,
 // inconsistent with the single-write path's documented "permission → 403" contract.
@@ -658,8 +659,8 @@ func TestBatchTenants_PRMode_ForgeForbidden(t *testing.T) {
 	}
 	var resp map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != CodeForbidden {
-		t.Errorf("code = %v, want %q", resp["code"], CodeForbidden)
+	if resp["code"] != string(errcode.ForgeForbidden) {
+		t.Errorf("code = %v, want %q", resp["code"], errcode.ForgeForbidden)
 	}
 	msg, _ := resp["error"].(string)
 	if !strings.Contains(msg, "insufficient") || strings.Contains(msg, "APIError") {
@@ -737,8 +738,8 @@ func TestPutTenant_PRMode_ForgeForbidden(t *testing.T) {
 	}
 	var resp map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != CodeForbidden {
-		t.Errorf("code = %v, want %q", resp["code"], CodeForbidden)
+	if resp["code"] != string(errcode.ForgeForbidden) {
+		t.Errorf("code = %v, want %q", resp["code"], errcode.ForgeForbidden)
 	}
 	// The clean message must not leak an internal stack / upstream body.
 	msg, _ := resp["error"].(string)
@@ -854,7 +855,7 @@ func TestPutTenant_PRMode_RateLimited403MapsTo503(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("expected JSON response, unmarshal failed: %v; body=%s", err, w.Body.String())
 	}
-	if resp["code"] == CodeForbidden {
+	if resp["code"] == string(errcode.Forbidden) {
 		t.Errorf("code = %v, want a non-FORBIDDEN code (rate-limit is degradation, not a permission error)", resp["code"])
 	}
 	// Claim released so a post-back-off retry isn't blocked.

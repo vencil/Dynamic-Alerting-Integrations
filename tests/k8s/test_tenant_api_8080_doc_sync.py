@@ -11,7 +11,8 @@ WHAT IS CHECKED: the set of `key=value` selectors under
 of backticked `key=value` selectors on the tenant-api row of each doc's
 NetworkPolicy table. Adding or removing a workload in the chart without updating
 both pages turns this red, and so does a doc row that names one the chart does
-not admit. The raw manifest (`k8s/04-tenant-api/`) is not compared here.
+not admit. The chart is tenant-api's only deployment source (the raw k8s
+manifests were removed in #1594), so there is no second carrier to compare.
 """
 from __future__ import annotations
 

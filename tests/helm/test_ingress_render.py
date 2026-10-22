@@ -164,11 +164,14 @@ def test_tier2_overlay_now_renders_its_ingress(repo_root: Path):
 @_needs_helm
 @pytest.mark.parametrize("chart", _CHARTS)
 def test_fails_closed_without_oauth2_proxy(repo_root: Path, chart: str):
+    # da-portal's own GHSA guard forbids upstream URLs without the proxy;
+    # clear them so the Ingress guard is the one that fires. tenant-api has no
+    # `portal` key, and its values.schema.json refuses unknown keys (#1594).
+    clear_upstreams = (("--set", "portal.tenantApiUrl=", "--set", "portal.recipePreviewUrl=")
+                       if chart == "helm/da-portal" else ())
     res = _helm_template(
         repo_root, chart, *_enable("--set", "oauth2Proxy.enabled=false"),
-        # da-portal's own GHSA guard forbids upstream URLs without the proxy;
-        # clear them so the Ingress guard is the one that fires.
-        "--set", "portal.tenantApiUrl=", "--set", "portal.recipePreviewUrl=",
+        *clear_upstreams,
     )
     assert res.returncode != 0
     assert "ingress.enabled=true requires oauth2Proxy.enabled=true" in res.stderr

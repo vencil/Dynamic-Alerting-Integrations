@@ -51,7 +51,6 @@ _REAL_RBAC = os.path.join(_REPO, "try-local", "seed", "conf.d", "_rbac.yaml")
 _REAL_DOMAIN_POLICY = os.path.join(
     _REPO, "components", "threshold-exporter", "config", "conf.d", "examples", "_domain_policy.yaml")
 # Production RBAC embedded as a block-scalar string (the fail-open hole this closes).
-_REAL_K8S_CONFIGMAP = os.path.join(_REPO, "k8s", "04-tenant-api", "configmap-rbac.yaml")
 _REAL_HELM_VALUES = os.path.join(_REPO, "helm", "tenant-api", "values.yaml")
 _REAL_HELM_TEMPLATE = os.path.join(_REPO, "helm", "tenant-api", "templates", "configmap-rbac.yaml")
 
@@ -249,11 +248,6 @@ class TestEmbeddedRbac:
     extractor validates it against the SAME rbac schema, and that a BAD embedded
     RBAC actually fails."""
 
-    def test_real_k8s_configmap_clean(self, rbac_schema):
-        assert os.path.exists(_REAL_K8S_CONFIGMAP), _REAL_K8S_CONFIGMAP
-        assert validate_embedded_file(
-            _REAL_K8S_CONFIGMAP, ("data", "_rbac.yaml"), rbac_schema, jsonschema) == []
-
     def test_real_helm_values_clean(self, rbac_schema):
         assert os.path.exists(_REAL_HELM_VALUES), _REAL_HELM_VALUES
         assert validate_embedded_file(
@@ -317,10 +311,9 @@ class TestEmbeddedRbac:
                 _REAL_HELM_TEMPLATE, ("data", "_rbac.yaml"), rbac_schema, jsonschema)
 
     def test_embedded_source_classifier_is_path_anchored(self):
-        # Only the two exact production files classify as embedded sources; a bare
+        # Only the exact production file classifies as an embedded source; a bare
         # basename or another chart's values.yaml must NOT (avoids false positives
-        # on the 10 other values.yaml).
-        assert embedded_source_for("k8s/04-tenant-api/configmap-rbac.yaml") is not None
+        # on the other values.yaml).
         assert embedded_source_for("repo/helm/tenant-api/values.yaml") is not None
         assert embedded_source_for("helm/da-portal/values.yaml") is None
         assert embedded_source_for("values.yaml") is None
@@ -332,7 +325,7 @@ class TestEmbeddedCLI:
     so fixtures live under the real repo-relative subpaths)."""
 
     def test_real_embedded_files_exit_zero(self):
-        result = _run(_REAL_K8S_CONFIGMAP, _REAL_HELM_VALUES)
+        result = _run(_REAL_HELM_VALUES)
         assert result.returncode == EXIT_OK, result.stderr
         assert "OK:" in result.stdout
 
@@ -349,8 +342,8 @@ class TestEmbeddedCLI:
         assert "readonly" in result.stderr, result.stderr
 
     def test_missing_key_exit_one(self, tmp):
-        p = _write_at(tmp, "k8s/04-tenant-api/configmap-rbac.yaml",
-                      "data:\n  _rbac_TYPO.yaml: |\n    groups: []\n")
+        p = _write_at(tmp, "helm/tenant-api/values.yaml",
+                      "rbac:\n  _rbacYaml_TYPO: |\n    groups: []\n")
         result = _run(p)
         assert result.returncode == EXIT_VIOLATION, result.stdout + result.stderr
         assert "not found" in result.stderr, result.stderr
@@ -388,12 +381,12 @@ class TestEmbeddedCLI:
         assert "readonly" in result.stderr, result.stderr
 
     def test_real_embedded_files_are_validated_not_deferred(self):
-        # Tripwire (adversarial MINOR): the two real registered sources must be
+        # Tripwire (adversarial MINOR): the real registered source must be
         # VALIDATED (counted), not silently deferred — a regression that pushes a
         # registered source into a skipped/deferred branch would fail this.
-        result = _run(_REAL_K8S_CONFIGMAP, _REAL_HELM_VALUES)
+        result = _run(_REAL_HELM_VALUES)
         assert result.returncode == EXIT_OK, result.stderr
-        assert "2 admin meta-config file(s) valid" in result.stdout, result.stdout
+        assert "1 admin meta-config file(s) valid" in result.stdout, result.stdout
         assert "deferred" not in result.stdout.lower(), result.stdout
 
     def test_helm_template_path_skipped_not_error(self):
@@ -456,12 +449,12 @@ class TestGateIntegrity:
                     f"FAIL-OPEN: hook regex selects {rel!r} but the script does not "
                     f"recognize it (schema_for + embedded_source_for both None) → "
                     f"the script skips it and exits 0.")
-        # >= stems + the 2 embedded sources ensures the guard isn't vacuous.
+        # >= stems + the embedded sources ensures the guard isn't vacuous.
         assert selected >= len(SCHEMA_MAP) + len(EMBEDDED_RBAC_SOURCES), (
             f"regex selected only {selected} candidate(s) — guard likely vacuous")
 
     def test_embedded_sources_are_selected_by_the_hook(self):
-        # The regex MUST select the two production embedded-RBAC files (that is the
+        # The regex MUST select the production embedded-RBAC files (that is the
         # whole point of this follow-up), from repo root and nested.
         pattern = self._hook_files_regex()
         for suffix in EMBEDDED_RBAC_SOURCES:

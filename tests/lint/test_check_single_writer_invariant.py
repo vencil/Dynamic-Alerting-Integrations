@@ -2,15 +2,17 @@
 
 Pinned contracts
 ----------------
-1. **replicas**: a tenant-api Deployment with replicas != 1 is flagged.
-2. **strategy**: missing / non-Recreate `strategy.type` is flagged (replicaCount=1
-   alone does NOT satisfy the invariant — phantom-writer window, ADR-023 §A).
-3. **helm values**: replicaCount != 1 is flagged.
-4. **template guard**: the layer-1 `fail` guard must be present in the chart
+1. **strategy**: a chart template without `strategy.type: Recreate` is flagged
+   (replicaCount=1 alone does NOT satisfy the invariant — phantom-writer window,
+   ADR-023 §A).
+2. **helm values**: replicaCount != 1 is flagged.
+3. **template guard**: the layer-1 `fail` guard must be present in the chart
    template; removing it (not just the value) is caught.
-5. **scope**: a non-Deployment doc is ignored (kind filter).
-6. **live dogfood**: the real repo tree honors the invariant across all three
-   Deployment sources (guards a regression of this very PR).
+4. **autoscaler**: an HPA / KEDA manifest under the chart templates is flagged.
+5. **live dogfood**: the real chart honors the invariant (guards a regression).
+
+The raw tenant-api manifests under `k8s/` were removed in #1594; the chart is
+tenant-api's only deployment source, so the raw-Deployment checks went with it.
 """
 from __future__ import annotations
 
@@ -24,44 +26,6 @@ _TOOLS_DIR = os.path.join(
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_single_writer_invariant as lint  # noqa: E402
-
-
-# ── raw Deployment core ─────────────────────────────────────────────────────
-def _deploy(replicas, strategy_type="Recreate"):
-    d = {"kind": "Deployment", "spec": {"replicas": replicas}}
-    if strategy_type is not None:
-        d["spec"]["strategy"] = {"type": strategy_type}
-    return d
-
-
-def test_raw_clean():
-    assert lint.check_raw_deployment(_deploy(1, "Recreate")) == []
-
-
-def test_raw_replicas_two_flagged():
-    out = lint.check_raw_deployment(_deploy(2, "Recreate"))
-    assert len(out) == 1 and "replicas" in out[0]
-
-
-def test_raw_missing_strategy_flagged():
-    # replicaCount=1 alone is NOT enough — the phantom-writer window.
-    out = lint.check_raw_deployment(_deploy(1, strategy_type=None))
-    assert len(out) == 1 and "strategy" in out[0]
-
-
-def test_raw_rollingupdate_flagged():
-    out = lint.check_raw_deployment(_deploy(1, "RollingUpdate"))
-    assert len(out) == 1 and "Recreate" in out[0]
-
-
-def test_raw_both_wrong_flags_both():
-    out = lint.check_raw_deployment(_deploy(3, "RollingUpdate"))
-    assert len(out) == 2
-
-
-def test_non_deployment_ignored():
-    assert lint.check_raw_deployment({"kind": "Service", "spec": {}}) == []
-    assert lint.check_raw_deployment("not a dict") == []  # type: ignore
 
 
 # ── helm values core ────────────────────────────────────────────────────────
@@ -106,20 +70,13 @@ def test_template_guard_detected():
 
 
 # ── main() exit codes against a synthetic repo ──────────────────────────────
-def _write_repo(tmp_path, *, replicas=1, strategy="Recreate", rc=1,
-                tpl=_GOOD_TPL):
+def _write_repo(tmp_path, *, rc=1, tpl=_GOOD_TPL):
     (tmp_path / ".git").mkdir(exist_ok=True)
     (tmp_path / "helm" / "tenant-api" / "templates").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "k8s" / "04-tenant-api").mkdir(parents=True, exist_ok=True)
     (tmp_path / "helm" / "tenant-api" / "values.yaml").write_text(
         f"replicaCount: {rc}\n", encoding="utf-8")
     (tmp_path / "helm" / "tenant-api" / "templates" / "deployment.yaml").write_text(
         tpl, encoding="utf-8")
-    strat = f"  strategy:\n    type: {strategy}\n" if strategy else ""
-    (tmp_path / "k8s" / "04-tenant-api" / "deployment.yaml").write_text(
-        f"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: tenant-api\n"
-        f"spec:\n  replicas: {replicas}\n{strat}",
-        encoding="utf-8")
 
 
 def test_check_targets_clean(tmp_path):
@@ -127,21 +84,27 @@ def test_check_targets_clean(tmp_path):
     assert lint.check_targets(tmp_path) == []
 
 
-def test_check_targets_catches_raw_drift(tmp_path):
-    # The exact drift this PR found: raw manifest missing strategy: Recreate.
-    _write_repo(tmp_path, strategy=None)
+def test_check_targets_catches_template_strategy_drift(tmp_path):
+    _write_repo(tmp_path, tpl=_GOOD_TPL.replace("type: Recreate", "type: RollingUpdate"))
     findings = lint.check_targets(tmp_path)
-    assert any("strategy" in f and "04-tenant-api" in f for f in findings)
+    assert any("strategy" in f and "templates/deployment.yaml" in f for f in findings)
+
+
+def test_check_targets_catches_removed_guard(tmp_path):
+    tpl = "\n".join(l for l in _GOOD_TPL.splitlines() if "fail" not in l) + "\n"
+    _write_repo(tmp_path, tpl=tpl)
+    findings = lint.check_targets(tmp_path)
+    assert any("fail" in f and "guard" in f for f in findings)
 
 
 def test_check_targets_catches_replica_bump(tmp_path):
-    _write_repo(tmp_path, rc=2, replicas=2)
+    _write_repo(tmp_path, rc=2)
     findings = lint.check_targets(tmp_path)
-    assert len(findings) >= 2  # both values + raw manifest
+    assert any("replicaCount=2" in f for f in findings)
 
 
 def test_main_exit_codes(tmp_path, monkeypatch):
-    _write_repo(tmp_path, rc=2, replicas=2)
+    _write_repo(tmp_path, rc=2)
     monkeypatch.setattr(lint, "_THIS_DIR",
                         str(tmp_path / "scripts" / "tools" / "lint"))
     (tmp_path / "scripts" / "tools" / "lint").mkdir(parents=True)
@@ -175,30 +138,12 @@ def test_hpa_under_chart_flagged(tmp_path):
     assert any("autoscaler" in f and "hpa.yaml" in f for f in findings)
 
 
-def test_keda_scaledobject_under_raw_dir_flagged(tmp_path):
-    _write_repo(tmp_path)
-    (tmp_path / "k8s" / "04-tenant-api" / "scaledobject.yaml").write_text(
-        "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\n", encoding="utf-8")
-    findings = lint.check_targets(tmp_path)
-    assert any("autoscaler" in f and "scaledobject.yaml" in f for f in findings)
-
-
 def test_keda_under_chart_templates_flagged(tmp_path):
-    # symmetric: KEDA resource under the chart templates dir (not just raw k8s).
     _write_repo(tmp_path)
     (tmp_path / "helm" / "tenant-api" / "templates" / "scaledjob.yaml").write_text(
         "apiVersion: keda.sh/v1alpha1\nkind: ScaledJob\n", encoding="utf-8")
     findings = lint.check_targets(tmp_path)
     assert any("autoscaler" in f and "scaledjob.yaml" in f for f in findings)
-
-
-def test_hpa_under_raw_dir_flagged(tmp_path):
-    # symmetric: native HPA under the raw k8s dir (not just chart templates).
-    _write_repo(tmp_path)
-    (tmp_path / "k8s" / "04-tenant-api" / "hpa.yaml").write_text(
-        "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\n", encoding="utf-8")
-    findings = lint.check_targets(tmp_path)
-    assert any("autoscaler" in f and "hpa.yaml" in f for f in findings)
 
 
 # ── live dogfood ────────────────────────────────────────────────────────────
