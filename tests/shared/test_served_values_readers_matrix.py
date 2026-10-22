@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 import _lib_tenant_values as tv
 import analyze_rule_pack_gaps as arg
@@ -160,16 +161,15 @@ def test_flat_file_is_named_from_skipped_and_is_not_a_tenant(script, extra, tmp_
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_file_the_exporter_drops_fails_closed(script, extra, tmp_path):
-    """被 exporter 丟掉的檔（`parse_failed`）：rc 2、指名該檔、沒有 traceback（R5 推翻後的契約）。"""
+    """被 exporter 丟掉的檔（`parse_failed`）：共用的拒絕——rc 2、指名該檔、沒有 traceback（#3206）。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _BASE,
         "tenant-b.yaml": _B,
         "_platform.yaml": "tenants:\n  tenant-b: 3\n",
     })
     p = _cli(script, conf_d, *extra)
-    assert p.returncode == 2, (p.returncode, p.stderr)
-    assert "_platform.yaml" in p.stderr and "Traceback" not in p.stderr, p.stderr
-    assert "cannot unmarshal" in p.stderr, p.stderr  # exporter 自己的解析原因
+    assert go_refused(conf_d) == ["_platform.yaml"]
+    assert_refused(p.returncode, p.stderr, ["_platform.yaml"])
 
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
@@ -193,14 +193,13 @@ def test_dangling_symlink_fails_closed(script, extra, tmp_path):
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK})
     symlink_or_skip("missing.yaml", conf_d / "tenant-b.yaml")
     p = _cli(script, conf_d, *extra)
-    assert p.returncode == 2, (p.returncode, p.stderr)
+    assert_refused(p.returncode, p.stderr, ["tenant-b.yaml"])  # #3206
+    assert "(stat_error)" in p.stderr, p.stderr
+    # #3115: 兩支都帶 --json，stdout 是一份 envelope，error 是拒絕的最後一行 ERROR。
     err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
-    assert len(err) == 1 and "tenant-b.yaml (stat_error)" in err[0], p.stderr
-    assert "Traceback" not in p.stderr, p.stderr
-    # #3115: 兩支都帶 --json，stdout 是一份 envelope（原為空），error 就是那行 ERROR。
     doc = json.loads(p.stdout)
     assert (doc["status"], doc["reason"], doc["error"]) == (
-        "caller_error", "served_values_unavailable", err[0]), p.stdout
+        "caller_error", "conf_d_not_servable", err[-1]), p.stdout
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
@@ -242,19 +241,16 @@ def test_subdir_without_permission_fails_closed(script, extra, tmp_path):
 
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
-def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, tmp_path):
-    """例外（owner 裁決）：指向目錄的 symlink `tb.yaml`——exporter 本來就不跟進
-    （k8s ConfigMap 巢狀路徑會掛成目錄 symlink）。Go 只 WARN 後跳過，不進
-    parse_failed／skipped／unreadable，rc 0。讀取端把 da-guard 的那行 WARN 轉印到 stderr，
-    stdout 照常是一份 JSON。"""
+def test_a_directory_symlink_with_a_config_name_refuses_the_run(script, extra, tmp_path):
+    """指向目錄的 symlink `tb.yaml`——exporter 不跟進（k8s ConfigMap 巢狀路徑會掛成
+    目錄 symlink），路由產生器因它拒收整棵樹（da-guard 驗證結束碼 4）。原本是「只 WARN、
+    rc 0」的例外；#3206 起與其他 Go 點名的路徑一樣，共用的拒絕：rc 2、點名、不出結果。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
     (conf_d / "realdir").mkdir()
     symlink_or_skip("realdir", conf_d / "tb.yaml")
     p = _cli(script, conf_d, *extra)
-    assert p.returncode == 0, p.stderr
-    warn = [ln for ln in p.stderr.split("\n") if ln.startswith(_P + "WARN: cannot read ")]
-    assert len(warn) == 1 and "tb.yaml" in warn[0], p.stderr
-    json.loads(p.stdout)
+    assert go_refused(conf_d) == ["tb.yaml"]
+    assert_refused(p.returncode, p.stderr, ["tb.yaml"])
 
 
 # ── da-guard 的 stderr：照轉，不分類、不篩選（第 2 輪盲審 F1–F4）──────────────
@@ -317,19 +313,14 @@ def test_several_files_dropped_each_reason_shown_below_one_error_line(script, ex
     })
     (conf_d / "x2.yaml").write_bytes(b"tenants:\n  x2:\n    mysql_connections: 1 # \xff\n")
     p = _cli(script, conf_d, *extra)
-    assert p.returncode == 2, p.stderr
-    lines = p.stderr.splitlines()
-    err = [i for i, ln in enumerate(lines) if ln.startswith("ERROR: ")]
-    assert len(err) == 1, lines
-    head, below = lines[err[0]], lines[err[0] + 1:]
-    assert "x1.yaml, x2.yaml, x3.yaml" in head and "defaults found" not in head, head
-    assert all(ln.startswith(_P) for ln in below), below
-    # "not valid UTF-8 at byte": parse-tree's invalid_utf8, which the
-    # exporter's load reports since ADR-036 step 6 (#3206; it was yaml.v3's
-    # "invalid leading UTF-8 octet").
-    for reason in ("did not find expected", "not valid UTF-8 at byte",
-                   _P + "  line 2: cannot unmarshal !!seq", "defaults found in td.yaml"):
-        assert any(reason in ln for ln in below), (reason, below)
+    # #3206: the shared refusal — one ERROR line per file Go names, each with
+    # its own reason, one line each (a multi-line reason is joined).
+    assert go_refused(conf_d) == ["x1.yaml", "x2.yaml", "x3.yaml"]
+    assert_refused(p.returncode, p.stderr, ["x1.yaml", "x2.yaml", "x3.yaml"])
+    lines = {ln.split(": ", 2)[1]: ln for ln in p.stderr.splitlines()
+             if ln.startswith("ERROR: x")}
+    assert "(syntax_error:" in lines["x1.yaml"] and "(invalid_utf8:" in lines["x2.yaml"], lines
+    assert "td.yaml" not in p.stderr, p.stderr
 
 
 # ── 檔名裡的換行：轉印的每一行都在前綴之後，不會出現在第 0 欄（第 3 輪盲審 F6）──
