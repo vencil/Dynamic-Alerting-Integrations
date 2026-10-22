@@ -32,12 +32,35 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+# #3133: every answer is checked by the lib; a query not answered is a failed
+# check, never a missing one.
+from _lib_prometheus import QueryError, instant_or_error, vector_count  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
+# The module's one query call: (rows, None) or (None, why).
+query_prometheus = instant_or_error
+
+
+def _query_failed(check, err):
+    """The check a query that was not answered produces (#452/#737: a
+    caller error, exit 2; #3133: on every step, never left out)."""
+    return {
+        "check": check,
+        "status": "fail",
+        "caller_error": True,
+        "detail": f"Query failed: {err[:60]}",
+    }
+
+
+def _count(check, results):
+    """``(count, None)`` — None for an empty answer — or ``(None, check)``
+    when the sample is not a finite count (#3133; it used to crash)."""
+    try:
+        return vector_count(results), None
+    except QueryError as exc:
+        return None, _query_failed(check, str(exc))
 
 
 def check_edge(prom_url):
@@ -96,12 +119,7 @@ def check_edge(prom_url):
     # 3. tenant label exists on metrics
     results, err = query_prometheus(prom_url, 'count by(tenant) (up{tenant!=""})')
     if err:
-        checks.append({
-            "check": "edge_tenant_label",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        })
+        checks.append(_query_failed("edge_tenant_label", err))
     elif results:
         tenants = sorted(r.get("metric", {}).get("tenant", "?") for r in results)
         checks.append({
@@ -164,12 +182,7 @@ def check_central(prom_url):
     # 2. Edge metrics received (check for metrics with cluster label)
     results, err = query_prometheus(prom_url, 'count by(cluster) (up{tenant!=""})')
     if err:
-        checks.append({
-            "check": "central_edge_metrics",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        })
+        checks.append(_query_failed("central_edge_metrics", err))
     elif results:
         clusters = sorted(r.get("metric", {}).get("cluster", "local") for r in results)
         checks.append({
@@ -178,10 +191,14 @@ def check_central(prom_url):
             "detail": f"Metrics from {len(clusters)} cluster(s): {', '.join(clusters[:10])}",
         })
     else:
-        # Fallback: check tenant-labeled metrics without cluster
-        results2, _ = query_prometheus(prom_url, 'count(up{tenant!=""})')
-        if results2:
-            count = int(float(results2[0]["value"][1]))
+        # Fallback: check tenant-labeled metrics without cluster. Its error is
+        # a failed check (#3133) — it was discarded and read as "none found".
+        results2, err2 = query_prometheus(prom_url, 'count(up{tenant!=""})')
+        count, failed = ((None, _query_failed("central_edge_metrics", err2)) if err2
+                         else _count("central_edge_metrics", results2))
+        if failed:
+            checks.append(failed)
+        elif count is not None:
             checks.append({
                 "check": "central_edge_metrics",
                 "status": "warn",
@@ -197,15 +214,10 @@ def check_central(prom_url):
     # 3. threshold-exporter scrape
     results, err = query_prometheus(prom_url, "count(user_threshold)")
     if err:
-        checks.append({
-            "check": "central_threshold_exporter",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        })
+        checks.append(_query_failed("central_threshold_exporter", err))
     elif results:
-        count = int(float(results[0]["value"][1]))
-        checks.append({
+        count, failed = _count("central_threshold_exporter", results)
+        checks.append(failed or {
             "check": "central_threshold_exporter",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} user_threshold series found",
@@ -221,14 +233,16 @@ def check_central(prom_url):
     results, err = query_prometheus(
         prom_url, 'count(count by(__name__) ({__name__=~"tenant:.*"}))'
     )
-    if not err and results:
-        count = int(float(results[0]["value"][1]))
-        checks.append({
+    if err:
+        checks.append(_query_failed("central_recording_rules", err))  # #3133: was dropped
+    elif results:
+        count, failed = _count("central_recording_rules", results)
+        checks.append(failed or {
             "check": "central_recording_rules",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} tenant:* recording rule metric names",
         })
-    elif not err:
+    else:
         checks.append({
             "check": "central_recording_rules",
             "status": "warn",
@@ -284,14 +298,16 @@ def check_e2e(prom_url, edge_urls):
         prom_url,
         "count(tenant:alert_threshold:mysql_connections > 0)"
     )
-    if not err and results:
-        count = int(float(results[0]["value"][1]))
-        checks.append({
+    if err:
+        checks.append(_query_failed("e2e_cross_cluster_matching", err))  # #3133: was dropped
+    elif results:
+        count, failed = _count("e2e_cross_cluster_matching", results)
+        checks.append(failed or {
             "check": "e2e_cross_cluster_matching",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} tenant(s) have cross-cluster threshold matching",
         })
-    elif not err:
+    else:
         checks.append({
             "check": "e2e_cross_cluster_matching",
             "status": "warn",

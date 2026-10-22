@@ -33,7 +33,13 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+# #3133: every answer is checked by the lib (prometheus_instant's shape
+# check, one count reading); a query not answered is a failed check, never
+# a missing one or an advisory.
+from _lib_prometheus import (  # noqa: E402
+    QueryError, alertmanager_alerts, alertmanager_silences, instant_or_error,
+    vector_count, vector_sample)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
@@ -41,8 +47,8 @@ from _lib_exitcodes import (  # noqa: E402
 # the generation-time guard can never disagree on "is this equal-label gated".
 from _grar_validate import find_ungated_equal_label_inhibits  # noqa: E402
 
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
+# The orchestrator's one query call: (rows, None) or (None, why).
+query_prometheus = instant_or_error
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +61,26 @@ query_prometheus = query_prometheus_instant
 # the #452/#737 caller_error classification and every pass/warn/fail/skip
 # boundary are preserved verbatim.
 # ---------------------------------------------------------------------------
+def _query_failed(check, err):
+    """The check a query that was not answered produces (#452/#737: a
+    caller error, exit 2; #3133: on every step, never left out or a warn)."""
+    return {
+        "check": check,
+        "status": "fail",
+        "caller_error": True,
+        "detail": f"Query failed: {err[:60]}",
+    }
+
+
+def _count(check, results):
+    """``(count, None)`` — None for an empty answer — or ``(None, check)``
+    when the sample is not a finite count (#3133; it used to crash)."""
+    try:
+        return vector_count(results), None
+    except QueryError as exc:
+        return None, _query_failed(check, str(exc))
+
+
 def _judge_reachable(err):
     """Judge Step 0 (prometheus_reachable) from the /-/healthy probe.
 
@@ -85,12 +111,7 @@ def _judge_step1_tenant_label(results, err):
     are already the post-fallback values.
     """
     if err:
-        return {
-            "check": "step1_tenant_label",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        }
+        return _query_failed("step1_tenant_label", err)
     elif results:
         tenants = sorted(r.get("metric", {}).get("tenant", "?") for r in results)
         return {
@@ -109,15 +130,9 @@ def _judge_step1_tenant_label(results, err):
 def _judge_step2_threshold_exporter_scrape(results, err):
     """Judge Step 2 (threshold-exporter scrape)."""
     if err:
-        return {
-            "check": "step2_threshold_exporter_scrape",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        }
+        return _query_failed("step2_threshold_exporter_scrape", err)
     elif results:
-        up_values = [r.get("value", [None, "0"])[1] for r in results]
-        all_up = all(v == "1" for v in up_values)
+        all_up = all(vector_sample(r) == 1 for r in results)
         return {
             "check": "step2_threshold_exporter_scrape",
             "status": "pass" if all_up else "warn",
@@ -135,14 +150,11 @@ def _judge_step2_threshold_exporter_scrape(results, err):
 def _judge_step2_user_threshold_metrics(results, err):
     """Judge Step 2b (user_threshold metrics present)."""
     if err:
-        return {
-            "check": "step2_user_threshold_metrics",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        }
+        return _query_failed("step2_user_threshold_metrics", err)
     elif results:
-        count = int(float(results[0]["value"][1]))
+        count, failed = _count("step2_user_threshold_metrics", results)
+        if failed:
+            return failed
         return {
             "check": "step2_user_threshold_metrics",
             "status": "pass" if count > 0 else "warn",
@@ -202,64 +214,65 @@ def _judge_step3_rule_packs_loaded(data, err):
 def _judge_step3b_recording_rules_output(results, err):
     """Judge Step 3b (recording rules producing output).
 
-    Returns None when the query errored — Step 3b appends NOTHING on error (the
-    original had no else branch), so the orchestrator appends only a non-None result.
+    A query error is a failed check (#3133; it used to append nothing, so the
+    step left the report and the run could pass).
     """
-    if not err and results:
-        count = int(float(results[0]["value"][1]))
+    if err:
+        return _query_failed("step3_recording_rules_output", err)
+    if results:
+        count, failed = _count("step3_recording_rules_output", results)
+        if failed:
+            return failed
         return {
             "check": "step3_recording_rules_output",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} tenant:* recording rule metric names producing output",
         }
-    elif not err:
-        return {
-            "check": "step3_recording_rules_output",
-            "status": "warn",
-            "detail": "No tenant:* metrics found (rules may not have evaluated yet)",
-        }
-    return None
+    return {
+        "check": "step3_recording_rules_output",
+        "status": "warn",
+        "detail": "No tenant:* metrics found (rules may not have evaluated yet)",
+    }
 
 
 def _judge_e2e_vector_matching(results, err):
     """Judge E2E (Vector matching verification).
 
-    Returns None on query error (no check appended — matches the original's missing
-    else branch); the orchestrator appends only a non-None result.
+    A query error is a failed check (#3133; it used to append nothing).
     """
-    if not err and results:
-        count = int(float(results[0]["value"][1]))
+    if err:
+        return _query_failed("e2e_vector_matching", err)
+    if results:
+        count, failed = _count("e2e_vector_matching", results)
+        if failed:
+            return failed
         return {
             "check": "e2e_vector_matching",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} tenant(s) have threshold normalization output",
         }
-    elif not err:
-        return {
-            "check": "e2e_vector_matching",
-            "status": "warn",
-            "detail": "No threshold normalization output (may need data + threshold to exist)",
-        }
-    return None
+    return {
+        "check": "e2e_vector_matching",
+        "status": "warn",
+        "detail": "No threshold normalization output (may need data + threshold to exist)",
+    }
 
 
-def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running):
+def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running,
+                                    running_err=None):
     """Judge Step 4 (disk-recipe prerequisite — kubelet volume-stats).
 
     Pure verdict over already-fetched query results. The orchestrator issues the
     declaring query first and ONLY issues the arriving/running follow-ups when a
     disk recipe is actually declared; in the short-circuit paths it passes
     arriving/arriving_err/running as None, which the err / not-declaring early
-    returns below never touch. `arriving_err` is the volume-stats query's own error
-    (transient); the running query's error is intentionally discarded by the caller.
+    returns below never touch. An error of any of the three queries is a failed
+    check (#3133): a volume-stats query that was not answered used to be a warn,
+    and the running query's error was discarded — its empty result then read as
+    "no tenant running yet".
     """
     if err:
-        return {
-            "check": "step4_disk_recipe_prereq",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        }
+        return _query_failed("step4_disk_recipe_prereq", err)
     elif not declaring:
         return {
             "check": "step4_disk_recipe_prereq",
@@ -283,14 +296,8 @@ def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, runn
     # a broken pipeline. All verdicts below key on this confirmed-running set.
     candidates = declaring_tenants & running_tenants
     missing = sorted(candidates - arriving_tenants)
-    if arriving_err:
-        # The volume-stats query itself errored (transient / Prometheus-side) —
-        # empty results here are NOT a real absence; degrade to advisory.
-        return {
-            "check": "step4_disk_recipe_prereq",
-            "status": "warn",
-            "detail": f"disk recipe(s) declared but could not query volume-stats: {arriving_err[:50]}",
-        }
+    if arriving_err or running_err:
+        return _query_failed("step4_disk_recipe_prereq", arriving_err or running_err)
     elif not candidates:
         # No declaring tenant is confirmed running — workloads not deployed yet, or
         # kube_pod_status_phase isn't scraped. Can't conclude a pipeline gap; advise.
@@ -329,19 +336,16 @@ def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, runn
         }
 
 
-def _judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err, running):
+def _judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err, running,
+                                         running_err=None):
     """Judge Step 5 (disk-IOPS-recipe prerequisite — container_fs).
 
     Same shape as Step 4; the orchestrator gates the arriving/running follow-up
-    queries on a recipe being declared the same way.
+    queries on a recipe being declared the same way, and an error of any of
+    them is a failed check the same way (#3133).
     """
     if err:
-        return {
-            "check": "step5_disk_iops_recipe_prereq",
-            "status": "fail",
-            "caller_error": True,
-            "detail": f"Query failed: {err[:60]}",
-        }
+        return _query_failed("step5_disk_iops_recipe_prereq", err)
     elif not declaring:
         return {
             "check": "step5_disk_iops_recipe_prereq",
@@ -353,12 +357,8 @@ def _judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err,
     running_tenants = {r.get("metric", {}).get("tenant", "?") for r in (running or [])}
     candidates = declaring_tenants & running_tenants  # running-pods guard (as Step 4)
     missing = sorted(candidates - arriving_tenants)
-    if arriving_err:
-        return {
-            "check": "step5_disk_iops_recipe_prereq",
-            "status": "warn",
-            "detail": f"IOPS recipe(s) declared but could not query container_fs: {arriving_err[:50]}",
-        }
+    if arriving_err or running_err:
+        return _query_failed("step5_disk_iops_recipe_prereq", arriving_err or running_err)
     elif not candidates:
         return {
             "check": "step5_disk_iops_recipe_prereq",
@@ -442,18 +442,14 @@ def check_prometheus(args):
     results, err = query_prometheus(
         prom_url, 'count(count by(__name__) ({__name__=~"tenant:.*"}))'
     )
-    c = _judge_step3b_recording_rules_output(results, err)
-    if c:
-        checks.append(c)
+    checks.append(_judge_step3b_recording_rules_output(results, err))
 
     # E2E: Vector matching verification (no check appended on query error)
     results, err = query_prometheus(
         prom_url,
         "count(tenant:alert_threshold:mysql_connections > 0)"
     )
-    c = _judge_e2e_vector_matching(results, err)
-    if c:
-        checks.append(c)
+    checks.append(_judge_e2e_vector_matching(results, err))
 
     # Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
     # AND tenant-attributed. Only meaningful if a tenant declared a disk-fill custom
@@ -480,19 +476,20 @@ def check_prometheus(args):
     # no extra queries). available_bytes is a faithful proxy for arriving stats —
     # kubelet emits the family together. Running-pods guard (mirrors the sentinel):
     # KSM carries namespace (not tenant); derive tenant via label_replace (1:1, same
-    # idiom). The running query's own error is intentionally discarded (as before).
-    arriving = arriving_err = running = None
+    # idiom). An error of either follow-up is judged, never discarded (#3133).
+    arriving = arriving_err = running = running_err = None
     if not err and declaring:
         arriving, arriving_err = query_prometheus(
             prom_url, 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant!=""})'
         )
-        running, _ = query_prometheus(
+        running, running_err = query_prometheus(
             prom_url,
             'count by(tenant) (label_replace('
             'kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, '
             '"tenant", "$1", "namespace", "(.+)"))'
         )
-    checks.append(_judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running))
+    checks.append(_judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running,
+                                                  running_err))
 
     # Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped AND
     # tenant-attributed. Only meaningful if a tenant declared a rate recipe over
@@ -515,20 +512,21 @@ def check_prometheus(args):
     # the cgroup-fs family is present, blkio is not bypassed; if bypassed (NFS/EFS) the
     # whole family is absent. The family arrives together (same scrape). Gate the
     # follow-ups on a recipe being declared (as Step 4 / the original else-branch).
-    arriving = arriving_err = running = None
+    arriving = arriving_err = running = running_err = None
     if not err and declaring:
         arriving, arriving_err = query_prometheus(
             prom_url,
             'count by(tenant) (container_fs_reads_total{tenant!=""} '
             'or container_fs_writes_total{tenant!=""})'
         )
-        running, _ = query_prometheus(
+        running, running_err = query_prometheus(
             prom_url,
             'count by(tenant) (label_replace('
             'kube_pod_status_phase{namespace=~"db-.+", phase="Running"} == 1, '
             '"tenant", "$1", "namespace", "(.+)"))'
         )
-    checks.append(_judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err, running))
+    checks.append(_judge_step5_disk_iops_recipe_prereq(declaring, err, arriving, arriving_err,
+                                                       running, running_err))
 
     return checks
 
@@ -754,31 +752,29 @@ def check_alertmanager(args):
             inhibit_parse_err = str(exc)
 
     # 3. Check current alerts
+    # #3133: alerts not read are a failed check (exit 2) — they used to be a
+    # warn, and a body that is not a list passed as "0 active alert(s)".
     alerts_by_alertname = None   # {alertname: [set(label keys), ...]}; None = no data
-    data, err = http_get_json(f"{am_url}/api/v2/alerts")
-    if err:
+    try:
+        alerts = alertmanager_alerts(am_url)
+    except QueryError as exc:
         checks.append({
             "check": "alertmanager_alerts",
-            "status": "warn",
-            "detail": f"Alerts API failed: {err[:60]}",
+            "status": "fail",
+            "caller_error": True,
+            "detail": f"Alerts API failed: {str(exc)[:60]}",
         })
     else:
-        alert_count = len(data) if isinstance(data, list) else 0
-        if isinstance(data, list):
-            alerts_by_alertname = {}
-            for a in data:
-                if not isinstance(a, dict):
-                    continue
-                labels = a.get("labels")
-                if not isinstance(labels, dict):
-                    continue
-                name = labels.get("alertname")
-                if name:
-                    alerts_by_alertname.setdefault(name, []).append(set(labels.keys()))
+        alerts_by_alertname = {}
+        for a in alerts:
+            labels = a.get("labels", {})
+            name = labels.get("alertname")
+            if name:
+                alerts_by_alertname.setdefault(name, []).append(set(labels.keys()))
         checks.append({
             "check": "alertmanager_alerts",
             "status": "pass",
-            "detail": f"{alert_count} active alert(s) in Alertmanager",
+            "detail": f"{len(alerts)} active alert(s) in Alertmanager",
         })
 
     # 3b. Inhibit-rule semantic safety (#1132 防再犯). Skipped silently when the
@@ -796,16 +792,19 @@ def check_alertmanager(args):
         checks.append(_judge_inhibit_semantics(inhibit_rules, alerts_by_alertname))
 
     # 4. Check silences (maintenance windows)
-    data, err = http_get_json(f"{am_url}/api/v2/silences")
-    if err:
+    # #3133: silences not read are a failed check (exit 2), no longer a warn.
+    try:
+        silences = alertmanager_silences(am_url)
+    except QueryError as exc:
         checks.append({
             "check": "alertmanager_silences",
-            "status": "warn",
-            "detail": f"Silences API failed: {err[:60]}",
+            "status": "fail",
+            "caller_error": True,
+            "detail": f"Silences API failed: {str(exc)[:60]}",
         })
     else:
-        active_silences = [s for s in (data or [])
-                           if isinstance(s, dict) and s.get("status", {}).get("state") == "active"]
+        active_silences = [s for s in silences
+                           if s.get("status", {}).get("state") == "active"]
         checks.append({
             "check": "alertmanager_silences",
             "status": "pass",

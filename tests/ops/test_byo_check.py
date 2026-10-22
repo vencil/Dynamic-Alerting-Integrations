@@ -29,9 +29,20 @@ def _args(**kwargs):
     return SimpleNamespace(**defaults)
 
 
+def _patch_http(get):
+    """Patch the HTTP fetch byo_check reads through — its own import and the
+    lib's, which the Alertmanager readers use (#3133)."""
+    import contextlib
+    import _lib_prometheus
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch.object(bc, "http_get_json", side_effect=get))
+    stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=get))
+    return stack
+
+
 def _mock_http_get_json(mapping):
     """Return a mock for http_get_json that returns based on URL patterns."""
-    def _get(url):
+    def _get(url, **_kw):
         for pattern, val in mapping.items():
             if pattern in url:
                 return val
@@ -137,7 +148,7 @@ class TestCheckPrometheus:
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with _patch_http(_mock_http_get_json(http_mapping)):
                 with patch.object(bc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = bc.check_prometheus(_args())
 
@@ -166,7 +177,7 @@ class TestCheckPrometheus:
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with _patch_http(_mock_http_get_json(http_mapping)):
                 with patch.object(bc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = bc.check_prometheus(_args())
 
@@ -214,7 +225,7 @@ class TestCheckAlertmanager:
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+            with _patch_http(_mock_http_get_json(mapping)):
                 checks = bc.check_alertmanager(_args())
 
         statuses = {c["check"]: c["status"] for c in checks}
@@ -238,7 +249,7 @@ class TestCheckAlertmanager:
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+            with _patch_http(_mock_http_get_json(mapping)):
                 checks = bc.check_alertmanager(_args())
 
         routes_check = next(c for c in checks if c["check"] == "alertmanager_tenant_routes")
@@ -300,7 +311,7 @@ class TestMain:
 # Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
 # AND tenant-attributed when a tenant declared a disk-fill custom alert.
 # ---------------------------------------------------------------------------
-def _disk_query(declaring, arriving, running, arriving_err=None):
+def _disk_query(declaring, arriving, running, arriving_err=None, running_err=None):
     """Mock query_prometheus for Step 4 scenarios; declaring/arriving/running are
     lists of tenant names. Earlier steps' queries return [] (benign — those checks
     are warn/fail but the tests only assert the step4 result). Order matters: the
@@ -317,7 +328,7 @@ def _disk_query(declaring, arriving, running, arriving_err=None):
         if "kubelet_volume_stats_available_bytes" in promql:
             return (None, arriving_err) if arriving_err else (_r(arriving), None)
         if "label_replace" in promql and "kube_pod_status_phase" in promql:
-            return _r(running), None
+            return (None, running_err) if running_err else (_r(running), None)
         return [], None  # steps 1-3 benign
     return _query
 
@@ -329,8 +340,7 @@ class TestStep4DiskRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json",
-                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=query_fn):
                     return bc.check_prometheus(_args())
 
@@ -367,14 +377,16 @@ class TestStep4DiskRecipePrereq:
         checks = self._run(_disk_query(declaring=["db-a", "db-b"], arriving=["db-a"], running=["db-a"]))
         assert self._step4(checks)["status"] == "pass"
 
-    def test_warn_not_fail_on_volume_stats_query_error(self):
-        """A transient error on the volume-stats query must NOT be read as a real
-        absence (false platform-wide fail) — degrade to advisory warn."""
+    @pytest.mark.parametrize("leg", ["arriving_err", "running_err"])
+    def test_a_follow_up_not_answered_is_a_caller_error(self, leg):
+        """#3133: an error on the volume-stats or the running query is not read
+        as an absence (no false platform-wide fail) and is no longer a warn —
+        the step was not measured: a caller error (exit 2)."""
         checks = self._run(_disk_query(declaring=["db-a"], arriving=[], running=["db-a"],
-                                       arriving_err="query timeout"))
+                                       **{leg: "query timeout"}))
         c = self._step4(checks)
-        assert c["status"] == "warn"
-        assert "could not query" in c["detail"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"] == "Query failed: query timeout"
 
     def test_warn_not_fail_when_no_declaring_tenant_running_yet(self):
         """Onboarding window: disk recipe declared but the workload isn't deployed
@@ -403,8 +415,7 @@ class TestStep4DiskRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json",
-                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=_rec):
                     bc.check_prometheus(_args())
         declaring = next(q for q in seen if "user_threshold" in q and "kubelet_volume_stats" in q)
@@ -421,7 +432,7 @@ class TestStep4DiskRecipePrereq:
 # Step 5: disk-IOPS-recipe prerequisite (#692 P0④) — container_fs scraped AND
 # tenant-attributed; the codified FIDELITY GATE (blkio-bypass → fail-loud).
 # ---------------------------------------------------------------------------
-def _iops_query(declaring, arriving, running, arriving_err=None):
+def _iops_query(declaring, arriving, running, arriving_err=None, running_err=None):
     """Mock query_prometheus for Step 5 scenarios. Earlier steps (incl Step 4's
     kubelet_volume_stats queries) return [] → Step 4 skips. The container_fs declaring
     query is matched before the container_fs_writes_total arriving substring."""
@@ -434,7 +445,7 @@ def _iops_query(declaring, arriving, running, arriving_err=None):
         if "container_fs_writes_total" in promql:
             return (None, arriving_err) if arriving_err else (_r(arriving), None)
         if "label_replace" in promql and "kube_pod_status_phase" in promql:
-            return _r(running), None
+            return (None, running_err) if running_err else (_r(running), None)
         return [], None  # steps 1-4 benign (no kubelet_volume_stats declared)
     return _query
 
@@ -446,8 +457,7 @@ class TestStep5DiskIopsRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json",
-                              side_effect=_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=query_fn):
                     return bc.check_prometheus(_args())
 
@@ -482,12 +492,14 @@ class TestStep5DiskIopsRecipePrereq:
         assert c["status"] == "warn"
         assert "running pods yet" in c["detail"]
 
-    def test_warn_not_fail_on_container_fs_query_error(self):
+    @pytest.mark.parametrize("leg", ["arriving_err", "running_err"])
+    def test_a_follow_up_not_answered_is_a_caller_error(self, leg):
+        """#3133: as Step 4."""
         checks = self._run(_iops_query(declaring=["db-a"], arriving=[], running=["db-a"],
-                                       arriving_err="query timeout"))
+                                       **{leg: "query timeout"}))
         c = self._step5(checks)
-        assert c["status"] == "warn"
-        assert "could not query" in c["detail"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"] == "Query failed: query timeout"
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +705,10 @@ class TestJudgeStep3RulePacksLoaded:
 
 
 class TestJudgeStep3bRecordingRulesOutput:
-    def test_err_returns_none(self):
-        """Query error → NO check appended (original had no else branch)."""
-        assert bc._judge_step3b_recording_rules_output(None, "boom") is None
+    def test_err_is_caller_error_fail(self):
+        """#3133: a query error is a failed check — it used to append none."""
+        c = bc._judge_step3b_recording_rules_output(None, "boom")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
 
     def test_positive_count_pass(self):
         c = bc._judge_step3b_recording_rules_output(_value("5"), None)
@@ -713,8 +726,9 @@ class TestJudgeStep3bRecordingRulesOutput:
 
 
 class TestJudgeE2eVectorMatching:
-    def test_err_returns_none(self):
-        assert bc._judge_e2e_vector_matching(None, "boom") is None
+    def test_err_is_caller_error_fail(self):
+        c = bc._judge_e2e_vector_matching(None, "boom")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
 
     def test_positive_count_pass(self):
         c = bc._judge_e2e_vector_matching(_value("3"), None)
@@ -741,11 +755,16 @@ class TestJudgeStep4DiskRecipePrereq:
         assert c["status"] == "skip"
         assert "step N/A" in c["detail"]
 
-    def test_arriving_err_warn(self):
+    def test_arriving_err_caller_error(self):
         c = bc._judge_step4_disk_recipe_prereq(
             _tenants("db-a"), None, None, "vol timeout", _tenants("db-a"))
-        assert c["status"] == "warn"
-        assert "could not query volume-stats" in c["detail"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_running_err_caller_error(self):
+        c = bc._judge_step4_disk_recipe_prereq(
+            _tenants("db-a"), None, _tenants("db-a"), None, None, "run timeout")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"] == "Query failed: run timeout"
 
     def test_no_running_candidates_warn(self):
         c = bc._judge_step4_disk_recipe_prereq(
@@ -777,13 +796,10 @@ class TestJudgeStep4DiskRecipePrereq:
             _tenants("db-a", "db-b"), None, _tenants("db-a"), None, _tenants("db-a"))
         assert c["status"] == "pass"
 
-    def test_arriving_err_truncated_to_50(self):
+    def test_arriving_err_truncated_to_60(self):
         c = bc._judge_step4_disk_recipe_prereq(
             _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
-        assert c["status"] == "warn"
-        assert c["detail"] == (
-            "disk recipe(s) declared but could not query volume-stats: " + "E" * 50
-        )
+        assert c["detail"] == "Query failed: " + "E" * 60
 
     def test_missing_join_capped_at_10(self):
         many = ["db-%02d" % i for i in range(16)]
@@ -805,11 +821,15 @@ class TestJudgeStep5DiskIopsRecipePrereq:
         assert c["status"] == "skip"
         assert "container_fs_*" in c["detail"]
 
-    def test_arriving_err_warn(self):
+    def test_arriving_err_caller_error(self):
         c = bc._judge_step5_disk_iops_recipe_prereq(
             _tenants("db-a"), None, None, "cfs timeout", _tenants("db-a"))
-        assert c["status"] == "warn"
-        assert "could not query container_fs" in c["detail"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_running_err_caller_error(self):
+        c = bc._judge_step5_disk_iops_recipe_prereq(
+            _tenants("db-a"), None, _tenants("db-a"), None, None, "run timeout")
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
 
     def test_no_running_candidates_warn(self):
         c = bc._judge_step5_disk_iops_recipe_prereq(
@@ -834,13 +854,10 @@ class TestJudgeStep5DiskIopsRecipePrereq:
             _tenants("db-a"), None, _tenants("db-a"), None, _tenants("db-a"))
         assert c["status"] == "pass"
 
-    def test_arriving_err_truncated_to_50(self):
+    def test_arriving_err_truncated_to_60(self):
         c = bc._judge_step5_disk_iops_recipe_prereq(
             _tenants("db-a"), None, None, "E" * 200, _tenants("db-a"))
-        assert c["status"] == "warn"
-        assert c["detail"] == (
-            "IOPS recipe(s) declared but could not query container_fs: " + "E" * 50
-        )
+        assert c["detail"] == "Query failed: " + "E" * 60
 
     def test_missing_join_capped_at_10(self):
         many = ["db-%02d" % i for i in range(16)]
@@ -865,9 +882,9 @@ class TestCheckPrometheusControlFlow:
         assert checks[0]["status"] == "fail"
         assert checks[0]["caller_error"] is True
 
-    def test_step3b_and_e2e_omitted_on_query_error(self):
-        """When every query errors, Steps 3b and E2E append no check dict — so
-        their check names are absent from the result set."""
+    def test_every_step_reports_a_query_error(self):
+        """#3133: when every query errors, every step is a failed check — Steps
+        3b and E2E used to append none, leaving the report."""
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"OK"
         mock_resp.__enter__ = lambda s: s
@@ -877,15 +894,15 @@ class TestCheckPrometheusControlFlow:
             return None, "query error"
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=lambda url: (None, "err")):
+            with _patch_http(lambda url, **_kw: (None, "err")):
                 with patch.object(bc, "query_prometheus", side_effect=_all_err):
                     checks = bc.check_prometheus(_args())
-        names = {c["check"] for c in checks}
-        assert "step3_recording_rules_output" not in names
-        assert "e2e_vector_matching" not in names
-        # but the caller_error steps ARE present
-        assert "step1_tenant_label" in names
-        assert "step4_disk_recipe_prereq" in names
+        by_name = {c["check"]: c for c in checks}
+        for name in ("step1_tenant_label", "step2_threshold_exporter_scrape",
+                     "step2_user_threshold_metrics", "step3_recording_rules_output",
+                     "e2e_vector_matching", "step4_disk_recipe_prereq",
+                     "step5_disk_iops_recipe_prereq"):
+            assert by_name[name].get("caller_error") is True, name
 
 
 # ---------------------------------------------------------------------------
@@ -1076,7 +1093,7 @@ class TestCheckAlertmanagerInhibitSemantics:
             "silences": ([], None),
         }
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+            with _patch_http(_mock_http_get_json(mapping)):
                 checks = bc.check_alertmanager(_args())
         return {c["check"]: c for c in checks}
 
@@ -1120,6 +1137,104 @@ class TestCheckAlertmanagerInhibitSemantics:
                 "silences": ([], None),
             }
             with patch("urllib.request.urlopen", return_value=mock_resp):
-                with patch.object(bc, "http_get_json", side_effect=_mock_http_get_json(mapping)):
+                with _patch_http(_mock_http_get_json(mapping)):
                     checks = bc.check_alertmanager(_args())   # must not raise
             assert any(c["check"] == "alertmanager_ready" for c in checks)
+
+
+# ---------------------------------------------------------------------------
+# #3133: answers are read by the lib — only HTTP is faked here, so the shape
+# check, the count reading and the Alertmanager readers all run for real.
+# ---------------------------------------------------------------------------
+def _healthy():
+    resp = MagicMock()
+    resp.read.return_value = b"OK"
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+def _vector(*samples):
+    return ({"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"tenant": f"db-{i}"}, "value": [1, v]} for i, v in enumerate(samples)]}},
+        None)
+
+
+class TestAnswersReadByTheLib:
+    def _prometheus(self, answer_for):
+        import urllib.parse as up
+
+        def _get(url, **_kw):
+            if "/api/v1/rules" in url:
+                return {"status": "success", "data": {"groups": []}}, None
+            q = up.parse_qs(up.urlsplit(url).query).get("query", [""])[0]
+            return answer_for(q)
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(_get):
+                return {c["check"]: c for c in bc.check_prometheus(_args())}
+
+    @pytest.mark.parametrize("value", ["NaN", "+Inf"])
+    def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
+        """It used to crash on int(float('nan'))."""
+        checks = self._prometheus(
+            lambda q: _vector(value) if q == "count(user_threshold)" else _vector())
+        c = checks["step2_user_threshold_metrics"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"].startswith(
+            f"Query failed: malformed Prometheus response: result[0] is [1, '{value}']")
+
+    def test_a_malformed_answer_is_a_caller_error(self):
+        """A success body without a readable sample is not "nothing there"."""
+        bad = ({"status": "success", "data": {"resultType": "vector",
+                                              "result": [{"metric": {}}]}}, None)
+        checks = self._prometheus(
+            lambda q: bad if "tenant:.*" in q else _vector())
+        c = checks["step3_recording_rules_output"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"].startswith(
+            "Query failed: malformed Prometheus response: result[0] has neither")
+
+    def test_a_number_sample_counts_as_up(self):
+        """A target is UP when its sample reads as 1, string or number."""
+        checks = self._prometheus(
+            lambda q: _vector("1", 1) if q.startswith("up{") else _vector())
+        assert checks["step2_threshold_exporter_scrape"]["status"] == "pass"
+
+    def _alertmanager(self, alerts, silences):
+        mapping = {"status": ({"config": {"original": "route: {}"}}, None),
+                   "alerts": alerts, "silences": silences}
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(_mock_http_get_json(mapping)):
+                return {c["check"]: c for c in bc.check_alertmanager(_args())}
+
+    @pytest.mark.parametrize("answer,defect", [
+        ((None, "HTTP 503"), "HTTP 503"),
+        (({"alerts": []}, None), "body is not a JSON array"),
+        (([{"labels": {"alertname": 1}}], None), "alert[0].labels.alertname"),
+    ], ids=["http-error", "not-a-list", "label-not-string"])
+    def test_alerts_not_read_are_a_caller_error(self, answer, defect):
+        """They used to be a warn, or — not a list — pass as 0 alerts."""
+        c = self._alertmanager(answer, ([], None))["alertmanager_alerts"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert defect in c["detail"]
+
+    @pytest.mark.parametrize("answer,defect", [
+        ((None, "HTTP 503"), "HTTP 503"),
+        (({}, None), "body is not a JSON array"),
+        (([{"status": "active"}], None), "silence[0].status is not an"),
+    ], ids=["http-error", "not-a-list", "status-not-object"])
+    def test_silences_not_read_are_a_caller_error(self, answer, defect):
+        """They used to be a warn (and a non-object status crashed)."""
+        c = self._alertmanager(([], None), answer)["alertmanager_silences"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert defect in c["detail"]
+
+    def test_silences_not_read_end_the_run_at_rc2(self, monkeypatch, capsys):
+        mapping = {"status": ({"config": {"original": "route: {}"}}, None),
+                   "alerts": ([], None), "silences": (None, "HTTP 503")}
+        monkeypatch.setattr(sys, "argv", ["byo_check", "alertmanager", "--json"])
+        with patch("urllib.request.urlopen", return_value=_healthy()):
+            with _patch_http(_mock_http_get_json(mapping)):
+                with pytest.raises(SystemExit) as exc:
+                    bc.main()
+        assert exc.value.code == 2

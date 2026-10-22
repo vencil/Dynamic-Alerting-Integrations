@@ -836,7 +836,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed (a `--mapping` that does not exist counts too: it is listed as FAIL, not as a caller error) |
-| `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
+| `2` | Caller error: Prometheus unreachable, a query failed, answered in the wrong shape, or answered a count that is not a finite number in `preflight` or `runtime` (each including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. A failed maintenance / silent mode query in `runtime` used to produce no check, so the result was `Overall: PASS` and exit code 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). An unreachable Alertmanager is still a skip |
 
 ---
 
@@ -887,7 +887,7 @@ da-tools byo-check all --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
-| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects |
+| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed, answered in the wrong shape, or answered a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects. Every step's query counts: a failed Step 3b or E2E query used to produce no check; a failed Step 4 / 5 follow-up query used to be a warn; Alertmanager alerts / silences that could not be read used to be a warn, and an alerts answer that is not an array passed ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -940,7 +940,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
-| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable or a config / query / rules API call failed (the check is still listed as FAIL, but the exit code is 2, not 1) |
+| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable, a config / query / rules API call failed, a query answered in the wrong shape, or a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1). Every query counts: the central fallback query (no cluster label) used to read a failure as "none found", exit code 1; a failed recording-rules or e2e cross-cluster query used to produce no check ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
