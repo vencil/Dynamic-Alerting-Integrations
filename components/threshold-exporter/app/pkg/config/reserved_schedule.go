@@ -169,26 +169,40 @@ func sameSchedule(a, b ScheduledValue) bool {
 // SubtreeScheduledReserved is ScheduledReservedEntries for the subtree
 // defaults files of a tree (#3269): every reserved key a conf.d subtree
 // `_defaults.yaml` writes with a schedule, as "<root-relative path>:
-// defaults.<key>", sorted (nil when none). parsed is the defaults-chain
-// cache (absolute path → the file's defaults level, as applySubtreeDefaults
-// reads it); the conf.d root's own `_defaults.yaml` is skipped by path, as
-// there (its `defaults:` is decoded by the typed decode, which refuses a
-// mapping there). The judgement is rawServedValue's — scheduledReserved —
-// so the overlay takes the same values' `default` alone (or refuses a
-// windowed `_state_` key outright, #1569).
-func SubtreeScheduledReserved(root string, parsed map[string]map[string]any) []string {
+// defaults.<key>", sorted, split by what the overlay does with it — the
+// same verdict applySubtreeDefaults acts on (subtreeLevelValue, over cfg,
+// the config being committed):
+//
+//   - defaultOnly: applied to the tenants that do not set the key, as its
+//     `default` alone (servedValue);
+//   - notApplied: not applied at all, schedule or not — a value the overlay
+//     refuses (not threshold-shaped: `_silent_mode: {default: warning, …}`)
+//     or no resolver would read from the tenant's map (a windowed `_state_`
+//     key, #1569).
+//
+// parsed is the defaults-chain cache (absolute path → the file's defaults
+// level, as applySubtreeDefaults reads it); the conf.d root's own
+// `_defaults.yaml` is skipped by path, as there. Which values are schedules
+// is rawServedValue's judgement — scheduledReserved.
+func SubtreeScheduledReserved(root string, parsed map[string]map[string]any, cfg *ThresholdConfig) (defaultOnly, notApplied []string) {
 	rootDir := AbsScanRoot(root)
-	var out []string
 	for path, level := range parsed {
 		if filepath.Dir(filepath.Clean(path)) == rootDir {
 			continue
 		}
 		for k, v := range level {
-			if _, ok := rawServedValue(k, v); ok {
-				out = append(out, subtreeRelPath(rootDir, path)+": defaults."+k)
+			if _, ok := rawServedValue(k, v); !ok {
+				continue
+			}
+			e := subtreeRelPath(rootDir, path) + ": defaults." + k
+			if _, verdict := subtreeLevelValue(cfg, k, v); verdict == subtreeApplied {
+				defaultOnly = append(defaultOnly, e)
+			} else {
+				notApplied = append(notApplied, e)
 			}
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(defaultOnly)
+	sort.Strings(notApplied)
+	return defaultOnly, notApplied
 }

@@ -188,8 +188,8 @@ func applySubtreeDefaults(
 					}
 					continue // the tenant authored it — never touched
 				}
-				value, ok := scheduledValueFromRaw(raw)
-				if !ok || !isThresholdShaped(value) {
+				value, verdict := subtreeLevelValue(cfg, key, raw)
+				if verdict == subtreeRefused {
 					continue // in refused (unless null: it fills nothing)
 				}
 				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
@@ -222,7 +222,7 @@ func applySubtreeDefaults(
 				// by da_config_subtree_undeliverable_tenants
 				// (config_subtree_undeliverable.go). The one thing this must
 				// never be again is silent. (#1569 blind review.)
-				if !keyCanReachTheOutputPlane(cfg, key, value) {
+				if verdict == subtreeUnreachable {
 					if unreachable[tenantID] == nil {
 						unreachable[tenantID] = map[string]ScheduledValue{}
 					}
@@ -309,6 +309,37 @@ func applySubtreeDefaults(
 		return filled, nil, applied, refusals
 	}
 	return filled, unreachable, applied, refusals
+}
+
+// subtreeLevelVerdict is what applySubtreeDefaults does with one subtree
+// level's value of a key, for a tenant that does not set the key itself
+// (subtreeLevelValue).
+type subtreeLevelVerdict int
+
+const (
+	// subtreeRefused: not threshold-shaped — not applied (refusedKeys).
+	subtreeRefused subtreeLevelVerdict = iota
+	// subtreeUnreachable: threshold-shaped, but no resolver reads the key
+	// from the tenant's map — not applied (keyCanReachTheOutputPlane).
+	subtreeUnreachable
+	// subtreeApplied: written into the tenant's map (as servedValue).
+	subtreeApplied
+)
+
+// subtreeLevelValue is applySubtreeDefaults' verdict on raw, one subtree
+// level's value of key, with the value it decodes to. The one judgement of
+// "does the overlay apply it": applySubtreeDefaults acts on it, and the
+// load's #3269 WARN words a scheduled reserved key by it
+// (SubtreeScheduledReserved).
+func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValue, subtreeLevelVerdict) {
+	value, ok := scheduledValueFromRaw(raw)
+	if !ok || !isThresholdShaped(value) {
+		return value, subtreeRefused
+	}
+	if !keyCanReachTheOutputPlane(cfg, key, value) {
+		return value, subtreeUnreachable
+	}
+	return value, subtreeApplied
 }
 
 // chainRejections is applySubtreeDefaults' account of the subtree values it
