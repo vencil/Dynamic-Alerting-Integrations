@@ -158,11 +158,32 @@ def format_duration(seconds: int) -> str:
 
 
 def is_disabled(value: Any) -> bool:
-    """Check if *value* represents a disabled state.
+    """Whether *value* switches a threshold row (or another `disable`-able
+    key) off, exactly as the exporter's thresholdRowDisabled reads it
+    (#3141): the value read by `split_threshold_severity`'s grammar is a
+    disabled word (``disable``, ``disabled``, ``off``, ``false``, lower-cased
+    as Go does) and no ``:<severity>`` is written. ``disable:critical`` is
+    not a disable: the exporter reads it as a value it cannot read, and
+    names ``disable`` / ``<key>_critical: disable`` as the fix. Trimmed with
+    Go's white space (``GO_SPACE``), so ``disable\x1c`` is not a disable
+    either. Pinned against Go by tests/shared/threshold_value_matrix.json's
+    `row_disabled` column. A custom alert's opt-out is
+    `custom_alert_disabled`.
+    """
+    if not value or not isinstance(value, str):
+        return False
+    word, suffixed = _disable_word(value)
+    return word and not suffixed
 
-    Recognises: ``disable``, ``disabled``, ``off``, ``false``
-    (case-insensitive, stripped). Consistent with the Go
-    ``IsDisabledValue()`` implementation.
+
+def routing_disabled(value: Any) -> bool:
+    """Whether a tenant's `_routing` string switches its routing off, as the
+    route generator — routing's one judge (ADR-036 section 9) — reads it:
+    Python ``str.strip()`` (U+001C–U+001F are white space here) then
+    ``lower()``, so ``"\x1coff"`` disables and ``"d\u0130sable"`` does not.
+    Pinned by tests/shared/routing_policy_parity_matrix.json. ⛔ Not a
+    threshold row's reading, which is the exporter's (`is_disabled`, #3141);
+    kept apart so that ruling does not move a routing verdict.
     """
     if not value or not isinstance(value, str):
         return False
@@ -202,21 +223,70 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     return value.strip(GO_SPACE), severity
 
 
+def _go_lower(text: str) -> str:
+    """`text` lower-cased per character as Go's strings.ToLower does (U+0130
+    → `i`, which Python's full mapping turns into two characters)."""
+    return "".join("i" if c == "\u0130" else c.lower() for c in text)
+
+
+def _disable_word(raw: Any) -> tuple[bool, bool]:
+    """`(word, suffixed)`: whether the value half of `split_threshold_severity`
+    is a disabled word, and whether a `:<severity>` is written beside it —
+    the one reading `is_disabled` (a threshold row: no suffix) and
+    `custom_alert_disabled` (any suffix) share. A suffix the grammar refuses
+    (`disable:bogus`) is no disabled word."""
+    try:
+        value, _severity = split_threshold_severity(raw)
+    except ValueError:
+        return False, False
+    if _go_lower(value) not in _DISABLED_VALUES:
+        return False, False
+    return True, ":" in str(raw).strip(GO_SPACE)
+
+
+class NonFiniteThresholdError(ValueError):
+    """A threshold number that reads as NaN or ±Inf (#3140): the exporter
+    refuses it, as it refuses `abc`."""
+
+
+def parse_threshold_number(text: Any) -> float:
+    """The number a threshold value's (trimmed) number half is, as the
+    exporter's parseThresholdNumber reads it (#3140), or ValueError.
+
+    Read with Python's `float` only where it agrees with Go's
+    `strconv.ParseFloat` (measured, go1.x): refused because Go refuses too —
+    a non-ASCII digit, a signed NaN (`+nan`), an overflow (`1e400`, `1e999`:
+    Go returns ErrRange, `float` answers inf); refused although Go accepts —
+    conservative — an underscore (`1_000`), a hex float (`0x1p4`). And the
+    number must be finite: `NaN`, `Inf`, `+Inf`, `-Inf` and `infinity`,
+    which ParseFloat accepts, raise NonFiniteThresholdError — an alert
+    compared against one never fires or always fires. Pinned to Go by
+    tests/shared/threshold_value_matrix.json's `float_ok` column."""
+    number = str(text)
+    if not number.isascii() or "_" in number:
+        raise ValueError(text)
+    value = float(number)
+    spelled = number.lower().lstrip("+-")
+    if math.isnan(value) and number.lower() != "nan":
+        raise ValueError(text)  # `+nan` / `-nan`: Go refuses a signed NaN
+    if math.isinf(value) and spelled not in ("inf", "infinity"):
+        raise ValueError(text)  # overflow: Go's ErrRange
+    if not math.isfinite(value):
+        raise NonFiniteThresholdError(text)
+    return value
+
+
 def custom_alert_disabled(threshold: Any) -> bool:
     """Whether a custom alert with this `threshold` is the three-state
     opt-out, exactly as resolveOneCustomAlert decides it (#3071): the value
     half of `split_threshold_severity` is a disabled word (`disable`,
-    `disable:critical`, `OFF`). A suffix the grammar refuses
-    (`disable:bogus`, `disable:`) is a parse error in Go, not an opt-out.
-    Lower-cased the way Go's strings.ToLower does (per character; U+0130 →
-    `i`, which Python's full mapping turns into two characters). Pinned
+    `disable:critical`, `OFF`; `_disable_word`, shared with `is_disabled`).
+    A suffix the grammar refuses (`disable:bogus`, `disable:`) is a parse
+    error in Go, not an opt-out. Unlike a threshold row (#3141), a custom
+    alert's `disable:<severity>` IS its opt-out (#3042). Pinned
     against Go by tests/shared/threshold_value_matrix.json's
     `custom_alert_disabled` column."""
-    try:
-        value, _severity = split_threshold_severity(threshold)
-    except ValueError:
-        return False
-    return "".join("i" if c == "\u0130" else c.lower() for c in value) in _DISABLED_VALUES
+    return _disable_word(threshold)[0]
 
 
 def is_valid_tenant_id(tenant: Any) -> bool:

@@ -2015,6 +2015,17 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
+def _root_defaults_non_finite_detail(rel: str, key: str, raw: str) -> str:
+    """One FAIL line for a root threshold written as a non-finite number
+    (#3140; da-guard's root_default_non_finite says the same)."""
+    return (f"{rel}: `defaults.{key}` is `{raw}`, not a finite number — an alert "
+            f"compared against it never fires (NaN, or the infinity on the side the "
+            f"alert compares) or always fires. threshold-exporter serves no default "
+            f"row for `{key}`; only a tenant's own value is served, as for an "
+            f"`optional_overrides:` key. Write a finite number, or list `{key}` under "
+            f"`optional_overrides:` instead.")
+
+
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
 #: file (#2386); the list lives in _lib_constants (shared with the policy
 #: readers since #2115 0-B).
@@ -2352,6 +2363,11 @@ _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT = (
     "There is no config file under --config-dir at all: point it at your conf.d "
     "tree, then re-run. No threshold value was checked.")
 _VALUES_NOT_SERVED_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No threshold value was checked."
+# #3209: the threshold keys were checked, the custom alerts' thresholds not.
+_VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT = (
+    "The threshold keys were checked; the custom alerts' `threshold:` values were not, "
+    "because `da-guard served-values` refuses this tree as the line above says. "
+    "Fix what it names and run again. Reported only, not blocking.")
 
 def check_values_not_served(config_dir: str) -> dict[str, object]:
     """Threshold values /metrics does not serve as written (#2065).
@@ -2363,6 +2379,14 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
     verdicts da-guard's `value_not_served` refuses
     (`value_not_served_as_written`). No YAML is judged here. A tree
     da-guard cannot load is the load-failure row `profiles` also uses.
+
+    #3209: also every `_custom_alerts` entry `da-guard served-values` marks
+    `refused` — the exporter rejects it for its `threshold:`, which da-guard
+    reports as the same `value_not_served`. The mark is Go's; this row only
+    lists it. A tree `effective` reads but served-values refuses (e.g. two
+    keys owning one series) keeps the threshold keys' verdict: the custom
+    alerts are then not checked, which turns a PASS into a WARN saying so,
+    never into a FAIL (the rows that read served-values report the tree).
     """
     try:
         tree = _effective_tree(config_dir)
@@ -2371,6 +2395,12 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
             "values_not_served", exc, config_dir,
             (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
              _VALUES_NOT_SERVED_NO_DA_GUARD_HINT))
+    try:
+        served = load_served_tree(config_dir).tenants
+        unchecked = None
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, YamlFileError) as exc:
+        served, unchecked = {}, (f"custom alerts not checked: `da-guard served-values` did not read the tree "
+                                 f"({type(exc).__name__}: {' '.join(str(exc).split())})")
     details: list[str] = []
     for tid in sorted(tree.tenants):
         te = tree.tenants[tid]
@@ -2379,15 +2409,26 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
             if not value_not_served_as_written(key, ns.reason):
                 continue
             details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}")
+        src = te.key_sources.get("_custom_alerts")
+        for e in (served[tid].custom_alerts or ()) if tid in served else ():
+            if e.refused is None:
+                continue
+            details.append(f"{src.file if src is not None else te.source_file}: tenant {tid}: "
+                           f"`_custom_alerts[{e.index}]` (`{e.spec.get('name')}`): threshold refused "
+                           f"({e.refused}): {e.reason}")
     if details:
-        return _make_result("values_not_served", FAIL, details)
+        return _make_result("values_not_served", FAIL, details + ([unchecked] if unchecked else []))
     # #2725: not "serves every threshold value as written" — a value no
     # defaults file declares is not served at all (served-values `unserved`),
     # and this row, by its predicate, does not name it.
-    return _make_result("values_not_served", PASS, [
+    passed = [
         f"{len(tree.tenants)} tenant(s): no threshold value the exporter refuses as written "
         f"(a value /metrics does not serve for another reason, e.g. a key no defaults file "
-        f"declares, is not this row's finding)"])
+        f"declares, is not this row's finding)"]
+    if unchecked:
+        return _make_result("values_not_served", WARN, passed + [unchecked],
+                            hint=_VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT)
+    return _make_result("values_not_served", PASS, passed)
 
 
 # ADR-038: the row's own hints where the check-level one ("fix a misspelt
@@ -2565,7 +2606,19 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
             out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
         elif node["tag"] not in ("!!int", "!!float"):
             out.append((key, node["text"], dr.UNPARSEABLE))
+        elif node["tag"] == "!!float" and "value" not in node:
+            # #3140: parse-tree gives a `!!float` no value exactly when
+            # yaml.v3 decodes it to NaN or ±Inf (`.nan`, `.inf`, `-.inf`).
+            # The file loads; the exporter serves no default row for the key.
+            out.append((key, node["text"], _NON_FINITE))
     return out
+
+
+#: `_root_defaults_verdicts`' kind for a root threshold yaml.v3 decodes to a
+#: non-finite number (#3140): not one of deprecate_rule's kinds (the carrier
+#: loads), but a FAIL of this row, as da-guard's root_default_non_finite is an
+#: error. The oracle's `default_row: false` rows are these.
+_NON_FINITE = "non_finite"
 
 
 _CUSTOM_ALERT_CAP_HINT = (
@@ -2720,6 +2773,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
+    details += [_root_defaults_non_finite_detail(rel, k, r)
+                for k, r, kind in verdicts
+                if kind == _NON_FINITE and k is not None and not k.startswith("_")]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
@@ -2903,8 +2959,10 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "`disable`; give each schedule window a UTC `HH:MM-HH:MM` whose start "
         "differs from its end; write a subtree default as a number or a "
         "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
-        "of a threshold a mapping writes twice (spelling_duplicate). "
-        "`da-guard effective --config-dir <dir>` lists each one under `not_served`.",
+        "of a threshold a mapping writes twice (spelling_duplicate); write a "
+        "custom alert's `threshold:` the same way as a threshold value. "
+        "`da-guard effective --config-dir <dir>` lists each one under `not_served` "
+        "(a custom alert: `da-guard served-values`, `custom_alerts[].refused`).",
         "docs/cli-reference.md#validate-config",
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.

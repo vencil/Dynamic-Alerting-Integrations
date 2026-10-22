@@ -77,3 +77,59 @@ func TestCheckValuesNotServed_NilSkips(t *testing.T) {
 		t.Errorf("findings = %v, want none", got)
 	}
 }
+
+// #3140 / #3141: both value_unparsed messages name a non-finite number among
+// the values the exporter cannot read, and the two spellings a
+// `disable:<severity>` may have meant — with the key's own critical tier for
+// a plain key.
+func TestValueNotServedMessage_NamesNonFiniteAndDisableSpellings(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ key, reason, critical string }{
+		{"mysql_connections", config.NotServedValueUnparsed, "`mysql_connections_critical: disable`"},
+		{"mysql_connections_critical", config.NotServedValueUnparsedDropped, "`<key>_critical: disable`"},
+		{`mysql_connections{db="a"}`, config.NotServedValueUnparsedDropped, "`<key>_critical: disable`"},
+	} {
+		msg := valueNotServedMessage(tc.key, config.NotServedKey{Reason: tc.reason, File: "t.yaml"})
+		for _, want := range []string{"not a finite number", "`NaN`", "`disable:critical`",
+			"write `disable` to switch the whole key off", tc.critical} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s/%s: message lacks %q: %s", tc.key, tc.reason, want, msg)
+			}
+		}
+	}
+}
+
+// #3209: CustomAlertsRefused alone — no ValuesNotServed at all — is one
+// value_not_served error per entry, after the tenant's keys, only for tenants
+// in EffectiveConfigs; the message starts with value_unparsed_dropped (no
+// default to fall back to) and names the entry, its threshold and the
+// exporter's reason.
+func TestCheckValuesNotServed_CustomAlertsRefused(t *testing.T) {
+	t.Parallel()
+	ca := func(i int, thr, refused string) RefusedCustomAlert {
+		return RefusedCustomAlert{Index: i, Name: "q", Threshold: thr, Refused: refused, Reason: "exporter says no"}
+	}
+	in := CheckInput{
+		EffectiveConfigs: map[string]map[string]any{"tx": {}, "ty": {}},
+		CustomAlertsRefused: map[string][]RefusedCustomAlert{
+			"ty":   {ca(2, "NaN", config.RefusedNonFinite)},
+			"tx":   {ca(0, "abc", config.RefusedUnparsed), ca(3, "70:high", config.RefusedUnparsed)},
+			"tout": {ca(0, "abc", config.RefusedUnparsed)}, // not in scope
+		},
+	}
+	var got [][2]string
+	for _, f := range checkValuesNotServed(in) {
+		if f.Kind != findingkind.FindingValueNotServed || f.Severity != SeverityError {
+			t.Errorf("unexpected finding %+v", f)
+		}
+		got = append(got, [2]string{f.TenantID, f.Field})
+		if !strings.HasPrefix(f.Message, "value_unparsed_dropped: ") || !strings.Contains(f.Message, "exporter says no") ||
+			!strings.Contains(f.Message, `"q"`) {
+			t.Errorf("message: %s", f.Message)
+		}
+	}
+	want := [][2]string{{"tx", "_custom_alerts[0]"}, {"tx", "_custom_alerts[3]"}, {"ty", "_custom_alerts[2]"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("findings = %v, want %v", got, want)
+	}
+}

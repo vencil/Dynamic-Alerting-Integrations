@@ -489,10 +489,10 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
 			}
-			lower := strings.TrimSpace(strings.ToLower(override))
-
-			// State 3: disable
-			if isDisabled(lower) {
+			// State 3: disable. `disable:<severity>` is not one (#3141): it
+			// falls through to the unreadable value below.
+			off, suffixedOff := thresholdRowDisabled(override)
+			if off {
 				continue
 			}
 
@@ -512,14 +512,31 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// Unknown value — log warning, use default. #2377: the `:severity`
 			// suffix belongs to the discarded value, so it is dropped too —
 			// "7O:critical" resolves exactly like the bare "7O". #3071: so does
-			// a severity no threshold rule selects ("70:high", "70:").
-			logf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
+			// a severity no threshold rule selects ("70:high", "70:"). #3140:
+			// so does a non-finite number ("NaN", "-Inf"; parseThresholdNumber).
+			// With no finite default either (#3140, rootNonFiniteDefaults)
+			// there is nothing to fall back to and the row is dropped.
+			hint := suffixedHint(suffixedOff, metricKey)
+			if !finiteThreshold(defaultValue) {
+				logf("WARN: unknown value %q for tenant=%s metric=%s, and the root default is not a finite number, skipping%s", override, tenant, metricKey, hint)
+				if rec != nil {
+					rec.note(tenant, metricKey, NotServedValueUnparsedDropped)
+				}
+				continue
+			}
+			logf("WARN: unknown value %q for tenant=%s metric=%s, using default%s", override, tenant, metricKey, hint)
 			if rec != nil {
 				rec.note(tenant, metricKey, NotServedValueUnparsed)
 			}
 		}
 
-		// State 2: use default
+		// State 2: use default — unless the root writes it as a non-finite
+		// number (#3140): the key is then served like an `optional_overrides:`
+		// one, the tenant's own value only, and da-guard reports the root
+		// value (root_default_non_finite).
+		if !finiteThreshold(defaultValue) {
+			continue
+		}
 		rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
 			Tenant:    tenant,
 			Metric:    metric,
@@ -642,12 +659,13 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		if rec != nil {
 			rec.noteInvalidWindows(tenant, metricKey, sv)
 		}
-		lower := strings.TrimSpace(strings.ToLower(override))
 		// State 3: disable. Note that for a declared key this is
 		// indistinguishable in OUTPUT from "never set" — both emit nothing.
 		// It is still honoured so a tenant can express intent, and so a
-		// profile/inherited value can be switched off.
-		if isDisabled(lower) {
+		// profile/inherited value can be switched off. `disable:<severity>`
+		// is no disable (#3141).
+		off, suffixedOff := thresholdRowDisabled(override)
+		if off {
 			continue
 		}
 
@@ -657,7 +675,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			// No default to fall back to — drop it and say so, matching
 			// resolveCriticalRows / resolveDimensionalRows rather than
 			// resolveBaseRows (which can and does fall back).
-			logf("WARN: invalid declared threshold %q for tenant=%s key=%s, skipping", override, tenant, metricKey)
+			logf("WARN: invalid declared threshold %q for tenant=%s key=%s, skipping%s", override, tenant, metricKey, suffixedHint(suffixedOff, metricKey))
 			if rec != nil {
 				rec.note(tenant, metricKey, NotServedValueUnparsedDropped)
 			}
@@ -711,8 +729,8 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		if rec != nil {
 			rec.noteInvalidWindows(tenant, key, sv)
 		}
-		lower := strings.TrimSpace(strings.ToLower(override))
-		if isDisabled(lower) {
+		off, suffixedOff := thresholdRowDisabled(override)
+		if off {
 			continue
 		}
 
@@ -723,7 +741,9 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		}
 
 		component, metric := parseMetricKey(baseKey)
-		if v, err := strconv.ParseFloat(strings.TrimSpace(override), 64); err == nil {
+		// The whole value is the number (no `:<severity>`: the row is
+		// critical), read by the one threshold-number reader (#3140).
+		if v, ok := parseThresholdNumber(strings.TrimSpace(override)); ok {
 			rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
 				Tenant:    tenant,
 				Metric:    metric,
@@ -732,7 +752,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 				Component: component,
 			}, sink, key)
 		} else {
-			logf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
+			logf("WARN: invalid critical threshold %q for tenant=%s key=%s%s", override, tenant, key, suffixedHint(suffixedOff, key))
 			if rec != nil {
 				rec.note(tenant, key, NotServedValueUnparsedDropped)
 			}
@@ -820,15 +840,15 @@ func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant,
 	if rec != nil {
 		rec.noteInvalidWindows(tenant, key, sv)
 	}
-	lower := strings.TrimSpace(strings.ToLower(valStr))
-	if isDisabled(lower) {
+	off, suffixedOff := thresholdRowDisabled(valStr)
+	if off {
 		return rows
 	}
 
 	component, metric := parseMetricKey(baseKey)
 	v, severity, ok := parseThresholdValue(valStr)
 	if !ok {
-		logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
+		logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping%s", valStr, tenant, key, suffixedHint(suffixedOff, key))
 		if rec != nil {
 			rec.note(tenant, key, NotServedValueUnparsedDropped)
 		}

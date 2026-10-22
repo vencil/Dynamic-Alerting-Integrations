@@ -197,3 +197,53 @@ func boolOrNil(b *bool) any {
 	}
 	return *b
 }
+
+// #3140: a value the row resolver refuses is named as a refusal, not as a
+// switch-off or a key nobody declares — per key (keys[].refused, and
+// keys[].reason value_non_finite / value_unparsed when no row is left) and
+// per no-row part of the day (segments[].reason). A misspelt key holding a
+// non-finite number stays no_row: the resolver never met it.
+func TestServedValues_RefusedValuesAreNamedApartFromDisables(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\noptional_overrides:\n  - oracle_process_count\n",
+		"db-a.yaml": "tenants:\n  db-a:\n" +
+			"    mysql_connections: \"NaN\"\n" + // base: the default is served
+			"    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n" +
+			"        - window: \"01:00-02:00\"\n          value: \"-Inf\"\n" +
+			"        - window: \"03:00-04:00\"\n          value: disable\n" +
+			"        - window: \"05:00-06:00\"\n          value: abc\n" +
+			"    oracle_process_count: \"Inf\"\n" +
+			"    redis_memory_critical: \"7O\"\n" +
+			"    redis_memory: disable\n" +
+			"    mysql_conections: \"NaN\"\n",
+	}, "2026-07-01T12:00:00Z", "--schedules") // outside every window: the keys[] reading is at --at
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["db-a"]
+	type k3 struct {
+		exporter        bool
+		reason, refused string
+	}
+	want := map[string]k3{
+		"mysql_connections":          {true, "", "non_finite"},
+		"mysql_connections_critical": {true, "", ""},
+		"oracle_process_count":       {false, keyReasonValueNonFinite, "non_finite"},
+		"redis_memory_critical":      {false, keyReasonValueUnparsed, "unparsed"},
+		"redis_memory":               {false, keyReasonDisabled, ""},
+		"mysql_conections":           {false, keyReasonNoRow, ""},
+	}
+	for k, w := range want {
+		if got := tv.Keys[k]; got.Exporter != w.exporter || got.Reason != w.reason || got.Refused != w.refused {
+			t.Errorf("keys[%q] = %+v, want %+v", k, got, w)
+		}
+	}
+	var nulls []string
+	for _, s := range tv.Schedules["mysql_connections_critical"].Segments {
+		if s.Value == nil && s.Error == "" {
+			nulls = append(nulls, s.From+"-"+s.To+"="+s.Reason)
+		}
+	}
+	if w := []string{"01:00-02:00=value_non_finite", "03:00-04:00=disabled", "05:00-06:00=value_unparsed"}; !reflect.DeepEqual(nulls, w) {
+		t.Errorf("null segments = %v, want %v", nulls, w)
+	}
+}

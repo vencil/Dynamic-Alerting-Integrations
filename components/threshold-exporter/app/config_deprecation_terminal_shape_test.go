@@ -31,6 +31,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -245,6 +246,9 @@ type carrierOracleCase struct {
 	Exporter string   `json:"exporter"` // accepted | dropped | absent
 	Key      *string  `json:"key"`      // nil for document-level rows
 	Value    *float64 `json:"value"`    // only for finite accepted values
+	// DefaultRow false: key decodes, but the resolver serves no default row
+	// for it — a non-finite number (#3140). Absent = true.
+	DefaultRow *bool `json:"default_row"`
 }
 
 func loadCarrierOracle(t *testing.T) []carrierOracleCase {
@@ -299,6 +303,26 @@ func assertCarrierVerdict(t *testing.T, name string, doc []byte, want string, ke
 	}
 }
 
+// assertDefaultRow is the meaning of the `default_row` column: whether the
+// resolver serves key's default row to a tenant that writes nothing.
+func assertDefaultRow(t *testing.T, name string, doc []byte, key string, want bool) {
+	t.Helper()
+	cfg, _ := parsePartialConfig("_defaults.yaml", "/conf.d/_defaults.yaml", doc,
+		newConfigMetrics(), log.New(io.Discard, "", 0))
+	cfg.Tenants = map[string]map[string]ScheduledValue{"t": {}}
+	keyed, _, err := cfg.ResolveAtWithKeysSilent(time.Now())
+	if err != nil {
+		t.Fatalf("%s: resolve: %v", name, err)
+	}
+	got := false
+	for _, k := range keyed {
+		got = got || k.Key == key
+	}
+	if got != want {
+		t.Fatalf("%s: a default row for %q served = %v, want %v (rows %+v)", name, key, got, want, keyed)
+	}
+}
+
 func TestDefaultsCarrierOracle(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tc := range loadCarrierOracle(t) {
@@ -309,6 +333,9 @@ func TestDefaultsCarrierOracle(t *testing.T) {
 		seen[tc.Name] = true
 		t.Run(tc.Name, func(t *testing.T) {
 			assertCarrierVerdict(t, tc.Name, []byte(tc.Doc), tc.Exporter, tc.Key, tc.Value)
+			if tc.Exporter == "accepted" && tc.Key != nil {
+				assertDefaultRow(t, tc.Name, []byte(tc.Doc), *tc.Key, tc.DefaultRow == nil || *tc.DefaultRow)
+			}
 		})
 	}
 }

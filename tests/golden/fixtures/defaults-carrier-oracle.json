@@ -1,5 +1,5 @@
 {
-  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `absent` = it loads and `key` is not in its defaults: a value written as null is no write (#2518; before it, such a key decoded to 0).",
+  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `absent` = it loads and `key` is not in its defaults: a value written as null is no write (#2518; before it, such a key decoded to 0). `default_row: false` (absent = true) = `key` decodes but the resolver serves no default row for it: a non-finite number (#3140), which validate-config's root_defaults row FAILs and da-guard reports as root_default_non_finite.",
   "cases": [
     {
       "name": "plain-int",
@@ -150,19 +150,22 @@
       "name": "dot-inf",
       "doc": "defaults:\n  k: .inf\n  neighbour: 90\n",
       "exporter": "accepted",
-      "key": "k"
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "negative-dot-inf",
       "doc": "defaults:\n  k: -.inf\n  neighbour: 90\n",
       "exporter": "accepted",
-      "key": "k"
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "dot-nan",
       "doc": "defaults:\n  k: .NaN\n  neighbour: 90\n",
       "exporter": "accepted",
-      "key": "k"
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "huge-int",

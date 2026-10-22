@@ -130,3 +130,70 @@ def test_end_to_end_exits_1(tmp_path, capsys, cli_argv):
     out = capsys.readouterr().out
     assert exc.value.code == 1, out
     assert "[FAIL] values_not_served" in out and rel in out, out
+
+
+# #3209：custom alert 的 `threshold:` 被 exporter 拒收（Go 在 served-values 標 `refused`）——
+# 與閾值 row 拒收同一列 FAIL；本列不自己判定，只列出 Go 的標記。
+_CA = "    _custom_alerts:\n      - {recipe: threshold, name: q_high, metric: qd, op: '>', window: %s, threshold: %s}\n"
+
+
+@pytest.mark.parametrize("threshold, refused", [
+    ("abc", "unparsed"), ("'NaN'", "non_finite"), ("'-Inf:critical'", "non_finite"), ("'70:high'", "unparsed"),
+])
+def test_refused_custom_alert_threshold_fails(tmp_path, threshold, refused):
+    r = vc.check_values_not_served(str(_tree(tmp_path, None, _CA % ("5m", threshold))))
+    assert r["status"] == vc.FAIL, r
+    assert len(r["details"]) == 1, r
+    assert r["details"][0].startswith(
+        f"team/t.yaml: tenant tx: `_custom_alerts[0]` (`q_high`): threshold refused ({refused}): "), r
+
+
+@pytest.mark.parametrize("window, threshold", [
+    ("5m", "'80:critical'"), ("5m", "disable"), ("5m", "'disable:critical'"),
+    ("5x", "'80'"),  # 因其他欄位拒收：不是門檻值的拒收，不是本列的
+])
+def test_custom_alert_threshold_not_refused_passes(tmp_path, window, threshold):
+    r = vc.check_values_not_served(str(_tree(tmp_path, None, _CA % (window, threshold))))
+    assert r["status"] == vc.PASS, r
+
+
+def test_custom_alert_lines_match_da_guard_value_not_served(tmp_path, da_guard_binary):
+    """同一棵樹：本列點名的 custom alert (tenant, field) == da-guard 主 gate 對
+    `_custom_alerts[i]` 的 value_not_served findings。"""
+    d = _tree(tmp_path, None,
+              "    _custom_alerts:\n"
+              "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
+              "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: '80'}\n"
+              "      - {recipe: threshold, name: c, metric: m3, op: '>', window: 5m, threshold: abc}\n")
+    r = vc.check_values_not_served(str(d))
+    row = {(line.split(": ", 3)[1].removeprefix("tenant "), line.split(": ", 3)[2].split(" ")[0].strip("`"))
+           for line in r["details"]}
+    proc = subprocess.run([da_guard_binary, "--config-dir", str(d), "--format", "json"],
+                          capture_output=True, check=False, timeout=600)
+    assert proc.returncode == 1, proc.stderr
+    gate = {(f["tenant_id"], f["field"]) for f in json.loads(proc.stdout)["report"]["findings"]
+            if f["kind"] == "value_not_served"}
+    assert row == gate == {("tx", "_custom_alerts[0]"), ("tx", "_custom_alerts[2]")}, (row, gate)
+
+
+def test_refused_custom_alert_end_to_end_exits_1(tmp_path, capsys, cli_argv):
+    cli_argv("validate_config", "--config-dir", str(_tree(tmp_path, None, _CA % ("5m", "'NaN'"))))
+    with pytest.raises(SystemExit) as exc:
+        vc.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 1, out
+    assert "[FAIL] values_not_served" in out and "`_custom_alerts[0]`" in out, out
+
+
+def test_tree_served_values_refuses_is_warn_not_fail(tmp_path):
+    """effective 讀得了、served-values 拒收的樹（兩個 key 擁有同一條 series）：閾值 key 照判，
+    custom alert 那半沒檢查——WARN 並說明，不是 FAIL（不新增結束碼變化）。"""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n", encoding="utf-8")
+    (d / "t.yaml").write_text("tenants:\n  tx:\n    mysql_connections_critical: 95\n", encoding="utf-8")
+    r = vc.check_values_not_served(str(d))
+    assert r["status"] == vc.WARN, r
+    assert r["details"][-1].startswith("custom alerts not checked: "), r
+    assert r["hint"] == vc._VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT, r
