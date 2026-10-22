@@ -1,21 +1,20 @@
-"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus TWO pinned patches.
+"""The vendored gopkg.in/yaml.v3 is upstream go.yaml.in/yaml/v3 v3.0.5 plus ONE pinned patch.
 
 Both Go modules replace ``gopkg.in/yaml.v3`` with
-``components/threshold-exporter/app/third_party/yaml.v3``: upstream v3.0.1
-with
-- grafana/go-yaml a1d5f0f's ``decode.go`` change (#2681: duplicate mapping
-  keys checked through a hash map above 48 keys, so a large mapping no longer
-  costs O(n²)). Nothing else from that fork may come along — its block-scalar
-  encode, ``Node.DecodeWithOptions``, ``0`` as a ``time.Duration`` and the
-  upstream v3.0.2+ backports all change behaviour;
-- upstream's own fix for a merge beside a non-scalar key (#2913,
-  ``go.yaml.in/yaml/v3`` v3.0.2+, unchanged through v3.0.5): the decoder's
-  merged-field set is read and written through
-  ``setPossiblyUnhashableKey`` / ``getPossiblyUnhashableKey``, which turn the
-  runtime panic of a slice or map key ("hash of unhashable type") into a
-  decode error. ``decode.go`` only, three hunks; their +/- lines are
-  byte-identical to upstream's, only the @@ line numbers moved. Nothing else
-  from v3.0.2+ comes along.
+``components/threshold-exporter/app/third_party/yaml.v3``: upstream
+``go.yaml.in/yaml/v3`` v3.0.5 (the same package under its new module path;
+its ``go.mod`` keeps upstream's module line, which Go does not check for a
+directory replace) with grafana/go-yaml a1d5f0f's ``decode.go`` change
+(#2681: duplicate mapping keys checked through a hash map above 48 keys, so a
+large mapping no longer costs O(n²)). Nothing else from that fork may come
+along — its block-scalar encode, ``Node.DecodeWithOptions`` and ``0`` as a
+``time.Duration`` all change behaviour.
+
+Upstream's own fix for a merge beside a non-scalar key (#2913: the
+decoder's merged-field set goes through ``setPossiblyUnhashableKey`` /
+``getPossiblyUnhashableKey``, so a slice or map key is a decode error, not
+the runtime panic "hash of unhashable type") is in the base since v3.0.2;
+it was a second patch while the base was v3.0.1 (ADR-036 §11, #3206).
 
 How this is checked, without the network and without Go:
 
@@ -26,14 +25,14 @@ How this is checked, without the network and without Go:
    exactly once. Swapping them back for the hunks' old text, last applied
    first, has to give upstream's files.
 3. With those swaps, the whole directory's Go module hash (``h1:``, the
-   dirhash algorithm ``go.sum`` uses) must equal v3.0.1's, as published by
+   dirhash algorithm ``go.sum`` uses) must equal v3.0.5's, as published by
    sum.golang.org. That covers every other file, byte for byte, including
    files added or removed.
 
 The ``h1:`` value is an independent anchor: ``go mod download -json
-gopkg.in/yaml.v3@v3.0.1`` prints it after verifying it against the checksum
-database, and it is the line the two ``go.sum`` files carried before the
-replace removed it.
+go.yaml.in/yaml/v3@v3.0.5`` prints it after verifying it against the
+checksum database (``https://sum.golang.org/lookup/go.yaml.in/yaml/v3@v3.0.5``
+serves the same line).
 """
 from __future__ import annotations
 
@@ -54,29 +53,29 @@ from _tree import repo_files
 _THIRD_PARTY = ROOT / "components" / "threshold-exporter" / "app" / "third_party"
 _VENDORED = _THIRD_PARTY / "yaml.v3"
 _PATCH = _THIRD_PARTY / "yaml.v3-uniquekeys.patch"
-_UNHASHABLE_PATCH = _THIRD_PARTY / "yaml.v3-unhashable-merge-key.patch"
 
+# The import path every importer uses, and the one the replaces swap out.
 _MODULE = "gopkg.in/yaml.v3"
-_VERSION = "v3.0.1"
-# sum.golang.org: `gopkg.in/yaml.v3 v3.0.1 h1:...`
-_UPSTREAM_H1 = "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA="
+# The upstream release the vendored tree is, as the checksum database names it.
+_UPSTREAM_MODULE = "go.yaml.in/yaml/v3"
+_VERSION = "v3.0.5"
+# sum.golang.org: `go.yaml.in/yaml/v3 v3.0.5 h1:...`
+_UPSTREAM_H1 = "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
 # grafana/go-yaml a1d5f0f's decode.go hunk; its +/- lines are byte-identical
-# to that commit, only the @@ line numbers moved by -3 to land on v3.0.1.
+# to that commit, only the @@ line numbers moved by -3 (to land on v3.0.1,
+# and v3.0.5's decode.go has the same lines there).
 _PATCH_SHA256 = "32fd9b238124d4eb520292c97119b2eaed76b983b9d1bc2f16e6d0f429451b9a"
-# Two more were deleted: the scanner switch Decoder.SpacesOnly (hub #2486
+# Three more were deleted: the scanner switch Decoder.SpacesOnly (hub #2486
 # PR-7c round 6) with its only caller, the domain-policy reader of
-# pkg/routingpolicy (ADR-036 step 3, #2905); and the non-specific-tag patch
+# pkg/routingpolicy (ADR-036 step 3, #2905); the non-specific-tag patch
 # (#2730 §6: (*parser).scalar kept the tag "!" on a non-plain scalar) once
 # every Go reader asks parse-tree first, which refuses `!` from the source
-# text (ADR-036 step 8, #3206).
-# #2913: go.yaml.in/yaml/v3 v3.0.2's decode.go change (the only semantic change
-# to that file through v3.0.5); +/- lines byte-identical to upstream's.
-_UNHASHABLE_PATCH_SHA256 = "d1faf04b486894b947ac08e9e52c607e1d3eaf0cbd1da5661cf28f1b472c5794"
-# Every allowed change, applied in this order on upstream v3.0.1: its pinned
+# text (ADR-036 step 8, #3206); and the unhashable-merge-key backport (#2913)
+# once the base moved to v3.0.5, which carries it (#3206).
+# Every allowed change, applied in this order on upstream v3.0.5: its pinned
 # sha256, and the hunks it may hold per file.
 _PATCHES = {
     _PATCH: (_PATCH_SHA256, {"decode.go": 1}),
-    _UNHASHABLE_PATCH: (_UNHASHABLE_PATCH_SHA256, {"decode.go": 3}),
 }
 
 # The modules that build with it, and the replace each must carry.
@@ -136,7 +135,7 @@ def _hunk(patch: Path = _PATCH) -> tuple[str, str]:
 
 def _dirhash_h1(files: dict[str, bytes]) -> str:
     """golang.org/x/mod/sumdb/dirhash.Hash1 over {relative path: content}."""
-    prefix = f"{_MODULE}@{_VERSION}/"
+    prefix = f"{_UPSTREAM_MODULE}@{_VERSION}/"
     summary = "".join(
         f"{hashlib.sha256(files[rel]).hexdigest()}  {prefix}{rel}\n"
         for rel in sorted(files, key=lambda r: (prefix + r).encode()))
@@ -184,33 +183,35 @@ def test_the_allowed_changes_are_the_pinned_hunks() -> None:
         digest = hashlib.sha256(patch.read_bytes()).hexdigest()
         assert digest == want, (
             f"{patch.name} changed (sha256 {digest}). It defines what may differ "
-            "from upstream v3.0.1; widening it is a decision for the owner "
-            "(#2681, #2913), made by editing its pinned sha256 here in the same diff.")
+            "from upstream v3.0.5; widening it is a decision for the owner "
+            "(#2681), made by editing its pinned sha256 here in the same diff.")
         counts: dict[str, int] = {}
         for name, _, _ in _hunks(patch):
             counts[name] = counts.get(name, 0) + 1
         assert counts == files, f"{patch.name} touches {counts}, pinned {files}"
     old, new = _hunk()
     assert "func (d *decoder) mapping(" in old and "checkUniqueKeysMap" in new
-    # Upstream's fix only routes the merged-field set through the two
-    # recovering helpers (and adds them): every changed line names one.
-    for name, old, new in _hunks(_UNHASHABLE_PATCH):
-        changed = ([line for line in new.splitlines() if line not in old.splitlines()]
-                   + [line for line in old.splitlines() if line not in new.splitlines()])
-        assert all("PossiblyUnhashableKey" in line or "mergedFields" in line
-                   or line.strip() in ("defer func() {", "if err := recover(); err != nil {",
-                                       'failf("%v", err)', "}", "}()", "m[key] = value",
-                                       "return m[key]", "")
-                   for line in changed), (name, changed)
+    on_disk = sorted(p.name for p in _THIRD_PARTY.glob("*.patch"))
+    assert on_disk == sorted(p.name for p in _PATCHES), (
+        f"third_party/ holds {on_disk}; _PATCHES pins {sorted(p.name for p in _PATCHES)}")
 
 
-def test_vendored_tree_is_v3_0_1_plus_only_the_hunk() -> None:
+def test_vendored_tree_is_v3_0_5_plus_only_the_hunk() -> None:
     got = _reverted_h1(_repo_tree())
     assert got == _UPSTREAM_H1, (
         f"{_VENDORED.relative_to(ROOT)} with the allowed hunk reverted hashes to "
-        f"{got}, not v3.0.1's {_UPSTREAM_H1}: some other byte, file or file "
-        "name differs from upstream. Re-vendor as third_party/README.md says; "
-        "never edit these files by hand.")
+        f"{got}, not {_UPSTREAM_MODULE} {_VERSION}'s {_UPSTREAM_H1}: some other "
+        "byte, file or file name differs from upstream. Re-vendor as "
+        "third_party/README.md says; never edit these files by hand.")
+
+
+def test_the_base_carries_upstreams_unhashable_key_fix() -> None:
+    """#2913: the reason the base is v3.0.5 and not v3.0.1. The h1 pin above
+    already fixes every byte; this names the one behaviour it was moved for,
+    so a re-vendor onto a release without it reads as what it is."""
+    decode = (_VENDORED / "decode.go").read_text(encoding="utf-8")
+    assert "func (d *decoder) setPossiblyUnhashableKey(" in decode
+    assert "d.mergedFields[k.Interface()] = true" not in decode
 
 
 def _tokens(line: str) -> list[str]:
@@ -421,13 +422,12 @@ def test_a_byte_inside_the_hunk_is_caught(scratch: Path) -> None:
         _reverted_h1(_tree(scratch))
 
 
-def test_a_byte_inside_the_unhashable_hunk_is_caught(scratch: Path) -> None:
+def test_reverting_upstreams_unhashable_fix_is_caught(scratch: Path) -> None:
     f = scratch / "decode.go"
     f.write_bytes(f.read_bytes().replace(
         b"d.setPossiblyUnhashableKey(d.mergedFields, k.Interface(), true)",
         b"d.mergedFields[k.Interface()] = true"))
-    with pytest.raises(AssertionError, match="unhashable-merge-key.patch 0 time"):
-        _reverted_h1(_tree(scratch))
+    assert _reverted_h1(_tree(scratch)) != _UPSTREAM_H1
 
 
 def test_an_added_file_is_caught(scratch: Path) -> None:
@@ -436,5 +436,5 @@ def test_an_added_file_is_caught(scratch: Path) -> None:
 
 
 def test_a_removed_file_is_caught(scratch: Path) -> None:
-    (scratch / "suite_test.go").unlink()
+    (scratch / "decode_test.go").unlink()
     assert _reverted_h1(_tree(scratch)) != _UPSTREAM_H1

@@ -20,7 +20,7 @@ import (
 
 // failOnPanic runs f and turns a panic in it into a t.Fatalf of the calling
 // (sub)test. Nothing on the reload path recovers, so without it a regression
-// (the vendored yaml.v3 patch gone) panics the test goroutine and ends the
+// (the vendored yaml.v3's fix gone) panics the test goroutine and ends the
 // whole test binary instead of failing this one case.
 func failOnPanic(t *testing.T, what string, f func()) {
 	t.Helper()

@@ -662,8 +662,8 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 var roundTripRejFiles = []struct {
 	name, body string
 }{
-	{"block_scalar_leading_blank", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
-		"    _metadata:\n      owner: |-\n\n        team\n"},
+	{"block_scalar_folded_more_indented", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
+		"    _metadata:\n      owner: >\n        team\n         a\n        b\n"},
 }
 
 func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
