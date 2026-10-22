@@ -27,8 +27,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -236,7 +238,20 @@ def check_local(dir_path: str) -> CheckResult:
 
     # No directory to check is the caller's input, not a verdict (#3211):
     # the caller-error exit (rc 2, its --json envelope) via `run()`.
-    if not base.is_dir():
+    # A path it cannot look at — EACCES under a parent the caller cannot
+    # enter (#3241) — is named too, not a crash. `os.stat`, not
+    # `Path.is_dir`: which errnos `is_dir` swallows changes across Python
+    # versions (3.13 raises EACCES, 3.14 returns False), and "not there" is
+    # decided here, by errno: ENOENT / ENOTDIR / ELOOP.
+    try:
+        is_dir = stat.S_ISDIR(os.stat(base).st_mode)
+    except OSError as e:
+        if e.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise CallerError(_h(f"ERROR: 無法存取 --dir: {dir_path}（{e.strerror}）",
+                                 f"ERROR: cannot access --dir: {dir_path} ({e.strerror})"),
+                              reason="dir_not_accessible") from None
+        is_dir = False
+    if not is_dir:
         raise CallerError(_h(f"ERROR: --dir 不是目錄: {dir_path}",
                              f"ERROR: --dir is not a directory: {dir_path}"),
                           reason="dir_not_found")

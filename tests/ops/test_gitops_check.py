@@ -47,6 +47,7 @@ Validates:
      - Multiple parse errors
 """
 
+import errno
 import json
 import os
 import shutil
@@ -290,6 +291,84 @@ class TestLocalDirMissingIsCallerError:
                               timeout=120)
         assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
         assert json.loads(proc.stdout)["reason"] == "dir_not_found", proc.stdout
+
+
+class TestLocalDirNotAccessibleIsCallerError:
+    """#3241: `local --dir` under a parent the caller cannot enter —
+    `Path.is_dir` raises EACCES there; a named caller error (rc 2 unchanged),
+    not `internal_error`."""
+
+    @pytest.mark.parametrize("err, reason", [
+        (errno.EACCES, "dir_not_accessible"),
+        (errno.ENAMETOOLONG, "dir_not_accessible"),
+        (errno.EIO, "dir_not_accessible"),
+        (errno.ENOENT, "dir_not_found"),
+        (errno.ENOTDIR, "dir_not_found"),
+        (errno.ELOOP, "dir_not_found"),
+    ])
+    def test_errno_decides_the_reason(self, monkeypatch, err, reason):
+        """By errno, not by which errnos this Python's `Path.is_dir` swallows
+        (3.13 raises EACCES, 3.14 returns False)."""
+        from _lib_exitcodes import CallerError
+
+        def _stat(path, *a, **kw):
+            raise OSError(err, os.strerror(err), str(path))
+        monkeypatch.setattr(gc.os, "stat", _stat)
+        with pytest.raises(CallerError) as exc_info:
+            gc.check_local("/locked/conf.d")
+        monkeypatch.undo()
+        assert exc_info.value.reason == reason
+        assert "/locked/conf.d" in str(exc_info.value)
+        if reason == "dir_not_accessible":
+            assert os.strerror(err) in str(exc_info.value)
+
+    def test_a_python_whose_is_dir_swallows_eacces(self, monkeypatch):
+        """3.14's `Path.is_dir` answers False on EACCES: still named."""
+        from _lib_exitcodes import CallerError
+
+        def _stat(path, *a, **kw):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        monkeypatch.setattr(Path, "is_dir", lambda self, *a, **kw: False)
+        monkeypatch.setattr(gc.os, "stat", _stat)
+        with pytest.raises(CallerError) as exc_info:
+            gc.check_local("/locked/conf.d")
+        monkeypatch.undo()
+        assert exc_info.value.reason == "dir_not_accessible"
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX permission bits")
+    def test_real_locked_parent(self, tmp_path):
+        """The real EACCES, through the CLI: a non-root caller under a parent
+        it cannot enter. Root re-runs as nobody via setpriv, from a fresh
+        system-temp dir nobody can reach (pytest's own tmp root is 0700)."""
+        prefix = []
+        base = tmp_path
+        if os.geteuid() == 0:
+            setpriv = shutil.which("setpriv")
+            if setpriv is None:
+                pytest.skip("root without setpriv: no uid that EACCES applies to")
+            prefix = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups"]
+            script = Path(gc.__file__).resolve()
+            if not (all(p.stat().st_mode & 0o001 for p in script.parents)
+                    and script.stat().st_mode & 0o004):
+                pytest.skip("checkout not readable by nobody: the CLI could not even start")
+            base = Path(tempfile.mkdtemp())
+            base.chmod(0o755)
+        locked = base / "locked"
+        (locked / "conf.d").mkdir(parents=True)
+        locked.chmod(0o700 if prefix else 0o000)
+        try:
+            proc = subprocess.run(
+                [*prefix, sys.executable, str(Path(gc.__file__)), "local",
+                 "--dir", str(locked / "conf.d"), "--json"],
+                capture_output=True, text=True, encoding="utf-8", timeout=120)
+        finally:
+            locked.chmod(0o755)
+            if base is not tmp_path:
+                shutil.rmtree(base)
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
+        assert "Traceback" not in proc.stderr, proc.stderr
+        doc = json.loads(proc.stdout)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_accessible"), doc
 
 
 # ── 2. check_repo() Tests ──────────────────────────────────────────────────
