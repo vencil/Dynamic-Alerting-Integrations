@@ -179,8 +179,8 @@ def test_control_each_way_of_disarming_the_gate_is_refused(mutate, needle):
 
 
 def test_the_two_fixture_trees_differ_only_in_the_inherited_defaults():
-    old = {p.name: p.read_bytes() for p in (FIXTURE / "old").iterdir()}
-    new = {p.name: p.read_bytes() for p in (FIXTURE / "new").iterdir()}
+    old = {p.name: p.read_bytes() for p in (FIXTURE / "old" / "conf.d").iterdir()}
+    new = {p.name: p.read_bytes() for p in (FIXTURE / "new" / "conf.d").iterdir()}
     assert old.keys() == new.keys() and "_defaults.yaml" in old, (old.keys(), new.keys())
     differing = sorted(n for n in old if old[n] != new[n])
     assert differing == ["_defaults.yaml"], differing

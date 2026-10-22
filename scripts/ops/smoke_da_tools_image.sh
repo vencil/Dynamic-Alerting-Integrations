@@ -14,7 +14,7 @@
 #   1. `da-tools --help`, then `<cmd> --help` for every COMMAND_MAP key read
 #      from this checkout's entrypoint.py (the source the image was built
 #      from). rc must be 0 and stdout non-empty.
-#   2. `config-diff` on tests/fixtures/da-tools-smoke/{old,new} — the trees
+#   2. `config-diff` on tests/fixtures/da-tools-smoke/{old,new}/conf.d — the trees
 #      differ only in `_defaults.yaml` — mounted read-only, as the image's own
 #      USER, which must not be the uid that owns the files. One run per row
 #      of config-diff's exit-code contract (ADR-037 decision 4), judged on the
@@ -47,7 +47,7 @@ ENTRYPOINT="$ROOT/components/da-tools/app/entrypoint.py"
 FIXTURE="$ROOT/tests/fixtures/da-tools-smoke"
 
 for side in old new; do
-    [ -d "$FIXTURE/$side" ] || { echo "::error::fixture tree $FIXTURE/$side is missing" >&2; exit 2; }
+    [ -d "$FIXTURE/$side/conf.d" ] || { echo "::error::fixture tree $FIXTURE/$side/conf.d is missing" >&2; exit 2; }
 done
 
 cmds_file="$(mktemp)"; out="$(mktemp)"; err="$(mktemp)"
@@ -120,7 +120,7 @@ stage() {
     for side in old new; do
         if [ "$side" = old ]; then mode="$1"; else mode="$2"; fi
         install -d -m 0755 "$work/$side"
-        for f in "$FIXTURE/$side"/*.yaml; do
+        for f in "$FIXTURE/$side/conf.d"/*.yaml; do
             install -m "$mode" "$f" "$work/$side/"
         done
     done
