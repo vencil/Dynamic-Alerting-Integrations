@@ -53,6 +53,7 @@ from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
+from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
     Finding,
@@ -2126,6 +2127,24 @@ def receiver_bool_type_errors(obj: object, *, block: str, where: str,
             out.append((f"{path}.{fld}",
                         f"{label}.{fld} must be a boolean (true / false, "
                         f"unquoted), got {value_type_text(value)}"))
+    return out
+
+
+def receiver_file_reference_errors(obj: object, *, block: str, where: str,
+                                   field_prefix: str = "") -> list[tuple[str, str]]:
+    """#3257: ``(field, message)`` of each file-reference key
+    (``_lib_validation.file_reference_paths``: ``*_file``, ``*_ref``,
+    ``files``, at any depth, ``http_config`` included) in a receiver of a
+    routing block — the receivers of ``routing_block_receivers``, whatever
+    their type. Each refuses the whole tree in every mode, like a boolean of
+    the wrong type: a receiver skipped with a WARN would still leave a tenant
+    able to write it, and the route it drops would change in silence."""
+    out: list[tuple[str, str]] = []
+    for recv, label, path in routing_block_receivers(
+            obj, block=block, where=where, field_prefix=field_prefix):
+        for fld in file_reference_paths(recv):
+            out.append((f"{path}.{fld}",
+                        f"{label} {file_reference_problem([fld])}"))
     return out
 
 

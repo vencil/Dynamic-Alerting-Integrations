@@ -674,6 +674,70 @@ def _http_config_problem(value: Any) -> Optional[str]:
     return None
 
 
+# #3257: the receiver keys that make Alertmanager load something other than
+# the value written — a file inside its own container (`*_file`, and the
+# `files` list of an `http_headers` entry), or a secret through a secret
+# manager Alertmanager does not have (`*_ref`: the config loads, then building
+# the receiver fails and the whole reload with it). A receiver written in the
+# tenant configs (tenant, defaults, overrides, enforced, profiles) must not
+# carry any of them, at any depth. A RULE, not a list of today's keys
+# (cf. Grafana Mimir's validateFileLoad, which refuses `_file` the same way):
+# a key Alertmanager adds upstream is covered without a change here. Pinned
+# by tests/shared/test_receiver_file_reference_rule.py (the schema has no
+# property the rule matches anywhere a receiver reaches) and by
+# tests/alertmanager-inhibit (the schema's http_config key sets are
+# Alertmanager's minus exactly these keys). A secret the platform itself
+# needs belongs in the base config (--base-config), which this rule never
+# reads.
+FILE_REFERENCE_KEY_SUFFIXES: tuple[str, ...] = ("_file", "_ref")
+FILE_REFERENCE_KEYS: frozenset[str] = frozenset({"files"})
+
+
+def is_file_reference_key(key: Any) -> bool:
+    """#3257: whether *key* is a receiver key the rule above refuses."""
+    return isinstance(key, str) and (
+        key.endswith(FILE_REFERENCE_KEY_SUFFIXES) or key in FILE_REFERENCE_KEYS)
+
+
+def file_reference_paths(value: Any, path: str = "") -> list[str]:
+    """#3257: the path of every key of *value* (a receiver, walked through
+    every nested mapping and list) that ``is_file_reference_key``: dotted,
+    list items as ``[i]`` — ``http_config.basic_auth.password_file``,
+    ``http_config.http_headers.X-Token.files``. The value under such a key
+    does not matter (null and ``""`` included): the key itself is refused,
+    as the schema refuses it (no such property, additionalProperties: false)."""
+    out: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            here = f"{path}.{key}" if path else str(key)
+            if is_file_reference_key(key):
+                out.append(here)
+            else:
+                out.extend(file_reference_paths(item, here))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            out.extend(file_reference_paths(item, f"{path}[{i}]"))
+    return out
+
+
+def file_reference_problem(paths: list[str]) -> Optional[str]:
+    """#3257: the message for the ``file_reference_paths`` of one receiver,
+    or ``None`` when there are none."""
+    if not paths:
+        return None
+    names = ", ".join(f"'{p}'" for p in paths)
+    return (f"sets {names}: a key ending in _file or _ref, or a 'files' list, "
+            "makes Alertmanager load a file or secret from inside its own "
+            "container, so a tenant-config receiver may not carry one; write the value "
+            "itself, or have the platform set it in the base config")
+
+
+def receiver_file_reference_problem(receiver: Any) -> Optional[str]:
+    """#3257: the one judgment of the rule above for a receiver — the
+    problem (callers prefix tenant / receiver context), or ``None``."""
+    return file_reference_problem(file_reference_paths(receiver))
+
+
 def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
     """Check the optional values Alertmanager cannot load (#2295).
 
@@ -688,12 +752,22 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
       built (``receiver_bool_problems``); this check stays for the callers
       that build a receiver directly;
     - the property referencing ``httpConfigOrNull`` (webhook ``http_config``)
-      follows ``_http_config_problem``.
+      follows ``_http_config_problem``;
+    - before both, #3257: no key at any depth may be a file reference
+      (``receiver_file_reference_problem``).
 
     Returns the first problem (callers prefix tenant / receiver context), or
     ``None``. Cases in
     components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
+    # #3257: first — a file-reference key is never written out, whatever
+    # else the receiver gets wrong. The route generator refuses the whole
+    # tree on it before any receiver is built
+    # (`_grar_validate.receiver_file_reference_errors`); this check stays for
+    # the callers that build a receiver directly.
+    problem = receiver_file_reference_problem(receiver)
+    if problem:
+        return problem
     fields = _receiver_field_schemas().get(rtype, {})
     for field in receiver_bool_fields(rtype):
         if field in receiver and not is_bool_or_unset(receiver[field]):

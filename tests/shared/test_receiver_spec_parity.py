@@ -376,8 +376,17 @@ def test_plain_scalar_table_covers_every_implicit_resolver():
 def test_generator_refuses_what_pyyaml_retypes(key):
     """The Python half of the contract: a candidate PyYAML does not read as a
     string is refused by the generator in each of the four string fields
-    (null is unset; text PyYAML cannot construct fails the whole file)."""
-    from _lib_validation import _http_config_problem
+    (null is unset; text PyYAML cannot construct fails the whole file).
+    #3257: bearer_token_file is refused as a key, whatever its value
+    (``receiver_file_reference_problem``), so for it the receiver-level
+    verdict is what is asserted — still refused, by the stronger rule."""
+    from _lib_validation import _http_config_problem, receiver_optional_problem
+
+    def refused(hc: dict):
+        if key == "bearer_token_file":
+            return receiver_optional_problem(
+                "webhook", {"type": "webhook", "url": "https://h.example/a", "http_config": hc})
+        return _http_config_problem(hc)
 
     checked = 0
     for row in _plain_scalar_table():
@@ -391,7 +400,7 @@ def test_generator_refuses_what_pyyaml_retypes(key):
         hc = {key: value}
         if key == "no_proxy":
             hc["proxy_url"] = "http://p.example:1"
-        assert _http_config_problem(hc), f"{key}: {row['text']!r} ({row['pyyaml']}) is not refused"
+        assert refused(hc), f"{key}: {row['text']!r} ({row['pyyaml']}) is not refused"
     assert checked > 50
 
 

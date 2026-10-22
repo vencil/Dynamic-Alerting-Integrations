@@ -61,6 +61,7 @@ from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     domain_policy_problems,
     receiver_bool_type_errors,
+    receiver_file_reference_errors,
     value_type_text,
     _validate_profile_refs,
     check_domain_policies,
@@ -507,9 +508,14 @@ def _record_receiver_bool_errors(result: dict, obj: object, *, block: str,
                                  file: str | None = None) -> None:
     """#2906: a receiver boolean (`send_resolved`, `require_tls`,
     `http_config.proxy_from_environment`) that is not a boolean or null —
-    `"yes"` / `"true"` used to be written out as the boolean they spell."""
-    for fld, message in receiver_bool_type_errors(
-            obj, block=block, where=where, field_prefix=field_prefix):
+    `"yes"` / `"true"` used to be written out as the boolean they spell.
+    #3257: and a file-reference key (`*_file` / `*_ref` / `files`) at any
+    depth of a receiver — Alertmanager would load it from its own container."""
+    for fld, message in [
+            *receiver_bool_type_errors(
+                obj, block=block, where=where, field_prefix=field_prefix),
+            *receiver_file_reference_errors(
+                obj, block=block, where=where, field_prefix=field_prefix)]:
         _field_type_error(result, "invalid_receiver_field",
                           f"{file}: {message}" if file else message,
                           file=file, tenant=tenant, field=fld)
