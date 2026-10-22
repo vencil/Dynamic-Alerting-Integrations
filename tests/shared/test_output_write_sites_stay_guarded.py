@@ -233,14 +233,13 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/lint/trufflehog_to_sarif.py",
     "scripts/tools/ops/assemble_config_dir.py",
     "scripts/tools/ops/baseline_discovery.py",
-    "scripts/tools/ops/blast_radius.py",
     "scripts/tools/ops/config_history.py",
     "scripts/tools/ops/da_assembler.py",
     "scripts/tools/ops/federation_keygen.py",
     "scripts/tools/ops/generate_rule_pack_split.py",
     "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 27
+_GUARDED_FILES_CEILING = 26
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an

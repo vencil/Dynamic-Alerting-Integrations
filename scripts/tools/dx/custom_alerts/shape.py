@@ -212,7 +212,7 @@ def _shape_hash(inst: dict, nhex: int = 16) -> str:
     shape identity. Fields are emitted in a FIXED order, each length-prefixed, with an
     explicit "" for a field not applicable to the recipe (no None → Go reproduces it
     trivially). 64-bit puts an adversarial suffix-forcing search at a 2^64 birthday bound;
-    the loader.py collision guard is the last-resort backstop for the residual. MUST be
+    the entries.py collision guard is the last-resort backstop for the residual. MUST be
     byte-identical to custom_alert.go::shapeHashSuffix (golden-vector pinned)."""
     recipe = inst["recipe"]
     is_forecast = recipe == "forecast"

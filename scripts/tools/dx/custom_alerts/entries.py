@@ -27,11 +27,16 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from . import shape as _shape
-from .loader import CustomAlertConfigError
 
 #: Statuses the compiler builds a rule for: served, and switched off (no row
 #: by design; a rule so that switching back on needs no recompile).
 COMPILED_STATUSES = ("served", "disabled")
+
+_NOTICE_TENANT_SAMPLE = 10   # max tenant names per lifecycle notice (CI-log readability)
+
+
+class CustomAlertConfigError(ValueError):
+    """A declaration tree is invalid (rejected at compile time)."""
 
 
 class CustomAlertParityError(CustomAlertConfigError):
@@ -226,13 +231,27 @@ def shapes_from_entries(entries: Iterable[Entry]) -> Tuple[List[dict], List[Entr
     return result, skipped
 
 
+def _summarize_tenants(tenants) -> str:
+    """`<count> tenant(s) (<=N names[, and M more])` for a lifecycle notice line.
+
+    A deprecated/eol SHARED recipe can be declared by hundreds of tenants (sharing
+    is the whole point of vectorization); joining them all makes a multi-kilobyte
+    single-line CI warning that some log collectors truncate mid-line. Lead with
+    the actionable COUNT, then a bounded sample of names. Full per-tenant
+    enumeration belongs in a metric/dashboard, not a log line.
+    """
+    names = sorted(tenants)
+    shown = ", ".join(names[:_NOTICE_TENANT_SAMPLE])
+    if len(names) > _NOTICE_TENANT_SAMPLE:
+        shown += f", and {len(names) - _NOTICE_TENANT_SAMPLE} more"
+    return f"{len(names)} tenant(s) ({shown})"
+
+
 def lifecycle_notices(entries: Iterable[Entry]) -> List[str]:
     """Human-readable notices for non-active recipes in use (ADR-024 #6): one
     per (status, recipe) a compiled entry declares, naming its tenants.
     Deprecated / eol recipes keep compiling (no silent alert loss); the
     write-side eol rejection lives in tenant-api."""
-    from .loader import _summarize_tenants
-
     by_status: Dict[Tuple[str, str], set] = defaultdict(set)
     for e in entries:
         recipe = e.spec.get("recipe")

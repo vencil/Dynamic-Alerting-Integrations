@@ -13,20 +13,20 @@ lang: zh
 
 ## 概述
 
-當平台規模從數十租戶成長到數百甚至上千租戶時，原本在小規模下足夠的操作方式會遇到效率瓶頸。本文件描述在 Dynamic Alerting 平台中，如何利用 v2.7.0 引入的工具鏈有效管理大規模租戶環境：
+當平台規模從數十租戶成長到數百甚至上千租戶時，原本在小規模下足夠的操作方式會遇到效率瓶頸。本文件描述在 Dynamic Alerting 平台中，如何利用既有工具鏈有效管理大規模租戶環境：
 
-- **Blast Radius 預估**：變更 `_defaults.yaml` 前了解影響範圍
+- **影響範圍預估**：變更 `_defaults.yaml` 前，用 `config-diff` 了解影響範圍
 - **批次查詢與篩選**：快速定位特定域名、區域或環境的租戶
 - **繼承鏈追蹤**：確認每個租戶的有效配置來源
-- **安全變更流程**：PR → Blast Radius CI Bot → Review → Merge
+- **安全變更流程**：PR → CI 貼出 config-diff 報告 → Review → Merge
 
 ## 前置條件
 
 - 已完成 `conf.d/` 階層式結構遷移（參考 [multi-domain-conf-layout](multi-domain-conf-layout.md)）或至少部分域名使用階層式結構（混合模式）
-- 已安裝工具：`scripts/tools/dx/describe_tenant.py`、`scripts/tools/ops/blast_radius.py`、`scripts/tools/dx/migrate_conf_d.py`；`describe_tenant.py` 輸出的每個值（有效設定、繼承鏈、`merged_hash`）都讀自 `da-guard effective`（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`，da-tools 映像已內建；repo 內 `make da-guard-build` 建到 `.build/da-guard`），沒有 da-guard 時結束碼 2、不輸出（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）；樹裡有 exporter 解析不了或讀不到的檔時 `merged_hash` 為 `null`，`blast_radius.py` 改為逐欄比對並在 stderr 說明
-- GitHub Actions 已啟用 `blast-radius.yml` workflow
+- 已安裝工具：`da-tools config-diff`（`scripts/tools/ops/config_diff.py`）、`scripts/tools/dx/describe_tenant.py`、`scripts/tools/dx/migrate_conf_d.py`。兩支都讀 `da-guard`（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`，da-tools 映像已內建；repo 內 `make da-guard-build` 建到 `.build/da-guard`）：`describe_tenant.py` 輸出的每個值（有效設定、繼承鏈、`merged_hash`）都讀自 `da-guard effective`，沒有 da-guard 時結束碼 2、不輸出（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）；`config-diff` 比較兩棵樹經 `da-guard served-values` 與路由產生器渲染後的結果（[ADR-037](../adr/037-config-diff-compares-rendered-output.md)）
+- PR 上的自動報告：`da-tools init` 產生的 CI 會在 PR 上跑 config-diff 並貼出報告（見 [GitOps CI 整合](gitops-ci-integration.md)）
 
-## 情景 1：變更域預設值前評估 Blast Radius
+## 情景 1：變更域預設值前評估影響範圍
 
 ### 問題
 
@@ -38,12 +38,10 @@ lang: zh
 
 ### 步驟
 
-#### A. 產出當前有效配置快照
+#### A. 保留修改前的 conf.d
 
 ```bash
-python scripts/tools/dx/describe_tenant.py --all \
-  --conf-d conf.d/ \
-  --output /tmp/before.json
+cp -r conf.d/ conf.d.before/
 ```
 
 #### B. 修改域預設值
@@ -59,53 +57,47 @@ defaults:
 > 所以一個 key 可以驅動多條告警。平台值是不加引號的數字（`map[string]float64`），
 > 租戶覆寫則是加引號的字串。
 
-#### C. 產出修改後有效配置快照
+#### C. 執行 config-diff
 
 ```bash
-python scripts/tools/dx/describe_tenant.py --all \
-  --conf-d conf.d/ \
-  --output /tmp/after.json
+da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/
 ```
 
-#### D. 執行 Blast Radius 分析
+結束碼 0 是沒有變更，1 是有變更（或有沒比對到的東西），2 是沒有結果（工具或 PR 側失敗）。
 
-```bash
-python3 scripts/tools/ops/blast_radius.py \
-  --base /tmp/before.json \
-  --pr /tmp/after.json \
-  --format markdown \
-  --changed-files "finance/_defaults.yaml"
-```
-
-輸出範例：
+輸出範例（三個 finance 租戶的樹，`tenant-fin-003` 自己寫了 `mysql_connections: "98"`；加 `--at 2026-10-22T00:00:00Z` 實際跑出）：
 
 ```
-### Blast Radius: this PR modifies `finance/_defaults.yaml`
+# Config Diff Report
 
-| Metric | Count |
-|--------|-------|
-| Total tenants scanned | 500 |
-| Affected tenants | 187 |
-| Tier A (threshold/routing) | 187 |
+Comparing: `conf.d.before` → `conf.d`
 
-> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
+Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows are read at this instant, on both sides)
 
-<details>
-<summary>Tier A (threshold/routing): 187 tenants</summary>
+## Platform Settings
 
-- `tenant-fin-001`
-- `tenant-fin-002`
-...
-</details>
+> Top-level keys of `_`-prefixed files whose value changed (comments and formatting are not changes), and `_` files no reader reads whose bytes changed. The renders compare what a setting does; a setting they do not show is listed here to review directly.
+
+**Rendered (see the sections below)** (1)
+
+- `finance/_defaults.yaml` `defaults` (modified)
+  - the renders that read it changed; which of those changes come from this key is not told apart
+
+## Threshold Changes
+
+| Metric | Before | After | Change | Affected Alerts | Tenants |
+|--------|--------|-------|--------|-----------------|---------|
+| mysql_connections | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
+
+---
+Summary: 2 tenant(s) changed, 2 metric change(s)
 ```
 
-⚠️ 187 > `SUMMARY_MODE_TENANT_THRESHOLD`（50），所以版面是**租戶清單 + artifact**，不是逐租戶展開。上一版這裡寫的是 `Substantive changes: 187 tenants` 加逐租戶欄位差異——那個版面**結構上不可能產生**。同一份文件下方的 PR Comment 範例是同一類，兩處一起修（[#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419)）。
+注意：已自行覆蓋 `mysql_connections` 的租戶（這裡的 `tenant-fin-003`）不在受影響清單中——覆寫的鍵是指標 key，不是告警名。路由或 receiver 有變時，報告另有對應區段。要機器可讀的結果用 `--format json`。
 
-注意：已自行覆蓋 `mysql_connections` 的租戶（例如設為 98）不會出現在影響清單中——覆寫的鍵是指標 key，不是告警名。
+### D. 確認後提交 PR
 
-### E. 確認後提交 PR
-
-Blast Radius CI Bot 會在 PR 上自動發布報告，reviewer 可在 merge 前確認影響範圍。
+CI 會在 PR 上貼出同一份 config-diff 報告，reviewer 可在 merge 前確認影響範圍。
 
 ## 情景 2：追蹤單一租戶的配置來源
 
@@ -186,62 +178,23 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-001 --diff tenant-fin-080 
 
 差異來自 region 層預設值（US-East vs EU-West）。
 
-## 情景 4：CI 自動化 — Blast Radius Bot 工作流程
+## 情景 4：CI 自動化 — PR 上的 config-diff 報告
 
 ### 觸發條件
 
-GitHub Actions workflow `blast-radius.yml` 在 PR 修改 `conf.d/**` 路徑時自動觸發。
+`da-tools init` 產生的 workflow（GitHub Actions／GitLab）在 PR 修改 `conf.d/` 時執行 config-diff，GitHub 那一份把報告貼成 PR comment，GitLab 那一份印在 job log 並以 artifact 上傳。步驟細節、結束碼的處理與 GitLab 的差異見 [GitOps CI 整合](gitops-ci-integration.md)。
 
 ### 流程
 
 ```
-PR 提交 → CI 觸發 blast-radius.yml
-  ├── 1. checkout base + PR
-  ├── 2. 各自執行 describe_tenant.py --all
-  ├── 3. blast_radius.py 比對 + 分類
-  ├── 4. 發布 PR comment（含 Tier A/B/C 摘要）
-  └── 5. 上傳 JSON report artifact（供審計用）
+PR 提交 → CI 執行 config-diff 那一步
+  ├── 1. 取出 base branch 的 conf.d/ 到 conf.d.base/
+  ├── 2. da-tools config-diff --old-dir conf.d.base/ --new-dir conf.d/
+  │      （兩側各以 da-guard served-values 與路由產生器渲染，再比較）
+  └── 3. 結束碼 0 或 1：貼出報告；2：該步驟失敗
 ```
 
-### PR Comment 範例
-
-```
-### Blast Radius: this PR modifies `finance/_defaults.yaml`
-
-| Metric | Count |
-|--------|-------|
-| Total tenants scanned | 500 |
-| Affected tenants | 347 |
-| Tier A (threshold/routing) | 347 |
-
-> :warning: Affected tenant count exceeds the inline-detail threshold (50). Showing tenant list only — per-field diffs are available in the workflow artifact.
-
-<details>
-<summary>Tier A (threshold/routing): 347 tenants</summary>
-
-- `tenant-fin-000`
-- `tenant-fin-001`
-...
-- _…and 147 more (see artifact)_
-
-</details>
-```
-
-⚠️ 這段是**實際跑 `blast_radius.py` 產出的**，不是手寫的。上一版寫的是 `Tier A | 12` ／ `Tier C (format-only) | 335`，那是 [#1419](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1419) 修掉的那個缺陷的輸出——繼承下來的閾值變更當時全被歸成「無影響」。而 347 個受影響租戶會跨過 inline-detail 門檻（50），所以連版面都不是逐租戶展開，而是租戶清單 + artifact。
-
-### Tier 分類邏輯
-
-| Tier | 定義 | PR Comment 行為 |
-|------|------|----------------|
-| **A** | 閾值數值變動、routing receiver 變動 | 計入 highlight 計數；**逐租戶模式**下與 Tier B 一樣是 `<details>` 內的一條 bullet，但**帶新舊值** |
-| **B** | 其他 alerting 欄位變動（severity、rules 等） | 同一個 `<details>` 內的 bullet；⚠️ 新增／移除時**只寫欄位名不寫值** |
-| **C** | 註解類欄位（`_comment` / `_comments` / `_description` / `_metadata`），以及**兩個 recipe 欄位一起**純重排 | 僅計數，不展開 |
-
-⚠️ **A 與 B 的版面差異比這張表以前寫的小**：舊版寫「A 高亮、展開細節／B 列表」，實際上 `_tenant_change_summary` 把兩者輸出成同一組**縮排兩格的** `-` bullet；真正的差別是**值**（B 的 add/remove 只印欄位名，所以 `_silent_mode: "all"` 這種開關看不到設成什麼）。**summary 模式下 Tier A 完全沒有 per-field 細節**，只有租戶清單。
-
-⚠️ Tier C 是**可證明無影響**的那一類，不是「沒被分類到」的桶子——未被辨識的欄位落在 Tier B（列出但不高亮），因為 Tier C 印出來的字是「無 threshold/routing/alerting 影響」，那是一個正面宣稱。`effective_config` 裡不以 `_` 開頭的鍵是**閾值**，屬 Tier A（#1419）——例外是平台文件本身的結構鍵（`profiles` / `tenants` / `optional_overrides` / `state_filters` / `max_metrics_per_tenant`），它們**在自己那一層**是結構、歸 Tier B；其底下的路徑仍是閾值。
-
-⚠️ 表上兩格值得單獨說明：**①`_metadata`（真管線目前到不了）** —— `deep_merge` 每一層都跳過 override 帶來的 `_metadata`（base 原本有的值留著），所以改租戶的 `_metadata.db_type` 不會產生 diff；今天真正走得到 Tier C 的載體是 `_comment` / `_comments` / `_description`。**②純重排（到得了）** —— `describe_tenant` 用同一份 `resolved` 清單依序寫出 `_custom_alerts` 與 `_custom_alerts_resolution`，所以重排一定同時重排兩者；降級規則兩個欄位都認，純重排會落在 Tier C。
+報告的內容與情景 1 的輸出範例相同：平台設定的變更、閾值、路由、receiver 等區段，每一筆變更帶它影響的租戶清單。比較規則見 [ADR-037](../adr/037-config-diff-compares-rendered-output.md)。
 
 ## 情景 5：大規模遷移後驗證
 
@@ -252,25 +205,19 @@ PR 提交 → CI 觸發 blast-radius.yml
 ### 步驟
 
 ```bash
-# 1. 遷移前快照
-python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/pre-migration.json
+# 1. 保留遷移前的 conf.d
+cp -r conf.d/ conf.d.pre-migration/
 
 # 2. 執行遷移
 python scripts/tools/dx/migrate_conf_d.py --apply \
   --conf-d conf.d/ \
   --infer-from metadata
 
-# 3. 遷移後快照
-python scripts/tools/dx/describe_tenant.py --all --conf-d conf.d/ --output /tmp/post-migration.json
-
-# 4. 比對：應該 0 個受影響租戶
-python3 scripts/tools/ops/blast_radius.py \
-  --base /tmp/pre-migration.json \
-  --pr /tmp/post-migration.json \
-  --format json
+# 3. 比對：應該沒有變更
+da-tools config-diff --old-dir conf.d.pre-migration/ --new-dir conf.d/
 ```
 
-預期結果：`"affected_tenants": 0`。只搬移或改名檔案（包括宣告 `_custom_alerts` 的檔）不算變更：`merged_hash` 不看檔名，自訂告警比對 recipe 內容、名稱與是否為租戶自己的，不比宣告所在的檔（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。如果有非零結果，表示遷移過程中有配置語義發生變化，需要逐一排查。
+預期結果：結束碼 0，報告為 `No changes detected.`。config-diff 比較的是渲染結果，不是檔案，所以只搬移或改名檔案（包括宣告 `_custom_alerts` 的檔）不算變更。如果有變更，表示遷移過程中有配置語義發生變化，需要逐一排查。
 
 ## 工具速查
 
@@ -279,7 +226,7 @@ python3 scripts/tools/ops/blast_radius.py \
 | `describe_tenant.py <id>` | 查看單一租戶有效配置 | `python scripts/tools/dx/describe_tenant.py tenant-a --show-sources` |
 | `describe_tenant.py --all` | 產出所有租戶有效配置 JSON | `python scripts/tools/dx/describe_tenant.py --all --output snap.json` |
 | `describe_tenant.py --diff` | 比較兩個租戶配置差異 | `python scripts/tools/dx/describe_tenant.py tid-1 --diff tid-2` |
-| `blast_radius.py` | 比對兩份快照，分類影響 | `python scripts/tools/ops/blast_radius.py --base a.json --pr b.json` |
+| `da-tools config-diff` | 比較兩棵 conf.d 的渲染結果，列出影響的租戶 | `da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/` |
 | `migrate_conf_d.py` | 平面→階層遷移 | `python scripts/tools/dx/migrate_conf_d.py --conf-d conf.d/ --dry-run` |
 | `da-tools validate-config` | 配置正確性驗證 | `da-tools validate-config --config-dir conf.d/` |
 

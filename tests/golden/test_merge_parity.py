@@ -69,12 +69,11 @@ describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
 (pkg/config ResolveEffective, behind tenant-api `/effective`).
 
 Known gaps (a mutation there leaves this oracle green):
-- `_custom_alerts` is in no fixture, and cannot be on the effective_config
-  leg: describe_tenant shows the compiler's ADR-024 UNION (inherited +
-  own recipes, plus `_custom_alerts_resolution`), the exporter's merge
-  replaces the list. The two hashes agree because describe_tenant reads
-  merged_hash from da-guard (#1549); blast_radius compares the recipe lists
-  on their own (tests/ops/test_blast_radius.py, #1549 rows).
+- `_custom_alerts` is in no fixture. describe_tenant's effective_config
+  shows da-guard effective's list as is (#3230), so both legs would carry
+  the exporter's one list; the per-element verdict beside it
+  (`custom_alerts`, da-guard served-values) is pinned in
+  tests/dx/test_describe_tenant.py, not here.
 - ADR-017's `_routing` null opt-out is enforced by the route generator
   (_grar_merge.py over `_routing_defaults` + the tenant file's `_routing`),
   which neither merge implementation runs; no golden row exercises

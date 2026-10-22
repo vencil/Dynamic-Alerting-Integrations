@@ -74,9 +74,10 @@ HIDDEN_MARKS = ("ghost", ".snap")
 
 # A body most readers understand: a threshold (gitops_check counts it,
 # deprecate_rule scans for it), `_metadata.db_type` (check_retire_drift,
-# migrate_conf_d) and a `_custom_alerts` instance (the loader emits a triple
-# only for a tenant that carries one — without it the loader's cell would
-# see nothing in EITHER arm and pass vacuously).
+# migrate_conf_d) and a `_custom_alerts` instance (a reader of that list
+# sees only a tenant that carries one — without it such a cell would see
+# nothing in EITHER arm and pass vacuously; the custom-alert loader's cell
+# was the first such, until #3230 retired it).
 _BODY = (
     "tenants:\n"
     "  {tid}:\n"
@@ -199,13 +200,6 @@ def _gitops_check(root):
     return [CONTROL] * min(n, 1) + ["ghost?"] * max(n - 1, 0)
 
 
-def _custom_alerts_loader(root):
-    from custom_alerts import loader
-    triples, errors = loader.collect_instances(root)
-    return ([t[0] for t in triples] + [t[2] for t in triples]
-            + [str(e) for e in errors])
-
-
 def _check_routing_profiles(root):
     import check_routing_profiles
     data = check_routing_profiles._collect_data(str(root))
@@ -302,8 +296,6 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "generate_tenant_metadata": ("dx/generate_tenant_metadata.py",
                                  _generate_tenant_metadata),
     "gitops_check": ("ops/gitops_check.py", _gitops_check),
-    "custom_alerts_loader": ("dx/custom_alerts/loader.py",
-                             _custom_alerts_loader),
     "check_routing_profiles": ("lint/check_routing_profiles.py",
                                _check_routing_profiles),
     "config_history": ("ops/config_history.py", _config_history),
@@ -475,7 +467,7 @@ def test_the_derivation_did_not_collapse() -> None:
     # `generate_tenant_metadata` was the third until #2115 0-B/B4, and
     # `describe_tenant` until #2906, and `gitops_check` until #2906 E1:
     # none lists a directory any more (the walk is da-guard's), so they left
-    # the set — their cells still run.
-    for must in ("dx/custom_alerts/loader.py", "dx/migrate_conf_d.py",
-                 "ops/offboard_tenant.py"):
+    # the set — their cells still run. `custom_alerts/loader.py` was a member
+    # until #3230 deleted it.
+    for must in ("dx/migrate_conf_d.py", "ops/offboard_tenant.py"):
         assert must in derived, (must, sorted(derived))

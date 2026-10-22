@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-10-17
+updated_at: 2026-10-22
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -18,7 +18,7 @@ updated_at: 2026-10-17
 
 ## 狀態
 
-✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。2026-10-14 決定 3 改由 parse-tree 逐鍵說出讀取位置，「完整涵蓋、渲染結果沒有差異只附註」自此啟用。2026-10-17 決定 3 的延後載體表更新：`_` 檔頂層的 `_custom_alerts` 已沒有讀取端。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。2026-10-14 決定 3 改由 parse-tree 逐鍵說出讀取位置，「完整涵蓋、渲染結果沒有差異只附註」自此啟用。2026-10-17 決定 3 的延後載體表更新：`_` 檔頂層的 `_custom_alerts` 已沒有讀取端。2026-10-22 平台的 blast-radius 報告退役，「這個變更影響誰」只由 config-diff 回答。
 
 ## 摘要
 
@@ -37,7 +37,7 @@ updated_at: 2026-10-17
 
 平台把預設路由的 `group_wait` 從 30s 改成 99s（`_defaults.yaml` 的 `_routing_defaults`）。實際影響：沒有自己 `_routing`、也沒有綁 routing profile 的租戶，告警的等待時間都變了。
 
-目前的 config-diff 對這個變更只能說「`_defaults.yaml` 有變，但沒有比對」，說不出影響了誰。平台 CI 另有一支 blast-radius 報告，它讀的是每個租戶合併後的設定。那份合併結果看得到 `defaults:` 裡的值，但依 [ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) 不含與 `defaults:` 同層的鍵（`_routing_defaults` 就是其中之一），所以這個變更它也看不到。
+目前的 config-diff 對這個變更只能說「`_defaults.yaml` 有變，但沒有比對」，說不出影響了誰。平台 CI 另有一支 blast-radius 報告（`blast_radius.py`，已退役），它讀的是每個租戶合併後的設定。那份合併結果看得到 `defaults:` 裡的值，但依 [ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) 不含與 `defaults:` 同層的鍵（`_routing_defaults` 就是其中之一），所以這個變更它也看不到。
 
 ### 兩支渲染程式各看得到什麼
 
@@ -201,7 +201,7 @@ db-b 自己把 `container_memory` 設成 90，所以不受影響。
 - **matcher 完全相同的兄弟節點**：只能依出現順序對應。順序改變時，可能報成一刪一增。
 - **放寬或刪除規則看不出來**：`domain_policies`、`_policies` 只列為提示，放寬或刪除一條規則不會被 CI 擋，報告也不會以結束碼標出；`severity: warning` 的 `_policies` 規則違反時，CI 也不會失敗。
 - **閾值 profile 裡寫的路由層鍵**（`_routing`、`_severity_dedup` 等）：兩個讀取端都不套用，報告把這種變更列為「沒有效果」（no_effect）；為什麼見 [`routing_in_unread_location`](../cli-reference.md#guard)。
-- **平台的 blast-radius 報告**（`blast_radius.py`）與本決策重疊，之後另行評估是否退役。
+- **平台的 blast-radius 報告**（`blast_radius.py`）與本決策重疊，已退役：「這個變更影響誰」只由 config-diff 回答。
 
 ## 考慮過但否決
 

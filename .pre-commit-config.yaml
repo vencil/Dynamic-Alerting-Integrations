@@ -1922,7 +1922,7 @@ repos:
   # privileged-only contexts (base.ref / github.base_ref / PR number) are NOT
   # flagged; those stay convention ("zero raw ${{ github.event.* }} in
   # run:", see the env: blocks in commitlint/secret-scan/self-review-pass2/
-  # planning-status-sync/blast-radius) + review.
+  # planning-status-sync/config-diff) + review.
   #
   # -shellcheck= / -pyflakes= pin those optional integrations OFF: the
   # binaries exist on ubuntu CI runners but not on Windows dev hosts, so an

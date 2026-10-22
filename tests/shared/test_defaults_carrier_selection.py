@@ -89,8 +89,9 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50, "disk_pct": 4}
     # Since #2906 describe_tenant has no carrier selection of its own: the
-    # warning is the custom-alerts loader's, from parse-tree's `not_read`
-    # verdict on the carrier it does not read (#3147).
+    # warning is parse-tree's `not_read` verdict on the carrier no plane
+    # reads (#3147; said by describe_tenant itself since #3230 removed the
+    # custom-alert loader that said it before).
     warn = "_defaults.yml is ignored on every plane (#1674)"
     assert warn in r.stderr, r.stderr
     # Once per file per run (blind review).
@@ -129,46 +130,6 @@ def test_describe_tenant_skips_a_dangling_carrier(tmp_path: Path) -> None:
     r = _describe(tmp_path, "t-dang")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["defaults_chain"] == ["_defaults.yml"]
-
-
-def _loader_tree(root: Path, *, dangling: str) -> None:
-    ok = "_defaults.yml" if dangling == "_defaults.yaml" else "_defaults.yaml"
-    (root / ok).write_text(
-        "_custom_alerts:\n  - recipe: from_readable\n    params:\n"
-        "      threshold: 50\n", encoding="utf-8")
-    _symlink_or_skip(root / dangling, root / "missing.yaml")
-    (root / "alpha.yaml").write_text("tenants:\n  alpha: {}\n", encoding="utf-8")
-
-
-def test_loader_selects_among_readable_carriers(tmp_path: Path) -> None:
-    """L2 of the blind review: `_defaults.yaml` dangling, `_defaults.yml`
-    readable → the loader compiled NOTHING (it selected the dangling name).
-    The exporter's chain is [_defaults.yml], so its alerts must be inherited,
-    and the dangling entry is still reported."""
-    from dx.custom_alerts import loader  # noqa: PLC0415
-    _loader_tree(tmp_path, dangling="_defaults.yaml")
-    triples, errors = loader.collect_instances(tmp_path)
-    assert {t[1].get("recipe") for t in triples} == {"from_readable"}
-    assert [e for e in errors if "_defaults.yaml" in str(e)], errors
-
-
-def test_loader_still_reports_an_unselected_dangling_carrier(tmp_path: Path) -> None:
-    """L1 of the blind review: a dangling `_defaults.yml` beside a readable
-    `_defaults.yaml` vanished from file_errors once only the selected
-    carrier was loaded."""
-    from dx.custom_alerts import loader  # noqa: PLC0415
-    _loader_tree(tmp_path, dangling="_defaults.yml")
-    triples, errors = loader.collect_instances(tmp_path)
-    assert {t[1].get("recipe") for t in triples} == {"from_readable"}
-    assert [e for e in errors if "_defaults.yml" in str(e)], errors
-
-
-def test_loader_warns_on_a_multi_carrier_directory(tmp_path: Path, capsys) -> None:
-    from dx.custom_alerts import loader  # noqa: PLC0415
-    (tmp_path / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
-    (tmp_path / "_defaults.yml").write_text("defaults: {}\n", encoding="utf-8")
-    loader.collect_instances(tmp_path)
-    assert "_defaults.yml is ignored on every plane" in capsys.readouterr().err
 
 
 def test_describe_tenant_single_carrier_is_silent(tmp_path: Path) -> None:

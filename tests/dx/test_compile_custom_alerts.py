@@ -47,9 +47,7 @@ sys.path.insert(0, _TOOLS)
 import compile_custom_alerts as cc  # noqa: E402
 from custom_alerts import shape as shp  # noqa: E402
 from custom_alerts import entries as ent  # noqa: E402
-from custom_alerts import loader as ld  # noqa: E402
-from custom_alerts.entries import CustomAlertParityError  # noqa: E402
-from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
+from custom_alerts.entries import CustomAlertConfigError, CustomAlertParityError  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 
@@ -1882,91 +1880,8 @@ def test_the_extension_a_tenant_typed_does_not_change_what_compiles(
     assert rules_a == rules_b
 
 
-def test_an_unreadable_yml_carrier_is_named_not_skipped(tmp_path):
-    """The OTHER call site in this module, which is a different promise (#1603).
-
-    `unusable_config_entries` answers "which config-NAMED things could this reader not
-    read", and the loader turns each into a `file_errors` record. Narrowed to `.yaml`
-    it did not consider `.yml` config-named at all, so an unreadable `.yml` carrier was
-    not quarantined and not reported — it was simply absent, which is the shape ADR-024
-    already promises against ("a broken file is quarantined, not disappeared").
-
-    ⛔ The unreadable thing here is a DIRECTORY wearing a config name. That case needs
-    no symlink privilege and no permission bits, so it reproduces on every host this
-    suite runs on — unlike the broken-symlink and chmod cases in `test_lib_confd.py`,
-    which are exactly the ones that fail on a stock Windows checkout.
-
-    ⛔ Measured before the widening: this mutant survives every other test in this
-    file, which is why it is here — reverting only the `unusable_config_entries` call
-    left the whole suite green.
-    """
-    (tmp_path / "db-c.yml").mkdir()                      # config-named, unreadable
-    (tmp_path / "db-b.yaml").write_text(_RECIPE_BODY, encoding="utf-8")
-
-    _triples, file_errors = ld.collect_instances(tmp_path)
-    named = [e for e in file_errors if "db-c.yml" in str(e)]
-    assert named, f"an unreadable .yml carrier must be named, got {file_errors}"
-
-    # Must-fire control: the same shape spelled `.yaml` was already named before this
-    # change, so if THIS stops being reported the assertion above is meaningless.
-    other = tmp_path / "other"
-    other.mkdir()
-    (other / "db-c.yaml").mkdir()
-    (other / "db-b.yaml").write_text(_RECIPE_BODY, encoding="utf-8")
-    _t2, fe2 = ld.collect_instances(other)
-    assert [e for e in fe2 if "db-c.yaml" in str(e)], "the .yaml control stopped firing"
-
-
-def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
-    """⛔ The CEILING. Everything above pins the floor — this reader must not be
-    NARROWER than the exporter's set — and blind review measured that the other
-    direction was unwatched: widening either call site to
-    `(".yaml", ".yml", ".json")` is a one-token edit that left all 151 tests green
-    while the compiler read `db-j.json` as a tenant it would then emit alerts for,
-    and named a `.json` directory as a config it could not read. Both are answers
-    this tool has no business giving: `config_hierarchy.go` does not serve either.
-    `has_yaml_extension`'s own docstring says out loud that this parameter gets
-    edited, so "nobody would do that" is not the guard.
-
-    ⛔ Behavioural, not a re-spelling of the call sites. Asserting that the two
-    calls pass no `suffixes=` would go green for a reader that then ignores the
-    result; this asks what the reader DOES with a carrier the exporter does not
-    serve, so it survives `CONFIG_SUFFIXES` itself changing for a reason.
-
-    ⛔ THE TENANT ID COMES FROM THE FILE'S CONTENT, NOT ITS NAME. The first
-    version of this test gave the `.json` file the same body as the control and
-    asserted no tenant named after the file appeared — an assertion that cannot
-    fire, because reading `db-j.json` yields a second `db-b`. Measured: the
-    site-2 mutant stayed green through it. So the extra carrier declares a
-    tenant only IT can introduce.
-
-    ⚠️ THE NAME OVERSTATES WHAT THIS PINS: only the EXTENSION axis. The
-    hidden-path axis (a `.`-prefixed file or directory, a ConfigMap mount's
-    `..<timestamp>/` payload — carriers `scanDirHierarchical` never serves) was
-    read by this compiler until #2086 and is pinned separately, in section N
-    below. Do not read a green run HERE as "the two planes agree" on that axis.
-    """
-    json_only = _RECIPE_BODY.replace("db-b:", "db-json-only:")
-    assert "db-json-only:" in json_only, "the fixture rewrite missed — test is vacuous"
-
-    (tmp_path / "db-b.yml").write_text(_RECIPE_BODY, encoding="utf-8")
-    (tmp_path / "db-j.json").write_text(json_only, encoding="utf-8")
-    (tmp_path / "bad.json").mkdir()          # unreadable, but still not ours to name
-
-    triples, file_errors = ld.collect_instances(tmp_path)
-
-    # ⛔ Control FIRST. Both negatives below are satisfied by a reader that read
-    # nothing at all, which is precisely the failure the floor tests exist for.
-    assert [t for t in triples if t[0] == "db-b"], \
-        "the .yml control produced no tenant — the two negatives below are vacuous"
-    assert not [t for t in triples if t[0] == "db-json-only"], \
-        f"a .json carrier introduced a tenant the exporter does not serve: {triples}"
-    assert not [e for e in file_errors if ".json" in str(e)], \
-        f"a .json entry was named as an unreadable config: {file_errors}"
-
-
 # --- N. what the exporter does not walk is not a recipe source (#2086) --------
-# `collect_instances` used to list conf.d with `rglob("*")`, which descends
+# The compiler's own conf.d walk used to list it with `rglob("*")`, which descends
 # `.`-prefixed directories and yields `.`-prefixed files — carriers the
 # exporter's walker (`pkg/config.ScanDirTree` / `confdname.IsScanned`) never
 # serves. Measured on main 42db84e4 with the trees below: the hidden tree
@@ -2025,9 +1940,6 @@ def test_a_hidden_path_is_not_a_recipe_source(tmp_path):
     assert [s["metric"] for s in shapes] == ["node_cpu"], shapes
     assert not_compiled == [], not_compiled
     assert cc.build_pack(hid)["_meta"]["shapes"] == 1
-    triples, file_errors = ld.collect_instances(hid)
-    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
-    assert file_errors == []
     assert _described_alert_names(hid, "acme") == ["a1"]
 
 
@@ -2060,61 +1972,7 @@ def test_a_configmap_mount_reads_each_tenant_once(tmp_path):
     assert [(e.tenant, e.spec["name"], e.status) for e in meta["entries"]] == [
         ("acme", "a1", "served")]
     assert meta["shapes"] == 1
-    triples, file_errors = ld.collect_instances(cm)
-    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
-    assert file_errors == []
     assert _described_alert_names(cm, "acme") == ["a1"]
-
-
-def test_a_broken_defaults_in_a_hidden_dir_is_not_a_file_error(tmp_path):
-    """`_dir_defaults_alerts` walks with `os.walk`; it must prune the same
-    `.`-prefixed directories, or a `_defaults.yaml` nothing else reads is
-    loaded — and a broken one reported — here."""
-    hid, vis = tmp_path / "hid", tmp_path / "vis"
-    for root, sub in ((hid, ".snap"), (vis, "snap")):
-        _write_tree(root, {"ok.yaml": _ca_tenant("acme", _ca("a1")),
-                           f"{sub}/_defaults.yaml": "_custom_alerts: [\n"})
-
-    # ⛔ Control: the same broken file in a visible directory IS reported.
-    _t, vis_errors = ld.collect_instances(vis)
-    assert [e["origin"] for e in vis_errors] == ["snap/_defaults.yaml"], vis_errors
-
-    triples, file_errors = ld.collect_instances(hid)
-    assert file_errors == [], file_errors
-    assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
-
-
-def test_an_unlistable_subdirectory_is_named_not_dropped(tmp_path, monkeypatch):
-    """A sub-directory the walk cannot enumerate is a whole subtree NOT read,
-    and it must land in `file_errors` (via `listing.unusable`, which carries
-    `list_config_tree`'s `unscannable`). `rglob` dropped such a subtree with
-    no record at all; this pins that #2086 now names it.
-
-    ⛔ Fault injected at `os.scandir` — the call `os.walk` (inside
-    `list_config_tree`) makes per directory — NOT by `chmod 000`: under uid 0
-    the mode bits are ignored, the directory stays readable, and the test
-    would pass without ever exercising the failure."""
-    _write_tree(tmp_path, {"ok.yaml": _ca_tenant("acme", _ca("a1")),
-                           "locked/inner.yaml": _ca_tenant("inner", _ca("i1"))})
-
-    # ⛔ Control: readable, the subtree is read and nothing is reported.
-    triples, file_errors = ld.collect_instances(tmp_path)
-    assert sorted(t for t, *_ in triples) == ["acme", "inner"]
-    assert file_errors == [], file_errors
-
-    locked = os.fspath(tmp_path / "locked")
-    real_scandir = os.scandir
-
-    def scandir(path="."):
-        if os.fspath(path) == locked:
-            raise PermissionError(13, "Permission denied", locked)
-        return real_scandir(path)
-
-    monkeypatch.setattr(os, "scandir", scandir)
-    triples, file_errors = ld.collect_instances(tmp_path)
-    assert [t for t, *_ in triples] == ["acme"]
-    assert [e["origin"] for e in file_errors] == ["locked"], file_errors
-    assert "NOT scanned" in file_errors[0]["reason"], file_errors
 
 
 # --- #2852: no tree root (the recipe-preview image layout) ------------------

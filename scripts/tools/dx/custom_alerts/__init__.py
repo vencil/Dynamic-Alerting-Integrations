@@ -10,5 +10,6 @@ Modules:
             + strict metric/label validation + safe selector assembly
   recipes — the 7 core recipe PromQL emitters
             (threshold/rate/ratio/absence/p99/forecast/slo_burn_rate)
-  loader  — conf.d tree walk + _custom_alerts inheritance + per-tenant cap count
+  entries — the exporter's reading of each tenant's _custom_alerts (da-guard
+            served-values) + the compiler's error types and lifecycle notices
 """

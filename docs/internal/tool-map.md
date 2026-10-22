@@ -23,7 +23,6 @@ lang: zh
 | `baseline_discovery.py` | Baseline Discovery 工具。 |
 | `batch_diagnose.py` | Post-cutover multi-tenant health report. |
 | `batchpr_dispatch.py` | `da-tools batch-pr` Python entrypoint. |
-| `blast_radius.py` | Blast Radius diff engine — compare base vs PR effective tenant configs. |
 | `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |

@@ -27,10 +27,11 @@ receivers are `config_dir`, `self.conf_d`, `RULE_PACKS_DIR`, `helm_dir`,
 wearing derivation's clothes, which is the exact anti-pattern
 `test_confd_enumeration_contract.py`'s own docstring warns about.
 Anchoring instead on the argparse declaration was tried and misses
-`gitops_check` and `custom_alerts/loader` outright (neither takes a CLI
-flag; both receive the directory as a function parameter) — and the
-second is v2.9.0's shipped tenant self-service path, i.e. the gate would
-have been silent on the highest-value target.
+`gitops_check` and the custom-alert compiler's tree walk (since retired,
+#3230) outright (neither takes a CLI flag; both receive the directory as
+a function parameter) — and the second was v2.9.0's shipped tenant
+self-service path, i.e. the gate would have been silent on the
+highest-value target.
 
 So this file asks the behavioural question instead: run the tool twice
 against two trees whose CONTENT is byte-identical and whose FILENAMES
@@ -718,7 +719,7 @@ KNOWN_INSENSITIVE: set[str] = {
 # to be genuinely DIVERGENT and needed fixing; `policy_opa_bridge`
 # measured clean. Blind review found the same emptiness hiding a real
 # `validate_config` divergence, and this file had already been caught
-# by it once with `custom_alerts/loader`.
+# by it once with the custom-alert compiler's (since retired) tree walk.
 #
 # ⚠️ Read this list as a list of QUESTIONS TO RE-ASK, not answers. An
 # entry means "this fixture cannot see the tool", never "the tool is
@@ -889,12 +890,11 @@ def test_tools_see_the_harness_kubectl_not_the_hosts(
     )
 
 
-# ── the two library-shaped readers ────────────────────────────────────
+# ── the library-shaped reader ─────────────────────────────────────────
 #
-# Neither takes a CLI flag, so neither is in ALL_TOOLS. They are called
-# directly instead — and they are not an afterthought:
-# `custom_alerts/loader` is v2.9.0's shipped tenant self-service path, so
-# it is the one reader here a tenant can aim a filename at.
+# `gitops_check` takes no CLI flag, so it is not in ALL_TOOLS; it is
+# called directly instead. (The custom-alert compiler's tree walk, the
+# other one, is gone with #3230: the compiler reads da-guard served-values.)
 
 sys.path.insert(0, str(TOOLS_DIR))
 
@@ -905,109 +905,6 @@ def _pair_of_trees(tmp_path: pathlib.Path) -> tuple[pathlib.Path,
     _write_tree(lower, upper=False, tenants=True)
     _write_tree(upper, upper=True, tenants=True)
     return lower, upper
-
-
-def _write_custom_alerts_tree(root: pathlib.Path, *, upper: bool) -> None:
-    """A conf.d the LOADER can see something in.
-
-    ⛔ The generic fixture above is not enough here and that was measured,
-    not assumed: `collect_instances` only emits a triple for a tenant
-    carrying `_custom_alerts`, so against a plain tenant tree it returns
-    `[]` for BOTH casings and the comparison passes while proving
-    nothing. Reverting the loader's fix left this test GREEN until this
-    fixture existed — the same "assertion with no detection power" shape
-    this whole file is about, committed by the file itself.
-    """
-    root.mkdir(parents=True, exist_ok=True)
-    defaults = "_DEFAULTS.YAML" if upper else "_defaults.yaml"
-    tenant = "alpha.YAML" if upper else "alpha.yaml"
-    # ⛔ The defaults carrier declares a PLATFORM-level `_custom_alerts`
-    # list on purpose. Without it, `_dir_defaults_alerts` contributes
-    # nothing, and reverting the loader's defaults matching stayed GREEN —
-    # measured. That silence was hiding a second unfixed site: the
-    # inheritance walk matched `"_defaults.yaml" in files` literally, so a
-    # `_DEFAULTS.YAML` declaring platform policy vanished for every tenant
-    # beneath it.
-    (root / defaults).write_text(
-        "defaults:\n"
-        "  pg_connections: 80\n"
-        "_custom_alerts:\n"
-        "  - recipe: platform_baseline\n"
-        "    params:\n"
-        "      threshold: 50\n",
-        encoding="utf-8")
-    # A SECOND carrier spelling in the same directory. ⛔ Without it, which
-    # carrier `_dir_defaults_alerts` reads is invisible. Blind review once
-    # measured a `critical` rule in `_defaults.yaml` discarded because
-    # `_defaults.yml` sat beside it (the last file overwrote); the fix then
-    # merged BOTH. Since #1674 every plane reads ONE carrier per directory —
-    # the `.yaml` spelling (`select_defaults_carrier`) — so this file's
-    # `_custom_alerts` must NOT contribute, and the `.yaml`'s must.
-    second = "_DEFAULTS.YML" if upper else "_defaults.yml"
-    (root / second).write_text(
-        "_custom_alerts:\n"
-        "  - recipe: platform_second_carrier\n"
-        "    params:\n"
-        "      threshold: 60\n",
-        encoding="utf-8")
-    (root / tenant).write_text(
-        "tenants:\n"
-        "  alpha:\n"
-        "    pg_connections: 90\n"
-        "    _custom_alerts:\n"
-        "      - recipe: pg_connections_high\n"
-        "        params:\n"
-        "          threshold: 95\n",
-        encoding="utf-8")
-
-
-def test_custom_alerts_loader_sees_both_casings(
-        tmp_path: pathlib.Path) -> None:
-    """v2.9.0's tenant self-service path (ADR-024 capability B)."""
-    from dx.custom_alerts import loader  # noqa: PLC0415
-
-    lower, upper = tmp_path / "lower", tmp_path / "upper"
-    _write_custom_alerts_tree(lower, upper=False)
-    _write_custom_alerts_tree(upper, upper=True)
-
-    # `collect_instances` carries the enumeration; its third tuple field
-    # is the origin filename, which is exactly what the casing changes.
-    inst_lower, err_lower = loader.collect_instances(lower)
-    inst_upper, err_upper = loader.collect_instances(upper)
-
-    # ⛔ Vacuity guard FIRST. An empty-vs-empty comparison is not a pass.
-    assert inst_lower, (
-        "the lower-case fixture produced no instances at all, so the "
-        "comparison below cannot detect anything — fix the fixture "
-        "before trusting this test"
-    )
-    # ⛔ Vacuity guard, part two: the SELECTED carrier contributed and the
-    # other spelling did not (#1674). Reading the `.yml` instead, or merging
-    # both, is red here — each is a way `_dir_defaults_alerts` can disagree
-    # with the chain the exporter and describe_tenant read.
-    recipes = {i[1].get("recipe") for i in inst_lower if isinstance(i[1], dict)}
-    assert "platform_baseline" in recipes and "platform_second_carrier" not in recipes, (
-        f"one carrier per directory: `_defaults.yaml` is read and "
-        f"`_defaults.yml` beside it is not (#1674); got {sorted(recipes)}"
-    )
-
-    def _summary(instances):
-        # tenant + instance body; the origin string legitimately carries
-        # the filename, so only its casing is folded away.
-        return sorted((t, str(i[2]).lower(), i[3], repr(i[1]))
-                      for t, i in ((x[0], x) for x in instances))
-
-    assert _summary(inst_lower) == _summary(inst_upper), (
-        f"custom_alerts/loader collects a different set of instances when "
-        f"the names are upper-cased. This is the shipped tenant "
-        f"self-service path — the filename is chosen by the tenant.\n"
-        f"  lower: {_summary(inst_lower)}\n"
-        f"  upper: {_summary(inst_upper)}"
-    )
-    assert err_lower == err_upper, (
-        f"loader reports different file errors across casings:\n"
-        f"  lower: {err_lower}\n  upper: {err_upper}"
-    )
 
 
 def _upper_only_tree(root: pathlib.Path, *, defaults_body: str,
@@ -1263,62 +1160,6 @@ def test_the_unusable_tree_is_not_vacuous(tmp_path: pathlib.Path) -> None:
     assert not (tree / "broken.yaml").is_file()
 
 
-def test_custom_alerts_loader_quarantines_unusable_entries(
-        tmp_path: pathlib.Path) -> None:
-    """The loader's contract is `file_errors`, not stderr (#1008 Part B).
-
-    ⭐ Measured regression this pins: `file_errors` went from four named
-    records to EMPTY when `is_file()` began filtering the entries out before
-    the `except` could see them — on the SHIPPED tenant self-service path.
-    """
-    from custom_alerts import loader  # noqa: PLC0415
-
-    tree = _unusable_tree(tmp_path / "conf.d")
-    _, file_errors = loader.collect_instances(tree)
-    origins = [rec["origin"] for rec in file_errors]
-    for name in _UNUSABLE_NAMES:
-        assert name in origins, (
-            f"{name} vanished from file_errors instead of being quarantined; "
-            f"got {origins}")
-    dupes = sorted({o for o in origins if origins.count(o) > 1})
-    assert not dupes, (
-        f"{dupes} recorded twice — the unusable-entry pass and the "
-        f"malformed-YAML quarantine overlap, the double-count that "
-        f"`unusable_config_paths` was narrowed twice to avoid")
-    # ⛔ The SHAPE, not just the origin. `compile_custom_alerts` prints these
-    # with `s['tenant']` / `s['name']` (its #1008 fail-soft quarantine line),
-    # so a record missing a key crashes the shared compile gate on any tree
-    # containing a bad file — the exact cross-tenant block fail-soft exists
-    # to prevent. Blind review deleted two keys and 191 tests stayed green
-    # because every existing consumer test reads only `origin`.
-    required = {"tenant", "origin", "name", "reason"}
-    for rec in file_errors:
-        assert required <= set(rec), (
-            f"file_errors record is missing {sorted(required - set(rec))}; "
-            f"`compile_custom_alerts` indexes all four. got {rec}")
-
-
-def test_defaults_carrier_is_reported_once_not_twice(
-        tmp_path: pathlib.Path) -> None:
-    """⛔ Disjointness, where it is easiest to get wrong.
-
-    A BROKEN SYMLINK named `_defaults.yaml` is in `os.walk`'s `files`, so
-    `_dir_defaults_alerts` already quarantines it. Without the
-    `is_defaults_name` skip in `collect_instances`, one path would produce
-    two `file_errors` records and the caveat line would say "2" for one file.
-    """
-    from custom_alerts import loader  # noqa: PLC0415
-
-    tree = _unusable_tree(tmp_path / "conf.d")
-    (tree / "_defaults.yaml").unlink()
-    symlink_or_skip(tree / "no-such-defaults.yaml", (tree / "_defaults.yaml"))
-    _, file_errors = loader.collect_instances(tree)
-    hits = [r for r in file_errors if r["origin"] == "_defaults.yaml"]
-    assert len(hits) == 1, (
-        f"expected exactly one record for the broken defaults carrier, "
-        f"got {len(hits)}: {hits}")
-
-
 @pytest.mark.parametrize("tool_rel", ["ops/operator_generate.py",
                                       "ops/migrate_to_operator.py"])
 def test_operator_readers_refuse_unusable_entries(
@@ -1482,30 +1323,6 @@ def test_describe_tenant_does_name_an_unusable_defaults_carrier(
         f"a real loss it must name.\n{text[:800]}")
 
 
-def test_loader_names_a_directory_shaped_defaults_carrier(
-        tmp_path: pathlib.Path) -> None:
-    """⛔ The one path where "every reader names what it drops" was false.
-
-    `_dir_defaults_alerts` walks with `os.walk`, which classifies by
-    `is_dir()`: a broken symlink lands in `files` and is quarantined there, a
-    DIRECTORY lands in `dirs` and is invisible to it. The skip in
-    `collect_instances` must therefore follow the same line, not skip every
-    defaults-named entry.
-    """
-    from custom_alerts import loader  # noqa: PLC0415
-
-    tree = _reserved_unusable_tree(tmp_path / "conf.d")
-    _, file_errors = loader.collect_instances(tree)
-    origins = [r["origin"] for r in file_errors]
-    assert "_defaults.yaml" in origins, (
-        f"a directory-shaped defaults carrier vanished from file_errors; "
-        f"got {origins}")
-    dupes = sorted({o for o in origins if origins.count(o) > 1})
-    assert not dupes, (
-        f"{dupes} recorded twice — the disjointness with "
-        f"`_dir_defaults_alerts` broke while closing the directory case")
-
-
 def test_the_reserved_unusable_tree_is_not_vacuous(
         tmp_path: pathlib.Path) -> None:
     """⛔ Guard on the guard: the directory-shaped carrier must really exist."""
@@ -1554,8 +1371,7 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
 
     Not only wasted I/O: if anything changes under `conf.d` between the
     passes, the warnings, the findings and the "N tenant file(s)" tail stop
-    agreeing. `collect_instances` lists once and says so; blind review found
-    these two doing otherwise.
+    agreeing. Blind review found these two doing otherwise.
     """
     tree = _unusable_tree(tmp_path / "conf.d")
     calls: list[str] = []
@@ -1583,10 +1399,6 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
     sys.path.insert(0, str(TOOLS_DIR / "dx"))
     import importlib  # noqa: PLC0415
     mod = importlib.import_module("describe_tenant")
-    # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
-    # counting it here would make this test about `custom_alerts.loader`
-    # rather than about this scanner. Disabled so the count is `_scan`'s.
-    monkeypatch.setattr(mod, "_ca_loader", None)
     mod.ConfDScanner(tree)
 
     whole_tree = [p for p in calls if p == "*"]

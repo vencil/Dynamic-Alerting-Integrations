@@ -457,8 +457,8 @@ def emit_shape(shape: dict) -> Tuple[List[dict], List[dict]]:
         # windows), then a DEDICATED per-severity multi-window core (the generic
         # single-window core cannot express the AND) and the standard alert +
         # metric_group/slo_burn labels. severities is always the fixed pair
-        # ["critical", "warning"] (fan-out in loader.py — severity is decided by
-        # the recipe, not a threshold tail).
+        # ["critical", "warning"] (severity is decided by the recipe, not a
+        # threshold tail).
         recording.extend(_slo_burn_records(rid, metric, sel, denom))
         for sev in severities:
             recording.append(_slo_core_record(rid, sev, int(shape["min_events"])))

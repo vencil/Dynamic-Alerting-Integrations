@@ -251,23 +251,6 @@ def _bench_side(tmp: Path, name: str) -> str:
     return str(p)
 
 
-def _effective_config_json(tmp: Path, name: str) -> str:
-    """One side of a blast-radius diff, produced by the tool that feeds it.
-
-    `blast_radius` reads `describe_tenant --all --output` JSON, so the input is
-    generated with `describe_tenant` itself against the in-repo seed conf.d
-    rather than hand-written: a hand-written stand-in would drift from the
-    producer's schema and the row would start proving nothing.
-    """
-    p = tmp / f"effective-{name}.json"
-    if not p.exists():
-        subprocess.run(
-            [sys.executable, str(TOOLS_DIR / "dx" / "describe_tenant.py"),
-             "--conf-d", str(_jsc.SEED_CONF_D), "--all", "-o", str(p)],
-            check=True, capture_output=True, timeout=TIMEOUT_S)
-    return str(p)
-
-
 def _shard_source_dir(tmp: Path) -> str:
     """One `--sources` shard for `assemble_config_dir`: a flat conf.d."""
     d = tmp / "shard-a"
@@ -757,13 +740,6 @@ ROWS: list[Row] = [
       reach="same shard; `--output` is a writable tmp dir so the run reaches "
             "the manifest write, which is the sink under test",
       out_name="assembly-manifest.json"),
-    R("ops/blast_radius.py", "-o/--output", "file",
-      lambda c, out: ["--base", _effective_config_json(c.tmp, "base"),
-                      "--pr", _effective_config_json(c.tmp, "pr"),
-                      "-o", str(out)],
-      reach="two `describe_tenant --all` dumps of the in-repo seed conf.d "
-            "(identical: an empty diff is still a written report, rc=0)",
-      out_name="blast-radius.json"),
     R("ops/baseline_discovery.py", "-o/--output-dir", "dir",
       lambda c, out: ["--tenant", "t1", "--prometheus", "http://127.0.0.1:1",
                       "--duration", "1", "--interval", "1", "-o", str(out)],

@@ -1,8 +1,9 @@
 """The sticky-comment report workflows: one run per PR, stamped comments.
 
-#1518. `blast-radius.yml`, `config-diff.yaml` and `guard-defaults-impact.yml`
-each edit ONE sticky PR comment in place (`config-diff-advisory.yml`, the
-ADR-037 advisory run, joined them later). Two facts make that dangerous:
+#1518. `config-diff.yaml` and `guard-defaults-impact.yml` each edit ONE
+sticky PR comment in place (`config-diff-advisory.yml`, the ADR-037 advisory
+run, joined them later; `blast-radius.yml` was one until #3230 retired it).
+Two facts make that dangerous:
 
   1. Without a concurrency group, two pushes in quick succession race, and the
      comment ends up describing whichever run finished LAST — possibly the
@@ -56,7 +57,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = (
-    ".github/workflows/blast-radius.yml",
     ".github/workflows/config-diff.yaml",
     ".github/workflows/config-diff-advisory.yml",
     ".github/workflows/guard-defaults-impact.yml",
@@ -357,7 +357,7 @@ def test_the_workflows_never_share_a_group() -> None:
             conc, _ctx(name, "pull_request", run_id=1001, pr=7))[0]
     assert len(set(groups.values())) == len(groups), (
         f"the same PR maps to a shared group across workflows: {groups}. "
-        f"blast-radius.yml and config-diff.yaml fire on the same paths, so "
+        f"config-diff.yaml and config-diff-advisory.yml fire on the same paths, so "
         f"a shared group lets one workflow cancel the other's report.")
 
 

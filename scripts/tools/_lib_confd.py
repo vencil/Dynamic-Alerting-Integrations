@@ -197,7 +197,7 @@ def has_yaml_extension(
     the set they already accept; the default is both.
 
     ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
-    `custom_alerts/loader`, `generate_tenant_metadata` and
+    `custom_alerts/loader` (since removed, #3230), `generate_tenant_metadata` and
     `check_path_metadata_consistency` and `operator_generate`, and the
     axis reaches call sites
     that list never had (it was drawn from one spelling of the narrowing —

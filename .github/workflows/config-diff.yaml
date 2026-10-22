@@ -1,6 +1,7 @@
 # config-diff.yaml — Config Diff report on flat conf.d PRs
-# (⚠️ NOT "Blast Radius Report" — blast-radius.yml owns that name; two
-#  identically-named checks on one PR is what this was renamed away from.)
+# (⚠️ NOT "Blast Radius Report" — blast-radius.yml owned that name until
+#  #3230 retired it; two identically-named checks on one PR is what this was
+#  renamed away from.)
 #
 # Automatically posts a config diff report as a PR comment when tenant
 # configs are modified. Part of the Data-Driven Threshold Review pipeline:
@@ -33,9 +34,9 @@ permissions:
   pull-requests: write
 
 # ⛔ One run per pull request (#1518). Why the PR number and not the ref, why
-# the workflow prefix (blast-radius.yml fires on the same paths), why other
-# events never cancel, and why a cancelled run cannot tear the comment: see
-# the block of the same shape in blast-radius.yml.
+# the workflow prefix (config-diff-advisory.yml fires on the same paths), why
+# other events never cancel, and why a cancelled run cannot tear the comment:
+# see the block of the same shape in guard-defaults-impact.yml.
 # `tests/ops/test_pr_report_workflow_concurrency.py` evaluates both
 # expressions per event.
 concurrency:
@@ -44,9 +45,10 @@ concurrency:
 
 jobs:
   config-diff:
-    # ⚠️ Deliberately NOT "Blast Radius Report": blast-radius.yml renders a
-    # check by that exact name, so the PR checks list had two identically
-    # named entries and a reviewer could not tell which one had failed.
+    # ⚠️ Deliberately NOT "Blast Radius Report": blast-radius.yml rendered a
+    # check by that exact name (until #3230 retired it), so the PR checks list
+    # had two identically named entries and a reviewer could not tell which
+    # one had failed.
     name: Config Diff (flat conf.d)
     runs-on: ubuntu-24.04
     steps:
@@ -293,8 +295,8 @@ jobs:
               echo "> ⚠️ **This report does not cover $blind.** \`config-diff\` reads"
               echo "> \`conf.d/\` flat and skips \`_\`-prefixed files, so inherited defaults and"
               echo "> nested tenants are outside the comparison — \"no changes\" below means"
-              echo "> \"no changes among the files it read\". The Blast Radius report on this"
-              echo "> PR is the one that resolves inheritance."
+              echo "> \"no changes among the files it read\". The Config Diff — rendered"
+              echo "> (advisory) report on this PR is the one that resolves inheritance."
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -331,15 +333,9 @@ jobs:
           # malformed YAML (or non-UTF-8 bytes) in conf.d makes it traceback with
           # rc=1, which "changes detected" also uses, stdout is 0 bytes,
           # has_changes stays unset, the comment step is skipped and the job is
-          # GREEN. `Generate PR effective configs` and `Generate base effective
-          # configs` in blast-radius.yml got exactly this check in the same
-          # commit ("exited 0 but wrote no ..."); this one did not.
-          # ⚠️ NOT a completeness claim over that file: a third producer there,
-          # `Compute blast radius`, still carries the old
-          # `if [ -s X ]; then …=true; fi` shape. It is left alone because
-          # `generate_pr_comment` returns a non-empty string on every branch, so
-          # it cannot fire — that is a property of today's callee, not of the
-          # step, so do not read it as swept.
+          # GREEN. The two effective-config producers of blast-radius.yml
+          # (retired, #3230) got exactly this check in the same commit
+          # ("exited 0 but wrote no ..."); this one did not.
           # rc=0 still writes a non-empty "No changes detected." report, so this
           # cannot false-red. ⚠️ No byte count here — see this file's header for
           # why: three independent measurements of the SAME rc=0 report came back
@@ -359,7 +355,7 @@ jobs:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('/tmp/diff-report.md', 'utf8');
-            // ⛔ Provenance — see the equivalent block in blast-radius.yml.
+            // ⛔ Provenance — see the equivalent block in guard-defaults-impact.yml.
             // These comments are sticky, so a failed run leaves the previous
             // verdict in place looking current.
             const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);

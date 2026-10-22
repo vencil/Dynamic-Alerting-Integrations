@@ -2,7 +2,7 @@
 
 The image does not ship ``scripts/tools``: its Dockerfile COPYs a hand-picked
 list into ``/opt/recipe-preview/core``. When ``compile_custom_alerts`` started
-importing ``_lib_io`` (and ``custom_alerts.loader`` ``_lib_confd`` …), nobody
+importing ``_lib_io`` (and the custom-alert loader, since removed, ``_lib_confd`` …), nobody
 added them to that list, and ``app.py`` failed at import — so the container
 never came up — from 2026-08-28 on. CI only runs ``docker build``, which a
 missing *Python* module does not fail.

@@ -12,11 +12,11 @@ the threshold rows and custom alerts share). Held to the same columns here:
 * ``check_threshold_unit_sanity._as_number`` — the number the unit-sanity
   lint judges (None for a value the exporter cannot read);
 * ``custom_alerts/shape.py`` ``parse_threshold`` — the custom-alert compiler;
-* ``_lib_validation.custom_alert_disabled`` and the two tools that read a
-  custom alert's opt-out through it (``config_diff._threshold_disabled``,
-  ``blast_radius._threshold_disabled``) — against the ``custom_alert_disabled``
-  column, which Go writes from ``resolveOneCustomAlert`` itself;
-* the severity sets those two compare against;
+* ``_lib_validation.custom_alert_disabled`` and the tool that reads a
+  custom alert's opt-out through it (``config_diff._threshold_disabled``)
+  — against the ``custom_alert_disabled`` column, which Go writes from
+  ``resolveOneCustomAlert`` itself;
+* the severity sets the backtest and the compiler compare against;
 * tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
   the suffix only (``ok`` is false only for a refused suffix), through ``re``
   and jsonschema.
@@ -39,7 +39,6 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools"))
 
 import _lib_validation  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
-import blast_radius  # noqa: E402
 import config_diff  # noqa: E402
 import check_threshold_unit_sanity as unit_sanity  # noqa: E402
 from custom_alerts import shape  # noqa: E402
@@ -144,7 +143,6 @@ def test_custom_alert_opt_out_is_read_as_the_exporter_reads_it(row):
     want = row["custom_alert_disabled"]
     assert _lib_validation.custom_alert_disabled(row["value"]) is want, row
     assert config_diff._threshold_disabled(row["value"]) is want, row
-    assert blast_radius._threshold_disabled({"threshold": row["value"]}) is want, row
 
 
 def test_matrix_carries_the_opt_out_samples():

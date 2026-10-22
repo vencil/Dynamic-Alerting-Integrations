@@ -525,7 +525,7 @@ def _code_span(val):
 
 def _threshold_disabled(val):
     """Is a custom-alert threshold a three-state opt-out? The exporter's
-    reading (custom_alert.go), shared with blast_radius: `custom_alert_disabled`
+    reading (custom_alert.go): `custom_alert_disabled`
     splits the optional `:severity` with the one grammar (#3071) and tests the
     value part against the disabled set — so `off`/`disabled`/`false` and
     ``disable:warning`` are caught, while ``disable:bogus`` (a parse error in
