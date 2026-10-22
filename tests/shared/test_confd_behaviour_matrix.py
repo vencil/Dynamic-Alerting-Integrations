@@ -26,10 +26,10 @@ THE INVARIANT, for every tool in `TOOLS` on every tree
   * Go exit 0 (`matrix: control` rows): the tool exits 0. Without this, a
     tool that fails on everything would pass every other cell.
   * Go exit 3 or 4 (`matrix: flagged`): every path Go names appears (its
-    path or base name) in the tool's stdout + stderr, AND the tool exits 1
-    or 2 (dev-rules §13 decides which; the matrix accepts either — and for
-    `da-tools guard`, whose §13 exception is da-guard's own codes, 3 or 4
-    too: `FAILING_EXITS`), AND the
+    path or base name) in the tool's stdout + stderr, AND the tool exits
+    non-zero (which code is dev-rules §13's business — 1 or 2, or a code
+    §13 sanctions such as `da-tools guard`'s 3 and 4 — not the matrix's),
+    AND the
     output holds no Python traceback, AND the tool was not stopped by the
     cell timeout (exit 124 / 137: a hang, e.g. a FIFO opened for reading).
   * `matrix: refused` (a file name that is not UTF-8): the tool exits 2.
@@ -310,14 +310,6 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/validate_all.py": "runs other tools on the repo's fixed paths; takes no conf.d operand",
 }
 
-#: The failing exits dev-rules §13 gives a tool, where they are not 1 / 2.
-#: Not an excuse from the invariant (the tool must still fail and name every
-#: path): §13's recognised exception for `da-tools guard` is da-guard's own
-#: 0/1/2/3/4, which it passes through — 3 and 4 are its failing exits.
-FAILING_EXITS: dict[str, tuple[int, ...]] = {
-    "guard_dispatch": (1, 2, 3, 4),
-}
-
 #: Table rows outside the population's root (`scripts/tools`).
 OUTSIDE_POPULATION = {"ops/configmap_assemble.py"}
 
@@ -589,11 +581,10 @@ def violations(c: Cell) -> list[str]:
     if kind == "control":
         return [] if c.rc == 0 else [f"exit {c.rc} on a tree Go serves (exit 0)\n{tail}"]
     bad = []
-    failing = FAILING_EXITS.get(c.tool, (1, 2))
     if c.rc in _HANG:
         bad.append(f"stopped after {CELL_TIMEOUT_S}s (exit {c.rc}): the tool hangs")
-    elif c.rc not in failing:
-        bad.append(f"exit {c.rc}, want one of {failing} (Go exits {c.oracle_rc} naming {c.named})")
+    elif c.rc == 0:
+        bad.append(f"exit 0, want non-zero (Go exits {c.oracle_rc} naming {c.named})")
     for path in c.named:
         if not _named(c.out, path, CATALOG["root"]):
             bad.append(f"{path} (named by Go) is not named")
@@ -628,7 +619,6 @@ def test_xfail_keys_are_cells_of_the_matrix():
     assert not stale, f"XFAIL entries for no cell: {stale}"
     for key, reason in XFAIL.items():
         assert reason.startswith(("X: ", "β2: ")), f"{key}: the reason names no follow-up: {reason!r}"
-    assert set(FAILING_EXITS) <= set(TOOLS), sorted(set(FAILING_EXITS) - set(TOOLS))
     for tool in ("operator_generate", "migrate_to_operator"):
         assert not [k for k in XFAIL if k[0] == tool], f"{tool} must pass every cell"
 

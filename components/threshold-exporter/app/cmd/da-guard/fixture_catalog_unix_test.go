@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // buildCatalogRow applies the catalogue's base (when the row asks) and the
@@ -142,14 +145,20 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv(fixtureCatalogEnv, copyPath)
+		// Nor pkg/config's source: hand it the records that source allows.
+		t.Setenv(walkRecordsEnv, strings.Join(possibleWalkRecords(t), ","))
 	}
 	if !testutil.RunUnprivileged(t, "TestFixtureCatalog_RecipesGiveTheirEntries") {
 		return
 	}
 	c := loadFixtureCatalog(t)
+	seen := map[string][]string{} // walk record → the rows whose walk wrote it
 	for _, row := range c.Rows {
 		t.Run(row.ID, func(t *testing.T) {
 			conf := buildCatalogRow(t, c, row, t.TempDir())
+			for _, rec := range walkRecordsOf(t, conf) {
+				seen[rec] = append(seen[rec], row.ID)
+			}
 			code, doc, msg := runPT(t, "", "--config-dir", conf)
 			if row.Expect.Refused {
 				if code != exitCallerErr {
@@ -199,4 +208,77 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 			}
 		})
 	}
+	// The walk's own closed sets, finer than (role, kind): two reasons can
+	// share a pair (a FIFO's special_file and a directory link's
+	// directory_symlink are both not_a_file/not_regular_file), and a tool can
+	// treat them differently (open the FIFO and hang). Every reason the walk
+	// can record needs a tree of its own.
+	var missing []string
+	possible := possibleWalkRecords
+	if env := os.Getenv(walkRecordsEnv); env != "" {
+		possible = func(*testing.T) []string { return strings.Split(env, ",") }
+	}
+	for _, rec := range possible(t) {
+		if len(seen[rec]) == 0 {
+			missing = append(missing, rec)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("the walk can record %v, and no catalogue row's walk does: add a row "+
+			"(the behaviour matrix runs every tool on every row)", missing)
+	}
+
+}
+
+// walkRecordsEnv carries possibleWalkRecords to the run as uid 65534, which
+// cannot read pkg/config's source in a 0700 home.
+const walkRecordsEnv = "VIBE_CONFD_WALK_RECORDS"
+
+// walkRecordsOf is every record the exporter's full walk (config.ScanDirTreeFiles)
+// writes for the tree at conf, as possibleWalkRecords spells them.
+func walkRecordsOf(t *testing.T, conf string) []string {
+	t.Helper()
+	scan, err := config.ScanDirTreeFiles(conf, log.New(io.Discard, "", 0))
+	if err != nil {
+		return nil // a tree the walk refuses whole records nothing
+	}
+	var out []string
+	for _, u := range scan.Unreadable {
+		out = append(out, unreadableRecord(u.Reason, u.Missing))
+	}
+	for _, nf := range scan.NotFiles {
+		out = append(out, "not_file/"+nf.Reason)
+	}
+	return out
+}
+
+func unreadableRecord(reason string, missing bool) string {
+	if reason == config.UnreadableStatError {
+		if missing {
+			return "unreadable/" + reason + "/missing"
+		}
+		return "unreadable/" + reason + "/not_missing"
+	}
+	return "unreadable/" + reason
+}
+
+// possibleWalkRecords is every record the walk can write, from pkg/config's
+// closed sets read from its source (the Unreadable* and NotFile* constants):
+// a stat failure splits on Missing (statErrorFile, the only writer of it),
+// which decides its role.
+func possibleWalkRecords(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, r := range constsWithPrefix(t, "Unreadable") {
+		if r == config.UnreadableStatError {
+			out = append(out, unreadableRecord(r, true), unreadableRecord(r, false))
+			continue
+		}
+		out = append(out, unreadableRecord(r, false))
+	}
+	for _, r := range constsWithPrefix(t, "NotFile") {
+		out = append(out, "not_file/"+r)
+	}
+	sort.Strings(out)
+	return out
 }
