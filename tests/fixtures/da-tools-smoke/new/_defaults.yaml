@@ -1,0 +1,4 @@
+# da-tools release smoke fixture (#3258) — differs from ../old/ only in container_memory.
+defaults:
+  container_cpu: 80
+  container_memory: 90

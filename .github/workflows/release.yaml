@@ -40,6 +40,9 @@
 #   Release）一件都不會出現。候選 tag 不刻意清理——理由見
 #   docs/internal/github-release-playbook.md §Release-gate 陷阱。
 #   順序由 tests/ops/test_release_scan_before_publish.py 解析本檔守住。
+#   da-tools 另在 Trivy 之後、簽章與 promote 之前，對同一個 digest 實際執行映像
+#   （scripts/ops/smoke_da_tools_image.sh，#3258）；不過就不發布。位置由
+#   tests/ops/test_release_da_tools_smoke.py 守住。
 
 name: Release
 
@@ -311,6 +314,22 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      # #3258: EXECUTE the candidate before it is signed or promoted. Trivy
+      # reads the image's packages; nothing else in this release runs it, and
+      # the PR-time build stubs tools/ and the Go binaries. So an entrypoint
+      # that no longer matches COMMAND_MAP, a missing dependency, or an image
+      # uid that cannot read mounted files would otherwise reach a customer's
+      # pipeline first. Same digest as Trivy and promotion (amd64 slice).
+      # tests/ops/test_release_da_tools_smoke.py pins this step's place.
+      - name: Smoke-test candidate image (#3258)
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
+          bash scripts/ops/smoke_da_tools_image.sh "${IMG}@${DIGEST}"
 
       # C-11 PR-3 Layer 1: sign the Docker image with cosign keyless.
       # We sign by digest (not tag) — tags can be moved, digests are

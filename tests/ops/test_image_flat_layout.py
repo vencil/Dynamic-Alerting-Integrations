@@ -22,7 +22,10 @@ imports these modules **in the repo layout**. Nothing anywhere imported them in
 the layout customers actually run. The CI docker builds could not see it either:
 the PR-time build stubs da-tools with an *empty* ``tools/`` directory (and its
 path filter does not even include ``scripts/tools/ops/**``), and the release
-build never executes the image it pushes — not even ``--help``.
+build did not execute the image it pushed — not even ``--help``. Since #3258 the
+da-tools release job runs ``scripts/ops/smoke_da_tools_image.sh`` on the
+candidate digest before promotion, but that only fires on a ``tools/v*`` tag:
+this module is still the signal a PR gets.
 
 ⛔ This test is deliberately BEHAVIOURAL rather than a second static rule.
 ``check_build_completeness.check_layout_depth_assumptions`` reads the source and
