@@ -52,6 +52,9 @@ var (
 	parityShared    = "tenants:\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")
 	parityBodyIn    = "tenants:\n" + paritySec(parityIn, "critical")
 	parityBodyInOut = parityBodyIn + paritySec(parityOut, "critical")
+	// parityThresholdDefaults declares mysql_connections at the root, so a
+	// body writing it is refused for its value only (#3140).
+	parityThresholdDefaults = map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 80\n"}
 )
 
 // parityCase is one request, sent to the three endpoints.
@@ -126,6 +129,20 @@ func parityCases() []parityCase {
 			want: http.StatusForbidden},
 		{name: "declared_elsewhere", file: parityOwn, extra: map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
 			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantDeclaredElsewhere), tree: true},
+		// #3140: a threshold written as a non-finite number is refused by
+		// the body-only pre-flight (the exporter's own predicate), so every
+		// endpoint answers it alike, in both modes. It used to be 200: the
+		// tree declares the key (parityThresholdDefaults), so the finite twin
+		// (accepted_finite_threshold) is 200 and only the number differs.
+		{name: "non_finite_threshold", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
+			body: "tenants:\n  " + parityIn + ":\n    mysql_connections: \"NaN\"\n", want: http.StatusBadRequest,
+			wantText: "is not a finite number"},
+		{name: "accepted_finite_threshold", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
+			body: "tenants:\n  " + parityIn + ":\n    mysql_connections: \"70\"\n", want: http.StatusOK},
+		{name: "non_finite_threshold_in_a_window", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
+			body: "tenants:\n  " + parityIn + ":\n    mysql_connections:\n      default: \"70\"\n" +
+				"      overrides:\n        - window: \"01:00-02:00\"\n          value: \"-Inf:critical\"\n",
+			want: http.StatusBadRequest, wantText: "is not a finite number"},
 		{name: "invalid_body", file: parityOwn, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", want: http.StatusBadRequest, tree: true},
 		{name: "accepted", file: parityOwn, groups: "in-team",

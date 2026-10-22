@@ -43,6 +43,7 @@ type servedOut struct {
 				Value    any    `json:"value"`
 				Severity string `json:"severity"`
 				Error    string `json:"error"`
+				Reason   string `json:"reason"`
 			} `json:"segments"`
 			Expires string `json:"expires"`
 			Expired *bool  `json:"expired"`
@@ -64,6 +65,7 @@ type servedOut struct {
 			Hint         string              `json:"hint"`
 			Disable      string              `json:"disable"`
 			ServedFamily []string            `json:"served_family"`
+			Refused      string              `json:"refused"`
 		} `json:"keys"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`
@@ -871,22 +873,100 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 	}
 }
 
+// #3140: a non-finite tenant value (`NaN`, `+Inf`, `-inf:critical`) is a
+// value the exporter cannot read — it serves the platform default, at
+// severity warning (the `:critical` goes with the refused value, #2377) —
+// and a non-finite root default serves no default row while a tenant's own
+// value is served (the key is read like an `optional_overrides:` one).
+// It used to pin all three served as written.
 func TestServedValues_NonFiniteThresholds(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n  container_cpu: 75\n",
+		"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n  container_cpu: 75\n  pg_connections: .nan\n" +
+			"  redis_keys: -.inf\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n" +
-			"    container_cpu: \"-inf:critical\"\n",
+			"    container_cpu: \"-inf:critical\"\n    pg_connections: \"60\"\n",
 	}, "")
 	mustOK(t, code, stderr)
 	tv := doc.Tenants["tenant-a"]
-	for key, want := range map[string]string{"mysql_connections": "NaN", "redis_memory": "+Inf", "container_cpu": "-Inf"} {
+	for key, want := range map[string]any{"mysql_connections": float64(80), "redis_memory": float64(70),
+		"container_cpu": float64(75), "pg_connections": float64(60)} {
 		if got := tv.Values[key]; got != want {
-			t.Errorf("values[%q] = %#v, want %q", key, got, want)
+			t.Errorf("values[%q] = %#v, want %v", key, got, want)
 		}
 	}
-	if tv.Severities["container_cpu"] != "critical" {
-		t.Errorf("severities = %v", tv.Severities)
+	if _, served := tv.Values["redis_keys"]; served {
+		t.Errorf("values[redis_keys] = %#v, want no row: the root writes it as -.inf", tv.Values["redis_keys"])
+	}
+	for _, key := range []string{"mysql_connections", "redis_memory", "container_cpu", "pg_connections"} {
+		if tv.Severities[key] != "warning" {
+			t.Errorf("severities[%q] = %q, want warning: %v", key, tv.Severities[key], tv.Severities)
+		}
+	}
+}
+
+// #3140: a threshold key the root `defaults:` writes as a non-finite number
+// gives a tenant that does not write it no row, and keys[] says why —
+// root_default_non_finite, refused non_finite — rather than leaving the key
+// out (a reader then took the lost row for a removal or a switch-off). A
+// dimensional one is not shown in unserved: JSON has no NaN, and served-values
+// failed to encode the document (exit 2). A tenant writing the key is read
+// as any key it writes.
+func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  redis_memory: .nan\n  mysql_connections_critical: .inf\n" +
+			"  mysql_threads_running: .nan\n" +
+			"  \"mysql_connections{db=\\\"a\\\"}\": -.inf\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
+		"tenant-b.yaml": "tenants:\n  tenant-b:\n    redis_memory: \"60\"\n    mysql_connections_critical: \"NaN\"\n" +
+			"    mysql_cpu: \"NaN\"\n", // the retired spelling of mysql_threads_running
+	}, "", "--schedules")
+	mustOK(t, code, stderr)
+	a, b := doc.Tenants["tenant-a"], doc.Tenants["tenant-b"]
+	for _, k := range []string{"redis_memory", "mysql_connections_critical", `mysql_connections{db="a"}`} {
+		if got, ok := a.Keys[k]; !ok || got.Exporter || got.Reason != keyReasonRootDefaultNonFinite || got.Refused != "non_finite" {
+			t.Errorf("tenant-a keys[%q] = %+v (present=%v), want root_default_non_finite, refused non_finite", k, got, ok)
+		}
+		if _, ok := a.Unserved[k]; ok {
+			t.Errorf("tenant-a unserved[%q] = %#v, want none", k, a.Unserved[k])
+		}
+		if _, ok := a.Values[k]; ok {
+			t.Errorf("tenant-a values[%q] = %#v, want no row", k, a.Values[k])
+		}
+	}
+	if got := b.Keys["redis_memory"]; got.Exporter != true || got.Reason != "" || got.Refused != "" {
+		t.Errorf("tenant-b keys[redis_memory] = %+v, want read: the tenant writes it", got)
+	}
+	// The tenant's own refused value: the resolver met it (value_non_finite).
+	if got := b.Keys["mysql_connections_critical"]; got.Reason != keyReasonValueNonFinite || got.Refused != "non_finite" {
+		t.Errorf("tenant-b keys[mysql_connections_critical] = %+v, want value_non_finite", got)
+	}
+	// Written under its retired spelling, the key is the tenant's: its entry
+	// is that spelling's, not a root_default_non_finite one.
+	if got, ok := b.Keys["mysql_threads_running"]; ok {
+		t.Errorf("tenant-b keys[mysql_threads_running] = %+v: the tenant writes it as mysql_cpu", got)
+	}
+	if got, ok := a.Keys["mysql_connections"]; ok {
+		t.Errorf("tenant-a keys[mysql_connections] = %+v: a finite root default it inherits is no key of its own", got)
+	}
+}
+
+// The root still writes a retired alias (mysql_cpu) as non-finite: the entry
+// is under the canonical key, the one values and every reader use (#3140).
+func TestServedValues_RootNonFiniteAliasIsNamedCanonically(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_cpu: .nan\n",
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
+	}, "")
+	mustOK(t, code, stderr)
+	tv := doc.Tenants["tenant-a"]
+	if got, ok := tv.Keys["mysql_threads_running"]; !ok || got.Reason != keyReasonRootDefaultNonFinite || got.Refused != "non_finite" {
+		t.Errorf("keys[mysql_threads_running] = %+v (present=%v), want root_default_non_finite under the canonical key", got, ok)
+	}
+	if got, ok := tv.Keys["mysql_cpu"]; ok {
+		t.Errorf("keys[mysql_cpu] = %+v: the retired spelling is no key a reader joins on", got)
 	}
 }
 

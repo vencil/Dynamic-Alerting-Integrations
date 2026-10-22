@@ -129,6 +129,11 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  cpu_critical: 90\n"},
 		finding: findingkind.FindingRootDefaultsCriticalKey,
 	},
+	// #3140: a non-finite root default is judged in the carrier itself.
+	"non-finite number in the root defaults": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: .nan\n"},
+		finding: findingkind.FindingRootDefaultNonFinite,
+	},
 	// #2031: one series two keys share fails the whole tree's scrape,
 	// whatever the scope; the tenant is outside it.
 	"/metrics not gatherable": {
@@ -180,6 +185,7 @@ var zeroTenantKindClass = map[string]string{
 	"root_defaults_unwrapped":    kindTreeLevel,
 	"defaults_toplevel_ignored":  kindTreeLevel,
 	"root_defaults_critical_key": kindTreeLevel,
+	"root_default_non_finite":    kindTreeLevel,
 	// The whole tree's /metrics.
 	"metrics_not_gatherable": kindTreeLevel,
 }

@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -77,7 +78,8 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_validation import i18n_text, split_threshold_severity  # noqa: E402
+from _lib_validation import (  # noqa: E402
+    NonFiniteThresholdError, i18n_text, parse_threshold_number, split_threshold_severity)
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
@@ -166,7 +168,15 @@ def _as_number(raw) -> float | None:
     an `expires:` block, `type: scheduled`, label lists) is not a threshold.
     The suffix is read by the exporter's grammar (`split_threshold_severity`,
     #3071): a value whose severity it refuses (`70:high`, `70:`) is not the
-    number written — the exporter serves the default — so it is None here.
+    number written — the exporter serves the default — so it is None here;
+    so is a number the exporter cannot read (`parse_threshold_number`).
+
+    ⛔ Except a non-finite one (`NaN`, `Inf`, `-Inf`, an overflow such as
+    `1e999` that reads as ±inf; a JSON `-Infinity`, a YAML `.inf`): the
+    exporter refuses it too (#3140), but this lint still returns the float,
+    so ±Inf stays OUT-OF-DOMAIN wherever it is written — a tenant string,
+    platform-data, a rule pack (owner ruling on #3140, D). A NaN compares
+    false with every bound, as before.
     """
     if isinstance(raw, bool):
         return None
@@ -176,9 +186,19 @@ def _as_number(raw) -> float | None:
         return None
     try:
         text, _severity = split_threshold_severity(raw)
-        return float(text)
     except ValueError:
         return None
+    try:
+        return parse_threshold_number(text)
+    except NonFiniteThresholdError:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        other = float(text)  # `1e999`: Go's ErrRange, Python's inf; `+nan`
+    except ValueError:
+        return None
+    return None if math.isfinite(other) else other
 
 
 # ------------------------------------------------------------------ scanning

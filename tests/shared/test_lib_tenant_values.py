@@ -182,10 +182,11 @@ def test_non_finite_thresholds_become_floats(tmp_path, da_guard):
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n"
                          "    container_cpu: \"-inf:critical\"\n",
     })
+    # #3140: a non-finite value is one the exporter refuses — it serves the
+    # platform default (used to pin NaN / ±Inf served as written).
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"].values
-    assert isinstance(got["mysql_connections"], float) and math.isnan(got["mysql_connections"])
-    assert got["redis_memory"] == float("inf")
-    assert got["container_cpu"] == float("-inf")
+    assert [(type(got[k]), got[k]) for k in ("mysql_connections", "redis_memory", "container_cpu")] == [
+        (float, 80.0), (float, 70.0), (float, 75.0)]
 
 
 def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
@@ -426,7 +427,7 @@ def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     warn, crit = ident("warning"), ident("critical")
     assert got.schedules["mysql_connections"] == tv.KeySchedule([
         S("00:00", "06:00", 1000.0, "warning", None, warn), S("06:00", "12:00", 70.0, "warning", None, warn),
-        S("12:00", "13:00", None, None), S("13:00", "15:00", 70.0, "warning", None, warn),
+        S("12:00", "13:00", None, None, reason="disabled"), S("13:00", "15:00", 70.0, "warning", None, warn),
         S("15:00", "16:00", 700.0, "critical", None, crit), S("16:00", "22:00", 70.0, "warning", None, warn),
         S("22:00", "24:00", 1000.0, "warning", None, warn),
     ], None, None)
@@ -761,13 +762,63 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": false, "reason": "no_row", "registered": "no"}}',
     '{"k": {"exporter": false, "reason": "disabled", "disable": "maybe"}}',
     '{"k": {"exporter": false, "reason": "disabled", "disable": "noop", "served_family": ["k_critical"]}}',
+    '{"k": {"exporter": true, "refused": "nan"}}',
+    '{"k": {"exporter": false, "reason": "value_non_finite"}}',
+    '{"k": {"exporter": false, "reason": "no_row", "refused": "non_finite"}}',
+    '{"k": {"exporter": false, "reason": "root_default_non_finite"}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
-        "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial"])
+        "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial",
+        "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason",
+        "root-reason-without-refusal"])
 def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
     doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"keys": {}', f'"keys": {keys}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
     assert "keys" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_guard):
+    """#3140: `refused` / `value_non_finite` per key and a no-row segment's
+    `reason` are read as da-guard writes them (the facts PR-side readers use
+    instead of re-reading the value)."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_process_count\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connections: \"NaN\"\n    oracle_process_count: \"-Inf\"\n"
+                  "    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n"
+                  "        - window: \"01:00-02:00\"\n          value: \"Inf\"\n"
+                  "        - window: \"03:00-04:00\"\n          value: disable\n",
+    })
+    got = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, schedules=True)["t"]
+    assert got.keys["mysql_connections"] == tv.ServedKey(True, refused="non_finite")
+    assert got.keys["oracle_process_count"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
+    reasons = [(s.start, s.reason) for s in got.schedules["mysql_connections_critical"].segments
+               if s.value is None]
+    assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]
+
+
+def test_real_da_guard_names_a_root_non_finite_default_the_tenant_does_not_write(tmp_path, da_guard):
+    """#3140: a root `defaults:` value that is non-finite leaves a tenant
+    that does not write the key no row; `keys[]` names it
+    (`root_default_non_finite`, refused `non_finite`) instead of leaving the
+    key out, so a reader does not take the lost row for a removal."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: .nan\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connections: \"70\"\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["t"]
+    assert got.keys["redis_memory"] == tv.ServedKey(False, "root_default_non_finite", refused="non_finite")
+    assert "redis_memory" not in got.values and "redis_memory" not in (got.unserved or {})
+
+
+@pytest.mark.parametrize("reason", ["typo", None])
+def test_a_segment_reason_not_of_its_shape_is_refused(reason):
+    seg = {"from": "00:00", "to": "24:00", "value": 5, "severity": "warning", "series": [
+        {"name": "user_threshold", "labels": {}, "metric_key": "k", "legacy_twin": False,
+         "dimensions": {}, "dimensions_regex": {}}], "reason": "disabled"}
+    if reason is not None:
+        seg = {"from": "00:00", "to": "24:00", "value": None, "reason": reason}
+    with pytest.raises(ValueError):
+        tv._key_schedule({"segments": [seg]})
 
 
 def test_routing_not_a_mapping_is_refused(tmp_path):
@@ -826,10 +877,31 @@ def test_custom_alerts_are_read_entry_by_entry(tmp_path, da_guard):
     assert tree.tenants["tb"].custom_alerts == () and tree.tenants["tb"].custom_alerts_error
 
 
+def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da_guard):
+    """#3209：exporter 因 `threshold:` 拒收的條目帶 Go 寫的 `refused`（non_finite／unparsed）；
+    因其他欄位拒收的、停用的、送出的都沒有。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "a.yaml": "tenants:\n  ta:\n    _custom_alerts:\n"
+                  "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
+                  "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: abc}\n"
+                  "      - {recipe: threshold, name: c, metric: m3, op: '>', window: 5x, threshold: '80'}\n"
+                  "      - {recipe: threshold, name: d, metric: m4, op: '>', window: 5m, threshold: disable}\n"
+                  "      - {recipe: threshold, name: e, metric: m5, op: '>', window: 5m, threshold: '80'}\n",
+    })
+    ta = tv.load_served_tree(conf_d, binary=da_guard).tenants["ta"].custom_alerts
+    assert [(e.status, e.refused) for e in ta] == [
+        ("rejected", "non_finite"), ("rejected", "unparsed"), ("rejected", None),
+        ("disabled", None), ("served", None)]
+
+
 @pytest.mark.parametrize("entry, why", [
     ('{"index": 0, "spec": {}, "status": "bogus"}', "status"),
     ('{"index": 0, "spec": {}, "status": "served"}', "recipe_id"),
-], ids=["unknown-status", "served-without-recipe-id"])
+    ('{"index": 0, "spec": {}, "status": "rejected", "refused": "bogus"}', "refused"),
+    ('{"index": 0, "spec": {}, "status": "disabled", "recipe_id": "r", "severities": ["warning"], '
+     '"refused": "unparsed"}', "refused"),
+], ids=["unknown-status", "served-without-recipe-id", "unknown-refused", "refused-not-rejected"])
 def test_a_custom_alert_entry_not_of_its_shape_is_refused(tmp_path, entry, why):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
                                    '"unreadable": [], "aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '

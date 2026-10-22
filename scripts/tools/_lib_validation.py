@@ -158,11 +158,32 @@ def format_duration(seconds: int) -> str:
 
 
 def is_disabled(value: Any) -> bool:
-    """Check if *value* represents a disabled state.
+    """Whether *value* switches a threshold row (or another `disable`-able
+    key) off, exactly as the exporter's thresholdRowDisabled reads it
+    (#3141): the value read by `split_threshold_severity`'s grammar is a
+    disabled word (``disable``, ``disabled``, ``off``, ``false``, lower-cased
+    as Go does) and no ``:<severity>`` is written. ``disable:critical`` is
+    not a disable: the exporter reads it as a value it cannot read, and
+    names ``disable`` / ``<key>_critical: disable`` as the fix. Trimmed with
+    Go's white space (``GO_SPACE``), so ``disable\x1c`` is not a disable
+    either. Pinned against Go by tests/shared/threshold_value_matrix.json's
+    `row_disabled` column. A custom alert's opt-out is
+    `custom_alert_disabled`.
+    """
+    if not value or not isinstance(value, str):
+        return False
+    word, suffixed = _disable_word(value)
+    return word and not suffixed
 
-    Recognises: ``disable``, ``disabled``, ``off``, ``false``
-    (case-insensitive, stripped). Consistent with the Go
-    ``IsDisabledValue()`` implementation.
+
+def routing_disabled(value: Any) -> bool:
+    """Whether a tenant's `_routing` string switches its routing off, as the
+    route generator — routing's one judge (ADR-036 section 9) — reads it:
+    Python ``str.strip()`` (U+001C–U+001F are white space here) then
+    ``lower()``, so ``"\x1coff"`` disables and ``"d\u0130sable"`` does not.
+    Pinned by tests/shared/routing_policy_parity_matrix.json. ⛔ Not a
+    threshold row's reading, which is the exporter's (`is_disabled`, #3141);
+    kept apart so that ruling does not move a routing verdict.
     """
     if not value or not isinstance(value, str):
         return False
@@ -202,21 +223,70 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     return value.strip(GO_SPACE), severity
 
 
+def _go_lower(text: str) -> str:
+    """`text` lower-cased per character as Go's strings.ToLower does (U+0130
+    → `i`, which Python's full mapping turns into two characters)."""
+    return "".join("i" if c == "\u0130" else c.lower() for c in text)
+
+
+def _disable_word(raw: Any) -> tuple[bool, bool]:
+    """`(word, suffixed)`: whether the value half of `split_threshold_severity`
+    is a disabled word, and whether a `:<severity>` is written beside it —
+    the one reading `is_disabled` (a threshold row: no suffix) and
+    `custom_alert_disabled` (any suffix) share. A suffix the grammar refuses
+    (`disable:bogus`) is no disabled word."""
+    try:
+        value, _severity = split_threshold_severity(raw)
+    except ValueError:
+        return False, False
+    if _go_lower(value) not in _DISABLED_VALUES:
+        return False, False
+    return True, ":" in str(raw).strip(GO_SPACE)
+
+
+class NonFiniteThresholdError(ValueError):
+    """A threshold number that reads as NaN or ±Inf (#3140): the exporter
+    refuses it, as it refuses `abc`."""
+
+
+def parse_threshold_number(text: Any) -> float:
+    """The number a threshold value's (trimmed) number half is, as the
+    exporter's parseThresholdNumber reads it (#3140), or ValueError.
+
+    Read with Python's `float` only where it agrees with Go's
+    `strconv.ParseFloat` (measured, go1.x): refused because Go refuses too —
+    a non-ASCII digit, a signed NaN (`+nan`), an overflow (`1e400`, `1e999`:
+    Go returns ErrRange, `float` answers inf); refused although Go accepts —
+    conservative — an underscore (`1_000`), a hex float (`0x1p4`). And the
+    number must be finite: `NaN`, `Inf`, `+Inf`, `-Inf` and `infinity`,
+    which ParseFloat accepts, raise NonFiniteThresholdError — an alert
+    compared against one never fires or always fires. Pinned to Go by
+    tests/shared/threshold_value_matrix.json's `float_ok` column."""
+    number = str(text)
+    if not number.isascii() or "_" in number:
+        raise ValueError(text)
+    value = float(number)
+    spelled = number.lower().lstrip("+-")
+    if math.isnan(value) and number.lower() != "nan":
+        raise ValueError(text)  # `+nan` / `-nan`: Go refuses a signed NaN
+    if math.isinf(value) and spelled not in ("inf", "infinity"):
+        raise ValueError(text)  # overflow: Go's ErrRange
+    if not math.isfinite(value):
+        raise NonFiniteThresholdError(text)
+    return value
+
+
 def custom_alert_disabled(threshold: Any) -> bool:
     """Whether a custom alert with this `threshold` is the three-state
     opt-out, exactly as resolveOneCustomAlert decides it (#3071): the value
     half of `split_threshold_severity` is a disabled word (`disable`,
-    `disable:critical`, `OFF`). A suffix the grammar refuses
-    (`disable:bogus`, `disable:`) is a parse error in Go, not an opt-out.
-    Lower-cased the way Go's strings.ToLower does (per character; U+0130 →
-    `i`, which Python's full mapping turns into two characters). Pinned
+    `disable:critical`, `OFF`; `_disable_word`, shared with `is_disabled`).
+    A suffix the grammar refuses (`disable:bogus`, `disable:`) is a parse
+    error in Go, not an opt-out. Unlike a threshold row (#3141), a custom
+    alert's `disable:<severity>` IS its opt-out (#3042). Pinned
     against Go by tests/shared/threshold_value_matrix.json's
     `custom_alert_disabled` column."""
-    try:
-        value, _severity = split_threshold_severity(threshold)
-    except ValueError:
-        return False
-    return "".join("i" if c == "\u0130" else c.lower() for c in value) in _DISABLED_VALUES
+    return _disable_word(threshold)[0]
 
 
 def is_valid_tenant_id(tenant: Any) -> bool:
@@ -674,6 +744,100 @@ def _http_config_problem(value: Any) -> Optional[str]:
     return None
 
 
+# #3257: the receiver keys that make Alertmanager load something other than
+# the value written — a file inside its own container (`*_file`, and the
+# `files` list of an `http_headers` entry), or a secret through a secret
+# manager Alertmanager does not have (`*_ref`: the config loads, then building
+# the receiver fails and the whole reload with it). A receiver written in the
+# tenant configs (tenant, defaults, overrides, enforced, profiles) must not
+# carry any of them, at any depth. A RULE, not a list of today's keys
+# (cf. Grafana Mimir's validateFileLoad, which refuses `_file` the same way):
+# a key Alertmanager adds upstream is covered without a change here. Pinned
+# by tests/shared/test_receiver_file_reference_rule.py (the schema has no
+# property the rule matches anywhere a receiver reaches) and by
+# tests/alertmanager-inhibit (the schema's http_config key sets are
+# Alertmanager's minus exactly these keys). A secret the platform itself
+# needs belongs in the base config (--base-config), which this rule never
+# reads.
+# ONE pattern, the very string tenant-config.schema.json carries as
+# definitions.fileReferenceKey.pattern (the test asserts the two are equal),
+# applied with `re.search` as jsonschema applies it — so both sides give one
+# verdict on every key, `"password_file\n"` included (Python's `$` also
+# matches before a final newline: refused on both sides, not on one).
+FILE_REFERENCE_KEY_PATTERN = r"(?:_file|_ref)$|^files$"
+_FILE_REFERENCE_KEY_RE = re.compile(FILE_REFERENCE_KEY_PATTERN)
+
+
+def is_file_reference_key(key: Any) -> bool:
+    """#3257: whether *key* is a receiver key the rule above refuses."""
+    return isinstance(key, str) and _FILE_REFERENCE_KEY_RE.search(key) is not None
+
+
+def file_reference_paths(value: Any, path: str = "", *,
+                         label_maps: frozenset[str] = frozenset(),
+                         receiver_keys: frozenset[str] = frozenset()) -> list[str]:
+    """#3257: the path of every key of *value* (a receiver, walked through
+    every nested mapping and list) that ``is_file_reference_key``: dotted,
+    list items as ``[i]`` — ``http_config.basic_auth.password_file``,
+    ``http_config.http_headers.X-Token.files``. The value under such a key
+    does not matter (null and ``""`` included): the key itself is refused,
+    as the schema refuses it (no such property, additionalProperties: false).
+    A key that is not a string (a ``!!binary`` key reads as bytes, and
+    Alertmanager decodes ``!!binary password_file`` to ``password_file``) is
+    refused too: the rule cannot read its name, so it does not lean on the
+    file reader having refused the tag first.
+
+    *label_maps*: keys whose mapping's own keys are NAMES, not config keys
+    (a routing block's ``match``: label names, which may legitimately end in
+    ``_file``). Under such a key the names are not judged at all (Alertmanager
+    reads no file through a matcher; a name of the wrong type is the routing
+    checks' to name); every value is still walked with the full rule.
+    *receiver_keys*: keys whose value is a receiver (a routing block's
+    ``receiver``). Below one, *label_maps* no longer applies: inside a
+    receiver ``match`` is an ordinary key (a header named ``match`` under
+    ``http_headers``), so ``http_headers.match.files`` is refused."""
+    out: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = key if isinstance(key, str) else repr(key)
+            here = f"{path}.{name}" if path else name
+            if not isinstance(key, str) or is_file_reference_key(key):
+                out.append(here)
+            elif key in label_maps and isinstance(item, dict):
+                for label, v in item.items():
+                    lname = label if isinstance(label, str) else repr(label)
+                    out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps,
+                                                    receiver_keys=receiver_keys))
+            elif key in receiver_keys:
+                out.extend(file_reference_paths(item, here))
+            else:
+                out.extend(file_reference_paths(item, here, label_maps=label_maps,
+                                                receiver_keys=receiver_keys))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            out.extend(file_reference_paths(item, f"{path}[{i}]", label_maps=label_maps,
+                                            receiver_keys=receiver_keys))
+    return out
+
+
+def file_reference_problem(paths: list[str]) -> Optional[str]:
+    """#3257: the message for the ``file_reference_paths`` of one receiver,
+    or ``None`` when there are none."""
+    if not paths:
+        return None
+    names = ", ".join(f"'{p}'" for p in paths)
+    return (f"sets {names}: a key ending in _file or _ref, or a 'files' list, "
+            "makes Alertmanager load a file or secret from inside its own "
+            "container, so a tenant-config receiver may not carry one; write the value "
+            "itself, or have the platform set it in the base config")
+
+
+def receiver_file_reference_problem(receiver: Any) -> Optional[str]:
+    """#3257: the one judgment of the rule above for a receiver — the
+    problem (callers prefix tenant / receiver context), or ``None``."""
+    return file_reference_problem(file_reference_paths(receiver))
+
+
 def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
     """Check the optional values Alertmanager cannot load (#2295).
 
@@ -688,12 +852,22 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
       built (``receiver_bool_problems``); this check stays for the callers
       that build a receiver directly;
     - the property referencing ``httpConfigOrNull`` (webhook ``http_config``)
-      follows ``_http_config_problem``.
+      follows ``_http_config_problem``;
+    - before both, #3257: no key at any depth may be a file reference
+      (``receiver_file_reference_problem``).
 
     Returns the first problem (callers prefix tenant / receiver context), or
     ``None``. Cases in
     components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
+    # #3257: first — a file-reference key is never written out, whatever
+    # else the receiver gets wrong. The route generator refuses the whole
+    # tree on it before any receiver is built
+    # (`_grar_validate.routing_block_file_reference_errors`); this check stays for
+    # the callers that build a receiver directly.
+    problem = receiver_file_reference_problem(receiver)
+    if problem:
+        return problem
     fields = _receiver_field_schemas().get(rtype, {})
     for field in receiver_bool_fields(rtype):
         if field in receiver and not is_bool_or_unset(receiver[field]):

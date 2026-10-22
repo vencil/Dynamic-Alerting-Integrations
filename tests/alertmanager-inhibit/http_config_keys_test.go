@@ -14,7 +14,9 @@ package aminhibit
 //
 // This module links Alertmanager itself, so it reads every key set from the
 // struct Alertmanager decodes into, instead of from a copy of it, and an
-// Alertmanager upgrade that adds or drops a key turns this red.
+// Alertmanager upgrade that adds or drops a key turns this red. #3257: minus
+// the keys definitions.fileReferenceKey matches (*_file, *_ref, files), which
+// Alertmanager reads but a conf.d receiver may not carry.
 
 import (
 	"encoding/json"
@@ -145,6 +147,8 @@ func TestSchemaHTTPConfigKeys_MatchAlertmanager(t *testing.T) {
 		"httpHeader":        headers.Field(0).Type.Elem(),
 	}
 	defs := schemaDefinitions(t)
+	fileRef := fileReferenceKeyRule(t)
+	withheld := 0
 	for name, typ := range structs {
 		def, ok := defs[name]
 		if !ok {
@@ -154,11 +158,56 @@ func TestSchemaHTTPConfigKeys_MatchAlertmanager(t *testing.T) {
 		if string(def.AdditionalProperties) != "false" {
 			t.Errorf("definitions.%s.additionalProperties is %s, not false; Alertmanager refuses an unknown key", name, def.AdditionalProperties)
 		}
-		am := yamlKeys(t, typ)
+		// #3257: the schema lists Alertmanager's keys minus the file-reference
+		// ones (definitions.fileReferenceKey): Alertmanager reads them, but a
+		// conf.d receiver may not carry them. A key Alertmanager adds that
+		// matches the rule stays out without a schema change; any other new
+		// key still turns this red.
+		var am []string
+		for _, k := range yamlKeys(t, typ) {
+			if fileRef.MatchString(k) {
+				withheld++
+				continue
+			}
+			am = append(am, k)
+		}
 		if listed := sortedKeys(def.Properties); len(am) == 0 || !slices.Equal(listed, am) {
-			t.Errorf("definitions.%s.properties = %v\nAlertmanager's %s keys = %v", name, listed, deref(typ), am)
+			t.Errorf("definitions.%s.properties = %v\nAlertmanager's %s keys, file-reference keys withheld = %v", name, listed, deref(typ), am)
 		}
 	}
+	// Alertmanager has file-reference keys in these structs (bearer_token_file,
+	// the *_file / *_ref forms, http_headers files). None at all would mean
+	// the rule went blind, and the subtraction above would prove nothing.
+	if withheld == 0 {
+		t.Errorf("no Alertmanager http_config key matched definitions.fileReferenceKey %q: the rule matches nothing", fileRef)
+	}
+}
+
+// fileReferenceKeyRule compiles definitions.fileReferenceKey.pattern (#3257),
+// the schema's statement of the rule the route generator applies
+// (_lib_validation.is_file_reference_key; the Python side pins the two
+// together in tests/shared/test_receiver_file_reference_rule.py).
+func fileReferenceKeyRule(t *testing.T) *regexp.Regexp {
+	t.Helper()
+	data, err := os.ReadFile(repoRoot("docs/schemas/tenant-config.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schema struct {
+		Definitions struct {
+			FileReferenceKey struct {
+				Pattern string `json:"pattern"`
+			} `json:"fileReferenceKey"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	re, err := regexp.Compile(schema.Definitions.FileReferenceKey.Pattern)
+	if err != nil || re.String() == "" {
+		t.Fatalf("definitions.fileReferenceKey.pattern: %v %q", err, re)
+	}
+	return re
 }
 
 // TestSchemaHTTPHeaders_ReservedMatchAlertmanager: the header names
