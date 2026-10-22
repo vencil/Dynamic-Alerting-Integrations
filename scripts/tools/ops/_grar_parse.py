@@ -61,6 +61,7 @@ from _grar_validate import (  # noqa: E402
     domain_policy_problems,
     receiver_bool_type_errors,
     routing_block_file_reference_errors,
+    routing_block_group_by_type_errors,
     value_type_text,
     _validate_profile_refs,
     check_domain_policies,
@@ -519,6 +520,13 @@ def _record_receiver_bool_errors(result: dict, obj: object, *, block: str,
             *routing_block_file_reference_errors(
                 obj, block=block, where=where, field_prefix=field_prefix)]:
         _field_type_error(result, "invalid_receiver_field",
+                          f"{file}: {message}" if file else message,
+                          file=file, tenant=tenant, field=fld)
+    # #3284: a `group_by` that is not a list (`group_by: alertname`) used to
+    # render no group_by at all, rc 0 in every mode; refused the same way.
+    for fld, message in routing_block_group_by_type_errors(
+            obj, block=block, where=where, field_prefix=field_prefix):
+        _field_type_error(result, "routing_group_by_invalid",
                           f"{file}: {message}" if file else message,
                           file=file, tenant=tenant, field=fld)
 
