@@ -1032,6 +1032,33 @@ def test_a_reset_after_an_arm_alone_takes_no_collection(monkeypatch):
     assert not getattr(fake, "_da_stdout_tap", False)
 
 
+def test_a_reset_keeps_the_import_time_tap_of_the_original_stdout():
+    """Unarmed, a failure of the original stdout is recorded (the import-time
+    tap); a reset that undoes the taps must leave that one as import made it."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    ec.reset_exit_state()
+    assert getattr(sys.__stdout__, "_da_stdout_tap", False)
+    assert "flush" in vars(sys.__stdout__)
+
+
+def test_a_reset_gives_back_a_streams_own_instance_flush(monkeypatch):
+    """A stream whose flush was already an instance attribute gets that one
+    back, not the class's."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    import io
+    fake = io.StringIO()
+    own = fake.flush
+    fake.flush = own
+    monkeypatch.setattr(sys, "stdout", fake)
+    ec.arm_crash_envelope()
+    assert vars(fake)["flush"] is not own
+    ec.reset_exit_state()
+    assert vars(fake)["flush"] is own
+    assert "write" not in vars(fake)
+
+
 def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
     """Not a hard-coded 2: a process whose import set other codes (#3092's
     crash code under tests) gets those back."""

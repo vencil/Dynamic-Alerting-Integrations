@@ -649,6 +649,8 @@ def reset_exit_state() -> None:
         _stdout_failures.clear()
         _stdout_closed_reported = False
         _lost_envelope = None
+    # The import-time tap of the original stdout (below), undone with the rest.
+    _tap_stdout(sys.__stdout__)
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
