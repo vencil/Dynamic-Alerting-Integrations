@@ -764,6 +764,6 @@ class TestPerTenantTimeout:
         calls = sum(1 for n in ast.walk(tree) if isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Name) and n.func.id == "query_prometheus")
         per_query = inspect.signature(
-            diagnose.query_prometheus_instant).parameters["timeout"].default
+            diagnose.prometheus_instant).parameters["timeout"].default
         assert calls >= 4
         assert bd.DEFAULT_TIMEOUT_S > calls * per_query, (calls, per_query)

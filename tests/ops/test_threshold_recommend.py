@@ -252,61 +252,27 @@ class TestBuildQuery:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# query_prometheus_range (mocked)
+# query_prometheus_range_ts (mocked HTTP)
 # ═══════════════════════════════════════════════════════════════════════
 class TestPrometheusQuery:
-    """Prometheus 查詢測試（mock HTTP）。
+    """#3133: the query goes through ``_lib_prometheus.prometheus_instant``
+    (a range-vector PromQL at one instant: a matrix); an answer that is not
+    one raises ``QueryError`` — never ``([], err)``."""
 
-    W1: fetch core 收斂進 _lib_prometheus.query_prometheus_instant，
-    HTTP seam 改 patch ``_lib_prometheus.http_get_json``。
-    """
-
-    @patch("_lib_prometheus.http_get_json")
-    def test_range_vector_extraction(self, mock_get):
-        """Range vector 應提取所有 values。"""
-        mock_get.return_value = ({
-            "status": "success",
-            "data": {
-                "resultType": "matrix",
-                "result": [{
-                    "metric": {"key": "cpu"},
-                    "values": [[1000, "80.5"], [1001, "82.3"], [1002, "79.1"]],
-                }],
-            },
-        }, None)
-        values, err = tr.query_prometheus_range("http://prom:9090", "test_query")
-        assert err is None
-        assert len(values) == 3
-        assert values[0] == 80.5
-
-    @patch("_lib_prometheus.http_get_json")
-    def test_instant_vector_extraction(self, mock_get):
-        """Instant vector 應提取 value。"""
-        mock_get.return_value = ({
-            "status": "success",
-            "data": {
-                "resultType": "vector",
-                "result": [{"metric": {"key": "cpu"}, "value": [1000, "85.0"]}],
-            },
-        }, None)
-        values, err = tr.query_prometheus_range("http://prom:9090", "test_query")
-        assert err is None
-        assert 85.0 in values
-
-    @patch("_lib_prometheus.http_get_json")
-    def test_query_error(self, mock_get):
-        """查詢錯誤應返回 error。"""
-        mock_get.return_value = (None, "connection refused")
-        values, err = tr.query_prometheus_range("http://prom:9090", "test_query")
-        assert err is not None
-        assert values == []
-
-    @patch("_lib_prometheus.http_get_json")
-    def test_prometheus_error_status(self, mock_get):
-        """Prometheus error 狀態應返回 error。"""
-        mock_get.return_value = ({"status": "error", "error": "bad query"}, None)
-        values, err = tr.query_prometheus_range("http://prom:9090", "test_query")
-        assert err == "bad query"
+    @pytest.mark.parametrize("answer,message", [
+        ((None, "connection refused"), "connection refused"),
+        (({"status": "error", "error": "bad query"}, None), "bad query"),
+        (({"status": "success", "data": {"resultType": "vector", "result": []}}, None),
+         "resultType is 'vector', expected 'matrix'"),
+        (({"status": "success", "data": {"resultType": "matrix",
+                                          "result": [{"values": [[1, "x"]]}]}}, None),
+         "result[0].values[0]"),
+    ], ids=["transport", "error-status", "vector", "unreadable-sample"])
+    def test_not_answered_raises(self, answer, message):
+        with patch("_lib_prometheus.http_get_json", return_value=answer):
+            with pytest.raises(tr.QueryError) as exc:
+                tr.query_prometheus_range_ts("http://prom:9090", "q")
+        assert message in str(exc.value)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -390,7 +356,7 @@ class TestAnalyzeTenant:
     @patch("threshold_recommend.query_prometheus_range_ts")
     def test_with_prometheus_data(self, mock_query):
         """mapped key 有 Prometheus 資料時應產生推薦。"""
-        mock_query.return_value = (_ts_pairs([80, 82, 78, 85, 90, 88, 79, 83, 81, 86] * 50), None)
+        mock_query.return_value = _ts_pairs([80, 82, 78, 85, 90, 88, 79, 83, 81, 86] * 50)
         config = {"connections": 70}
         report = tr.analyze_tenant(
             "db-a", config, prometheus_url="http://prom:9090", observed_map=self.HERMETIC_MAP
@@ -404,7 +370,7 @@ class TestAnalyzeTenant:
     @patch("threshold_recommend.query_prometheus_range_ts")
     def test_no_data_points(self, mock_query):
         """mapped key 無資料點應返回 LOW confidence。"""
-        mock_query.return_value = ([], None)
+        mock_query.return_value = []
         config = {"connections": 80}
         report = tr.analyze_tenant(
             "db-a", config, prometheus_url="http://prom:9090", observed_map=self.HERMETIC_MAP
@@ -674,6 +640,40 @@ class TestCLI:
                 tr.main()
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
+    @pytest.mark.parametrize("fmt", [[], ["--json"], ["--export-patch"]],
+                             ids=["text", "json", "export-patch"])
+    def test_a_key_not_measured_makes_the_run_partial_rc2(self, tmp_path, capsys, fmt):
+        """#3133：某個 key 的查詢沒得到回答 → 那個 key 沒有量測、報告是 partial、
+        rc 2（以前寫成 reason "query error"、rc 0）；量到的 key 照樣報。"""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", keys={"mysql_connections": 80, "mysql_threads_running": 50}))
+        rows = _range_result([40 + (i % 7) for i in range(1000)])
+
+        failing = tr.build_metric_query(  # the one key whose query is not answered
+            tr.observed_map_lib.load_observed_map()["mysql_connections"]["observed_series"],
+            "db-a", "7d")
+
+        def answer(url, promql, **kw):
+            if promql == failing:
+                raise tr.QueryError("connection refused")
+            return rows
+        with patch("threshold_recommend.prometheus_instant", side_effect=answer), \
+                patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                   "--prometheus", "http://p:9090", *fmt]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        out, err = capsys.readouterr()
+        assert "ERROR: Prometheus query failed for 1 key(s)" in err, err
+        if fmt == ["--json"]:
+            doc = json.loads(out)
+            assert (doc["status"], doc["reason"]) == ("partial", "prometheus_query_error")
+            assert doc["summary"]["query_errors"] == 1
+            keys = {k["key"]: k for t in doc["tenants"] for k in t["keys"] + t["inherited"]}
+            assert keys["mysql_connections"]["query_error"] == "connection refused"
+            assert keys["mysql_threads_running"]["query_error"] == ""
+            assert keys["mysql_threads_running"]["sample_count"] > 0
+
     def test_dry_run_cli(self, tmp_path):
         """CLI --dry-run 正常完成。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
@@ -798,15 +798,14 @@ class TestQueryPrometheusRangeTs:
             "data": {"resultType": "matrix", "result": [{
                 "metric": {}, "values": [[1000, "0.95"], [1060, "0.96"]]}]},
         }, None)
-        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
-        assert err is None
+        pairs = tr.query_prometheus_range_ts("http://prom:9090", "q")
         assert pairs == [(1000.0, 0.95), (1060.0, 0.96)]
 
     @patch("_lib_prometheus.http_get_json")
-    def test_error_propagates(self, mock_get):
+    def test_error_raises(self, mock_get):
         mock_get.return_value = (None, "connection refused")
-        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
-        assert pairs == [] and err == "connection refused"
+        with pytest.raises(tr.QueryError, match="^connection refused$"):
+            tr.query_prometheus_range_ts("http://prom:9090", "q")
 
     @patch("_lib_prometheus.http_get_json")
     def test_filters_nan_and_inf(self, mock_get):
@@ -818,8 +817,7 @@ class TestQueryPrometheusRangeTs:
                 "metric": {}, "values": [
                     [1000, "0.95"], [1060, "NaN"], [1120, "0.96"], [1180, "Inf"]]}]},
         }, None)
-        pairs, err = tr.query_prometheus_range_ts("http://prom:9090", "q")
-        assert err is None
+        pairs = tr.query_prometheus_range_ts("http://prom:9090", "q")
         assert pairs == [(1000.0, 0.95), (1120.0, 0.96)]   # NaN + Inf dropped
 
 
@@ -996,7 +994,7 @@ class TestAnalyzeTenantLowerBound:
 
     @patch("threshold_recommend.query_prometheus_range_ts")
     def test_percentile_lower_routes_to_lower_engine(self, mock_ts):
-        mock_ts.return_value = (_floor_samples(0.97), None)
+        mock_ts.return_value = _floor_samples(0.97)
         report = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "0.95"},
                                    prometheus_url="http://p:9090", observed_map=self.LOWER_MAP)
         rec = report.keys[0]
@@ -1015,7 +1013,7 @@ class TestAnalyzeTenantLowerBound:
     @patch("threshold_recommend.query_prometheus_range_ts")
     def test_bad_value_forces_manual_not_crash(self, mock_ts):
         # one tenant's garbage value must degrade to force_manual, not sink the run
-        mock_ts.return_value = (_floor_samples(0.97), None)
+        mock_ts.return_value = _floor_samples(0.97)
         report = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "not-a-ratio"},
                                    prometheus_url="http://p:9090", observed_map=self.LOWER_MAP)
         rec = report.keys[0]
@@ -1045,8 +1043,8 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
     def _upper(self, values, step=100.0):
         """Through the raw Prometheus response, so the finite filter that
         query_prometheus_range_ts applies is the one under test."""
-        with patch("threshold_recommend.query_prometheus_instant",
-                   return_value=(_range_result(values, step), None)):
+        with patch("threshold_recommend.prometheus_instant",
+                   return_value=_range_result(values, step)):
             report = tr.analyze_tenant("db-x", {"connections": "2000"},
                                        prometheus_url="http://p:9090",
                                        observed_map=self._UPPER_MAP)
@@ -1080,7 +1078,7 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
 
     def _upper_pairs(self, pairs):
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(pairs, None)):
+                   return_value=pairs):
             report = tr.analyze_tenant("db-x", {"connections": "2000"},
                                        prometheus_url="http://p:9090",
                                        observed_map=self._UPPER_MAP)
@@ -1160,7 +1158,7 @@ class TestLowConfidenceNotExported:
         # -15.7% whether or not the upper engine clamps a tightening (#2964).
         # current 40: a loosening to 59 (P95 and P99 alike), +47.5%.
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(pairs, None)):
+                   return_value=pairs):
             return tr.analyze_tenant("db-x", {"connections": current},
                                      prometheus_url="http://p:9090",
                                      observed_map=self._UPPER_MAP,
@@ -1238,7 +1236,7 @@ class TestLowConfidenceNotExported:
         """560 points with --min-samples 1000: a percentile-lower floor is LOW."""
         yaml = pytest.importorskip("yaml")
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(_floor_samples(0.97, days=8, pts_per_day=70), None)):
+                   return_value=_floor_samples(0.97, days=8, pts_per_day=70)):
             rep = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "0.95"},
                                     prometheus_url="http://p:9090",
                                     observed_map=self._LOWER_MAP, min_samples=1000)
@@ -1432,7 +1430,7 @@ class TestUpperBoundFloor2964:
         the CLI passes them (7 days, so the 24h coverage floor never bites)."""
         pairs = _ts_pairs(values, step=7 * 86400 / len(values))
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(pairs, None)):
+                   return_value=pairs):
             report = tr.analyze_tenant("db-x", {"connections": current},
                                        prometheus_url="http://p:9090",
                                        observed_map=self._MAP)
@@ -1618,7 +1616,7 @@ class TestUpperBoundFloor2964:
         values = [base] * (_N_7D - 10) + [top] * 10
         pairs = _ts_pairs(values, step=7 * 86400 / len(values))
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(pairs, None)):
+                   return_value=pairs):
             report = tr.analyze_tenant("db-x", {"connections": current},
                                        prometheus_url="http://p:9090",
                                        observed_map=self._MAP)
@@ -1783,7 +1781,7 @@ class TestUpperBoundFloor2964:
         values = [0.0] * 900 + [0.3] * 100
         pairs = _ts_pairs(values, step=36.0)          # 1000 points in 10 hours
         with patch("threshold_recommend.query_prometheus_range_ts",
-                   return_value=(pairs, None)):
+                   return_value=pairs):
             rec = tr.analyze_tenant("db-x", {"connections": "0"},
                                     prometheus_url="http://p:9090",
                                     observed_map=self._MAP).keys[0]

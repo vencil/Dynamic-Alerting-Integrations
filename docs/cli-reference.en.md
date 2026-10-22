@@ -319,7 +319,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|-------------|
 | `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
 | `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
-| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr). What stdout carries depends on the case: a missing tenant is rejected by argparse and leaves stdout empty; a failed Prometheus query prints the `status: error` JSON above; the rest (`--show-inheritance` without `--config-dir`, `kubectl` missing or not answering, the da-guard ones) print one `"status": "caller_error"` envelope, with `reason` `served_values_unavailable` for the da-guard ones and `caller_error` for the rest ([#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115); stdout used to be empty) |
+| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query, the maintenance / silent mode queries included (those used to read as `normal` at exit code `0`; `operational_mode` is then `unknown`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr). What stdout carries depends on the case: a missing tenant is rejected by argparse and leaves stdout empty; a failed Prometheus query prints the `status: error` JSON above; the rest (`--show-inheritance` without `--config-dir`, `kubectl` missing or not answering, the da-guard ones) print one `"status": "caller_error"` envelope, with `reason` `served_values_unavailable` for the da-guard ones and `caller_error` for the rest ([#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115); stdout used to be empty) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: it returns `0` whether `status` is `healthy` or `error`, and ends with a Python traceback (rc=1) when `kubectl` is missing. On v2.9.0, read the output's `status`. <!-- image-caveat: v2.9.0 -->
 
@@ -432,9 +432,9 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 | Code | Description |
 |------|-------------|
-| `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
+| `0` | Success: every sampling query was answered |
 | `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit. ⛔ `--interval 0` (formerly `duration // interval` raising `ZeroDivisionError`) has exited `2` at parse time since #2966, and an unwritable output path has been `2` since #1789; neither lands here any more | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
+| `2` | Caller error: a Prometheus query of any sample was not answered (unreachable, an HTTP error, an `error` status, a malformed answer) — the failed points are recorded as empty, the report and CSVs are still written, and stderr carries one `ERROR: Prometheus query failed for N sample(s)` line (it used to be `0`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)); none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
 
@@ -508,7 +508,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|-------------|
 | `0` | Every pair matches; with `--watch --auto-detect-convergence`, converged |
 | `1` | A mismatch, or a value found on only one side (`old_missing` / `new_missing`); with `--watch --auto-detect-convergence`, still not converged after `--rounds` |
-| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure, or a malformed answer (an unreadable sample value used to be reported as `old_missing` / `new_missing` at exit code `1`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet. It returns `2` only for bad arguments and `0` for everything else, and it still prints "🎉 可以安全切換" (safe to cut over) when Prometheus is unreachable. On v2.9.0, do not gate on the exit code; read the mismatch / missing counts in the summary instead. <!-- image-caveat: v2.9.0 -->
 
@@ -3272,6 +3272,8 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 ```
 
 ---
+
+**A query not answered** ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)): when a key's Prometheus query is not answered (unreachable, an HTTP error, an `error` status, an answer that is not a readable matrix), that key carries `query_error` (the reason in `reason`) and no recommendation, and the other keys are recommended as usual; the report is still printed, `--json` gains top-level `status: "partial"` and `reason: "prometheus_query_error"`, `summary.query_errors` counts the keys not measured, stderr carries one `ERROR: Prometheus query failed for N key(s)` line, and the exit code is `2` (it used to be only `reason: query error: …` at exit code `0`).
 
 #### threshold-govern
 

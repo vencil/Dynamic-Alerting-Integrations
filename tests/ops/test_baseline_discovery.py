@@ -22,6 +22,19 @@ import pytest
 import baseline_discovery  # noqa: E402
 
 
+def _as_reader(query):
+    """A ``(results, err)`` fake as the raising reader the tool calls
+    (#3133): an error is a ``QueryError``, never a value."""
+    from _lib_prometheus import QueryError
+
+    def reader(prom_url, promql, **kw):
+        results, err = query(prom_url, promql)
+        if err:
+            raise QueryError(err)
+        return results
+    return reader
+
+
 # ── extract_scalar ─────────────────────────────────────────────────
 
 
@@ -51,10 +64,12 @@ class TestExtractScalar:
         results = [{"metric": {}, "value": [0, "Inf"]}]
         assert baseline_discovery.extract_scalar(results) is None
 
-    def test_non_numeric_value(self):
-        """Non-numeric string returns None."""
+    def test_non_numeric_value_never_gets_here(self):
+        """#3133: an unreadable sample is refused by prometheus_instant (the
+        whole answer); reaching extract_scalar it is a bug, not a None."""
         results = [{"metric": {}, "value": [0, "not-a-number"]}]
-        assert baseline_discovery.extract_scalar(results) is None
+        with pytest.raises(ValueError):
+            baseline_discovery.extract_scalar(results)
 
     def test_missing_value_key(self):
         """Result without 'value' key returns None."""
@@ -237,49 +252,6 @@ class TestDefaultMetrics:
         assert expected == actual
 
 
-# ── query_prometheus（mock http_get_json）─────────────────────────
-
-
-class TestQueryPrometheus:
-    """query_prometheus() — now an alias to _lib_python.query_prometheus_instant."""
-
-    def test_success(self, monkeypatch):
-        """成功查詢回傳 results。"""
-        fake = lambda prom_url, promql: ([{"metric": {}, "value": [0, "42"]}], None)
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
-        results, err = baseline_discovery.query_prometheus(
-            "http://localhost:9090", "up")
-        assert err is None
-        assert len(results) == 1
-
-    def test_http_error(self, monkeypatch):
-        """HTTP 錯誤回傳 error。"""
-        fake = lambda prom_url, promql: (None, "connection refused")
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
-        results, err = baseline_discovery.query_prometheus(
-            "http://localhost:9090", "up")
-        assert results is None
-        assert "connection refused" in err
-
-    def test_api_error_status(self, monkeypatch):
-        """Prometheus API 回傳非 success 狀態。"""
-        fake = lambda prom_url, promql: (None, "bad query")
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
-        results, err = baseline_discovery.query_prometheus(
-            "http://localhost:9090", "bad{")
-        assert results is None
-        assert "bad query" in err
-
-    def test_empty_result(self, monkeypatch):
-        """查詢成功但無資料回傳空 list。"""
-        fake = lambda prom_url, promql: ([], None)
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
-        results, err = baseline_discovery.query_prometheus(
-            "http://localhost:9090", "nonexistent_metric")
-        assert err is None
-        assert results == []
-
-
 # ── main() CLI ────────────────────────────────────────────────────
 
 
@@ -346,7 +318,7 @@ class TestMainObservationLoop:
         """基本觀測迴圈：3 個採樣、1 個指標、產出 CSV。"""
         cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            self._mock_query(75.0))
+                            _as_reader(self._mock_query(75.0)))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
@@ -366,30 +338,36 @@ class TestMainObservationLoop:
         out_dir = tmp_path / "new" / "nested" / "dir"
         cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "2", "--interval", "2", "--metrics", "cpu", "-o", str(out_dir))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            self._mock_query(50.0))
+                            _as_reader(self._mock_query(50.0)))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
         assert out_dir.exists()
 
     def test_observation_with_query_errors(self, capsys, monkeypatch, tmp_path, cli_argv):
-        """查詢失敗時記錄 None，不中斷迴圈。"""
-        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
+        """#3133：查詢失敗的點記 None、迴圈不中斷、CSV 照寫；但那些點沒量到，
+        報告是 partial，rc 2（以前 rc 0）。"""
+        out_dir = tmp_path / "out"
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(out_dir))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            self._mock_query_with_errors())
+                            _as_reader(self._mock_query_with_errors()))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
-        baseline_discovery.main()
-
-        out = capsys.readouterr().out
+        with pytest.raises(SystemExit) as exc:
+            baseline_discovery.main()
+        assert exc.value.code == 2
+        out, err = capsys.readouterr()
         assert "觀測完成" in out
+        assert "ERROR: Prometheus query failed for 1 sample(s)" in err, err
+        assert "connection refused" in err
+        assert (out_dir / "baseline-db-a-timeseries.csv").exists()
 
     def test_observation_sleep_called(self, monkeypatch, tmp_path, cli_argv):
         """sleep 應被呼叫 (total_samples - 1) 次。"""
         sleep_calls = []
         cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            self._mock_query(50.0))
+                            _as_reader(self._mock_query(50.0)))
         monkeypatch.setattr(baseline_discovery.time, "sleep",
                             lambda s: sleep_calls.append(s))
 
@@ -409,7 +387,7 @@ class TestMainObservationLoop:
             return [{"metric": {}, "value": [0, "50.0"]}], None
         out_dir = tmp_path / "out"
         cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "10", "--interval", "15", "--metrics", "cpu", "-o", str(out_dir), *extra)
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", _query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         with pytest.raises(SystemExit) as exc_info:
@@ -427,7 +405,7 @@ class TestMainObservationLoop:
             queried.append(expr)
             return [{"metric": {}, "value": [0, "50.0"]}], None
         cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "15", "--interval", "15", "--metrics", "cpu", "-o", str(tmp_path / "out"))
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", _query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
@@ -461,7 +439,7 @@ class TestCSVOutput:
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, str(value)]}], None
 
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(mock_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
@@ -537,7 +515,7 @@ class TestReportOutput:
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "65.0"]}], None
 
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(mock_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
@@ -556,12 +534,16 @@ class TestReportOutput:
         def mock_query(prometheus_url, expr):
             return None, "connection refused"
 
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(mock_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
-        baseline_discovery.main()
-        out = capsys.readouterr().out
+        # #3133: not measured is rc 2 (was 0), the report still printed
+        with pytest.raises(SystemExit) as exc:
+            baseline_discovery.main()
+        assert exc.value.code == 2
+        out, err = capsys.readouterr()
         assert "無有效資料" in out
+        assert "ERROR: Prometheus query failed for 2 sample(s)" in err, err
 
     def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path, cli_argv):
         """報告包含 patch 建議指令。
@@ -574,7 +556,7 @@ class TestReportOutput:
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "70.0"]}], None
 
-        monkeypatch.setattr(baseline_discovery, "query_prometheus", mock_query)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(mock_query))
         monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
 
         baseline_discovery.main()
@@ -652,7 +634,7 @@ def _run_report(monkeypatch, tmp_path, cli_argv, capsys, values):
     def fake(url, expr):
         v = by_query.get(expr)
         return ([], None) if v is None else ([{"metric": {}, "value": [0, str(v)]}], None)
-    monkeypatch.setattr(baseline_discovery, "query_prometheus", fake)
+    monkeypatch.setattr(baseline_discovery, "query_prometheus", _as_reader(fake))
     monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
     baseline_discovery.main()
     return capsys.readouterr().out
@@ -742,7 +724,7 @@ class TestIntervalAndDurationRange:
                  "--prometheus", "http://mock:9090", "--metrics", "cpu",
                  "-o", str(tmp_path / "out"), flag, bad)
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            lambda *a: pytest.fail("queried Prometheus"))
+                            _as_reader(lambda *a: pytest.fail("queried Prometheus")))
         monkeypatch.setattr(baseline_discovery.time, "sleep",
                             lambda s: pytest.fail("slept"))
         with pytest.raises(SystemExit) as exc:
@@ -767,7 +749,7 @@ class TestIntervalAndDurationRange:
                  "--prometheus", "http://mock:9090", "--metrics", "cpu",
                  "-o", str(tmp_path / "out"), "--duration", "45", "--interval", "15")
         monkeypatch.setattr(baseline_discovery, "query_prometheus",
-                            lambda url, expr: ([{"metric": {}, "value": [0, "1"]}], None))
+                            _as_reader(lambda url, expr: ([{"metric": {}, "value": [0, "1"]}], None)))
         slept = []
         monkeypatch.setattr(baseline_discovery.time, "sleep", slept.append)
         baseline_discovery.main()

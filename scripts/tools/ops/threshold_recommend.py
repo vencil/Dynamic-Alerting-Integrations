@@ -67,8 +67,10 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     exit_on_yaml_file_error,
     parse_duration_seconds,
-    query_prometheus_instant,
 )
+# #3133: a query not answered raises QueryError — never an empty result; a
+# sample is read once, by the lib (#3213).
+from _lib_prometheus import QueryError, finite_row_samples, prometheus_instant  # noqa: E402
 # #2116: the tenants, their values and who owns each key come from Go
 # (`da-guard effective`); the alias table from `da-guard served-values`.
 from _lib_tenant_values import (  # noqa: E402
@@ -220,6 +222,9 @@ class KeyRecommendation:
     # manual-review section keyed on guardrail_reason.
     force_manual: bool = False
     guardrail_reason: str = ""
+    # #3133: the query for this key was not answered (QueryError's text); the
+    # key has no measurement, and the run is partial (rc 2).
+    query_error: str = ""
     # #2116: who owns the value, as `da-guard effective` reports it. `key` is
     # the spelling the config writes (the one a write-back must match);
     # `canonical_key` is set only when that spelling is a retired one.
@@ -797,102 +802,34 @@ def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
     return f'{observed_series}{{tenant="{safe_tenant}"}}[{lookback}]'
 
 
-def query_prometheus_range(
-    prometheus_url: str,
-    promql: str,
-    *,
-    timeout: int = 30,
-) -> tuple[list[float], Optional[str]]:
-    """Execute a Prometheus instant query and extract sample values.
-
-    For range vectors, Prometheus returns matrix results with arrays of
-    [timestamp, value] pairs.
-
-    Args:
-        prometheus_url: Base Prometheus URL.
-        promql: PromQL query string.
-        timeout: HTTP timeout.
-
-    Returns:
-        (values_list, error_or_none)
-    """
-    # Fetch core delegated to _lib_prometheus.query_prometheus_instant (ROI
-    # r3 W1) — this hits /api/v1/query with a range-vector PromQL, so the
-    # response is a matrix; the flatten logic below is unchanged. timeout is
-    # passed through (this site pre-dated the lib's default of 10).
-    results, err = query_prometheus_instant(
-        prometheus_url, promql, timeout=timeout)
-    if err:
-        return [], err
-
-    values: list[float] = []
-
-    for series in results:
-        # Range vector → "values" array of [ts, val]
-        for point in series.get("values", []):
-            try:
-                values.append(float(point[1]))
-            except (IndexError, ValueError, TypeError):
-                continue
-        # Instant vector → single "value" [ts, val]
-        val = series.get("value")
-        if val and isinstance(val, list) and len(val) >= 2:
-            try:
-                values.append(float(val[1]))
-            except (ValueError, TypeError):
-                pass
-
-    return values, None
-
-
 def query_prometheus_range_ts(
     prometheus_url: str,
     promql: str,
     *,
     timeout: int = 30,
-) -> tuple[list[tuple[float, float]], Optional[str]]:
-    """Like ``query_prometheus_range`` but keeps the sample timestamps.
+) -> list[tuple[float, float]]:
+    """The finite ``(ts, value)`` samples a range-vector PromQL selects.
 
     The lower-bound engine (#916) buckets samples by UTC day to compute a
     daily-P5, and the upper-bound path counts the UTC hours its samples cover
-    (#2941), so both need ``(ts, value)`` pairs. Returns
-    ``(pairs, error_or_none)``.
+    (#2941), so both need ``(ts, value)`` pairs.
 
-    NaN/Inf are filtered (parity with ``compute_percentiles``): a hit-ratio
+    NaN/Inf are left out (parity with ``compute_percentiles``): a hit-ratio
     recording rule can emit ``NaN`` while idle (0/0), and an unfiltered NaN would
     sort to an arbitrary index and yield a silently-wrong percentile. A filtered
     series that ends up too thin then hits the engine's own sample gate.
+
+    Raises ``QueryError`` (#3133) when the query was not answered — no
+    connection, an HTTP error, an ``error`` status, or a body that is not a
+    matrix of readable samples. It used to come back as ``([], err)`` and the
+    key as a ``query error`` reason in a run that exited 0.
     """
-    # Same lib delegation as query_prometheus_range above (ROI r3 W1).
-    results, err = query_prometheus_instant(
-        prometheus_url, promql, timeout=timeout)
-    if err:
-        return [], err
-
-    def _finite(ts_raw, v_raw) -> Optional[tuple[float, float]]:
-        try:
-            ts, v = float(ts_raw), float(v_raw)
-        except (ValueError, TypeError):
-            return None
-        if math.isnan(v) or math.isinf(v):
-            return None
-        return (ts, v)
-
+    rows = prometheus_instant(prometheus_url, promql, timeout=timeout,
+                              result_type="matrix")
     pairs: list[tuple[float, float]] = []
-    for series in results:
-        for point in series.get("values", []):
-            try:
-                p = _finite(point[0], point[1])
-            except IndexError:
-                continue
-            if p is not None:
-                pairs.append(p)
-        val = series.get("value")
-        if val and isinstance(val, list) and len(val) >= 2:
-            p = _finite(val[0], val[1])
-            if p is not None:
-                pairs.append(p)
-    return pairs, None
+    for row in rows:
+        pairs.extend(finite_row_samples(row)[0])
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -1036,12 +973,7 @@ def _recommend_key(
         if direction == "<":
             # Lower-bound floor path: timestamped samples → daily-bucket P5
             # engine (never the upper-bound percentile logic).
-            pairs, err = query_prometheus_range_ts(prometheus_url, promql)
-            if err:
-                return KeyRecommendation(
-                    key=key, current_value=current_value,
-                    reason=f"query error: {err[:60]}", promql=promql,
-                )
+            pairs = query_prometheus_range_ts(prometheus_url, promql)
             if not pairs:
                 return KeyRecommendation(
                     key=key, current_value=current_value,
@@ -1055,12 +987,7 @@ def _recommend_key(
             # Upper-bound path. Timestamped and finite-only (#2956: NaN / Inf
             # are not data, and counted they let 999 NaN + 1 point grade HIGH).
             # The timestamps give the hours covered the #2941 floor needs.
-            pairs, err = query_prometheus_range_ts(prometheus_url, promql)
-            if err:
-                return KeyRecommendation(
-                    key=key, current_value=current_value,
-                    reason=f"query error: {err[:60]}", promql=promql,
-                )
+            pairs = query_prometheus_range_ts(prometheus_url, promql)
             values = [v for _, v in pairs]
             if not values:
                 return KeyRecommendation(
@@ -1084,6 +1011,14 @@ def _recommend_key(
                 rec.confidence = CONFIDENCE_LOW
                 rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
                               f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
+    except QueryError as exc:
+        # #3133: not measured — the key is reported as such and the run ends
+        # partial at rc 2 (main), never as a reason in a run that exits 0.
+        return KeyRecommendation(
+            key=key, current_value=current_value,
+            reason=f"query error: {str(exc)[:60]}", promql=promql,
+            query_error=str(exc),
+        )
     except Exception as exc:  # noqa: BLE001 — one bad value must not sink the run
         # Reason phrasing follows the key's own direction (an upper-bound key
         # blowing up must not be mislabelled "lower-bound floor").
@@ -1236,9 +1171,14 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
     return "\n".join(lines)
 
 
+def query_error_count(reports: list[TenantRecommendation]) -> int:
+    """How many keys were not measured (#3133)."""
+    return sum(1 for r in reports for k in r.keys + r.inherited if k.query_error)
+
+
 def format_json_report(reports: list[TenantRecommendation]) -> str:
     """Format reports as JSON string."""
-    output = {
+    output: dict[str, Any] = {
         "tool": "threshold-recommend",
         "tenants": [asdict(r) for r in reports],
         "summary": {
@@ -1247,8 +1187,12 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "recommended_changes": sum(r.recommended_changes for r in reports),
             "low_confidence_changes": sum(r.low_confidence_changes for r in reports),
             "inherited_keys": sum(len(r.inherited) for r in reports),
+            "query_errors": query_error_count(reports),
         },
     }
+    if output["summary"]["query_errors"]:
+        # #3133 (#3059 rule): what was measured is reported; the run is partial.
+        output.update({"status": "partial", "reason": "prometheus_query_error"})
     return _dump_json(output)
 
 
@@ -1735,6 +1679,14 @@ def main() -> None:
         print(format_markdown_report(reports))
     else:
         print(format_text_report(reports))
+
+    failed = query_error_count(reports)
+    if failed:
+        # #3133: a key whose query was not answered has no recommendation —
+        # the report above is partial, and so is the exit (rc 2, not 0).
+        print(f"ERROR: Prometheus query failed for {failed} key(s); the "
+              "report is partial", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 if __name__ == "__main__":

@@ -383,6 +383,26 @@ class TestCheck:
         assert capsys.readouterr().out == "", "帶了 out= 就不該再寫 stdout"
         assert sys.stdout is before, "check() 不得改動行程全域的 sys.stdout"
 
+    @pytest.mark.parametrize("failing", ["maintenance", "silent"])
+    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.query_prometheus")
+    def test_mode_query_not_answered_is_not_normal(self, mock_qp, mock_cmd, capsys,
+                                                    failing):
+        """#3133：模式查詢沒得到回答 → 模式是 unknown、點名查詢失敗（rc 2）；
+        以前吞掉、照報 normal / healthy、rc 0。"""
+        mock_cmd.return_value = "Running"
+        maint = (None, "connection refused") if failing == "maintenance" else ([], None)
+        side = [_MARIADB, ([{"value": [1700000000, "1"]}], None), maint]
+        if failing == "silent":
+            side.append((None, "connection refused"))
+        mock_qp.side_effect = side
+        doc = diagnose.check("db-a", "http://prom:9090")
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "error", out
+        assert out["operational_mode"] == "unknown", out
+        assert any(i.startswith(diagnose.PROMETHEUS_FAILURE) for i in out["issues"]), out
+        assert diagnose.exit_code(doc) == 2
+
     @mock.patch("diagnose.run_cmd")
     @mock.patch("diagnose.query_prometheus")
     def test_pod_not_found(self, mock_qp, mock_cmd, capsys):

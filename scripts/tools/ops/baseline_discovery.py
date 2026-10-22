@@ -61,14 +61,16 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
-    http_get_json, write_text_secure, query_prometheus_instant,
-    add_prometheus_arg, DOCS_INSTALL_URL, positive_int_seconds,
+    write_text_secure, add_prometheus_arg, DOCS_INSTALL_URL, positive_int_seconds,
 )
+# #3133: a query not answered raises QueryError, never "no sample"; the
+# sample is read once, by the lib (#3213).
+from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
+
+# The query seam tests replace (the lib's raising reader).
+query_prometheus = prometheus_instant
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
 
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
 # `config_key`：建議值要寫進哪個租戶 key。先前一律拼成 `mysql_<名稱>`，其中
@@ -171,17 +173,14 @@ def percent_verdict(stats, key):
 
 
 def extract_scalar(results):
-    """Extract first scalar value from Prometheus result."""
+    """The first row's sample of an instant answer (``prometheus_instant``
+    rows), or None: no row, a histogram-only row, or a non-finite value."""
     if not results:
         return None
-    val_str = results[0].get("value", [None, None])[1]
-    try:
-        val = float(val_str)
-        if math.isnan(val) or math.isinf(val):
-            return None
-        return val
-    except (TypeError, ValueError):
+    val = vector_sample(results[0])
+    if val is None or math.isnan(val) or math.isinf(val):
         return None
+    return val
 
 
 def percentile(sorted_values, p):
@@ -318,6 +317,7 @@ def main():
     # 收集數據
     samples = {key: [] for key in metrics}
     timestamps = []
+    failed_queries: list[str] = []
 
     for i in range(total_samples):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -326,8 +326,12 @@ def main():
         sys.stdout.flush()
 
         for key, info in metrics.items():
-            results, err = query_prometheus(args.prometheus, info["query"])
-            if err:
+            try:
+                results = query_prometheus(args.prometheus, info["query"])
+            except QueryError as exc:
+                # #3133: not measured — the point stays empty in the CSV, is
+                # counted, and the run ends partial (rc 2), never "樣本不足".
+                failed_queries.append(f"{key}: {exc}")
                 samples[key].append(None)
             else:
                 samples[key].append(extract_scalar(results))
@@ -478,6 +482,12 @@ def main():
             if suggestion["critical"] is not None:
                 print(f"  da-tools patch-config {args.tenant} {config_key}_critical {suggestion['critical']}")
             print()
+
+    if failed_queries:
+        # #3133: what was measured is reported above; the run is partial.
+        print(f"ERROR: Prometheus query failed for {len(failed_queries)} sample(s); "
+              f"the report is partial (first: {failed_queries[0]})", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 if __name__ == "__main__":

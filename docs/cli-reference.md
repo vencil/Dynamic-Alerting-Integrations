@@ -320,7 +320,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`kubectl` 不在或沒回應、da-guard 這一類）是一份 `"status": "caller_error"` 的 envelope，da-guard 這一類的 `reason` 是 `served_values_unavailable`，其餘是 `caller_error`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗，含維護／靜默模式的查詢（後者先前被當成 `normal`、結束碼 `0`，此時 `operational_mode` 為 `unknown`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`kubectl` 不在或沒回應、da-guard 這一類）是一份 `"status": "caller_error"` 的 envelope，da-guard 這一類的 `reason` 是 `served_values_unavailable`，其餘是 `caller_error`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -429,9 +429,9 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
+| `0` | 成功：每一次採樣查詢都得到回答 |
 | `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口。⛔ `--interval 0`（原本是 `duration // interval` 的 `ZeroDivisionError`）自 #2966 起在解析時就回 `2`；輸出路徑寫不進去自 #1789 起是 `2`，兩者都不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
+| `2` | 呼叫端錯誤：任一次採樣的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應格式不對）——失敗的點記為空值，報告與 CSV 照出，stderr 印一行 `ERROR: Prometheus query failed for N sample(s)`（先前是 `0`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）；`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
 
@@ -505,7 +505,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|------|
 | `0` | 全部比對組一致；`--watch --auto-detect-convergence` 時為已收斂 |
 | `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
-| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗、或回應格式不對（樣本值讀不懂先前被報成 `old_missing`／`new_missing`、結束碼 `1`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。 <!-- image-caveat: v2.9.0 -->
 
@@ -3258,6 +3258,8 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 ```
 
 ---
+
+**查詢沒得到回答**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：某個 key 的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應不是讀得懂的 matrix）時，那個 key 標 `query_error`（原因寫在 `reason`）、沒有推薦值，其他 key 照常推薦；報告照印，`--json` 頂層加 `status: "partial"`、`reason: "prometheus_query_error"`，`summary.query_errors` 是沒量到的 key 數，stderr 印一行 `ERROR: Prometheus query failed for N key(s)`，結束碼 `2`（先前只寫成 `reason: query error: …`、結束碼 `0`）。
 
 #### threshold-govern
 

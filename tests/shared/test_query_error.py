@@ -148,6 +148,65 @@ def test_matrix_rows_carries_prometheus_error_text(body, message):
         lp._matrix_rows(body)
 
 
+# ── instant reader (#3133 batch 2) ───────────────────────────────────
+
+def _vec(result, result_type="vector"):
+    return {"status": "success", "data": {"resultType": result_type, "result": result}}
+
+
+_VROW = {"metric": {"tenant": "t"}, "value": [1, "3"]}
+
+
+@pytest.mark.parametrize("body", [
+    _vec([]), _vec([_VROW]), _vec([{"value": [1, "NaN"]}]),
+    _vec([{"metric": {}, "histogram": [1, {"count": "x"}]}]),
+], ids=["empty", "one-row", "nan-without-metric", "histogram-only"])
+def test_vector_rows_accepts_a_vector(body):
+    assert lp._vector_rows(body) == body["data"]["result"]
+
+
+@pytest.mark.parametrize("body,defect", [
+    (None, "body is not a JSON object"),
+    ({"status": "success"}, "'data' is missing or not an object"),
+    (_vec([], "matrix"), "resultType is 'matrix', expected 'vector'"),
+    (_vec(None), "'data.result' is missing or not a list"),
+    (_vec(["x"]), "result[0] is not an object"),
+    (_vec([{"metric": [], "value": [1, "1"]}]), "result[0].metric is not an object"),
+    (_vec([{"metric": {}}]), "result[0] has neither 'value' nor 'histogram'"),
+    (_vec([{"value": [1]}]), "result[0].value is [1]"),
+    (_vec([{"value": [1, "abc"]}]), "result[0].value is [1, 'abc']"),
+    (_vec([{"value": [1, True]}]), "result[0].value is [1, True]"),
+], ids=["null", "no-data", "matrix", "result-null", "row-string", "metric-list",
+        "no-value", "value-short", "value-not-number", "value-bool"])
+def test_vector_rows_names_the_defect(body, defect):
+    with pytest.raises(lp.QueryError) as exc:
+        lp._vector_rows(body)
+    assert str(exc.value).startswith("malformed Prometheus response: "), exc.value
+    assert defect in str(exc.value), exc.value
+
+
+def test_vector_rows_carries_prometheus_error_text():
+    with pytest.raises(lp.QueryError, match="^bad_data: x$"):
+        lp._vector_rows({"status": "error", "error": "bad_data: x"})
+
+
+def test_prometheus_instant(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lp, "http_get_json",
+                        lambda url, timeout=10: (seen.append((url, timeout)) or (_vec([_VROW]), None)))
+    assert lp.prometheus_instant("http://p", 'up{job="a b"}', timeout=3) == [_VROW]
+    assert seen == [("http://p/api/v1/query?query=up%7Bjob%3D%22a+b%22%7D", 3)]
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (None, "refused"))
+    with pytest.raises(lp.QueryError, match="^refused$"):
+        lp.prometheus_instant("http://p", "up")
+
+
+def test_vector_sample():
+    assert lp.vector_sample(_VROW) == 3.0
+    assert lp.vector_sample({"histogram": [1, {}]}) is None
+    assert math.isinf(lp.vector_sample({"value": [1, "+Inf"]}))
+
+
 def test_prometheus_range_raises_on_transport_error(monkeypatch):
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=30: (None, "refused"))
     with pytest.raises(lp.QueryError, match="^refused$"):
@@ -271,20 +330,12 @@ _ALLOWED = frozenset({
     ("scripts/tools/_lib_python.py", "query_prometheus_instant"),
     ("scripts/tools/_lib_python.py", "query_prometheus_range"),
     # batch 2: instant callers
-    ("scripts/tools/ops/baseline_discovery.py", "http_get_json"),
-    ("scripts/tools/ops/baseline_discovery.py", "query_prometheus_instant"),
     ("scripts/tools/ops/byo_check.py", "http_get_json"),
     ("scripts/tools/ops/byo_check.py", "query_prometheus_instant"),
-    ("scripts/tools/ops/cardinality_forecasting.py", "query_prometheus_instant"),
-    ("scripts/tools/ops/diagnose.py", "http_get_json"),
-    ("scripts/tools/ops/diagnose.py", "query_prometheus_instant"),
     ("scripts/tools/ops/federation_check.py", "http_get_json"),
     ("scripts/tools/ops/federation_check.py", "query_prometheus_instant"),
     ("scripts/tools/ops/shadow_verify.py", "http_get_json"),
     ("scripts/tools/ops/shadow_verify.py", "query_prometheus_instant"),
-    ("scripts/tools/ops/threshold_recommend.py", "query_prometheus_instant"),
-    ("scripts/tools/ops/validate_migration.py", "http_get_json"),
-    ("scripts/tools/ops/validate_migration.py", "query_prometheus_instant"),
     # batch 3: direct http_get_json / urlopen callers
     ("scripts/tools/ops/alert_correlate.py", "http_get_json"),
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe

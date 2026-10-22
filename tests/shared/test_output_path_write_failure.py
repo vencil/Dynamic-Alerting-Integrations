@@ -741,10 +741,11 @@ ROWS: list[Row] = [
             "the manifest write, which is the sink under test",
       out_name="assembly-manifest.json"),
     R("ops/baseline_discovery.py", "-o/--output-dir", "dir",
-      lambda c, out: ["--tenant", "t1", "--prometheus", "http://127.0.0.1:1",
+      lambda c, out: ["--tenant", "t1", "--prometheus", c.stub,
                       "--duration", "1", "--interval", "1", "-o", str(out)],
-      reach="a closed port for Prometheus: every query fails, every sample is "
-            "None, and the tool still exits 0 having written both CSVs",
+      reach="the stub Prometheus answers every query (an empty vector), so the "
+            "run exits 0 having written both CSVs (#3133: a closed port is a "
+            "query not answered, rc 2)",
       # Two rows' worth of sinks in one tool: `parent_is_file` reaches the
       # `os.makedirs`, `artifact_is_dir` gets past it and reaches the
       # `open(..., 'wb')` + `chmod` inside `_write_csv_secure`. The FIRST CSV
