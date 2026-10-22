@@ -15,6 +15,10 @@ spec:
       labels:
         app: alertmanager
     spec:
+      # #3257: neither container calls the Kubernetes API (the reloader
+      # sidecar below builds no client), so no ServiceAccount token is mounted
+      # — a file Alertmanager can read is one it could be made to send.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
