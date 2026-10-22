@@ -695,8 +695,14 @@ def _run_da_guard(
         if os.path.isdir(conf_d):
             _lib_parse_cache.require_servable(conf_d, binary=exe, timeout=timeout)
     except _lib_parse_cache.ParseTreeError as e:
-        raise error(f"da-guard parse-tree (the tree's index): {' '.join(str(e).split())}",
-                    None, "", broken=True) from e
+        import _lib_parse_tree  # lazy, as above
+        text = ' '.join(str(e).split())
+        if isinstance(e, _lib_parse_tree.BinaryMissing):
+            raise DaGuardNotFoundError(text) from e
+        # parse-tree's own words name a da-guard older than this tool.
+        stale = "older than this tool" in text
+        raise error(f"da-guard parse-tree (the tree's index): {text}", None, "",
+                    stale=stale, broken=not stale) from e
     cmd = [exe, subcommand, "--config-dir", str(conf_d), *extra]
     try:
         # Bytes, not text: stderr may carry a file name that is not UTF-8

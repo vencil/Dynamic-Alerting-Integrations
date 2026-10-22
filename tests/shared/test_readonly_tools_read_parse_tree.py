@@ -30,6 +30,7 @@ import subprocess
 import sys
 
 import pytest
+from _go_refusal import assert_refused, refuses  # noqa: E402  (#3206)
 import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -41,7 +42,6 @@ for _sub in ("", "ops", "lint"):
         sys.path.insert(0, _p)
 
 import _lib_parse_tree  # noqa: E402
-from _lib_io import YamlFileError  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -127,10 +127,12 @@ def test_gitops_check_parses_no_yaml(tmp_path, no_yaml_parse):
 
 
 def test_gitops_check_names_an_unreadable_defaults_carrier(tmp_path):
+    """#3206: a carrier parse-tree cannot read refuses the run, named, with
+    its kind — before any check could call it merely invalid."""
     gc = _tool("gitops_check")
-    result = gc.check_local(str(_write(tmp_path, {"_defaults.yaml": "a: 1\na: 2\n"})))
-    assert result.status == "fail"
-    assert "_defaults.yaml is invalid: duplicate_key" in result.message, result.message
+    with refuses("_defaults.yaml") as err:
+        gc.check_local(str(_write(tmp_path, {"_defaults.yaml": "a: 1\na: 2\n"})))
+    assert "(duplicate_key:" in err.getvalue()
 
 
 def test_gitops_check_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):
@@ -166,9 +168,8 @@ def test_diagnose_names_a_carrier_parse_tree_refuses(tmp_path):
     dg = _tool("diagnose")
     d = _write(tmp_path, {**_DIAG, "_defaults.yaml":
                           "defaults: !!set {cpu}\noptional_overrides: [x]\n"})
-    with pytest.raises(Exception, match="_defaults.yaml") as exc:
+    with refuses("_defaults.yaml"):  # the shared refusal (#3206)
         dg.resolve_inheritance_chain("tx", str(d))
-    assert type(exc.value).__name__ == "ParseFailedError", exc.value
 
 
 def test_diagnose_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):
@@ -250,14 +251,16 @@ def test_backtest_parses_no_yaml(tmp_path, no_yaml_parse):
 
 
 def test_backtest_names_an_unreadable_conf_file(tmp_path):
-    with pytest.raises(YamlFileError, match="db-a.yaml"):
+    with refuses("db-a.yaml"):  # the shared refusal (#3206)
         _bt_trees(tmp_path, {"db-a.yaml": b"tenants:\n  a\xff: {}\n"})
 
 
-def test_backtest_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys, no_parse_tree_binary):
-    """No `parse-tree` binary changes nothing (the backtest has no such
-    reader); no da-guard at all is rc 2, `served_values_unavailable`."""
-    _bt_trees(tmp_path)
+def test_backtest_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
+    """No da-guard at all is rc 2, `served_values_unavailable` — since #3206
+    the backtest reads the tree's index (`parse-tree`) first, and a missing
+    binary there is the same answer."""
+    _write(tmp_path / "new", _BT)
+    _write(tmp_path / "base", _BT_BASE)
     bt = _tool("backtest_threshold")
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     monkeypatch.setattr(sys, "argv", ["bt", "--config-dir", str(tmp_path / "new"),
@@ -363,8 +366,9 @@ def test_retire_drift_parses_no_yaml(tmp_path, no_yaml_parse):
 def test_retire_drift_names_an_unreadable_tenant_file(tmp_path):
     rd = _tool("check_retire_drift")
     d = _write(tmp_path / "conf.d", {**_RD, "u.yaml": "tenants:\n  a: [\n"})
-    with pytest.raises(YamlFileError, match="syntax_error"):
+    with refuses("u.yaml") as err:  # the shared refusal (#3206)
         rd.conf_d_declared_db_type_tenants(d)
+    assert "(syntax_error:" in err.getvalue()
 
 
 def test_retire_drift_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):
@@ -399,8 +403,9 @@ def test_path_metadata_parses_no_yaml(tmp_path, monkeypatch, no_yaml_parse):
 
 
 def test_path_metadata_names_an_unreadable_file(tmp_path, monkeypatch, capsys):
-    assert _pm_main(monkeypatch, _write(tmp_path, {**_PM, "prod/u.yaml": "a: [\n"})) == 0
-    assert "u.yaml:0: warning: not checked — " in capsys.readouterr().err
+    d = _write(tmp_path, {**_PM, "prod/u.yaml": "a: [\n"})
+    rc = _pm_main(monkeypatch, d)  # the shared refusal (#3206), not a warning
+    assert_refused(rc, capsys.readouterr().err, ["prod/u.yaml"])
 
 
 def test_path_metadata_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_parse_tree_binary):
@@ -437,10 +442,9 @@ def test_unit_sanity_parses_no_yaml(tmp_path, no_yaml_parse):
 
 def test_unit_sanity_names_an_unreadable_file(tmp_path):
     _write(tmp_path, {f"{_US_CONFD}/_defaults.yaml": "defaults:\n  k: 50\n  k: 60\n"})
-    errors = _us_errors(tmp_path)
-    assert len(errors) == 1 and errors[0].startswith(
-        f"NOT-READ: {_US_CONFD}/_defaults.yaml: da-guard parse-tree cannot read it "
-        "(duplicate_key"), errors
+    with refuses("_defaults.yaml") as err:  # the shared refusal (#3206)
+        _us_errors(tmp_path)
+    assert "(duplicate_key:" in err.getvalue()
 
 
 def test_unit_sanity_without_da_guard_is_exit_2(no_parse_tree_binary):
