@@ -1062,53 +1062,14 @@ func (c *ThresholdConfig) resolveSilentModesAt(now time.Time, logf func(format s
 			continue // Normal mode (default) — no silent entries
 		}
 
-		val := strings.TrimSpace(sv.Default)
-
-		// Try structured format: check if the value looks like YAML mapping
-		// ScheduledValue.UnmarshalYAML serializes mappings back to YAML string
-		if strings.Contains(val, "target:") {
-			parsed := silentModeStructured{}
-			if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-				logf("WARN: failed to parse structured _silent_mode for tenant=%s: %v", tenant, err)
-				continue
-			}
-			target := strings.TrimSpace(strings.ToLower(parsed.Target))
-			if isDisabled(target) || target == "" {
-				continue
-			}
-
-			var expires time.Time
-			var expired bool
-			if parsed.Expires != "" {
-				t, err := time.Parse(time.RFC3339, parsed.Expires)
-				if err != nil {
-					// #2000: fail-CLOSED — an unparseable expires drops the whole
-					// structured _silent_mode (no silent entry → notifications NOT
-					// suppressed) rather than silencing with no end. Same reasoning
-					// as the maintenance branch in ResolveStateFiltersAt.
-					logf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", parsed.Expires, tenant, err)
-					continue
-				}
-				expires = t
-				expired = now.After(t)
-			}
-
-			entries := resolveSilentTarget(tenant, target, expires, parsed.Reason, expired)
-			result = append(result, entries...)
+		// One reading of the value, shared with silentModeProblem (#3227).
+		r := silentModeOf(sv)
+		r.logWarn(logf, tenant)
+		if r.canonical.Kind != silentModeActive {
 			continue
 		}
-
-		// Scalar format (backward compatible)
-		lower := strings.TrimSpace(strings.ToLower(val))
-		if isDisabled(lower) || lower == "" {
-			continue
-		}
-
-		entries := resolveSilentTarget(tenant, lower, time.Time{}, "", false)
-		if len(entries) == 0 {
-			logf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", lower, tenant)
-		}
-		result = append(result, entries...)
+		expired := r.hasExpires && now.After(r.expires)
+		result = append(result, resolveSilentTarget(tenant, r.target, r.expires, r.canonical.Reason, expired)...)
 	}
 
 	return result
