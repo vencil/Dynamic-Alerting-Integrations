@@ -1085,11 +1085,11 @@ func (c *ThresholdConfig) resolveSilentModesAt(now time.Time, logf func(format s
 		// One reading of the value, shared with silentModeProblem (#3227).
 		r := silentModeOf(sv)
 		r.logWarn(logf, tenant)
-		if r.canonical.Kind != silentModeActive {
+		if r.kind != silentModeActive {
 			continue
 		}
 		expired := r.hasExpires && now.After(r.expires)
-		result = append(result, resolveSilentTarget(tenant, r.target, r.expires, r.canonical.Reason, expired)...)
+		result = append(result, resolveSilentTarget(tenant, r.target, r.expires, r.reason, expired)...)
 	}
 
 	return result

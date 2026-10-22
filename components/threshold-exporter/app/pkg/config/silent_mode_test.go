@@ -29,7 +29,7 @@ type silentModeCase struct {
 // structured form's failure modes.
 func silentModeCases() []silentModeCase {
 	var cs []silentModeCase
-	for _, w := range append(append([]string{}, silentModeTargets...), disabledWords...) {
+	for _, w := range append(append([]string{}, silentModeTargets...), disabledWords()...) {
 		cs = append(cs,
 			silentModeCase{"word/" + w, "_silent_mode: " + w, false},
 			silentModeCase{"upper/" + w, "_silent_mode: " + strings.ToUpper(w), false},
@@ -143,7 +143,8 @@ func TestSilentModeCanonicalContract(t *testing.T) {
 	obs := make([]observed, len(cases))
 	for i, c := range cases {
 		sv := parseSilentMode(t, c.doc)
-		canon[i] = silentModeOf(sv).canonical
+		r := silentModeOf(sv)
+		canon[i] = r.canonical()
 		for _, now := range silentModeNows {
 			e, w := silentModeReaderAt(sv, now)
 			obs[i].entries = append(obs[i].entries, e)
@@ -195,13 +196,13 @@ func TestSilentModeCanonicalSpellings(t *testing.T) {
 		{"_silent_mode: warning", "_silent_mode: off"},
 	}
 	for _, p := range equal {
-		a, b := silentModeOf(parseSilentMode(t, p[0])).canonical, silentModeOf(parseSilentMode(t, p[1])).canonical
+		a, b := silentModeCanonicalOf(parseSilentMode(t, p[0])), silentModeCanonicalOf(parseSilentMode(t, p[1]))
 		if a != b {
 			t.Errorf("want equal:\n  %q -> %+v\n  %q -> %+v", p[0], a, p[1], b)
 		}
 	}
 	for _, p := range unequal {
-		a, b := silentModeOf(parseSilentMode(t, p[0])).canonical, silentModeOf(parseSilentMode(t, p[1])).canonical
+		a, b := silentModeCanonicalOf(parseSilentMode(t, p[0])), silentModeCanonicalOf(parseSilentMode(t, p[1]))
 		if a == b {
 			t.Errorf("want unequal:\n  %q -> %+v\n  %q -> %+v", p[0], a, p[1], b)
 		}
@@ -213,7 +214,7 @@ func TestSilentModeCanonicalSpellings(t *testing.T) {
 // what the resolver honours.
 func TestSilentModeTargetsMatchResolver(t *testing.T) {
 	t.Parallel()
-	candidates := append(append([]string{"", "purple", "warn", "crit", "both", "none"}, silentModeTargets...), disabledWords...)
+	candidates := append(append([]string{"", "purple", "warn", "crit", "both", "none"}, silentModeTargets...), disabledWords()...)
 	for _, c := range candidates {
 		got := len(resolveSilentTarget("t1", c, time.Time{}, "", false)) > 0
 		if want := slices.Contains(silentModeTargets, c); got != want {
@@ -230,7 +231,13 @@ func TestSilentModeTargetsMatchResolver(t *testing.T) {
 // which values switch a key off.
 func TestDisabledWordsUnchanged(t *testing.T) {
 	t.Parallel()
-	if want := []string{"disable", "disabled", "off", "false"}; !slices.Equal(disabledWords, want) {
-		t.Errorf("disabledWords = %q, want %q", disabledWords, want)
+	if want := []string{"disable", "disabled", "off", "false"}; !slices.Equal(disabledWords(), want) {
+		t.Errorf("disabledWords() = %q, want %q", disabledWords(), want)
 	}
+}
+
+// silentModeCanonicalOf is silentModeOf(sv).canonical() in one expression.
+func silentModeCanonicalOf(sv ScheduledValue) silentModeCanonical {
+	r := silentModeOf(sv)
+	return r.canonical()
 }
