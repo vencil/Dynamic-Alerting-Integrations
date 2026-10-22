@@ -1,0 +1,14 @@
+# Custom Alerts example — TENANT leaf under finance/ (tenant `pay-b`).
+# pay-b binds the `finance` profile AND writes its own _custom_alerts: its own
+# list replaces the profile's whole (no merge, ADR-024 §3), so the exporter
+# serves pay-b pending_settlements_high only, not payment_failure_ratio.
+tenants:
+  pay-b:
+    _profile: finance
+    _custom_alerts:
+      - recipe: threshold
+        name: pending_settlements_high
+        metric: pending_settlements
+        op: ">"
+        window: 5m
+        threshold: "500:critical"

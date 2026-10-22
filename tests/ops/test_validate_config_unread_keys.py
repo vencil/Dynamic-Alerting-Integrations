@@ -58,6 +58,47 @@ def test_a_platform_side_finding_is_one_line_with_its_tenants(tmp_path):
     assert r["details"] == ["_profiles.yaml: notice: unread `mysql_conections` (no_row) — tenant(s) ta, tb"]
 
 
+def test_a_profile_key_no_reader_reads_is_a_notice_on_the_profile(tmp_path):
+    """The `profiles` row judges no key names (#3042); a `_` key the registry
+    does not list, written in a profile, is reported here instead, on the
+    profile file — and `_custom_alerts`, which a profile carries, is not."""
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "_profiles.yaml": "profiles:\n  p1:\n    _unknown_thing: bad\n    _custom_alerts:\n"
+                          "      - {recipe: threshold, name: q, metric: m, op: \">\", window: 5m,"
+                          " threshold: \"1:warning\"}\n",
+        "ta.yaml": "tenants:\n  ta:\n    _profile: p1\n"}))
+    assert r["details"] == ["_profiles.yaml: notice: unread `_unknown_thing` (unregistered) — tenant(s) ta"]
+
+
+_PROFILE_KEYS = ("profiles:\n  p1:\n    _unknown_thing: bad\n    _namespaces: [x]\n"
+                 "    _profile: p2\n    _metadata: {owner: t}\n    _silent_mode: warning\n"
+                 "  p2:\n    mysql_connections: 70\n")
+
+
+@pytest.mark.parametrize("text", [
+    pytest.param("tenants:\n  ta:\n    mysql_connections: 70\n", id="unbound"),
+    pytest.param("tenants:\n  ta:\n    _profile: p1\n", id="bound"),
+    pytest.param("tenants:\n  ta:\n    _profile: p1\n    _namespaces: [own]\n", id="shadowed"),
+])
+def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, text):
+    """#3042: a `_` key no reader reads in a profile is reported on the
+    profile file whether or not a tenant binds the profile, and when the
+    tenant's own value shadows it; `_profile` in a profile never takes
+    effect. `_metadata` and `_silent_mode` are read in a profile: no line.
+    The reason is the profile layer's, bound or not (`not_read_in_profile`,
+    never the tenant path's `not_exporter_key`)."""
+    r = vc.check_unread_keys(_tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                                              "_profiles.yaml": _PROFILE_KEYS, "ta.yaml": text}))
+    who = "tenant(s) ta" if "_profile: p1" in text else "no tenant"
+    got = [d for d in r["details"] if d.startswith("_profiles.yaml:")]
+    assert got == [
+        f"_profiles.yaml: notice: unread `_namespaces` (not_read_in_profile) — {who}",
+        f"_profiles.yaml: notice: unread `_profile` (not_read_in_profile) — {who}",
+        f"_profiles.yaml: notice: unread `_unknown_thing` (unregistered) — {who}",
+    ], r["details"]
+
+
 def test_a_clean_tree_passes(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"}))
@@ -123,3 +164,15 @@ def test_a_clean_nested_tree_passes_without_a_flat_read_caveat(tmp_path):
     assert not row.get("skipped_nested_files"), row
     # The root-only `_policies` note is policy_dsl's to print, once.
     assert p.stderr.count("`_policies` are read from the root") <= 1, p.stderr
+
+
+def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
+    """Policy-as-Code reads a tenant's view: a rule naming `_namespaces` reads
+    nothing from a profile no tenant binds, so the key is still reported."""
+    defaults = _DEFAULTS + ("_policies:\n  - {name: ns, target: _namespaces, operator: required,"
+                            " severity: error}\n")
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": defaults,
+        "_profiles.yaml": "profiles:\n  p1:\n    _namespaces: [x]\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+    assert "_profiles.yaml: notice: unread `_namespaces` (not_read_in_profile) — no tenant" in r["details"], r

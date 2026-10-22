@@ -1306,9 +1306,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         covers every root `_` file's `profiles:`, not only `_profiles.yaml`,
         and profiles no tenant elects — in a tree with no tenant at all too.
         A generator that cannot read the tree fails the row (fail-closed).
-      - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
-        …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
-        into its tenants (docs/design/config-driven.md, #2830)
+      - No key-name judgment: whether a reader reads a `_` key in a profile
+        is the `unread_keys` row's (the shared verdict, from the registry's
+        `profile` layer, bound or not; #3042)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
 
@@ -1382,7 +1382,6 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                             [f"the route generator cannot read this tree: {exc}"],
                             hint=_PROFILE_ROUTING_UNREAD_HINT)
     errors = [msg for _field, msg in in_profiles]
-    routing_fields = {field for field, _msg in in_profiles}
 
     # ── Profile structure validation ──
     for p_name, p_data in profiles.items():
@@ -1393,21 +1392,10 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         if not p_data:
             warnings.append(f"profile={p_name}: empty profile (no metric keys)")
             continue
-
-        for key in p_data:
-            # Reserved keys should not be in profiles (they belong in tenant config)
-            if key.startswith("_"):
-                if f"_profiles.yaml:profiles.{p_name}.{key}" in routing_fields:
-                    continue  # a FAIL above (#2914)
-                if key == "_metadata":
-                    continue  # filled into the tenants, a documented use (#2830)
-                if _is_reserved_key(key):
-                    warnings.append(
-                        f"profile={p_name}: contains reserved key \"{key}\" "
-                        f"(reserved keys belong in tenant config, not profiles)")
-                else:
-                    warnings.append(
-                        f"profile={p_name}: contains unknown reserved key \"{key}\"")
+        # ⛔ No key-name judgment here (#3042, ADR-038 decision 3): whether a
+        # `_` key in a profile is read is the `unread_keys` row's verdict,
+        # from the registry's layers — `_custom_alerts`, for one, is read in
+        # a profile (ADR-024 §3).
 
     # ── Tenant _profile reference validation (#2115 0-B) ──
     # `effective_config["_profile"]` is the name as written (source text) plus
@@ -2483,7 +2471,9 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         fam = ("; still served: " + ", ".join(
             f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
             if f.served_family else "")
-        details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — tenant(s) {who}")
+        # A profile key no tenant binds names none (#3042).
+        who = f"tenant(s) {who}" if who else "no tenant"
+        details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — {who}")
     if verdict.undecidable:
         n = sum(v.verdict == key_verdict.UNDECIDABLE for vs in verdict.keys.values() for v in vs)
         details.append(f"no root platform file was read: {n} threshold key(s) cannot be judged "
