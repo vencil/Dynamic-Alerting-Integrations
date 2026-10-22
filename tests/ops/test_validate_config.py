@@ -3444,6 +3444,45 @@ class TestJsonSchemaRow:
                    for x in row["details"]), row
         assert rc == 1
 
+    def test_group_by_string_in_a_root_platform_tenants_block_fails(
+            self, tmp_path, capsys, cli_argv):
+        """#2743: the same entry in the ROOT `_defaults.yaml`'s `tenants:`
+        block is the tenant's value to every plane — and the same violation,
+        named by the platform file."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": (self._DEFAULTS + "tenants:\n  ta:\n"
+                               + self._RECEIVER + "      group_by: alertname\n"),
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+        })
+        rc, rows = self._run(d, capsys, cli_argv)
+        row = rows["json_schema"]
+        assert row["status"] == "fail", row
+        assert "_defaults.yaml: 'alertname' is not of type 'array', 'null' " \
+               "@ /tenants/ta/_routing/group_by" in row["details"], row
+        assert rc == 1
+
+    def test_a_root_platform_files_tenants_block_is_quoting_checked_once(
+            self, tmp_path, capsys, cli_argv):
+        """#2743: a root `_` file other than `_defaults*` (`_profiles.yaml`)
+        overlays its `tenants:` block too. `yaml_quoting` reports its misread
+        scalar; `json_schema` leaves it to that row (#2695) and still judges
+        the rest of the entry."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "_profiles.yaml": ("profiles:\n  std: {}\ntenants:\n  ta:\n"
+                               "    mysql_connections: 70\n"
+                               + self._RECEIVER + "      group_by: alertname\n"),
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        quoting = rows["yaml_quoting"]
+        assert quoting["status"] == "fail", quoting
+        assert [x.split(": ", 2)[:2] for x in quoting["details"]] == [
+            ["_profiles.yaml", "/tenants/ta/mysql_connections"]], quoting
+        assert rows["json_schema"]["details"] == [
+            "_profiles.yaml: 'alertname' is not of type 'array', 'null' "
+            "@ /tenants/ta/_routing/group_by"], rows["json_schema"]
+
     def test_platform_schema_refusal_is_reported(self, tmp_path, capsys,
                                                  cli_argv):
         """A key platform-defaults.schema.json refuses (additionalProperties
