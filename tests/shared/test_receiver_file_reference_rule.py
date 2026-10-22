@@ -253,6 +253,15 @@ def test_paths_name_every_key_at_its_depth():
         "http_config.http_headers.X-A.files", "http_config.oauth2.claims.l[0].k_file"]
 
 
+def test_a_key_that_is_not_a_string_is_refused():
+    # Alertmanager decodes a `!!binary` key to its text (`password_file`);
+    # the rule cannot read a bytes key's name, so it refuses any non-string
+    # key rather than rely on the file reader rejecting the tag first.
+    receiver = _hook({"basic_auth": {b"password_file": "/p"}, "tls_config": {1: "x"}})
+    assert file_reference_paths(receiver) == [
+        "http_config.basic_auth.b'password_file'", "http_config.tls_config.1"]
+
+
 # ── 3. the generator refuses the whole tree, wherever the receiver sits ──
 
 _DEFAULTS = "defaults:\n  cpu_usage_percent: 80\n"

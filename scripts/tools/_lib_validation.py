@@ -705,12 +705,17 @@ def file_reference_paths(value: Any, path: str = "") -> list[str]:
     list items as ``[i]`` — ``http_config.basic_auth.password_file``,
     ``http_config.http_headers.X-Token.files``. The value under such a key
     does not matter (null and ``""`` included): the key itself is refused,
-    as the schema refuses it (no such property, additionalProperties: false)."""
+    as the schema refuses it (no such property, additionalProperties: false).
+    A key that is not a string (a ``!!binary`` key reads as bytes, and
+    Alertmanager decodes ``!!binary password_file`` to ``password_file``) is
+    refused too: the rule cannot read its name, so it does not lean on the
+    file reader having refused the tag first."""
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            here = f"{path}.{key}" if path else str(key)
-            if is_file_reference_key(key):
+            name = key if isinstance(key, str) else repr(key)
+            here = f"{path}.{name}" if path else name
+            if not isinstance(key, str) or is_file_reference_key(key):
                 out.append(here)
             else:
                 out.extend(file_reference_paths(item, here))
