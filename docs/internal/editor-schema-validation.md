@@ -109,6 +109,7 @@ JetBrains 內建 YAML schema 支援（不需 yaml-language-server）：
 - **巢狀值刻意 loose**（`defaults` / `state_filters` 下的 metric / filter 名是動態的、不建模）。
 - 頂層 properties 同時鏡像 Go `ThresholdConfig`（`tenants` / `profiles` / `max_metrics_per_tenant` 也放行——loader 從任何檔解碼它們；但 exporter 只採信根目錄 `_defaults.yaml` 的 `max_metrics_per_tenant`，其他位置記 WARN 忽略，#2028）。
 - **CI（`check_confd_schema.py`）與編輯器（devcontainer `yaml.schemas`）用同一 schema、同一組檔案**（兩種副檔名拼法、不分大小寫；例外見〈適用範圍〉的已知差異）。
+- ⚠️ **根目錄平台檔的 `tenants:` 區塊只有 CI 檢查，編輯器不檢查**（#2743）。exporter 與路由產生器把根目錄任一 `_` 檔（`_defaults*`、`_profiles.yaml`…）的 `tenants:` 當成該租戶自己的值合併，所以 `check_confd_schema.py`（與 `validate-config` 的 `json_schema` 列）拿 `tenant-config.schema.json` 逐筆檢查每個 `tenants.<id>`，錯誤寫成 `_defaults.yaml: … @ /tenants/<id>/…`。這個 schema 的 `tenants` 刻意維持 loose：編輯器分不出檔案在根目錄還是子目錄，而子目錄平台檔的 `tenants:` 沒有任何讀取端讀（#1576）。
 
 **仍 fast-follow（defer-with-trigger）**：(1) `_defaults` 的 **full 巢狀結構** schema（metric / filter 名動態，須真建模）——trigger＝收到 value-level「對合法亮紅 / 對錯放行」回報；(2) 其餘 `_*`（`_profiles` / `_routing_profiles` / `_rbac` / `_domain_policy` / `_instance_mapping`）的專屬 schema——形狀各異，`_routing_profiles` 等已有自家 validator（`check_routing_profiles.py`）。
 

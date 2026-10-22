@@ -23,6 +23,14 @@ SCOPE:
   _instance_mapping / _rbac ... — basename starts with "_") have their own shapes and
   validators; they are SKIPPED and listed explicitly so coverage is never silently
   capped.
+  ROOT PLATFORM `tenants:` (#2743): every `_` file at the conf.d ROOT that the exporter
+  reads (`_defaults*`, `_profiles.yaml`, … — da-guard parse-tree's verdict,
+  `Entry.root_platform_file`) may carry a `tenants:` block, the platform's per-tenant
+  default that the exporter and the route generator merge as the tenant's own values.
+  Each `tenants.<id>` entry there is validated against tenant-config.schema.json
+  itself — the definition a tenant file is held to — and named
+  `<file>: … @ /tenants/<id>/…`. A nested platform file's block is read by no plane
+  (#1576) and is not judged.
 
 READ (ADR-036 step 4, #2906): every file is read through `da-guard parse-tree`
   (yaml.v3, the exporter's own reading; `$DA_GUARD_BINARY`, else `da-guard` on
@@ -38,7 +46,7 @@ ERROR (#2164): a value in a string-typed field that yaml.v3 reads as
 WARN (#2509, never changes the exit code): a YAML 1.1 boolean word (`yes` /
   `no` / `on` / `off`, three spellings each), quoted or not, in a field that
   takes a boolean — a string to yaml.v3, which the field refuses. Printed as
-  `WARN: <file>: <path>: …`. A root `_defaults*` file's `tenants:` block is
+  `WARN: <file>: <path>: …`. A root platform file's `tenants:` block is
   held to the tenant schema for this and #2164.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
@@ -231,6 +239,30 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
         validator.validate(doc, platform_schema,
                            registry=registry if registry is not None
                            else default_registry())
+    except validator.ValidationError as exc:
+        loc = "/".join(str(p) for p in exc.absolute_path)
+        return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
+    return []
+
+
+def platform_tenants_violations(rel: str, block: object, tenant_schema: dict,
+                                validator) -> list[str]:
+    """The violation in a ROOT platform file's `tenants:` block (#2743), as
+    `<rel>: … @ /tenants/<id>/…`.
+
+    ⛔ Judged by the tenant schema ITSELF — the document every tenant file is
+    validated against, `{"tenants": block}` — not by a copy of its
+    `tenants` definition in the platform schema: the exporter
+    (platform_overlay.go) and the route generator merge each entry as the
+    tenant's own values, so there is one definition of an entry. No key is
+    legal in only one of the two places (the overlay is per top-level key;
+    `_metadata` / `_profile` / `_custom_alerts` each have a platform layer).
+
+    The platform schema leaves `tenants` loose on purpose: it binds every
+    `_defaults*` document, nested ones too (the editor's binding), and below
+    the root no plane reads the block (#1576)."""
+    try:
+        validator.validate({"tenants": block}, tenant_schema)
     except validator.ValidationError as exc:
         loc = "/".join(str(p) for p in exc.absolute_path)
         return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
@@ -448,21 +480,29 @@ def validate_dir(config_dir: str, schema: dict, validator,
         is_defaults = platform_schema is not None and entry.defaults_document
         is_profiles = (profiles_schema is not None
                        and basename in ROUTING_PROFILES_NAMES)
+        # #2743 (#2509 review F3 before it, quoting only): a ROOT platform
+        # file's `tenants:` block is the tenant's own values to the exporter
+        # and the route generator (platform overlay) — held to the tenant
+        # schema, the definition a tenant file is held to. Which files is
+        # Go's verdict (`root_platform_file`), not a name rule here.
+        holds_tenants = entry.root_platform_file
         if entry.reserved and not is_defaults and not is_profiles:
+            # Its own shape is another validator's; only a root one's
+            # `tenants:` block is read here.
             skipped.append(rel)
-            continue
-        if is_profiles:
+            if not holds_tenants:
+                continue
+            file_schema = file_schema_name = None
+        elif is_profiles:
             file_schema, file_schema_name = profiles_schema, PROFILES_SCHEMA_NAME
         elif is_defaults:
             file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
         else:
             file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
-        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block is a
-        # tenant's values to the exporter (platform overlay) — the platform
-        # schema leaves it loose, so it is held to the tenant schema too
-        # (whose only top-level key is `tenants`: nothing else is walked twice).
-        quoting = [(file_schema, file_schema_name)]
-        if is_defaults and "/" not in rel:
+        # The tenant schema's only top-level key is `tenants`: walking a
+        # platform file with it reads that block and nothing else twice.
+        quoting = [] if file_schema is None else [(file_schema, file_schema_name)]
+        if holds_tenants:
             quoting.append((schema, TENANT_SCHEMA_NAME))
         as_quoted = (quoting_reported_for is not None
                      and rel in quoting_reported_for)
@@ -476,6 +516,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
                 continue
             root = reader.node(path)
         except FileUnreadable as exc:
+            if file_schema is None:
+                continue  # a meta-file: reading it is its own validator's
             if exc.kind == "top_level_not_mapping":
                 # A tenant-shaped or platform file whose top document is a
                 # list / scalar is malformed — a violation, not a skip, or it
@@ -512,6 +554,13 @@ def validate_dir(config_dir: str, schema: dict, validator,
         # An empty / comment-only / null document is `{}` in parse-tree. For
         # `_defaults*` and `_routing_profiles` that is a placeholder (nothing
         # read from it), as before; a tenant file is judged by the schema.
+        if holds_tenants and isinstance(doc, dict) and "tenants" in doc:
+            violations.extend(platform_tenants_violations(
+                rel, doc["tenants"], schema, validator))
+            if file_schema is None:
+                checked += 1
+        if file_schema is None:
+            continue
         if doc == {} and (is_defaults or is_profiles):
             doc = None
         docs = [doc]
