@@ -833,7 +833,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗（`--mapping` 指到不存在的檔也算，列為 FAIL，不是呼叫端錯誤） |
-| `2` | 呼叫端錯誤：`preflight`（含 `all`）或 `runtime`（含 `all`）的 Prometheus 連不上、查詢失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。 `runtime` 的維護／靜默模式查詢失敗先前不產生檢查項，結果是 `Overall: PASS`、結束碼 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。Alertmanager 連不上時那一項仍是 skip |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）或 `runtime`（含 `all`）的 Prometheus 連不上、查詢失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。`runtime` 的維護／靜默模式查詢失敗先前不產生檢查項，結果是 `Overall: PASS`、結束碼 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。Alertmanager 連不上時那一項仍是 skip |
 
 ---
 

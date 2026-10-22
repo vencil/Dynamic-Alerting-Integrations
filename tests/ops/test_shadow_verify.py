@@ -435,3 +435,15 @@ class TestQueryNotAnsweredIsACheck:
     def test_an_empty_count_still_reads_as_zero(self):
         c = _run(sv.check_preflight, lambda q: _vector())["recording_rules_loaded"]
         assert (c["status"], c["detail"]) == ("warn", "0 tenant:* recording rule metric names found")
+
+
+@pytest.mark.parametrize("marker,check", [
+    ("tenant:.*", "recording_rules_loaded"),
+    ("shadow", "shadow_rules_present"),
+])
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_every_count_refuses_a_non_finite_count(marker, check, value):
+    """#3133: both count positions are a named caller_error, not a crash."""
+    c = _run(sv.check_preflight, lambda q: _vector(value) if marker in q
+             else _vector("3"))[check]
+    assert (c["status"], c.get("caller_error")) == ("fail", True)

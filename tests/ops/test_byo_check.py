@@ -1238,3 +1238,34 @@ class TestAnswersReadByTheLib:
                 with pytest.raises(SystemExit) as exc:
                     bc.main()
         assert exc.value.code == 2
+
+
+class TestEveryCountIsReadByTheLib:
+    """#3133: each count(...) position refuses a non-finite count by name —
+    a caller_error check, not an internal-error crash (review of 4f7e9dd03)."""
+
+    @pytest.mark.parametrize("query,check", [
+        ("count(user_threshold)", "step2_user_threshold_metrics"),
+        ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "step3_recording_rules_output"),
+        ("count(tenant:alert_threshold:mysql_connections > 0)", "e2e_vector_matching"),
+    ], ids=["step2b", "step3b", "e2e"])
+    @pytest.mark.parametrize("value", ["NaN", "+Inf"])
+    def test_a_count_that_is_not_finite_is_a_caller_error(self, query, check, value):
+        checks = TestAnswersReadByTheLib()._prometheus(
+            lambda q: _vector(value) if q == query else _vector())
+        assert (checks[check]["status"], checks[check].get("caller_error")) == ("fail", True)
+
+
+class TestStep1PrimaryError:
+    def test_the_primary_error_reaches_the_report_when_the_fallback_answers(self):
+        """#3133: the fallback's answer no longer hides the primary's error."""
+        primary = 'count by(tenant) (up{job=~".*exporter.*|.*tenant.*"})'
+        checks = TestAnswersReadByTheLib()._prometheus(
+            lambda q: (None, "HTTP 503") if q == primary else _vector("1"))
+        c = checks["step1_tenant_label"]
+        assert c["status"] == "pass"
+        assert c["detail"].endswith(" (primary query failed: HTTP 503)")
+
+    def test_no_note_when_the_primary_answers(self):
+        checks = TestAnswersReadByTheLib()._prometheus(lambda q: _vector("1"))
+        assert "primary query failed" not in checks["step1_tenant_label"]["detail"]

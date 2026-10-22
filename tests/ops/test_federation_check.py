@@ -454,3 +454,30 @@ class TestQueryNotAnsweredIsACheck:
             with pytest.raises(SystemExit) as exc:
                 fc.main()
         assert exc.value.code == EXIT_CALLER_ERROR
+
+
+@pytest.mark.parametrize("query,check", [
+    ("count(user_threshold)", "central_threshold_exporter"),
+    ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "central_recording_rules"),
+    ('count(up{tenant!=""})', "central_edge_metrics"),
+], ids=["threshold-exporter", "recording-rules", "fallback"])
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_every_count_refuses_a_non_finite_count(query, check, value):
+    """#3133: each count position is a named caller_error, not a crash. The
+    fallback is asked only when the cluster query answered empty."""
+    def answer(q):
+        if q == query:
+            return _vector(value)
+        return _vector() if q == 'count by(cluster) (up{tenant!=""})' else _vector("1")
+    c = _central(answer)[check]
+    assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_the_cross_cluster_count_refuses_a_non_finite_count(value):
+    with patch.object(fc, "check_edge", return_value=[]), \
+            patch.object(fc, "check_central", return_value=[]), \
+            patch.object(fc, "query_prometheus",
+                         return_value=([{"metric": {}, "value": [1, value]}], None)):
+        checks = fc.check_e2e("http://prom:9090", ["http://edge:9090"])
+    assert (checks[0]["status"], checks[0].get("caller_error")) == ("fail", True)

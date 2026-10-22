@@ -421,10 +421,16 @@ def check_prometheus(args):
     results, err = query_prometheus(
         prom_url, 'count by(tenant) (up{job=~".*exporter.*|.*tenant.*"})'
     )
+    primary_err = err
     if err:
         # Fallback: check any metric with tenant label
         results, err = query_prometheus(prom_url, "count by(tenant) (up{tenant!=\"\"})")
-    checks.append(_judge_step1_tenant_label(results, err))
+    c = _judge_step1_tenant_label(results, err)
+    if primary_err and not err:
+        # #3133: the fallback answered, but the primary query's error still
+        # reaches the report rather than vanishing behind it.
+        c["detail"] += f" (primary query failed: {primary_err[:60]})"
+    checks.append(c)
 
     # Step 2: threshold-exporter scrape
     results, err = query_prometheus(prom_url, 'up{job=~".*threshold.*|.*dynamic.*"}')
