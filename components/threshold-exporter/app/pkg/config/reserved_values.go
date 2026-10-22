@@ -19,12 +19,32 @@ const (
 	ShapeScalarOrMapping = "scalar_or_mapping"
 )
 
+// valueCheck is what a registry `value.check` name is bound to: the
+// exporter's own reading of the value, in the two forms the write gate needs.
+type valueCheck struct {
+	// problem judges a value: "" when the exporter reads it, otherwise the
+	// reason it ignores it, in one tenant-free sentence.
+	problem func(ScheduledValue) string
+	// reading is the value as the exporter reads it, as a comparable value:
+	// two values whose readings are == are read the same way — quoting, key
+	// order, comments and every spelling the reader treats alike fall away.
+	// KeyValidation.Ratchet compares these, never the ScheduledValue itself.
+	reading func(ScheduledValue) any
+	// effect is what happens while the reader ignores the value, for the
+	// write gate's message ("nothing is silenced while it is set").
+	effect string
+}
+
 // valueChecks binds each `value.check` name the registry may carry to the
-// function that judges a value with the exporter's own parser: "" when the
-// exporter reads the value, otherwise the problem in one sentence.
-// TestValueChecks_BoundBothWays keeps it equal to the names the registry
-// uses, in both directions.
-var valueChecks = map[string]func(ScheduledValue) string{}
+// exporter-side reading that judges it. TestValueChecks_BoundBothWays keeps
+// it equal to the names the registry uses, in both directions.
+var valueChecks = map[string]valueCheck{
+	"silent_mode": {
+		problem: silentModeProblem,
+		reading: func(sv ScheduledValue) any { return silentModeOf(sv).canonical },
+		effect:  "nothing is silenced while it is set",
+	},
+}
 
 // metadataPatchReason is the refusal tenant-api has given for a batch patch
 // of `_metadata` since #2859; kept word for word.
@@ -75,13 +95,29 @@ func CheckReservedValue(k string, sv ScheduledValue) string {
 	return checkReservedValue(k, sv, reservedValueChecks, valueChecks)
 }
 
-func checkReservedValue(k string, sv ScheduledValue, names map[string]string, fns map[string]func(ScheduledValue) string) string {
-	fn := fns[names[k]]
-	if fn == nil {
+func checkReservedValue(k string, sv ScheduledValue, names map[string]string, checks map[string]valueCheck) string {
+	c, ok := checks[names[k]]
+	if !ok || c.problem == nil {
 		return ""
 	}
-	return fn(sv)
+	return c.problem(sv)
 }
+
+// readAlike reports whether the exporter reads a and b, two values of
+// reserved key k, the same way — by the reading k's registry `value.check`
+// is bound to. A key with no check is never "alike": with nothing to say
+// how the reader reads it, the caller must treat the value as changed.
+func readAlike(k string, a, b ScheduledValue) bool {
+	c, ok := valueChecks[reservedValueChecks[k]]
+	if !ok || c.reading == nil {
+		return false
+	}
+	return c.reading(a) == c.reading(b)
+}
+
+// valueEffect is what happens while the reader ignores a value of k ("" when
+// k's check does not say).
+func valueEffect(k string) string { return valueChecks[reservedValueChecks[k]].effect }
 
 func sortedCopy(in []string) []string {
 	out := append([]string(nil), in...)

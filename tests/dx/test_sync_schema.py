@@ -268,7 +268,9 @@ class TestValueAndBatchDerivations:
         d = ss.derive(reg)
         assert d["scope_metadata_keys"] == ["_profile"]
         assert d["batch_unsettable"] == ["_routing", "_routing_receiver_type"]
-        assert d["value_checks"] == {}
+        # #3227: `_silent_mode` is judged by the exporter's reader at the
+        # write gate (valueChecks in pkg/config/reserved_values.go).
+        assert d["value_checks"] == {"_silent_mode": "silent_mode"}
 
     def test_scope_follows_the_layers_the_exporter_reads_metadata_in(self):
         reg = _registry()
