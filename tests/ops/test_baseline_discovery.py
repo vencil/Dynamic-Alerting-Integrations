@@ -362,6 +362,30 @@ class TestMainObservationLoop:
         assert "connection refused" in err
         assert (out_dir / "baseline-db-a-timeseries.csv").exists()
 
+    @pytest.mark.parametrize("metric", ["connections", "cpu"],
+                             ids=["unbounded", "bounded"])
+    def test_a_point_not_measured_is_named_not_too_few_samples(
+            self, capsys, monkeypatch, tmp_path, cli_argv, metric):
+        """#3133：沒量成的指標在 stdout 與摘要 CSV 都寫成查詢失敗，
+        不寫「樣本不足」，cpu 也不把原因推給沒設 limit。"""
+        import csv
+        out_dir = tmp_path / "out"
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "6", "--interval", "2", "--metrics", metric, "-o", str(out_dir))
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            _as_reader(lambda url, q: (None, "connection refused")))
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        with pytest.raises(SystemExit) as exc:
+            baseline_discovery.main()
+        assert exc.value.code == 2
+        out = capsys.readouterr().out
+        with open(out_dir / "baseline-db-a-summary.csv", encoding="utf-8-sig") as fh:
+            note = list(csv.DictReader(fh))[0]["note"]
+        assert note == "查詢失敗 3/3 次，本列不完整", note
+        assert "查詢失敗 3/3 次" in out
+        for wrong in ("樣本不足", "無有效資料", baseline_discovery.NO_LIMIT_NOTE):
+            assert wrong not in out
+
     def test_observation_sleep_called(self, monkeypatch, tmp_path, cli_argv):
         """sleep 應被呼叫 (total_samples - 1) 次。"""
         sleep_calls = []
@@ -542,8 +566,22 @@ class TestReportOutput:
             baseline_discovery.main()
         assert exc.value.code == 2
         out, err = capsys.readouterr()
-        assert "無有效資料" in out
+        assert "查詢失敗 2/2 次，本列不完整" in out
+        assert "無有效資料" not in out
         assert "ERROR: Prometheus query failed for 2 sample(s)" in err, err
+
+    def test_report_answered_but_empty_is_no_valid_data(self, capsys, monkeypatch,
+                                                         tmp_path, cli_argv):
+        """有回答但沒有樣本才是「無有效資料」，rc 0（#3133 對照組）。"""
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "4", "--interval", "2", "--metrics", "cpu", "-o", str(tmp_path / "out"))
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            _as_reader(lambda url, q: ([], None)))
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        out = capsys.readouterr().out
+        assert "無有效資料" in out
+        assert "查詢失敗" not in out
 
     def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path, cli_argv):
         """報告包含 patch 建議指令。

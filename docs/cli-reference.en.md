@@ -299,7 +299,7 @@ When something is wrong it lists `issues` and recent error logs:
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
+When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`, which is `unknown` when a mode query was not answered ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)); with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -408,7 +408,7 @@ da-tools baseline --tenant <name> [options]
 
 **Output**
 
-The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
+The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds; when a sampling query was not answered, that line's `note` reads 「查詢失敗 N/M 次，本列不完整」 (queries failed N of M times, the line is incomplete), [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
 Metrics observed and the tenant key each suggestion goes to:
 

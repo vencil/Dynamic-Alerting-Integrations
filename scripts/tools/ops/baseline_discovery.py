@@ -318,6 +318,7 @@ def main():
     samples = {key: [] for key in metrics}
     timestamps = []
     failed_queries: list[str] = []
+    failed_per_key = {key: 0 for key in metrics}
 
     for i in range(total_samples):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -332,6 +333,7 @@ def main():
                 # #3133: not measured — the point stays empty in the CSV, is
                 # counted, and the run ends partial (rc 2), never "樣本不足".
                 failed_queries.append(f"{key}: {exc}")
+                failed_per_key[key] += 1
                 samples[key].append(None)
             else:
                 samples[key].append(extract_scalar(results))
@@ -340,6 +342,11 @@ def main():
             time.sleep(args.interval)
 
     print(f"\n\n✅ 觀測完成：共 {total_samples} 個採樣點\n")
+
+    def failed_note(key):
+        """#3133: a point not measured is named as such — never as too few samples."""
+        n = failed_per_key[key]
+        return f"查詢失敗 {n}/{total_samples} 次，本列不完整" if n else None
 
     # 計算統計
     all_stats = {}
@@ -358,7 +365,12 @@ def main():
         print(f"■ {key} ({info['description']})")
         print(f"  Unit: {info['unit']}")
 
+        if failed_note(key):
+            print(f"  ⚠️  {failed_note(key)}")
         if stats["count"] == 0:
+            if failed_note(key):
+                print()
+                continue
             print(f"  ⚠️  無有效資料")
             if info.get("bounded"):
                 print(f"  {NO_LIMIT_NOTE}")
@@ -435,11 +447,14 @@ def main():
                        if stats["count"] >= 10 else
                        (NO_LIMIT_NOTE if stats["count"] == 0 else suggestion["note"]))
             suggestion = {"warning": None, "critical": None, "note": verdict}
+        note = suggestion["note"]
+        if failed_note(key):
+            note = failed_note(key) if stats["count"] == 0 else f"{failed_note(key)}；{note}"
         writer.writerow([
             key, info["unit"], stats["count"],
             stats["min"], stats["max"], stats["avg"],
             stats["p50"], stats["p90"], stats["p95"], stats["p99"],
-            suggestion["warning"], suggestion["critical"], suggestion["note"],
+            suggestion["warning"], suggestion["critical"], note,
         ])
     _write_csv_secure(summary_path, "\ufeff" + buf.getvalue())
 

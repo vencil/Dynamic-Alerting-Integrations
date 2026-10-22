@@ -300,7 +300,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`，模式查詢沒得到回答時它是 `unknown`（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -405,7 +405,7 @@ da-tools baseline --tenant <name> [options]
 
 **輸出**
 
-統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
+統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值；有採樣點的查詢沒得到回答時，該列 `note` 寫「查詢失敗 N/M 次，本列不完整」，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 觀測的指標與建議寫進的租戶 key：
 
