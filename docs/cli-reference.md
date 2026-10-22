@@ -1083,6 +1083,8 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
 | `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）；以及給了 `--alertmanager` 而它沒回答（連不上、HTTP 錯誤、回應不是 alert 物件的 list；[#3073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3073)，之前當成 0 筆被抑制、rc 0，`--ci --min-score` 下本該 rc 1 的也被放行成 0）——此時不印報告，stderr 帶 `Error: <Prometheus\|Alertmanager> query failed: <原文>`；`--json` 印 `{"status": "caller_error", "reason": "prometheus_query_error"（Alertmanager 為 `alertmanager_query_error`）, "error": "<原文>", ...}`（其餘鍵沿用正常報告並歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
 
+**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：`ALERTS` 的每個樣本值由 lib 讀一次。讀不懂的值（例如 `"abc"`，或不是字串）視為回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不算任何狀態，不計入評估；丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped`（每筆告警另有同名欄位），文字報告也會印一行。
+
 ---
 
 #### alert-correlate
@@ -1231,6 +1233,8 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `0` | 成功（CI 模式：沒有 critical 風險） |
 | `1` | CI 模式：有 critical 風險 |
 | `2` | 呼叫端錯誤：參數錯誤；或取不到基數資料。`--json` 的 `reason` 分得開兩種：Prometheus 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；或回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data` 時報 `no_cardinality_data`（rc 2），某一列既沒有 `values` 也沒有 `histograms` 時略過該列（rc 0））⇒ `"status": "caller_error"`、`"reason": "prometheus_query_error"`，並帶 `"error": "<原文>"`（#3065，之前與下一種同為 `"status": "no_data"`、`no_cardinality_data`）；查詢成功但沒有任何 `tenant_threshold_*` series ⇒ `"status": "no_data"`、`"reason": "no_cardinality_data"`。`da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
+
+**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：每個樣本值由 lib 讀一次。讀不懂的值是回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不進迴歸，丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped` 與文字報告；樣本全是非有限值的租戶不列入，所有租戶都如此時是 `no_cardinality_data`（`2`）。
 
 #### config-history
 
