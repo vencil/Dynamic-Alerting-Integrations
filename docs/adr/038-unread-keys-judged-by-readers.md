@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-10-21
+updated_at: 2026-10-22
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -29,6 +29,8 @@ updated_at: 2026-10-21
 2026-10-17 修訂：自訂告警編譯器改照 exporter 的讀法編譯，兩者讀 `_custom_alerts` 的層相同（決定 2）。
 
 2026-10-21 修訂：產生器那半以登錄表的宣告為準，由雙向探針保證與程式一致，不在每次判定時另外量產生器的輸出（決定 1、5）；Go 的寫入檢查只留值與結構的檢查，鍵名交給共用判決（決定 2）；profile 裡的 `_` 鍵依登錄表的 profile 層直接判、不經租戶（決定 4）；產生器容器接上共用判決前，served-values 先能只算指定的租戶，記憶體與時間預算照 ADR-036 §3（決定 5、11）。
+
+2026-10-22 修訂：登錄表多記每個鍵的值的形狀、由 exporter 的哪個判斷式判值、批次操作可否移除這個鍵（決定 2）；exporter 讀的鍵，值在寫入關卡由 exporter 自己的解析程式判（決定 1）；新增決定 12，規定磁碟上既有的錯值怎麼處理。
 
 ## 摘要
 
@@ -117,6 +119,8 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 不另寫一份「產生器會讀哪些鍵」的程式邏輯給別的讀取端模仿；登錄表只是宣告，由探針兩個方向對照產生器的實際輸出。某個值在產生器的語意下是否有效（例如 `_routing_profile` 指向的 profile 存不存在），仍只由產生器判，與 [ADR-036](./036-single-parser-effective-config.md) 一致。
 
+值也照同一個原則判。exporter 讀的鍵，值合不合法在寫入關卡由 exporter 自己的解析程式判：寫入檢查呼叫 exporter 讀這個值時用的同一段程式，不另寫一份詞表或規則。產生器讀的鍵，值仍只由產生器判，寫入關卡不複製產生器的規則。
+
 ### 2. 保留鍵登錄表
 
 量不到的事實寫在一份 JSON 登錄表，放在 exporter 的 Go module 內（`components/threshold-exporter/app/pkg/config/`），內容限於頂層 `_` 命名空間：
@@ -125,6 +129,13 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 - 每個讀取端**在哪些層讀這個鍵**：租戶檔、根平台檔的 `tenants:`、profile、子目錄 `_defaults.yaml` 的 `defaults:`、根平台檔的頂層。同一個鍵，各讀取端讀的層可以不同：例如登錄表宣告子目錄 `_defaults.yaml` 的 `defaults:` 裡的 `_severity_dedup` 由 exporter 讀、產生器不讀。
 - **已退役的鍵**與給使用者的提示文字。
 - 說明文字（給 schema 的 description 與 explain 輸出）。
+- 每個鍵的**值**：
+  - 形狀：`scalar`（純量）、`mapping`（對映）、`list`（清單），或 `scalar_or_mapping`（兩種寫法都讀，例如 `_silent_mode: warning` 與 `_silent_mode: {target: warning}`）。租戶設定裡讀得到的鍵一定要寫；只在根平台檔頂層讀的鍵可以省略。
+  - `check`：由 exporter 的哪個判斷式判值。只有 exporter 讀的鍵能寫；判斷式在 Go 裡以同一個名稱綁定，Go 測試要求登錄表寫到的每個名稱都有綁定、每個綁定都有鍵用到。
+  - `refers_to`：值指向哪一層的項目，例如 `_profile` 的值是 profile 層裡的一個 profile 名稱。
+- **批次操作可否移除**（`batch.unset`）：tenant-api 的批次操作能不能 unset 這個鍵。已退役的鍵一律可以移除、不必另寫：沒有讀取端讀它，移除不改變任何輸出；而它留在檔裡時，寫入檢查會擋下該租戶的其他寫入，批次必須能把它拿掉。決定租戶範圍的鍵（`_metadata`，以及下一段推得的鍵）不能設成可移除，產生常數時會拒絕這樣的登錄表。
+
+tenant-api 從這些欄位推出兩份清單，不再各自手寫：形狀是 `mapping` 或 `list` 的鍵，批次 patch 的字串值設不了；`refers_to` 指向的層若是 exporter 讀 `_metadata` 的層，該鍵就會改變租戶的 `_metadata`，也就是租戶的環境與領域，屬於決定租戶範圍的鍵（目前只有 `_profile`）。
 
 今天的三份保留鍵清單改由登錄表產生，CI 重新產生後比對差異，有差異就紅：
 
@@ -144,6 +155,8 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 | `expires:` 加在只宣告於 `optional_overrides`、沒有平台預設值的鍵上 | `read` | 擋 |
 | `expires:` 加在 `_critical` 鍵、維度鍵或保留鍵上（不會生效、也不會回復） | `read` | 擋 |
 
+值的檢查之後也走這條路：登錄表 `check` 指名的判斷式由 Go 寫入檢查呼叫（決定 1）。例如 `_silent_mode: purple`，exporter 讀了它（判決是 `read`），只是不認得這個值、什麼都不靜音；擋下它的是這個值檢查，不是鍵名判決。磁碟上已經有的錯值怎麼處理見決定 12。
+
 鍵名那一段指的是：登錄表沒有的 `_` 鍵、登錄表有但不在租戶層讀的 `_` 鍵（例如租戶檔裡的 `_policies`、`_routing_defaults`）、`_routing` 前綴下產生器不讀的鍵、平台預設與 `optional_overrides` 都沒有的閾值鍵（維度鍵除外，見下一段）、base 沒有平台預設值的 `_critical` 鍵。這幾種沒有讀取端讀，共用判決判為 `unread`，改由它判，同一件事只有一個地方說了算。維度鍵 `version` 標籤值的檢查屬於值的檢查，留在 Go；舊鍵名改名的提示是遷移說明、不擋寫入，也留在 Go。
 
 base 不在平台預設、也不在 `optional_overrides` 的維度鍵，Go 今天擋，但 exporter 照樣送出它，判決是 `read`。Go 的擋法是誤擋，這一段刪除後 tenant-api 改為收下；這種鍵的問題是沒有規則讀它，由決定 10 報（永遠只是建議）。
@@ -152,7 +165,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 
 執行時各工具讀的是產生出來的常數，不在執行時讀這份 JSON，所以 da-tools 映像不需要多帶檔案。登錄表放在 Go module 內，是為了讓 Go 端日後若要直接嵌入，三個 Go 程式（exporter、da-guard、tenant-api）都不必再複製一份。
 
-**範圍只到頂層鍵名**。子鍵表以讀取它的程式為準：`_routing` 與 `_metadata` 的子鍵由程式碼定義，schema 與其他端以測試釘住；`_custom_alerts` 條目的欄位寫在 Go 的 recipe 契約檔，schema 由它產生：
+**範圍只到頂層鍵名與值的形狀**。值接受哪些字（例如 `_silent_mode` 認得哪些模式）與子鍵表都以讀取它的程式為準，不進登錄表：`_routing` 與 `_metadata` 的子鍵由程式碼定義，schema 與其他端以測試釘住；`_custom_alerts` 條目的欄位寫在 Go 的 recipe 契約檔，schema 由它產生：
 
 | 子鍵 | 以誰為準 |
 |---|---|
@@ -280,6 +293,19 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 閘門改成「判到就擋」不在本 ADR，依 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 推進。各處手寫的鍵名判斷，與同一入口的閘門改成擋下同一步或之後才刪。唯一的例外是判決未完成時（da-guard 失敗或逾時、`undecidable`）：依決定 5 只報 notice、不擋，tenant-api 的 Go 鍵名檢查刪除後，今天會被擋的拼錯鍵在這條路徑上會被收下；除此之外，任何一個中間版本都不比之前寬鬆。這條降級路徑列在「後果與已知限制」，是否保留要在刪 Go 鍵名檢查之前另行決定。
 
+### 12. 磁碟上既有的錯值
+
+寫入關卡加上一條值的檢查時，repo 裡可能已經有不符的值。若照樣擋，租戶改任何其他鍵都會被這個沒人動過的舊值擋下。做法借用 Kubernetes 的 CRD validation ratcheting（KEP-4008：更新物件時，新加的驗證規則只套在這次改到的欄位，沒改的舊值照樣放行）：
+
+- **以讀取端解析的結果判「沒變」**，不比原始文字。加不加引號、對映的鍵序、註解不同，或讀取端本來就不分大小寫的大小寫差異，只要 exporter 解出的結果相同就算沒變。例如 `Purple` 改成 `purple`，exporter 讀起來一樣，算沒變；`purple` 改成 `orange` 算改了。
+- **沒變的錯值降為 notice，寫入照收**；新寫的、或改過的錯值照擋。
+- **讀不到寫入前的檔案就嚴格判**：新租戶、檔案不存在或無法解析時沒有比較的基準，一律照擋。
+- **只適用新加的值檢查**。既有的檢查（例如 `_profile` 指向不存在的 profile、`expires:` 不是 RFC3339 時間）不因此放寬。
+- **作用在檔案裡的每一個租戶**：一個檔可以有多個租戶，寫其中一個時，其他租戶沒動過的錯值同樣只是 notice。
+- 讀取租戶設定（GET）時，以磁碟上的內容自己當基準，既有的錯值以 notice 回報。
+
+這和產生器關卡對寫入前就有的問題的處理不同。產生器關卡把它標成 `pre_existing`（寫入前就有），但照樣擋。差別在失效方向與影響範圍：`_silent_mode` 的錯值讓 exporter 什麼都不靜音，告警照常送出，失效在安全的那一側，影響也只有這一個鍵；照擋卻會讓租戶在修好它之前什麼都不能改。產生器擋的問題有些會讓整棵 conf.d 拒絕產出（例如 `_severity_dedup` 寫了產生器不認得的值），放行的代價高得多。
+
 ## 範例
 
 上面背景一節的例子，判決輸出（explain 的人讀版，節錄；等級是各閘門改成「判到就擋」之後的等級）：
@@ -297,6 +323,17 @@ db-a
 
 輸入與今天的實測輸出見「背景」；這張表是本 ADR 規定的判決，各欄位依決定 1、4、8、9 產生。
 
+值的檢查與決定 12：exporter 不認得 `_silent_mode: purple`（它只記一行 `WARN: unknown silent mode "purple"`、什麼都不靜音）。本 ADR 規定 tenant-api 對它的結果如下：
+
+| 寫入 | 磁碟上原本 | 結果 |
+|---|---|---|
+| PUT 租戶設定，含 `_silent_mode: purple` | 沒有這個鍵，或是 `warning` | 拒絕（400） |
+| PUT 租戶設定，只改了別的鍵 | `_silent_mode: purple` | 寫入，回應附 notice |
+| PUT 租戶設定，`_silent_mode` 改成 `orange` | `_silent_mode: purple` | 拒絕（400） |
+| 批次 patch `_silent_mode: purple` | 沒有這個鍵 | 該筆操作失敗，不寫入 |
+| 批次 patch 別的鍵 | `_silent_mode: purple` | 寫入，該筆結果附 notice |
+| GET 租戶設定 | `_silent_mode: purple` | 回應附 notice |
+
 ## 後果與已知限制
 
 - **保留鍵清單只剩一個來源**：新增保留鍵只改登錄表，再重新產生；各讀取端各自的鍵名判斷改由共用判決取代。
@@ -305,6 +342,8 @@ db-a
 - **判決未完成時 tenant-api 照收**：tenant-api 的 Go 鍵名檢查刪除後，da-guard 失敗或逾時時寫入只帶 notice、照常收下（決定 5），今天 Go 會擋的拼錯鍵在這條路徑上會進 repo。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
 - **規則讀取以 repo 內的規則包為準**：客戶自己的規則讀了某個閾值，除非宣告為外部讀取端，否則會被報成「沒有規則讀」。這一項因此永遠只是建議。
+- **schema 比讀取端窄**：JSON schema 只是給編輯器的提示，判值的是讀取端。exporter 讀 `_silent_mode` 時不分大小寫、會去掉前後空白，也認得 `disabled`、`off`、`false` 等停用詞；schema 的列舉沒有這些寫法。YAML 未加引號的 `false`、`off` 在部分解析器裡是布林值，字串列舉表達不了。所以 schema 標錯的值不一定是錯的，以讀取端為準。
+- **沒變的錯值會一直留著**：決定 12 讓沒改過的錯值只報 notice，它會留在檔裡直到有人改這個鍵；期間它照樣什麼都不靜音。
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
 - **反事實重算的成本**：重算的輪數等於單一租戶最多有幾個 `disable`，每輪是一次 served-values。它不進入寫入檢查。
 - **實測中發現、另案處理的問題**：
@@ -323,6 +362,7 @@ db-a
 ## 實作位置
 
 - 登錄表：`components/threshold-exporter/app/pkg/config/reserved_keys.json`；`scripts/tools/dx/sync_schema.py --update` 產生、`--check` 比對（CI 由 `tests/dx/test_sync_schema.py` 執行）。
+- 值的形狀、判斷式綁定、批次可移除的鍵與決定租戶範圍的鍵的查詢：`components/threshold-exporter/app/pkg/config/reserved_values.go`。
 - 探針：`tests/shared/test_reserved_key_probes.py`。
 - 共用函式：`scripts/tools/` 下的新模組，由 validate-config、產生器與產生器容器呼叫。
 - exporter 實測：`da-guard served-values`（`components/threshold-exporter/app/cmd/da-guard/served_values.go`）。
