@@ -453,7 +453,15 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 	// ParseConfigFile, not a bare yaml.Unmarshal (#2518): a threshold the
 	// body writes as null is no write, so the platform layer (supplyFor) and
 	// the profile fill supply it — as on /metrics, which decodes the same way.
-	tenantCfg, err := ParseConfigFile(tenantData)
+	//
+	// #3269: decodeConfigFile — ParseConfigFile but for its last step — so
+	// the tenant layer keeps a reserved key's schedule as written: the GET's
+	// ValidateTenantKeys reports it (a notice, SelfRatchet) as the write
+	// gate's does. The display merge takes servedValue (mergeTenantConfig).
+	tenantCfg, err := ThresholdConfig{}, judgeConfFile(tenantData)
+	if err == nil {
+		tenantCfg, err = decodeConfigFile(tenantData, false)
+	}
 	if err != nil {
 		tenantCfg = ThresholdConfig{}
 	}
@@ -475,7 +483,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 			// into the display one, and own must stay what the tenant wrote.
 			display := make(map[string]ScheduledValue, len(flatKV))
 			for k, v := range flatKV {
-				display[k] = v
+				display[k] = servedValue(k, v) // #3269, as mergeTenantConfig
 			}
 			merged.Tenants[tenantID] = display
 			merged.own[tenantID] = flatKV
@@ -653,9 +661,14 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 		// Pre-size to the known override count: a tenant can carry many
 		// metric thresholds, so sizing the destination lets the copy below
 		// fill without incremental map growth/rehashing (#708 review nit).
+		//
+		// #3269: the display copy holds what the readers read — a reserved
+		// key's `default` alone (servedValue), as ParseConfigFile hands
+		// /metrics — while own keeps the schedule as written, for
+		// ValidateTenantKeys to refuse.
 		dst := make(map[string]ScheduledValue, len(overrides))
 		for k, v := range overrides {
-			dst[k] = v
+			dst[k] = servedValue(k, v)
 		}
 		merged.Tenants[tenant] = dst
 		out.own[tenant] = overrides

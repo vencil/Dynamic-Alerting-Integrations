@@ -1010,6 +1010,27 @@ def severity_dedup_mode(value: object) -> str | None:
     return None
 
 
+def routing_profile_ref(tenant: str, value: object) -> tuple[str | None, str | None]:
+    """#3269: a tenant's ``_routing_profile`` as ``(name, error)``.
+
+    A profile NAME, so a string: ``(value.strip(), None)`` — an empty string
+    names nothing, ``(None, None)``, as does null (not set). Any other value —
+    a mapping such as ``{default: p1, overrides: [...]}`` (a time window no
+    reserved key supports), a number, a boolean, a list — is ``(None,
+    message)``: the generator refuses the whole tree on it
+    (``routing_profile_invalid``) and check_routing_profiles reports the same
+    message. It used to be skipped in silence, the tenant falling back to the
+    default route while the file read as if it named a profile.
+    """
+    if isinstance(value, str):
+        return (value.strip() if value else None), None
+    if value is None:
+        return None, None
+    return None, (f"tenant '{tenant}': _routing_profile must be a routing profile "
+                  f"name (a string), got {value_type_text(value)} — a reserved key "
+                  f"takes no time window or expires (#3269); write the name alone")
+
+
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
@@ -1026,9 +1047,14 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     _record_unknown_routing_keys(result, overrides, layer="tenant", where=tenant, tenant=tenant)
 
     # v2.1.0 ADR-007: Extract _routing_profile reference
-    rp_ref = overrides.get("_routing_profile")
-    if rp_ref and isinstance(rp_ref, str):
-        result["tenant_profile_refs"][tenant] = rp_ref.strip()
+    # ⛔ #3269: judged by `routing_profile_ref` (check_routing_profiles reads
+    # it too); a value that is not a name refuses the whole tree.
+    rp_name, rp_error = routing_profile_ref(tenant, overrides.get("_routing_profile"))
+    if rp_name is not None:
+        result["tenant_profile_refs"][tenant] = rp_name
+    if rp_error is not None:
+        _field_type_error(result, "routing_profile_invalid", rp_error,
+                          tenant=tenant, field="_routing_profile")
 
     # Severity dedup: default "enable", explicit "disable" to opt out.
     # ⛔ #2906: judged by type and value (`severity_dedup_mode`); a value it
