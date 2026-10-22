@@ -43,10 +43,15 @@ _ENV_AT_IMPORT = dict(os.environ)
 _PRELUDE = f"import os, sys\nsys.path.insert(0, {str(TOOLS_DIR)!r})\nimport _lib_exitcodes\n"
 
 
-def _conftest():
-    mod = sys.modules.get("conftest")
-    assert mod is not None and Path(mod.__file__).resolve() == REPO_ROOT / "tests" / "conftest.py"
-    return mod
+def _conftest(pytestconfig):
+    """tests/conftest.py as pytest loaded it — by path, from the plugin
+    manager: ``sys.modules["conftest"]`` is whichever conftest was imported
+    last (tests/federation-e2e has its own) in a run that collects both."""
+    want = REPO_ROOT / "tests" / "conftest.py"
+    mods = [m for m in pytestconfig.pluginmanager.get_plugins()
+            if getattr(m, "__file__", None) and Path(m.__file__).resolve() == want]
+    assert len(mods) == 1, mods
+    return mods[0]
 
 
 def _script(tmp_path: Path, body: str) -> Path:
@@ -66,11 +71,11 @@ def _run(script: Path, **kwargs) -> subprocess.CompletedProcess:
                           encoding="utf-8", errors="replace", timeout=60, **kwargs)
 
 
-def test_the_session_moves_the_crash_code_off_2():
+def test_the_session_moves_the_crash_code_off_2(pytestconfig):
     assert os.environ.get(ENV) == str(SESSION_CODE)
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
-    assert ec.TEST_CRASH_EXIT_CODE_ENV == _conftest().TEST_CRASH_EXIT_CODE_ENV == ENV
+    assert ec.TEST_CRASH_EXIT_CODE_ENV == _conftest(pytestconfig).TEST_CRASH_EXIT_CODE_ENV == ENV
     assert ec.effective_crash_exit_code() == SESSION_CODE
     assert ec.get_crash_exit_code() == ec.EXIT_CALLER_ERROR  # the tool's own choice
 
@@ -121,13 +126,13 @@ def test_an_env_that_names_the_variable_keeps_its_own_value(tmp_path):
     assert env[ENV] == "71"
 
 
-def test_the_shim_never_changes_the_callers_mapping(monkeypatch):
+def test_the_shim_never_changes_the_callers_mapping(monkeypatch, pytestconfig):
     env = _minimal_env()
-    out = _conftest()._with_test_crash_exit_code(env)
+    out = _conftest(pytestconfig)._with_test_crash_exit_code(env)
     assert ENV not in env
     assert out[ENV] == str(SESSION_CODE) and out is not env
     monkeypatch.delenv(ENV)  # as under the opt-out
-    stripped = _conftest()._with_test_crash_exit_code(out)
+    stripped = _conftest(pytestconfig)._with_test_crash_exit_code(out)
     assert ENV not in stripped and out[ENV] == str(SESSION_CODE)
 
 
