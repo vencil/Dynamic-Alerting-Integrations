@@ -185,6 +185,7 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
   - Go 的 panic（rc 2）。
   - 墊片只包 `subprocess.Popen`；`os.posix_spawn`、`os.spawn*e`、`os.exec*e` 帶自建 env 時不會補上變數（目前 `tests/`、`scripts/` 都沒有用到）。
   - 工具自己用寬的 `except Exception` 接住例外、再以 `EXIT_CALLER_ERROR` 結束的（例如 `dx/waveform_score.py` 的 `main` 的 `ERR_UNEXPECTED`），不會經過 crash 出口：這類工具的 rc 2 斷言仍分不出「具名錯誤」與「意外例外」，要另外比對 stderr 的具名錯誤。
+  - 輸出也可能不同：`run()` 只在結束碼等於呼叫端錯誤碼時補印 armed envelope。正式環境 crash 碼與呼叫端錯誤碼同為 2，這段會執行；測試下 crash 碼是 70，就不會執行。目前沒有工具同時用 `run(main)`、`arm_crash_envelope` 與自行處理 crash 的 `@main(on_crash=)`，所以實際上碰不到（#3278）。
 
 ## 測試檔案對照
 
