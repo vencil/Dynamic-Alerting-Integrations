@@ -2,19 +2,19 @@
 # Human governance contract for the `forecast` recipe. The executable form is
 # scripts/tools/dx/custom_alerts/recipes.py::_forecast_records.
 recipe: forecast
-status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: Predict (linear) that a gauge or headroom ratio will cross a threshold within a horizon.
 summary_zh: 用線性預測判斷某 gauge 或餘量比例會在指定提前量內越過閾值（趨勢/耗盡預測）。
 params:
   metric:          {required: true,  desc: "the gauge to forecast (raw mode) or numerator (ratio mode). gauge-like only — counters must be rate()-d first (not supported in MVP)"}
-  capacity_metric: {required: false, desc: "ratio mode: the denominator (e.g. total capacity). present → predict metric/capacity headroom ratio crossing a fractional floor in (0,1); absent → raw mode (predict the gauge crossing an absolute threshold)"}
+  capacity_metric: {required: false, desc: "ratio mode: the denominator (e.g. total capacity). present → predict metric/capacity headroom ratio crossing a fractional floor in (0, 0.5) (the current-state band); absent → raw mode (predict the gauge crossing an absolute threshold)"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<="], desc: "ratio mode usually '<' (falling toward a floor); raw mode usually '>' (rising toward a ceiling)"}
   horizon:   {required: true,  enum: ["1h", "2h", "4h", "12h", "24h", "48h"], desc: "how far ahead to predict. The platform derives lookback = max(2*horizon, 1h) — the tenant never sets the lookback (an expert foot-gun)"}
   threshold: {required: true,  desc: "value[:severity]. ratio mode: a fractional floor in (0, 0.5) — below the current-state band, enforced at load/preflight (e.g. 0.15:warning); raw mode: an absolute value"}
   selectors:    {required: false, desc: "exact label filters (=)"}
   selectors_re: {required: false, desc: "regex label filters (=~)"}
-  mode:      {required: false, default: page, enum: [page, silent]}
-  for:       {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326). Use a sustain (e.g. 30m) to smooth transient slope flips"}
+  mode:      {required: false, default: "page", enum: ["page", "silent"]}
+  for:       {required: false, default: "1m", enum: ["0s", "1m", "5m", "15m", "30m", "1h"], desc: "pending duration before firing (enum-bounded, TRK-326). Use a sustain (e.g. 30m) to smooth transient slope flips"}
 emitted_shape: |
   # ratio mode (capacity_metric set):
   custom:fcbase:<id> = sum by(tenant)(<metric><sel>) / (sum by(tenant)(<capacity><sel>) > 0)

@@ -1,0 +1,153 @@
+"""Tests for gen_recipe_contract (#3229).
+
+The recipe contract is written once, in the exporter's
+pkg/config/recipe_contract.json; the schema members, the portal's two JSON
+files, shape.py's GENERATED block and rule-packs/recipes/*.yaml are generated
+from it. These pin that the committed copies are in sync, that a contract edit
+reaches every copy, that a hand edit to a copy is caught, and that a malformed
+contract or target is a caller error (rc 2), not a silent pass.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+_DX = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx")
+sys.path.insert(0, _DX)
+
+import gen_recipe_contract as gen  # noqa: E402
+
+_REPO = Path(__file__).resolve().parents[2]
+_SCRIPT = _REPO / "scripts" / "tools" / "dx" / "gen_recipe_contract.py"
+
+
+def _tree(tmp_path: Path) -> Path:
+    """A minimal copy of every file the generator reads or writes."""
+    for rel in (gen.CONTRACT_REL, gen.SEVERITY_REL, gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL,
+                gen.PORTAL_STATUS_REL, gen.SHAPE_REL, gen.CONSTANTS_REL):
+        dst = tmp_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_REPO / rel, dst)
+    shutil.copytree(_REPO / gen.RECIPES_DIR_REL, tmp_path / gen.RECIPES_DIR_REL,
+                    ignore=shutil.ignore_patterns("examples"))
+    return tmp_path
+
+
+def _cli(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(_SCRIPT), "--root", str(root), *args],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+
+def _edit_contract(root: Path, fn) -> None:
+    path = root / gen.CONTRACT_REL
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    fn(doc)
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_committed_copies_are_in_sync():
+    assert gen.run(_REPO, update=False) == []
+
+
+def test_committed_copies_are_lf_on_disk():
+    # esbuild bundles the portal copies from the raw bytes; --check reads with
+    # universal newlines and cannot see a CRLF copy.
+    for rel in (gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL):
+        assert b"\r\n" not in (_REPO / rel).read_bytes(), rel
+
+
+def test_a_contract_edit_reaches_every_copy(tmp_path):
+    root = _tree(tmp_path)
+
+    def add(doc):
+        doc["horizon"]["enum"].append("72h")
+        doc["recipes"][1]["status"] = "deprecated"   # rate
+        doc["custom_alert_cap"] = 25
+
+    _edit_contract(root, add)
+    r = _cli(root, "--check")
+    assert r.returncode == 1, r.stdout + r.stderr
+    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL, gen.SHAPE_REL,
+                gen.CONSTANTS_REL,
+                f"{gen.RECIPES_DIR_REL}/forecast.yaml", f"{gen.RECIPES_DIR_REL}/rate.yaml"):
+        assert f"STALE: {rel}" in r.stdout
+    assert _cli(root, "--update").returncode == 0
+    assert _cli(root, "--check").returncode == 0
+
+    schema = json.loads((root / gen.SCHEMA_REL).read_text(encoding="utf-8"))
+    props = schema["definitions"]["customAlertInstance"]["properties"]
+    assert "72h" in props["horizon"]["enum"]
+    assert "72h" in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["horizon"]
+    assert json.loads((root / gen.PORTAL_STATUS_REL).read_text(encoding="utf-8"))["statuses"]["rate"] == "deprecated"
+    assert '"72h"' in (root / gen.SHAPE_REL).read_text(encoding="utf-8")
+    assert "MAX_CUSTOM_RECIPES: Final[int] = 25" in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
+    forecast = yaml.safe_load((root / gen.RECIPES_DIR_REL / "forecast.yaml").read_text(encoding="utf-8"))
+    assert "72h" in forecast["params"]["horizon"]["enum"]
+    rate = yaml.safe_load((root / gen.RECIPES_DIR_REL / "rate.yaml").read_text(encoding="utf-8"))
+    assert rate["status"] == "deprecated"
+
+
+def test_a_hand_edited_copy_is_caught(tmp_path):
+    root = _tree(tmp_path)
+    p = root / gen.PORTAL_ENUMS_REL
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    doc["forecastCurrentBand"] = 1
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    r = _cli(root, "--check")
+    assert r.returncode == 1
+    assert f"STALE: {gen.PORTAL_ENUMS_REL}" in r.stdout
+
+
+def test_op_enum_is_per_recipe():
+    # `==` is threshold-only: the governance yamls offer it there and nowhere else.
+    for path in sorted((_REPO / gen.RECIPES_DIR_REL).glob("*.yaml")):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        op = doc["params"].get("op")
+        if op is None:
+            continue
+        assert ("==" in op["enum"]) == (doc["recipe"] == "threshold"), path.name
+
+
+def test_governance_yaml_status_and_enums_match_the_contract():
+    c = json.loads((_REPO / gen.CONTRACT_REL).read_text(encoding="utf-8"))
+    for r in c["recipes"]:
+        doc = yaml.safe_load((_REPO / gen.RECIPES_DIR_REL / f"{r['name']}.yaml").read_text(encoding="utf-8"))
+        assert doc["status"] == r["status"]
+        mode = doc["params"]["mode"]
+        assert mode["enum"] == c["mode"]["enum"] and mode["default"] == c["mode"]["default"]
+        assert doc["params"]["for"]["enum"] == c["for"]["enum"]
+
+
+@pytest.mark.parametrize("case", ["schema_extra_property", "missing_yaml", "unknown_param", "bad_json"])
+def test_malformed_inputs_are_caller_errors(tmp_path, case):
+    root = _tree(tmp_path)
+    if case == "schema_extra_property":
+        _edit_contract(root, lambda d: d["fields"].append({"name": "lookback"}))
+    elif case == "missing_yaml":
+        (root / gen.RECIPES_DIR_REL / "ratio.yaml").unlink()
+    elif case == "unknown_param":
+        p = root / gen.RECIPES_DIR_REL / "rate.yaml"
+        p.write_text(p.read_text(encoding="utf-8").replace(
+            "  window:", "  lookback:  {required: false, desc: \"x\"}\n  window:", 1), encoding="utf-8")
+    else:
+        (root / gen.CONTRACT_REL).write_text("{", encoding="utf-8")
+    r = _cli(root, "--check")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "ERROR:" in r.stderr
+
+
+def test_shape_py_reads_the_generated_values():
+    sys.path.insert(0, _DX)
+    from custom_alerts import shape  # noqa: E402
+
+    c = json.loads((_REPO / gen.CONTRACT_REL).read_text(encoding="utf-8"))
+    assert shape.RECIPES == tuple(r["name"] for r in c["recipes"])
+    assert shape.RESERVED_LABELS == frozenset(c["reserved_labels"])
+    assert "mode" in shape.RESERVED_LABELS   # the label Go reserved and Python did not

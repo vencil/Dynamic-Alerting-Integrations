@@ -2,7 +2,7 @@
 # Human governance contract for the `slo_burn_rate` recipe. The executable form is
 # scripts/tools/dx/custom_alerts/recipes.py::_slo_burn_records/_slo_core_record.
 recipe: slo_burn_rate
-status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: Multi-window SLO error-budget burn-rate alerting (SRE Workbook ch.5) from one declaration — fast burn pages, slow burn tickets.
 summary_zh: 一條宣告展開多窗 SLO 錯誤預算 burn-rate 告警（SRE Workbook ch.5）——fast 檔叫人、slow 檔開單。
 params:
@@ -13,8 +13,8 @@ params:
   min_events: {required: false, default: 10, desc: "positive integer; fast-window (5m) bad-event absolute floor (low-traffic guard). The slow tier's floor is compiler-derived = min_events×6 (30m = 5m×6). IS a shape component (literal in the rule text; `minev{N}` in the slug) — see the override cost note below"}
   selectors:    {required: false, desc: "exact label filters (=), applied to numerator AND denominator"}
   selectors_re: {required: false, desc: "regex label filters (=~), applied to numerator AND denominator"}
-  mode:       {required: false, default: page, enum: [page, silent]}
-  for:        {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326)"}
+  mode:       {required: false, default: "page", enum: ["page", "silent"]}
+  for:        {required: false, default: "1m", enum: ["0s", "1m", "5m", "15m", "30m", "1h"], desc: "pending duration before firing (enum-bounded, TRK-326)"}
 emitted_shape: |
   # recording (6 metric-side + the standard threshold record; NO maintenance
   # suppression here — measurement is never suppressed, budget burn stays fully

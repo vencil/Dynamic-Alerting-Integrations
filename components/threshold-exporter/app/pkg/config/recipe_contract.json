@@ -1,0 +1,68 @@
+{
+  "_comment": "The custom-alert recipe contract (#3229, ADR-024): the one place the recipe enums, patterns, bands, lifecycle and SLO windows/multipliers are written. The exporter reads it through go:embed (recipe_contract.go); every other copy is GENERATED from it by scripts/tools/dx/gen_recipe_contract.py (--update rewrites, --check is the drift gate): the customAlertInstance members of docs/schemas/tenant-config.schema.json, the portal's recipe-enums.json and recipe-status.json, the GENERATED blocks of scripts/tools/dx/custom_alerts/shape.py and scripts/tools/_lib_constants.py, and the status/enum/default of rule-packs/recipes/*.yaml. tenant-api reads it through pkg/config. Where two hand-written copies disagreed, the stricter one was kept.",
+  "recipes": [
+    {"name": "threshold", "status": "active", "duration": "window"},
+    {"name": "rate", "status": "active", "duration": "window"},
+    {"name": "ratio", "status": "active", "duration": "window"},
+    {"name": "absence", "status": "active", "duration": "window"},
+    {"name": "p99_latency", "status": "active", "duration": "window"},
+    {"name": "forecast", "status": "active", "duration": "horizon"},
+    {"name": "slo_burn_rate", "status": "active", "duration": "none"}
+  ],
+  "lifecycle": ["active", "deprecated", "eol"],
+  "custom_alert_cap": 20,
+  "fields": [
+    {"name": "recipe"},
+    {"name": "name"},
+    {"name": "metric"},
+    {"name": "denominator_metric"},
+    {"name": "capacity_metric"},
+    {"name": "op"},
+    {"name": "window"},
+    {"name": "horizon"},
+    {"name": "quantile", "quoted_example": "\"0.99\""},
+    {"name": "threshold"},
+    {"name": "objective", "quoted_example": "\"99.9\""},
+    {"name": "slo_period"},
+    {"name": "min_events"},
+    {"name": "selectors"},
+    {"name": "selectors_re"},
+    {"name": "mode"},
+    {"name": "for"},
+    {"name": "group_by"}
+  ],
+  "patterns": {
+    "name": "^[a-z][a-z0-9_]*$",
+    "metric": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+    "label": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+    "window": "^([0-9]+(ns|us|µs|ms|s|m|h))+$",
+    "decimal": "^[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$"
+  },
+  "op": {
+    "enum": [">", ">=", "<", "<=", "=="],
+    "default": ">",
+    "slug": {">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"},
+    "eq_recipes": ["threshold"]
+  },
+  "for": {"enum": ["0s", "1m", "5m", "15m", "30m", "1h"], "default": "1m"},
+  "mode": {"enum": ["page", "silent"], "default": "page"},
+  "horizon": {"enum": ["1h", "2h", "4h", "12h", "24h", "48h"]},
+  "group_by": {"enum": ["persistentvolumeclaim"]},
+  "quantile": {"default": "0.99", "exclusive_minimum": 0, "exclusive_maximum": 1},
+  "reserved_labels": ["tenant", "version", "__name__", "severity", "recipe", "recipe_id", "name", "mode"],
+  "template_metachars": ["{{", "}}", "`"],
+  "forecast": {"current_band": 0.5},
+  "slo_burn_rate": {
+    "objective": {"exclusive_minimum": 0, "exclusive_maximum": 100, "disable": "disable"},
+    "slo_period": {"enum": ["28d", "30d"], "default": "30d"},
+    "min_events": {"default": 10, "minimum": 1, "maximum": 1000000},
+    "tiers": [
+      {"severity": "critical", "long": "1h", "short": "5m", "min_events_factor": 1},
+      {"severity": "warning", "long": "6h", "short": "30m", "min_events_factor": 6}
+    ],
+    "multipliers": {
+      "30d": {"critical": 14.4, "warning": 6},
+      "28d": {"critical": 13.44, "warning": 5.6}
+    }
+  }
+}

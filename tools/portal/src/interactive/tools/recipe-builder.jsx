@@ -14,6 +14,7 @@ import {
   formSupported,
   isValidName,
   isValidMetric,
+  opOptions,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
@@ -39,8 +40,8 @@ const t = window.__t || ((zh, en) => en);
  * The recipe/validation/YAML engine (status, field model, per-field +
  * whole-recipe validation, plain-English summary, RecipeObject + YAML
  * snippet) lives in ./recipe-builder/engine.js — imported above and unit
- * tested directly. All enums derive from recipe-enums.json (schema-
- * extracted; a Vitest drift-guard keeps it honest) — NO hardcoded enums.
+ * tested directly. All enums derive from recipe-enums.json (generated from
+ * the exporter's recipe contract, #3229) — NO hardcoded enums.
  * ─────────────────────────────────────────────────────────────────── */
 
 /* ── default live S6a fetcher (overridable for tests / tenant-manager) ─ */
@@ -374,7 +375,7 @@ export default function RecipeBuilder(props) {
   const [recipe, setRecipe] = useState((initialValue && initialValue.recipe) || 'threshold');
   const [f, setF] = useState(() => ({
     name: '', metric: '', denominator_metric: '', capacity_metric: '',
-    op: ENUMS.opDefault, window: '5m', horizon: '4h', quantile: '0.99',
+    op: ENUMS.opDefault, window: '5m', horizon: '4h', quantile: ENUMS.quantileDefault,
     threshold: '', severity: ENUMS.severityDefault,
     mode: ENUMS.modeDefault, for: ENUMS.forDefault,
     ...(initialValue || {}),
@@ -431,7 +432,7 @@ export default function RecipeBuilder(props) {
 
   function renderField(field) {
     if (['op', 'severity', 'mode', 'for', 'horizon'].includes(field)) {
-      return select(field, LABELS[field], ENUMS[field === 'severity' ? 'severity' : field]);
+      return select(field, LABELS[field], field === 'op' ? opOptions(recipe) : ENUMS[field]);
     }
     if (METRIC_FIELDS.includes(field)) {
       return (

@@ -491,6 +491,9 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
         "repo's own Python tools, counted case-insensitively (issue 1541)",
     "dx/gen_agent_adapters.py":
         "os.listdir over .agents/skills — the repo-owned skill SSOT it generates adapters from",
+    "dx/gen_recipe_contract.py":
+        "globs rule-packs/recipes/*.yaml — the repo-owned recipe governance "
+        "documents it writes status/enum/default into (issue 3229)",
     "dx/inject_waveform.py":
         "`--rules` is a PrometheusRule candidate file/dir (glob *.yaml/*.yml), not a tenant conf.d",
     "dx/pr_preflight.py":

@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // MergeCustomAlerts replaces the `tenants.<tenantID>._custom_alerts` sequence
@@ -85,15 +87,11 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 }
 
 // recipeFieldOrder is the canonical emission order for a recipe's keys —
-// logical (recipe → identity → metric(s) → params → routing), matching how
-// the recipe library + hand-written conf.d entries read. Keys not listed are
-// appended after (sorted) so a future schema field is never silently dropped.
-var recipeFieldOrder = []string{
-	"recipe", "name", "metric", "denominator_metric", "capacity_metric",
-	"op", "window", "horizon", "quantile", "threshold",
-	"objective", "slo_period", "min_events",
-	"selectors", "selectors_re", "mode", "for",
-}
+// logical (recipe → identity → metric(s) → params → routing), from the recipe
+// contract the exporter embeds (config.RecipeFieldOrder, #3229). Keys not
+// listed are appended after (sorted) so a future schema field is never
+// silently dropped.
+var recipeFieldOrder = config.RecipeFieldOrder()
 
 // recipeNode builds an ordered, properly-quoted mapping node for one recipe.
 func recipeNode(r map[string]any) *yaml.Node {
@@ -187,11 +185,9 @@ func literalBlockKeeps(s string) bool {
 // cross-language Go↔Python contract and therefore MUST arrive as JSON strings
 // (schema type: string): quantile (#1017, enters the recipe_id slug) and
 // objective (ADR-031, parsed independently by the Go resolver and the Python
-// compiler). The map value is the example quoted in the violation message.
-var stringTypedContractFields = map[string]string{
-	"quantile":  `"0.99"`,
-	"objective": `"99.9"`,
-}
+// compiler). The map value is the example quoted in the violation message;
+// both come from the recipe contract (config.RecipeQuotedTextFields, #3229).
+var stringTypedContractFields, stringTypedContractFieldNames = config.RecipeQuotedTextFields()
 
 // QuantileStringViolations rejects any recipe whose string-typed contract
 // field (quantile, objective — see stringTypedContractFields) arrives as a
@@ -212,13 +208,8 @@ var stringTypedContractFields = map[string]string{
 // with the conf.d schema CI gate (check_confd_schema.py).
 func QuantileStringViolations(recipes []map[string]any) []string {
 	var viol []string
-	fields := make([]string, 0, len(stringTypedContractFields))
-	for f := range stringTypedContractFields {
-		fields = append(fields, f)
-	}
-	sort.Strings(fields) // deterministic violation order
 	for i, r := range recipes {
-		for _, field := range fields {
+		for _, field := range stringTypedContractFieldNames { // sorted: deterministic order
 			v, present := r[field]
 			if !present {
 				continue

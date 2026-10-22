@@ -52,12 +52,10 @@ type customAlertThresholdRefusal struct {
 func (e *customAlertThresholdRefusal) Error() string { return e.err.Error() }
 func (e *customAlertThresholdRefusal) Unwrap() error { return e.err }
 
-// forecastCurrentBand mirrors _FORECAST_CURRENT_BAND in
-// scripts/tools/dx/custom_alerts/shape.py. The compiler gates a ratio-mode forecast
-// on `custom:fcbase < band` (a current-state sanity floor), so a threshold >= band is
-// silently neutered (the alert can only fire once current headroom drops below the
-// band). These two values MUST stay in lockstep.
-const forecastCurrentBand = 0.5
+// forecastCurrentBand is the ratio-mode forecast's current-state band: the
+// compiler gates a ratio-mode forecast on `custom:fcbase < band`, so a
+// threshold >= band would be silently neutered. From recipe_contract.json.
+var forecastCurrentBand = contract.Forecast.CurrentBand
 
 // logCustomAlertError surfaces a malformed custom-alert at ERROR (paired with
 // the da_custom_alert_parse_errors gauge so a silent skip is observable).
@@ -149,81 +147,79 @@ func (s *strictInt) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// Every enum, pattern and band below comes from recipe_contract.json (#3229);
+// the comments say why each exists, the contract says what it holds.
 var (
-	customAlertRecipes = map[string]bool{
-		"threshold": true, "rate": true, "ratio": true, "absence": true, "p99_latency": true,
-		"forecast": true, "slo_burn_rate": true,
-	}
-	// op → slug. Keep in sync with shape.py OP_SLUG.
-	customAlertOpSlug = map[string]string{">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"}
+	customAlertRecipes = func() map[string]bool {
+		m := map[string]bool{}
+		for _, r := range contract.Recipes {
+			m[r.Name] = true
+		}
+		return m
+	}()
+	customAlertOpSlug = contract.Op.Slug
+	// recipes that may use op "==" (#810): exact match suits integer status/
+	// error codes on a RAW gauge; other recipes emit computed floats.
+	customAlertEqRecipes = stringSet(contract.Op.EqRecipes)
 	// permitted forecast horizons (predict-ahead distance) — enum-bounded, enters
-	// the recipe_id slug. MUST match shape.py ALLOWED_HORIZON + the schema enum.
-	customAlertHorizonValid = map[string]bool{
-		"1h": true, "2h": true, "4h": true, "12h": true, "24h": true, "48h": true,
-	}
-	// metric/label name charset (no colon → cannot reference recording rules;
-	// no braces/operators → PromQL injection structurally impossible). Mirrors
-	// shape.py _METRIC_RE / _LABEL_RE.
-	customAlertNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	// the recipe_id slug.
+	customAlertHorizonValid = stringSet(contract.Horizon.Enum)
+	// the tenant-chosen alert name (the `name` label).
+	customAlertAlertNameRe = regexp.MustCompile(contract.Patterns.Name)
+	// metric name charset (no colon → cannot reference recording rules; no
+	// braces/operators → PromQL injection structurally impossible).
+	customAlertMetricRe = regexp.MustCompile(contract.Patterns.Metric)
+	// selector label-name charset.
+	customAlertLabelRe = regexp.MustCompile(contract.Patterns.Label)
 	// non-identifier chars → '_' (deterministic, locale-free). Mirrors _sanitise.
 	customAlertSanitiseRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 	// window is a BARE PromQL token interpolated raw into rate(m[<window>]) — it
-	// cannot be quote-escaped, so it must be allowlisted to the Go-duration charset
-	// (the schema pattern, now enforced imperatively). Mirrors shape.py _WINDOW_RE.
-	customAlertWindowRe = regexp.MustCompile(`^([0-9]+(ns|us|µs|ms|s|m|h))+$`)
-	// quantile: DECIMAL-float charset only. strconv.ParseFloat accepts Go hex-float
-	// literals ("0x1p-1"=0.5) and underscores that CPython float() rejects — this
-	// regex pins the accept-set so the Go preflight and the Python compiler can never
-	// diverge (a divergence lands a poison commit that wedges the CI drift gate; Phase
-	// C hunter finding). Anchored, so MatchString == fullmatch. Mirrors shape.py _QUANTILE_RE.
-	customAlertQuantileRe = regexp.MustCompile(`^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$`)
+	// cannot be quote-escaped, so it must be allowlisted to the Go-duration charset.
+	customAlertWindowRe = regexp.MustCompile(contract.Patterns.Window)
+	// quantile / objective: DECIMAL-float charset only. strconv.ParseFloat
+	// accepts Go hex-float literals ("0x1p-1"=0.5) and underscores; this pins
+	// the accept-set to plain decimals. Anchored, so MatchString == fullmatch.
+	customAlertQuantileRe = regexp.MustCompile(contract.Patterns.Decimal)
 	// Go-template metacharacters forbidden in a selector VALUE: the value reaches the
-	// alert-annotation template context (recipes.py _alert_rule) where Prometheus
-	// evaluates {{ query … }} across the whole TSDB. Reject so tenant data can never
-	// BECOME template code (SSTI logic-less). Mirrors shape.py _TEMPLATE_METACHARS.
-	customAlertTemplateMetachars = []string{"{{", "}}", "`"}
+	// alert-annotation template context where Prometheus evaluates {{ query … }}
+	// across the whole TSDB. Reject so tenant data can never BECOME template code.
+	customAlertTemplateMetachars = contract.TemplateMetachars
 	// reserved labels a tenant may not pin as a selector (would hijack the
-	// vectorisation join keys / platform dimensions). Mirrors RESERVED_LABELS.
-	customAlertReservedLabels = map[string]bool{
-		"tenant": true, "version": true, "__name__": true, "severity": true,
-		"recipe": true, "recipe_id": true, "name": true, "mode": true,
-	}
+	// vectorisation join keys / platform dimensions).
+	customAlertReservedLabels = stringSet(contract.ReservedLabels)
 	// permitted `for` values — enum-bounded (TRK-326 / #751) so `for` entering
-	// the recipe_id slug keeps cardinality a small constant per base-shape (no
-	// O(M)→O(N) blow-up). MUST match the schema enum in
-	// docs/schemas/tenant-config.schema.json.
-	customAlertForValid = map[string]bool{
-		"0s": true, "1m": true, "5m": true, "15m": true, "30m": true, "1h": true,
-	}
+	// the recipe_id slug keeps cardinality a small constant per base-shape.
+	customAlertForValid = stringSet(contract.For.Enum)
 	// permitted group_by dimensions (ADR-024 §Addendum disk recipes) — bounded so a
-	// per-PVC disk-fill alert can fire per volume (a small full disk is not masked
-	// by a large empty one in a by(tenant) sum) without unbounding cardinality.
-	// Each entry enters the recipe_id slug. MUST match shape.py ALLOWED_GROUP_BY +
-	// the schema enum.
-	customAlertGroupByValid = map[string]bool{"persistentvolumeclaim": true}
+	// per-PVC disk-fill alert can fire per volume without unbounding cardinality.
+	// Each entry enters the recipe_id slug.
+	customAlertGroupByValid = stringSet(contract.GroupBy.Enum)
+	// permitted `mode` values: only these ride the data plane.
+	customAlertModeValid = stringSet(contract.Mode.Enum)
 	// permitted slo_burn_rate `slo_period` budget windows (ADR-031). NOT a shape
 	// component: the period only scales the burn-rate multipliers derived at
 	// resolve time (see sloBurnMultipliers) — it never enters the slug/hash/rule
-	// text, so changing it never re-slugs. MUST match shape.py ALLOWED_SLO_PERIOD
-	// + the schema enum.
-	customAlertSloPeriodValid = map[string]bool{"28d": true, "30d": true}
+	// text, so changing it never re-slugs.
+	customAlertSloPeriodValid = stringSet(contract.SloBurnRate.SloPeriod.Enum)
 	// slo_burn_rate per-period burn multipliers (ADR-031 §2, LOCKED): fast = "1h
 	// burns 2% of the budget", slow = "6h burns 5%"; M = consumption × period ÷
-	// detection window. 30d (720h): fast 0.02×720/1=14.4, slow 0.05×720/6=6;
-	// 28d (672h): fast 13.44, slow 5.6. The emitted user_threshold VALUE is
-	// M × (1 − objective/100) — critical uses fast, warning uses slow. Pinned on
-	// BOTH sides by tests/dx/fixtures/slo_burn_multiplier_vectors.json.
-	sloBurnMultipliers = map[string]struct{ fast, slow float64 }{
-		"30d": {fast: 14.4, slow: 6},
-		"28d": {fast: 13.44, slow: 5.6},
-	}
+	// detection window. The emitted user_threshold VALUE is
+	// M × (1 − objective/100) — critical uses fast, warning uses slow. Pinned by
+	// tests/dx/fixtures/slo_burn_multiplier_vectors.json.
+	sloBurnMultipliers = func() map[string]struct{ fast, slow float64 } {
+		m := map[string]struct{ fast, slow float64 }{}
+		for p, byTier := range contract.SloBurnRate.Multipliers {
+			m[p] = struct{ fast, slow float64 }{fast: byTier["critical"], slow: byTier["warning"]}
+		}
+		return m
+	}()
 )
 
-// sloMinEventsDefault mirrors shape.py SLO_MIN_EVENTS_DEFAULT (ADR-031 OQ-A):
-// the fast-window bad-event absolute floor when min_events is omitted. The
-// default IS materialised into the slug (`minev10`) so a later default change
-// can never silently re-slug existing shapes.
-const sloMinEventsDefault = 10
+// sloMinEventsDefault (ADR-031 OQ-A): the fast-window bad-event absolute floor
+// when min_events is omitted. The default IS materialised into the slug
+// (`minev10`) so a later default change can never silently re-slug existing
+// shapes.
+var sloMinEventsDefault = contract.SloBurnRate.MinEvents.Default
 
 func customAlertSanitise(s string) string {
 	return customAlertSanitiseRe.ReplaceAllString(s, "_")
@@ -265,7 +261,7 @@ func shapeHashSuffix(spec CustomAlertSpec, op string, items []selectorItem, gb [
 	if spec.Recipe == "p99_latency" {
 		quantile = string(spec.Quantile)
 		if quantile == "" {
-			quantile = "0.99"
+			quantile = contract.Quantile.Default
 		}
 	}
 	horizon := ""
@@ -274,7 +270,7 @@ func shapeHashSuffix(spec CustomAlertSpec, op string, items []selectorItem, gb [
 	}
 	forVal := spec.For
 	if forVal == "" {
-		forVal = "1m"
+		forVal = contract.For.Default
 	}
 	var b strings.Builder
 	for _, f := range []string{spec.Recipe, spec.Metric, hashOp, window, quantile, horizon, den, forVal} {
@@ -308,8 +304,8 @@ func customAlertGroupBy(spec CustomAlertSpec) ([]string, error) {
 	var out []string
 	for _, label := range spec.GroupBy {
 		if !customAlertGroupByValid[label] {
-			return nil, fmt.Errorf("group_by label %q must be one of [persistentvolumeclaim] "+
-				"(bounded whitelist, ADR-024 Addendum)", label)
+			return nil, fmt.Errorf("group_by label %q must be one of [%s] "+
+				"(bounded whitelist, ADR-024 Addendum)", label, strings.Join(contract.GroupBy.Enum, ", "))
 		}
 		if !seen[label] {
 			seen[label] = true
@@ -321,9 +317,9 @@ func customAlertGroupBy(spec CustomAlertSpec) ([]string, error) {
 }
 
 func validateCustomAlertMetric(metric, field string) error {
-	if !customAlertNameRe.MatchString(metric) {
-		return fmt.Errorf("%s %q is not a bare metric name (^[a-zA-Z_][a-zA-Z0-9_]*$); "+
-			"label filtering must use selectors/selectors_re, never inline PromQL", field, metric)
+	if !customAlertMetricRe.MatchString(metric) {
+		return fmt.Errorf("%s %q is not a bare metric name (%s); "+
+			"label filtering must use selectors/selectors_re, never inline PromQL", field, metric, contract.Patterns.Metric)
 	}
 	return nil
 }
@@ -348,12 +344,13 @@ func rejectTemplateMetachars(value, key string) error {
 func validateQuantile(q string) error {
 	// Charset gate FIRST — reject Go hex-floats/underscores that ParseFloat accepts
 	// but CPython float() does not, keeping both sides' accept-set identical.
+	qMin, qMax := contract.Quantile.ExclusiveMinimum, contract.Quantile.ExclusiveMaximum
 	if !customAlertQuantileRe.MatchString(q) {
-		return fmt.Errorf("quantile %q must be a decimal number in the open interval (0,1)", q)
+		return fmt.Errorf("quantile %q must be a decimal number in the open interval (%v,%v)", q, qMin, qMax)
 	}
 	f, err := strconv.ParseFloat(q, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f >= 1 {
-		return fmt.Errorf("quantile %q must be a number in the open interval (0,1)", q)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= qMin || f >= qMax {
+		return fmt.Errorf("quantile %q must be a number in the open interval (%v,%v)", q, qMin, qMax)
 	}
 	return nil
 }
@@ -369,48 +366,53 @@ func validateQuantile(q string) error {
 // poison-commit class). Mirrors shape.py::_validate_objective (isinstance(str)
 // → charset regex → float → range).
 func validateSloObjective(o taggedScalar) error {
+	obj := contract.SloBurnRate.Objective
+	lo, hi, disable := obj.ExclusiveMinimum, obj.ExclusiveMaximum, obj.Disable
 	if o.tag != "" && o.tag != "!!str" {
 		return fmt.Errorf("objective must be a quoted YAML string (e.g. \"99.9\"), got a %s "+
 			"scalar — a bare value is YAML-dialect-ambiguous and breaks the Go/Python "+
 			"lockstep (#1017 quantile class)", o.tag)
 	}
 	if o.value == "" {
-		return fmt.Errorf("slo_burn_rate recipe requires objective (SLO target percentage " +
-			"in the open interval (0,100), e.g. \"99.9\"; \"disable\" opts out tri-state)")
+		return fmt.Errorf("slo_burn_rate recipe requires objective (SLO target percentage "+
+			"in the open interval (%v,%v), e.g. \"99.9\"; %q opts out tri-state)", lo, hi, disable)
 	}
-	if o.value == "disable" {
+	if o.value == disable {
 		return nil
 	}
 	if !customAlertQuantileRe.MatchString(o.value) {
-		return fmt.Errorf("objective %q must be a decimal number in the open interval (0,100) "+
-			"or \"disable\" (decimal charset only — keeps Go/Python accept-sets in lockstep)", o.value)
+		return fmt.Errorf("objective %q must be a decimal number in the open interval (%v,%v) "+
+			"or %q (decimal charset only — keeps Go/Python accept-sets in lockstep)", o.value, lo, hi, disable)
 	}
 	f, err := strconv.ParseFloat(o.value, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 || f >= 100 {
-		return fmt.Errorf("objective %q must be in the OPEN interval (0,100): 100 makes the "+
-			"error budget 0 (threshold 0 → always fires), 0 makes it never fire", o.value)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= lo || f >= hi {
+		return fmt.Errorf("objective %q must be in the OPEN interval (%v,%v): %v makes the "+
+			"error budget 0 (threshold 0 → always fires), %v makes it never fire", o.value, lo, hi, hi, lo)
 	}
 	return nil
 }
 
 // sloPeriod validates + normalizes the slo_burn_rate `slo_period` (budget
-// window). Empty → default "30d". Mirrors shape.py::_normalize_slo_period.
+// window). Empty → the contract's default. Mirrors shape.py::_normalize_slo_period.
 func sloPeriod(spec CustomAlertSpec) (string, error) {
 	p := spec.SloPeriod
 	if p == "" {
-		p = "30d"
+		p = contract.SloBurnRate.SloPeriod.Default
 	}
 	if !customAlertSloPeriodValid[p] {
-		return "", fmt.Errorf("slo_period %q must be one of 28d/30d", p)
+		return "", fmt.Errorf("slo_period %q must be one of %s", p, oneOf(contract.SloBurnRate.SloPeriod.Enum))
 	}
 	return p, nil
 }
 
-// sloMinEventsMax mirrors the schema `maximum` (
-// docs/schemas/tenant-config.schema.json min_events) and shape.py::_normalize_min_events's
-// upper bound: an absurd floor (e.g. 10^15) silently disables the alert while
-// looking configured, and the literal enters the rule text.
-const sloMinEventsMax = 1000000
+// sloMinEventsMin / sloMinEventsMax bound min_events: below the minimum the
+// low-traffic guard is off (the opt-out is objective:"disable"); an absurd
+// floor (e.g. 10^15) silently disables the alert while looking configured, and
+// the literal enters the rule text.
+var (
+	sloMinEventsMin = int64(contract.SloBurnRate.MinEvents.Minimum)
+	sloMinEventsMax = int64(contract.SloBurnRate.MinEvents.Maximum)
+)
 
 // sloMinEventsRe pins min_events' RAW text to plain decimal digits. This keeps
 // `010` legal (base-0 ParseInt reads it as octal 8, matching PyYAML 1.1's
@@ -445,9 +447,9 @@ func sloMinEvents(spec CustomAlertSpec) (int, error) {
 	// Range-check in the int64 domain BEFORE narrowing to int: on a 32-bit
 	// platform int(n64) can wrap (e.g. 2^32+5 → 5) and sneak past the bounds
 	// (CodeQL go/incorrect-integer-conversion).
-	if n64 < 1 {
-		return 0, fmt.Errorf("min_events %d must be >= 1 (0 would disable the low-traffic "+
-			"guard entirely; use objective:\"disable\" to opt out instead)", n64)
+	if n64 < sloMinEventsMin {
+		return 0, fmt.Errorf("min_events %d must be >= %d (0 would disable the low-traffic "+
+			"guard entirely; use objective:\"disable\" to opt out instead)", n64, sloMinEventsMin)
 	}
 	if n64 > sloMinEventsMax {
 		return 0, fmt.Errorf("min_events %d exceeds the maximum %d (schema maximum; an "+
@@ -472,7 +474,7 @@ func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
 		items = append(items, selectorItem{"=~", k, v})
 	}
 	for _, it := range items {
-		if !customAlertNameRe.MatchString(it.key) {
+		if !customAlertLabelRe.MatchString(it.key) {
 			return nil, fmt.Errorf("selector label %q is not a valid label name", it.key)
 		}
 		if customAlertReservedLabels[it.key] {
@@ -515,7 +517,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	}
 	op := spec.Op
 	if op == "" {
-		op = ">"
+		op = contract.Op.Default
 	}
 	// `==` is threshold-recipe-only (#810): exact match suits integer status/
 	// error codes on a RAW gauge; other recipes emit computed floats where
@@ -524,9 +526,9 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	// the imperative gate in lockstep with the JSON-schema if/then editor-guard,
 	// so an API/GitOps-accepted spec can't later fail to render in the Portal.
 	// Mirrors shape.py.
-	if op == "==" && spec.Recipe != "threshold" {
-		return "", fmt.Errorf("op \"==\" is only allowed for the threshold recipe "+
-			"(raw-gauge status-code match); %s does not support it", spec.Recipe)
+	if op == "==" && !customAlertEqRecipes[spec.Recipe] {
+		return "", fmt.Errorf("op \"==\" is only allowed for the %s recipe "+
+			"(raw-gauge status-code match); %s does not support it", oneOf(contract.Op.EqRecipes), spec.Recipe)
 	}
 	// slo_burn_rate fixes op ">" (a burn RATE exceeding its budget threshold is
 	// the only meaningful direction). An explicit different op is a semantic
@@ -554,10 +556,10 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		// shape.py recipe_id's forecast branch.
 		h := spec.Horizon
 		if h == "" {
-			return "", fmt.Errorf("forecast recipe requires horizon (one of 1h/2h/4h/12h/24h/48h)")
+			return "", fmt.Errorf("forecast recipe requires horizon (one of %s)", oneOf(contract.Horizon.Enum))
 		}
 		if !customAlertHorizonValid[h] {
-			return "", fmt.Errorf("horizon %q must be one of 1h/2h/4h/12h/24h/48h", h)
+			return "", fmt.Errorf("horizon %q must be one of %s", h, oneOf(contract.Horizon.Enum))
 		}
 		parts = append(parts, "h"+h)
 		if spec.CapacityMetric != "" {
@@ -606,7 +608,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 		if spec.Recipe == "p99_latency" {
 			q := string(spec.Quantile)
 			if q == "" {
-				q = "0.99"
+				q = contract.Quantile.Default
 			}
 			if err := validateQuantile(q); err != nil {
 				return "", err
@@ -628,7 +630,7 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	// Always emitted; default 1m. MUST stay byte-identical to shape.py::recipe_id.
 	forVal := spec.For
 	if forVal == "" {
-		forVal = "1m"
+		forVal = contract.For.Default
 	}
 	parts = append(parts, "for"+forVal)
 
@@ -722,12 +724,12 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 		}
 		if !customAlertWindowRe.MatchString(spec.Window) {
 			return nil, fmt.Errorf("window %q is not a valid Go duration "+
-				"(^([0-9]+(ns|us|µs|ms|s|m|h))+$); it is interpolated raw into rate(…[<window>]) "+
-				"— an invalid value is a PromQL injection", spec.Window)
+				"(%s); it is interpolated raw into rate(…[<window>]) "+
+				"— an invalid value is a PromQL injection", spec.Window, contract.Patterns.Window)
 		}
 	}
-	if !customAlertNameRe.MatchString(spec.Name) {
-		return nil, fmt.Errorf("name %q is not a valid identifier", spec.Name)
+	if !customAlertAlertNameRe.MatchString(spec.Name) {
+		return nil, fmt.Errorf("name %q is not a valid alert name (%s)", spec.Name, contract.Patterns.Name)
 	}
 	rid, err := RecipeID(spec)
 	if err != nil {
@@ -766,22 +768,22 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	}
 	mode := spec.Mode
 	if mode == "" {
-		mode = "page"
+		mode = contract.Mode.Default
 	}
 	// reject unsupported mode (typo): only page|silent ride the data plane; an
 	// unknown value would surface a bogus mode label that S8 routing can't handle.
-	if mode != "page" && mode != "silent" {
-		return nil, fmt.Errorf("mode %q must be page or silent", mode)
+	if !customAlertModeValid[mode] {
+		return nil, fmt.Errorf("mode %q must be one of %s", mode, oneOf(contract.Mode.Enum))
 	}
 	// `for` must be one of the enum-bounded values (TRK-326): it enters the
 	// recipe_id slug, so an out-of-enum value would silently spawn a distinct
 	// shape/rule and bloat cardinality. Default 1m (matches schema default).
 	forVal := spec.For
 	if forVal == "" {
-		forVal = "1m"
+		forVal = contract.For.Default
 	}
 	if !customAlertForValid[forVal] {
-		return nil, fmt.Errorf("for %q is not allowed (one of 0s/1m/5m/15m/30m/1h)", forVal)
+		return nil, fmt.Errorf("for %q is not allowed (one of %s)", forVal, oneOf(contract.For.Enum))
 	}
 	return []ResolvedThreshold{{
 		Tenant:    tenant,
@@ -812,8 +814,8 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 	if spec.Name == "" || spec.Metric == "" {
 		return nil, fmt.Errorf("missing required field (recipe/name/metric)")
 	}
-	if !customAlertNameRe.MatchString(spec.Name) {
-		return nil, fmt.Errorf("name %q is not a valid identifier", spec.Name)
+	if !customAlertAlertNameRe.MatchString(spec.Name) {
+		return nil, fmt.Errorf("name %q is not a valid alert name (%s)", spec.Name, contract.Patterns.Name)
 	}
 	// RecipeID carries the rest of the slo validation duty (objective charset +
 	// open interval, slo_period enum, denominator_metric, min_events, fixed op,
@@ -824,7 +826,7 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 		return nil, err
 	}
 	obj := spec.Objective.value
-	if obj == "disable" {
+	if obj == contract.SloBurnRate.Objective.Disable {
 		return nil, errCustomAlertDisabled
 	}
 	objective, err := strconv.ParseFloat(obj, 64)
@@ -834,10 +836,10 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 	}
 	mode := spec.Mode
 	if mode == "" {
-		mode = "page"
+		mode = contract.Mode.Default
 	}
-	if mode != "page" && mode != "silent" {
-		return nil, fmt.Errorf("mode %q must be page or silent", mode)
+	if !customAlertModeValid[mode] {
+		return nil, fmt.Errorf("mode %q must be one of %s", mode, oneOf(contract.Mode.Enum))
 	}
 	// `for` must be one of the enum-bounded values (TRK-326) on the slo path
 	// too: RecipeID slugs `for{val}` without an enum check, so skipping this
@@ -846,10 +848,10 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 	// preflight/compiler drift. Same check + message as the non-slo path.
 	forVal := spec.For
 	if forVal == "" {
-		forVal = "1m"
+		forVal = contract.For.Default
 	}
 	if !customAlertForValid[forVal] {
-		return nil, fmt.Errorf("for %q is not allowed (one of 0s/1m/5m/15m/30m/1h)", forVal)
+		return nil, fmt.Errorf("for %q is not allowed (one of %s)", forVal, oneOf(contract.For.Enum))
 	}
 	period, err := sloPeriod(spec)
 	if err != nil {
@@ -1244,9 +1246,9 @@ func CustomAlertRowCount(tenant string, overrides map[string]ScheduledValue) int
 // MaxCustomRecipesDefault is the per-tenant cap on a tenant's OWN custom-alert
 // rows (S4, #3042), judged by tenant-api's write check, da-guard's
 // custom_alert_over_cap and validate-config's custom_alert_cap — the compiler
-// does not judge it. scripts/tools/_lib_constants.py::MAX_CUSTOM_RECIPES is the
-// Python copy (tests/ops/test_validate_config_custom_alert_cap.py pins the two).
-const MaxCustomRecipesDefault = 20
+// does not judge it. The number is the recipe contract's custom_alert_cap;
+// scripts/tools/_lib_constants.py::MAX_CUSTOM_RECIPES is generated from it.
+var MaxCustomRecipesDefault = contract.Cap
 
 // ValidateTenantCustomAlerts is the tenant-api shift-left preflight (ADR §S5):
 // the Go-native, in-process equivalent of the Python compiler's per-tenant

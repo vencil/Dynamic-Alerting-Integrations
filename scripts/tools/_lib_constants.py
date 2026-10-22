@@ -147,9 +147,12 @@ RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...
 # `tenants:` entry; one a profile gives it is a shape the profile's tenants
 # share and is not counted (#3042). A row is one `user_threshold` series the
 # exporter serves: a switched-off recipe serves none, an slo_burn_rate two.
-# The same number as Go's pkg/config.MaxCustomRecipesDefault (tenant-api's
-# write check), pinned by tests/ops/test_validate_config_custom_alert_cap.py.
+# The recipe contract's custom_alert_cap, which Go's
+# pkg/config.MaxCustomRecipesDefault (tenant-api's write check) also reads.
+# BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
+# block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
 MAX_CUSTOM_RECIPES: Final[int] = 20
+# END GENERATED recipe contract
 
 # ============================================================
 # Timing Guardrails

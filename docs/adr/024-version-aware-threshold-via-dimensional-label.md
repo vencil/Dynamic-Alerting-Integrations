@@ -225,13 +225,13 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 
 portal 的 recipe 表單在瀏覽器裡執行，不跑 Go：它只做即時提示，界限讀下面的產生物，合不合法以 tenant-api 的寫入檢查為準。
 
-規則裡的**資料**——各 recipe 的必填欄位與預設值、各欄位的列舉（recipe、op、mode、for、horizon、group_by、slo_period …）、metric、label、window、name 的格式、租戶不可當 selector 的保留標籤、p99_latency 的 quantile 範圍、forecast 的現狀 band 與比例下限、slo_burn_rate 的 `min_events` 預設與上限、生命週期狀態、SLO 每個嚴重度的偵測窗口、每個預算期間（28d、30d）的快慢兩級燒錯倍數、每租戶自訂告警上限——寫在一份 **recipe 契約檔**，放在同一個 Go package，以 `go:embed`（Go 在編譯時把檔案內容嵌進執行檔的機制）嵌入。其他需要這些資料的地方都由它產生，CI 重新產生後比對，有差異就紅：
+規則裡的**資料**——各 recipe 的必填欄位與預設值、各欄位的列舉（recipe、op、mode、for、horizon、group_by、slo_period …）、metric、label、window、name 的格式、租戶不可當 selector 的保留標籤、p99_latency 的 quantile 範圍、forecast 的現狀 band 與比例下限、slo_burn_rate 的 `min_events` 預設與上限、生命週期狀態、SLO 每個嚴重度的偵測窗口、每個預算期間（28d、30d）的快慢兩級燒錯倍數、每租戶自訂告警上限——寫在一份 **recipe 契約檔**，放在同一個 Go package，以 `go:embed`（Go 在編譯時把檔案內容嵌進執行檔的機制）嵌入。exporter、da-guard 與 tenant-api 是 Go 程式，經同一個 package 直接讀它，不另存副本；其他需要這些資料的地方都由它產生，CI 重新產生後比對，有差異就紅：
 
 | 產生物 | 用途 |
 |---|---|
 | `tenant-config.schema.json` 的 `_custom_alerts` 條目定義 | 編輯器提示、validate-config 的 schema 檢查 |
 | portal 的 `recipe-enums.json`、`recipe-status.json` | recipe builder 的選項與狀態標示 |
-| tenant-api 的 `recipe-status.json` | eol 只擋擴張的寫入閘（§8） |
+| validate-config 讀的每租戶自訂告警上限（`_lib_constants.py`） | `custom_alert_cap` 列 |
 | `rule-packs/recipes/*.yaml` 的參數列舉與預設值 | 給人讀的治理文件 |
 | 自訂規則 lint 的查詢範圍上限（由 horizon 最大值推得） | `lint_custom_rules.py` |
 | recipe-preview 的 `for` 分鐘數對照 | 預覽試算 |

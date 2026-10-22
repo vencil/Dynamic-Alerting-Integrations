@@ -1404,7 +1404,7 @@
         "selectors": {
           "type": "object",
           "title": "Exact Label Filters (=)",
-          "description": "label → value, compiled to exact matchers `{label=\"value\"}`. Reserved labels (tenant/version/__name__/severity/recipe/recipe_id/name) are rejected.",
+          "description": "label → value, compiled to exact matchers `{label=\"value\"}`. The labels the platform reserves (`reserved_labels` in components/threshold-exporter/app/pkg/config/recipe_contract.json) are rejected.",
           "propertyNames": { "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },

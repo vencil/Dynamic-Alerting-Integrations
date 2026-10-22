@@ -40,8 +40,8 @@ import RECIPE_STATUS from '../_common/data/recipe-status.json';
 /* ── i18n helper ───────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
-/* Recipe lifecycle status (ADR-024 §8), derived from shape.py RECIPE_STATUS via
- * recipe-status.json. Unknown → active. This is ADVISORY UX only: the tenant-api
+/* Recipe lifecycle status (ADR-024 §8), generated from the exporter's recipe
+ * contract (pkg/config/recipe_contract.json) into recipe-status.json. Unknown → active. This is ADVISORY UX only: the tenant-api
  * writer is the eol-expansion authority (B2-wide). */
 function recipeStatus(r) {
   return (RECIPE_STATUS.statuses && RECIPE_STATUS.statuses[r]) || 'active';
@@ -82,9 +82,12 @@ function formSupported(recipe) {
 const NAME_RE = new RegExp(ENUMS.patterns.name);
 const METRIC_RE = new RegExp(ENUMS.patterns.metric);
 const WINDOW_RE = new RegExp(ENUMS.patterns.window);
+const DECIMAL_RE = new RegExp(ENUMS.patterns.decimal);
 
 /* ── validation (pure UX fast-feedback; the S5 Go preflight + CI are the
- * authority — this never re-implements the cross-language contract) ─── */
+ * authority). Every enum, pattern and bound comes from recipe-enums.json,
+ * which is GENERATED from the recipe contract the exporter embeds (#3229), so
+ * the form cannot accept what the exporter refuses. ─── */
 function isValidName(s) { return typeof s === 'string' && NAME_RE.test(s); }
 function isValidMetric(s) { return typeof s === 'string' && METRIC_RE.test(s); }
 function isValidWindow(s) { return typeof s === 'string' && WINDOW_RE.test(s); }
@@ -113,6 +116,19 @@ function requiredFields(recipe) {
   return base;
 }
 
+/* The operators a recipe accepts: `==` only on the contract's eq recipes
+ * (#810 — exact match on a raw gauge; computed floats reject it). */
+function opOptions(recipe) {
+  return ENUMS.op.filter((op) => op !== '==' || ENUMS.eqRecipes.includes(recipe));
+}
+
+/* A decimal strictly inside the open interval (lo, hi). */
+function inOpenRange(s, [lo, hi]) {
+  if (typeof s !== 'string' || !DECIMAL_RE.test(s)) return false;
+  const n = Number(s);
+  return Number.isFinite(n) && n > lo && n < hi;
+}
+
 function isFieldValid(field, value) {
   switch (field) {
     case 'name': return isValidName(value);
@@ -121,7 +137,7 @@ function isFieldValid(field, value) {
     case 'capacity_metric': return isValidMetric(value);
     case 'window': return isValidWindow(value);
     case 'horizon': return ENUMS.horizon.includes(value);
-    case 'quantile': { const n = Number(value); return Number.isFinite(n) && n > 0 && n < 1; }
+    case 'quantile': return inOpenRange(value, ENUMS.quantileRange);
     case 'threshold': return !Number.isNaN(parseThresholdValue(value));
     default: return true;
   }
@@ -145,10 +161,13 @@ function allRequiredValid(recipe, f) {
   for (const field of (FIELDS_BY_RECIPE[recipe] || [])) {
     if (!required.includes(field) && f[field] && !isFieldValid(field, f[field])) return false;
   }
-  // forecast ratio mode: capacity_metric set → floor ∈ (0,1).
+  if (f.op && !opOptions(recipe).includes(f.op)) return false;
+  // forecast ratio mode: capacity_metric set → floor ∈ (0, current band); a
+  // floor at or above the band is neutered by the band gate, so the exporter
+  // refuses it.
   if (recipe === 'forecast' && f.capacity_metric) {
     const floor = parseThresholdValue(f.threshold);
-    if (!(floor > 0 && floor < 1)) return false;
+    if (!(floor > 0 && floor < ENUMS.forecastCurrentBand)) return false;
   }
   return true;
 }
@@ -174,7 +193,7 @@ function recipeSummary(recipe, f) {
       return t(`當 ${f.metric} 連續 ${f.window} 無數據時，觸發 ${sev} 告警`,
         `fires ${sev} when ${f.metric} has no data for ${f.window}`);
     case 'p99_latency': {
-      const q = f.quantile || '0.99';
+      const q = f.quantile || ENUMS.quantileDefault;
       return t(`當 ${f.metric} 的 p${q} 延遲在 ${f.window} 內 ${op} ${value} 秒時，觸發 ${sev} 告警`,
         `fires ${sev} when the p${q} latency of ${f.metric} ${op} ${value}s over ${f.window}`);
     }
@@ -249,6 +268,7 @@ export {
   composeThreshold,
   requiredFields,
   isFieldValid,
+  opOptions,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,

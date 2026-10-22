@@ -64,117 +64,103 @@ import hashlib
 import re
 from typing import Dict, List, Tuple
 
-# --- charset contracts ------------------------------------------------------
-# Metric / label names: strict Prometheus identifier WITHOUT colon. Forbidding
-# the colon stops a tenant from referencing a recording rule (e.g.
-# `tenant_version:alert_threshold:...`) and is the first line of the
-# PromQL-injection defence (ADR-024 §2d). The second line is _assemble_selector,
-# which never interpolates a raw value outside a quoted+escaped string literal.
+# --- the recipe contract ------------------------------------------------------
+# Every enum, pattern, band and default below is GENERATED from the exporter's
+# recipe contract (#3229):
+#   components/threshold-exporter/app/pkg/config/recipe_contract.json
+# The exporter reads the same file through go:embed, so the two cannot part.
+# What each one is for:
+#   _METRIC_RE / _LABEL_RE — strict Prometheus identifier WITHOUT colon:
+#       forbidding the colon stops a tenant from referencing a recording rule
+#       and is the first line of the PromQL-injection defence (ADR-024 §2d).
+#       The second line is _assemble_selector, which never interpolates a raw
+#       value outside a quoted+escaped string literal.
+#   _NAME_RE — the tenant-chosen alert name (the `name` label).
+#   _WINDOW_RE / _QUANTILE_RE — `window` and `quantile` are BARE PromQL
+#       tokens interpolated raw into the rule (rate(m[<window>]) /
+#       histogram_quantile(<quantile>, …)); a bare token IS syntax, so they are
+#       allowlisted. The decimal charset rejects the Go hex-floats/underscores
+#       that strconv.ParseFloat accepts and float() does not.
+#   _TEMPLATE_METACHARS — forbidden in a selector VALUE: the value also reaches
+#       the alert-annotation `description` (recipes.py _alert_rule), which
+#       Prometheus renders as a Go text/template at fire time, where
+#       `{{ query … }}` runs arbitrary cross-tenant PromQL. A denylist by
+#       necessity; check_custom_alert_annotations is the backstop.
+#   RESERVED_LABELS — the vectorisation join keys / platform-owned dimensions
+#       a tenant may not pin as a selector.
+#   _EQ_RECIPES — `==` is threshold-recipe-only (#810): exact match suits an
+#       integer status code on a RAW gauge, not a computed float.
+#   ALLOWED_FOR / ALLOWED_HORIZON / ALLOWED_GROUP_BY — enum-bounded because
+#       each enters the recipe_id slug (TRK-326: per-base-shape cardinality
+#       stays a small constant). The platform derives the forecast lookback =
+#       max(2·horizon, 1h) from the horizon (recipes.py).
+#   ALLOWED_SLO_PERIOD — NOT a shape component (ADR-031): it only scales the
+#       burn multipliers the exporter derives at resolve time.
+#   SLO_MIN_EVENTS_DEFAULT — the fast-window (5m) bad-event floor; the slow
+#       tier's floor is compiler-derived as min_events × its SLO_BURN_WINDOWS
+#       factor (30m = 5m×6).
+#   SLO_BURN_WINDOWS — fixed recipe semantics: severity is decided by the
+#       recipe (fast→critical, slow→warning), stated in
+#       rule-packs/recipes/slo_burn_rate.yaml.
+#   RECIPE_STATUS — recipe lifecycle (ADR-024 §Custom Alerts cost/governance,
+#       #741 item #6), RECIPE versioning, distinct from the `version` label:
+#       active = no restriction; deprecated = still compiles, the compiler
+#       emits a non-fatal notice and the portal warns; eol = existing
+#       declarations KEEP compiling, but tenant-api rejects a write that grows
+#       the recipe's usage.
+#   _FORECAST_CURRENT_BAND — see validate_forecast_ratio_threshold.
+# BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
+# block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
+RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate")
+RECIPE_LIFECYCLE = frozenset({"active", "deprecated", "eol"})
+RECIPE_STATUS = {
+    "threshold": "active",
+    "rate": "active",
+    "ratio": "active",
+    "absence": "active",
+    "p99_latency": "active",
+    "forecast": "active",
+    "slo_burn_rate": "active",
+}
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _METRIC_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _LABEL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-
-# `window` (and, for p99_latency, `quantile`) are BARE PromQL tokens interpolated
-# raw into the compiled rule (rate(m[<window>]) / histogram_quantile(<quantile>,…)).
-# Unlike a selector VALUE they cannot be quote-escaped — a bare token IS syntax — so
-# they must be allowlisted. `window` is the Go-duration charset (the schema pattern,
-# now enforced imperatively both sides). MUST match custom_alert.go::customAlertWindowRe.
 _WINDOW_RE = re.compile(r"^([0-9]+(ns|us|µs|ms|s|m|h))+$")
-
-# quantile: DECIMAL-float charset only. Go strconv.ParseFloat accepts Go hex-float
-# literals ("0x1p-1"=0.5) and underscores that CPython float() rejects — a SHARED
-# regex pins the accept-set so the Go preflight and the Python compiler can never
-# diverge (a divergence lands a poison commit that wedges the CI drift gate; Phase C
-# hunter finding). MUST match custom_alert.go::customAlertQuantileRe.
 _QUANTILE_RE = re.compile(r"^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$")
-
-# Go-template metacharacters forbidden in a tenant-controlled selector VALUE. The
-# value is safe in the PromQL string-literal (escaped by _escape_value), but it is
-# ALSO interpolated into the alert-annotation `description` (recipes.py _alert_rule),
-# which Prometheus renders as a Go text/template at fire time — where `{{ query … }}`
-# runs arbitrary cross-tenant PromQL. Per the SSTI logic-less principle, untrusted
-# data must never be able to BECOME template code. A denylist by necessity (a label
-# value is arbitrary UTF-8, not allowlistable like an identifier); the emit-time
-# invariant gate (check_custom_alert_annotations) is the backstop. Backtick is the
-# Go raw-string delimiter that survives _escape_value. MUST match
-# custom_alert.go::customAlertTemplateMetachars.
 _TEMPLATE_METACHARS = ("{{", "}}", "`")
-
-# Tenants may NOT set these as selectors: they are the vectorisation join keys /
-# platform-owned dimensions. Letting a tenant pin `tenant=` or `version=` would
-# hijack the cross-tenant isolation or poison the graceful version-join.
-RESERVED_LABELS = frozenset(
-    {"tenant", "version", "__name__", "severity", "recipe", "recipe_id", "name"}
-)
-
+RESERVED_LABELS = frozenset({
+    "tenant",
+    "version",
+    "__name__",
+    "severity",
+    "recipe",
+    "recipe_id",
+    "name",
+    "mode",
+})
 OP_SLUG = {">": "gt", ">=": "ge", "<": "lt", "<=": "le", "==": "eq"}
-
-# `==` is threshold-recipe-only (#810): exact match is meaningful for integer
-# status/error codes read off a RAW gauge, but float-fragile (and semantically
-# hollow) against COMPUTED values — rate()/ratio/histogram_quantile/predict_linear
-# all emit floats where equality is an accident of arithmetic. MUST match the
-# Go gate in custom_alert.go::RecipeID.
+DEFAULT_OP = ">"
 _EQ_RECIPES = frozenset({"threshold"})
-
-# Permitted `for` pending-durations (enum-bounded, TRK-326). `for` is part of the
-# recipe_id slug + shape_signature, so bounding it keeps per-base-shape cardinality
-# a small constant (no O(M)→O(N)). MUST match docs/schemas/tenant-config.schema.json
-# and custom_alert.go::customAlertForValid.
 ALLOWED_FOR = frozenset({"0s", "1m", "5m", "15m", "30m", "1h"})
-
-# Permitted forecast horizons (the predict-ahead distance, ADR-024 §Forecast
-# Recipe). Enum-bounded for the same cardinality reason as `for`: `horizon` enters
-# the recipe_id slug. The platform derives lookback = max(2·horizon, 1h) from this
-# (compile-time only — see recipes.py). MUST match the schema + Go customAlertHorizonValid.
+DEFAULT_FOR = "1m"
 ALLOWED_HORIZON = frozenset({"1h", "2h", "4h", "12h", "24h", "48h"})
-
-# Permitted `slo_period` budget windows (ADR-031). NOT a shape component: it
-# only scales the burn-rate multipliers the Go exporter derives at resolve time
-# (30d→14.4/6, 28d→13.44/5.6) — never enters the slug/hash/rule text, so
-# changing the period never re-slugs or forks the rule. Python validates the
-# enum per the ADR-029 dual-side validation duty. MUST match the schema enum +
-# custom_alert.go (Wave 2).
-ALLOWED_SLO_PERIOD = frozenset({"28d", "30d"})
-
-# slo_burn_rate min_events default (ADR-031 OQ-A → 10): the fast-window (5m)
-# bad-event absolute floor. The slow tier's floor is compiler-derived as
-# min_events×6 (30m = 5m×6) — the linear window scaling lives HERE, not in Go.
-SLO_MIN_EVENTS_DEFAULT = 10
-
-# slo_burn_rate burn windows per severity (ADR-031 §2): (long, short, bad-floor
-# multiplier). FIXED recipe semantics — severity is decided by the recipe
-# (fast→critical, slow→warning), a deliberate departure from the threshold
-# value:severity tail, stated in rule-packs/recipes/slo_burn_rate.yaml.
-SLO_BURN_WINDOWS = {
-    "critical": ("1h", "5m", 1),    # fast burn: 1h & 5m ratio + bad:5m > minev
-    "warning": ("6h", "30m", 6),    # slow burn: 6h & 30m ratio + bad:30m > minev*6
-}
-
-# Permitted `group_by` dimensions (ADR-024 §Addendum disk recipes). A disk-fill
-# alert must fire PER PVC — a 99%-full 10GB volume must not be hidden by a 10%-full
-# 500GB one in a `by(tenant)` sum. group_by preserves the named label in the
-# metric-side aggregation so each dimension is evaluated separately. Bounded to a
-# whitelist to keep cardinality safe (a tenant has few PVCs). Each entry enters the
-# recipe_id slug + shape_signature. MUST match the schema enum + custom_alert.go.
 ALLOWED_GROUP_BY = frozenset({"persistentvolumeclaim"})
-
-RECIPES = ("threshold", "rate", "ratio", "absence", "p99_latency", "forecast",
-           "slo_burn_rate")
-
-# Recipe lifecycle status (ADR-024 §Custom Alerts cost/governance, #741 item #6).
-# A recipe is platform-authored; its status governs whether tenants may keep
-# declaring it. This is RECIPE versioning — distinct from capability-A APP
-# versioning (the `version` label).
-#   active     — normal, no restriction.
-#   deprecated — still compiles; the compiler emits a non-fatal notice and the
-#                portal shows a warning. Signals "migrate away, still works".
-#   eol        — existing declarations KEEP compiling (no silent alert loss), but
-#                tenant-api preflight rejects any PUT that uses the recipe (forces
-#                migration on next edit). SRE clears by flipping status back.
-# RECIPE_STATUS is the executable SSOT; the human governance contracts
-# rule-packs/recipes/*.yaml mirror a `status:` field (drift-guarded by
-# tests/dx/test_recipe_lifecycle.py). Default every shipped recipe to active.
-RECIPE_LIFECYCLE = frozenset({"active", "deprecated", "eol"})
-RECIPE_STATUS = {r: "active" for r in RECIPES}
+DEFAULT_QUANTILE = "0.99"
+QUANTILE_RANGE = (0, 1)
+OBJECTIVE_RANGE = (0, 100)
+OBJECTIVE_DISABLE = "disable"
+ALLOWED_SLO_PERIOD = frozenset({"28d", "30d"})
+DEFAULT_SLO_PERIOD = "30d"
+SLO_MIN_EVENTS_DEFAULT = 10
+SLO_MIN_EVENTS_MIN = 1
+SLO_MIN_EVENTS_MAX = 1000000
+# severity -> (long window, short window, bad-event floor multiplier)
+SLO_BURN_WINDOWS = {
+    "critical": ("1h", "5m", 1),
+    "warning": ("6h", "30m", 6),
+}
+_FORECAST_CURRENT_BAND = 0.5
+# END GENERATED recipe contract
 
 
 def recipe_status(recipe: str) -> str:
@@ -220,14 +206,14 @@ def _shape_hash(inst: dict, nhex: int = 16) -> str:
     fields = [
         recipe,
         str(inst["metric"]),
-        "" if recipe == "absence" else str(inst.get("op", ">")),
+        "" if recipe == "absence" else str(inst.get("op", DEFAULT_OP)),
         # slo_burn_rate has NO window slot (fixed burn windows are recipe
         # semantics; a stray authored `window` is ignored — like forecast — so
         # it must not fork the hash). Existing recipes' field list/order is
         # UNCHANGED. min_events needs no field here: it is charset-bounded and
         # always visible in the readable slug (`minev{N}`), so it cannot alias.
         "" if recipe in ("forecast", "slo_burn_rate") else str(inst.get("window", "")),
-        str(inst.get("quantile", "0.99")) if recipe == "p99_latency" else "",
+        str(inst.get("quantile", DEFAULT_QUANTILE)) if recipe == "p99_latency" else "",
         _normalize_horizon(inst) if is_forecast else "",
         str(den),
         _normalize_for(inst),
@@ -270,8 +256,8 @@ def _normalize_for(inst: dict) -> str:
     `if forVal == "" { forVal = "1m" }` so the two implementations never diverge
     on the falsy case. Any other value MUST be one of ALLOWED_FOR.
     """
-    value = inst.get("for", "1m")
-    value = "1m" if value in (None, "") else str(value)
+    value = inst.get("for", DEFAULT_FOR)
+    value = DEFAULT_FOR if value in (None, "") else str(value)
     if value not in ALLOWED_FOR:
         raise RecipeError(
             f"for {value!r} must be one of {sorted(ALLOWED_FOR)} (TRK-326 enum-bounded)"
@@ -354,7 +340,7 @@ def _validate_objective(inst: dict) -> str:
             f"(#1017 quantile class)"
         )
     v = value
-    if v == "disable":
+    if v == OBJECTIVE_DISABLE:
         return v
     if not _QUANTILE_RE.fullmatch(v):
         raise RecipeError(
@@ -362,7 +348,7 @@ def _validate_objective(inst: dict) -> str:
             f'or "disable" (decimal charset only — keeps Go/Python accept-sets in lockstep)'
         )
     o = float(v)
-    if not (0.0 < o < 100.0):
+    if not (OBJECTIVE_RANGE[0] < o < OBJECTIVE_RANGE[1]):
         raise RecipeError(
             f"objective {v!r} must be in the OPEN interval (0,100): 100 makes the "
             f"error budget 0 (threshold 0 → always fires), 0 makes it never fire"
@@ -376,8 +362,8 @@ def _normalize_slo_period(inst: dict) -> str:
     scales the exporter-computed threshold values (30d→14.4/6, 28d→13.44/5.6), so
     it never enters the slug/hash/rule text and changing it never re-slugs.
     Python's duty is the enum check only (ADR-029 dual-side validation)."""
-    value = inst.get("slo_period", "30d")
-    value = "30d" if value in (None, "") else str(value)
+    value = inst.get("slo_period", DEFAULT_SLO_PERIOD)
+    value = DEFAULT_SLO_PERIOD if value in (None, "") else str(value)
     if value not in ALLOWED_SLO_PERIOD:
         raise RecipeError(
             f"slo_period {value!r} must be one of {sorted(ALLOWED_SLO_PERIOD)}"
@@ -402,17 +388,17 @@ def _normalize_min_events(inst: dict) -> int:
             f"min_events {value!r} must be a positive integer (a bare YAML int, "
             f"not a string/float/bool) — it enters the recipe_id slug as minev{{N}}"
         )
-    if value < 1:
+    if value < SLO_MIN_EVENTS_MIN:
         raise RecipeError(
-            f"min_events {value} must be >= 1 (0 would disable the low-traffic "
+            f"min_events {value} must be >= {SLO_MIN_EVENTS_MIN} (0 would disable the low-traffic "
             f"guard entirely; use `objective: \"disable\"` to opt out instead)"
         )
-    if value > 1_000_000:
+    if value > SLO_MIN_EVENTS_MAX:
         # mirrors the schema `maximum` + custom_alert.go sloMinEventsMax: an
         # absurd floor silently disables the alert while looking configured,
         # and the literal enters the rule text.
         raise RecipeError(
-            f"min_events {value} exceeds the maximum 1000000 (schema maximum; "
+            f"min_events {value} exceeds the maximum {SLO_MIN_EVENTS_MAX} (schema maximum; "
             f"an absurd floor silently disables the alert while looking configured)"
         )
     return value
@@ -440,7 +426,7 @@ def _validate_quantile(quantile: str) -> None:
         q = float(quantile)
     except (TypeError, ValueError):
         raise RecipeError(f"quantile {quantile!r} is not a number in (0,1)")
-    if not (0.0 < q < 1.0):
+    if not (QUANTILE_RANGE[0] < q < QUANTILE_RANGE[1]):
         raise RecipeError(f"quantile {quantile!r} must be in the open interval (0,1)")
 
 
@@ -526,7 +512,7 @@ def recipe_id(inst: dict) -> str:
     # gate strict here matches the JSON-schema if/then editor-guard — otherwise
     # an API/GitOps-submitted absence+"==" the imperative gate silently accepted
     # would later fail to render in the Portal form (front/back brain-split).
-    op = inst.get("op", ">")
+    op = inst.get("op", DEFAULT_OP)
     if op == "==" and recipe not in _EQ_RECIPES:
         raise RecipeError(
             f"op '==' is only allowed for the threshold recipe (exact match on a "
@@ -597,7 +583,7 @@ def recipe_id(inst: dict) -> str:
             )
         parts.append("w" + window)
         if recipe == "p99_latency":
-            quantile = str(inst.get("quantile", "0.99"))
+            quantile = str(inst.get("quantile", DEFAULT_QUANTILE))
             _validate_quantile(quantile)
             parts.append("q" + quantile)
         if recipe == "ratio":
@@ -673,11 +659,11 @@ def shape_signature(inst: dict) -> Tuple:
         inst["metric"],
         # den slot: ratio's/slo's denominator_metric OR forecast's capacity_metric.
         inst.get("capacity_metric") if is_forecast else inst.get("denominator_metric"),
-        None if inst["recipe"] == "absence" else inst.get("op", ">"),
+        None if inst["recipe"] == "absence" else inst.get("op", DEFAULT_OP),
         # forecast has no window (lookback derives from horizon); slo_burn_rate
         # has none either (fixed burn windows are recipe semantics); others do.
         None if (is_forecast or is_slo) else str(inst.get("window", "")),
-        str(inst.get("quantile", "0.99")) if inst["recipe"] == "p99_latency" else None,
+        str(inst.get("quantile", DEFAULT_QUANTILE)) if inst["recipe"] == "p99_latency" else None,
         # forecast's horizon is a shaping param (predict-ahead distance).
         _normalize_horizon(inst) if is_forecast else None,
         tuple(_selector_items(inst)),
@@ -697,9 +683,8 @@ def shape_signature(inst: dict) -> Tuple:
 # floor that suppresses transient-write-burst / cold-start false positives at high
 # headroom (a pure-slope alarm would otherwise page an 80%-empty disk). It lives HERE
 # (not in recipes.py) so the emitter AND the write/compile-time validator share ONE
-# source of truth; the Go preflight hardcodes the same value (custom_alert.go
-# `forecastCurrentBand`) and MUST stay in lockstep.
-_FORECAST_CURRENT_BAND = 0.5
+# name; its value is generated from the recipe contract above (the Go preflight's
+# `forecastCurrentBand` reads the same contract).
 
 
 def validate_forecast_ratio_threshold(inst: dict, value: str) -> None:
