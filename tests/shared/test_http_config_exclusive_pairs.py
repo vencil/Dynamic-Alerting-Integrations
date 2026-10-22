@@ -48,11 +48,11 @@ _CONTEXTS = {
 _MIXINS = {"httpProxyRules"}
 # A mapping value that is valid on its own, per key (an empty one otherwise).
 _OBJECT_SAMPLES = {"oauth2": {"client_id": "c", "token_url": "https://t.example/x"}}
-# Sibling keys a pair needs so that only the pair can refuse `both`: a client
-# cert needs a client key and the reverse; no_proxy needs a proxy_url key.
+# Sibling keys a pair needs so that only the pair can refuse `both`: no_proxy
+# needs a proxy_url key. (#3257 dropped the cert / key families: their pairs
+# were the three forms of a client cert or key, and tls_config now takes only
+# the inline form — no pair is left there.)
 _FIXUPS = [
-    ({"cert", "cert_file", "cert_ref"}, {"key_file": "/k"}),
-    ({"key", "key_file", "key_ref"}, {"cert_file": "/c"}),
     ({"no_proxy"}, {"proxy_url": ""}),
 ]
 
@@ -182,9 +182,24 @@ def test_table_is_the_schema_expanded():
     assert committed == _render(rows), (
         "http_config_exclusive_pairs.json is not the schema's pairs expanded; "
         "run: python3 tests/shared/test_http_config_exclusive_pairs.py")
-    # Every pair of every context is in it (38 when written; this pins the
-    # floor, the equality above pins the rest).
-    assert len(rows) >= 3 * 30
+    # Every pair of every context is in it (38 when written; 10 since #3257
+    # removed the file-reference keys and the 28 pairs that only they formed —
+    # the four auth keys' 6 and the proxy rules' 2 in http_config and in
+    # oauth2. This pins the floor, the equality above pins the rest.)
+    assert len(rows) >= 3 * 10
+    # No pair may name a key a conf.d receiver cannot carry: such a row would
+    # judge a receiver the generator refuses whole.
+    from _lib_validation import is_file_reference_key
+    named = sorted({k for r in rows for k in _keys(r["receiver"]) if is_file_reference_key(k)})
+    assert not named, f"pair rows name file-reference keys: {named}"
+
+
+def _keys(value) -> set:
+    if isinstance(value, dict):
+        return set(value) | {k for v in value.values() for k in _keys(v)}
+    if isinstance(value, list):
+        return {k for v in value for k in _keys(v)}
+    return set()
 
 
 def test_schema_judges_each_row_as_the_table_says():
