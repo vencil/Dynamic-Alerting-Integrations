@@ -3305,6 +3305,12 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/dx/waveform_score.py":
         "a different domain entirely — its `defaults:` is the severity to "
         "tolerance-ceiling matrix, not threshold defaults",
+    "scripts/tools/ops/backtest_threshold.py":
+        "PROJECTS `_registry_lib`'s `defaults` tier (the scaffold face's own "
+        "source) into a TemporaryDirectory that `_served_written` deletes after "
+        "one `da-guard served-values` run (`_written_tree`, #3140 `--tenant`), so "
+        "no conf.d it writes is shipped or read again; the one key a caller "
+        "names is declared under `optional_overrides:`, never under `defaults:`",
     "scripts/tools/ops/config_diff.py":
         "READS `_` files (through `da-guard parse-tree`) and writes no conf.d; "
         "the census hit is RENDERED_CARRIERS, the table mapping the top-level "
