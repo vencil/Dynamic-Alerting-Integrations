@@ -1357,6 +1357,10 @@ _NOT_RUN_WHY = {
 }
 
 
+#: How many refused paths the `--markdown-output` report lists (#3206).
+MARKDOWN_REFUSED_PATHS_MAX = 50
+
+
 def not_run_markdown(report):
     """#3089: the `--markdown-output` of a path that ran no backtest — never
     empty, so a PR comment built from it says that nothing was measured and
@@ -1364,9 +1368,16 @@ def not_run_markdown(report):
     why = _NOT_RUN_WHY.get((report["status"], report["reason"]))
     if why is None:
         why = f"caller error `{report['reason']}` (see the job log)."
-    if report.get("refused_paths"):
-        # #3206: the paths the refusal named, each its own line.
-        why += "\n>\n" + "\n".join(f"> - `{safe_label(p)}`" for p in report["refused_paths"])
+    refused = report.get("refused_paths") or []
+    if refused:
+        # #3206: the paths the refusal named, each its own line — capped, as
+        # a PR comment must stay readable; stderr and the JSON keep them all.
+        shown = refused[:MARKDOWN_REFUSED_PATHS_MAX]
+        why += "\n>\n" + "\n".join(f"> - `{safe_label(r['path'])}` ({r['verdict']})"
+                                     for r in shown)
+        if len(refused) > len(shown):
+            why += (f"\n> - … and {len(refused) - len(shown)} more "
+                    "(all of them on stderr and in the JSON report)")
     return ("## Threshold Backtest Results\n"
             "\n"
             f"> **Backtest not run:** {why}\n"
@@ -1454,7 +1465,7 @@ def _end_refused(args, bad, lines):
     to `-o` and to `--markdown-output` (#3089: every terminal path writes
     both), then rc 2."""
     report = empty_report(args.lookback, "caller_error", _lib_parse_tree.REFUSAL_REASON)
-    report["refused_paths"] = [e.path for e in bad]
+    report["refused_paths"] = _lib_parse_tree.refused_paths(bad)
     report["error"] = lines[-1]
     if args.json:
         print(format_json_report(report))

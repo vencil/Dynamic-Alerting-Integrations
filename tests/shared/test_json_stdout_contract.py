@@ -689,6 +689,21 @@ def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
     return check
 
 
+def _refusal_doc(paths: "list[dict[str, str]]") -> Callable[[object], str | None]:
+    """The shared conf.d refusal's envelope (#3206): reason
+    `conf_d_not_servable` and `refused_paths` — every refused path with its
+    verdict, as stderr names them."""
+    base = _caller_error_doc("conf_d_not_servable")
+
+    def check(doc: object) -> str | None:
+        why = base(doc)
+        if why is None and doc.get("refused_paths") != paths:  # type: ignore[union-attr]
+            why = (f"refused_paths must be {paths!r}, "
+                   f"got {doc.get('refused_paths')!r}")  # type: ignore[union-attr]
+        return why
+    return check
+
+
 def _checklist_doc(doc: object) -> str | None:
     """`--checklist-only` must serve THE CHECKLIST, whatever else is combined with it.
 
@@ -1305,7 +1320,7 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", _confd_the_exporter_drops(t),
                     "--policy", _policy_file(t), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("conf_d_not_servable")),
+      doc_check=_refusal_doc([{"path": "_platform.yaml", "verdict": "unservable"}])),
 
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
@@ -1752,6 +1767,8 @@ def test_crash_in_json_mode_emits_one_envelope(
             assert isinstance(own, dict), (
                 f"the tool's own caller_error document is "
                 f"{type(own).__name__}, the crash envelope an object: {where}")
-            missing = sorted(set(own) - set(doc))
+            # `refused_paths` is the shared conf.d refusal's own field (#3206):
+            # the paths that refusal names, with no meaning on a crash.
+            missing = sorted(set(own) - set(doc) - {"refused_paths"})
             assert not missing, (f"crash envelope lacks keys of the tool's own "
                                  f"caller_error document {missing}: {where}")

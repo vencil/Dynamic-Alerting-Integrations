@@ -585,7 +585,13 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     if handler is not None:
         handler(bad, lines)
     from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
-    exit_caller_error(lines[-1], REFUSAL_REASON)
+    exit_caller_error(lines[-1], REFUSAL_REASON, fields={"refused_paths": refused_paths(bad)})
+
+
+def refused_paths(entries: "Iterable[Entry]") -> "list[dict[str, str]]":
+    """The refusal's `--json` field: every refused entry as {path, verdict},
+    in order — all of them, as on stderr (#3206)."""
+    return [{"path": e.path, "verdict": e.verdict} for e in entries]
 
 
 def entries_of(doc: dict) -> "tuple[Entry, ...]":

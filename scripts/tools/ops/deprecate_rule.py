@@ -406,7 +406,7 @@ def exporter_drop_reason(name, section, plane="root", *, reserved):
     return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
-def manual_reason(name, section, key, val, config_dir, *, reserved):
+def manual_reason(name, section, key, val, config_dir, *, reserved, root_dir=None):
     """`OWNER_MANUAL` 殘留的那一句話（預覽與執行同一句）。*reserved* 同 `section_owner`。"""
     where = f"[{section}] {key}: {val}"
     if section == "unreadable":
@@ -415,7 +415,8 @@ def manual_reason(name, section, key, val, config_dir, *, reserved):
     if "/" in name and (block in ("defaults", "optional_overrides") or not reserved):
         subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
-                f"`--config-dir {subtree} --plane subtree --root-dir {config_dir}`：{where}")
+                f"`--config-dir {subtree} --plane subtree --root-dir {root_dir or config_dir}`："
+                f"{where}")
     if block == "profiles":
         return f"`_` 前綴檔的 `profiles:` 區塊本工具射程外，請手動移除：{where}"
     return (f"本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，請手動移除："
@@ -1305,8 +1306,12 @@ def _deprecate(args):
                 reason = (f"租戶檔 exporter 讀不進去（{tenant_bad[name]}），本工具"
                           f"不改寫，請先修檔：[{section}] {key}: {val}")
             elif designed:
+                # The guidance names the conf.d ROOT: --root-dir on the subtree
+                # plane (#3206), --config-dir on the root plane.
                 reason = manual_reason(name, section, key, val, args.config_dir,
-                                       reserved=name in reserved)
+                                       reserved=name in reserved,
+                                       root_dir=args.root_dir if args.plane == "subtree"
+                                       else None)
             else:
                 reason = f"重掃仍有引用：[{section}] {key}: {val}"
             incomplete.append((metric, name, reason))

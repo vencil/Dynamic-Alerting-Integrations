@@ -284,12 +284,15 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/da_assembler.py": "its --config-dir is an OUTPUT (a CRD controller writing conf.d files)",
     "tools/ops/generator_service.py": "tenant-api's long-running judge over a stdin protocol, "
                                       "not a CLI over a tree",
-    "tools/ops/migrate_rule.py": "writes conf.d content and reads it back at the path it writes; "
-                                 "takes no input tree",
-    "tools/ops/onboard_platform.py": "writes conf.d content and reads it back at the path it writes; "
-                                     "takes no input tree",
-    "tools/ops/scaffold_tenant.py": "writes conf.d content and reads it back at the path it writes; "
-                                    "takes no input tree",
+    "tools/ops/migrate_rule.py": ("writes conf.d files under -o/--output-dir, which may be an "
+        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
+        "refusal in β2 (#3206)"),
+    "tools/ops/onboard_platform.py": ("writes conf.d files under -o/--output-dir, which may be an "
+        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
+        "refusal in β2 (#3206)"),
+    "tools/ops/scaffold_tenant.py": ("writes conf.d files under -o/--output-dir, which may be an "
+        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
+        "refusal in β2 (#3206)"),
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     "tools/dx/generate_platform_data.py": "reads the repo's own conf.d at a fixed path; takes no operand",

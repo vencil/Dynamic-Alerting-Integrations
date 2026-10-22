@@ -1337,3 +1337,38 @@ def test_plane_subtree_needs_a_root_it_is_under(tmp_path):
         r = _run(*argv)
         assert r.returncode == 2 and words in r.stderr, (argv, r.stderr)
         assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_the_printed_subtree_guidance_is_runnable_from_either_plane(tmp_path):
+    """The guidance a run prints for a residue below it names the conf.d
+    ROOT as `--root-dir` — the root plane's `--config-dir`, the subtree
+    plane's own `--root-dir` (#3206). Followed as printed, each step runs
+    (a wrong root would judge `team1/_defaults.yaml`'s legal string value as
+    a root default and refuse), and the last one leaves nothing behind."""
+    import re
+    import shlex
+    root = tmp_path / "conf.d"
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root / "team1", "_defaults.yaml",
+           'defaults:\n  cpu_usage: "70"\n  mem: "disable"\n')
+    _write(root / "team1" / "sub", "_defaults.yaml", 'defaults:\n  cpu_usage: "60"\n')
+    assert go_refused(root) == []
+    guidance = re.compile(r"`(--config-dir \S+ --plane subtree --root-dir \S+)`")
+
+    r = _run(root, "--execute")
+    seen = []
+    for _ in range(3):
+        tail = _tail(r.stdout) if "下架未完成" in r.stdout else ""
+        steps = sorted(set(guidance.findall(tail)))
+        if not steps:
+            break
+        argv = shlex.split(steps[0])
+        assert argv[argv.index("--root-dir") + 1] == str(root), steps
+        seen.append(steps[0])
+        r = _run_metrics(Path(argv[1]), ["cpu_usage"], *argv[2:], "--execute")
+        assert "Traceback" not in r.stderr, r.stderr
+        assert "da-guard validation names" not in r.stderr, (steps[0], r.stderr)
+    assert r.returncode == 0, (seen, r.stdout + r.stderr)
+    assert any("/team1/sub " in s for s in seen), seen
+    for carrier in ("team1/_defaults.yaml", "team1/sub/_defaults.yaml"):
+        assert "cpu_usage" not in (root / carrier).read_text(encoding="utf-8"), carrier
