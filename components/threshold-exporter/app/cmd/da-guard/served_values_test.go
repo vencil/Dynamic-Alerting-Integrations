@@ -1207,7 +1207,9 @@ func TestServedValues_NonUTF8_ExitsThreeNamingTheFile(t *testing.T) {
 }
 
 // Two broken files whose names differ only in a non-UTF-8 byte: JSON would
-// render both as "b\ufffd.yaml", so exit 2 names the first in byte order.
+// render both as "b\ufffd.yaml", so exit 2 names the first in byte order —
+// since #3206 before the load, as every subcommand that walks conf.d refuses
+// such a tree (utf8_names.go).
 // Several runs: the one named must be the first every time, not whichever
 // map iteration happens to reach first. Not parallel, for the reason given
 // on TestServedValues_NonUTF8_ExitsThreeNamingTheFile.
@@ -1220,7 +1222,7 @@ func TestServedValues_NonUTF8FileName_ExitsTwoNamingIt(t *testing.T) {
 		"b\xfe.yaml":     "tenants: [\n",
 		"b\xff.yaml":     "tenants: [\n",
 	}
-	const want = `parse_failed[0]: "b\xfe.yaml"`
+	const want = `the path "b\xfe.yaml" is not valid UTF-8`
 	for run := 0; run < 8; run++ {
 		code, _, _, stderr := served(t, files, "")
 		if code != exitCallerErr {

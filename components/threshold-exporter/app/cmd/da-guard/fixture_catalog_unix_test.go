@@ -5,11 +5,13 @@ package main
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
 // buildCatalogRow applies the catalogue's base (when the row asks) and the
@@ -93,8 +96,9 @@ func buildCatalogRow(t *testing.T, c fixtureCatalog, row catalogRow, dir string)
 // assertValidationClass holds the row's `matrix` class to da-guard's
 // validation exit on the same tree — the behaviour matrix's oracle: control
 // → 0 (every tool must exit 0 on it), flagged → 3 or 4 (every tool must
-// fail and name what the report names). go_only rows are content kinds the
-// matrix does not run; refused rows are judged by parse-tree's exit 2.
+// fail and name what the report names), go_only → 3 (content kinds the
+// matrix does not run: every one is a file the exporter's load drops).
+// Refused rows are judged by parse-tree's exit 2.
 func assertValidationClass(t *testing.T, row catalogRow, conf string) {
 	t.Helper()
 	var want []int
@@ -103,6 +107,8 @@ func assertValidationClass(t *testing.T, row catalogRow, conf string) {
 		want = []int{exitOK}
 	case "flagged":
 		want = []int{exitParseFailed, exitUndetermined}
+	case "go_only":
+		want = []int{exitParseFailed}
 	default:
 		return
 	}
@@ -115,6 +121,124 @@ func assertValidationClass(t *testing.T, row catalogRow, conf string) {
 	}
 	t.Errorf("matrix %q: validation exit %d, want one of %v (the matrix's oracle): %s",
 		row.Matrix, code, want, errOut.String())
+}
+
+// assertVerdictIsValidationsLists is the invariant of parse-tree's
+// "verdict" (verdict.go, #3206): on the tree at conf, the (path, verdict)
+// pairs of tree mode are exactly the paths validation's JSON report lists —
+// parse_failed and unreadable as unservable, undetermined items of reason
+// unreadable_outside_run as tree_refused — and validation's exit is 3 iff
+// some path is unservable, else 4 iff some is tree_refused. The other
+// undetermined reasons (routing_key, domain_policy, routing_profiles_file,
+// invalid_tenant_id, duplicate_tenant) are evidence about content, not a
+// path the exporter or the generator cannot read: left out of the equality,
+// they may make the exit 4 on their own. List mode's verdicts are tree
+// mode's but for what only reading finds: a file the load drops whose
+// problem is no walk record is null there.
+func assertVerdictIsValidationsLists(t *testing.T, conf string, doc map[string]any) {
+	t.Helper()
+	var out, errOut strings.Builder
+	code := run([]string{"--config-dir", conf, "--format", "json", "--cardinality-limit", "0"}, &out, &errOut)
+	var rep struct {
+		ParseFailed  []string           `json:"parse_failed"`
+		Unreadable   []skippedFile      `json:"unreadable"`
+		Undetermined []undeterminedItem `json:"undetermined"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &rep); err != nil {
+		t.Fatalf("validation (exit %d) wrote no JSON report: %v: %s", code, err, errOut.String())
+	}
+	want := map[string]string{}
+	add := func(p, v string) {
+		if have, ok := want[p]; ok && have != v {
+			t.Errorf("validation lists %s as %s and as %s", p, have, v)
+		}
+		want[p] = v
+	}
+	for _, p := range rep.ParseFailed {
+		add(p, verdictUnservable)
+	}
+	for _, u := range rep.Unreadable {
+		add(u.File, verdictUnservable)
+	}
+	otherEvidence := false
+	for _, it := range rep.Undetermined {
+		if it.Reason == undeterminedUnreadableOutsideRun {
+			add(it.File, verdictTreeRefused)
+		} else {
+			otherEvidence = true
+		}
+	}
+	got := map[string]string{}
+	anyUnservable, anyRefused := false, false
+	tree := entriesByPath(t, doc)
+	for p, e := range tree {
+		v, _ := e["verdict"].(string)
+		if e["verdict"] != nil && v != verdictUnservable && v != verdictTreeRefused {
+			t.Errorf("%s: verdict %v, not one of the closed set", p, e["verdict"])
+		}
+		if v != "" {
+			got[p] = v
+		}
+		anyUnservable = anyUnservable || v == verdictUnservable
+		anyRefused = anyRefused || v == verdictTreeRefused
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parse-tree's verdicts are not validation's lists:\n parse-tree %v\n validation %v", got, want)
+	}
+	wantExit := exitOK
+	switch {
+	case anyUnservable:
+		wantExit = exitParseFailed
+	case anyRefused || otherEvidence:
+		wantExit = exitUndetermined
+	}
+	if code != wantExit {
+		t.Errorf("validation exit %d, want %d (unservable %v, tree_refused %v, other evidence %v): %s",
+			code, wantExit, anyUnservable, anyRefused, otherEvidence, errOut.String())
+	}
+
+	lcode, list, msg := runPT(t, "", "--list-only", "--config-dir", conf)
+	if lcode != exitOK {
+		t.Fatalf("list mode: exit %d: %s", lcode, msg)
+	}
+	for p, e := range entriesByPath(t, list) {
+		te, ok := tree[p]
+		if !ok {
+			continue // TestParseTree_ListEntriesAreTreeEntries holds the paths equal
+		}
+		w := te["verdict"]
+		if w == verdictUnservable {
+			walkRecord := false
+			if pr, ok := te["problem"].(map[string]any); ok {
+				k := parsetree.Kind(pr["kind"].(string))
+				walkRecord = k == parsetree.KindReadFailure || k == parsetree.KindNotRegularFile
+			}
+			if !walkRecord {
+				w = nil
+			}
+		}
+		if e["verdict"] != w {
+			t.Errorf("%s: list mode verdict %v, tree mode %v (want %v)", p, e["verdict"], te["verdict"], w)
+		}
+	}
+}
+
+// assertEverySubcommandRefuses: on a tree parse-tree refuses (a name that is
+// not UTF-8), every other subcommand that walks conf.d exits 2 too
+// (utf8_names.go, #3206) — never the 0 that read as "the tree is fine".
+func assertEverySubcommandRefuses(t *testing.T, conf string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"--config-dir", conf, "--format", "json", "--cardinality-limit", "0"},
+		{servedValuesCmd, "--config-dir", conf},
+		{effectiveCmd, "--config-dir", conf},
+		{keyRefsCmd, "--config-dir", conf, "--metric", "mysql_connections"},
+	} {
+		var out, errOut strings.Builder
+		if code := run(args, &out, &errOut); code != exitCallerErr || !strings.Contains(errOut.String(), "not valid UTF-8") {
+			t.Errorf("%v: exit %d, want %d naming the path: %s", args[0], code, exitCallerErr, errOut.String())
+		}
+	}
 }
 
 // TestFixtureCatalog_RecipesGiveTheirEntries: each catalogue recipe, built
@@ -166,12 +290,14 @@ func TestFixtureCatalog_RecipesGiveTheirEntries(t *testing.T) {
 				if code != exitCallerErr {
 					t.Fatalf("exit %d, want %d (a tree parse-tree refuses): %s", code, exitCallerErr, msg)
 				}
+				assertEverySubcommandRefuses(t, conf)
 				return
 			}
 			if code != exitOK {
 				t.Fatalf("exit %d: %s", code, msg)
 			}
 			assertValidationClass(t, row, conf)
+			assertVerdictIsValidationsLists(t, conf, doc)
 			want := map[string]string{}
 			expected := row.Expect.Entries
 			if row.Base {

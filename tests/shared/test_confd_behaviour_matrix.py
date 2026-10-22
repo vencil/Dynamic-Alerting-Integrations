@@ -317,8 +317,7 @@ OUTSIDE_POPULATION = {"ops/configmap_assemble.py"}
 _X_EXIT = "X: shared fail-closed exit — a path Go names does not fail the tool (next PR)"
 _X_NAME = "X: shared fail-closed exit — a path Go names is not named (next PR)"
 _X_CRASH = "X: traceback — the tool crashes on a path Go names (next PR)"
-_X_UTF8 = ("X: a file name that is not UTF-8 is not refused with exit 2 (next PR, with da-guard "
-           "validation's own exit 0 on such a tree)")
+_X_UTF8 = "X: a file name that is not UTF-8 is not refused with exit 2 (next PR)"
 _B2 = "β2: migrates to da-guard"
 
 
@@ -413,10 +412,9 @@ XFAIL: dict[tuple[str, str], str] = {
     **_cells("backtest_threshold", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
              "team_link_outside"),
     **_cells("backtest_threshold", _X_NAME, "config_named_dir"),
-    **{(t, "non_utf8_name"): _X_UTF8
-       for t in ("compile_custom_alerts", "tenant_verify", "generate_tenant_metadata",
-                 "analyze_rule_pack_gaps", "guard_dispatch", "blind_spot_discovery",
-                 "backtest_threshold")},
+    # da-guard's own subcommands refuse such a tree since #3206 (utf8_names.go),
+    # and every tool that asks one of them now does; this one asks none.
+    ("tenant_verify", "non_utf8_name"): _X_UTF8,
     # A file the exporter cannot decode (validation's parse_failed).
     **{(t, r): reason
        for r in ("yaml_syntax_error", "multi_document_file")

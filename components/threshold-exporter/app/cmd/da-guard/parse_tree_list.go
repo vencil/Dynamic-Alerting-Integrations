@@ -191,9 +191,19 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 }
 
 // parseTreeListOf is the list-mode document of one ScanDirTreeNames walk.
+// Its verdicts are pathVerdict over the walk's half of validation's exit-3
+// lists (config.TreeUnreadable, the function ScopeEffective fills
+// unreadable with): no byte is read, so no file is known to be one the
+// exporter's load drops (parse_failed).
 func parseTreeListOf(scan *config.TreeScan) (*parseTreeIndex, error) {
 	idx := newParseTreeIndex("list")
+	if p := nonUTF8Path(scan); p != "" {
+		return nil, nonUTF8Error(p)
+	}
 	if err := walkEntries(scan, &idx); err != nil {
+		return nil, err
+	}
+	if err := setVerdicts(idx.Entries, reportedPaths(nil, unreadableEntries(config.TreeUnreadable(scan)))); err != nil {
 		return nil, err
 	}
 	return &idx, nil

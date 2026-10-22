@@ -138,8 +138,13 @@ def test_permission_refusals_are_config_files_in_both_modes(unprivileged) -> Non
         assert e.config_file and e.problem is not None and e.problem[0] == "read_failure", e
         with pytest.raises(lpt.FileUnreadable):
             tree.value(rel)
-    # List mode: tree mode's entries, but for the problems only reading finds.
+    # List mode: tree mode's entries, but for what only reading finds — the
+    # content problems, and the `unservable` verdict of a file the exporter's
+    # load drops for its content (list mode knows the walk's records alone).
     def without_content_problem(e: lpt.Entry) -> lpt.Entry:
+        walk_record = e.problem is not None and e.problem[0] in lpt.LIST_PROBLEM_KINDS
+        if e.verdict == "unservable" and not walk_record:
+            e = lpt.Entry(**{**e.__dict__, "verdict": None})
         if e.problem is not None and e.problem[0] not in lpt.LIST_PROBLEM_KINDS:
             return lpt.Entry(**{**e.__dict__, "problem": None})
         return e
@@ -199,7 +204,7 @@ def test_a_list_document_is_no_tree_document() -> None:
     list document (no content) refuses it whole, and the other way round."""
     entry = {"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t",
              "defaults_document": False, "readers": ["exporter"], "not_read": None,
-             "role": "config", "problem": None}
+             "role": "config", "problem": None, "verdict": None}
     listed = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
               "defaults_carriers": {}, "entries": [entry]}
     import json
@@ -220,7 +225,8 @@ def test_a_dir_entry_names_no_reader(role, problem) -> None:
     import json
     base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
             "defaults_document": False, "readers": [], "not_read": None,
-            "role": role, "problem": problem}
+            "role": role, "problem": problem,
+            "verdict": None if problem is None else "unservable"}
     doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
            "defaults_carriers": {}}
     listing = lpt.read_document(json.dumps({**doc, "entries": [base]}).encode(),

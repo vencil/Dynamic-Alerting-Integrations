@@ -580,6 +580,18 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 	return walkDirTree(root, nil, nil, logger, walkListOnly, nil)
 }
 
+// ScanDirTreeFilesWith is ScanDirTreeFiles over the tree as opts makes it
+// read (ScanOptions: one overlay's bytes at its path; #3206, `da-guard
+// parse-tree --path` judging the tree as it is once that file is written).
+// The zero opts is ScanDirTreeFiles. A refused overlay is an error wrapping
+// ErrOverlay, and nothing is scanned.
+func ScanDirTreeFilesWith(root string, logger *log.Logger, opts ScanOptions) (*TreeScan, error) {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return walkDirTree(root, nil, nil, logger, walkListOnly, opts.Overlay)
+}
+
 // ScanDirTreeNames is ScanDirTreeFiles without reading a byte (#3206): the
 // same walk, the same files, unreadable entries, defaults carriers and
 // NotFiles, but each kept file is only opened and closed (OpenConfFile), so
@@ -668,7 +680,7 @@ func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
 // hash, the classification and the hierarchy products. mode is walkFull for
 // every production caller except scanRootDefaults and scanRootPlatform.
-// overlay is ScanOptions.Overlay (walkFull only; nil everywhere else).
+// overlay is ScanOptions.Overlay (walkFull and walkListOnly; nil everywhere else).
 func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode, overlay *FileOverlay) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 

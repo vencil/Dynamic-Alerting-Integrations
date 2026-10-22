@@ -93,7 +93,7 @@ def _v2_doc(files):
         return {"path": rel, "depth": rel.count("/"), "class": cls,
                 "tenant_named": name.rsplit(".", 1)[0] if cls == "tenant" else None,
                 "defaults_document": cls == "defaults", "readers": ["exporter", "generator"],
-                "not_read": None, "role": "config", "problem": None}
+                "not_read": None, "role": "config", "problem": None, "verdict": None}
     return {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
             "defaults_carriers": {},
             "entries": [entry(r) for r in sorted(files)], "files": files, "rendered_by": {}}
