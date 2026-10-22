@@ -27,6 +27,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
 import yaml
 
 from factories import (

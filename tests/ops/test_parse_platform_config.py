@@ -10,6 +10,10 @@ import sys
 
 import pytest
 
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools", "ops"))
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
