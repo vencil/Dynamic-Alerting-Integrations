@@ -452,7 +452,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop isfile check on explicit (missing path returns string)",
         fn_name="_resolve_binary",
-        old="        if explicit:\n            return (\n                explicit if Path(explicit).is_file() else None\n            ), cleaned",
+        old="        if explicit:\n            return (explicit if _may_be_file(explicit) else None), cleaned",
         new="        if explicit:\n            return explicit, cleaned",
     ),
     Mutation(
@@ -468,7 +468,7 @@ MUTATIONS: list[Mutation] = [
         test_file="tests/shared/test_property_tools.py",
         label="resolve: drop env-var fallback (only flag + PATH consulted)",
         fn_name="_resolve_binary",
-        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (\n                env_override if Path(env_override).is_file() else None\n            ), cleaned',
+        old='        env_override = os.environ.get(self.env_var, "").strip()\n        if env_override:\n            return (env_override if _may_be_file(env_override) else None), cleaned',
         new='        env_override = ""\n        if env_override:\n            return None, cleaned',
     ),
     # ── _substitute_tenant (_grar_merge) ─────────────────────────

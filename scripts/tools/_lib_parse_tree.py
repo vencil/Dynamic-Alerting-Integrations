@@ -44,8 +44,9 @@ Every mode's document carries `entries`, read here into `Entry` objects:
 (`list_tree`, `parse-tree --list-only`, no content read) and
 `classify_names` for names that are not on a disk. ⛔ An entry's `role` is
 the verdict — `config` (a config file; its readers fail loudly on a
-`problem`), `not_a_file`, `unlistable_dir` — and nothing here composes one of
-its own from the other fields. `Tree.selected` / `unreadable` / `not_read`
+`problem`), `dir` (a directory the walk enters: every one has an entry, so
+no reader lists directories itself), `not_a_file`, `unlistable_dir` — and
+nothing here composes one of its own from the other fields. `Tree.selected` / `unreadable` / `not_read`
 are computed from the entries, for the readers written against them.
 
 A document of another schema (v1 included: a da-guard older than this tool),
@@ -236,7 +237,7 @@ def _signal_name(signum: int) -> str:
 # ── entries (ADR-036 §7 step 9, #3206) ──────────────────────────────
 
 #: `role` values, a closed set (pkg/config Role): Go's verdict on a path.
-ROLES = frozenset({"config", "not_a_file", "unlistable_dir"})
+ROLES = frozenset({"config", "dir", "not_a_file", "unlistable_dir"})
 #: `class` values: of a walked path, and the more a name alone can be.
 WALK_CLASSES = frozenset({"tenant", "defaults", "platform", "directory"})
 NAME_CLASSES = frozenset({"tenant", "defaults", "platform", "hidden", "not_config_name"})
@@ -284,6 +285,23 @@ class Entry:
         """A config file (role `config`) — readable or not: a `problem` on one
         is a read that fails, loudly, never a reason to skip it."""
         return self.role == "config"
+
+    @property
+    def is_dir(self) -> bool:
+        """A directory the walk enters and lists (role `dir`). One whose name
+        is a config file name (`x.yaml/`) carries a `problem` saying so; its
+        files are read like any directory's."""
+        return self.role == "dir"
+
+    @property
+    def flagged(self) -> bool:
+        """Not a config file, and Go names a problem with it: what every
+        reader names instead of passing over — a symlink to a directory the
+        walk does not follow, a special file, a dangling link (`not_a_file`),
+        a directory it could not list (`unlistable_dir`), a directory with a
+        file's name (`dir` with a problem). The fact is Go's; this composes
+        nothing beyond reading it."""
+        return not self.config_file and self.problem is not None
 
     @property
     def not_a_file(self) -> bool:
@@ -339,7 +357,13 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
             raise ValueError(f"{where}: role {role!r} is not one this reader knows")
         if not_read is not None and not (isinstance(not_read, str) and not_read):
             raise ValueError(f"{where}: not_read is not a reason")
-        if (not_read is None) == (not readers):
+        if role in ("dir", "unlistable_dir"):
+            # A directory, listed or not, is no file a reader reads, and
+            # nothing is passed over.
+            if readers or not_read is not None:
+                raise ValueError(f"{where}: a {role} with readers {readers!r} / "
+                                 f"not_read {not_read!r}")
+        elif (not_read is None) == (not readers):
             raise ValueError(f"{where}: readers {readers!r} with not_read {not_read!r}")
     problem = None
     if bad is not None:
@@ -427,8 +451,13 @@ def check_shape(doc: dict) -> None:
         if doc["mode"] == "tree" and e.config_file and e.readers and e.problem is None \
                 and e.path not in doc["files"]:
             raise ValueError(f"{e.path!r}: a config file a reader reads, with neither content nor a problem")
-        if doc["mode"] == "file" and e.problem is None and e.path not in doc["files"]:
+        # A directory --path (role dir / unlistable_dir: the walk's own entry)
+        # is no file: file mode reads no text for it, and that is no gap.
+        if doc["mode"] == "file" and e.problem is None and e.path not in doc["files"] \
+                and e.role not in ("dir", "unlistable_dir"):
             raise ValueError(f"{e.path!r}: file mode gave neither content nor a problem")
+        if doc["mode"] == "file" and e.role in ("dir", "unlistable_dir") and e.path in doc["files"]:
+            raise ValueError(f"{e.path!r}: file mode read text for a directory")
 
 
 def is_scalar(v: Any) -> bool:

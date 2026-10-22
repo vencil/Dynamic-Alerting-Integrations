@@ -39,7 +39,7 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
@@ -96,6 +96,12 @@ class GitOpsReport:
 # ---------------------------------------------------------------------------
 # Git repo checks
 # ---------------------------------------------------------------------------
+# `git archive --remote` naming a path the branch does not have — git's own
+# wording (from the server, in its locale). Any other failure (the server
+# does not run upload-archive, a ref it refuses) stays "cannot verify".
+_PATHSPEC_MISSING = "did not match any files"
+
+
 def _run_cmd(cmd: list[str], timeout: int = 10,
              keep_stdout: bool = True) -> tuple[bool, str, str]:
     """Run shell command, return (success, stdout, stderr).
@@ -158,8 +164,11 @@ def check_repo(
 
     # Step 2: Check if branch exists
     branches = [line.split("\t")[1] for line in stdout.split("\n") if line.strip()]
-    branch_ref = f"refs/heads/{branch}"
-    branch_exists = any(b == branch_ref or b.endswith(f"/{branch}") for b in branches)
+    # That branch, as git itself resolves a branch name (#3211): `main` is
+    # refs/heads/main — never refs/heads/feature/main, which merely ends in
+    # it — and `heads/x` / `refs/heads/x` name refs/heads/x.
+    wanted = {f"refs/heads/{branch}", f"refs/{branch}", branch}
+    branch_exists = any(b in wanted and b.startswith("refs/heads/") for b in branches)
 
     if not branch_exists:
         return CheckResult(
@@ -183,6 +192,19 @@ def check_repo(
     )
     if path_ok:
         details["config_path_verified"] = True
+    elif _PATHSPEC_MISSING in path_err:
+        # The server DID run `git archive` and answered that the path is not
+        # in that branch (#3211): that is a verdict, not "cannot verify".
+        details["config_path_verified"] = False
+        return CheckResult(
+            check="repo",
+            status="fail",
+            message=_h(
+                f"配置路徑不存在於分支 {branch}: {path}",
+                f"Config path not found in branch {branch}: {path}"
+            ),
+            details=details,
+        )
     else:
         # Not a hard failure — server may not support git archive --remote
         details["config_path_verified"] = False
@@ -191,13 +213,9 @@ def check_repo(
             "Cannot verify path remotely (git archive --remote may not be supported), use local subcommand to confirm"
         )
 
-    status = "pass"
-    if not path_ok and "config_path_note" in details:
-        status = "pass"  # path check is best-effort, not a failure
-
     return CheckResult(
         check="repo",
-        status=status,
+        status="pass",  # the path check is best-effort when the server cannot answer
         message=_h(
             f"Git 倉庫可訪問，分支 {branch} 存在"
             + ("，配置路徑已驗證" if details.get("config_path_verified") else ""),
@@ -216,17 +234,12 @@ def check_local(dir_path: str) -> CheckResult:
     details = {"directory": dir_path}
     base = Path(dir_path)
 
-    # Check directory exists
+    # No directory to check is the caller's input, not a verdict (#3211):
+    # the caller-error exit (rc 2, its --json envelope) via `run()`.
     if not base.is_dir():
-        return CheckResult(
-            check="local",
-            status="fail",
-            message=_h(
-                f"目錄不存在: {dir_path}",
-                f"Directory not found: {dir_path}"
-            ),
-            details=details,
-        )
+        raise CallerError(_h(f"ERROR: --dir 不是目錄: {dir_path}",
+                             f"ERROR: --dir is not a directory: {dir_path}"),
+                          reason="dir_not_found")
 
     # ADR-036 step 4 (#2906): which files there are and what each holds is
     # `da-guard parse-tree`'s answer — the files the exporter selects, read
@@ -484,7 +497,10 @@ def main() -> None:
     # #3094: a crash in --json mode still prints one envelope (`--json` lives
     # on every subcommand; no subcommand means no attribute)
     if getattr(args, "json", False):
-        arm_crash_envelope()
+        # dev-rules §13: an early exit keeps the report's keys, zeroed
+        arm_crash_envelope(build=lambda: GitOpsReport(
+            overall_status="", checks=[],
+            timestamp=datetime.now(timezone.utc).isoformat()).to_dict())
 
     if not args.action:
         parser.print_help()

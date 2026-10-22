@@ -123,7 +123,8 @@ class TestANewKeyReachesEveryCopy:
 
     def test_a_tenant_key(self, tmp_path):
         root = self._with(tmp_path, "_probe_key", {
-            "read_by": {"exporter": ["tenant"]}, "description": "probe"})
+            "read_by": {"exporter": ["tenant"]}, "description": "probe",
+            "value": {"shape": "scalar"}})
         assert '"_probe_key",' in _read(root, ss.PY_REL)
         assert '"_probe_key",' in _read(root, ss.GO_REL)
         tenant = json.loads(_read(root, ss.TENANT_SCHEMA_REL))["definitions"]["tenantConfig"]
@@ -163,7 +164,8 @@ class TestANewKeyReachesEveryCopy:
 
     def test_update_is_idempotent(self, tmp_path):
         root = self._with(tmp_path, "_probe_key", {
-            "read_by": {"exporter": ["tenant"]}, "description": "probe"})
+            "read_by": {"exporter": ["tenant"]}, "description": "probe",
+            "value": {"shape": "scalar"}})
         snap = {rel: _read(root, rel) for rel in _TARGETS}
         assert _cli("--root", str(root), "--update").stdout.startswith("OK")
         assert {rel: _read(root, rel) for rel in _TARGETS} == snap
@@ -208,6 +210,35 @@ class TestRegistryShape:
         (lambda r: r["keys"]["_silent_mode"].update({"readers": {}}), "allowed fields"),
         (lambda r: r.update({"extra": 1}), "top-level keys"),
         (lambda r: r["layers"].pop("profile"), "layers must be"),
+        # value / batch (#3227)
+        (lambda r: r["keys"]["_silent_mode"]["value"].update({"shape": "string"}),
+         "keys._silent_mode.value.shape"),
+        (lambda r: r["keys"]["_silent_mode"]["value"].pop("shape"), "keys._silent_mode.value.shape"),
+        (lambda r: r["keys"]["_silent_mode"]["value"].update({"enum": ["all"]}),
+         "keys._silent_mode.value: allowed fields"),
+        (lambda r: r["keys"]["_silent_mode"].update({"value": "scalar"}),
+         "keys._silent_mode.value: allowed fields"),
+        (lambda r: r["keys"]["_silent_mode"].pop("value"), "needs value.shape"),
+        (lambda r: r["keys"]["_silent_mode"].update({"value": None}),
+         "keys._silent_mode.value: allowed fields"),
+        (lambda r: r["keys"]["_policies"].update({"batch": None}),
+         "keys._policies.batch: allowed fields"),
+        (lambda r: r["keys"]["_routing"]["value"].update({"check": "routing"}),
+         "only a key the exporter reads can name a check"),
+        (lambda r: r["keys"]["_silent_mode"]["value"].update({"check": ""}),
+         "keys._silent_mode.value.check: must be a non-empty string"),
+        (lambda r: r["keys"]["_profile"]["value"].update({"refers_to": "profiles"}),
+         "keys._profile.value.refers_to"),
+        (lambda r: r["keys"]["_routing"]["batch"].update({"set": True}),
+         "keys._routing.batch: allowed fields"),
+        (lambda r: r["keys"]["_routing"]["batch"].update({"unset": "yes"}),
+         "keys._routing.batch.unset: must be true"),
+        (lambda r: r["keys"]["_profile"].update({"batch": {"unset": True}}),
+         "keys._profile.batch.unset: _profile decides the tenant's scope"),
+        (lambda r: r["keys"]["_metadata"].update({"batch": {"unset": True}}),
+         "keys._metadata.batch.unset: _metadata decides the tenant's scope"),
+        (lambda r: r["prefixes"]["_state_"].update({"value": {"shape": "scalar"}}),
+         "prefixes._state_: allowed fields are read_by, description, note"),
     ])
     def test_refused(self, tmp_path, mutate, needle):
         reg = _registry()
@@ -225,13 +256,54 @@ class TestRegistryShape:
         assert p.returncode == 2 and "cannot read" in p.stderr
 
 
+class TestValueAndBatchDerivations:
+    """What tenant-api will read from the registry instead of its own lists
+    (tenant-api internal/handler/body_validator.go unsetAllowedKeys, internal/handler/batch_common.go
+    scopeMetadataKeys): derived, so a registry change moves them."""
+
+    def test_the_committed_registry_gives_today_s_handler_lists(self):
+        reg = ss.load_registry(os.path.join(_REPO, ss.REGISTRY_REL))
+        assert ss.scope_metadata_keys(reg) == ["_profile"]
+        assert ss.batch_unsettable_keys(reg) == ["_routing", "_routing_receiver_type"]
+        d = ss.derive(reg)
+        assert d["scope_metadata_keys"] == ["_profile"]
+        assert d["batch_unsettable"] == ["_routing", "_routing_receiver_type"]
+        assert d["value_checks"] == {}
+
+    def test_scope_follows_the_layers_the_exporter_reads_metadata_in(self):
+        reg = _registry()
+        reg["keys"]["_metadata"]["read_by"]["exporter"].remove("profile")
+        assert ss.scope_metadata_keys(ss.check_registry(reg)) == []
+
+    def test_a_retired_key_is_unsettable_without_saying_so(self):
+        reg = _registry()
+        reg["retired"]["_probe_old"] = "gone"
+        assert "_probe_old" in ss.batch_unsettable_keys(ss.check_registry(reg))
+
+    def test_the_tables_reach_the_go_file(self, tmp_path):
+        reg = _registry()
+        reg["keys"]["_namespaces"]["value"]["shape"] = "scalar"
+        reg["keys"]["_silent_mode"]["value"]["check"] = "silent_mode"
+        reg["keys"]["_metadata"]["read_by"]["exporter"].remove("profile")
+        root = _copy_tree(tmp_path, reg)
+        check = _cli("--root", str(root), "--check")
+        assert check.returncode == 1 and f"STALE: {ss.GO_REL}" in check.stdout, check.stdout
+        assert _cli("--root", str(root), "--update").returncode == 0
+        go = _read(root, ss.GO_REL)
+        assert '"_namespaces":       "scalar",' in go
+        assert 'var reservedValueChecks = map[string]string{\n\t"_silent_mode": "silent_mode",\n}' in go
+        assert "var scopeMetadataKeys = []string{}\n" in go
+
+
 @pytest.mark.skipif(shutil.which("gofmt") is None, reason="gofmt not installed")
 def test_the_generated_go_is_gofmt_clean(tmp_path):
     reg = _registry()
-    reg["keys"]["_probe_key"] = {"read_by": {"exporter": ["tenant"]}, "description": "x"}
+    reg["keys"]["_probe_key"] = {"read_by": {"exporter": ["tenant"]}, "description": "x",
+                                 "value": {"shape": "scalar", "check": "probe"}}
+    reg["keys"]["_silent_mode"]["value"]["check"] = "silent_mode"
     reg["retired"]["_probe_old"] = "a hint with `quotes` and \"double\" quotes"
     out = tmp_path / "gen.go"
-    out.write_text(ss.render_go(ss.derive(reg)), encoding="utf-8")
+    out.write_text(ss.render_go(ss.derive(ss.check_registry(reg))), encoding="utf-8")
     p = subprocess.run(["gofmt", "-l", str(out)], capture_output=True, text=True,
                        encoding="utf-8", timeout=60)
     assert p.returncode == 0 and p.stdout == "", p.stdout + p.stderr
