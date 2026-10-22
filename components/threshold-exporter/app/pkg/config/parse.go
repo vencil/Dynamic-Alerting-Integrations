@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -274,9 +275,13 @@ func DisabledAt(sv ScheduledValue, now time.Time) bool {
 	return isDisabled(strings.ToLower(strings.TrimSpace(sv.resolveValue(now, nil))))
 }
 
+// disabledWords are the (lower-cased) values that switch a key off — a
+// threshold key, a custom alert, or _silent_mode.
+var disabledWords = []string{"disable", "disabled", "off", "false"}
+
 // isDisabled checks if a value string means "disabled".
 func isDisabled(lower string) bool {
-	return lower == "disable" || lower == "disabled" || lower == "off" || lower == "false"
+	return slices.Contains(disabledWords, lower)
 }
 
 // ParseMetricKey splits a metric key into component and metric (exported for testing).
