@@ -97,7 +97,7 @@ func withRole(e parseTreeEntry, role config.Role) parseTreeEntry {
 	if role != config.RoleConfig {
 		e.DefaultsDocument = false
 	}
-	if role == config.RoleUnlistableDir {
+	if role == config.RoleUnlistableDir || role == config.RoleDir {
 		e.Class, e.TenantNamed = classDirectory, ""
 	}
 	return e
@@ -107,7 +107,9 @@ func withRole(e parseTreeEntry, role config.Role) parseTreeEntry {
 func unreadableAsEntry(u config.UnreadableFile) parseTreeEntry {
 	e := withRole(nameEntry(u.RelKey), u.Role())
 	if u.Reason == config.UnreadableWalkError {
-		e.Readers = []string{readerExporter, readerGenerator}
+		// A directory it could not list (role unlistable_dir) is, like any
+		// directory, no file a reader reads: readers [], nothing passed over.
+		e.Readers = []string{}
 	} else {
 		// Never an unselected carrier: selection runs over the files the
 		// walk could read (the generator's readable_carriers too).
@@ -159,7 +161,7 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 	}
 	if scan.RootWalkErr != nil {
 		e := withRole(parseTreeEntry{Path: "."}, config.RootWalkRole)
-		e.Readers = []string{readerExporter, readerGenerator}
+		e.Readers = []string{}
 		e.Problem = &parseTreeProblem{Kind: parsetree.KindReadFailure,
 			Message: unreadableMessage(config.UnreadableWalkError)}
 		idx.Entries = append(idx.Entries, e)
@@ -167,7 +169,24 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 	for _, nf := range scan.NotFiles {
 		idx.Entries = append(idx.Entries, notFileAsEntry(nf))
 	}
+	for _, d := range scan.Dirs {
+		// A directory is no file a reader reads: readers [], and no not_read
+		// reason (nothing is passed over).
+		e := withRole(nameEntry(d), config.RoleDir)
+		e.Readers = []string{}
+		idx.Entries = append(idx.Entries, e)
+	}
 	sort.SliceStable(idx.Entries, func(i, j int) bool { return idx.Entries[i].Path < idx.Entries[j].Path })
+	// One entry per path is the document's contract (a reader refuses a
+	// document that breaks it). The walk keeps it at its source; checked
+	// here too, so a walk that breaks it fails HERE, naming the path,
+	// instead of in a reader that can only refuse the whole document.
+	for i := 1; i < len(idx.Entries); i++ {
+		if idx.Entries[i].Path == idx.Entries[i-1].Path {
+			return fmt.Errorf("the walk recorded %q twice; the index holds one entry "+
+				"per path (a da-guard defect, not the tree's)", idx.Entries[i].Path)
+		}
+	}
 	return nil
 }
 

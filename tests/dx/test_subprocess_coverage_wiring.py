@@ -179,6 +179,68 @@ def test_a_child_without_the_config_is_not_measured_at_all(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
+# os._exit（#3156）：工具在 stdout 失敗路徑以 os._exit 結束，跳過 coverage 的 atexit 存檔
+# ---------------------------------------------------------------------------
+def _measure_os_exit_child(tmp_path: Path, *, patch_exit: bool) -> set:
+    """以 **pyproject 的** coverage 設定（只把 source／data_file 指到 tmp）跑一個以
+    ``os._exit(3)`` 結束的子行程，回傳它留下的 context 集合（空集合＝沒存檔）。"""
+    import coverage
+
+    target = tmp_path / "exits_hard.py"
+    target.write_text("import os\n\n\ndef work():\n    return 1\n\n\nwork()\nos._exit(3)\n",
+                      encoding="utf-8")
+    config = coverage.Coverage(config_file=str(_REPO_ROOT / "pyproject.toml")).config
+    config.source = [str(tmp_path)]
+    config.data_file = str(tmp_path / ".coverage")
+    config.context = _load(_TOOL, "_wiring_tool_for_context").SUBPROCESS_CONTEXT
+    if not patch_exit:
+        config.patch = [p for p in config.patch if p != "_exit"]
+    env = {k: v for k, v in os.environ.items() if k not in _ENV_KEYS}
+    env["COVERAGE_PROCESS_CONFIG"] = config.serialize()
+    proc = subprocess.run([sys.executable, str(target)], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=120, env=env)
+    assert proc.returncode == 3, proc.stderr
+    contexts: set = set()
+    for path in tmp_path.glob(".coverage*"):
+        data = coverage.CoverageData(basename=str(path))
+        data.read()
+        for measured in data.measured_files():
+            if os.path.samefile(measured, target):
+                for line_contexts in data.contexts_by_lineno(measured).values():
+                    contexts.update(line_contexts)
+    return contexts
+
+
+def test_a_child_that_leaves_with_os_exit_is_still_measured(tmp_path: Path) -> None:
+    """``_lib_exitcodes`` 在 stdout 失敗路徑以 ``os._exit`` 結束行程（#3156），coverage
+    的 atexit 存檔不會跑；pyproject 的 ``patch = ["_exit"]`` 讓 coverage 在 ``os._exit``
+    之前存檔。子行程設定由父行程衍生（conftest），所以這一行也帶到子行程。"""
+    expected = _load(_TOOL, "_wiring_tool_for_context").SUBPROCESS_CONTEXT
+    assert _measure_os_exit_child(tmp_path, patch_exit=True) == {expected}
+
+
+def test_the_child_config_derived_by_conftest_keeps_the_exit_patch(clean_env, tmp_path) -> None:
+    """The two cells above serialise pyproject's config themselves; the
+    children of a real run get theirs from conftest's derivation. This pins
+    that the derivation carries ``patch`` across — with a parent built from
+    pyproject, as pytest-cov builds it."""
+    import coverage
+
+    parent = coverage.Coverage(config_file=str(_REPO_ROOT / "pyproject.toml"))
+    parent.config.data_file = str(tmp_path / "p.coverage")
+    assert "_exit" in parent.config.patch, parent.config.patch
+    _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(parent)))
+    child = coverage.config.CoverageConfig.deserialize(clean_env["COVERAGE_PROCESS_CONFIG"])
+    assert "_exit" in child.patch, child.patch
+
+
+def test_without_the_exit_patch_an_os_exit_child_is_not_measured(tmp_path: Path) -> None:
+    """⛔ 控制項：同一支程式、同一份設定，只少了 ``_exit`` 這一項就量不到——上一格量到的
+    確實是那一行的效果。"""
+    assert _measure_os_exit_child(tmp_path, patch_exit=False) == set()
+
+
+# ---------------------------------------------------------------------------
 # 從父行程衍生 —— CodeRabbit 在 #1885 提的三條，逐條兩個方向
 # ---------------------------------------------------------------------------
 def test_the_child_follows_the_parent_data_file_not_the_repo_root(clean_env, tmp_path):
