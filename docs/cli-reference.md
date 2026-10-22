@@ -107,7 +107,7 @@ da-tools <command> --help
 
 #### conf.d refusal
 
-**conf.d 上有讀不了的路徑：每支 conf.d 工具同一個拒絕**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)，[ADR-036](adr/036-single-parser-effective-config.md) §7 步驟 9）：讀 `--config-dir`（或 `--conf-d`、`--sources`、`--output` 指到的既有 conf.d）的工具，在讀內容、寫任何東西之前，先取這次執行的整棵樹索引（`da-guard parse-tree`）。只要有一條路徑是 `da-guard` 驗證會點名的（`verdict` 為 `unservable`：exporter 讀不了或解不開，例如 YAML 語法錯、一個檔多份文件、懸空或迴圈的 symlink、FIFO、列不出內容的目錄；或 `tree_refused`：路由產生器因它拒收整棵樹，例如指向目錄的 symlink、名稱像設定檔的目錄 `x.yaml/`），工具就在 stderr 逐條印 `ERROR: <路徑>: <原因>`（**全部列出、不截斷**），最後一行點名那棵樹，然後以 `2` 結束，什麼都不寫；帶 `--json` 時 stdout 是一份 envelope，`reason` 為 `conf_d_not_servable`。`tenant-verify` 以它的輸入錯誤碼 `1` 結束（它的 `2` 是驗證不一致）。以前這些路徑在多支工具只印 `WARN`／`NOTE` 就照常結束碼 `0`（`configmap-assemble`、`assemble_config_dir`、`init`、`offboard`、`deprecate`、`migrate_conf_d` 的 `x.yaml/` 等），現在都是這個拒絕。例外是判定本身就是輸出的工具：`validate-config`（結束碼 `1`）、`generate-routes`、`check_routing_profiles`、`check_confd_schema`、`config-diff`，它們自己點名這些路徑並失敗，見各自章節；`deprecate --plane subtree` 也不走這個拒絕（已知缺口，見 [deprecate](#deprecate)）；`da-tools guard` 本身照舊以 `3`／`4` 結束。`assemble_config_dir --validate` 以前判為 ERROR 的檔（頂層不是 mapping、解析錯誤）現在都在組裝前被這個拒絕擋下，不論有沒有帶 `--validate`；這個旗標只剩 WARN。
+**conf.d 上有讀不了的路徑：每支 conf.d 工具同一個拒絕**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)，[ADR-036](adr/036-single-parser-effective-config.md) §7 步驟 9）：讀 `--config-dir`（或 `--conf-d`、`--sources`、`--output` 指到的既有 conf.d）的工具，在讀內容、寫任何東西之前，先取這次執行的整棵樹索引（`da-guard parse-tree`）。只要有一條路徑是 `da-guard` 驗證會點名的（`verdict` 為 `unservable`：exporter 讀不了或解不開，例如 YAML 語法錯、一個檔多份文件、懸空或迴圈的 symlink、FIFO、列不出內容的目錄；或 `tree_refused`：路由產生器因它拒收整棵樹，例如指向目錄的 symlink、名稱像設定檔的目錄 `x.yaml/`），工具就在 stderr 逐條印 `ERROR: <路徑>: <原因>`（**全部列出、不截斷**），最後一行點名那棵樹，然後以 `2` 結束，什麼都不寫；帶 `--json` 時 stdout 是一份 envelope，`reason` 為 `conf_d_not_servable`。`tenant-verify` 以它的輸入錯誤碼 `1` 結束（它的 `2` 是驗證不一致）。以前這些路徑在多支工具只印 `WARN`／`NOTE` 就照常結束碼 `0`（`configmap-assemble`、`assemble_config_dir`、`init`、`offboard`、`deprecate`、`migrate_conf_d` 的 `x.yaml/` 等），現在都是這個拒絕。例外是判定本身就是輸出的工具：`validate-config`（結束碼 `1`）、`generate-routes`、`check_routing_profiles`、`check_confd_schema`、`config-diff`，它們自己點名這些路徑並失敗，見各自章節；`da-tools guard` 本身照舊以 `3`／`4` 結束。`assemble_config_dir --validate` 已移除：它判為 ERROR 的檔（頂層不是 mapping、解析錯誤）現在都在組裝前被這個拒絕擋下，帶這個旗標會是用法錯誤（結束碼 2）。
 
 ---
 
@@ -692,7 +692,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 
 執行 PR 中 threshold 變更的歷史回測。
 
-conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；兩棵樹（`--config-dir` 與 `--baseline`）都適用。帶 `--json` 時 stdout 的 envelope `reason` 為 `conf_d_not_servable`；`-o` 與 `--markdown-output` 都不寫（以前這條路徑是 `served_values_unavailable`，兩個檔都寫出）。
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；兩棵樹（`--config-dir` 與 `--baseline`）都適用。這條路徑照樣寫出 `-o` 與 `--markdown-output`：未執行的報告，`status` 為 `caller_error`、`reason` 為 `conf_d_not_servable`，`refused_paths` 列出被點名的路徑（`--json` 時 stdout 是同一份；markdown 說明原因並逐條列路徑）。以前這條路徑的 `reason` 是 `served_values_unavailable`。
 
 **用途**：驗證閾值調整的影響；評估 PR 對告警的預期影響。
 
@@ -2436,7 +2436,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 
 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔移除 `<m>`、`<m>_critical`、`custom_<m>`、`custom_<m>_critical`；租戶平面另含這四個名字的維度鍵 `<名字>{…}`。
 
-conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。這包括只因為本輪要刪的 key 才被 exporter 丟掉的載體（例如 `defaults:` 裡的 `old_metric: disable`）：本工具不再替這種樹修復，先手動修好那個檔再跑。⚠️ `--plane subtree` 不走這個拒絕：`da-guard parse-tree` 把給它的目錄當 root 判，子樹載體合法的字串值在那裡會被判為讀不了，所以這個平面照舊用自己的檢查（已知缺口）。
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。這包括只因為本輪要刪的 key 才被 exporter 丟掉的載體（例如 `defaults:` 裡的 `old_metric: disable`）：本工具不再替這種樹修復，先手動修好那個檔再跑。`--plane subtree` 也一樣：它以 `--root-dir` 那棵樹的索引判，子樹外的路徑同樣會讓它拒絕；子樹載體合法的字串值不受影響。
 
 **用途**：逐步淘汰舊指標；維護版本相容性。
 
@@ -2458,7 +2458,8 @@ da-tools deprecate <metric_keys...> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed | `root` |
+| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed；`subtree` 需要 `--root-dir` | `root` |
+| `--root-dir <PATH>` | `--plane subtree` 時必填：exporter 的 `-config-dir`（conf.d 的 root），`--config-dir` 必須是它底下 exporter 會走進的目錄；否則（或在 `root` 平面給了它）結束碼 2。這一輪的索引取自這個 root 的整棵樹，共用的拒絕也以整棵樹判（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；寫入仍只在 `--config-dir` | （無） |
 
 **輸出**
 

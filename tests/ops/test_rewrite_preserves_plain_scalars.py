@@ -485,13 +485,16 @@ def test_dump_for_rewrite_is_safe_dump_for_ordinary_data():
 
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
     """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
-    ADR-036 §2), not `RawPlain`. A scalar `defaults:` is a tree the exporter
-    cannot serve, so only `--plane subtree` (which stands aside from the
-    shared refusal, #3206) still reaches this message: run as that plane."""
-    (tmp_path / "_defaults.yaml").write_text("defaults: 5\n", encoding="utf-8")
-    with _lib_parse_cache.judging():
+    ADR-036 §2), not `RawPlain`. A scalar `defaults:` is servable only in a
+    subtree carrier, so this is the `--plane subtree` reading: the subtree's
+    reader cut from the root's index (#3206)."""
+    (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 1\n", encoding="utf-8")
+    (tmp_path / "team").mkdir()
+    (tmp_path / "team" / "_defaults.yaml").write_text("defaults: 5\n", encoding="utf-8")
+    with _lib_parse_cache.session():
+        _lib_parse_cache.subtree_reader(tmp_path / "team", tmp_path)
         [(_p, ok, msg, _r)] = deprecate_rule.remove_from_all_defaults(
-            "mysql_slave_lag", str(tmp_path))
+            "mysql_slave_lag", str(tmp_path / "team"))
     assert not ok and "（!!int）" in msg, msg
 
 

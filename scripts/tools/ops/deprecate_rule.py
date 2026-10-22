@@ -415,7 +415,7 @@ def manual_reason(name, section, key, val, config_dir, *, reserved):
     if "/" in name and (block in ("defaults", "optional_overrides") or not reserved):
         subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
-                f"`--config-dir {subtree} --plane subtree`：{where}")
+                f"`--config-dir {subtree} --plane subtree --root-dir {config_dir}`：{where}")
     if block == "profiles":
         return f"`_` 前綴檔的 `profiles:` 區塊本工具射程外，請手動移除：{where}"
     return (f"本工具依設計不寫任何 `_` 前綴檔的 `tenants:` 區塊，請手動移除："
@@ -553,7 +553,7 @@ def out_of_reach(config_dir, plane="root"):
     for name, listed in sorted(_top(reader).items()):
         if listed.is_dir:
             out.append((f"{name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
-                                    "`--config-dir <子樹> --plane subtree`"))
+                                    "`--config-dir <子樹> --plane subtree --root-dir <root>`"))
         elif not listed.config_file:
             continue
         elif name in tree.not_read and listed.cls == "defaults":
@@ -980,7 +980,7 @@ def _health_reason(key, raw, kind):
     return (f"`defaults:` 的 {key} 的值 {raw} exporter 讀不成數字（defaults 的型別是 "
             f"map[string]float64），這份載體會被整份丟棄，下架不會生效；請先修掉它。"
             f"若這個 --config-dir 其實是子樹載體（exporter 的 -config-dir 之下的"
-            f"目錄），請加 `--plane subtree`")
+            f"目錄），請加 `--plane subtree --root-dir <exporter 的 -config-dir>`")
 
 
 @_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
@@ -1005,18 +1005,27 @@ def _main():
     parser.add_argument("--plane", choices=("root", "subtree"), default="root",
                         help="這個 --config-dir 是 conf.d 的 root（預設）還是"
                              "一層子樹載體。root 會對這一層 `_` 前綴檔做載體"
-                             "體檢；subtree 跳過（子樹平面的字串值合法）")
+                             "體檢；subtree 跳過（子樹平面的字串值合法），並需要 --root-dir")
+    parser.add_argument("--root-dir", default=None,
+                        help="--plane subtree 時必填：exporter 的 -config-dir（conf.d 的 "
+                             "root），--config-dir 必須是它底下 exporter 會走進的目錄")
 
     args = parser.parse_args()
     if args.plane == "subtree":
-        # ⚠️ #3206 known gap: `--plane subtree` points at a directory BELOW
-        # the exporter's --config-dir, but `da-guard parse-tree` judges the
-        # directory it is given as a root — a subtree carrier's string value
-        # (legal there) reads as a root default the exporter drops. Until Go
-        # can judge a subtree in its place, this plane stands aside from the
-        # shared refusal and keeps its own checks (`judging`).
-        with _lib_parse_cache.judging():
-            return _deprecate(args)
+        # #3206: a subtree is not a root — `da-guard parse-tree` run on it
+        # judges it as one (a subtree carrier's legal string value reads as a
+        # root default the exporter drops). The run's index is the ROOT's
+        # tree-mode document: the shared refusal is taken on the whole tree,
+        # and the subtree's reader is cut from it (`subtree_reader`); the
+        # writes stay in --config-dir.
+        if args.root_dir is None:
+            parser.error("--plane subtree requires --root-dir <the conf.d root>")
+        try:
+            _lib_parse_cache.subtree_reader(args.config_dir, args.root_dir)
+        except ValueError as exc:
+            parser.error(f"--config-dir / --root-dir: {exc}")
+    elif args.root_dir is not None:
+        parser.error("--root-dir is for --plane subtree only")
     return _deprecate(args)
 
 
@@ -1275,7 +1284,10 @@ def _deprecate(args):
 
     # 完成度是 KEY 級: 重掃（或預覽時用掃描結果）扣掉本工具會清的，剩下的具名。
     # 載體體檢已具名的檔不再以「無法讀取」重複列。
-    after = _lib_parse_cache.ConfdReader(args.config_dir) if write else None
+    after = None
+    if write:
+        after = (_lib_parse_cache.subtree_reader(args.config_dir, args.root_dir, fresh=True)
+                 if args.plane == "subtree" else _lib_parse_cache.ConfdReader(args.config_dir))
     for metric in args.metrics:
         # After the writes: a NEW parse-tree read (the run's document is the
         # tree as it was before them).

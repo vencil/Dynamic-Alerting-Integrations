@@ -45,6 +45,7 @@ def _with_da_guard(da_guard_env):
 
 
 def _write(root: Path, name: str, body: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
     (root / name).write_text(body, encoding="utf-8")
 
 
@@ -71,12 +72,14 @@ def _run(config_dir: Path, *extra: str) -> subprocess.CompletedProcess:
 
 
 def _assert_refused_unchanged(root: Path, paths: list[str], *extra: str,
-                              metrics: "list[str] | None" = None) -> subprocess.CompletedProcess:
-    """The run is the shared refusal (#3206): Go names exactly *paths*, the
-    tool names each, exit 2, and no byte of the tree changed."""
+                              metrics: "list[str] | None" = None,
+                              config_dir: "Path | None" = None) -> subprocess.CompletedProcess:
+    """The run is the shared refusal (#3206): Go names exactly *paths* on
+    *root*, the tool names each, exit 2, and no byte of the tree changed.
+    *config_dir*: the run's --config-dir when it is not *root* (a subtree)."""
     assert go_refused(root) == sorted(paths), go_refused(root)
     before = _tree_bytes(root)
-    r = _run_metrics(root, metrics or ["cpu_usage"], *extra)
+    r = _run_metrics(config_dir or root, metrics or ["cpu_usage"], *extra)
     assert_refused(r.returncode, r.stderr, paths)
     assert "下架完成" not in r.stdout and "下架未完成" not in r.stdout, r.stdout
     assert _tree_bytes(root) == before, "a refused run wrote to the tree"
@@ -388,7 +391,7 @@ def test_a_key_left_in_a_subdirectory_withholds_the_claim_until_that_subtree_is_
     assert f"--config-dir {sub} --plane subtree" in tail, tail
     assert "cpu_usage: 60" in (sub / "_defaults.yaml").read_text(encoding="utf-8")
 
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     sub_text = (sub / "_defaults.yaml").read_text(encoding="utf-8")
     assert "cpu_usage" not in sub_text, sub_text
@@ -435,7 +438,7 @@ def test_a_subtree_without_its_own_carrier_follows_the_guidance_to_green(tmp_pat
     assert r.returncode == 1, r.stdout + r.stderr
     assert f"--config-dir {sub} --plane subtree" in _tail(r.stdout), r.stdout
 
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "此子樹沒有自己的載體，跳過" in r2.stdout, r2.stdout
     assert "不存在" not in r2.stdout, r2.stdout
@@ -744,7 +747,7 @@ def test_a_healthy_carrier_is_still_written(tmp_path):
     sub.mkdir()
     _write(sub, "_defaults.yaml",
            'defaults:\n  cpu_usage: 80\n  _state_maintenance: "disable"\n')
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     text = (sub / "_defaults.yaml").read_text(encoding="utf-8")
     assert "cpu_usage" not in text, text
@@ -774,30 +777,13 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
     _write(root, "alpha.yaml", bad_value)
     for mode in ((), ("--execute",)):
         _assert_refused_unchanged(root, ["alpha.yaml"], *mode)
-    # The subtree plane keeps its own checks (it stands aside from the
-    # refusal: parse-tree would judge the subtree as a root).
-    cases = [("subtree", bad_value, "x: disable")]
-    for n, (plane, body, hint) in enumerate(cases):
-        root = tmp_path / f"conf.d{n}"
-        root.mkdir()
-        _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-        _write(root, "alpha.yaml", body)
-        before = (root / "alpha.yaml").read_bytes()
-
-        r = _run(root, "--plane", plane, "--execute")
-
-        assert r.returncode == 1, r.stdout + r.stderr
-        assert "本工具不寫它" in r.stdout, r.stdout
-        assert "已移除: alpha.yaml" not in r.stdout, r.stdout
-        tail = _tail(r.stdout)
-        assert "alpha.yaml" in tail and "租戶檔 exporter 讀不進去" in tail, tail
-        assert hint in tail and "本工具不改寫，請先修檔" in tail, tail
-        assert (root / "alpha.yaml").read_bytes() == before, (plane, hint)
-        assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
-        # 預覽給同一個判斷（預覽不寫，所以殘留是靠「本輪不改寫」那條規則列出來的）。
-        preview = _run(root, "--plane", plane)
-        assert preview.returncode == 1, preview.stdout + preview.stderr
-        assert _tail(preview.stdout) == tail, preview.stdout
+    # The subtree plane takes the same refusal, on the ROOT's whole tree.
+    root = tmp_path / "conf.d-sub"
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root / "team", "alpha.yaml", bad_value)
+    for mode in ((), ("--execute",)):
+        _assert_refused_unchanged(root, ["team/alpha.yaml"], "--plane", "subtree",
+                                  "--root-dir", str(root), *mode, config_dir=root / "team")
 
     # A repeated key is outside parse-tree's closed list (ADR-036 §2): the
     # tool cannot read the file at all — named unreadable, never written.
@@ -854,7 +840,7 @@ def test_under_plane_subtree_a_root_style_underscore_file_is_not_read(tmp_path):
     assert r.returncode == 1, r.stdout + r.stderr
     assert f"--config-dir {sub} --plane subtree" in _tail(r.stdout), r.stdout
 
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "_shared.yaml exporter 不讀" in r2.stdout, r2.stdout
     assert "併進全域" not in r2.stdout, r2.stdout
@@ -893,7 +879,7 @@ def test_a_subtree_carriers_tenants_and_profiles_blocks_are_not_read(tmp_path):
     tail = _tail(r.stdout)
     assert "tenants.t9" not in tail and "profiles.p" not in tail, tail
 
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     r3 = _run(root, "--execute")
     assert r3.returncode == 0, r3.stdout + r3.stderr
@@ -947,14 +933,14 @@ def test_under_plane_subtree_an_unparseable_own_carrier_degrades_the_run(tmp_pat
     _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
     before = _tree_bytes(sub)
 
-    r = _run(sub, "--plane", "subtree", "--execute")
+    r = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert "本輪降級為預覽" in r.stdout, r.stdout
     assert _tree_bytes(sub) == before, "a degraded subtree run wrote to the tree"
 
     _write(sub, "_defaults.yaml", "defaults:\n  cpu_usage: 60\n")
-    r2 = _run(sub, "--plane", "subtree", "--execute")
+    r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "cpu_usage" not in (sub / "t1.yaml").read_text(encoding="utf-8")
 
@@ -1093,7 +1079,7 @@ def test_plane_subtree_skips_the_root_type_rule(tmp_path):
     _write(sub, "_defaults.yaml", _SUBTREE_CHILD)
     _write(sub, "t1.yaml", "tenants:\n  t1: {}\n")
 
-    r = _run(sub, "--plane", "subtree", "--execute")
+    r = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "下架未完成" not in r.stdout, r.stdout
@@ -1108,7 +1094,7 @@ def test_a_subtree_directory_without_a_carrier_prints_no_type_check_notice(
     sub.mkdir()
     _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
 
-    r = _run(sub, "--plane", "subtree")
+    r = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent))
 
     assert "子樹載體不做型別體檢" not in r.stdout, r.stdout
 
@@ -1128,15 +1114,22 @@ def test_the_default_plane_is_root_and_it_names_the_escape_hatch(tmp_path):
 @pytest.mark.parametrize("fixture_name", ["full-l0-l3", "mixed-mode"])
 def test_the_shipped_golden_subtrees_run_clean_under_plane_subtree(
         tmp_path, fixture_name):
-    """既有的兩個正典子樹形狀，`--plane subtree` 下都是 rc 0、位元組不變。"""
+    """既有的兩個正典子樹形狀，`--plane subtree` 下都是 rc 0、位元組不變。
+    full-l0-l3 的根 `_defaults.yaml` exporter 不服務（tests/golden/not_served.json），
+    #3206 起子樹平面也以整棵樹的索引判，所以那棵樹被拒絕、點名該檔、不寫。"""
     fixture = GOLDEN / fixture_name / "conf.d"
     if not (fixture / "db" / "_defaults.yaml").exists():
         pytest.skip(f"golden fixture moved: {fixture}")
     root = tmp_path / "conf.d"
     shutil.copytree(fixture, root)
+    if fixture_name == "full-l0-l3":
+        _assert_refused_unchanged(root, ["_defaults.yaml"], "--plane", "subtree",
+                                  "--root-dir", str(root), "--execute",
+                                  config_dir=root / "db")
+        return
     before = _tree_bytes(root)
 
-    r = _run(root / "db", "--plane", "subtree", "--execute")
+    r = _run(root / "db", "--plane", "subtree", "--root-dir", str(root), "--execute")
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "下架未完成" not in r.stdout, r.stdout
@@ -1292,3 +1285,55 @@ def test_a_clean_flat_tree_says_nothing_about_unreachable_files(tmp_path):
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "本工具射程外" not in r.stdout, r.stdout
+
+
+# ===================================================================
+# --plane subtree reads the ROOT's index (#3206)
+# ===================================================================
+
+def test_plane_subtree_refuses_on_a_broken_file_elsewhere_in_the_tree(tmp_path):
+    """A subtree is not a root: the run's index is the conf.d root's
+    tree-mode document, so a file the exporter cannot read OUTSIDE the
+    subtree refuses the subtree run too — named, nothing written. The
+    control: the same tree without it runs as before (rc 0, the key gone,
+    the subtree carrier's string value not called unreadable)."""
+    def tree(root: Path, broken: bool) -> Path:
+        _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+        _write(root / "team", "_defaults.yaml",
+               'defaults:\n  cpu_usage: "70"\n  mem: "disable"\n')
+        _write(root / "team", "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '60'\n")
+        if broken:
+            _write(root / "other", "bad.yaml", "tenants:\n  tb: [\n")
+        return root
+
+    root = tree(tmp_path / "broken", True)
+    _assert_refused_unchanged(root, ["other/bad.yaml"], "--plane", "subtree",
+                              "--root-dir", str(root), "--execute",
+                              config_dir=root / "team")
+
+    root = tree(tmp_path / "clean", False)
+    assert go_refused(root) == []
+    r = _run(root / "team", "--plane", "subtree", "--root-dir", str(root), "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cpu_usage" not in (root / "team" / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in (root / "team" / "t1.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage: 80" in (root / "_defaults.yaml").read_text(encoding="utf-8")
+
+
+def test_plane_subtree_needs_a_root_it_is_under(tmp_path):
+    """`--root-dir` is required with `--plane subtree`, must hold the subtree
+    as a directory the walk enters, and is refused on the root plane — each
+    a usage error (rc 2) before any read."""
+    root = tmp_path / "conf.d"
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root / "team", "t1.yaml", "tenants:\n  t1: {}\n")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    for argv, words in [
+            ((root / "team", "--plane", "subtree"), "requires --root-dir"),
+            ((other, "--plane", "subtree", "--root-dir", str(root)), "is not a directory"),
+            ((root, "--plane", "subtree", "--root-dir", str(root)), "is not a directory"),
+            ((root, "--root-dir", str(root)), "for --plane subtree only")]:
+        r = _run(*argv)
+        assert r.returncode == 2 and words in r.stderr, (argv, r.stderr)
+        assert "Traceback" not in r.stderr, r.stderr

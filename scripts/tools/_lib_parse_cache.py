@@ -504,6 +504,30 @@ def require_servable(root: "str | os.PathLike[str]", *, binary: Optional[str] = 
         reader_for(root).require()
 
 
+def subtree_reader(subtree: "str | os.PathLike[str]", root: "str | os.PathLike[str]", *,
+                   fresh: bool = False) -> ConfdReader:
+    """The reader of *subtree*, a directory the walk enters below conf.d root
+    *root*, built from the ROOT's tree-mode document (#3206): the run's
+    fail-closed exit is taken on the whole tree (`ConfdReader.tree` of
+    *root*), and the subtree's paths keep Go's verdicts as they are where
+    they really are (`_lib_parse_tree.subtree_of`) — never a parse-tree run
+    on the subtree, which would judge it as a root. *fresh*: new readers
+    (a re-read after writes) instead of the session's. Raises ValueError when
+    *subtree* is not a directory the walk enters under *root*, and
+    ParseTreeError as `tree` does."""
+    root_reader = ConfdReader(root) if fresh else reader_for(root)
+    tree = root_reader.tree()
+    rel = Path(os.path.relpath(os.path.realpath(subtree), os.path.realpath(root))).as_posix()
+    entry = next((e for e in tree.entries if e.path == rel), None)
+    if rel == "." or rel.startswith("../") or entry is None or not entry.is_dir:
+        raise ValueError(f"{subtree} is not a directory the exporter's walk enters under {root}")
+    reader = ConfdReader(subtree) if fresh else reader_for(subtree)
+    if reader._tree is None:
+        reader._tree = _lib_parse_tree.subtree_of(tree, rel)
+    _SERVABLE.add(os.path.realpath(subtree))
+    return reader
+
+
 # ── one reader per tree for the length of a run ─────────────────────────
 
 _SESSION: "Optional[dict[str, ConfdReader]]" = None

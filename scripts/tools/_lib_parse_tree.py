@@ -542,6 +542,27 @@ def refusal_lines(entries: "Iterable[Entry]", root: "Path | str") -> "list[str]"
     return lines
 
 
+#: A tool's own ending for the refusal (`on_refusal`), or None.
+_ON_REFUSAL: "contextvars.ContextVar[Optional[Callable[[tuple[Entry, ...], list[str]], Any]]]" = \
+    contextvars.ContextVar("_lib_parse_tree._ON_REFUSAL", default=None)
+
+
+@contextlib.contextmanager
+def on_refusal(handler: "Callable[[tuple[Entry, ...], list[str]], Any]") -> Iterator[None]:
+    """For the length of the block, the refusal (`refuse_unservable`) ends
+    the run through *handler* — called with the refused entries and the
+    `ERROR:` lines already printed, and expected not to return — for a tool
+    whose contract owes every exit path its own report (backtest's `-o` /
+    `--markdown-output`, #3089). The decision and the lines stay this
+    module's; only the ending is the tool's. Should *handler* return, the
+    shared exit follows."""
+    token = _ON_REFUSAL.set(handler)
+    try:
+        yield
+    finally:
+        _ON_REFUSAL.reset(token)
+
+
 def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     """THE fail-closed exit of a conf.d tool run (#3206): when any of a
     tree-mode document's *entries* has a `verdict`, print `refusal_lines`
@@ -560,6 +581,9 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     lines = refusal_lines(bad, root)
     for line in lines:
         print(line, file=sys.stderr)
+    handler = _ON_REFUSAL.get()
+    if handler is not None:
+        handler(bad, lines)
     from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
     exit_caller_error(lines[-1], REFUSAL_REASON)
 
@@ -953,6 +977,43 @@ def list_tree(root: Path | str, binary: Optional[str] = None,
     `Listing` and passes it down. Raises as `run_list`."""
     doc = run_list(root, binary, timeout)
     return Listing(Path(root), entries_of(doc), MappingProxyType(dict(doc["defaults_carriers"])))
+
+
+def subtree_of(tree: Tree, prefix: str) -> Tree:
+    """The part of a tree-mode document under directory *prefix* (root-
+    relative, '/'), its paths relative to *prefix* — Go's verdicts, roles and
+    classes left as the whole tree's run gave them (#3206). A directory below
+    the exporter's root is not a root: run on it, parse-tree judges it as one
+    (a subtree carrier's string value reads as a root default the exporter
+    drops); cut from the root's document, every path keeps the answer it has
+    where it really is."""
+    lead = prefix.rstrip("/") + "/"
+    cut = len(prefix.rstrip("/").split("/"))
+
+    def under(path: str) -> Optional[str]:
+        return path[len(lead):] if path.startswith(lead) else None
+
+    def remap(mapping: Optional[Mapping[str, Any]]) -> "dict[str, Any]":
+        return {under(k): v for k, v in (mapping or {}).items() if under(k) is not None}
+
+    carriers = {}
+    for directory, carrier in (tree.defaults_carriers or {}).items():
+        if directory == prefix.rstrip("/"):
+            carriers["."] = under(carrier)
+        elif under(directory) is not None:
+            carriers[under(directory)] = under(carrier)
+    return Tree(
+        selected=MappingProxyType(remap(tree.selected)),
+        unreadable=MappingProxyType(remap(tree.unreadable)),
+        not_read=MappingProxyType(remap(tree.not_read)),
+        rendered_by=(None if tree.rendered_by is None
+                     else MappingProxyType(remap(tree.rendered_by))),
+        _files=MappingProxyType(remap(tree._files)),
+        defaults_carriers=MappingProxyType(carriers),
+        entries=tuple(Entry(**{**e.__dict__, "path": under(e.path), "depth": e.depth - cut})
+                      for e in tree.entries if under(e.path) is not None),
+        da_guard_version=tree.da_guard_version,
+    )
 
 
 def listing_of(tree: Tree, root: Path | str) -> Listing:
