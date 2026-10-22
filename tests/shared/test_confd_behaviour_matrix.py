@@ -32,10 +32,12 @@ THE INVARIANT, for every tool in `TOOLS` on every tree
     AND the
     output holds no Python traceback, AND the tool was not stopped by the
     cell timeout (exit 124 / 137: a hang, e.g. a FIFO opened for reading).
-  * `matrix: refused` (a file name that is not UTF-8): the tool exits 2.
-    The oracle there is `da-guard parse-tree`, which must exit 2 — da-guard
-    validation itself exits 0 on such a tree today (a Go defect fixed in a
-    later PR), so it is not this row's oracle.
+  * `matrix: refused` (a file name that is not UTF-8): as a flagged row —
+    the tool exits non-zero (which code is §13's and the tool's documented
+    contract: `tenant_verify`'s 2 means a verification mismatch, so it exits
+    1), not by the cell timeout, with no traceback, naming the file in its
+    escaped form (`bad-\xff.yaml`, `_refused_names`). The oracle there is
+    `da-guard parse-tree`, which must exit 2.
   * Sanity, never a pass: a `flagged` row on which Go validation exits
     neither 3 nor 4, or names nothing, is red — "the cell measures nothing".
     Likewise a `control` row Go does not pass, or a `refused` row
@@ -324,7 +326,7 @@ def _cells(tool: str, reason: str, *rows: str) -> dict[tuple[str, str], str]:
 #: Cells that break the invariant today, measured against this contract.
 #: Each is strict: a fixed cell XPASSes and goes red until it is deleted.
 XFAIL: dict[tuple[str, str], str] = {
-    **_cells("config_history", _B2, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
+    **_cells("config_history", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
              "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
              "config_named_dir_link", "team_link_outside"),
@@ -336,12 +338,6 @@ XFAIL: dict[tuple[str, str], str] = {
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
              "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
              "config_named_dir_link", "team_link_outside"),
-    # tenant_verify's documented contract (cli-reference §tenant-verify, the
-    # rollback checklist) gives exit 2 to a FAILED verification and 1 to an
-    # input error, which a tree da-guard refuses is: it exits 1 here. Exit 2
-    # would read as "hash mismatch" to the checklist — the owner's call.
-    ("tenant_verify", "non_utf8_name"): ("X: tenant_verify's inverted exit contract (2 = "
-                                         "verification failed) — owner decision pending"),
     # A file the exporter cannot decode (validation's parse_failed).
     **{(t, r): _B2
        for r in ("yaml_syntax_error", "multi_document_file")
@@ -465,6 +461,7 @@ def run_cell(box: pathlib.Path, run, tool: str, row: str) -> Cell:
         named: list[str] = []
         if ROWS[row]["matrix"] == "refused":
             oracle = run([guard, "parse-tree", "--config-dir", str(conf)])
+            named = _refused_names(ROWS[row])
         else:
             oracle = run([guard, "--config-dir", str(conf), "--format", "json",
                           "--cardinality-limit", "0"])
@@ -502,6 +499,15 @@ def _named(out: str, path: str) -> bool:
     return False
 
 
+def _refused_names(row: dict) -> list[str]:
+    """The not-UTF-8 names a `refused` row writes, root-relative, in the
+    escaped form every reader prints them in (`\\xNN` per byte that does not
+    decode)."""
+    root = CATALOG["root"].encode("utf-8") + b"/"
+    return sorted(bytes.fromhex(op["path_hex"]).removeprefix(root).decode("utf-8", "backslashreplace")
+                  for op in row["ops"] if "path_hex" in op)
+
+
 def oracle_problems(c: Cell) -> list[str]:
     """Why the oracle cannot judge this cell ([] = it can): never a pass."""
     kind = ROWS[c.row]["matrix"]
@@ -524,8 +530,6 @@ def violations(c: Cell) -> list[str]:
     """What this cell's run broke of the invariant ([] = it holds)."""
     kind = ROWS[c.row]["matrix"]
     tail = c.out[-1500:]
-    if kind == "refused":
-        return [] if c.rc == 2 else [f"exit {c.rc}, want 2 (parse-tree refuses this tree)\n{tail}"]
     if kind == "control":
         return [] if c.rc == 0 else [f"exit {c.rc} on a tree Go serves (exit 0)\n{tail}"]
     bad = []
