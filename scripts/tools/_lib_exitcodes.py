@@ -862,10 +862,28 @@ def main(func: Optional[_F] = None, *, crash_exit_code: Optional[int] = None,
 _previous_excepthook = sys.excepthook
 
 
+def _interactive() -> bool:
+    """An interactive session (REPL, `python -i tool.py` post-mortem): an
+    error is reported by the default hook and the session carries on —
+    ending it at rc 2 would take the prompt away, and catching the error
+    would leave `pdb.pm()` / `sys.last_value` a SystemExit (#3237).
+
+    The interpreter's own test for "a prompt follows the script": ``-i``
+    (``flags.interactive``), or ``PYTHONINSPECT`` (``flags.inspect`` alone)
+    with a terminal on fd 0 — without one CPython exits instead, so the crash
+    keeps its exit code; or already at a prompt (``sys.ps1``)."""
+    if sys.flags.interactive or hasattr(sys, "ps1"):
+        return True
+    if not sys.flags.inspect:
+        return False
+    try:
+        return os.isatty(0)
+    except OSError:
+        return False
+
+
 def _crash_excepthook(exc_type, exc, tb) -> None:
-    # An interactive session (REPL, `python -i tool.py` post-mortem) reports
-    # an error and carries on: ending it at rc 2 would take the prompt away.
-    if not issubclass(exc_type, Exception) or sys.flags.interactive or hasattr(sys, "ps1"):
+    if not issubclass(exc_type, Exception) or _interactive():
         _previous_excepthook(exc_type, exc, tb)
         return
     if exc is None:  # defensive: hook called with a bare type
@@ -898,7 +916,8 @@ def run(entry: Callable[[], Any]) -> NoReturn:
 
     * an ``Exception`` is a crash (``exit_on_crash``) — except a
       ``CallerError`` or a recorded stdout ``OSError``, which leave by their
-      own exits (see ``exit_on_crash``);
+      own exits (see ``exit_on_crash``); in an interactive session it is
+      re-raised for the default hook, as the module excepthook does;
     * an exit with the caller-error code that has printed no envelope yet
       — a hand-written ``sys.exit(2)`` — prints the armed envelope with
       ``reason: "caller_error"`` and, as ``error``, the tool's last stderr
@@ -919,6 +938,8 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     except SystemExit as exc:
         status = exc.code
     except Exception as exc:  # noqa: BLE001 — that is the point
+        if _interactive():
+            raise  # the default hook reports it, as `_crash_excepthook` does
         try:
             exit_on_crash(exc)
         except SystemExit as done:
