@@ -2266,7 +2266,7 @@ class TestTwoTreesCompare:
 
     @pytest.mark.parametrize("name", [
         b"has\nnewline.yaml", b'has"quote.yaml', b"has\\backslash.yaml", b"has space.yaml",
-        "İSTANBUL.YAML".encode("utf-8"), b"legacy-\xff.yaml"])
+        "İSTANBUL.YAML".encode("utf-8")])
     def test_any_file_name_is_read(self, tmp_path, cli_argv, capsys, fake_prom, name):
         """The tenant is the `tenants:` key the exporter reads; a file's name is
         only a path."""
@@ -2276,6 +2276,20 @@ class TestTwoTreesCompare:
             {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert self._changes(doc) == [("acme", "mysql_connections", "80", "50")], err
+
+    def test_a_name_that_is_not_utf8_refuses_the_tree(self, tmp_path, cli_argv, capsys,
+                                                       fake_prom):
+        """A config file name that is not UTF-8 is one no da-guard output can carry:
+        served-values refuses the tree (#3206), so this is rc 2, the name escaped —
+        never a comparison that silently lacks that file's tenants."""
+        name = b"legacy-\xff.yaml"
+        require_file_name(name)
+        cur, base = _dirs(
+            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
+            {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
+        rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert (rc, doc["reason"]) == (2, "served_values_unavailable"), (doc, err)
+        assert r"legacy-\xff.yaml" in err and "not valid UTF-8" in err
 
 
 _RECIPE = ("    _custom_alerts:\n      - recipe: threshold\n        name: q\n"

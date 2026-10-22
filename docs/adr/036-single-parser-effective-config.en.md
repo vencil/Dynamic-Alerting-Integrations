@@ -147,16 +147,17 @@ da-guard gains a `parse-tree` subcommand. It takes a conf.d directory and output
   - `unlistable_dir`: a directory whose contents cannot be listed (`.` for the root). Nothing under it was seen, so the document is incomplete.
   - The judgement is a whitelist: only the cases above are `not_a_file`; every other failure (permission denied, EIO, a name too long, a reason added later) is `config`. The default the other way would let a tenant file whose stat a permission refuses vanish from the list behind one WARN line.
 - `problem`: why a read of it fails, `{kind, message}` (see "Unreadable files" below).
+- `verdict`: how da-guard's validation (without `--scope`) lists the path, computed in Go from validation's own lists: `unservable` (listed under exit 3: the exporter's load drops it or cannot read it, so it cannot serve it), `tree_refused` (listed under exit 4 as `unreadable_outside_run`: the route generator refuses the whole tree on it), or `null`. A reader that must fail on every path validation lists reads this field and composes nothing from `role` and `problem` — a file the exporter's decode refuses can have no `problem` at all (e.g. a list under `tenants:`). The list-only mode reads no content and knows only the walk's half: a file refused for its content is `null` there; file mode gives the full verdict for `--path` alone and loads no tree. A broken `_defaults` carrier below the root that its directory does not select is both `unselected_defaults_carrier` and `unservable`. `verdict` answers per path only: `null` on every entry does not mean validation passes (a tenant declared twice, routing content, fall on no path); for the whole verdict, run validation.
 
 Example: a tree holds `t1.yaml`, `_defaults.yaml` and `_defaults.yml`, `team/t2.yaml` with a syntax error, and `gone.yaml`, a link to a file that does not exist. `da-guard parse-tree --list-only --config-dir conf.d` writes (three entries shown, one per line):
 
 ```json
-{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null}
-{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}}
-{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null}
+{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null, "verdict": null}
+{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}, "verdict": "unservable"}
+{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null, "verdict": null}
 ```
 
-The whole-tree mode gives the same three entries for the same tree, except that `team/t2.yaml` also has `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`; it adds `files` and `rendered_by`. `gone.yaml` has the same `problem` as a file whose stat a permission refuses; only `role` tells that it is not a file.
+The whole-tree mode gives the same three entries for the same tree, except that `team/t2.yaml` also has `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}` and `"verdict": "unservable"`; it adds `files` and `rendered_by`. `gone.yaml` has the same `problem` as a file whose stat a permission refuses; only `role` tells that it is not a file.
 
 **Which files were selected**: `readers` marks every file some reader actually reads.
 

@@ -50,7 +50,7 @@ def _write(root: pathlib.Path, files: dict[str, str]) -> pathlib.Path:
 # ── a fake da-guard that writes a document it is handed ─────────────────
 
 def _entry(path, *, role="config", cls="tenant", problem=None, depth=None, readers=None,
-           not_read=None):
+           not_read=None, verdict=None):
     return {"path": path, "depth": path.count("/") if depth is None else depth,
             "class": cls, "tenant_named": path.rsplit("/", 1)[-1].split(".")[0]
             if cls == "tenant" else None,
@@ -59,7 +59,8 @@ def _entry(path, *, role="config", cls="tenant", problem=None, depth=None, reade
             "readers": (([] if role in ("dir", "unlistable_dir") else ["exporter", "generator"])
                         if readers is None else readers),
             "not_read": not_read, "role": role,
-            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
+            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]},
+            "verdict": verdict}
 
 
 def _emit(tmp: pathlib.Path, doc: dict, name: str = "da-guard") -> str:
@@ -423,7 +424,7 @@ def _names_doc(cls: str) -> dict:
                 "path": "x.yaml", "depth": 0, "class": cls,
                 "tenant_named": "x" if cls == "tenant" else None,
                 "defaults_document": False, "readers": None, "not_read": None,
-                "role": None, "problem": None}]}
+                "role": None, "problem": None, "verdict": None}]}
 
 
 def test_the_names_memo_follows_the_binary_that_would_run(tmp_path, monkeypatch) -> None:
@@ -905,7 +906,7 @@ def test_flagged_is_the_role_and_the_problem() -> None:
     def e(role, problem):
         return pt.Entry(path="x", depth=0, cls="directory", tenant_named=None,
                         defaults_document=False, readers=(), not_read=None,
-                        role=role, problem=problem)
+                        role=role, problem=problem, verdict=None)
     assert [e(r, p).flagged for r, p in (
         ("not_a_file", bad), ("unlistable_dir", ("read_failure", "x")), ("dir", bad),
         ("dir", None), ("config", bad), ("config", None))] == [True, True, True, False, False, False]
