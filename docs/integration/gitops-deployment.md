@@ -71,7 +71,7 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 
 | 平台 | 取得方式 | blast radius | 觸發條件 |
 |------|---------|-------------|---------|
-| GitHub Actions | 本 repo 內建 `.github/workflows/config-diff.yaml`，可直接複製套用 | ✅ 自動貼成 PR comment | PR 修改 `conf.d/**` |
+| GitHub Actions | 由 `da-tools init --ci github` 產生 `.github/workflows/dynamic-alerting.yaml` | ✅ 自動貼成 PR comment | PR 修改 `conf.d/**` |
 | GitLab CI | 由 `da-tools init --ci gitlab` 產生 `.gitlab-ci.d/dynamic-alerting.yml`，並以根目錄 `.gitlab-ci.yml` 的 `include: local` 接進 pipeline | ✅ job log＋MR 頁面上的 artifact 連結（見下） | MR 修改 `conf.d/**` |
 
 GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等更新，不重複建立）。

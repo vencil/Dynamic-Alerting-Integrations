@@ -206,6 +206,13 @@ def test_every_real_marker_expires_when_the_version_moves() -> None:
     Every marker in the tree names the current image, so pretending the next
     version is current must report each of them as stale, and nothing else.
     The expected count is derived from the tree, not written down.
+
+    ⚠️ The tree may hold no markers at all — it does since #3258 retired
+    `config-diff.yaml`, which carried the last one — and zero then equals
+    zero. That the rule FIRES is shown on synthetic trees above
+    (`test_a_marker_older_than_version_is_stale`,
+    `test_workflows_are_scanned_and_expire_like_docs`); what this one adds is
+    that the gate reads the real tree, so that is what is asserted non-empty.
     """
     current = gate.read_tools_version(_REPO_ROOT)
     assert current is not None
@@ -216,27 +223,12 @@ def test_every_real_marker_expires_when_the_version_moves() -> None:
         for p in gate.iter_markdown(_REPO_ROOT)
         for line in p.read_text(encoding="utf-8").splitlines()
     )
-    assert markers > 0, "no markers in the tree; this control measures nothing"
+    scanned = gate.iter_markdown(_REPO_ROOT)
+    assert any(p.parent.name == "workflows" for p in scanned) and \
+        any(p.suffix == ".md" for p in scanned), (
+        "the gate scans no workflow or no Markdown file of the real tree; "
+        "this control measures nothing")
     bumped = (current[0], current[1] + 1, 0)
     findings = gate.scan(_REPO_ROOT, bumped)
     assert {f["kind"] for f in findings} == {"stale"}, findings
     assert len(findings) == markers
-
-
-def test_the_config_diff_disclosure_and_its_expiry_go_together() -> None:
-    """#1420 D2: the platform `config-diff.yaml` keeps its blind-spot
-    disclosure while its pinned image predates config_diff's own
-    "Changed Files Not Compared" section, and the image-caveat marker is what
-    makes `make pre-tag` force it out at the release that moves the pin.
-
-    Both directions are the defect: the disclosure without the marker is
-    never removed (it duplicates the report forever); the marker without the
-    disclosure means the disclosure went before the pin moved, and the
-    platform's own PRs are back to a bare "No changes detected." for a
-    `_defaults.yaml` edit until the next release.
-    """
-    text = (_REPO_ROOT / ".github/workflows/config-diff.yaml").read_text(encoding="utf-8")
-    has_disclosure = "blind_spots<<EOF" in text
-    has_marker = any(gate.MARKER_RE.search(gate._CODE_SPAN_RE.sub("", line))
-                     for line in text.splitlines())
-    assert has_disclosure == has_marker, (has_disclosure, has_marker)

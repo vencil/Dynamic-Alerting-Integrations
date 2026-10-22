@@ -1,8 +1,9 @@
 """The sticky-comment report workflows: one run per PR, stamped comments.
 
-#1518. `config-diff.yaml` and `guard-defaults-impact.yml` each edit ONE
-sticky PR comment in place (`config-diff-advisory.yml`, the ADR-037 advisory
-run, joined them later; `blast-radius.yml` was one until #3230 retired it).
+#1518. `config-diff-advisory.yml` (the ADR-037 advisory run) and
+`guard-defaults-impact.yml` each edit ONE sticky PR comment in place
+(`blast-radius.yml` was one until #3230 retired it, `config-diff.yaml` until
+#3258).
 Two facts make that dangerous:
 
   1. Without a concurrency group, two pushes in quick succession race, and the
@@ -16,8 +17,8 @@ What this module holds, and how:
   * Each workflow declares a TOP-LEVEL `concurrency`. Its `group` and
     `cancel-in-progress` are EVALUATED — not string-matched — against synthetic
     `github` contexts, one per event: two pushes to one PR share a group and
-    cancel; two PRs do not share; the workflows never share (two of them
-    fire on the same paths, and a shared group would let one cancel the other);
+    cancel; two PRs do not share; the workflows never share (they fire
+    on overlapping paths, and a shared group would let one cancel the other);
     and every non-`pull_request` event neither cancels nor shares a group with
     anything, including another run of the same event on the same ref (a group
     with cancel-in-progress false still replaces its PENDING run).
@@ -57,7 +58,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = (
-    ".github/workflows/config-diff.yaml",
     ".github/workflows/config-diff-advisory.yml",
     ".github/workflows/guard-defaults-impact.yml",
 )
@@ -357,7 +357,7 @@ def test_the_workflows_never_share_a_group() -> None:
             conc, _ctx(name, "pull_request", run_id=1001, pr=7))[0]
     assert len(set(groups.values())) == len(groups), (
         f"the same PR maps to a shared group across workflows: {groups}. "
-        f"config-diff.yaml and config-diff-advisory.yml fire on the same paths, so "
+        f"config-diff-advisory.yml and guard-defaults-impact.yml fire on overlapping paths, so "
         f"a shared group lets one workflow cancel the other's report.")
 
 

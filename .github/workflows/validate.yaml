@@ -208,7 +208,6 @@ jobs:
               - "components/da-tools/README.md"
               - "components/da-tools/app/VERSION"
               - "components/threshold-exporter/README.md"
-              - ".github/workflows/config-diff.yaml"
               # ⛔ #1407 repointed the JSX front-matter glob here (46 of these
               # files sat at v2.7.0 while the SSOT said 2.9.0 and every gate
               # reported green). Without this pattern a portal-only PR skips
