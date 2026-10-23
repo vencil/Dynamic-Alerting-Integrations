@@ -172,7 +172,7 @@ da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一�
 
 Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語料。
 
-**檔名規則只在 Go 一處**：哪些檔名算租戶檔、檔名怎麼對應租戶 id，Go 端只留一份實作，exporter、tenant-api、da-guard 共用。只需要檔案清單、不需要內容的工具，用 `parse-tree` 只列檔、不解析內容的模式；已經拿到整棵樹文件的工具直接讀它的 `entries`，不再另外列一次檔。Python 端的名稱述詞與比對 Go、Python 兩邊名稱規則的對照表一併退場。
+**檔名規則只在 Go 一處**：哪些檔名算租戶檔、檔名怎麼對應租戶 id，Go 端只留一份實作，exporter、tenant-api、da-guard 共用。只需要檔案清單、不需要內容的工具，用 `parse-tree` 只列檔、不解析內容的模式；已經拿到整棵樹文件的工具直接讀它的 `entries`，不再另外列一次檔。Python 端的名稱述詞，以及拿它比對 Go 規則的測試一併退場；名稱對照表本身保留，作為 Go 測試的 fixture。
 
 **每份檔的內容**：輸出的是 yaml.v3 **解碼後**的結構，不是節點原樣。
 
@@ -465,7 +465,7 @@ tenant-api pod
 - **步驟 6：exporter 與 da-guard 載入 conf.d 先經這份判定**（§2），tenant-api 經 `pkg/config` 的讀取面（`/effective`、租戶列表等）同一步跟著改。exporter 不服務讀不了的檔並以 metric 與 log 回報；da-guard 對這些檔回 exit 3，不再以 exit 4 列為產生器才判的證據（§9）。這是 breaking change，升級前的把關見 §8。
 - **步驟 7：tenant-api 的寫入改用這份判定**，取代自己的形狀判定；tenant-api 自己讀的管理設定（`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本）同一步改經這份判定再解碼。這些多半是授權邊界的輸入，判為讀不了時照各自現有的「解析失敗」處置，不當成空檔（§2）。
 - **步驟 8：刪除「非特定 tag」patch。** 這時 exporter、da-guard、tenant-api 都已經經共用的判定（理由見下方）。
-- **步驟 9：檔名規則與檔案清單收斂。** Go 端 4 份檔名規則合併為一份。`parse-tree` 的每一種模式輸出同一份逐路徑索引（`entries`），每個路徑是不是設定檔由 Go 判定（`role`），只列檔模式是同一份文件少了內容。Python 端只有一個讀這份文件的地方，讀 `role`，不再自己判斷路徑是不是設定檔；名稱述詞與 Go／Python 名稱規則的對照表退場。需要檔案清單的工具改用只列檔模式，已有整棵樹文件的工具讀它的 `entries`；Python 端仍以自己的名稱規則列出 conf.d 檔案的地方一併改經 da-guard。
+- **步驟 9：檔名規則與檔案清單收斂。** Go 端 4 份檔名規則合併為一份。`parse-tree` 的每一種模式輸出同一份逐路徑索引（`entries`），每個路徑是不是設定檔由 Go 判定（`role`），只列檔模式是同一份文件少了內容。Python 端只有一個讀這份文件的地方，讀 `role`，不再自己判斷路徑是不是設定檔；名稱述詞與拿它比對 Go 規則的測試退場，名稱對照表保留作為 Go 測試的 fixture。需要檔案清單的工具改用只列檔模式，已有整棵樹文件的工具讀它的 `entries`；Python 端仍以自己的名稱規則列出 conf.d 檔案的地方一併改經 da-guard。
 - **步驟 10：編輯原語與 da-guard 的 `edit`／`emit`**（§2）。寫 conf.d 的 Python 工具分批改為送「要改什麼」，寫入後的讀回確認移進 Go。
 - **步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層**，連同它依賴的、模仿 yaml.v3 的 loader（§11）。
 - **步驟 12：conf.d 以外的 YAML 改以消費者為準，加上守住邊界的 lint**（§12），並決定 tenant-api 管理設定的取得機制。§12 的做法（AST lint 列出呼叫點，白名單逐項附理由）已先用在 conf.d 讀取端，但只用在它判得準的地方：步驟 9 刪掉 `_lib_confd` 的名稱述詞之後，以同樣的閘門守住它們不再出現：`_lib_confd` 不再定義、`scripts/` 底下也沒有任何地方引用（`tests/shared/test_confd_tools_no_python_judgement.py`）；工具是否以其他方式自己判斷 conf.d 路徑，是行為問題，由行為矩陣測試回答，不靠文字比對。

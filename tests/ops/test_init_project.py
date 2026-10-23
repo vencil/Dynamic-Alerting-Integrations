@@ -1789,6 +1789,8 @@ class TestKustomizeBaseEnumeratesConfd:
         import sys
         from pathlib import Path
 
+        if sys.platform == 'win32':
+            pytest.skip('the da-guard wrapper is a POSIX shell script')
         real = os.environ.get('DA_GUARD_BINARY')
         if not real:
             pytest.skip('needs $DA_GUARD_BINARY (the session build sets it)')
@@ -1811,6 +1813,7 @@ class TestKustomizeBaseEnumeratesConfd:
             capture_output=True, text=True, encoding='utf-8', errors='replace',
             env=env, timeout=180)
         assert r.returncode == 2, (r.returncode, r.stderr[-600:])
+        assert 'names: boom' in r.stderr, r.stderr[-600:]  # failed AT the names run
         assert 'Traceback' not in r.stderr, r.stderr[-600:]
         after = sorted(p.relative_to(out).as_posix() for p in out.rglob('*'))
         assert after == before, f"written although the run was refused: {set(after) - set(before)}"
