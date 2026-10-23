@@ -727,7 +727,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Go 端的檔名規則（已合併為一份） | `pkg/confdname`。其他各份已刪除，原處改呼叫它：`pkg/config/source.go` 的副檔名判斷與 `hasHiddenSegment`；`pkg/config/tree_scan.go` 的 `IsScannedFileName`、`IsScannedPath` 與走訪內嵌的前綴判斷；tenant-api `internal/confd` 的 `TenantIDFromFile`、`isReservedName`；tenant-api `handler/errors.go` 的 `findingReadable` 自己寫的副檔名判斷；da-guard `parse_tree.go` 的 `hiddenPath` |
 | `parse-tree` 只列檔、不解析內容的模式 | `da-guard parse-tree --list-only`（`cmd/da-guard/parse_tree_list.go`）；走訪是 `pkg/config` 的 `ScanDirTreeNames` |
 | 逐路徑索引與 `role` 判定 | `entries` 由 `cmd/da-guard/parse_tree_list.go` 的 `walkEntries` 產生（整棵樹模式與只列檔模式共用）；判定是 `pkg/config/role.go`（`UnreadableFile.Role`、`NotFile.Role`）；Python 讀取端是 `scripts/tools/_lib_parse_tree.py`（`Entry`、`entries_of`、`list_tree`、`classify_names`） |
-| Python 端的名稱述詞與名稱規則對照表（退場） | `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）；`tests/shared/confd_name_classification_matrix.json` 與比對它的測試 |
+| Python 端的名稱述詞（已刪除）與名稱規則對照表（改由 Go 獨有） | 原本在 `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）與拿它們比對對照表的 Python 測試；對照表 `tests/shared/confd_name_classification_matrix.json` 留作 Go 測試的 fixture（`pkg/confdname` 的矩陣測試逐格驗證並守住涵蓋下限） |
 | 以 sigs.k8s.io/yaml 解碼的先例（通用化） | `cmd/da-crdecode`（目前一個檔多份文件時拒收） |
 | 遷移稽核指令（退場） | `scripts/tools/ops/migration_audit.py` |
 | 產生器另外讀的 policy 檔名 | `_grar_parse.py` 的 `_POLICY_FILENAMES`；exporter 不讀巢狀 `_` 檔的說明在 `flat_build.go` |
