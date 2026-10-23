@@ -88,7 +88,7 @@ func nameEntry(rel string) parseTreeEntry {
 	_, ext := confdname.SplitCarrier(base)
 	return parseTreeEntry{Path: rel, Depth: depthOf(rel), Class: class, TenantNamed: id,
 		DefaultsDocument: class != classHidden && confdname.IsDefaultsDocument(base),
-		ConfigExtension:  rel != "." && ext}
+		ConfigExtension:  ext} // "." carries none: SplitCarrier needs a whole extension
 }
 
 // withRole sets the entry's role; an entry that is not a config file is a

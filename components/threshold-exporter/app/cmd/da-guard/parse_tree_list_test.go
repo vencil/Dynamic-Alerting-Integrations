@@ -326,7 +326,7 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 // disk, so no role and no readers.
 func TestParseTreeList_Names(t *testing.T) {
 	t.Parallel()
-	_, doc, _ := runPTList(t, `["db-a.yaml","MiXeD.YmL",".h.yaml","_defaults.YML","_x.yml","_defaults-multidb.yaml","n.txt","x.yaml.bak"]`, "--names", "-")
+	_, doc, _ := runPTList(t, `["db-a.yaml","MiXeD.YmL",".h.yaml","_defaults.YML","_x.yml","_defaults-multidb.yaml","n.txt","x.yaml.bak","."]`, "--names", "-")
 	if doc.Mode != "names" || !reflect.DeepEqual(doc.DefaultsCarriers, map[string]string{".": "_defaults.YML"}) {
 		t.Fatalf("mode %q carriers %v", doc.Mode, doc.DefaultsCarriers)
 	}
@@ -342,6 +342,9 @@ func TestParseTreeList_Names(t *testing.T) {
 		{Path: "_defaults-multidb.yaml", Class: classPlatform, DefaultsDocument: true, ConfigExtension: true},
 		{Path: "n.txt", Class: classNotConfigName},
 		{Path: "x.yaml.bak", Class: classNotConfigName},
+		// "." is hidden and carries no config extension (the root's name):
+		// a hidden name's extension is answered by the name, not by hidden.
+		{Path: ".", Class: classHidden},
 	}
 	if !reflect.DeepEqual(doc.Entries, want) {
 		t.Errorf("entries\n got  %+v\n want %+v", doc.Entries, want)
