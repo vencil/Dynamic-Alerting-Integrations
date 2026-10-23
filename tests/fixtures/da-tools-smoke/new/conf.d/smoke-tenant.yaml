@@ -1,0 +1,4 @@
+# da-tools release smoke fixture (#3258) — the tenant is identical on both sides.
+tenants:
+  smoke-tenant:
+    container_cpu: "70"

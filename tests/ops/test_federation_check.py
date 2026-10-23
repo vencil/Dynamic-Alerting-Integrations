@@ -378,3 +378,106 @@ class TestPrometheusEnvFallback:
             monkeypatch,
             ["federation_check.py", "edge", "--prometheus", "http://cli:9099"])
         assert url == "http://cli:9099"
+
+
+# ---------------------------------------------------------------------------
+# #3133: answers are read by the lib — only HTTP is faked, so the shape check
+# and the count reading run for real; a query not answered is a failed check.
+# ---------------------------------------------------------------------------
+def _vector(*samples):
+    return ({"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"cluster": f"c{i}"}, "value": [1, v]} for i, v in enumerate(samples)]}},
+        None)
+
+
+def _central(answer_for):
+    """check_central with every query answered by ``answer_for(promql)``."""
+    import contextlib
+    import urllib.parse as up
+    import _lib_prometheus
+
+    def _get(url, **_kw):
+        if "/api/v1/rules" in url:
+            return {"status": "success", "data": {"groups": []}}, None
+        return answer_for(up.parse_qs(up.urlsplit(url).query).get("query", [""])[0])
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()))
+        stack.enter_context(patch.object(fc, "http_get_json", side_effect=_get))
+        stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=_get))
+        return {c["check"]: c for c in fc.check_central("http://prom:9090")}
+
+
+class TestQueryNotAnsweredIsACheck:
+    def test_the_fallback_query_error_is_a_caller_error(self):
+        """No cluster label, then the fallback errors: it used to be dropped
+        and read as "No tenant-labeled metrics found" — a finding, rc 1."""
+        c = _central(lambda q: (None, "HTTP 503") if q == 'count(up{tenant!=""})'
+                     else _vector())["central_edge_metrics"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"] == "Query failed: HTTP 503"
+
+    def test_the_recording_rules_query_error_is_a_check(self):
+        """It used to append nothing."""
+        c = _central(lambda q: (None, "HTTP 503") if "tenant:.*" in q
+                     else _vector("1"))["central_recording_rules"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    @pytest.mark.parametrize("value", ["NaN", "+Inf"])
+    def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
+        """It used to crash on int(float('nan'))."""
+        c = _central(lambda q: _vector(value) if q == "count(user_threshold)"
+                     else _vector("1"))["central_threshold_exporter"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_a_malformed_answer_is_a_caller_error(self):
+        bad = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
+        c = _central(lambda q: bad if q == "count(user_threshold)"
+                     else _vector("1"))["central_threshold_exporter"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert "resultType is 'matrix'" in c["detail"]
+
+    def test_the_cross_cluster_query_error_is_a_check(self):
+        """e2e: it used to append nothing."""
+        with patch.object(fc, "check_edge", return_value=[]), \
+                patch.object(fc, "check_central", return_value=[]), \
+                patch.object(fc, "query_prometheus", return_value=(None, "HTTP 503")):
+            checks = fc.check_e2e("http://prom:9090", ["http://edge:9090"])
+        assert checks == [{"check": "e2e_cross_cluster_matching", "status": "fail",
+                           "caller_error": True, "detail": "Query failed: HTTP 503"}]
+
+    def test_the_fallback_error_ends_the_run_at_rc2(self, monkeypatch):
+        """Was rc 1 (#3133)."""
+        monkeypatch.setattr(sys, "argv", ["federation_check", "central", "--json"])
+        with patch.object(fc, "check_central", return_value=list(_central(
+                lambda q: (None, "HTTP 503") if q == 'count(up{tenant!=""})'
+                else _vector()).values())):
+            with pytest.raises(SystemExit) as exc:
+                fc.main()
+        assert exc.value.code == EXIT_CALLER_ERROR
+
+
+@pytest.mark.parametrize("query,check", [
+    ("count(user_threshold)", "central_threshold_exporter"),
+    ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "central_recording_rules"),
+    ('count(up{tenant!=""})', "central_edge_metrics"),
+], ids=["threshold-exporter", "recording-rules", "fallback"])
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_every_count_refuses_a_non_finite_count(query, check, value):
+    """#3133: each count position is a named caller_error, not a crash. The
+    fallback is asked only when the cluster query answered empty."""
+    def answer(q):
+        if q == query:
+            return _vector(value)
+        return _vector() if q == 'count by(cluster) (up{tenant!=""})' else _vector("1")
+    c = _central(answer)[check]
+    assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_the_cross_cluster_count_refuses_a_non_finite_count(value):
+    with patch.object(fc, "check_edge", return_value=[]), \
+            patch.object(fc, "check_central", return_value=[]), \
+            patch.object(fc, "query_prometheus",
+                         return_value=([{"metric": {}, "value": [1, value]}], None)):
+        checks = fc.check_e2e("http://prom:9090", ["http://edge:9090"])
+    assert (checks[0]["status"], checks[0].get("caller_error")) == ("fail", True)

@@ -267,17 +267,15 @@ def preview_recipe(recipe, tenant, scenario):
         }
 
     # Compute the slug via the compiler's OWN function (zero cross-language
-    # drift, §5.3). A structurally invalid recipe (RecipeError) OR one missing a
-    # required key (KeyError, e.g. no `metric` — recipe_id does `inst["metric"]`)
-    # fails loud here → state:error, honouring the §4 contract that a config error
-    # is a verdict-less error (the catch-all in app.py would otherwise mask it as a
-    # 500). Pre-existing on the threshold path too; caught here for both.
+    # drift, §5.3). A structurally invalid recipe — including one missing a
+    # field the recipe contract requires (shape.RECIPE_RULES) — raises
+    # RecipeError and fails loud here → state:error, honouring the §4 contract
+    # that a config error is a verdict-less error (the catch-all in app.py
+    # would otherwise mask it as a 500).
     try:
         slug = shape.recipe_id(recipe)
     except shape.RecipeError as exc:
         return _err(str(exc))
-    except KeyError as exc:
-        return _err(f"recipe is missing required field {exc}")
 
     # Validate the request BEFORE the promtool-availability check, so bad input
     # is reported as an error regardless of whether we can evaluate locally

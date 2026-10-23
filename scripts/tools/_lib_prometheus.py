@@ -437,6 +437,24 @@ def vector_sample(row: dict[str, Any]) -> Optional[float]:
     return sample_value(row["value"][1]) if "value" in row else None
 
 
+def vector_count(rows: list[dict[str, Any]]) -> Optional[int]:
+    """The number a ``count(...)`` instant query answered — the sample of the
+    first ``_vector_rows`` row — or None when Prometheus answered with an
+    empty vector (``count()`` over nothing).
+
+    Raises ``QueryError`` when that sample is not a finite number (a
+    histogram row, ``NaN``, ``±Inf``): no count is one, and ``int()`` on it
+    used to crash the tool (#3133). The one reading of a count: tools do not
+    call ``int(float(...))`` on a sample themselves."""
+    if not rows:
+        return None
+    value = vector_sample(rows[0])
+    if value is None or not math.isfinite(value):
+        raise _malformed("Prometheus", f"result[0] is {rows[0].get('value', rows[0])!r:.40}, "
+                                       "expected a finite count")
+    return int(value)
+
+
 def _matrix_rows(body: Any) -> list[dict[str, Any]]:
     """The rows of a ``query_range`` answer, or ``QueryError``.
 
@@ -522,6 +540,28 @@ def prometheus_instant(
     return readers[result_type](data)
 
 
+def instant_or_error(
+    prom_url: str,
+    promql: str,
+    *,
+    timeout: int = 10,
+) -> tuple[Optional[list[dict[str, Any]]], Optional[str]]:
+    """:func:`prometheus_instant` for a check tool whose judges take a result
+    *and its error* (byo-check, federation-check, shadow-verify): ``(rows,
+    None)``, or ``(None, why)`` when the query was not answered.
+
+    The answer is checked exactly as :func:`prometheus_instant` checks it —
+    unlike :func:`query_prometheus_instant`, which hands back any
+    ``success`` body's ``result`` unread. The error is a value here only
+    because each of those tools reports it as a failed check of its own;
+    every ``err`` it returns must reach a check (#3133: a discarded one is
+    the "not measured reads as nothing there" bug)."""
+    try:
+        return prometheus_instant(prom_url, promql, timeout=timeout), None
+    except QueryError as exc:
+        return None, str(exc)
+
+
 def prometheus_range(
     prom_url: str,
     promql: str,
@@ -600,4 +640,33 @@ def alertmanager_alerts(
         if bad is not None:
             raise _malformed("Alertmanager",
                              f"alert[{i}].labels.{bad} is not a string")
+    return data
+
+
+def alertmanager_silences(am_url: str, *, timeout: int = 15) -> list[dict[str, Any]]:
+    """Alertmanager's ``/api/v2/silences``; return the silences or raise.
+
+    Returns:
+        The silences, each a dict whose ``status``, when present, is an
+        object with ``state`` (when present) a string. ``[]`` only when
+        Alertmanager answered with an empty list.
+
+    Raises:
+        QueryError: (``source="Alertmanager"``) no connection, an HTTP error,
+            or a body that is not a list of silence objects — silences that
+            could not be read are not "no silences" (#3133).
+    """
+    data, err = http_get_json(f"{am_url}/api/v2/silences", timeout=timeout)
+    if err:
+        raise QueryError(err, source="Alertmanager")
+    if not isinstance(data, list):
+        raise _malformed("Alertmanager", "body is not a JSON array")
+    for i, silence in enumerate(data):
+        if not isinstance(silence, dict):
+            raise _malformed("Alertmanager", f"silence[{i}] is not an object")
+        status = silence.get("status", {})
+        if not isinstance(status, dict):
+            raise _malformed("Alertmanager", f"silence[{i}].status is not an object")
+        if not isinstance(status.get("state", ""), str):
+            raise _malformed("Alertmanager", f"silence[{i}].status.state is not a string")
     return data

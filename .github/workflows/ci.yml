@@ -364,16 +364,11 @@ jobs:
             # gate on that pair. Without this path a rule-pack PR that only
             # regenerates platform-data.json never runs the gate, and PR #1215
             # landed a real mariadb-defaults drift that way.
-            # tenant-config.schema.json is the same shape, one gate over:
-            # recipe-enums.drift.test.ts binds the portal's recipe-enums.json
-            # to it (the cross-language enum contract the Python compiler and
-            # the Go preflight also read). Not burned as of `55bbf231`, which
-            # added this path: the schema edits between that test landing and
-            # then matched no portal path, but none touched a MIRRORED
-            # property — and the only thing
-            # keeping it green is that editing an enum usually makes the
-            # author edit recipe-enums.json too, i.e. the failure mode IS
-            # "author forgot", which is exactly when no portal path matches.
+            # tenant-config.schema.json is the same shape, one gate over: the
+            # *-schema.drift tests (silent-mode, receiver-required,
+            # schema-explorer, template-gallery) bind portal copies to it, and
+            # a schema edit that touches no portal file — the "author forgot"
+            # case — is exactly when no other portal path matches.
             # ALERT-REFERENCE.md is the third: count-literals-drift.test.ts
             # reads it (and platform-data.json) to pin the pack/alert counts
             # the portal advertises, so a doc regen that touches no portal
@@ -1194,11 +1189,12 @@ jobs:
       - name: "Custom-alert generated pack is valid PromQL (SEC-AUDIT #741 F1 backstop)"
         run: promtool check rules rule-packs/rule-pack-custom-alerts.yaml
 
-      # #741 #6 / ADR-024 §8 A1: recipe-status.json is DERIVED from shape.py
-      # RECIPE_STATUS (SSOT) and consumed by the Go tenant-api via go:embed.
-      # Edit a recipe status but forget `make recipe-status-json` → fail here.
-      - name: "recipe-status.json matches RECIPE_STATUS SSOT (HARD gate — #741 #6)"
-        run: python scripts/tools/dx/gen_recipe_status_json.py --check
+      # #3229: the schema, portal, shape.py and rule-packs/recipes copies of the
+      # recipe contract are GENERATED from pkg/config/recipe_contract.json (the
+      # exporter's go:embed). Edit the contract but forget `make recipe-contract`
+      # → fail here.
+      - name: "recipe copies match recipe_contract.json (HARD gate — #3229)"
+        run: python scripts/tools/dx/gen_recipe_contract.py --check
 
       # ADR-035 D2: tenant-id.json (Go go:embed + portal import) is DERIVED from
       # tenant-config.schema.json definitions.tenantId. Edit the rule but forget

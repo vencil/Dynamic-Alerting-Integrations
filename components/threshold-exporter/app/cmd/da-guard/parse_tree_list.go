@@ -128,6 +128,15 @@ func notFileAsEntry(nf config.NotFile) parseTreeEntry {
 	return e
 }
 
+// dirAsEntry is the entry of one walk record of TreeScan.Dirs. A directory
+// is no file a reader reads: readers [], and no not_read reason (nothing is
+// passed over).
+func dirAsEntry(d string) parseTreeEntry {
+	e := withRole(nameEntry(d), config.RoleDir)
+	e.Readers = []string{}
+	return e
+}
+
 // walkEntries fills idx's defaults_carriers and entries from one walk: every
 // file it keeps, every entry it dropped, every config-named path that is not
 // a file, and the root when it could not be listed — sorted by path. The
@@ -170,11 +179,7 @@ func walkEntries(scan *config.TreeScan, idx *parseTreeIndex) error {
 		idx.Entries = append(idx.Entries, notFileAsEntry(nf))
 	}
 	for _, d := range scan.Dirs {
-		// A directory is no file a reader reads: readers [], and no not_read
-		// reason (nothing is passed over).
-		e := withRole(nameEntry(d), config.RoleDir)
-		e.Readers = []string{}
-		idx.Entries = append(idx.Entries, e)
+		idx.Entries = append(idx.Entries, dirAsEntry(d))
 	}
 	sort.SliceStable(idx.Entries, func(i, j int) bool { return idx.Entries[i].Path < idx.Entries[j].Path })
 	// One entry per path is the document's contract (a reader refuses a
@@ -215,10 +220,17 @@ func parseTreeListOf(scan *config.TreeScan) (*parseTreeIndex, error) {
 // readers: there is no disk and no tree.
 func parseTreeNamesOf(names []string) (*parseTreeIndex, error) {
 	idx := newParseTreeIndex("names")
+	seen := make(map[string]bool, len(names))
 	for _, n := range names {
 		if n == "" || strings.ContainsAny(n, "/\\") || !utf8.ValidString(n) {
 			return nil, fmt.Errorf("--names: %q is not a base name (empty, holds a separator, or not valid UTF-8)", n)
 		}
+		if seen[n] {
+			// The document holds one entry per path (a reader refuses a
+			// document that breaks it), and no ConfigMap holds a key twice.
+			return nil, fmt.Errorf("--names: %q is given twice; the document holds one entry per name", n)
+		}
+		seen[n] = true
 		idx.Entries = append(idx.Entries, nameEntry(n))
 	}
 	return &idx, nil

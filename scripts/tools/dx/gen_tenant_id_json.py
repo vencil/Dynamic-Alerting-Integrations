@@ -6,7 +6,7 @@ docs/schemas/tenant-config.schema.json. Python reads it there at runtime
 (``_lib_validation.tenant_id_rule``); a Go binary and the portal bundle cannot
 read the repo's ``docs/`` at runtime, so this script DERIVES one JSON copy for
 each of them (Go via ``go:embed``, the portal via import). One authored source,
-derived everywhere — the same shape as gen_recipe_status_json.py.
+derived everywhere — the same shape as gen_recipe_contract.py.
 
     python gen_tenant_id_json.py            # write both copies
     python gen_tenant_id_json.py --check    # exit 1 if a committed copy drifted
@@ -107,7 +107,7 @@ def main() -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         # newline="\n": force LF on every platform (CRLF would taint the portal
         # bundle's sourcemap once the portal imports this file; see
-        # gen_recipe_status_json.py).
+        # gen_recipe_contract.py).
         path.write_text(generated, encoding="utf-8", newline="\n")
         print(f"WROTE: {rel}")
     return 0

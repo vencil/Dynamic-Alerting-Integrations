@@ -374,3 +374,76 @@ class TestMainCLI:
         output = json.loads(captured.out)
         assert output["tool"] == "shadow-verify"
         assert len(output["phases"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# #3133: answers are read by the lib — only HTTP is faked, so the shape check
+# and the count reading run for real; a query not answered is a failed check.
+# ---------------------------------------------------------------------------
+def _vector(*samples):
+    return ({"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"tenant": f"db-{i}"}, "value": [1, v]} for i, v in enumerate(samples)]}},
+        None)
+
+
+def _run(check, answer_for):
+    import contextlib
+    import urllib.parse as up
+    import _lib_prometheus
+
+    def _get(url, **_kw):
+        if "/api/v2/status" in url:
+            return {"config": {"original": "migration_status"}}, None
+        return answer_for(up.parse_qs(up.urlsplit(url).query).get("query", [""])[0])
+    healthy = MagicMock()
+    healthy.read.return_value = b"Prometheus is Healthy."
+    healthy.__enter__ = lambda s: s
+    healthy.__exit__ = MagicMock(return_value=False)
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("urllib.request.urlopen", return_value=healthy))
+        stack.enter_context(patch.object(sv, "http_get_json", side_effect=_get))
+        stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=_get))
+        return {c["check"]: c for c in check(_args())}
+
+
+class TestQueryNotAnsweredIsACheck:
+    @pytest.mark.parametrize("query,check", [
+        ('user_state_filter{filter="maintenance"}', "maintenance_mode"),
+        ("user_silent_mode", "silent_mode"),
+    ])
+    def test_a_mode_query_error_is_a_caller_error(self, query, check):
+        """It used to append nothing."""
+        c = _run(sv.check_runtime, lambda q: (None, "HTTP 503") if q == query
+                 else _vector())[check]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        assert c["detail"] == "Query failed: HTTP 503"
+
+    @pytest.mark.parametrize("value", ["NaN", "+Inf"])
+    def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
+        """It used to crash on int(float('nan'))."""
+        c = _run(sv.check_preflight, lambda q: _vector(value) if "shadow" in q
+                 else _vector("3"))["shadow_rules_present"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_a_malformed_answer_is_a_caller_error(self):
+        bad = ({"status": "success", "data": {"resultType": "vector",
+                                              "result": [{"value": "3"}]}}, None)
+        c = _run(sv.check_preflight, lambda q: bad if "tenant:.*" in q
+                 else _vector("3"))["recording_rules_loaded"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_an_empty_count_still_reads_as_zero(self):
+        c = _run(sv.check_preflight, lambda q: _vector())["recording_rules_loaded"]
+        assert (c["status"], c["detail"]) == ("warn", "0 tenant:* recording rule metric names found")
+
+
+@pytest.mark.parametrize("marker,check", [
+    ("tenant:.*", "recording_rules_loaded"),
+    ("shadow", "shadow_rules_present"),
+])
+@pytest.mark.parametrize("value", ["NaN", "+Inf"])
+def test_every_count_refuses_a_non_finite_count(marker, check, value):
+    """#3133: both count positions are a named caller_error, not a crash."""
+    c = _run(sv.check_preflight, lambda q: _vector(value) if marker in q
+             else _vector("3"))[check]
+    assert (c["status"], c.get("caller_error")) == ("fail", True)

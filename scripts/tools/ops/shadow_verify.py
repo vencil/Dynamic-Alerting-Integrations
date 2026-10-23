@@ -46,12 +46,35 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+# #3133: every answer is checked by the lib; a query not answered is a failed
+# check, never a missing one.
+from _lib_prometheus import QueryError, instant_or_error, vector_count  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
+# The module's one query call: (rows, None) or (None, why).
+query_prometheus = instant_or_error
+
+
+def _query_failed(check, err):
+    """The check a query that was not answered produces (#452/#737: a
+    caller error, exit 2; #3133: on every step, never left out)."""
+    return {
+        "check": check,
+        "status": "fail",
+        "caller_error": True,
+        "detail": f"Query failed: {err[:60]}",
+    }
+
+
+def _count(check, results):
+    """``(count, None)`` — 0 for an empty answer, as before — or ``(None,
+    check)`` when the sample is not a finite count (#3133; it used to crash)."""
+    try:
+        return vector_count(results) or 0, None
+    except QueryError as exc:
+        return None, _query_failed(check, str(exc))
 
 
 def run_cmd(cmd):
@@ -118,15 +141,10 @@ def check_preflight(args):
     # 3. Rule groups loaded
     results, err = query_prometheus(prom_url, "count(count by(__name__) ({__name__=~\"tenant:.*\"}))")
     if err:
-        checks.append({
-            "check": "recording_rules_loaded",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        })
+        checks.append(_query_failed("recording_rules_loaded", err))
     else:
-        count = int(float(results[0]["value"][1])) if results else 0
-        checks.append({
+        count, failed = _count("recording_rules_loaded", results)
+        checks.append(failed or {
             "check": "recording_rules_loaded",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} tenant:* recording rule metric names found",
@@ -135,15 +153,10 @@ def check_preflight(args):
     # 4. Shadow rules present (migration_status=shadow)
     results, err = query_prometheus(prom_url, 'count({migration_status="shadow"}) or vector(0)')
     if err:
-        checks.append({
-            "check": "shadow_rules_present",
-            "status": "fail",
-            "caller_error": True,  # query transport failure = caller-error
-            "detail": f"Query failed: {err[:60]}",
-        })
+        checks.append(_query_failed("shadow_rules_present", err))
     else:
-        count = int(float(results[0]["value"][1])) if results else 0
-        checks.append({
+        count, failed = _count("shadow_rules_present", results)
+        checks.append(failed or {
             "check": "shadow_rules_present",
             "status": "pass" if count > 0 else "warn",
             "detail": f"{count} shadow-tagged metric series",
@@ -219,15 +232,19 @@ def check_runtime(args):
 
     # 2. Tenant operational modes
     prom_url = args.prometheus
+    # #3133: a mode query not answered is a failed check — it used to append
+    # nothing, so the report could not tell "not checked" from "none".
     results, err = query_prometheus(prom_url, 'user_state_filter{filter="maintenance"}')
-    if not err and results:
+    if err:
+        checks.append(_query_failed("maintenance_mode", err))
+    elif results:
         maint_tenants = [r.get("metric", {}).get("tenant", "?") for r in results]
         checks.append({
             "check": "maintenance_mode",
             "status": "warn",
             "detail": f"Tenants in maintenance: {', '.join(maint_tenants)}",
         })
-    elif not err:
+    else:
         checks.append({
             "check": "maintenance_mode",
             "status": "pass",
@@ -235,14 +252,16 @@ def check_runtime(args):
         })
 
     results, err = query_prometheus(prom_url, "user_silent_mode")
-    if not err and results:
+    if err:
+        checks.append(_query_failed("silent_mode", err))
+    elif results:
         silent_tenants = list({r.get("metric", {}).get("tenant", "?") for r in results})
         checks.append({
             "check": "silent_mode",
             "status": "warn",
             "detail": f"Tenants in silent mode: {', '.join(sorted(silent_tenants))}",
         })
-    elif not err:
+    else:
         checks.append({
             "check": "silent_mode",
             "status": "pass",
