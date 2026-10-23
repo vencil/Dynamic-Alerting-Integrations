@@ -1577,7 +1577,8 @@ def main() -> None:
 
     # #656: surface a governance run whose writes overwhelmingly failed as a non-zero
     # exit (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale
-    # can fire). A clean / partly degraded / dry-run run stays exit 0. See
+    # can fire). A clean / partly degraded / dry-run run, every threshold
+    # measured (above), stays exit 0. See
     # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
     sys.exit(EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK)
 

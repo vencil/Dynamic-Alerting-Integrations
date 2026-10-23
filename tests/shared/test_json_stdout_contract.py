@@ -311,6 +311,8 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
         # every other instant query — `rate(x[5m])` included — a vector.
         from urllib.parse import parse_qs, urlsplit
         query = parse_qs(urlsplit(path).query).get("query", [""])[0]
+        # ⚠️ A heuristic on the query text: a range selector followed by
+        # `offset` / `@` would read as a vector. No tool sends one today.
         if query.rstrip().endswith("]"):
             return j(_RICH_MATRIX if rich else _EMPTY_MATRIX)
         return j(_RICH_VECTOR if rich else _EMPTY_VECTOR)

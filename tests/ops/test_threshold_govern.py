@@ -1638,9 +1638,38 @@ class TestNotMeasured:
         with pytest.raises(SystemExit) as exc:
             tg.main()
         assert exc.value.code == tg.EXIT_CALLER_ERROR
-        err = capsys.readouterr().err.strip().splitlines()
+        captured = capsys.readouterr()
+        err = captured.err.strip().splitlines()
         assert err[-1].startswith("ERROR: Prometheus query failed for 2 threshold(s); "
                                   "the report is partial (first: db-a/mysql_connections:")
+        if json_output:
+            assert json.loads(captured.out)["status"] == "partial"
+
+    def test_apply_still_writes_the_measured_and_partial_outranks_systemic(
+            self, monkeypatch, tmp_path, capsys):
+        """--apply opens the PRs of the thresholds that were measured, and the
+        partial verdict (2) wins over a write plane that failed outright (1)."""
+        import sys
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: self._reports())
+        written = []
+
+        def fail_write(plan, args):
+            written.append((plan.tenant, [c.key for c in plan.changes]))
+            return tg.TenantOutcome(plan.tenant, "error", [c.key for c in plan.changes],
+                                    message="HTTP 500")
+        monkeypatch.setattr(tg, "open_governance_pr", fail_write)
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), "--apply",
+            "--tenant-api-url", "http://tenant-api", "--identity-groups", "g", "--json"])
+        assert tg._is_systemic_failure(
+            [tg.TenantOutcome("db-a", "error", ["redis_memory"])], True)
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        assert written == [("db-a", ["redis_memory"])]
+        assert exc.value.code == tg.EXIT_CALLER_ERROR
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "partial"
+        assert out["summary"]["not_measured"] == 2
 
     def test_measured_keys_are_still_planned(self):
         plans = tg.build_governance_plan(self._reports(), 10.0)
