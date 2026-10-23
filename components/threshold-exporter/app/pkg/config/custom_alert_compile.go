@@ -314,6 +314,16 @@ func durationSeconds(d string) (int, error) {
 	return n * map[string]int{"h": 3600, "m": 60, "s": 1}[m[2]], nil
 }
 
+// forecastLookbackSeconds is the lookback of a forecast with horizon hs
+// seconds: max(lookback_factor·horizon, lookback_floor) from the recipe
+// contract (whose load parses the floor). gen_recipe_contract.py writes the
+// largest one, over the horizon enum, as the compiled pack's
+// max_range_duration.
+func forecastLookbackSeconds(hs int) int {
+	floor, _ := durationSeconds(contract.Forecast.LookbackFloor)
+	return max(contract.Forecast.LookbackFactor*hs, floor)
+}
+
 func record(name, expr string) orderedMap {
 	return orderedMap{{"record", name}, {"expr", expr}}
 }
@@ -346,18 +356,15 @@ func metricRecord(id string, sh customAlertShape, sel string) orderedMap {
 // forecastRecords (ADR-024 §Forecast Recipe): custom:fcbase:{id} is the base
 // aggregate (ratio mode: avail/capacity headroom; raw mode: the gauge), and
 // custom:metric:{id} is predict_linear over it plus a cold-start gate. The
-// lookback is max(2·horizon, 1h), platform-derived (not tenant-settable), and
-// every duration is integer seconds so `[lookback]` is never a bad duration.
+// lookback is forecastLookbackSeconds, platform-derived (not
+// tenant-settable), and every duration is integer seconds so `[lookback]` is
+// never a bad duration.
 func forecastRecords(id string, sh customAlertShape, sel string) ([]any, error) {
 	hs, err := durationSeconds(sh.Horizon)
 	if err != nil {
 		return nil, err
 	}
-	lb := 2 * hs
-	if lb < 3600 {
-		lb = 3600
-	}
-	h, l := strconv.Itoa(hs), strconv.Itoa(lb)
+	h, l := strconv.Itoa(hs), strconv.Itoa(forecastLookbackSeconds(hs))
 	g := gbSuffix(sh.GroupBy)
 	base := "custom:fcbase:" + id
 	var baseInner, predictInner string

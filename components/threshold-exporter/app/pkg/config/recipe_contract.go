@@ -101,6 +101,10 @@ type recipeContract struct {
 		// RatioFloorExclusiveMinimum is the lower bound of a ratio-mode
 		// threshold; current_band is its (exclusive) upper bound.
 		RatioFloorExclusiveMinimum float64 `json:"ratio_floor_exclusive_minimum"`
+		// The lookback is max(LookbackFactor·horizon, LookbackFloor):
+		// platform-derived, never tenant-set (ADR-024 §Forecast Recipe).
+		LookbackFactor int    `json:"lookback_factor"`
+		LookbackFloor  string `json:"lookback_floor"`
 	} `json:"forecast"`
 	SloBurnRate struct {
 		Objective struct {
@@ -247,6 +251,14 @@ func parseRecipeContract(data []byte) (recipeContract, error) {
 	md := c.SloBurnRate.MinEvents
 	if md.Default < md.Minimum || md.Default > md.Maximum {
 		return c, fmt.Errorf("min_events default %d is outside [%d, %d]", md.Default, md.Minimum, md.Maximum)
+	}
+	if c.Forecast.LookbackFactor < 1 {
+		return c, fmt.Errorf("forecast lookback_factor %d must be at least 1", c.Forecast.LookbackFactor)
+	}
+	for _, d := range append([]string{c.Forecast.LookbackFloor}, c.Horizon.Enum...) {
+		if _, err := durationSeconds(d); err != nil {
+			return c, fmt.Errorf("forecast lookback: %w", err)
+		}
 	}
 	for _, p := range []string{c.Patterns.Name, c.Patterns.Metric, c.Patterns.Label, c.Patterns.Window, c.Patterns.Decimal} {
 		if _, err := regexp.Compile(p); err != nil || p == "" {

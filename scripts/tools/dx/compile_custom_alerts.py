@@ -148,10 +148,9 @@ def build_pack(config_dir, binary=None, timeout=tv.DEFAULT_TIMEOUT) -> "tv.Custo
 
 def _not_served_count(pack: "tv.CustomAlertPack") -> int:
     """How many things the source declares that the exporter serves none of:
-    entries it rejects or drops, lists that do not decode, files its load
-    skips."""
-    return (len(pack.not_compiled) + len(pack.block_errors)
-            + len(pack.parse_failed) + len(pack.unreadable))
+    entries it rejects or drops, lists that do not decode. (A file its load
+    skips or cannot read is refused before this is counted.)"""
+    return len(pack.not_compiled) + len(pack.block_errors)
 
 
 _NOTICE_TENANT_SAMPLE = 10   # max tenant names per lifecycle notice (CI-log readability)
@@ -455,8 +454,7 @@ def _nothing_compiled_diagnosis(config_dir: Path, not_served: int) -> str:
             f"   Check, in this order:\n"
             f"     1. a declaration the compiler stopped seeing — a renamed, moved or deleted\n"
             f"        source file, or a filename its discovery does not match;\n"
-            f"     2. a source file whose contents no longer parse (it would be listed above);\n"
-            f"     3. the last declaration really was removed — that is a legitimate end state.")
+            f"     2. the last declaration really was removed — that is a legitimate end state.")
 
 
 @exit_on_output_write_error
@@ -532,15 +530,24 @@ def main() -> int:
     # prints them: they say which declarations it never saw.
     tv.print_load_warnings(pack)
 
+    # A tree with a file the load skips or cannot read is refused before the
+    # compile (the shared conf.d refusal, #3206). The compile reads the tree
+    # again: a file that breaks in between gets here, and is refused the
+    # same way — never a pack without its tenants.
+    if pack.parse_failed or pack.unreadable:
+        for path in pack.parse_failed:
+            print(f"ERROR: the exporter's load skips {_safe_log(path)} (it does not decode)",
+                  file=sys.stderr)
+        for u in pack.unreadable:
+            print(f"ERROR: the exporter's load cannot read {_safe_log(u.file)} ({u.reason})",
+                  file=sys.stderr)
+        print(f"ERROR: the conf.d at {config_dir} changed while it was read; nothing is "
+              f"written (run it again)", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     # What the source declares and the exporter does not serve gets no rule —
     # said here, never silently. Not a failure: the exporter's own report
     # (da-guard, tenant-api's write check) is where such an entry is refused.
-    for path in pack.parse_failed:
-        print(f"  ⚠ the exporter's load skips {_safe_log(path)} (it does not decode): "
-              f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
-    for u in pack.unreadable:
-        print(f"  ⚠ the exporter's load cannot read {_safe_log(u.file)} ({u.reason}): "
-              f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
     for tenant, reason in sorted(pack.block_errors.items()):
         print(f"  ⚠ tenant={_safe_log(tenant)}: the exporter serves none of its "
               f"_custom_alerts, not compiled: {_safe_log(reason)}", file=sys.stderr)

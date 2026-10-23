@@ -394,6 +394,40 @@ def test_the_cli_names_a_file_the_exporter_cannot_decode(tmp_path, monkeypatch, 
     assert not out.exists(), "a refused compile must not write --out"
 
 
+def test_the_cli_names_a_path_the_exporter_cannot_read(tmp_path, monkeypatch):
+    # The other half of the shared refusal: a path the load cannot read (a
+    # symlink loop: stat fails) — named with its reason, rc 2, no pack written.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, {"good.yaml": _BAD_FILE_TREE["good.yaml"]})
+    symlink_or_skip(src / "loop.yaml", src / "loop.yaml")
+    with refuses("loop.yaml") as err:
+        _compile_into(src, out, monkeypatch)
+    assert "(read_failure: " in err.getvalue(), err.getvalue()
+    assert not out.exists(), "a refused compile must not write --out"
+
+
+@pytest.mark.parametrize("dropped", ["parse_failed", "unreadable"])
+def test_a_file_that_breaks_after_the_refusal_is_still_refused(tmp_path, monkeypatch, capsys, dropped):
+    # The shared refusal reads the tree, then the compile reads it again: a
+    # file that breaks in between reaches the pack's parse_failed/unreadable.
+    # rc 2, named, nothing written — never a ✅ pack without its tenants.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, {"good.yaml": _BAD_FILE_TREE["good.yaml"]})
+    real = cc.build_pack
+
+    def raced(config_dir, *a, **kw):
+        pack = real(config_dir, *a, **kw)
+        if dropped == "parse_failed":
+            return pack._replace(parse_failed=["two.yaml"])
+        return pack._replace(unreadable=[tv.UnreadableFile("two.yaml", "stat_error")])
+
+    monkeypatch.setattr(cc, "build_pack", raced)
+    assert _compile_into(src, out, monkeypatch) == 2
+    err = capsys.readouterr().err
+    assert "two.yaml" in err and "changed while it was read" in err, err
+    assert not out.exists(), "a refused compile must not write --out"
+
+
 # --- 5c. served and disabled compile; rejected and duplicate do not (#3042) --
 def test_disabled_entries_compile_rejected_and_duplicate_do_not(tmp_path):
     # A switched-off entry has no row BY DESIGN, and gets a rule anyway, so that

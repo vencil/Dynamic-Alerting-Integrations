@@ -44,7 +44,7 @@ class TestRunCmd:
 # ---------------------------------------------------------------------------
 
 class TestQueryPrometheus:
-    """Tests for query_prometheus() — now uses query_prometheus_instant from _lib_python."""
+    """Tests for query_prometheus() — now uses prometheus_instant from _lib_prometheus."""
 
     def test_success(self, monkeypatch):
         fake = lambda prom_url, promql: ([{"value": [0, "42"]}], None)

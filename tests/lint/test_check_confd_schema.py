@@ -200,8 +200,8 @@ class TestValidateDir:
     def test_bare_number_quantile_rejected(self, confd, schema):
         # #1017: quantile is string-only. A bare YAML number is dialect-ambiguous
         # (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string, yaml.v3 as
-        # a float) and silently splits the Go/Python recipe_id join → the alert
-        # never fires. The schema gate must force the quote at author/CI time.
+        # a float), so a reader of the file other than the exporter can see
+        # another recipe_id than the one compiled. The schema gate must force the quote at author/CI time.
         _write(confd, "db-a.yaml",
                'tenants:\n  db-a:\n    _custom_alerts:\n'
                '      - recipe: p99_latency\n'
