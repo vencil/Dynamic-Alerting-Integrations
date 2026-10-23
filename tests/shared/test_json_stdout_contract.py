@@ -1538,7 +1538,9 @@ def _private_tree(tmp_path: Path, breaker: Callable[[Path], None]) -> Path:
 
 
 def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
-         fake_bin: Path) -> subprocess.CompletedProcess:
+         fake_bin: Path, net_log: Path | None = None) -> subprocess.CompletedProcess:
+    """Run *recipe*. With *net_log*, under ``_net_hook_runner`` — the tool's
+    network use is logged there (``test_ops_http_through_lib``, #3215)."""
     root = sandbox_root if recipe.sandbox else REPO_ROOT
     if recipe.private_tree is not None:
         root = _private_tree(tmp_path, recipe.private_tree)
@@ -1557,10 +1559,13 @@ def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
     env.pop("FAKE_KUBECTL_CM", None)
     if recipe.fake_cm is not None:
         env["FAKE_KUBECTL_CM"] = recipe.fake_cm
-    return subprocess.run(
-        [sys.executable, str(script), *recipe.build(tmp_path, stub)],
-        capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env,
-    )
+    argv = [sys.executable, str(script), *recipe.build(tmp_path, stub)]
+    if net_log is not None:
+        env["NET_HOOK_LOG"] = str(net_log)
+        env["NET_HOOK_OPS"] = str(root / "scripts" / "tools" / "ops")
+        env["NET_HOOK_LIB"] = str(root / "scripts" / "tools" / "_lib_prometheus.py")
+        argv.insert(1, str(Path(__file__).with_name("_net_hook_runner.py")))
+    return subprocess.run(argv, capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env)
 
 
 @pytest.mark.parametrize("recipe", RECIPES, ids=[r.id for r in RECIPES])
