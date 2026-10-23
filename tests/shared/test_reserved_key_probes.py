@@ -324,14 +324,11 @@ def test_served_values_keys_agree_with_the_registry(readers, name, layer):
 # alone. Per key the exporter reads, written in the schedule form (two
 # windows covering the whole UTC day, each switching it to another value the
 # reader acts on), the exporter serves exactly what the default alone
-# serves; a window that took effect would change the output.
+# serves; a window that took effect would change the output. Every layer,
+# the subtree defaults overlay included: it strips the window before judging
+# the value (#3295), where it used to refuse a windowed `_state_<filter>`.
 _SCHEDULE_OTHER = {"_silent_mode": "disable", "_severity_dedup": "enable",
                    "_profile": "p1", "_state_": "enable"}
-
-# The one layer where the schedule form is not read as its default: the
-# subtree defaults overlay refuses a windowed `_state_<filter>` outright
-# (#1569, keyBypassesTheDeclaredSurface), so it serves as if not written.
-_SCHEDULE_REFUSED = {("_state_", "subtree_defaults")}
 
 
 def _scheduled(value, other):
@@ -354,11 +351,8 @@ def test_a_scheduled_reserved_key_serves_its_default(readers, tmp_path, name, la
         _tree(sched, name, layer, False)
     finally:
         _SENTINELS[name] = (key, value)
-    want = _baseline(readers, name, "exporter", False) if (name, layer) in _SCHEDULE_REFUSED \
-        else readers.exporter(plain)
-    assert readers.exporter(sched) == want, (
-        f"{key} written with a schedule in {layer} serves differently from "
-        f"{'the tree without it' if (name, layer) in _SCHEDULE_REFUSED else 'its default alone'}")
+    assert readers.exporter(sched) == readers.exporter(plain), (
+        f"{key} written with a schedule in {layer} serves differently from its default alone")
 
 
 def test_a_scheduled_routing_profile_is_refused_by_the_generator(readers, tmp_path):

@@ -259,7 +259,7 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]Ro
 				continue
 			}
 			rs := spelled(k)
-			if len(rs) == 0 || keyCanReachTheOutputPlane(cfg, k, v) {
+			if len(rs) == 0 || keyCanReachTheOutputPlane(cfg, k) {
 				continue
 			}
 			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
