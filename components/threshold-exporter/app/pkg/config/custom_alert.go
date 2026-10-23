@@ -574,7 +574,7 @@ func checkRecipeFields(spec CustomAlertSpec, op string, withDataPlane bool) erro
 // unequal shapes is a hash collision (CompileCustomAlertPack refuses it).
 type customAlertShape struct {
 	Recipe, Metric string
-	// Op: the authored op or the contract default; meaningless for absence.
+	// Op: the authored op or the contract default; empty for absence.
 	Op string
 	// Window: rate/ratio/p99_latency/threshold/absence only.
 	Window string
@@ -628,10 +628,14 @@ func recipeShape(spec CustomAlertSpec) (customAlertShape, error) {
 		return sh, fmt.Errorf("op \"==\" is only allowed for the %s recipe "+
 			"(raw-gauge status-code match); %s does not support it", oneOf(contract.Op.EqRecipes), spec.Recipe)
 	}
-	if spec.Recipe != "absence" {
-		if _, ok := customAlertOpSlug[op]; !ok {
-			return sh, fmt.Errorf("unknown op %q", op)
-		}
+	if spec.Recipe == "absence" {
+		// A presence check has no comparison: the op is not in its slug nor
+		// in any rule it emits, so it is not in its shape either — or two
+		// entries on one recipe_id, one with a stray `op:`, would be refused
+		// as a collision (CompileCustomAlertPack compares shapes whole).
+		sh.Op = ""
+	} else if _, ok := customAlertOpSlug[op]; !ok {
+		return sh, fmt.Errorf("unknown op %q", op)
 	}
 	switch spec.Recipe {
 	case "forecast":

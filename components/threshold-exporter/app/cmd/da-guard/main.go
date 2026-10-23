@@ -114,6 +114,13 @@
 // each with a fixed kind (ADR-036 §2); with --path / --input, the same for
 // one text meant for one path. Exit codes: 0 ok (an unreadable file is data,
 // not a verdict), 2 caller error.
+//
+// Subcommand `compile-custom-alerts` (#3229, compile_custom_alerts.go)
+// prints, as JSON, the custom-alert rule pack (ADR-024 Capability B) compiled
+// from the entries served-values lists, beside the entries it does not serve,
+// the non-active recipes in use and the load's parse_failed / skipped /
+// unreadable. Same exit codes as served-values; a tree whose /metrics cannot
+// be gathered, or two shapes on one recipe_id, is 2.
 package main
 
 import (

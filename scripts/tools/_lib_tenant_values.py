@@ -1395,11 +1395,17 @@ def load_custom_alert_pack(
                     or nc.status not in ("rejected", "duplicate")):
                 raise ValueError(f"not_compiled entry {e!r} is not of its shape")
             not_compiled.append(nc)
-        block_errors = {str(k): str(v) for k, v in doc["block_errors"].items()}
-        lifecycle = [LifecycleUse(str(u["recipe"]), str(u["status"]), tuple(str(t) for t in u["tenants"]))
-                     for u in doc["lifecycle"]]
+        block_errors, lifecycle = doc["block_errors"], doc["lifecycle"]
+        if not isinstance(block_errors, dict) or not isinstance(lifecycle, list):
+            raise TypeError("block_errors / lifecycle is not of its shape")
+        uses = []
+        for u in lifecycle:
+            if not isinstance(u["tenants"], list):
+                raise TypeError(f"lifecycle entry {u!r} is not of its shape")
+            uses.append(LifecycleUse(str(u["recipe"]), str(u["status"]), tuple(str(t) for t in u["tenants"])))
+        block_errors = {str(k): str(v) for k, v in block_errors.items()}
         return CustomAlertPack(
-            groups, shapes, not_compiled, block_errors, lifecycle,
+            groups, shapes, not_compiled, block_errors, uses,
             [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
             [str(f) for f in doc["parse_failed"]],
             [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]], [])

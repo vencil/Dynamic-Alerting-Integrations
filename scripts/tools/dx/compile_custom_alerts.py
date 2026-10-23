@@ -139,11 +139,11 @@ def _safe_log(value) -> str:
     return safe_label(value)
 
 
-def build_pack(config_dir, binary=None) -> "tv.CustomAlertPack":
+def build_pack(config_dir, binary=None, timeout=tv.DEFAULT_TIMEOUT) -> "tv.CustomAlertPack":
     """The custom-alert rule pack for the conf.d tree at `config_dir`, as
     `da-guard compile-custom-alerts` compiles it. Raises what
     `tv.load_custom_alert_pack` raises."""
-    return tv.load_custom_alert_pack(config_dir, binary=binary)
+    return tv.load_custom_alert_pack(config_dir, binary=binary, timeout=timeout)
 
 
 def _not_served_count(pack: "tv.CustomAlertPack") -> int:
@@ -546,7 +546,7 @@ def main() -> int:
               f"_custom_alerts, not compiled: {_safe_log(reason)}", file=sys.stderr)
     for e in pack.not_compiled:
         print(f"  ⚠ tenant={_safe_log(e.tenant)} _custom_alerts[{e.index}] "
-              f"name={_safe_log(e.name)}: {e.status} by the exporter, not compiled: "
+              f"name={_safe_log(e.name)!r}: {e.status} by the exporter, not compiled: "
               f"{_safe_log(e.reason)}", file=sys.stderr)
     not_served = _not_served_count(pack)
 

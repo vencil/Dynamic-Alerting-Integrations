@@ -141,8 +141,8 @@ class TestGatingAndErrors:
         risks a false 'inactive' (CodeRabbit #873)."""
         real = rp.cc.build_pack
 
-        def odd_for(confd):
-            pack = real(confd)
+        def odd_for(confd, **kw):
+            pack = real(confd, **kw)
             for g in pack.groups:
                 for r in g["rules"]:
                     if r.get("alert", "").startswith("Custom_"):
@@ -239,6 +239,65 @@ class TestBuildPreviewTest:
         # pathological huge window: INTEGER arithmetic must not OverflowError on
         # int→float (the earlier math.ceil(secs/60) form did — CodeRabbit).
         assert rp._window_minutes("9" * 400 + "h") is None
+
+
+# ── what the preview takes from the exporter, and what it leaves behind (#3229) ──
+
+class TestJudgedByTheExporter:
+    def test_selector_values_are_the_exporters_reading(self, tmp_path):
+        """A selector the request writes as a JSON boolean is `"true"` to the
+        exporter — the rule matches `flag="true"`, so the synthetic series
+        must carry that, not Python's `True` (a false 'inactive')."""
+        r = dict(_THRESHOLD, selectors={"flag": True})
+        judged = rp.judge(r, "shop-a", tmp_path)
+        doc = rp.build_preview_test(r, "shop-a", 1500, judged)
+        rules = rp.cc._render(judged.pack.groups)
+        assert 'flag=\\"true\\"' in rules or 'flag="true"' in rules, rules
+        series = [x["series"] for x in yaml.safe_load(doc)["tests"][0]["input_series"]]
+        assert any('flag="true"' in x for x in series), series
+        assert not any('"True"' in x for x in series), series
+
+    def test_every_da_guard_run_is_bounded_like_promtool(self, tmp_path, monkeypatch):
+        """A hung da-guard holds an eval slot no longer than promtool may."""
+        seen = []
+        real_served, real_pack = rp.tv.load_served_tree, rp.cc.build_pack
+
+        def served(*a, **k):
+            seen.append(("served-values", k.get("timeout")))
+            return real_served(*a, **k)
+
+        def pack(*a, **k):
+            seen.append(("compile-custom-alerts", k.get("timeout")))
+            return real_pack(*a, **k)
+
+        monkeypatch.setattr(rp.tv, "load_served_tree", served)
+        monkeypatch.setattr(rp.cc, "build_pack", pack)
+        assert not isinstance(rp.judge(_THRESHOLD, "shop-a", tmp_path), str)
+        assert seen == [("served-values", rp._TIMEOUT), ("compile-custom-alerts", rp._TIMEOUT)]
+
+    def test_a_da_guard_older_than_the_core_is_the_services_fault(self, monkeypatch):
+        """A served-values without `custom_alerts` (an older da-guard) is an
+        error naming the preview's da-guard — not a 500, not the recipe's."""
+        real = rp.tv.load_served_tree
+
+        def old(*a, **k):
+            tree = real(*a, **k)
+            return tree._replace(tenants={t: v._replace(custom_alerts=None)
+                                          for t, v in tree.tenants.items()})
+
+        monkeypatch.setattr(rp.tv, "load_served_tree", old)
+        out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
+        assert out["states"][0]["state"] == "error"
+        assert out["states"][0]["reason"].startswith("the preview's da-guard cannot judge recipes"), out
+
+    def test_the_preview_leaves_no_tree_in_the_servable_index(self):
+        """Each preview reads a fresh temporary tree; the process-wide index
+        of trees already found servable must not keep it — a recycled path
+        would skip the check, and the index would grow forever."""
+        import _lib_parse_cache
+        before = set(_lib_parse_cache._SERVABLE)
+        rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
+        assert set(_lib_parse_cache._SERVABLE) == before
 
 
 # ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──

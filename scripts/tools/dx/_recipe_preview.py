@@ -40,6 +40,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 import compile_custom_alerts as cc  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402  (on the path compile_custom_alerts adds)
+import _lib_parse_cache  # noqa: E402
 
 # `threshold` covers >, >=, <, <=, == (all value-crossing, flat series). `absence`
 # is presence-based — fires where a DECLARING tenant's metric had no sample over
@@ -123,12 +124,14 @@ def _labels(d):
 
 class Judged:
     """The exporter's verdict on the recipe, read from the one-tenant tree:
-    the pack, the alert name, and the `user_threshold` row it serves."""
+    the pack, the alert name, the `user_threshold` row it serves and the
+    entry as it decoded it."""
 
-    def __init__(self, pack, row, for_min):
+    def __init__(self, pack, row, for_min, spec):
         self.pack = pack
         self.row = row            # served-values' `_custom_alerts` row: labels, metric, severity, value
         self.for_min = for_min    # the compiled alert's `for:`, in minutes
+        self.spec = spec          # the entry as the exporter decoded it (string selector values)
 
     @property
     def slug(self):
@@ -150,13 +153,18 @@ def judge(recipe, tenant, confd):
     """Write *recipe* as *tenant*'s only `_custom_alerts` entry into the empty
     directory *confd*, and read the exporter's verdict on it. Returns a
     `Judged`, or a reason string when the exporter does not serve it.
-    Raises what `tv.load_served_tree` / `tv.load_custom_alert_pack` raise."""
+    Raises what `tv.load_served_tree` / `tv.load_custom_alert_pack` raise
+    (each da-guard run bounded by `_TIMEOUT`), and OSError."""
     text = yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
                           sort_keys=False, allow_unicode=True)
     (Path(confd) / _TENANT_FILE).write_text(text, encoding="utf-8", newline="\n")
-    served = tv.load_served_tree(confd).tenants.get(tenant)
+    served = tv.load_served_tree(confd, timeout=_TIMEOUT).tenants.get(tenant)
     if served is None:
         return f"the exporter serves no tenant {tenant!r} from the recipe"
+    if served.custom_alerts is None:
+        raise tv.ServedValuesError(
+            f"da-guard {tv.SUBCOMMAND} has no custom_alerts — this da-guard is older than this "
+            "tool: upgrade or rebuild it", None, "", stale=True)
     if served.custom_alerts_error:
         return f"the exporter does not decode _custom_alerts: {served.custom_alerts_error}"
     entry = served.custom_alerts[0]
@@ -168,7 +176,7 @@ def judge(recipe, tenant, confd):
     if entry.status != "served" or len(rows) != 1:
         return f"the exporter serves {len(rows)} row(s) for the recipe ({entry.status})"
     row = rows[0]
-    pack = cc.build_pack(confd)
+    pack = cc.build_pack(confd, timeout=_TIMEOUT)
     alertname = f"Custom_{row['labels']['recipe_id']}"
     rule = next((r for g in pack.groups for r in g.get("rules", [])
                  if r.get("alert") == alertname
@@ -178,7 +186,7 @@ def judge(recipe, tenant, confd):
     for_min = _duration_minutes(rule.get("for", "0s"), allow_zero=True)
     if for_min is None:
         return f"preview cannot size the series for for-window {rule.get('for')!r}"
-    return Judged(pack, row, for_min)
+    return Judged(pack, row, for_min, entry.spec)
 
 
 def build_preview_test(recipe, tenant, value, judged):
@@ -234,7 +242,9 @@ def build_preview_test(recipe, tenant, value, judged):
         # enough to clear `for:`.
         eval_min = for_min + 5
         n = for_min + 10
-        selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
+        # The selector the compiled rule matches is the exporter's reading of
+        # the recipe (`flag: true` is "true" to it, not Python's "True").
+        selectors = dict(judged.spec.get("selectors") or {})
         metric_labels = {"tenant": tenant, **selectors}
         input_series = [
             {"series": f"{row['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
@@ -346,8 +356,16 @@ def preview_recipe(recipe, tenant, scenario):
             judged = judge(recipe, tenant, confd)
         except tv.DaGuardNotFoundError as exc:
             return _err(f"da-guard not available — cannot judge the recipe: {exc}")
-        except (tv.DaGuardError, tv.ParseFailedError, yaml.YAMLError) as exc:
+        except tv.DaGuardError as exc:
+            # A da-guard that cannot be run, answers unlike da-guard or is
+            # older than this core is the service's fault, not the recipe's.
+            what = ("the preview's da-guard cannot judge recipes" if exc.binary_fault
+                    else "recipe failed to compile")
+            return _err(f"{what}: {' '.join(str(exc).split())}")
+        except (tv.ParseFailedError, yaml.YAMLError) as exc:
             return _err(f"recipe failed to compile: {' '.join(str(exc).split())}")
+        except OSError as exc:
+            return _err(f"preview could not write the recipe's tree: {exc}")
         if isinstance(judged, str):
             return _err(judged)
         alertname = judged.alertname
@@ -447,4 +465,5 @@ def preview_recipe(recipe, tenant, scenario):
             "warnings": [],
         }
     finally:
+        _lib_parse_cache.forget(work / "conf.d")
         shutil.rmtree(work, ignore_errors=True)

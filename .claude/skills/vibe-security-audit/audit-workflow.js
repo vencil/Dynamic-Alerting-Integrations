@@ -118,7 +118,7 @@ const DEFAULT_CLASSES = [
     scope: 'Mint tokens beyond policy or rate-limit, replay a revoked/expired token, bypass federation admission validation, or exploit orphan detection to escalate. Token store/verify, mint_limiter, fedpolicy admission, revocation bookkeeping.',
     files: 'internal/federation/token/*, internal/federation/fedpolicy/*, internal/federation/orphan/*, internal/handler/federation/*' },
   { key: 'injection', title: 'Tenant-supplied content injection & git write-plane abuse',
-    scope: 'Tenant custom-alert / write content injecting into PromQL / YAML / config / Go-template ANNOTATIONS (a distinct sink from PromQL selectors), escaping sanitize/body-validator, spoofing write-source, or bypassing gitops admission. Trace tenant input -> merge/extract -> compiler (recipes.py/shape.py) -> admission -> writer -> git, ACROSS component boundaries.',
+    scope: 'Tenant custom-alert / write content injecting into PromQL / YAML / config / Go-template ANNOTATIONS (a distinct sink from PromQL selectors), escaping sanitize/body-validator, spoofing write-source, or bypassing gitops admission. Trace tenant input -> merge/extract -> compiler (pkg/config custom_alert_compile.go) -> admission -> writer -> git, ACROSS component boundaries.',
     files: 'internal/customalerts/*, internal/handler/{sanitize,body_validator,tenant_custom_alerts,write_source,pr_writeflow}.go, internal/gitops/*  AND the cross-component compiler: components/threshold-exporter/app/pkg/config/ (custom_alert.go, custom_alert_compile.go), scripts/tools/dx/compile_custom_alerts.py' },
 ]
 const CLASSES = (Array.isArray(A.attackClasses) && A.attackClasses.length) ? A.attackClasses : DEFAULT_CLASSES

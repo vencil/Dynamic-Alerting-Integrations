@@ -119,6 +119,23 @@ func TestCompileCustomAlertPack_RefusesARecipeIDTwoShapesShare(t *testing.T) {
 	}
 }
 
+// An absence entry's op is in neither its slug nor its rules: two entries on
+// one recipe_id that differ only in a stray `op:` are one shape, not a
+// collision that would refuse the whole tree.
+func TestCompileCustomAlertPack_AbsenceOpIsNotPartOfTheShape(t *testing.T) {
+	a := caEntry(t, CustomAlertServed, []string{"warning"},
+		`- {recipe: absence, name: hb, metric: hb_total, window: 5m, threshold: "1"}`)
+	b := caEntry(t, CustomAlertServed, []string{"warning"},
+		`- {recipe: absence, name: hb, metric: hb_total, window: 5m, threshold: "1", op: "<"}`)
+	if a.RecipeID != b.RecipeID {
+		t.Fatalf("precondition: one recipe_id, got %s / %s", a.RecipeID, b.RecipeID)
+	}
+	p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "a", Entries: []CustomAlertEntry{a}}, {Tenant: "b", Entries: []CustomAlertEntry{b}}})
+	if err != nil || p.Shapes != 1 {
+		t.Fatalf("shapes = %d, err = %v; want one shape", p.Shapes, err)
+	}
+}
+
 func TestCompileCustomAlertPack_EmptyHasNoGroups(t *testing.T) {
 	p, err := CompileCustomAlertPack(nil)
 	if err != nil || len(p.Groups) != 0 || p.Shapes != 0 {
