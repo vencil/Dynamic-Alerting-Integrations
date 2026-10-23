@@ -14,13 +14,13 @@
 | [`forecast`](forecast.yaml) | 線性預測 gauge/餘量比例在提前量內越界（趨勢/耗盡） | `metric` `capacity_metric` `op` `horizon` `threshold` |
 | [`slo_burn_rate`](slo_burn_rate.yaml) | SLO 錯誤預算 burn-rate（multi-window AND；fast→critical、slow→warning） | `metric` `denominator_metric` `objective` `slo_period` `min_events` |
 
-每個 `.yaml` 是該 recipe 的**治理契約**（參數、emitted PromQL shape、範例）；可執行形式在
-[`scripts/tools/dx/custom_alerts/recipes.py`](../../scripts/tools/dx/custom_alerts/recipes.py)（兩者由
+每個 `.yaml` 是該 recipe 的**治理契約**（參數、emitted PromQL shape、範例）；可執行形式是 exporter 的 Go 編譯器
+[`custom_alert_compile.go`](../../components/threshold-exporter/app/pkg/config/custom_alert_compile.go)（`da-guard compile-custom-alerts`；兩者由
 [`tests/dx/test_compile_custom_alerts.py`](../../tests/dx/test_compile_custom_alerts.py) drift-guard）。
 
 ## 宣告語法（`_custom_alerts`）
 
-exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile，**不合併**。`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 不會送出；一組租戶共用的告警寫在 profile。編譯器照 exporter 的讀法編譯（`da-guard served-values`），所以 exporter 送出的 recipe 都有規則，`_defaults.yaml` 裡的則不送出、也沒有規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。（規則見 [ADR-024 §3「宣告位置」](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)）。
+exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile，**不合併**。`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 不會送出；一組租戶共用的告警寫在 profile。編譯器就是 exporter 的判定（`da-guard compile-custom-alerts`，[#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229)），所以 exporter 送出的 recipe 都有規則，`_defaults.yaml` 裡的則不送出、也沒有規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。（規則見 [ADR-024 §3「宣告位置」](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)）。
 
 租戶檔（tenant leaf，只作用該租戶）：
 
@@ -52,7 +52,7 @@ tenants:
 - **防注入**：`metric` 嚴格 `^[a-zA-Z_][a-zA-Z0-9_]*$`（禁冒號/括號/運算子）；label 過濾只能走 `selectors`/`selectors_re`，由編譯器組裝 + value 跳脫。保留 label（`tenant`/`version`/`severity`/…）禁設。
 - **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window/horizon, quantile, denominator/capacity, selectors, for, min_events)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。`for` 入 signature（控制平面靜態屬性）；`forecast` 用 `horizon`（推導 lookback）取代 `window`；`slo_burn_rate` 無 `window`（burn 窗固定屬 recipe 語意）、`objective`/`slo_period` 走資料平面**不入 shape**（改值不 re-slug），`min_events` 入 shape（字面值寫進規則）。
 - **每個租戶、每個形狀、每個 severity 只能一條**：規則以 `on(tenant, version)` join 租戶的門檻列，同一租戶兩條同形狀、同 severity 的 recipe（名稱或 mode 不同也一樣）會讓這條共用規則對所有租戶評估失敗。exporter 只送清單中的第一條、丟棄其餘並計入 `da_custom_alert_parse_errors`，da-guard 以 `custom_alert_duplicate_series` 報出（[#3112](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3112)）。
-- **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label，是 Go↔Python 跨語言契約（見 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json)）。
+- **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label。exporter 送出的序列與編譯出的規則取自同一個 Go 函式，由 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json) 釘住：改 slug 會改名所有已部署的規則與序列。
 
 ## slo_burn_rate 補充
 

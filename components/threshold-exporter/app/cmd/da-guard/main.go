@@ -273,6 +273,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if len(args) > 0 && args[0] == parseTreeCmd {
 		return runParseTree(args[1:], os.Stdin, stdout, errOut)
 	}
+	if len(args) > 0 && args[0] == compileCustomAlertsCmd {
+		return runCompileCustomAlerts(args[1:], stdout, errOut)
+	}
 
 	f, err := parseFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {

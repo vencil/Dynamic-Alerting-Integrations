@@ -223,7 +223,7 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
     "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB,
-    "dx/custom_alerts/entries.py": _GO, "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
+    "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
     "ops/_observed_map_lib.py": _LIB, "ops/_registry_lib.py": _LIB, "ops/_render_diff.py": _LIB,

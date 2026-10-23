@@ -193,9 +193,8 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     number is the caller's question. The Python readers of the grammar
     (check_threshold_unit_sanity) calls this one —
     backtest_threshold and config_diff read the exporter's own answer from
-    served-values instead (#3140 PR2);
-    custom_alerts/shape.py keeps its own stdlib-only copy. All are held to
-    Go by tests/shared/test_threshold_value_parity.py."""
+    served-values instead (#3140 PR2); the custom-alert compiler is Go's
+    (#3229). All are held to Go by tests/shared/test_threshold_value_parity.py."""
     text = str(raw).strip(GO_SPACE)
     value, sep, suffix = text.rpartition(":")
     if not sep:

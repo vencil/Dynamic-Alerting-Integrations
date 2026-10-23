@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml.
 
-ADR-024 Capability B (#741 S1+S2). Reads every tenant's `_custom_alerts` as
-the exporter serves it, groups the entries by shape, and emits ONE vectorised
-`group_left` rule per shape (rule count = shape count, NOT per-tenant fan-out —
-preserves the rule-pack O(M) invariant). Tenants never write PromQL.
+ADR-024 Capability B (#741 S1+S2). ONE vectorised `group_left` rule set per
+shape (rule count = shape count, NOT per-tenant fan-out — preserves the
+rule-pack O(M) invariant). Tenants never write PromQL.
 
-What is compiled is the exporter's reading, not this compiler's (#3042): the
-entries da-guard served-values lists for each tenant (`custom_alerts/entries.py`)
-— the ones the exporter serves, plus the switched-off ones (a rule ready for
-when the tenant switches one back on). Which list a tenant has, whether an entry
-is valid, whether it repeats an earlier one's shape and severity, and the
-per-tenant cap are not judged here: the exporter, da-guard and tenant-api's
-write check judge them. An entry the exporter does not serve gets no rule and a
-stderr line. This compiler's recipe_id for an entry must equal the exporter's,
-or the compile is refused (exit 2) — the rule would join no served series.
-da-guard is required (`$DA_GUARD_BINARY`, or `da-guard` on PATH;
+The pack is the exporter's, not this script's (#3229): `da-guard
+compile-custom-alerts` judges every tenant's `_custom_alerts` as the exporter
+serves it (the entries served-values lists), computes each recipe_id, and
+emits the rules — the served entries plus the switched-off ones (a rule ready
+for when the tenant switches one back on). This script runs it
+(`_lib_tenant_values.load_custom_alert_pack`), serialises the pack, and owns
+the I/O guards below. An entry the exporter does not serve gets no rule and a
+stderr line. da-guard is required (`$DA_GUARD_BINARY`, or `da-guard` on PATH;
 `scripts/ops/with_da_guard.sh` builds one); without it, exit 2.
 
 The generated pack flows through the EXISTING fan-out unchanged (both glob
@@ -56,20 +53,19 @@ the write is irreversible in the working tree. See `_erases_committed_rules`.
     nothing to compare and writes whatever it got. Only the zero-shape warning
     speaks up there.
   * **The library entry point.** `build_pack()` has no guard at all; callers that
-    import this module and render themselves bypass everything here.
+    import this module and render themselves (recipe-preview) bypass everything here.
 
 Exit codes:
     0  wrote file / in sync (--check)
     1  drift detected (--check) / refused to erase the committed pack (write)
     2  error (no --out on a write, missing source, no da-guard, a tree the
-       exporter rejects as a whole, the compiler and the exporter reading an
-       entry differently, …)
+       exporter rejects as a whole or whose /metrics cannot be gathered, two
+       shapes on one recipe_id, …)
 """
 from __future__ import annotations
 
 import argparse
 import os
-import re
 import shlex
 import sys
 from pathlib import Path
@@ -92,12 +88,7 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 
-# import the compiler package (scripts/tools/dx/custom_alerts/)
-sys.path.insert(0, _THIS_DIR)
-from custom_alerts import entries as _entries  # noqa: E402
-from custom_alerts import recipes as _recipes  # noqa: E402
-from custom_alerts import shape as _shape  # noqa: E402
-from custom_alerts.entries import CustomAlertConfigError, CustomAlertParityError  # noqa: E402
+import _lib_tenant_values as tv  # noqa: E402
 
 
 PACK_NAME = "custom-alerts"
@@ -129,81 +120,6 @@ def _str_representer(dumper: yaml.Dumper, data: str):
 _BlockDumper.add_representer(str, _str_representer)
 
 
-def _silent_sentinel() -> dict:
-    """The SINGLE global (tenant-agnostic) silent-mode sentinel (#741 S7/S8).
-
-    Fires once per (tenant, name) whose recipe declares mode=silent, derived
-    straight from the exporter's user_threshold series — so it is injected ONCE
-    regardless of shape count (the query already spans every silent recipe in
-    the cluster). Alertmanager uses it as an inhibit SOURCE (equal:[tenant,name])
-    to suppress that recipe's notification while Prometheus keeps evaluating it
-    as an ALERTS series for dashboards. This rides the platform's established
-    ADR-003 Sentinel+Inhibit silent paradigm (mirrors TenantSilentWarning/
-    Critical) instead of an Alertmanager route-to-null receiver — more
-    observable in the AM UI and consistent with the tenant-level tri-state.
-
-    Like every platform sentinel it carries the static component="sentinel"
-    routing discriminator (#1095): the sentinel is an inhibit source + AM-UI/
-    dashboard surface, NOT a notification, and it still carries a `tenant`
-    label — without the discriminator it would fall through to the tenant main
-    route (and a matcher-less enforced NOC route) and notify humans. The
-    platform-static sentinel-sinkhole route (continue:false, ahead of enforced/
-    tenant routes) swallows it; inhibition is unaffected (Alertmanager matches
-    inhibit sources against all active alerts regardless of routing).
-    """
-    return {
-        "alert": "CustomRecipeSilent",
-        "expr": 'max by(tenant, name) (user_threshold{component="custom", mode="silent"})',
-        "labels": {
-            "severity": "none",
-            "component": "sentinel",
-            "tenant": "{{ $labels.tenant }}",
-            "name": "{{ $labels.name }}",
-        },
-        "annotations": {
-            "summary": "Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant }}",
-            "summary_zh": "{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式",
-            "description": ("The recipe is still evaluated and visible as an ALERTS "
-                           "series (dashboard-only); its notifications are suppressed "
-                           "via inhibit, not deleted."),
-            "description_zh": ("此自訂告警仍會評估並可於監控面板（ALERTS series）查看，"
-                              "通知經 inhibit 抑制而非刪除。"),
-        },
-    }
-
-
-# Platform-authored template actions the compiler ITSELF emits into custom-alert
-# rule labels/annotations — the ONLY {{ … }} allowed in a generated custom-alert
-# rule. Anything else means tenant-controlled data became Go-template code (the F2
-# annotation-injection class), regardless of WHICH field leaked it. Emit-time
-# INVARIANT gate (A+ defence-in-depth): shape.py's boundary reject stops the known
-# selector-value vector; this catches ANY future field reaching a template context
-# without its own guard. Allowed: `{{ $value | printf "%.Nf" }}` and `{{ $labels.X }}`.
-_ALLOWED_TEMPLATE_ACTION = re.compile(
-    r'\{\{\s*(?:\$value\s*\|\s*printf\s+"%\.[0-9]+f"|\$labels\.[a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}'
-)
-
-
-def _assert_annotations_template_safe(groups: List[dict]) -> None:
-    """Fail the compile if any generated label/annotation carries a Go-template
-    action OR backtick beyond the platform allowlist. Catches the F2 injection class
-    at emit time no matter which field carried it. MUST be kept in lockstep with the
-    platform annotations emitted by recipes.py / _silent_sentinel."""
-    for g in groups:
-        for r in g.get("rules", []):
-            fields = dict(r.get("labels") or {})
-            fields.update(r.get("annotations") or {})
-            for name, val in fields.items():
-                residual = _ALLOWED_TEMPLATE_ACTION.sub("", str(val))
-                if "{{" in residual or "}}" in residual or "`" in residual:
-                    ident = r.get("alert") or r.get("record") or "<rule>"
-                    raise CustomAlertConfigError(
-                        f"emit-time invariant violation: {name!r} in {ident!r} contains a "
-                        f"non-platform Go-template action or backtick — tenant-controlled data "
-                        f"must never become template code (F2 injection class). Value: {val!r}"
-                    )
-
-
 def _safe_log(value) -> str:
     """Deprecated alias for :func:`_lib_io.safe_label` (#1538).
 
@@ -223,86 +139,53 @@ def _safe_log(value) -> str:
     return safe_label(value)
 
 
-def build_pack(source) -> dict:
-    """Build the rule-pack dict (groups) from `source`: a conf.d tree (a path),
-    read as the exporter serves it (`entries.entries_from_tree`, da-guard
-    served-values), or `_custom_alerts` entries already in hand
-    (`entries.Entry`; the recipe-preview path, without da-guard).
-
-    Raises CustomAlertParityError when this compiler reads an entry the
-    exporter serves differently, and what `entries_from_tree` raises."""
-    if isinstance(source, (str, os.PathLike)):
-        tree = _entries.entries_from_tree(Path(source))
-    else:
-        tree = _entries.TreeEntries(list(source), {}, [], [])
-    shapes, not_compiled = _entries.shapes_from_entries(tree.entries)
-
-    recording: List[dict] = []
-    alerts: List[dict] = []
-    info: List[dict] = []
-    for shape in shapes:
-        rec, alr = _recipes.emit_shape(shape)
-        recording.extend(rec)
-        alerts.extend(alr)
-        # D1 (ADR-024 §8): a static lifecycle-info series per shape, so SRE can join
-        # recipe USAGE to recipe STATUS for a tech-debt burn-down:
-        #   count by(recipe_id)(user_threshold{component="custom"})
-        #     * on(recipe_id) group_left(recipe, status) custom_recipe_info
-        # user_threshold carries recipe_id but not recipe/status, and deriving the
-        # recipe type from recipe_id needs a fragile label_replace — this info series
-        # supplies recipe + status keyed by the same recipe_id instead.
-        info.append({
-            "record": "custom_recipe_info",
-            "expr": "vector(1)",
-            "labels": {
-                "recipe_id": shape["recipe_id"],
-                "recipe": shape["recipe"],
-                "status": _shape.recipe_status(shape["recipe"]),
-            },
-        })
-
-    groups: List[dict] = []
-    if recording:
-        groups.append({
-            "name": "custom-alerts-normalization",
-            "interval": "15s",
-            "rules": recording,
-        })
-    if info:
-        # Static metadata (never changes between compiles) → its own group on a
-        # slow 1m interval, kept out of the 15s normalize cadence.
-        groups.append({
-            "name": "custom-alerts-info",
-            "interval": "1m",
-            "rules": info,
-        })
-    if alerts:
-        # Inject the single global silent sentinel ONCE, ahead of the shape
-        # alerts (S7/S8). It is tenant-agnostic — never per-recipe.
-        groups.append({"name": "custom-alerts", "rules": [_silent_sentinel()] + alerts})
-
-    # A+ emit-time invariant gate: no tenant-controlled data may have become a
-    # Go-template action in any generated label/annotation (F2 defence-in-depth).
-    _assert_annotations_template_safe(groups)
-    return {
-        "groups": groups,
-        # entries: what was read; not_compiled: the entries the exporter does
-        # not serve (rejected, duplicate); block_errors: {tenant: why its list
-        # does not decode}; parse_failed / unreadable: files the exporter's
-        # load skips — their tenants have no entry.
-        "_meta": {"shapes": len(shapes), "info": len(info), "entries": tree.entries,
-                  "not_compiled": not_compiled, "block_errors": tree.block_errors,
-                  "parse_failed": tree.parse_failed, "unreadable": tree.unreadable,
-                  "served": tree.served},
-    }
+def build_pack(config_dir, binary=None) -> "tv.CustomAlertPack":
+    """The custom-alert rule pack for the conf.d tree at `config_dir`, as
+    `da-guard compile-custom-alerts` compiles it. Raises what
+    `tv.load_custom_alert_pack` raises."""
+    return tv.load_custom_alert_pack(config_dir, binary=binary)
 
 
-def _not_served_count(meta: dict) -> int:
+def _not_served_count(pack: "tv.CustomAlertPack") -> int:
     """How many things the source declares that the exporter serves none of:
     entries it rejects or drops, lists that do not decode, files its load
     skips."""
-    return (len(meta["not_compiled"]) + len(meta["block_errors"])
-            + len(meta["parse_failed"]) + len(meta["unreadable"]))
+    return (len(pack.not_compiled) + len(pack.block_errors)
+            + len(pack.parse_failed) + len(pack.unreadable))
+
+
+_NOTICE_TENANT_SAMPLE = 10   # max tenant names per lifecycle notice (CI-log readability)
+
+
+def _summarize_tenants(tenants) -> str:
+    """`<count> tenant(s) (<=N names[, and M more])` for a lifecycle notice line.
+
+    A deprecated/eol SHARED recipe can be declared by hundreds of tenants (sharing
+    is the whole point of vectorization); joining them all makes a multi-kilobyte
+    single-line CI warning that some log collectors truncate mid-line. Lead with
+    the actionable COUNT, then a bounded sample of names. Full per-tenant
+    enumeration belongs in a metric/dashboard, not a log line.
+    """
+    names = sorted(tenants)
+    shown = ", ".join(names[:_NOTICE_TENANT_SAMPLE])
+    if len(names) > _NOTICE_TENANT_SAMPLE:
+        shown += f", and {len(names) - _NOTICE_TENANT_SAMPLE} more"
+    return f"{len(names)} tenant(s) ({shown})"
+
+
+def lifecycle_notices(lifecycle) -> List[str]:
+    """One notice per non-active recipe in use (ADR-024 #6), naming its
+    tenants (`tv.LifecycleUse`, da-guard's). Deprecated / eol recipes keep
+    compiling (no silent alert loss); the write-side eol rejection lives in
+    tenant-api."""
+    notices: List[str] = []
+    for use in lifecycle:
+        tail = ("migrate away — it still compiles." if use.status == "deprecated"
+                else "existing declarations still compile, but new tenant-api "
+                     "writes using it are rejected until SRE clears the status.")
+        notices.append(f"recipe {use.recipe!r} is {use.status}: "
+                       f"{_summarize_tenants(use.tenants)}; {tail}")
+    return notices
 
 
 def _render(groups: List[dict]) -> str:
@@ -633,59 +516,44 @@ def main() -> int:
         print(f"ERROR: config dir not found: {config_dir}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    # #3042: the source is the exporter's own reading of the tree (da-guard
-    # served-values), imported here and not at module level — the
-    # recipe-preview image imports this module and ships neither it nor
-    # da-guard.
-    import _lib_tenant_values as tv
-
     try:
         pack = build_pack(config_dir)
-    except CustomAlertParityError as e:
-        # Never fail-soft: a rule built on this compiler's reading would join
-        # a series the exporter does not serve.
-        print(f"ERROR: the compiler and the exporter read a custom alert differently "
-              f"(#3042) — refusing to compile: {e}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    except CustomAlertConfigError as e:
-        print(f"ERROR: invalid custom-alert declarations: {e}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
     except (tv.DaGuardNotFoundError, tv.DaGuardError) as e:
-        # No da-guard, or a tree the exporter's load rejects as a whole (a
-        # tenant declared twice, …): nothing it serves to compile from.
+        # No da-guard, a tree the exporter's load rejects as a whole (a
+        # tenant declared twice, …) or whose /metrics cannot be gathered, two
+        # shapes on one recipe_id: nothing to compile from.
         tv.print_load_error(e)
         return EXIT_CALLER_ERROR
 
-    groups = pack["groups"]
-    meta = pack["_meta"]
+    groups = pack.groups
 
     # The exporter's own load warnings (a directory symlink it does not
     # follow, a file it serves no tenant from, …), as every da-guard reader
     # prints them: they say which declarations it never saw.
-    tv.print_load_warnings(meta["served"])
+    tv.print_load_warnings(pack)
 
     # What the source declares and the exporter does not serve gets no rule —
     # said here, never silently. Not a failure: the exporter's own report
     # (da-guard, tenant-api's write check) is where such an entry is refused.
-    for path in meta["parse_failed"]:
+    for path in pack.parse_failed:
         print(f"  ⚠ the exporter's load skips {_safe_log(path)} (it does not decode): "
               f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
-    for path in meta["unreadable"]:
-        print(f"  ⚠ the exporter's load cannot read {_safe_log(path)}: "
+    for u in pack.unreadable:
+        print(f"  ⚠ the exporter's load cannot read {_safe_log(u.file)} ({u.reason}): "
               f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
-    for tenant, reason in sorted(meta["block_errors"].items()):
+    for tenant, reason in sorted(pack.block_errors.items()):
         print(f"  ⚠ tenant={_safe_log(tenant)}: the exporter serves none of its "
               f"_custom_alerts, not compiled: {_safe_log(reason)}", file=sys.stderr)
-    for e in meta["not_compiled"]:
+    for e in pack.not_compiled:
         print(f"  ⚠ tenant={_safe_log(e.tenant)} _custom_alerts[{e.index}] "
-              f"name={e.spec.get('name')!r}: {e.status} by the exporter, not compiled: "
-              f"{_safe_log(e.reason or '')}", file=sys.stderr)
-    not_served = _not_served_count(meta)
+              f"name={_safe_log(e.name)}: {e.status} by the exporter, not compiled: "
+              f"{_safe_log(e.reason)}", file=sys.stderr)
+    not_served = _not_served_count(pack)
 
     # Non-fatal recipe-lifecycle notices (ADR-024 #6): deprecated/eol recipes in
     # use still compile (no silent alert loss); surface them to stderr so a GitOps
     # PR / CI log flags the migration debt without breaking the build.
-    for notice in _entries.lifecycle_notices(meta["entries"]):
+    for notice in lifecycle_notices(pack.lifecycle):
         print(f"  ⚠ recipe-lifecycle: {notice}", file=sys.stderr)
 
     # Prerequisite notice (#692 P0③ W3): disk-fill recipes (kubelet_volume_stats_*)
@@ -748,7 +616,7 @@ def main() -> int:
                 print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
             return EXIT_VIOLATION
         print(f"✅ custom-alerts rule pack matches source "
-              f"({meta['shapes']} shape(s)).")
+              f"({pack.shapes} shape(s)).")
         return EXIT_OK
 
     # Display repo-relative when the out path is inside the repo, else show it as
@@ -788,8 +656,8 @@ def main() -> int:
 
     with output_write(out_path, flag="--out"):
         out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
-    if meta["shapes"]:
-        print(f"✅ Compiled {meta['shapes']} shape(s) → {shown}")
+    if pack.shapes:
+        print(f"✅ Compiled {pack.shapes} shape(s) → {shown}")
     else:
         # ⛔ AN EMPTY COMPILE NEVER GETS A TICK. `✅ Compiled 0 shape(s)` with rc=0 is
         # the exact signature of the incident this guard exists for, and the guard
@@ -807,7 +675,7 @@ def main() -> int:
     # ⛔ THE CASUALTY NOTE BELONGS ON THE PATH THAT ACTUALLY DELETES, TOO. It was on
     # `--check` only, i.e. on the branch that changes nothing — while the write that
     # really drops the rules said `✅ Compiled N shape(s)` and named none of them.
-    if meta["shapes"]:
+    if pack.shapes:
         print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
     return EXIT_OK
 

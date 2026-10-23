@@ -1,6 +1,6 @@
 # Recipe: slo_burn_rate — platform-authored (ADR-031, #1092).
 # Human governance contract for the `slo_burn_rate` recipe. The executable form is
-# scripts/tools/dx/custom_alerts/recipes.py::_slo_burn_records/_slo_core_record.
+# components/threshold-exporter/app/pkg/config/custom_alert_compile.go::sloBurnRecords/sloCoreRecord.
 recipe: slo_burn_rate
 status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: Multi-window SLO error-budget burn-rate alerting (SRE Workbook ch.5) from one declaration — fast burn pages, slow burn tickets.

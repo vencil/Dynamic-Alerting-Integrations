@@ -2046,9 +2046,6 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #3042. Reads the tree through da-guard (served-values and
             # effective) under `--config-dir`.
             "custom_alert_cap",
-            # #3042. Reads the tree through da-guard (served-values and
-            # effective) and the custom-alert compiler under `--config-dir`.
-            "custom_alert_sources",
             # #2386. Reads every level's `_defaults.yaml` under `--config-dir`.
             "defaults_wrapper",
             # #2695. Reads every file under `--config-dir`; a file that does

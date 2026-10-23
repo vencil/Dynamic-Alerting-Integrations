@@ -49,15 +49,20 @@ on:
       - "components/recipe-preview/**"
       - "scripts/tools/dx/_recipe_preview.py"          # recipe-preview Dockerfile COPY source (bundled eval core)
       - "scripts/tools/dx/compile_custom_alerts.py"    # recipe-preview COPY source (bundled compiler)
-      - "scripts/tools/dx/custom_alerts/**"            # recipe-preview COPY source
       - "scripts/tools/lint/check_rulepack_sync.py"    # recipe-preview COPY source
       - "scripts/tools/_lib_exitcodes.py"              # recipe-preview COPY source
       - "scripts/tools/_lib_compat.py"                 # recipe-preview COPY source
       - "scripts/tools/_lib_io.py"                      # recipe-preview COPY source (#2873)
-      - "scripts/tools/_lib_confd.py"                   # recipe-preview COPY source (#2873)
       - "scripts/tools/_lib_parse_cache.py"             # recipe-preview COPY source (#2901)
       - "scripts/tools/_lib_constants.py"               # recipe-preview COPY source (#2873)
       - "scripts/tools/_lib_yaml_keys.py"               # recipe-preview COPY source (#2873)
+      - "scripts/tools/_lib_tenant_values.py"           # recipe-preview COPY source (#3229, the da-guard reader)
+      - "scripts/tools/_lib_parse_tree.py"              # recipe-preview COPY source (#3229)
+      - "scripts/tools/_lib_godispatch.py"              # recipe-preview COPY source (#3229)
+      - "scripts/tools/ops/guard_dispatch.py"           # recipe-preview COPY source (#3229)
+      - "scripts/tools/_lib_python.py"                  # recipe-preview COPY source (#3229)
+      - "scripts/tools/_lib_validation.py"              # recipe-preview COPY source (#3229)
+      - "scripts/tools/_lib_prometheus.py"              # recipe-preview COPY source (#3229)
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source

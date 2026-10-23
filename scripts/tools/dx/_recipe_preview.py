@@ -3,8 +3,10 @@
 
 Given ONE ADR-024 custom-alert recipe + a scenario value, answer "would it
 fire?" by going through the SAME authoritative engine the platform uses —
-`compile_custom_alerts.build_pack` + `promtool` — never re-implementing eval
-(the two-eval-homes rule; see docs/design/recipe-would-fire-preview.md).
+the exporter's judgment and rules (da-guard served-values and
+compile-custom-alerts, over a one-tenant conf.d holding the recipe) +
+`promtool` — never re-implementing eval or the recipe rules (the
+two-eval-homes rule; see docs/design/recipe-would-fire-preview.md).
 
 MVP scope: `threshold` (ops >, >=, <, <=, ==; a flat constant series at the
 scenario value) and `absence` (the metric is simply NOT emitted → it is absent
@@ -20,9 +22,10 @@ absent series can't stand in for them:
 Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so we run an
 INVERTED assert (synthetic input + `exp_alerts: []`): returncode 0 → nothing
 fired (inactive); returncode != 0 → it fired. A compile error must NOT be
-mislabeled as firing, so we gate with `build_pack` exception handling +
+mislabeled as firing, so we gate with the exporter's verdict on the recipe +
 `promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
 """
+import json
 import os
 import re
 import shutil
@@ -36,7 +39,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 import compile_custom_alerts as cc  # noqa: E402
-from custom_alerts import shape  # noqa: E402
+import _lib_tenant_values as tv  # noqa: E402  (on the path compile_custom_alerts adds)
 
 # `threshold` covers >, >=, <, <=, == (all value-crossing, flat series). `absence`
 # is presence-based — fires where a DECLARING tenant's metric had no sample over
@@ -49,12 +52,9 @@ from custom_alerts import shape  # noqa: E402
 # 3rd recipe type is actually scheduled (2026-07 ROI review).
 SUPPORTED_RECIPES_MVP = frozenset({"threshold", "absence"})
 
-# `for:` is enum-bounded (shape.ALLOWED_FOR). Map to minutes to size the
-# synthetic series + pick an eval_time PAST the pending window.
-_FOR_MINUTES = {"0s": 0, "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
-
-# `window` is a Prometheus/Go duration, NOT enum-bounded like `for:` — so PARSE it
-# (not a fixed map) to size the absence eval_time. It can be COMPOUND ("1h30m") and
+# `window` and the compiled rule's `for:` are Prometheus/Go durations — PARSE them
+# (not a fixed map: the allowed `for:` values are the recipe contract's) to size
+# the series and the eval_time. It can be COMPOUND ("1h30m") and
 # carry sub-second units ("500ms"), per the schema grammar
 # ^([0-9]+(ns|us|µs|ms|s|m|h))+$ — the compiler interpolates it RAW into
 # count_over_time(metric[window]) (Prometheus parses it), so a narrower parser here
@@ -75,69 +75,135 @@ _NS_PER_MIN = 60_000_000_000
 _MAX_WINDOW_MIN = 1440  # 24h
 
 
-def _window_minutes(window):
-    """Prometheus duration (compound + sub-second ok) → whole minutes (ceil; min 1).
-    INTEGER arithmetic throughout. None on a malformed / non-positive / absurdly
-    large (> _MAX_WINDOW_MIN) window — the preview can't synthesize a series that
-    long, and a recipe with such a window still deploys (the preview just abstains)."""
-    w = str(window or "").strip()
+def _duration_minutes(d, allow_zero=False):
+    """Prometheus duration (compound + sub-second ok) → whole minutes (ceil).
+    INTEGER arithmetic throughout. None on a malformed / absurdly large
+    (> _MAX_WINDOW_MIN) duration, and on a zero one unless *allow_zero* (a
+    `for: 0s` rule fires at once; a zero window is no window) — the preview
+    can't synthesize a series that long, and a recipe with such a window still
+    deploys (the preview just abstains)."""
+    w = str(d or "").strip()
     if not _DUR_FULL_RE.match(w):
         return None
     ns = sum(int(n) * _DUR_UNIT_NS[u] for n, u in _DUR_TOKEN_RE.findall(w))
-    if ns <= 0:
+    if ns <= 0 and not allow_zero:
         return None
     minutes = -(-ns // _NS_PER_MIN)   # integer ceil-div: no float → no overflow
     return minutes if minutes <= _MAX_WINDOW_MIN else None
+
+
+def _window_minutes(window):
+    """`_duration_minutes` of an absence `window` (never zero)."""
+    return _duration_minutes(window)
+
 
 _PROMTOOL = shutil.which("promtool")
 
 _TIMEOUT = 60
 
+# The one-tenant conf.d the recipe is judged in: a fixed file name, so the
+# tenant id (the caller's) never becomes a path.
+_TENANT_FILE = "tenant.yaml"
+
 
 def _labels(d):
     """Render a Prometheus label set `{k="v", ...}` (insertion order).
 
-    Values are escaped with the compiler's own `shape._escape_value`, so a
-    selector value containing a quote, backslash, or newline yields the SAME
-    label literal the compiled rule matches against — otherwise the synthetic
-    series wouldn't match (false "inactive") or would be an unparseable series.
+    Values are written as JSON strings, which PromQL's double-quoted string
+    grammar (Go's) reads back as the same value, so a selector value
+    containing a quote, backslash, newline or any other character yields the
+    SAME label value the compiled rule matches against — otherwise the
+    synthetic series wouldn't match (false "inactive") or would be an
+    unparseable series.
     """
     return "{" + ", ".join(
-        f'{k}="{shape._escape_value(str(v))}"' for k, v in d.items()
+        f"{k}={json.dumps(str(v), ensure_ascii=False)}" for k, v in d.items()
     ) + "}"
 
 
-def build_preview_test(recipe, tenant, value, slug):
+class Judged:
+    """The exporter's verdict on the recipe, read from the one-tenant tree:
+    the pack, the alert name, and the `user_threshold` row it serves."""
+
+    def __init__(self, pack, row, for_min):
+        self.pack = pack
+        self.row = row            # served-values' `_custom_alerts` row: labels, metric, severity, value
+        self.for_min = for_min    # the compiled alert's `for:`, in minutes
+
+    @property
+    def slug(self):
+        return self.row["labels"]["recipe_id"]
+
+    @property
+    def alertname(self):
+        return f"Custom_{self.slug}"
+
+
+def _fmt_value(v):
+    """A served threshold (a finite float) as promtool's series grammar and a
+    reader write it: an integral value without its `.0`, any other exactly."""
+    v = float(v)
+    return str(int(v)) if v.is_integer() and abs(v) < 2 ** 53 else repr(v)
+
+
+def judge(recipe, tenant, confd):
+    """Write *recipe* as *tenant*'s only `_custom_alerts` entry into the empty
+    directory *confd*, and read the exporter's verdict on it. Returns a
+    `Judged`, or a reason string when the exporter does not serve it.
+    Raises what `tv.load_served_tree` / `tv.load_custom_alert_pack` raise."""
+    text = yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
+                          sort_keys=False, allow_unicode=True)
+    (Path(confd) / _TENANT_FILE).write_text(text, encoding="utf-8", newline="\n")
+    served = tv.load_served_tree(confd).tenants.get(tenant)
+    if served is None:
+        return f"the exporter serves no tenant {tenant!r} from the recipe"
+    if served.custom_alerts_error:
+        return f"the exporter does not decode _custom_alerts: {served.custom_alerts_error}"
+    entry = served.custom_alerts[0]
+    if entry.status == "rejected":
+        return f"the exporter rejects the recipe: {entry.reason}"
+    if entry.status == "disabled":
+        return "the recipe is switched off (threshold: disable): it never fires"
+    rows = served.values.get("_custom_alerts") or []
+    if entry.status != "served" or len(rows) != 1:
+        return f"the exporter serves {len(rows)} row(s) for the recipe ({entry.status})"
+    row = rows[0]
+    pack = cc.build_pack(confd)
+    alertname = f"Custom_{row['labels']['recipe_id']}"
+    rule = next((r for g in pack.groups for r in g.get("rules", [])
+                 if r.get("alert") == alertname
+                 and (r.get("labels") or {}).get("severity") == row["severity"]), None)
+    if rule is None:
+        return f"the compiled pack has no {alertname} rule for severity {row['severity']}"
+    for_min = _duration_minutes(rule.get("for", "0s"), allow_zero=True)
+    if for_min is None:
+        return f"preview cannot size the series for for-window {rule.get('for')!r}"
+    return Judged(pack, row, for_min)
+
+
+def build_preview_test(recipe, tenant, value, judged):
     """Build a promtool test (YAML str) for a supported recipe — inverted assert.
+
+    The `user_threshold` series is the row the exporter serves for the recipe
+    (its labels, severity and value, `judged.row`), not one assembled here.
 
     POLYMORPHIC by recipe type (a flat series can't fake every shape):
       - threshold (>, >=, <, <=, ==): the observed metric @ the scenario `value`
-        (+ selector labels) + `user_threshold` @ the configured threshold +
-        a constant `tenant_metadata_info`; flat, held past `for:`.
+        (+ selector labels) + `user_threshold` + a constant
+        `tenant_metadata_info`; flat, held past `for:`.
       - absence: emit ONLY the declaration (`user_threshold`, which the compiler
         records as `custom:threshold:{id}`) + `tenant_metadata_info`, and DO NOT
         emit the metric. The rule is `custom:threshold:{id} unless on(tenant)
         count by(tenant)(count_over_time(metric[window]) > 0)`, so an absent
         metric leaves the `unless` arm empty → the declaring tenant fires (the
         absence.yaml firing case). `value` is unused. eval past `window` + `for:`.
-    Returns (yaml_text, severity, mode, threshold_value).
+    Returns the YAML text.
     """
-    rtype = recipe.get("recipe")
-    thr_value, severity = shape.parse_threshold(recipe["threshold"])
-    name = recipe["name"]
-    mode = recipe.get("mode")
-    for_min = _FOR_MINUTES[str(recipe.get("for", "1m"))]   # caller pre-validates membership
-
-    ut_labels = {
-        "component": "custom",
-        "metric": recipe["metric"],
-        "recipe_id": slug,
-        "tenant": tenant,
-        "severity": severity,
-        "name": name,
-    }
-    if mode:
-        ut_labels["mode"] = str(mode)
+    row = judged.row
+    for_min = judged.for_min
+    ut_labels = {"component": "custom", "metric": row["metric"], "tenant": tenant,
+                 "severity": row["severity"], **row["labels"]}
+    thr_value = _fmt_value(row["value"])
 
     def _md(n):
         # constant tenant_metadata_info for the group_left enrichment (both shapes).
@@ -151,7 +217,7 @@ def build_preview_test(recipe, tenant, value, slug):
         }
         return {"series": f"tenant_metadata_info{_labels(md_labels)}", "values": f"1x{n}"}
 
-    if rtype == "absence":
+    if recipe.get("recipe") == "absence":
         # eval must clear BOTH the absence detection window AND `for:`. The metric
         # is INTENTIONALLY absent (no series), so count_over_time(metric[window])
         # is empty → the rule's `unless on(tenant)` keeps the declaring tenant →
@@ -171,15 +237,15 @@ def build_preview_test(recipe, tenant, value, slug):
         selectors = {str(k): v for k, v in (recipe.get("selectors") or {}).items()}
         metric_labels = {"tenant": tenant, **selectors}
         input_series = [
-            {"series": f"{recipe['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
+            {"series": f"{row['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
             {"series": f"user_threshold{_labels(ut_labels)}", "values": f"{thr_value}x{n}"},
             _md(n),
         ]
 
     # Build the promtool test as a data structure and let yaml.safe_dump handle the
     # OUTER YAML quoting — NOT a hand-assembled string. The series CONTENT is still
-    # produced by _labels/_escape_value so each `{k="v"}` matches the compiled rule's
-    # label literal; the dumper owns the scalar quoting around it. Hand-wrapping the
+    # produced by _labels so each `{k="v"}` matches the compiled rule's label
+    # literal; the dumper owns the scalar quoting around it. Hand-wrapping the
     # series in a single-quoted YAML scalar (the old form) silently broke on a valid
     # selector value that contains a single quote (e.g. `it's`): the `'` closed the
     # scalar early → promtool parse error → a would-actually-deploy recipe was
@@ -194,13 +260,12 @@ def build_preview_test(recipe, tenant, value, slug):
             "input_series": input_series,
             "alert_rule_test": [{
                 "eval_time": f"{eval_min}m",
-                "alertname": f"Custom_{slug}",
+                "alertname": judged.alertname,
                 "exp_alerts": [],
             }],
         }],
     }
-    doc = yaml.safe_dump(doc_obj, sort_keys=False, allow_unicode=True)
-    return doc, severity, mode, thr_value
+    return yaml.safe_dump(doc_obj, sort_keys=False, allow_unicode=True)
 
 
 def _err(reason, alertname=None):
@@ -238,6 +303,8 @@ def preview_recipe(recipe, tenant, scenario):
     types return supported:false (no compile). promtool absent → supported:true
     with a warning and no states (cannot evaluate locally).
     """
+    if not isinstance(recipe, dict):
+        return _err(f"recipe must be a mapping, got {type(recipe).__name__}")
     rtype = recipe.get("recipe")
     if rtype not in SUPPORTED_RECIPES_MVP:
         return {
@@ -266,66 +333,54 @@ def preview_recipe(recipe, tenant, scenario):
             ],
         }
 
-    # Compute the slug via the compiler's OWN function (zero cross-language
-    # drift, §5.3). A structurally invalid recipe — including one missing a
-    # field the recipe contract requires (shape.RECIPE_RULES) — raises
-    # RecipeError and fails loud here → state:error, honouring the §4 contract
-    # that a config error is a verdict-less error (the catch-all in app.py
-    # would otherwise mask it as a 500).
-    try:
-        slug = shape.recipe_id(recipe)
-    except shape.RecipeError as exc:
-        return _err(str(exc))
-
-    # Validate the request BEFORE the promtool-availability check, so bad input
-    # is reported as an error regardless of whether we can evaluate locally
-    # (the "Python Tests" CI job has no promtool on PATH).
-    value = (scenario or {}).get("value")
-    # threshold is value-crossing → the scenario value is required and must be a
-    # bare number (promtool's series grammar reads "1+2" / "5.." as a slope/range
-    # → a wrong verdict). absence is presence-based: it needs no value (the metric
-    # is simply not emitted), so don't demand one.
-    if rtype == "threshold":
-        if value is None:
-            return _err("scenario.value is required for a threshold preview",
-                        alertname=f"Custom_{slug}")
-        try:
-            float(value)
-        except (TypeError, ValueError):
-            return _err(f"scenario.value must be numeric, got {value!r}",
-                        alertname=f"Custom_{slug}")
-    # `for:` is enum-bounded by shape.ALLOWED_FOR, but the preview must also be
-    # able to SIZE the synthetic series from it. If the two ever drift (a new
-    # ALLOWED_FOR value unmapped in _FOR_MINUTES), fail closed to error rather
-    # than silently shrink the window to 1m → wrong eval_time/length → a real
-    # firing misread as inactive (CodeRabbit #873).
-    _for = str(recipe.get("for", "1m"))
-    if _for not in _FOR_MINUTES:
-        return _err(f"preview cannot size the series for for-window {_for!r} "
-                    f"(sync _FOR_MINUTES with shape.ALLOWED_FOR)",
-                    alertname=f"Custom_{slug}")
-    # absence sizes its eval_time from `window` (a Go duration, NOT enum-bounded).
-    # If it can't be parsed, fail closed to error — never guess a window → wrong
-    # eval_time → a real firing misread as inactive (same class as the for guard).
-    if rtype == "absence" and _window_minutes(recipe.get("window")) is None:
-        return _err(f"preview cannot size the absence window "
-                    f"{recipe.get('window')!r} (expected a Prometheus duration "
-                    f"like 10m / 1h30m / 500ms)",
-                    alertname=f"Custom_{slug}")
-
-    if _PROMTOOL is None:
-        return {"alertname": f"Custom_{slug}", "supported": True, "states": [],
-                "warnings": ["promtool not available — cannot evaluate locally"]}
-
     work = Path(tempfile.mkdtemp(prefix="recipe-preview-"))
     try:
-        # ── compile (errors → state:error, never mislabeled firing). The
-        # recipe is handed over as an entry judged by the compiler's own rules
-        # (#3042): this image ships no da-guard to read a tree through. ──
+        # The exporter judges the recipe (#3229): its recipe_id, whether it is
+        # valid — a missing required field included — and the row and rules it
+        # serves. A recipe it does not serve fails loud → state:error,
+        # honouring the §4 contract that a config error is a verdict-less
+        # error (the catch-all in app.py would otherwise mask it as a 500).
+        confd = work / "conf.d"
+        confd.mkdir()
         try:
-            pack = cc.build_pack(cc._entries.entries_from_specs({tenant: [recipe]}))
-        except Exception as exc:  # RecipeError / CustomAlertConfigError
-            return _err(f"recipe failed to compile: {exc}", alertname=f"Custom_{slug}")
+            judged = judge(recipe, tenant, confd)
+        except tv.DaGuardNotFoundError as exc:
+            return _err(f"da-guard not available — cannot judge the recipe: {exc}")
+        except (tv.DaGuardError, tv.ParseFailedError, yaml.YAMLError) as exc:
+            return _err(f"recipe failed to compile: {' '.join(str(exc).split())}")
+        if isinstance(judged, str):
+            return _err(judged)
+        alertname = judged.alertname
+
+        # Validate the request BEFORE the promtool-availability check, so bad input
+        # is reported as an error regardless of whether we can evaluate locally
+        # (the "Python Tests" CI job has no promtool on PATH).
+        value = (scenario or {}).get("value")
+        # threshold is value-crossing → the scenario value is required and must be a
+        # bare number (promtool's series grammar reads "1+2" / "5.." as a slope/range
+        # → a wrong verdict). absence is presence-based: it needs no value (the metric
+        # is simply not emitted), so don't demand one.
+        if rtype == "threshold":
+            if value is None:
+                return _err("scenario.value is required for a threshold preview",
+                            alertname=alertname)
+            try:
+                float(value)
+            except (TypeError, ValueError):
+                return _err(f"scenario.value must be numeric, got {value!r}",
+                            alertname=alertname)
+        # absence sizes its eval_time from `window`; one the preview cannot size
+        # (beyond a day) fails closed to error — never guess a window → wrong
+        # eval_time → a real firing misread as inactive (same class as `for:`).
+        if rtype == "absence" and _window_minutes(recipe.get("window")) is None:
+            return _err(f"preview cannot size the absence window "
+                        f"{recipe.get('window')!r} (expected a Prometheus duration "
+                        f"like 10m / 1h30m / 500ms, at most {_MAX_WINDOW_MIN}m)",
+                        alertname=alertname)
+
+        if _PROMTOOL is None:
+            return {"alertname": alertname, "supported": True, "states": [],
+                    "warnings": ["promtool not available — cannot evaluate locally"]}
 
         pack_path = work / "rule-pack-custom-alerts.yaml"
 
@@ -335,7 +390,7 @@ def preview_recipe(recipe, tenant, scenario):
         # promtool vanishing after the `which` probe or an unwritable temp dir,
         # so the {state:error} contract holds even then. ──
         try:
-            pack_path.write_text(cc._render(pack["groups"]), encoding="utf-8", newline="\n")
+            pack_path.write_text(cc._render(judged.pack.groups), encoding="utf-8", newline="\n")
             # encoding is explicit: promtool echoes the rule's own annotations,
             # which are UTF-8. Left to the locale codec, a non-UTF-8 host (cp950)
             # raises inside subprocess's reader thread, the output arrives EMPTY,
@@ -349,8 +404,8 @@ def preview_recipe(recipe, tenant, scenario):
             if chk.returncode != 0:
                 return _err(f"compiled rule failed promtool check: "
                             f"{(chk.stderr or chk.stdout).strip()[:300]}",
-                            alertname=f"Custom_{slug}")
-            test_doc, severity, mode, thr_value = build_preview_test(recipe, tenant, value, slug)
+                            alertname=alertname)
+            test_doc = build_preview_test(recipe, tenant, value, judged)
             (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
             res = subprocess.run(
                 [_PROMTOOL, "test", "rules", "preview_test.yaml"],
@@ -358,28 +413,30 @@ def preview_recipe(recipe, tenant, scenario):
                 encoding="utf-8", errors="replace",
             )
         except subprocess.TimeoutExpired:
-            return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=f"Custom_{slug}")
+            return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=alertname)
         except OSError as exc:
-            return _err(f"promtool eval failed: {exc}", alertname=f"Custom_{slug}")
+            return _err(f"promtool eval failed: {exc}", alertname=alertname)
 
         out = (res.stdout or "") + (res.stderr or "")
         state = classify_promtool_result(res.returncode, out)
         if state == "error":
             return _err(f"promtool eval error (rc={res.returncode}): "
-                        f"{out.strip()[:300] or 'no output'}", alertname=f"Custom_{slug}")
+                        f"{out.strip()[:300] or 'no output'}", alertname=alertname)
+        severity = judged.row["severity"]
+        thr_value = _fmt_value(judged.row["value"])
+        mode = judged.row["labels"].get("mode")
         if rtype == "absence":
             win = recipe.get("window")
-            reason = (f"{recipe['metric']} absent over {win} → would fire ({severity})"
+            reason = (f"{judged.row['metric']} absent over {win} → would fire ({severity})"
                       if state == "firing"
                       else "simulated absence did not fire — verify the recipe "
                            "compiles to an absence alert for this tenant")
         else:
             op = recipe.get("op", ">")
-            verb = "==" if op == "==" else op
-            reason = (f"value {value} {verb} threshold {thr_value}" if state == "firing"
+            reason = (f"value {value} {op} threshold {thr_value}" if state == "firing"
                       else f"value {value} does not cross threshold {thr_value} ({op})")
         return {
-            "alertname": f"Custom_{slug}",
+            "alertname": alertname,
             "supported": True,
             "states": [{
                 "severity": severity,

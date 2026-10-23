@@ -25,7 +25,6 @@ import pytest
 #    scripts/tools{,/dx,/lint,/ops} 放進 sys.path。斷掉會是 ImportError 而不是靜默。
 import check_portal_bundle_size
 import check_trk_index_coverage
-import custom_alerts
 import generate_nav
 import waveform_compile
 
@@ -94,16 +93,6 @@ def test_generate_nav_exits_instead_of_returning(argv, tmp_path, capsys):
     assert "docs directory not found" in err, (
         f"rc 2 必須來自工具自己的 caller-error 路徑，不是 argparse\nstderr: {err!r}"
     )
-
-
-def test_custom_alerts_package_imports_in_process():
-    """⚠️ 這一格**只買到可見度，買不到偵測力**，而那是這個模組的性質：
-    `custom_alerts/__init__.py` 只有 docstring，零可執行語句。
-
-    ⛔ 明寫出來而不是讓它混在其他格裡看起來一樣有份量。
-    """
-    assert custom_alerts.__doc__, "套件 docstring 不見了"
-    assert custom_alerts.__file__.endswith("__init__.py")
 
 
 # ---------------------------------------------------------------------------

@@ -486,31 +486,12 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
-	if refuseNonUTF8Tree(f.configDir, programName+" "+servedValuesCmd, errOut) {
-		return exitCallerErr // utf8_names.go (#3206)
-	}
-	cfg, rep, written, err := config.LoadDirReportWritten(f.configDir, log.New(errOut, "", 0))
-	// A tree whose every config file is unreadable is not "no .yaml files"
-	// (#2627): the exporter serves nothing from it, so the document carries
-	// no tenant and names the files in unreadable (exit 3), as effective and
-	// the guard do on the same tree — a --config-dir the walk cannot list
-	// too, named as "." (walk_error). Only a tree with no config file at all
-	// keeps the refusal (exit 2).
-	allUnreadable := errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
-	if err != nil && !allUnreadable {
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+	cfg, rep, written, allUnreadable, ok := loadJSONTree(f.configDir, servedValuesCmd, errOut)
+	if !ok {
 		return exitCallerErr
-	}
-	if rep.RootListErr != nil {
-		// The reason; the root itself is named in unreadable as "." (#2627).
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, rep.RootListErr)
 	}
 	tenants := map[string]servedTenantValues{}
 	if !allUnreadable {
-		if err := checkUTF8(cfg); err != nil {
-			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
-			return exitCallerErr
-		}
 		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules, written)
 		if err == nil && f.disableEffects {
 			err = addDisableEffects(cfg, at, tenants, written)
@@ -567,6 +548,40 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		return exitParseFailed
 	}
 	return exitOK
+}
+
+// loadJSONTree is the load every JSON subcommand that reads a whole tree as
+// the exporter serves it starts with (served-values, compile-custom-alerts):
+// refuse a conf.d path that is not valid UTF-8 (utf8_names.go, #3206), load
+// the tree, and refuse what JSON cannot carry (checkUTF8). A tree whose every
+// config file is unreadable is not "no .yaml files" (#2627): the exporter
+// serves nothing from it, so allUnreadable is set and the caller writes a
+// document that names the files in unreadable (exit 3) — a --config-dir the
+// walk cannot list too, named as "." (walk_error). Only a tree with no
+// config file at all is refused. ok=false: refused, the reason already on
+// errOut (exit 2).
+func loadJSONTree(dir, cmd string, errOut io.Writer) (cfg *config.ThresholdConfig, rep config.LoadReport,
+	written map[string]map[string]string, allUnreadable, ok bool) {
+	if refuseNonUTF8Tree(dir, programName+" "+cmd, errOut) {
+		return nil, rep, nil, false, false
+	}
+	cfg, rep, written, err := config.LoadDirReportWritten(dir, log.New(errOut, "", 0))
+	allUnreadable = errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
+	if err != nil && !allUnreadable {
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, cmd, err)
+		return nil, rep, nil, false, false
+	}
+	if rep.RootListErr != nil {
+		// The reason; the root itself is named in unreadable as "." (#2627).
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, cmd, rep.RootListErr)
+	}
+	if !allUnreadable {
+		if err := checkUTF8(cfg); err != nil {
+			fmt.Fprintf(errOut, "%s %s: %v\n", programName, cmd, err)
+			return nil, rep, nil, false, false
+		}
+	}
+	return cfg, rep, written, allUnreadable, true
 }
 
 // checkUTF8 refuses, before anything is resolved, a tree whose tenant ids or

@@ -19,7 +19,7 @@ import (
 //     less pairing below is the common case, not an edge case.
 //   - `name` on Custom_* alerts is NOT in the pack's labels block at all — it
 //     rides in via group_left(name, mode) from the recording rule
-//     (scripts/tools/dx/custom_alerts/recipes.py). Deriving label sets by
+//     (pkg/config/custom_alert_compile.go). Deriving label sets by
 //     reading `labels:` would therefore get these fixtures WRONG; they are
 //     written by hand against runtime reality on purpose.
 //

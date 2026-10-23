@@ -98,7 +98,17 @@ def test_the_layout_was_read():
     assert "PREVIEW_CORE_DIR" in env, env
 
 
-def test_app_imports_in_the_image_layout(tmp_path):
+def test_the_image_ships_da_guard():
+    """The preview judges the recipe through da-guard (#3229): the image
+    must carry the binary where the dispatcher finds it, built from this
+    repo's cmd/da-guard."""
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    shipped = [ln for ln in _final_stage(text) if ln.startswith("COPY --from=")]
+    assert any(ln.split()[-1] == "/usr/local/bin/da-guard" for ln in shipped), shipped
+    assert "./cmd/da-guard" in text
+
+
+def test_app_imports_in_the_image_layout(tmp_path, da_guard_binary):
     workdir, copies, env = _layout()
     root = tmp_path / "img"
 
@@ -113,22 +123,23 @@ def test_app_imports_in_the_image_layout(tmp_path):
                             ignore=shutil.ignore_patterns("__pycache__"))
         else:
             shutil.copy2(source, target)
-    run_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
+    # The image's da-guard is /usr/local/bin/da-guard on PATH; here, the
+    # repo's build, named the way the dispatcher's first lookup reads it.
+    run_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", DA_GUARD_BINARY=da_guard_binary,
                    PREVIEW_CORE_DIR=str(here(env["PREVIEW_CORE_DIR"])))
-    # Import app.py as the container does, then compile one recipe with the
-    # bundled compiler the way `preview_recipe` does — an entry handed over
-    # directly, since the image ships no da-guard (#3042): `preview_recipe`
-    # wraps build_pack in `except Exception` and would turn a module missing
-    # at REQUEST time into a 200 `error` answer, which an import-only check
-    # cannot see (#2873 review).
-    probe = ("import importlib.util as u, sys; "
+    # Import app.py as the container does, then judge one recipe the way
+    # `preview_recipe` does (da-guard served-values + compile-custom-alerts
+    # over a one-tenant tree): `preview_recipe` turns a failure there into a
+    # 200 `error` answer, so a module missing at REQUEST time is invisible to
+    # an import-only check (#2873 review).
+    probe = ("import importlib.util as u, sys, tempfile; "
              "s = u.spec_from_file_location('app', 'app.py'); "
              "m = u.module_from_spec(s); s.loader.exec_module(m); "
-             "cc = sys.modules['compile_custom_alerts']; "
+             "rp = sys.modules['_recipe_preview']; "
              "recipe = {'recipe': 'threshold', 'name': 'cpu_hot', 'metric': 'node_cpu', "
              "'op': '>', 'window': '5m', 'threshold': '80:warning'}; "
-             "pack = cc.build_pack(cc._entries.entries_from_specs({'ta': [recipe]})); "
-             "assert pack['groups'], pack; print('ok')")
+             "j = rp.judge(recipe, 'ta', tempfile.mkdtemp()); "
+             "assert not isinstance(j, str), j; assert j.pack.groups, j.pack; print('ok')")
     r = subprocess.run([sys.executable, "-I", "-c", probe],
                        cwd=str(here(workdir)), capture_output=True,
                        timeout=120, env=run_env)

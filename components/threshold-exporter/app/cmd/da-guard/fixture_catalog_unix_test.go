@@ -233,6 +233,7 @@ func assertEverySubcommandRefuses(t *testing.T, conf string) {
 		{servedValuesCmd, "--config-dir", conf},
 		{effectiveCmd, "--config-dir", conf},
 		{keyRefsCmd, "--config-dir", conf, "--metric", "mysql_connections"},
+		{compileCustomAlertsCmd, "--config-dir", conf},
 	} {
 		var out, errOut strings.Builder
 		if code := run(args, &out, &errOut); code != exitCallerErr || !strings.Contains(errOut.String(), "not valid UTF-8") {
