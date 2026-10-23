@@ -168,8 +168,10 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 	}{
 		{"original does not parse", map[string]string{"t1.yaml": "tenants: [\n"}, editCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
 		{"original holds two documents", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n---\nx: 1\n"}, editCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
-		{"original the exporter cannot serve", map[string]string{"t1.yaml": "tenants:\n  - t1\n"}, editCmd, "t1.yaml",
-			`{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonOriginalUnservable},
+		// A verdict on the original is no refusal by itself; an edit that
+		// leaves the verdict in place is refused at the read-back.
+		{"an edit that leaves the original's verdict in place", map[string]string{"t1.yaml": "tenants:\n  - t1\n"}, editCmd, "t1.yaml",
+			`{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonReadBackMismatch},
 		{"an unselected defaults carrier", map[string]string{"_defaults.yaml": "defaults: {}\n", "_defaults.yml": "defaults: {}\n"},
 			editCmd, "_defaults.yml", `{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonNotRead},
 		// Judged before any op: the path, not the op, is what is refused.
@@ -211,6 +213,37 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 			sameTree(t, before, snapshot(t, root))
 		})
 	}
+}
+
+// TestWrite_RepairsAFileTheExporterCannotServe: a verdict on the original is
+// no refusal by itself (an edit may repair, never worsen): a tenant key whose
+// value is a list (unservable) set to a scalar is written, and the written
+// file carries no verdict. A syntax-broken original is still refused as
+// unreadable (RefusalsWriteNothing).
+func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
+	broken := "# kept\ntenants:\n  t1:\n    cpu:\n      default: [1, 2]\n    mem: \"5\"\n"
+	root := writeTree(t, map[string]string{"t1.yaml": broken})
+	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"70"}}]}`,
+		"--config-dir", root, "--path", "t1.yaml")
+	if code != exitOK || res.Status != writeStatusWritten {
+		t.Fatalf("exit %d %+v", code, res)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "t1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "# kept\ntenants:\n  t1:\n    cpu: 70\n    mem: \"5\"\n"; string(got) != want {
+		t.Fatalf("written %q, want %q", got, want)
+	}
+	// The repaired file is now one an edit judges like any other: an edit
+	// that would break it again is refused at the read-back.
+	before := snapshot(t, root)
+	code, res = runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"map":[["default",{"seq":[{"int":"1"}]}]]}}]}`,
+		"--config-dir", root, "--path", "t1.yaml")
+	if code != exitFindings || reasonOf(res) != writeReasonReadBackMismatch {
+		t.Fatalf("worsening edit: exit %d %+v", code, res)
+	}
+	sameTree(t, before, snapshot(t, root))
 }
 
 func TestWrite_ReadBackNamesTheValue(t *testing.T) {

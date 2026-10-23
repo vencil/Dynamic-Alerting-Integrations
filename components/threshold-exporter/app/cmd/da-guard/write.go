@@ -11,7 +11,10 @@ package main
 // ⛔ NOTHING IS WRITTEN unless all of these hold, in this order:
 //   - the target is a path a reader reads (parse-tree's file-mode entry has
 //     readers, role config) and, for edit, the original file parse-tree
-//     reads without a problem and validation names it under no verdict;
+//     reads without a problem. A verdict on the original does NOT refuse by
+//     itself: an edit may repair a file the exporter cannot serve, never
+//     worsen one — what is judged is the text to be written (below), so
+//     "unservable after" stays impossible;
 //   - every op applies, on the node tree and on the parse result;
 //   - the re-encode keeps every node outside the edit as it was written
 //     (confedit.Verify, ADR-036 §4);
@@ -70,9 +73,6 @@ const (
 	// writeReasonOriginalUnreadable (edit): parse-tree cannot read the file
 	// as it is ("problem" says why), or it cannot be read at all.
 	writeReasonOriginalUnreadable = "original_unreadable"
-	// writeReasonOriginalUnservable (edit): parse-tree reads the file, but
-	// validation names it under a verdict (the exporter cannot serve it).
-	writeReasonOriginalUnservable = "original_unservable"
 	// writeReasonEditNotApplicable: an op cannot be made on the file as it
 	// is (a node on its path is not a mapping, set under a key that is not
 	// there, a file that holds only comments); "difference.path" names it.
@@ -219,8 +219,10 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  \"difference\": {\"path\", \"want\", \"got\"}, \"content\" (dry_run), \"warnings\": [<text>]};\n"+
 		"null where it has no value (warnings: []). A path that exists but is no regular file\n"+
 		"(a FIFO, a device, a directory) is judged by parse-tree and refused not_read, never read.\n"+
-		"Refusal reasons: not_read, symlink, original_unreadable, original_unservable,\n"+
-		"edit_not_applicable, not_round_trippable, read_back_mismatch, changed_during_write.\n\n"+
+		"An original that parse-tree reads but validation names under a verdict may be edited: the\n"+
+		"write is judged by the text to be written, which must carry no verdict.\n"+
+		"Refusal reasons: not_read, symlink, original_unreadable, edit_not_applicable,\n"+
+		"not_round_trippable, read_back_mismatch, changed_during_write.\n\n"+
 		"Exit codes:\n"+
 		"  0  written, unchanged (edit: the text is the file's own) or dry run\n"+
 		"  1  refused: nothing written; the reason is named\n"+
@@ -553,10 +555,8 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 		return w.refuse(writeReasonOriginalUnreadable,
 			fmt.Sprintf("parse-tree cannot read the file as it is (%s: %s)", e.Problem.Kind, e.Problem.Message))
 	}
-	if e.Verdict != "" {
-		return w.refuse(writeReasonOriginalUnservable,
-			fmt.Sprintf("validation names the file as it is under verdict %s; repair it first", e.Verdict))
-	}
+	// A verdict on the original is not a refusal (repair is allowed): the
+	// read-back of the text to be written must have none (readBack).
 	w.res.Entry = nil
 
 	doc, err := confedit.ParseDoc(confedit.WithoutCRLF(original))
