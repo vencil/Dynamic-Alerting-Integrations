@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-22
+updated_at: 2026-10-23
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -702,7 +702,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
 - 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
 - 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）、原本就依賴 da-guard 的 Python 工具改讀 `role`（已有整棵樹文件的工具直接讀其 `entries`，不另列一次）；Python 的名稱規則已刪除（步驟 9b-3）：`_lib_confd` 的名稱述詞（`is_reserved_name`、`is_hidden_name`、`has_yaml_extension`、`is_defaults_name`、`select_defaults_carrier`、`config_stem` 等）連同拿它們和 Go 對照的測試一起刪掉，原本的呼叫點改讀 Go 給的資料——樹裡的路徑讀索引的 `role`、`class`、`tenant_named`、`not_read` 與 `defaults_carriers`，不在樹裡的名稱（ConfigMap 的鍵、還沒寫上磁碟的檔名）問 `parse-tree` 的名稱模式；檔名規則對照表（`tests/shared/confd_name_classification_matrix.json`）只由 Go 的 `pkg/confdname` 測試擁有，逐格驗證並守住列的涵蓋下限。`tests/shared/test_confd_tools_no_python_judgement.py` 改為守住這些述詞不再出現。尚未完成：閘門看不到、由行為矩陣測試（`tests/shared/test_confd_behaviour_matrix.py`）守住的。矩陣用的樹來自一份目錄檔，Go 端測試要求 Go 能寫出的每一種 role 與 problem 都有一棵樹；矩陣跑其中列檔層面的樹，加上兩種內容錯誤（YAML 語法錯、一個檔裡有多份文件），其餘內容錯誤只由 Go 端測試驗。每支工具以 nobody 身分執行，判準是同一棵樹上 da-guard 驗證的結束碼：0 時工具必須結束碼 0；3 或 4 時工具必須以非 0 結束、不得 traceback 或卡住，並點名驗證報告列出的每一條路徑；樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束（哪一碼依工具文件化的契約：`tenant_verify` 的 2 代表驗證不一致，所以是 1）、不得 traceback 或卡住，並以跳脫形式點名那個檔名。讀 conf.d 的工具共用一個失敗即停的出口：取得這次執行的整棵樹索引時，只要有一筆 `verdict` 不是 null，就逐條 `ERROR:` 點名那些路徑、在寫入任何東西之前以結束碼 2 結束；判定本身就是輸出的 `validate-config`、路由產生器、`check_routing_profiles`、`check_confd_schema`、`config_diff` 不經這個出口，自己點名並失敗；只讀 conf.d 一個子樹的工具（`deprecate_rule --plane subtree`）同樣經這個出口：它的索引取自 conf.d root 的整棵樹、再切出子樹那一段，因為 `parse-tree` 對子樹單獨執行時會把它當 root 判。還不符的格子會逐格列為預期失敗；目前沒有。`config_history`、`drift_detect`、`run_chaos_soak` 讀的檔一律取自這份索引，所以都需要 da-guard；`migrate_to_operator` 的 `--source-dir` 是 ConfigMap 匯出檔、不是 conf.d，它的檔取自 `parse-tree` 只列檔模式，不經這個出口。矩陣之外也還沒接上這個出口的：`batch_diagnose` 以名稱篩 ConfigMap 匯出檔；`scaffold_tenant`、`onboard_platform`、`migrate_rule` 以 `-o` 寫進既有 conf.d 時不先讀那棵樹（矩陣目前把它們當成沒有輸入樹而排除）。這些都在下一步（β2）接上。它守住的是：以 stat 或前綴自己判斷 conf.d 路徑的 `describe_tenant` 的 `--replaces`、`check_path_metadata_consistency`。`offboard_tenant` 認租戶自己的檔，也改看檔名帶的租戶 id（`tenant_named`），不再看檔名前綴。generator service 把 git 樹寫上磁碟時（`_gsvc_child`）略過隱藏路徑，改由名稱模式判定哪一段是隱藏的；路由產生器與 routing profile 的 lint 判斷平台檔裡的租戶有沒有人宣告時，改讀 `TenantScope` 的兩半，可能藏著租戶檔的項目會寫進訊息，不再把有人宣告的租戶說成 orphan。
-- 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
+- 進行中，步驟 10：已完成編輯原語的共用套件（`pkg/confedit`，含 §4 的不變式），tenant-api 的批次 patch 與 custom-alerts 合併已改用它；以及 da-guard 的 `edit`／`emit`，讀回確認後由它自己寫檔。尚未完成：寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準；`da-crdecode` 通用化並支援多份文件；AST lint 與白名單。
 - 步驟 13：刪除遷移稽核指令；漸進遷移 playbook 補上升級前檢查。
@@ -722,7 +722,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 端模仿 yaml.v3 的 loader | `_lib_yaml_keys.ExporterKeyLoader`、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader`（已刪除：describe-tenant 讀 `da-guard effective`）；`ExporterKeyLoader` 與 `StrictExporterKeyLoader` 系列仍被寫入工具的改寫層使用，隨改寫層一起刪除 |
 | 寫 conf.d 的工具的 PyYAML 改寫層（退場） | `_lib_io` 的 `StrictRewriteLoader`、`strict_load_for_rewrite`／`load_yaml_file_for_rewrite` 與 `_lib_yaml_keys.dump_for_rewrite` 的呼叫端（例如 `patch_config`、`deprecate_rule`、`da_assembler`）；以 `yaml.safe_dump` 產生新檔的 `scaffold_tenant` 等；它們依賴的 `_lib_yaml_keys.ExporterKeyLoader` |
 | Python 端的寫入前確認（移進 Go） | `scripts/tools/_lib_write_check.py` |
-| 編輯原語的來源（抽成共用套件） | tenant-api 的 `internal/customalerts/merge.go`（`setMapValue`、`deleteMapKey` 等）與批次 patch 的 `mergePatchYAML` |
+| 編輯原語（共用套件） | `pkg/confedit`：節點編輯（`Doc` 的 `Set`、`Unset`、`EnsureMap`）、值的寫法（`StringNode`、`BlockStringNode`、`DropImplicitTags`）、§4 的不變式（`Verify`）；抽自 tenant-api 的 `internal/customalerts/merge.go` 與批次 patch 的 `mergePatchYAML`，兩者現在呼叫它。da-guard 的 `edit`／`emit` 在 `cmd/da-guard/write.go` |
 | `parse-tree` 的判定 | `pkg/parsetree` |
 | Go 端的檔名規則（已合併為一份） | `pkg/confdname`。其他各份已刪除，原處改呼叫它：`pkg/config/source.go` 的副檔名判斷與 `hasHiddenSegment`；`pkg/config/tree_scan.go` 的 `IsScannedFileName`、`IsScannedPath` 與走訪內嵌的前綴判斷；tenant-api `internal/confd` 的 `TenantIDFromFile`、`isReservedName`；tenant-api `handler/errors.go` 的 `findingReadable` 自己寫的副檔名判斷；da-guard `parse_tree.go` 的 `hiddenPath` |
 | `parse-tree` 只列檔、不解析內容的模式 | `da-guard parse-tree --list-only`（`cmd/da-guard/parse_tree_list.go`）；走訪是 `pkg/config` 的 `ScanDirTreeNames` |
@@ -741,7 +741,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（已刪除） |
 | tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |
 | tenant-api 經共用判定的入口 | `internal/confd/verdict.go` 的 `Judge`（回 `pkg/config` 的 `UnreadableFileError`）；呼叫端：`validateShape`、`eolGuardErrs`、`tenantorg`、`rbac`、`groups`、`views`、`fedpolicy`、`account` 的解析函式，以及批次的 `tenantAbsentIn` 與 `scopeBlockOnDisk` |
-| 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`）；離線差分測試 `handler/batch_patch_diff_test.go` |
+| 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`，判定是 `confedit.Verify`）；離線差分測試 `handler/batch_patch_diff_test.go` |
 | tenant-api 裡其他的 Go 端路由與 policy 判定（已刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
 | tenant-api 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（先經 `parse-tree` 的判定，再以 yaml.v3 確認 exporter 讀得了）；保留鍵值的檢查（`_silent_mode`）改由寫入關卡以 exporter 自己的讀取函式判定（`pkg/config` 的 `CheckReservedValue`，[ADR-038](038-unread-keys-judged-by-readers.md) 決定 12），`handler/body_validator.go` 只剩長度上限與依保留鍵登錄表判定的 key 檢查 |
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
