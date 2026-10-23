@@ -163,9 +163,35 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     files (a multi-document manifest is ordinary here), not files the
     exporter serves, so the exporter's judgement of their content — and the
     conf.d refusal built on it — does not apply. A file that cannot be
-    parsed is a WARN of `parse_configmap_rules`, as before. Raises
+    parsed is a WARN of `parse_configmap_rules`, as before.
+
+    Nothing at the top level is dropped silently: one stderr line names
+    each entry this tool will not read, with Go's reason — the names the
+    walk does not list that Go classes `hidden` (names mode), and the listed
+    entries whose role is no readable file (`Entry.flagged`: a dangling
+    link, a FIFO, a link to a directory, a directory it cannot list, a
+    directory with a file's name). A name Go classes `not_config_name`
+    (`notes.txt`) was never a rule file and is not named. Raises
     ParseTreeError (no usable da-guard)."""
-    return _lib_parse_tree.list_tree(source_dir)
+    listing = _lib_parse_tree.list_tree(source_dir)
+    warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
+    try:
+        names = os.listdir(source_dir)
+    except OSError:
+        names = []  # list_tree read it; a race is not worth a second error
+    top = [e for e in listing.entries if e.depth == 0]
+    listed = {e.path for e in top}
+    unlisted = sorted(n for n in names if n not in listed)
+    classes = _lib_parse_tree.classify_names(unlisted) if unlisted else {}
+    unread = [(n, "hidden") for n in unlisted if classes[n].cls == "hidden"]
+    unread += [(e.path, e.problem[1] if e.problem else e.role) for e in top if e.flagged]
+    if unread:
+        shown = "; ".join(f"{safe_label(n)} ({safe_label(why)})" for n, why in sorted(unread))
+        print(i18n_text(
+            f"WARNING: --source-dir 有 {len(unread)} 個頂層項目不會被讀取: {shown}",
+            f"WARNING: --source-dir: {len(unread)} top-level entries not read: {shown}",
+        ), file=sys.stderr)
+    return listing
 
 
 def parse_configmap_rules(source_dir: Path,

@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 # Import the module to test
 import migrate_to_operator as mto  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1107,6 +1108,37 @@ class TestAnalyzeMigrationScansOnce:
         assert len(loads) == 1, loads
         assert [os.path.realpath(d) for d in lists] == [os.path.realpath(src)], lists
         assert "1 tenants" in capsys.readouterr().err
+
+
+class TestSourceDirNamesWhatItDoesNotRead:
+    """--source-dir is Go's list-only walk (#3206): a top-level entry the
+    walk leaves out or cannot read is named on stderr, never dropped
+    silently (`kubectl get cm -o yaml > .rules.yaml` is a real way to get
+    one)."""
+
+    _RULES = "groups:\n  - name: g\n    rules: []\n"
+
+    def test_hidden_and_unreadable_entries_are_named(self, tmp_path, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / ".hidden-rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "notes.txt").write_text("not a rule file\n", encoding="utf-8")
+        symlink_or_skip("nowhere", src / "dangling.yaml")
+        rules = mto.parse_configmap_rules(src)
+        assert [r["file"] for r in rules] == ["rules.yaml"]
+        err = capsys.readouterr().err
+        line = next((ln for ln in err.splitlines() if "not read" in ln), "")
+        assert ".hidden-rules.yaml (hidden)" in line, err
+        assert "dangling.yaml (" in line, err
+        assert "notes.txt" not in line, "a name that is no config file was never read"
+
+    def test_nothing_is_named_when_everything_is_read(self, tmp_path, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        mto.parse_configmap_rules(src)
+        assert "not read" not in capsys.readouterr().err
 
 
 class TestConfigMapScanAcceptsBothSpellings:
