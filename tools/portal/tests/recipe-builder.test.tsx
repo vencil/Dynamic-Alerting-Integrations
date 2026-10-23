@@ -175,14 +175,41 @@ describe('RecipeBuilder', () => {
     expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('forecast ratio mode: floor outside (0,1) blocks readiness', () => {
+  it('switching recipe drops an op the new recipe does not take (== on threshold → rate)', () => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['reqs'])} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByTestId('field-op'), { target: { value: '==' } });
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'rate' } });
+    fill('field-name', 'r');
+    fill('field-metric', 'reqs');
+    fill('field-window', '5m');
+    fill('field-threshold', '1');
+    expect((screen.getByTestId('field-op') as HTMLSelectElement).value).toBe('>');
+    expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('submit'));
+    expect(onSubmit.mock.calls[0][0].op).toBe('>');
+  });
+
+  it('forecast ratio mode: a floor at or above the band says why it is refused', () => {
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['avail', 'cap'])} onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'forecast' } });
+    fill('field-name', 'disk_fill');
+    fill('field-metric', 'avail');
+    fill('field-capacity_metric', 'cap');
+    fill('field-threshold', '0.8:warning');
+    expect(screen.getByTestId('forecast-floor-error').textContent).toMatch(/\(0, 0\.5\)/);
+    fill('field-threshold', '0.15:warning');
+    expect(screen.queryByTestId('forecast-floor-error')).toBeNull();
+  });
+
+  it('forecast ratio mode: floor outside (0, band) blocks readiness', () => {
     const onSubmit = vi.fn();
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['avail', 'cap'])} onSubmit={onSubmit} />);
     fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'forecast' } });
     fill('field-name', 'disk_fill');
     fill('field-metric', 'avail');
     fill('field-capacity_metric', 'cap');
-    fill('field-threshold', '5:warning'); // 5 is not in (0,1) → invalid floor
+    fill('field-threshold', '5:warning'); // not below the current-state band → invalid floor
     expect((screen.getByTestId('submit') as HTMLButtonElement).disabled).toBe(true);
 
     fill('field-threshold', '0.15:warning');

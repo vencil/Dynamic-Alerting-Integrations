@@ -880,7 +880,7 @@ func TestCustomAlertEntries_ThresholdRefused(t *testing.T) {
 		{"disable:critical", "{" + thr + ", name: a, threshold: \"disable:critical\"}", CustomAlertDisabled, "", ""},
 		{"switched off, bad for", "{" + thr + ", name: a, threshold: disable, for: 7m}", CustomAlertRejected, "", "switched off"},
 		{"bad window", "{recipe: threshold, metric: m, op: \">\", window: 5x, name: a, threshold: \"80\"}", CustomAlertRejected, "", "window"},
-		{"bad name", "{" + thr + ", name: \"a-b\", threshold: \"80\"}", CustomAlertRejected, "", "not a valid identifier"},
+		{"bad name", "{" + thr + ", name: \"a-b\", threshold: \"80\"}", CustomAlertRejected, "", "not a valid alert name"},
 		{"no threshold", "{" + thr + ", name: a}", CustomAlertRejected, "", "missing required field"},
 		{"forecast band", "{recipe: forecast, name: f, metric: avail, capacity_metric: cap, op: \"<\", horizon: 4h, threshold: \"0.9\"}", CustomAlertRejected, "", "must be in (0,"},
 	} {

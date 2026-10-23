@@ -2,8 +2,8 @@ package customalerts
 
 import "testing"
 
-// RecipeStatus reads the embedded recipe-status.json (generated from the SSOT).
-// Every shipped recipe is active today, and an unknown recipe must report active
+// RecipeStatus reads the exporter's recipe contract (pkg/config, #3229); its
+// fail-closed parse is tested there. Every shipped recipe is active today, and an unknown recipe must report active
 // (never block on an unknown name).
 func TestRecipeStatus_EmbeddedAllActive(t *testing.T) {
 	for _, r := range []string{"threshold", "rate", "ratio", "absence", "p99_latency", "forecast", "slo_burn_rate"} {
@@ -13,29 +13,6 @@ func TestRecipeStatus_EmbeddedAllActive(t *testing.T) {
 	}
 	if got := RecipeStatus("does_not_exist"); got != "active" {
 		t.Errorf("RecipeStatus(unknown) = %q, want active", got)
-	}
-}
-
-// parseRecipeStatus must FAIL CLOSED: a degraded/empty/invalid status map would
-// silently disable the eol-expansion guard, so it errors instead of defaulting.
-func TestParseRecipeStatus_FailsClosed(t *testing.T) {
-	bad := map[string]string{
-		"empty statuses":   `{"statuses":{}}`,
-		"missing statuses": `{}`,
-		"invalid value":    `{"statuses":{"x":"bogus"}}`,
-		"not json":         `not json`,
-	}
-	for name, in := range bad {
-		if _, err := parseRecipeStatus([]byte(in)); err == nil {
-			t.Errorf("%s: expected an error (fail closed), got nil", name)
-		}
-	}
-	m, err := parseRecipeStatus([]byte(`{"statuses":{"threshold":"active","x":"eol"}}`))
-	if err != nil {
-		t.Fatalf("valid input errored: %v", err)
-	}
-	if m["x"] != "eol" || m["threshold"] != "active" {
-		t.Errorf("parsed map wrong: %v", m)
 	}
 }
 
