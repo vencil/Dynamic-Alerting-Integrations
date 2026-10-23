@@ -16,7 +16,8 @@ Three parts:
   envelope naming ``<source>_query_error`` (a subprocess: the exit path is
   only observable at the end of a real interpreter);
 * the static gate: no tool defines its own ``*QueryError`` again, and the
-  set of tools still on the tuple helpers / raw ``urlopen`` only shrinks.
+  set of tools still on the tuple helpers only shrinks (raw HTTP is
+  observed at run time: ``test_ops_http_through_lib``).
 """
 from __future__ import annotations
 
@@ -557,9 +558,10 @@ _TUPLE_HELPERS = frozenset({"http_get_json", "query_prometheus_instant",
 # Matched on the module's last dotted part, so `scripts.tools._lib_python`,
 # `tools._lib_prometheus` and a relative `from ._lib_python import` all count.
 _LIB_MODULES = frozenset({"_lib_python", "_lib_prometheus"})
-# Raw HTTP in ops tools: urlopen, and the opener API that does the same
-# (`build_opener(...).open`, an `OpenerDirector`).
-_RAW_HTTP = frozenset({"urlopen", "build_opener", "OpenerDirector"})
+# Raw HTTP (urlopen, an opener, a socket…) is not matched by name here any
+# more: every spelling a review found got past a name list. Whether an ops
+# tool opens connections without the lib is observed at run time —
+# tests/shared/test_ops_http_through_lib.py (#3215).
 
 # (repo-relative file, name) — the helper a tool imports or calls by attribute.
 _ALLOWED = frozenset({
@@ -567,15 +569,9 @@ _ALLOWED = frozenset({
     ("scripts/tools/ops/byo_check.py", "instant_or_error"),
     ("scripts/tools/ops/federation_check.py", "instant_or_error"),
     ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
-    # batch 3: direct http_get_json / urlopen callers
+    # not Prometheus / Alertmanager reads
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe
-    ("scripts/tools/ops/discover_instance_mappings.py", "urlopen"),
-    ("scripts/tools/ops/maintenance_scheduler.py", "urlopen"),
-    ("scripts/tools/ops/notification_tester.py", "urlopen"),
-    ("scripts/tools/ops/policy_opa_bridge.py", "urlopen"),  # build_opener
-    ("scripts/tools/ops/threshold_govern.py", "http_get_json"),
-    ("scripts/tools/ops/threshold_govern.py", "urlopen"),
-    ("scripts/tools/ops/_federation_revocation_reconciler.py", "urlopen"),
+    ("scripts/tools/ops/threshold_govern.py", "http_get_json"),  # tenant-api
 })
 
 
@@ -586,10 +582,10 @@ def _tool_files() -> list[Path]:
     return out
 
 
-def _uses(tree: ast.AST, *, raw_http: bool) -> set[str]:
+def _uses(tree: ast.AST) -> set[str]:
     """Tuple helpers this module imports from the lib (by name, or ``*``),
-    reaches by attribute or by ``getattr(m, "<name>")``; plus raw HTTP
-    (reported as ``urlopen``) when *raw_http* (ops tools)."""
+    reaches by attribute or by ``getattr(m, "<name>")``. A floor, not a proof:
+    a name built at run time gets past it (#3215)."""
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -598,16 +594,9 @@ def _uses(tree: ast.AST, *, raw_http: bool) -> set[str]:
                 found |= names & _TUPLE_HELPERS
                 if "*" in names:
                     found.add("*")
-            if raw_http and node.module == "urllib.request" and names & _RAW_HTTP:
-                found.add("urlopen")
         elif isinstance(node, ast.Attribute):
             if node.attr in _TUPLE_HELPERS:
                 found.add(node.attr)
-            elif raw_http and node.attr in _RAW_HTTP:
-                found.add("urlopen")
-        elif isinstance(node, ast.Name):
-            if raw_http and node.id in _RAW_HTTP:
-                found.add("urlopen")
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
               and node.func.id == "getattr" and len(node.args) >= 2
               and isinstance(node.args[1], ast.Constant)
@@ -621,8 +610,7 @@ def _measured() -> set[tuple[str, str]]:
     for path in _tool_files():
         rel = path.relative_to(REPO_ROOT).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
-        raw_http = rel.startswith("scripts/tools/ops/")
-        got |= {(rel, name) for name in _uses(tree, raw_http=raw_http)}
+        got |= {(rel, name) for name in _uses(tree)}
     return got
 
 
@@ -642,41 +630,29 @@ def test_tuple_helper_users_only_shrink():
     measured = _measured()
     new = sorted(measured - _ALLOWED)
     assert not new, (
-        "new use of a (result, err) query helper or raw urlopen — use "
+        "new use of a (result, err) query helper — use "
         "_lib_prometheus.prometheus_range / alertmanager_alerts (raise QueryError) "
         f"instead (#3133): {new}")
     stale = sorted(_ALLOWED - measured)
     assert not stale, f"no longer true, remove from _ALLOWED (it only shrinks): {stale}"
 
 
-@pytest.mark.parametrize("src,raw_http,want", [
-    ("from _lib_python import http_get_json\n", False, {"http_get_json"}),
-    ("from _lib_prometheus import query_prometheus_range as q\n", False,
-     {"query_prometheus_range"}),
-    ("import _lib_prometheus as lp\nlp.query_prometheus_instant('u', 'q')\n", False,
+@pytest.mark.parametrize("src,want", [
+    ("from _lib_python import http_get_json\n", {"http_get_json"}),
+    ("from _lib_prometheus import query_prometheus_range as q\n", {"query_prometheus_range"}),
+    ("import _lib_prometheus as lp\nlp.query_prometheus_instant('u', 'q')\n",
      {"query_prometheus_instant"}),
-    ("from _lib_python import prometheus_range, QueryError\n", False, set()),
-    ("import urllib.request\nurllib.request.urlopen('u')\n", True, {"urlopen"}),
-    ("from urllib.request import urlopen\n", True, {"urlopen"}),
-    ("import urllib.request\nurllib.request.urlopen('u')\n", False, set()),
-    ("import _lib_prometheus as p\nf = getattr(p, 'query_prometheus_range')\n", False,
+    ("from _lib_python import prometheus_range, QueryError\n", set()),
+    ("import _lib_prometheus as p\nf = getattr(p, 'query_prometheus_range')\n",
      {"query_prometheus_range"}),
-    ("x = getattr(o, 'prometheus_range')\n", False, set()),
-    ("from _lib_prometheus import *\n", False, {"*"}),
-    ("from scripts.tools._lib_python import *\n", False, {"*"}),
-    ("from ._lib_prometheus import query_prometheus_range\n", False,
-     {"query_prometheus_range"}),
-    ("from tools._lib_prometheus import http_get_json\n", False, {"http_get_json"}),
-    ("from urllib.request import urlopen as uo\n", True, {"urlopen"}),
-    ("import urllib.request as ur\nur.urlopen('u')\n", True, {"urlopen"}),
-    ("import urllib.request\nurllib.request.build_opener().open('u')\n", True, {"urlopen"}),
-    ("from urllib.request import build_opener\no = build_opener()\n", True, {"urlopen"}),
-    ("import urllib.request as ur\nd = ur.OpenerDirector()\n", True, {"urlopen"}),
-    ("import urllib.request\nurllib.request.build_opener().open('u')\n", False, set()),
-], ids=["import", "import-as", "attribute", "new-api", "urlopen-attr", "urlopen-import",
-        "urlopen-outside-ops", "getattr", "getattr-other-name", "star", "star-dotted",
-        "relative", "package-prefix", "urlopen-alias", "urllib-alias", "build-opener-attr",
-        "build-opener-import", "opener-director", "opener-outside-ops"])
-def test_gate_predicate(src, raw_http, want):
+    ("x = getattr(o, 'prometheus_range')\n", set()),
+    ("from _lib_prometheus import *\n", {"*"}),
+    ("from scripts.tools._lib_python import *\n", {"*"}),
+    ("from ._lib_prometheus import query_prometheus_range\n", {"query_prometheus_range"}),
+    ("from tools._lib_prometheus import http_get_json\n", {"http_get_json"}),
+    ("import urllib.request\nurllib.request.urlopen('u')\n", set()),
+], ids=["import", "import-as", "attribute", "new-api", "getattr", "getattr-other-name", "star",
+        "star-dotted", "relative", "package-prefix", "raw-http-is-the-runtime-gates"])
+def test_gate_predicate(src, want):
     """The predicate itself: each spelling is seen; the raising API is not."""
-    assert _uses(ast.parse(src), raw_http=raw_http) == want
+    assert _uses(ast.parse(src)) == want
