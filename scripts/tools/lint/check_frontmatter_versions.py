@@ -22,7 +22,6 @@ from typing import Dict, List, Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_confd import is_hidden_name  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_versions import (  # noqa: E402
@@ -141,7 +140,7 @@ def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
     ancestor included — so a checkout living under any dot-directory
     (Claude Code's agent worktrees sit in ``.claude/worktrees/<name>/``)
     skipped the whole tree and reported a green "All 0 frontmatter versions
-    match". The predicate is ``_lib_confd.is_hidden_name``.
+    match". A part is hidden when it starts with ``.``.
     """
     results = []
     if not docs_dir.exists():
@@ -150,7 +149,7 @@ def scan_docs(docs_dir: Path) -> List[FrontmatterInfo]:
     for md_file in sorted(docs_dir.rglob("*.md")):
         # Skip hidden directories/files *inside* docs_dir only.
         rel_parts = md_file.relative_to(docs_dir).parts
-        if any(is_hidden_name(part) for part in rel_parts):
+        if any(part.startswith(".") for part in rel_parts):
             continue
         info = extract_frontmatter(md_file)
         results.append(info)
@@ -347,8 +346,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     scanned = scan_docs(docs_dir=DOCS_DIR) if reason is None else []
     if not scanned:
         if reason is None and total_found:
-            reason = (f"all {total_found} markdown file(s) hidden (skipped by "
-                      f"_lib_confd.is_hidden_name) under {DOCS_DIR}")
+            reason = (f"all {total_found} markdown file(s) hidden (a dot-prefixed "
+                      f"path part) under {DOCS_DIR}")
         elif reason is None:
             reason = f"no markdown files found under {DOCS_DIR}"
         msg = f"ERROR: {reason} — nothing was measured"

@@ -31,7 +31,7 @@ Two things a caller can do — pick deliberately, never by accident:
    Correct for anything whose job is "tell me about this configuration"
    (validators, describers, linters).
 
-2. `warn_nested(dir)` — stay flat, but say so out loud: it prints the
+2. `warn_nested(dir, listing=...)` — stay flat, but say so out loud: it prints the
    files being skipped to stderr, once per directory per process. Correct
    for tools that are flat BY DESIGN (e.g. `assemble_config_dir.py` merges
    several flat sharded sources) and for ones whose recursive semantics
@@ -768,33 +768,6 @@ def nested_yaml_files(config_dir: str | os.PathLike[str], *, listing: Any = None
     return [] if held is None else _nested_files(held)
 
 
-def _python_nested_files(config_dir: str | os.PathLike[str]) -> list[Path]:
-    """⛔ TRANSITIONAL (#3206 step 9, until the tools below go through
-    da-guard): the config files below the top level as a Python walk with
-    this module's own name predicates finds them — for `warn_nested` called
-    WITHOUT a listing, which only the tools that do not need da-guard yet
-    do (`config_history`, `drift_detect`, `migrate_to_operator`;
-    `test_confd_enumeration_contract` pins that set). Every other reader
-    passes its listing."""
-    root = Path(config_dir)
-    if not root.is_dir():
-        return []
-    out: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if not _is_hidden(d))
-        if Path(dirpath) == root:
-            continue
-        for name in filenames:
-            p = Path(dirpath) / name
-            try:
-                regular = p.is_file()
-            except OSError:
-                regular = True  # not proven no file: counted, its reader fails on it
-            if _is_config(name) and regular:
-                out.append(p)
-    return sorted(out, key=lambda q: q.relative_to(root).as_posix())
-
-
 def printable_name(name: str) -> str:
     """`name` with every non-printable character escaped, nothing else.
 
@@ -951,7 +924,7 @@ def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
 
     What is OBSERVED — exactly two call sites, both in this module:
 
-    * `warn_nested(d)`: recorded with every config file below the top level
+    * `warn_nested(d, ...)`: recorded with every config file below the top level
       of `d` (the same set it prints), on every call — including a flat
       tree (nothing skipped) and repeats its print memo silences.
     * `resolve_defaults_file(d)`: recorded with only the nested DEFAULTS
@@ -980,8 +953,11 @@ def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
         _FLAT_READ_SINKS.reset(token)
 
 
+_NO_SNAPSHOT: Any = object()
+
+
 def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
-                listing: Any = None, reader: Any = None) -> bool:
+                listing: Any = _NO_SNAPSHOT, reader: Any = None) -> bool:
     """Print the nested-config warning to stderr, at most once per directory.
 
     Returns whether anything was printed.
@@ -997,19 +973,18 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
     Callers should use this instead of hand-rolling the print, so the
     dedup and the stderr choice live in one place.
 
-    The nested files are the caller's snapshot: *listing* (a listing it
-    holds) or *reader* (its `ConfdReader`, whose tree-mode document it reads
-    the content from) — no second walk (#3206). ⛔ With neither, a Python
-    walk (`_python_nested_files`), kept only for the tools that do not need
-    da-guard yet; `test_confd_enumeration_contract` pins who may call it so.
+    The nested files are the caller's snapshot, one of which is required:
+    *listing* (a listing it holds) or *reader* (its `ConfdReader`, whose
+    tree-mode document it reads the content from) — no second walk (#3206).
+    `listing=None` is a snapshot too: the one `config_listing` gives for a
+    path that is not a directory (nothing nested). Raises TypeError with
+    neither.
     """
-    if listing is None and reader is not None:
+    if listing is _NO_SNAPSHOT:
+        if reader is None:
+            raise TypeError("warn_nested: pass the caller's snapshot (listing= or reader=)")
         listing = config_listing(config_dir, reader=reader)  # None: not a directory
-        missed = [] if listing is None else _nested_files(listing)
-    elif listing is not None:
-        missed = _nested_files(listing)
-    else:
-        missed = _python_nested_files(config_dir)
+    missed = [] if listing is None else _nested_files(listing)
     # Recorded BEFORE the flat-tree early return and the memo: an observer
     # asks "did this code path read `config_dir` flat?", and the answer is
     # yes on the second call too, when nothing is printed.

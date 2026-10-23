@@ -1675,7 +1675,7 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
                            ("_defaults.yaml", "defaults:\n  cpu_usage: 80\n")):
             (confd / name).write_text(body, encoding="utf-8")
             others[name] = body
-        fired[arm] = (mod.trigger_reload(confd),
+        fired[arm] = (mod.trigger_reload(mod.reload_carriers(confd)),
                       "# soak-toggle" in carrier.read_text(encoding="utf-8"))
         untouched = {n: (confd / n).read_text(encoding="utf-8") == b
                      for n, b in others.items()}
