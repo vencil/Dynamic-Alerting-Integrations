@@ -79,8 +79,8 @@ type Entry struct {
 // prefixed `# ` (`#` alone for an empty line), so whatever the text holds it
 // is a comment — never YAML. multiline false: one line only (a line
 // comment). Refused: a carriage return, any other C0 control character but
-// a tab, DEL, and U+0085 / U+2028 / U+2029 (line breaks to some readers);
-// a line break in a line comment.
+// a tab, DEL, U+0085 / U+2028 / U+2029 (line breaks to some readers) and
+// U+FEFF (a byte order mark); a line break in a line comment.
 func CommentText(text string, multiline bool) (string, error) {
 	if !utf8.ValidString(text) {
 		return "", errors.New("a comment is not valid UTF-8")
@@ -90,8 +90,8 @@ func CommentText(text string, multiline bool) (string, error) {
 		case r == '\n' && multiline, r == '\t':
 		case r == '\n':
 			return "", errors.New("a line comment is one line (no line break)")
-		case r < 0x20, r == 0x7f, r == 0x85, r == 0x2028, r == 0x2029:
-			return "", fmt.Errorf("a comment holds the control or line-break character %U", r)
+		case r < 0x20, r == 0x7f, r == 0x85, r == 0x2028, r == 0x2029, r == 0xfeff:
+			return "", fmt.Errorf("a comment holds the control, line-break or byte-order-mark character %U", r)
 		}
 	}
 	lines := strings.Split(text, "\n")
@@ -195,6 +195,14 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 				if len(kv) == 3 {
 					if err := decodeComments(kv[2], &e); err != nil {
 						return fmt.Errorf("map entry %d (%q): %w", i, e.Key, err)
+					}
+					// An empty mapping or sequence is written in flow style
+					// (`{}`, `[]`), after `key:` — where the encoder would
+					// put the line comment before it, which is no YAML.
+					if e.Line != "" && ((e.Value.Type == TypeMap && len(e.Value.Entries) == 0) ||
+						(e.Value.Type == TypeSeq && len(e.Value.Items) == 0)) {
+						return fmt.Errorf("map entry %d (%q): a line comment cannot follow an empty mapping or sequence "+
+							"(written `{}` / `[]`); give it a head comment instead", i, e.Key)
 					}
 				}
 				v.Entries = append(v.Entries, e)

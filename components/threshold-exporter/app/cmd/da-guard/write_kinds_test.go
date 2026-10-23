@@ -127,6 +127,48 @@ func TestWrite_MoveRefusals(t *testing.T) {
 	}
 }
 
+// TestWrite_AMoveSourceIsJudgedAsAnEditsOriginal: a source the walk does not
+// read — through a symlinked directory (inside the tree or out of it), under
+// a hidden one, with a hidden or non-config name — is refused not_read, and
+// nothing anywhere is moved or removed.
+func TestWrite_AMoveSourceIsJudgedAsAnEditsOriginal(t *testing.T) {
+	box := t.TempDir()
+	root := filepath.Join(box, "conf.d")
+	outside := filepath.Join(box, "outside")
+	for p, body := range map[string]string{
+		filepath.Join(outside, "secret.yaml"):         "tenants:\n  t7: {}\n",
+		filepath.Join(root, "team", "_defaults.yaml"): "defaults:\n  cpu: 5\n",
+		filepath.Join(root, "team", "t.yaml"):         "tenants:\n  t1: {}\n",
+		filepath.Join(root, ".git", "x.yaml"):         "tenants:\n  t2: {}\n",
+		filepath.Join(root, ".hidden.yaml"):           "tenants:\n  t3: {}\n",
+		filepath.Join(root, "notes.txt"):              "tenants:\n  t4: {}\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../outside", filepath.Join(root, "evil")); err != nil {
+		t.Skip(err)
+	}
+	if err := os.Symlink("team", filepath.Join(root, "link")); err != nil {
+		t.Skip(err)
+	}
+	before, outBefore := snapshot(t, root), snapshot(t, outside)
+	for _, from := range []string{"evil/secret.yaml", "link/_defaults.yaml", ".git/x.yaml", ".hidden.yaml", "notes.txt"} {
+		t.Run(from, func(t *testing.T) {
+			code, res := runBatch(t, writeCmd, `{"files":[{"path":"stolen.yaml","from":"`+from+`"}]}`, "--config-dir", root)
+			if code != exitFindings || !reflect.DeepEqual(statuses(res), []string{"refused/not_read"}) {
+				t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Files[0].Message)
+			}
+			sameTree(t, before, snapshot(t, root))
+			sameTree(t, outBefore, snapshot(t, outside))
+		})
+	}
+}
+
 // TestWrite_AFailedWriteUndoesTheCreatesAndMoves: the edit's rename fails
 // (it goes last); the create is removed and the move put back — nothing of
 // the call is left.
@@ -197,6 +239,11 @@ func TestWrite_ACommentIsNeverYAML(t *testing.T) {
 		"a carriage return, head_comment": `{"files":[{"path":"a.yaml","head_comment":"x\r\ny","create":{"map":[]}}]}`,
 		"an unknown comment member":       `{"files":[{"path":"a.yaml","create":{"map":[["tenants",{"map":[]},{"foot":"x"}]]}}]}`,
 		"a fourth element":                `{"files":[{"path":"a.yaml","create":{"map":[["tenants",{"map":[]},{},{}]]}}]}`,
+		"a byte order mark":               `{"files":[{"path":"a.yaml","create":{"map":[["tenants",{"map":[]},{"head":"x` + "\\" + `ufeffy"}]]}}]}`, // a JSON escape
+		// `{}` / `[]` are flow style after `key:`: a line comment there is
+		// no YAML, so it is refused, not moved.
+		"a line comment after an empty map": `{"files":[{"path":"a.yaml","create":{"map":[["tenants",{"map":[]},{"line":"l2"}]]}}]}`,
+		"a line comment after an empty seq": `{"files":[{"path":"a.yaml","create":{"map":[["x",{"seq":[]},{"line":"l2"}]]}}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitCallerErr || callReason(res) != "bad_input" {

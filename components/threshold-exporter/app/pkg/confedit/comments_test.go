@@ -26,6 +26,7 @@ func TestCommentText(t *testing.T) {
 		{"a\x7f", true, "", true},
 		{"a\u0085b", true, "", true},
 		{"a b", true, "", true},
+		{"a" + string(rune(0xfeff)) + "b", true, "", true}, // a byte order mark
 	} {
 		got, err := CommentText(tc.text, tc.multiline)
 		if (err != nil) != tc.bad || got != tc.want {

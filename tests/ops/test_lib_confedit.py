@@ -1,7 +1,7 @@
-"""_lib_confedit：Python 工具改既有 conf.d 檔時把意圖交給 `da-guard edit`（ADR-036 §2，#3206）。
+"""_lib_confedit：Python 工具改 conf.d（改寫、新建、搬移）時把意圖交給 `da-guard write`（ADR-036 §2，#3206）。
 
 這裡釘的是本模組自己的契約：值的型別規則（讀到的保留型別、使用者打的只有標準
-十進位才是數字）、`da-guard.write/v2` 的回答（寫入／拒絕／呼叫錯誤／寫到一半）
+十進位才是數字）、`da-guard.write/v3` 的回答（寫入／拒絕／呼叫錯誤／寫到一半）
 各自怎麼交給工具、以及多檔一次送出（#3206 步驟 10c：一次 da-guard、整批一次判定，
 全部通過才寫）。edit 本身的判定（§4 不變式、讀回）是 Go 的，測在 pkg/confedit 與
 cmd/da-guard。
@@ -262,6 +262,20 @@ def test_an_emitted_file_left_in_place_may_have_been_written(tmp_path, monkeypat
     assert isinstance(exc.value.cause, ce.EditRefused)
 
 
+def test_a_move_left_unknown_names_its_source_too(tmp_path, monkeypatch):
+    # #3206 review: a move da-guard could not undo may have changed both
+    # names: PartialWrite lists the target and the source.
+    root = _tree(tmp_path / "conf.d", {"m.yaml": "tenants: {}\n"})
+    answer = _answer("caller_error", "partial_write", [
+        ("n.yaml", "maybe_written", None, "not undone"),
+        ("b.yaml", "caller_error", "write_failed", "disk full")])
+    answer["files"][0].update(kind="move", **{"from": "m.yaml"})
+    monkeypatch.setattr(_lib_parse_tree, "_run", lambda *a, **kw: answer)
+    with pytest.raises(ce.PartialWrite) as exc:
+        ce.write_all(root, [ce.move_entry("n.yaml", "m.yaml"), ce.edit_entry("b.yaml", [])])
+    assert exc.value.maybe_written == ["n.yaml", "m.yaml"]
+
+
 def test_no_answer_to_a_write_may_have_landed_anywhere(tmp_path, monkeypatch):
     # da-guard killed or timed out while writing (no document): any of the
     # batch's renames may have happened, so every file is named as one that
@@ -269,7 +283,7 @@ def test_no_answer_to_a_write_may_have_landed_anywhere(tmp_path, monkeypatch):
     root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n", "b.yaml": "tenants: {}\n"})
 
     def run(*a, **kw):
-        raise _lib_parse_tree.ParseTreeError("da-guard edit did not finish within 1s")
+        raise _lib_parse_tree.ParseTreeError("da-guard write did not finish within 1s")
     monkeypatch.setattr(_lib_parse_tree, "_run", run)
     with pytest.raises(ce.PartialWrite) as exc:
         ce.edit_all(root, [("a.yaml", []), ("b.yaml", [])])
@@ -374,9 +388,9 @@ def test_a_refused_entry_writes_none_of_the_batch(tmp_path):
 def test_move_is_byte_for_byte_and_refuses_an_existing_target(tmp_path):
     root = _tree(tmp_path / "conf.d", {"m.yaml": _KEPT, "n.yaml": "tenants: {}\n"})
     with pytest.raises(ce.EditCallerError) as exc:
-        ce.move(root, "m.yaml", "n.yaml")
+        ce.move(root, "n.yaml", "m.yaml")
     assert (exc.value.path, exc.value.reason) == ("n.yaml", "path_exists")
-    assert ce.move(root, "m.yaml", "o.yaml")["status"] == ce.WRITTEN
+    assert ce.move(root, "o.yaml", "m.yaml")["status"] == ce.WRITTEN
     assert (root / "o.yaml").read_bytes() == _KEPT.encode() and not (root / "m.yaml").exists()
 
 

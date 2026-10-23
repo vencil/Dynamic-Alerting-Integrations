@@ -20,7 +20,7 @@ one.
 Which da-guard, and how long it may run, is `_lib_parse_tree`'s one
 resolution (`_lib_parse_tree._run`: an explicit argument, else the tool's
 `use_da_guard` selection, else `$DA_GUARD_BINARY`, then `$PATH`). No usable
-da-guard, a timeout or an answer that is not a `da-guard.write/v2` document
+da-guard, a timeout or an answer that is not a `da-guard.write/v3` document
 raise `_lib_parse_tree.ParseTreeError` (`BinaryMissing` for no binary), as
 for every other da-guard run — except where a real write may have begun
 (`edit_all` / `emit_all`, below).
@@ -375,7 +375,9 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
     if status in (WRITTEN, UNCHANGED, DRY_RUN):
         return results
     written = [r["path"] for r in results if r["status"] == WRITTEN]
-    maybe = [r["path"] for r in results if r["status"] == MAYBE_WRITTEN]
+    # A move whose outcome is not known may have changed its source too.
+    maybe = [p for r in results if r["status"] == MAYBE_WRITTEN
+             for p in (r["path"], r.get("from")) if p]
     failed = next((r for r in results if r["status"] in (CALLER_ERROR, REFUSED)), None)
     if written or maybe:
         cause: EditError = (EditRefused(failed, command) if failed and failed["status"] == REFUSED
@@ -418,10 +420,11 @@ def emit(root: "Path | str", rel: str, content: dict, *, head_comment: Optional[
     return _one(COMMAND, root, create_entry(rel, content, head_comment), dry_run, binary, timeout)
 
 
-def move(root: "Path | str", from_rel: str, rel: str, *, dry_run: bool = False,
+def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
          binary: Optional[str] = None, timeout: Optional[float] = None) -> dict:
     """`da-guard write` moving *from_rel* to the new path *rel*, byte for
-    byte; answers and raises as `edit`."""
+    byte (the target first, as `move_entry` and every entry take it);
+    answers and raises as `edit`."""
     return _one(COMMAND, root, move_entry(rel, from_rel), dry_run, binary, timeout)
 
 

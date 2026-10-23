@@ -287,7 +287,9 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  {\"path\": <rel>, \"create\": <value>, \"head_comment\": <text>}   a new file whose top level is\n"+
 		"      the \"map\" value, keys in the order given; head_comment (optional) above it\n"+
 		"  {\"path\": <rel>, \"from\": <rel>}   move an existing file here, byte for byte; the source\n"+
-		"      is gone after\n"+
+		"      is gone after. The source is judged as an edit's original: a file the walk reads, with\n"+
+		"      readers, no symlink on the way, that parse-tree reads (else not_read / symlink /\n"+
+		"      original_unreadable; missing: source_missing)\n"+
 		"<rel> is relative to --config-dir. A create's or a move's target must not exist: an existing\n"+
 		"regular file is a caller error (path_exists, exit 2); an existing path that is no regular\n"+
 		"file (a FIFO, a device, a directory, a symlink to one) is refused not_read (exit 1). Missing\n"+
@@ -320,8 +322,9 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  {\"seq\": [<value>, ...]}\n"+
 		"A comment (head, line, head_comment) is layout, not content: never read back, compared or\n"+
 		"judged. Each of its lines is written `# <line>`, so it cannot become YAML; a line comment is\n"+
-		"one line; a carriage return, another control character but a tab, DEL, U+0085, U+2028 and\n"+
-		"U+2029 are refused (bad_input).\n"+
+		"one line; a carriage return, another control character but a tab, DEL, U+0085, U+2028,\n"+
+		"U+2029 and U+FEFF are refused (bad_input), and so is a line comment on a key whose value is\n"+
+		"an empty mapping or sequence (written {} / []: give it a head comment).\n"+
 		"The input is UTF-8 JSON: invalid UTF-8, an unpaired \\uD800-\\uDFFF escape, a member given\n"+
 		"twice or a member name not spelled exactly as above is a caller error.\n\n"+
 		"The whole call is judged once, before anything is written: the tree is read with every\n"+
@@ -758,75 +761,108 @@ func readRegular(abs string) (data []byte, fi os.FileInfo, regular bool, err err
 	return data, fi, true, err
 }
 
-// refuseNotAFile judges a path that is no regular file with parse-tree (the
-// walk's own entry for it) and refuses it not_read.
-func (w *writer) refuseNotAFile(scan *config.TreeScan, f *writeFile) {
-	e, _, _, err := judgeAt(scan, f.rel, nil)
+// refuseNotAFile judges a path (rel) that is no regular file with parse-tree
+// (the walk's own entry for it) and refuses f not_read.
+func (w *writer) refuseNotAFile(scan *config.TreeScan, f *writeFile, rel, what string) {
+	e, _, _, err := judgeAt(scan, rel, nil)
 	if err != nil {
 		w.fileCallerError(f, writeReasonBadPath, "%v", err)
 		return
 	}
 	f.res.Entry, f.res.Problem = &e, e.Problem
-	w.refuse(f, writeReasonNotRead, fmt.Sprintf("the path is no regular file (role %s); nothing is read from it", e.Role))
+	w.refuse(f, writeReasonNotRead, fmt.Sprintf("%s is no regular file (role %s); nothing is read from it", what, e.Role))
+}
+
+// existing is a file a write reads and replaces or removes: an edit's
+// original, or a move's source — judged by one rule (readOriginal).
+type existing struct {
+	data []byte
+	fi   os.FileInfo // its Lstat
+	ofi  os.FileInfo // the opened handle's, for its owner
+	base parsetree.Content
+}
+
+// readOriginal reads and judges the existing file at rel (an edit's path, a
+// move's source) for f: it must exist (else a caller error, missing), be no
+// symlink and a regular file, be read by a reader in the walk as it is on
+// disk (parse-tree's file-mode entry: readers, role config — a hidden or
+// non-config name, or a directory on the way the walk does not descend, is
+// not_read), and be read by parse-tree without a problem. A verdict on it is
+// no refusal (repair is allowed). ok false: f's refusal or caller error is
+// recorded. what names rel in messages ("the path", "the source …").
+func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, missing, what string) (existing, bool) {
+	fi, err := os.Lstat(abs)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if f.kind == writeKindMove {
+			w.fileCallerError(f, missing, "%s does not exist", what)
+		} else {
+			w.fileCallerError(f, missing, "%q does not exist; an edit rewrites an existing file (a new one is a create's)", rel)
+		}
+		return existing{}, false
+	case err == nil && fi.Mode()&os.ModeSymlink != 0:
+		// What a reader makes of the link is the walk's: a link to no
+		// config file is not_read below; a link to one would be replaced.
+		if e, asOnDisk, _, jerr := judgeAt(scan, rel, nil); jerr == nil && (asOnDisk || e.Role != config.RoleConfig) {
+			f.res.Entry, f.res.Problem = &e, e.Problem
+			w.refuse(f, writeReasonNotRead, what+": "+notReadMessage(e))
+			return existing{}, false
+		}
+		w.refuse(f, writeReasonSymlink, what+" is a symlink; a write would replace or remove the link, not the file")
+		return existing{}, false
+	case err == nil && !fi.Mode().IsRegular():
+		w.refuseNotAFile(scan, f, rel, what)
+		return existing{}, false
+	}
+	read := w.read
+	if read == nil {
+		read = readRegular
+	}
+	original, ofi, regular, rerr := read(abs)
+	if rerr == nil && !regular {
+		// Swapped for a FIFO, a device, … since the Lstat: nothing was read.
+		// Refused here, whatever the path is by the time it is judged — a
+		// second swap back to a regular file must not carry a nil original
+		// on to the edit and the write.
+		w.refuseNotAFile(scan, f, rel, what)
+		return existing{}, false
+	}
+	e, asOnDisk, base, err := judgeAt(scan, rel, original)
+	if err != nil {
+		w.fileCallerError(f, writeReasonBadPath, "%v", err)
+		return existing{}, false
+	}
+	if asOnDisk || e.Role != config.RoleConfig || len(e.Readers) == 0 {
+		f.res.Entry, f.res.Problem = &e, e.Problem
+		w.refuse(f, writeReasonNotRead, what+": "+notReadMessage(e))
+		return existing{}, false
+	}
+	if rerr != nil {
+		f.res.Problem = &parseTreeProblem{Kind: parsetree.KindReadFailure, Message: rerr.Error()}
+		w.refuse(f, writeReasonOriginalUnreadable, what+" cannot be read: "+rerr.Error())
+		return existing{}, false
+	}
+	if e.Problem != nil {
+		f.res.Entry, f.res.Problem = &e, e.Problem
+		w.refuse(f, writeReasonOriginalUnreadable,
+			fmt.Sprintf("parse-tree cannot read %s as it is (%s: %s)", what, e.Problem.Kind, e.Problem.Message))
+		return existing{}, false
+	}
+	if base == nil {
+		base = parsetree.Content{}
+	}
+	return existing{data: original, fi: fi, ofi: ofi, base: base}, true
 }
 
 // prepareEdit judges one edit file alone — its path, its original, its ops
 // and the §4 invariant — and leaves the text to write and what it must read
 // as (f.out, f.want) for the batch's judgement; or records why not.
 func (w *writer) prepareEdit(scan *config.TreeScan, f *writeFile) {
-	fi, err := os.Lstat(f.abs)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		w.fileCallerError(f, "path_missing", "%q does not exist; an edit rewrites an existing file (a new one is a create's)", f.rel)
-		return
-	case err == nil && fi.Mode()&os.ModeSymlink != 0:
-		// What a reader makes of the link is the walk's: a link to no
-		// config file is not_read below; a link to one would be replaced.
-		if e, asOnDisk, _, jerr := judgeAt(scan, f.rel, nil); jerr == nil && (asOnDisk || e.Role != config.RoleConfig) {
-			f.res.Entry, f.res.Problem = &e, e.Problem
-			w.refuse(f, writeReasonNotRead, notReadMessage(e))
-			return
-		}
-		w.refuse(f, writeReasonSymlink, "the path is a symlink; writing would replace the link with a file")
-		return
-	case err == nil && !fi.Mode().IsRegular():
-		w.refuseNotAFile(scan, f)
+	orig, ok := w.readOriginal(scan, f, f.rel, f.abs, "path_missing", "the path")
+	if !ok {
 		return
 	}
-	read := w.read
-	if read == nil {
-		read = readRegular
-	}
-	original, ofi, regular, rerr := read(f.abs)
-	if rerr == nil && !regular {
-		// Swapped for a FIFO, a device, … since the Lstat: nothing was read.
-		// Refused here, whatever the path is by the time it is judged — a
-		// second swap back to a regular file must not carry a nil original
-		// on to the edit and the write.
-		w.refuseNotAFile(scan, f)
-		return
-	}
-	e, asOnDisk, base, err := judgeAt(scan, f.rel, original)
-	if err != nil {
-		w.fileCallerError(f, writeReasonBadPath, "%v", err)
-		return
-	}
-	if asOnDisk || e.Role != config.RoleConfig || len(e.Readers) == 0 {
-		f.res.Entry, f.res.Problem = &e, e.Problem
-		w.refuse(f, writeReasonNotRead, notReadMessage(e))
-		return
-	}
-	if rerr != nil {
-		f.res.Problem = &parseTreeProblem{Kind: parsetree.KindReadFailure, Message: rerr.Error()}
-		w.refuse(f, writeReasonOriginalUnreadable, "the file cannot be read: "+rerr.Error())
-		return
-	}
-	if e.Problem != nil {
-		f.res.Entry, f.res.Problem = &e, e.Problem
-		w.refuse(f, writeReasonOriginalUnreadable,
-			fmt.Sprintf("parse-tree cannot read the file as it is (%s: %s)", e.Problem.Kind, e.Problem.Message))
-		return
-	}
+	original, ofi, fi, base := orig.data, orig.ofi, orig.fi, orig.base
 	// A verdict on the original is not a refusal (repair is allowed): the
 	// text in place after the call must have none (judgeTree).
 
@@ -943,7 +979,7 @@ func (w *writer) prepareTarget(scan *config.TreeScan, f *writeFile) bool {
 		}
 		// A FIFO, a device, a directory, a link to none of them: no file a
 		// reader reads, and nothing a create or a move may write over.
-		w.refuseNotAFile(scan, f)
+		w.refuseNotAFile(scan, f, f.rel, "the path")
 		return false
 	}
 	e, asOnDisk, _, err := judgeAt(scan, f.rel, nil)
@@ -977,61 +1013,23 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 	f.out, f.want, f.perm = out, parsetree.Content(want), 0o644
 }
 
-// prepareMove judges one move alone — its source (a regular file, not a
-// symlink, that parse-tree reads without a problem; its bytes are what the
+// prepareMove judges one move alone — its source exactly as an edit's
+// original (readOriginal: a file of the walk, no symlink on the way, read by
+// a reader, read by parse-tree without a problem; its bytes are what the
 // target will hold) and its target (prepareTarget) — and leaves the bytes
 // and the source's parse result for the batch's judgement; or records why
-// not.
+// not. A source the walk does not read (a hidden or non-config name, under a
+// symlinked or hidden directory, outside the tree through a link) is
+// refused, so the batch's tree always takes it out (judgeTree).
 func (w *writer) prepareMove(scan *config.TreeScan, f *writeFile) {
-	fi, err := os.Lstat(f.fromAbs)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		w.fileCallerError(f, "source_missing", "the source %q does not exist", f.from)
-		return
-	case err != nil:
-		w.fileCallerError(f, writeReasonBadPath, "the source %q: %v", f.from, err)
-		return
-	case fi.Mode()&os.ModeSymlink != 0:
-		w.refuse(f, writeReasonSymlink, fmt.Sprintf("the source %q is a symlink; a move moves a file", f.from))
-		return
-	case !fi.Mode().IsRegular():
-		w.refuse(f, writeReasonNotRead, fmt.Sprintf("the source %q is no regular file; nothing is read from it", f.from))
-		return
-	}
-	read := w.read
-	if read == nil {
-		read = readRegular
-	}
-	data, _, regular, rerr := read(f.fromAbs)
-	if rerr != nil || !regular {
-		why := "it was swapped for no regular file"
-		if rerr != nil {
-			why = rerr.Error()
-		}
-		w.refuse(f, writeReasonOriginalUnreadable, fmt.Sprintf("the source %q cannot be read: %s", f.from, why))
+	src, ok := w.readOriginal(scan, f, f.from, f.fromAbs, "source_missing", fmt.Sprintf("the source %q", f.from))
+	if !ok {
 		return
 	}
 	if !w.prepareTarget(scan, f) {
 		return
 	}
-	// What the target must read as: the source's own parse result, at the
-	// target's path (judgeAt, file mode). A source parse-tree cannot read is
-	// refused: the move would carry the problem to a path a reader reads.
-	e, _, content, err := judgeAt(scan, f.rel, data)
-	if err != nil {
-		w.fileCallerError(f, writeReasonBadPath, "%v", err)
-		return
-	}
-	if e.Problem != nil {
-		f.res.Entry, f.res.Problem = &e, e.Problem
-		w.refuse(f, writeReasonOriginalUnreadable,
-			fmt.Sprintf("parse-tree cannot read the source %q (%s: %s)", f.from, e.Problem.Kind, e.Problem.Message))
-		return
-	}
-	if content == nil {
-		content = parsetree.Content{}
-	}
-	f.out, f.original, f.want, f.perm = data, data, content, fi.Mode().Perm()
+	f.out, f.original, f.want, f.perm = src.data, src.data, src.base, src.fi.Mode().Perm()
 }
 
 // judgeTree is the batch's one judgement: the tree as it is once every
@@ -1048,10 +1046,11 @@ func (w *writer) judgeTree(disk *config.TreeScan, files []*writeFile) (*config.T
 	for _, f := range files {
 		if f.pending && !f.unchanged {
 			overlays = append(overlays, config.FileOverlay{Rel: f.rel, Data: f.out})
-			// A move's source is gone after the call — from the tree the
-			// walk lists (a source no reader's walk lists takes nothing
-			// out of it).
-			if _, listed := disk.Files[f.from]; f.kind == writeKindMove && listed {
+			// A move's source is gone after the call. It is a file of the
+			// walk (prepareMove: judged as an edit's original), so the walk
+			// takes it out; one it does not list is an OverlayError below,
+			// refused.
+			if f.kind == writeKindMove {
 				overlays = append(overlays, config.FileOverlay{Rel: f.from, Remove: true})
 			}
 		}
