@@ -481,8 +481,9 @@ def confirm_all(root: "str | os.PathLike[str]",
     the caller writes any; raises at the first refusal. First of all the
     output tree passes :func:`require_output_tree` (an empty *items* too).
     Every conf.d writer that names an output root confirms through here
-    (`scaffold_tenant`, `onboard_platform`, `migrate_rule`, `init_project`,
-    `deprecate_rule`; `confirm_tree` on a non-empty root). Raises
+    (`scaffold_tenant`, `onboard_platform`, `migrate_rule`, `init_project`;
+    `confirm_tree` on a non-empty root; `deprecate_rule` sends its changes to
+    `da-guard edit` since #3206, `_lib_confedit`). Raises
     ParseTreeError for no usable da-guard."""
     require_output_tree(root, binary=binary, timeout=timeout)
     for rel, text, expected in items:

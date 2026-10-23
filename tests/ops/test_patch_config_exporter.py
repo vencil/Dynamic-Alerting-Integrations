@@ -191,8 +191,9 @@ def test_valid_patch_is_verified_and_served(cluster):
 @needs_go
 def test_anchor_shared_block_is_refused_before_the_write(cluster):
     # #1950 列 9：legacy config.yaml 的 anchor 共用區塊，改 t-a 會連帶改 t-b。
-    # ADR-036 §2（#2906）起寫入前的 parse-tree 確認讀回 t-b 也變了，整份拒寫
-    # （rc 2，一個位元組都不送）；先前要寫入後由 exporter 驗收、再回滾。
+    # ADR-036 §2 起寫入前就拒寫（rc 2，一個位元組都不送）：da-guard edit（#3206）
+    # 判定重新輸出會連帶改到 t-b（not_round_trippable）；先前要寫入後由 exporter
+    # 驗收、再回滾。
     # dimensional key：-config-dir 會剝掉 legacy defaults（列 6），base row 不發。
     old = ('tenants:\n  t-a: &shared\n    mysql_connections{db="x"}: "50"\n'
            '  t-b: *shared\n')
@@ -202,7 +203,7 @@ def test_anchor_shared_block_is_refused_before_the_write(cluster):
 
     r = c.run("t-a", 'mysql_connections{db="x"}', "60")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "content_differs" in r.stderr and "tenants.t-b" in r.stderr, r.stderr
+    assert "not_round_trippable" in r.stderr and "tenants.t-b" in r.stderr, r.stderr
     assert (c.dir / "config.yaml").read_text(encoding="utf-8") == old
     assert c.user_series() == before
 
@@ -258,8 +259,9 @@ def test_the_served_identity_is_the_hash_patch_config_computes(cluster):
 def test_fixing_a_key_the_exporter_rejected_is_verified(cluster):
     # #2132：t-a.yaml 被 exporter 拒收（`default:` 是 list，解不進字串），每個 tick
     # 都讓 da_config_parse_failure_total 上升；patch-config 把該值改成合法的就修好了
-    # 它。驗收看的是寫入後的 parse_failed 不再含它，不是計數器。⚠️ 這格釘的是真
-    # exporter 上的新判準；舊判準只在「寫入前讀數與換版之間剛好跑過一個 tick」時
+    # 它（#3206 起改寫由 da-guard edit 做：原檔有 verdict 不構成拒寫，要寫的文字
+    # 沒有 verdict 就寫——修得好、弄不壞）。驗收看的是寫入後的 parse_failed 不再
+    # 含它，不是計數器。⚠️ 這格釘的是真 exporter 上的新判準；舊判準只在「寫入前讀數與換版之間剛好跑過一個 tick」時
     # 誤判，這裡不穩定重現——確定性的重現在 test_patch_config_identity.py (b)。
     c = cluster({
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",

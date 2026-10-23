@@ -118,7 +118,7 @@ class TestIdentityVerdicts:
         code, doc = _run(c, "t-a", "mysql_connections", "65")
         assert (code, doc["status"]) == (0, "applied")
         assert doc["pods"]["exporter-0"]["identity"] == "checked"
-        assert "'65'" in c.data["t-a.yaml"] and len(c.patches) == 1
+        assert "mysql_connections: 65" in c.data["t-a.yaml"] and len(c.patches) == 1
 
     def test_a_reload_of_someone_elses_earlier_bytes_is_not_ours(self, capsys):
         """(a) 另一個寫者在本工具讀 ConfigMap 前寫了 t-b（comment 變動，series 不變），
@@ -144,11 +144,12 @@ class TestIdentityVerdicts:
 
     def test_fixing_a_key_the_exporter_rejected_passes(self):
         """(b) #2132：t-a.yaml 寫入前已在 parse_failed（exporter 拒收；本工具可讀），
-        計數器每次讀都在漲；寫入可 parse 的內容（重新序列化丟掉了讓它被拒的那行）
-        ⇒ 成功、不回滾。舊驗法（計數器）在同一情境誤判失敗。"""
+        計數器每次讀都在漲；寫入可 parse 的內容（讓它被拒的那個值換掉了）
+        ⇒ 成功、不回滾。舊驗法（計數器）在同一情境誤判失敗。（先前這裡讓 exporter
+        拒收的是一行註解、靠 PyYAML 改寫丟掉它；da-guard edit 保留註解，#3206。）"""
         def rejects(key, text):
-            return "exporter-rejects" in text
-        broken = "# exporter-rejects\n" + T_A
+            return key == "t-a.yaml" and "'70'" in text
+        broken = T_A
         state = {"n": 0}
 
         def render(data, pod=None):
@@ -170,7 +171,7 @@ class TestIdentityVerdicts:
     def test_our_bytes_that_do_not_parse_roll_back(self):
         """(c) hash 相符（pod 確實載入了本次位元組），但被 patch 的 key 在
         parse_failed ⇒ 失敗、回滾。"""
-        c = FakeCluster(_multi(), rejects=lambda k, t: k == "t-a.yaml" and "'65'" in t)
+        c = FakeCluster(_multi(), rejects=lambda k, t: k == "t-a.yaml" and "mysql_connections: 65" in t)
         code, doc = _run(c, "t-a", "mysql_connections", "65")
         assert (code, doc["status"], doc["rolled_back"]) == (
             pc.EXIT_VERIFY_FAILED, "verify-failed-rolled-back", True)

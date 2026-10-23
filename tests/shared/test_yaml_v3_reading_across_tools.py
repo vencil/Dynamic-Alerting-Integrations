@@ -208,6 +208,11 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
 _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes — "
               "tests/shared/test_writers_confirm_parse_tree.py")
+#: The tools that change an EXISTING conf.d file through `da-guard edit`
+#: (ADR-036 step 10b, #3206): Go writes the text, so what is left to probe
+#: is their reading, which is parse-tree's (same rows).
+_GO_EDIT = (_GO + "; changes existing conf.d files through `da-guard edit` (Go writes) — "
+            "tests/shared/test_writers_confirm_parse_tree.py")
 #: A conf.d file read from `git show` blobs (parse-tree's file mode), one
 #: fixed name at two revisions — no conf.d tree or argument a probe can drive.
 _GO_BLOB = (_GO + "; reads git blobs of one fixed-name file (`git show`) in parse-tree's "
@@ -222,7 +227,7 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
-    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB,
+    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB, "_lib_confedit.py": _LIB,
     "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
@@ -273,14 +278,14 @@ _NOT_PROBED: dict[str, str] = {
     "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
     "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,
-    "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
+    "ops/deprecate_rule.py": _GO_EDIT, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _NAMES, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _GO_WRITER,
     "ops/migrate_to_operator.py": _GO_KEYS,
     "ops/onboard_platform.py": _GO_WRITER, "ops/operator_generate.py": _GO_KEYS,
-    "ops/patch_config.py": _GO_WRITER,
-    "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_WRITER,
+    "ops/patch_config.py": _GO_EDIT,
+    "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_EDIT,
 }
 
 

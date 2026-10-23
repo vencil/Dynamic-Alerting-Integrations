@@ -251,12 +251,17 @@ def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
 def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
          stdin: Optional[bytes] = None, *,
          check: "Callable[[dict], None] | None" = None,
-         what: str = SUBCOMMAND) -> dict:
+         what: str = SUBCOMMAND, schema: str = SCHEMA,
+         accept: "frozenset[int]" = frozenset({0})) -> dict:
     """Run `da-guard <args>` and return its document, checked whole by
     *check* (default `check_shape`). *what* names the command in every
     message — a flag a da-guard older than this tool lacks included (a
     binary that knows `parse-tree` but not `--list-only` is named as lacking
-    `parse-tree --list-only`)."""
+    `parse-tree --list-only`). *schema* is the document's `schema` value
+    (default parse-tree's); *accept* the exit codes whose stdout is the
+    document (`edit --json` writes one on 1 and 2 too, `_lib_confedit`) —
+    an accepted non-zero exit with nothing on stdout is a failure as any
+    other exit is."""
     check = check_shape if check is None else check
     binary, timeout = _resolve(binary, timeout)  # ⛔ the one place (#3206)
     dispatcher = guard_dispatch.DISPATCHER
@@ -287,29 +292,29 @@ def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
         raise MemoryError(f"da-guard {what} was ended by "
                           f"{_signal_name(-proc.returncode)} under this process's "
                           f"memory limit (RLIMIT_DATA)")
-    if proc.returncode != 0:
+    if proc.returncode != 0 and not (proc.returncode in accept and proc.stdout.strip()):
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):
             older = (f" — this da-guard does not know `{what}`: it is older "
                      "than this tool; upgrade or rebuild it")
         raise ParseTreeError(f"da-guard {what} exited {proc.returncode}{older}"
                              + (f": {' '.join(stderr.split())}" if stderr else ""))
-    return read_document(proc.stdout, check=check, what=what)
+    return read_document(proc.stdout, check=check, what=what, schema=schema)
 
 
 def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,
-                  what: str = SUBCOMMAND) -> dict:
+                  what: str = SUBCOMMAND, schema: str = SCHEMA) -> dict:
     """*raw* (parse-tree's stdout) as a document *check* accepts (default
-    `check_shape`: tree or file mode). Raises ParseTreeError — naming a
-    da-guard older than this tool as such — for anything else: a document
-    wrong anywhere is unusable whole (ADR-036 §2)."""
+    `check_shape`: tree or file mode) whose `schema` is *schema*. Raises
+    ParseTreeError — naming a da-guard older than this tool as such — for
+    anything else: a document wrong anywhere is unusable whole (ADR-036 §2)."""
     check = check_shape if check is None else check
     try:
         doc = json.loads(raw.decode("utf-8"))
-        if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
+        if not isinstance(doc, dict) or doc.get("schema") != schema:
             got = doc.get("schema") if isinstance(doc, dict) else None
             hint = f" — {_OLDER}" if got in _OLDER_SCHEMAS else ""
-            raise ValueError(f"schema {got!r}, this reader reads {SCHEMA!r}{hint}")
+            raise ValueError(f"schema {got!r}, this reader reads {schema!r}{hint}")
         check(doc)
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.

@@ -62,7 +62,7 @@ class TestApplyVerified:
         assert _run(c, "t-a", "mysql_connections", "65") == 0
         assert len(c.patches) == 1
         assert yaml.safe_load(c.data["t-a.yaml"])["tenants"]["t-a"] == {
-            "mysql_connections": "65"}
+            "mysql_connections": 65}
         assert "Verified on 1 exporter pod" in capsys.readouterr().out
 
     def test_every_pod_is_verified(self):
@@ -694,7 +694,7 @@ def test_m28_a_failed_write_that_landed_and_a_failed_rollback_says_written(capsy
     doc = json.loads(capsys.readouterr().out)
     assert (code, doc["status"], doc["written"], doc["rolled_back"]) == (
         pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True, False)
-    assert "'65'" in c.data["t-a.yaml"]
+    assert "mysql_connections: 65" in c.data["t-a.yaml"]
 
 
 class TestRound6Pins:
@@ -756,14 +756,14 @@ class TestRound6Pins:
         c = FakeCluster(_multi())
         with mock.patch("patch_config._say", side_effect=self._fail_on_success):
             code = self._main(c, "t-a", "mysql_connections", "65")
-        assert code == 0 and len(c.patches) == 1 and "'65'" in c.data["t-a.yaml"]
+        assert code == 0 and len(c.patches) == 1 and "mysql_connections: 65" in c.data["t-a.yaml"]
 
     def test_m17_the_fallback_keeps_a_verified_write(self, capsys):
         c = FakeCluster(_multi())
         with mock.patch("patch_config._say", side_effect=self._fail_on_success), \
                 mock.patch("patch_config._conclude", side_effect=RuntimeError("bug")):
             code = self._main(c, "t-a", "mysql_connections", "65")
-        assert code == 0 and len(c.patches) == 1 and "'65'" in c.data["t-a.yaml"]
+        assert code == 0 and len(c.patches) == 1 and "mysql_connections: 65" in c.data["t-a.yaml"]
 
 
 @pytest.mark.parametrize("doc", ["docs/cli-reference.md", "docs/cli-reference.en.md"])
@@ -797,12 +797,12 @@ class TestCompareAndSwap:
         the counter an older exporter is judged by, and — `_rejects` — the
         parse_failed an exporter with an identity is judged by."""
         extra = ('da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'
-                 if "'65'" in data.get("t-a.yaml", "") else "")
+                 if "mysql_connections: 65" in data.get("t-a.yaml", "") else "")
         return render_thresholds(data) + extra
 
     @staticmethod
     def _rejects(key, text):
-        return key == "t-a.yaml" and "'65'" in text
+        return key == "t-a.yaml" and "mysql_connections: 65" in text
 
     def test_every_write_carries_the_version_it_is_based_on(self, capsys):
         c = FakeCluster(_multi())
@@ -1045,7 +1045,7 @@ class TestRollbackAccounting:
         rollbacks = [p for p in c.patches[1:] if "t-a.yaml" in p["data"]]
         assert len(rollbacks) == pc.ROLLBACK_CONFLICT_ATTEMPTS
         assert len(c.patches) == 1 + pc.ROLLBACK_CONFLICT_ATTEMPTS
-        assert "'65'" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
+        assert "mysql_connections: 65" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
         assert (code, doc["status"], doc["written"]) == (
             pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True)
 

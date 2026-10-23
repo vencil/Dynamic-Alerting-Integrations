@@ -58,6 +58,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_tenant_state.py",  # #2883: reads a tenant-api state store copy (groups, views, federation subsets)
     "_lib_parse_cache.py",  # #2901: the generator's conf.d parse entry point + content-addressed cache (ADR-036 §3)
     "_lib_write_check.py",  # #2906: a conf.d writer's pre-write parse-tree confirmation (ADR-036 §2)
+    "_lib_confedit.py",  # #3206: a tool's change of an existing conf.d file, sent to `da-guard edit` (ADR-036 §2)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

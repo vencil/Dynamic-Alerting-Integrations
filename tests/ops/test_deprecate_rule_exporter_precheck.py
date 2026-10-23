@@ -108,7 +108,7 @@ def test_every_spelling_the_exporter_assigns_is_cleared_and_nothing_else(
     assert (conf_d / "_defaults.yaml").read_text(encoding="utf-8") == (
         "defaults:\n  disk_usage: 80\n")
     assert (conf_d / "t1.yaml").read_text(encoding="utf-8") == (
-        "tenants:\n  t1:\n    disk_usage: '70'\n")
+        'tenants:\n  t1:\n    disk_usage: "70"\n')
 
 
 def test_a_root_carrier_the_exporter_drops_refuses_preview_and_execute(

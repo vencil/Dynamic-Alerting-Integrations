@@ -4,9 +4,8 @@ defaults:
   mem_usage: 90
   disk_usage: 85
 optional_overrides:
-- oracle_process_count
+  - "oracle_process_count"
 state_filters:
   container_crashloop:
-    reasons:
-    - CrashLoopBackOff
-    severity: critical
+    reasons: ["CrashLoopBackOff"]
+    severity: "critical"

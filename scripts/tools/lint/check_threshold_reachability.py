@@ -3305,9 +3305,6 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "dimensional variant is only ever printed as a comment in "
         "tenant-config.yaml; pinned by "
         "tests/ops/test_migrate_threshold_wiring.py",
-    "scripts/tools/ops/deprecate_rule.py":
-        "removes keys and rewrites what is left; it can shrink a `defaults:` "
-        "map but never name a new key",
     "scripts/tools/ops/policy_opa_bridge.py":
         "READS `_defaults.yaml` (`load_defaults`); the census hit is the dict "
         "shape in its module docstring",
