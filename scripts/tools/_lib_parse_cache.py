@@ -36,6 +36,12 @@ on stdin), never a tree-mode document — parse-tree would read the file
 again itself, and the file may have changed in between. A changed file can
 thus never be answered with an older or a newer file's result; the mode is
 in the key because one content read two ways gives two results.
+A reader that is about to read many files calls :meth:`ConfdReader.prefetch`
+first: every file that would miss gets its file-mode document from ONE
+batch run (``--inputs``, one walk of the tree; file mode walks the whole
+tree per call, so a cold cache filled per file was O(N²), ADR-036 §3). The
+document of each file is the same either way, and the miss path above —
+key, conversion, store — is unchanged.
 
 ⛔ SHA-256, whatever the repository's object format — never the git blob id.
 In a SHA-1 repository a blob id can be collided (chosen prefix), and two
@@ -173,6 +179,10 @@ class ParseCache:
         self.hits[key] = None
         return value
 
+    def holds(self, key: tuple[str, str]) -> bool:
+        """Whether an entry is stored under *key* (no read of it)."""
+        return key in self.new or key in self.entries
+
     def store(self, key: tuple[str, str], value: Any) -> None:
         """Keep *value* (pickled now, before the caller can change it)."""
         try:
@@ -222,6 +232,8 @@ class ConfdReader:
         self._listing: "Optional[_lib_parse_tree.Listing]" = None
         self._verdicts: "dict[str, Optional[tuple[Optional[str], dict]]]" = {}
         self._carriers_by_dir: "Optional[dict[str, list[str]]]" = None
+        #: rel → (content_key of the bytes, batch file-mode line): `prefetch`.
+        self._file_lines: "dict[str, tuple[str, bytes]]" = {}
 
     def tree(self) -> Tree:
         """The tree-mode document (run on first use). Raises ParseTreeError.
@@ -387,6 +399,26 @@ class ConfdReader:
         for it. A carrier that cannot be opened enters the key as such."""
         if rel in self._verdicts:
             return self._verdicts[rel]
+        found = self._verdict_key(rel)
+        if found is None:
+            self._verdicts[rel] = None
+            return None
+        data, key = found
+        cache = _ACTIVE
+        value = cache.cached(key) if cache is not None else MISS
+        if value is MISS:
+            if cache is not None:
+                cache.parses += 1  # a parse-tree run, as a read's miss
+            tree = self._file_tree(rel, data)
+            value = (tree.not_read.get(rel), dict(defaults_carriers(tree)))
+            if cache is not None:
+                cache.store(key, value)
+        self._verdicts[rel] = value
+        return value
+
+    def _verdict_key(self, rel: str) -> "Optional[tuple[bytes, tuple[str, str]]]":
+        """``(rel's bytes, its VERDICT_MODE key)`` (`_verdict`), or None when
+        *rel* cannot be opened."""
         parent = rel.rpartition("/")[0]
         h = hashlib.sha256()
         data = None
@@ -404,20 +436,70 @@ class ConfdReader:
             h.update(b"\x00" if content is None
                      else b"\x01" + len(content).to_bytes(8, "big") + content)
         if data is None:
-            self._verdicts[rel] = None
             return None
-        key = (content_key(rel, h.digest()), VERDICT_MODE)
+        return data, (content_key(rel, h.digest()), VERDICT_MODE)
+
+    def _file_tree(self, rel: str, data: bytes) -> Tree:
+        """parse-tree's file-mode document of *rel* read as *data*: the line
+        `prefetch` got for these very bytes (same path, same content_key),
+        else one file-mode run — the same document either way (Go holds the
+        batch line byte-identical to file mode's, and both are read by
+        `read_document`)."""
+        held = self._file_lines.get(rel)
+        if held is not None and held[0] == content_key(rel, data):
+            return _lib_parse_tree.tree_of(_lib_parse_tree.file_document(held[1]))
+        return _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
+
+    def prefetch(self, paths: "Iterable[str | os.PathLike[str]]",
+                 mode: ParseMode = VALUES) -> None:
+        """Under a cache (a no-op without one): ONE batch file-mode run
+        (`parse-tree --inputs`, one walk of the tree) for every file of
+        *paths* whose `read` in *mode* would miss the cache — instead of one
+        file-mode run per miss, each of which walks the whole tree (O(N²) on
+        a cold cache, #3206, ADR-036 §3). A carrier verdict (`_verdict`)
+        takes a held line too; the caller passes only paths it will read
+        (a path that is never read would miss on every call).
+
+        ⛔ It stores NOTHING in the cache. It only holds each file's line,
+        keyed by the content_key of the bytes it sent; `read` / `_verdict`
+        still compute their key from the bytes they read, look it up, and on
+        a miss convert and store exactly as before — they take the held line
+        in place of a run only when it was made from those same bytes. So
+        the entries, their keys and every exception a read raises are what
+        the per-file path gives. A batch that fails (an older da-guard, a
+        name JSON cannot carry, a memory limit) holds nothing: every read
+        then runs file mode on its own, as before."""
         cache = _ACTIVE
-        value = cache.cached(key) if cache is not None else MISS
-        if value is MISS:
-            if cache is not None:
-                cache.parses += 1  # a parse-tree run, as a read's miss
-            tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
-            value = (tree.not_read.get(rel), dict(defaults_carriers(tree)))
-            if cache is not None:
-                cache.store(key, value)
-        self._verdicts[rel] = value
-        return value
+        if cache is None:
+            return
+        items: list[tuple[str, bytes]] = []
+        keys: list[str] = []
+        seen: set[str] = set()
+        for p in paths:
+            rel = self.rel(p)
+            if rel in seen:
+                continue
+            seen.add(rel)
+            try:
+                with open(os.path.join(self.root, rel), "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                continue  # `read` answers from the walk's entry, no file mode
+            ck = content_key(rel, data)
+            held = self._file_lines.get(rel)
+            if held is not None and held[0] == ck:
+                continue
+            if not cache.holds((ck, mode.name)):
+                items.append((rel, data))
+                keys.append(ck)
+        if not items:
+            return
+        try:
+            lines = _lib_parse_tree.run_files_raw(self.root, items, self.binary, self.timeout)
+        except (ParseTreeError, MemoryError):
+            return
+        for (rel, _data), ck, line in zip(items, keys, lines):
+            self._file_lines[rel] = (ck, line)
 
     def node(self, path: "str | os.PathLike[str]") -> Any:
         """The file's tagged nodes, from the tree-mode document (shared: do
@@ -449,7 +531,7 @@ class ConfdReader:
         # file — it may have changed in between, and its value under this
         # key would be the parse of other content.
         try:
-            tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
+            tree = self._file_tree(rel, data)
             value = mode.convert(self._node(tree, rel))
         except MemoryError:
             cache.memory_error = True
@@ -654,6 +736,7 @@ def declared_tenants(reader: ConfdReader, *, exclude: "Callable[[str], bool] | N
     unknown — but a file whose top level is not a mapping, which declares
     nothing. The caller names them. Raises ParseTreeError / NotSelected."""
     scope = tenant_scope(reader, exclude=exclude)
+    reader.prefetch(scope.files)
     declared: dict[str, list[str]] = {}
     unknown: list[FileUnreadable] = list(scope.unknown)
     for rel in scope.files:

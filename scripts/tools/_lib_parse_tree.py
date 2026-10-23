@@ -105,6 +105,7 @@ cannot get it from this document.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import contextvars
 import json
@@ -251,6 +252,47 @@ def run_file(root: Path | str, rel: str, text: bytes,
                  "--input", "-"], binary, timeout, stdin=text)
 
 
+def run_files_raw(root: Path | str, items: "list[tuple[str, bytes]]",
+                  binary: Optional[str] = None, timeout: Optional[float] = None
+                  ) -> "list[bytes]":
+    """Batch file mode (#3206): `da-guard parse-tree --config-dir <root>
+    --inputs -` for *items* ``[(rel, text), ...]`` — one walk of the tree for
+    all of them — as one raw line per item, in order: each line is what
+    `run_file(root, rel, text)` reads its document from (Go holds the two
+    byte-identical, `TestParseTreeBatch_IsFileModeLineForLine`), and is not
+    checked here — `file_document` reads it as `run_file` would. Raises as
+    `run` does, and ParseTreeError when the line count is not the item
+    count. ⛔ A *rel* that is not valid UTF-8 (a surrogate-escaped name)
+    raises ParseTreeError before anything runs: JSON would carry it as
+    another name (U+FFFD), where `run_file` passes its bytes."""
+    for rel, _text in items:
+        try:
+            rel.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ParseTreeError(f"{rel!r}: not valid UTF-8; batch file mode cannot "
+                                 "carry it") from None
+    payload = json.dumps([{"path": rel, "input": base64.b64encode(text).decode("ascii")}
+                          for rel, text in items]).encode("ascii")
+    what = f"{SUBCOMMAND} --inputs"
+    out = _run_stdout([SUBCOMMAND, "--config-dir", str(root), "--inputs", "-"],
+                      binary, timeout, stdin=payload, what=what)
+    lines = out.split(b"\n")
+    del out
+    if lines and lines[-1] == b"":
+        lines.pop()
+    if len(lines) != len(items):
+        raise ParseTreeError(f"da-guard {what} wrote {len(lines)} documents for "
+                             f"{len(items)} files; nothing of it is used")
+    return lines
+
+
+def file_document(raw: bytes) -> dict:
+    """One `run_files_raw` line as the document `run_file` returns for that
+    item: the same reading of the same bytes (the line, without its
+    newline, is file mode's stdout)."""
+    return read_document(raw)
+
+
 def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
     """Make `$DA_GUARD_BINARY` in *environ* (default: this process's) an
     absolute path, against the current working directory — the meaning a
@@ -277,7 +319,14 @@ def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
     document (`edit --json` writes one on 1 and 2 too, `_lib_confedit`) —
     an accepted non-zero exit with nothing on stdout is a failure as any
     other exit is."""
-    check = check_shape if check is None else check
+    raw = _run_stdout(args, binary, timeout, stdin, what=what, accept=accept)
+    return read_document(raw, check=check, what=what, schema=schema)
+
+
+def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float],
+                stdin: Optional[bytes] = None, *, what: str = SUBCOMMAND,
+                accept: "frozenset[int]" = frozenset({0})) -> bytes:
+    """`_run` up to the document: da-guard's stdout, or raises as `_run`."""
     binary, timeout = _resolve(binary, timeout)  # ⛔ the one place (#3206)
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
@@ -317,7 +366,7 @@ def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
         if older:
             raise NotThisDocument(msg, older=True)
         raise ParseTreeError(msg)
-    return read_document(proc.stdout, check=check, what=what, schema=schema)
+    return proc.stdout
 
 
 def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,

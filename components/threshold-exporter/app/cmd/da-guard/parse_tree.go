@@ -223,6 +223,7 @@ type parseTreeFlags struct {
 	input     string
 	listOnly  bool
 	names     string
+	inputs    string
 }
 
 func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, error) {
@@ -236,6 +237,10 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"Its readers are judged in the tree as it is once that file is written.")
 	fs.StringVar(&f.input, "input", "",
 		"File mode: the file whose text to read ('-' = stdin). Required with --path.")
+	fs.StringVar(&f.inputs, "inputs", "",
+		"Batch file mode: this file ('-' = stdin), a JSON array of {\"path\", \"input\"}\n"+
+			"(input in base64), all read over one walk of --config-dir. Prints, for each item\n"+
+			"in order, the line `--path <path> --input <file>` prints for that text.")
 	fs.BoolVar(&f.listOnly, "list-only", false,
 		"List mode: the same document without \"files\" and \"rendered_by\", reading no\n"+
 			"file's content. With --config-dir, or with --names.")
@@ -249,6 +254,7 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --path <rel> --input <file|->\n", programName, parseTreeCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --inputs <file|->\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --list-only --config-dir <dir>\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --list-only --names <file|->\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, every conf.d path the exporter's walk records — what it is, who\n"+
@@ -344,6 +350,11 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"disk: a directory on it that exists but is not a real directory (a symlink, a file) is\n"+
 			"parent_not_walked; an existing --path that is not a regular file (or a link to one)\n"+
 			"gets the entry tree mode gives the same path, and the text is not read.\n"+
+			"Batch file mode (--inputs): file mode for many paths over one walk of the tree.\n"+
+			"stdout is one line per item, in the order given, each byte for byte what file\n"+
+			"mode prints for that path and text (a path may be given twice); an item file mode\n"+
+			"would refuse (exit 2) refuses the whole batch: exit 2, and the lines already\n"+
+			"printed are not a result (each line is written as it is made, never buffered).\n"+
 			"List mode (--list-only --config-dir): the walk of tree mode and the same entries\n"+
 			"(the same function builds both), but for the problems only reading finds.\n"+
 			"Names mode (--list-only --names): each given base name in the order given, \"depth\" 0,\n"+
@@ -353,7 +364,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok — an unreadable file is data in the document, not a verdict\n"+
 			"  2  caller error: bad flags, --config-dir missing or not a directory, a --path that is\n"+
-			"     absolute or leaves --config-dir, --input or --names not readable, --names not a\n"+
+			"     absolute or leaves --config-dir (in --inputs too), --input, --inputs or --names not\n"+
+			"     readable, --inputs not a JSON array of {path, input}, --names not a\n"+
 			"     JSON array of base names or holding one twice, a file name that is not valid UTF-8\n"+
 			"     (JSON cannot carry it), or stdout not writable\n")
 	}
@@ -392,6 +404,8 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	}
 	if f.listOnly {
 		switch {
+		case f.inputs != "":
+			return fail("--list-only reads no file: --inputs does not go with it")
 		case f.path != "" || f.input != "":
 			return fail("--list-only reads no file: --path and --input do not go with it")
 		case f.names != "" && f.configDir != "":
@@ -409,6 +423,12 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	}
 	if (f.path == "") != (f.input == "") {
 		return fail("--path and --input go together (file mode), or neither is given")
+	}
+	if f.inputs != "" {
+		if f.path != "" {
+			return fail("--inputs is batch file mode: --path and --input do not go with it")
+		}
+		return runParseTreeBatch(f, stdin, stdout, fail)
 	}
 	var input []byte
 	var rel string
@@ -443,10 +463,7 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 			err = setVerdicts(doc.Entries, treeDropped(scan))
 		}
 	} else {
-		var asOnDisk, selected bool
-		if doc, asOnDisk, selected, err = parseFileIn(scan, rel, input); err == nil {
-			setFileVerdict(scan, &doc.Entries[0], asOnDisk, selected, rel, input)
-		}
+		doc, err = fileModeDoc(scan, rel, input)
 	}
 	if err != nil {
 		return fail("%v", err)
@@ -495,6 +512,19 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 			doc.RenderedBy[e.Path] = rb
 		}
 	}
+	return doc, nil
+}
+
+// fileModeDoc is file mode's whole document of rel read as input, in the tree
+// scan holds: the entry and content (parseFileIn), then its verdict. File
+// mode and batch file mode (--inputs) both build each document here, over
+// one walk each, so the two cannot print different lines for one item.
+func fileModeDoc(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc, error) {
+	doc, asOnDisk, selected, err := parseFileIn(scan, rel, input)
+	if err != nil {
+		return nil, err
+	}
+	setFileVerdict(scan, &doc.Entries[0], asOnDisk, selected, rel, input)
 	return doc, nil
 }
 
