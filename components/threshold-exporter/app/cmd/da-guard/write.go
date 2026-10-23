@@ -276,8 +276,10 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 			"      one is created\n")
 	} else {
 		fmt.Fprintf(errOut, "Write new conf.d files from the content given, keys in the order given (ADR-036 §2).\n"+
-			"No path may exist; missing directories are created (and removed again when the\n"+
-			"call does not complete).\n\n"+
+			"No path may exist: an existing regular file is a caller error (path_exists, exit 2);\n"+
+			"an existing path that is no regular file (a FIFO, a device, a directory, a symlink to\n"+
+			"one) is refused not_read (exit 1). Missing directories are created (and removed again\n"+
+			"when the call does not complete).\n\n"+
 			"Input: {\"files\": [{\"path\": <rel>, \"content\": <value>}, ...]}, each file once; content\n"+
 			"is a \"map\" value: the file's top level.\n")
 	}
@@ -326,7 +328,7 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  1  refused: nothing written; every refused file is named\n"+
 		"  2  caller error: bad flags, input that is not the JSON above, a path given twice, absolute\n"+
 		"     or outside --config-dir, --config-dir not a directory, edit of a missing file, emit onto\n"+
-		"     an existing path, or a write that failed (partial_write: some files are written)\n", writeSchema)
+		"     an existing regular file, or a write that failed (partial_write: some files are written)\n", writeSchema)
 }
 
 // runEdit / runEmit are the subcommands' entry points.

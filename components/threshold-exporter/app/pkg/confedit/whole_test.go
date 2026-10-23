@@ -53,4 +53,12 @@ func TestContentSet_TheWholeTopLevel(t *testing.T) {
 	if err := ContentSet(c, nil, "x"); err == nil {
 		t.Fatal("a scalar top level: no error")
 	}
+	// The replacement may be c itself: its content is kept, not cleared.
+	same := parsetree.Content{"a": "1", "b": map[string]any{"c": "2"}}
+	if err := ContentSet(same, nil, map[string]any(same)); err != nil {
+		t.Fatal(err)
+	}
+	if p, w, g, ok := ContentDifference(map[string]any{"a": "1", "b": map[string]any{"c": "2"}}, same); !ok {
+		t.Fatalf("aliased replacement: at %v want %v got %v", p, w, g)
+	}
 }

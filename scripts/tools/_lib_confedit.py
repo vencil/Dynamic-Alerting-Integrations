@@ -55,10 +55,12 @@ tree with all of them in place, and if any is refused nothing is written
 and `EditsRefused` names every refusal. A batch whose every file passes but
 which would worsen the rest of the tree (a carrier it deselects, a tenant
 declared twice, a new verdict anywhere: da-guard's `worsens_tree`) is
-`TreeWorsened`, an `EditsRefused` naming each place. A da-guard that is not
-this tool's (an older one answering `da-guard.write/v1`, or one that does
-not know the command) took nothing: `EditCallerError`, reason
-`da_guard_mismatch`. ⚠️ The write itself can still stop
+`TreeWorsened`, an `EditsRefused` naming each place. A da-guard older than
+this tool's (one answering `da-guard.write/v1`, or one that does not know
+the command) took nothing: `EditCallerError`, reason `da_guard_mismatch`
+(also any other schema on a dry run). One answering a schema not known to
+be older (a newer da-guard) may have written: on a real write that is
+`PartialWrite`, every file of the batch maybe written. ⚠️ The write itself can still stop
 part-way — a write error (a full disk, a permission changed), or a file
 another writer changed between the judgement and its rename: an emitted
 file is removed again by da-guard, but an edited file already renamed
@@ -296,11 +298,15 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
     except _lib_parse_tree.BinaryMissing:
         raise  # nothing was run
     except _lib_parse_tree.NotThisDocument as exc:
-        # It answered, as another da-guard than this tool's (an older one
-        # writes v1, or knows no such command): it did not take this batch,
-        # so nothing of it was written.
-        raise EditCallerError({"path": "", "status": CALLER_ERROR, "reason": "da_guard_mismatch",
-                               "message": str(exc)}, command) from exc
+        # It answered as another da-guard than this tool's. An older one
+        # (exc.older: it writes v1, or knows no such command) cannot have
+        # taken this batch: nothing of it was written. A dry run writes
+        # nothing either way. Any other one (a newer schema) may have
+        # written: on a real write, every file may be in place.
+        if exc.older or dry_run:
+            raise EditCallerError({"path": "", "status": CALLER_ERROR, "reason": "da_guard_mismatch",
+                                   "message": str(exc)}, command) from exc
+        raise PartialWrite([], "", exc, maybe_written=[f["path"] for f in files]) from exc
     except _lib_parse_tree.ParseTreeError as exc:
         if dry_run:
             raise

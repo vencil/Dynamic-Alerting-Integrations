@@ -292,6 +292,36 @@ def test_an_older_da_guard_is_named_as_such(tmp_path, monkeypatch):
         with pytest.raises(ce.EditCallerError, match="older than this tool") as exc:
             ce.edit_all(root, [("a.yaml", [])], dry_run=dry)
         assert exc.value.reason == "da_guard_mismatch"
+        assert exc.value.__cause__.older is True
+
+
+def test_a_da_guard_that_does_not_know_the_command_took_nothing(tmp_path, monkeypatch):
+    # exit 2 and the binary rejects the command as unknown: older, by the
+    # exception's metadata, not its message.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n"})
+    monkeypatch.setattr(_lib_parse_tree.subprocess, "run", lambda *a, **kw: type(
+        "P", (), {"returncode": 2, "stdout": b"", "stderr": b"unknown command"})())
+    monkeypatch.setattr(_lib_parse_tree, "_accepts", lambda *a, **kw: False)
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.edit_all(root, [("a.yaml", [])])
+    assert exc.value.reason == "da_guard_mismatch" and exc.value.__cause__.older is True
+
+
+def test_a_newer_da_guard_may_have_written(tmp_path, monkeypatch):
+    # #3206 review: a schema not known to be older (a newer da-guard) is no
+    # proof that nothing was written: a real write is PartialWrite, every
+    # file maybe written; a dry run wrote nothing.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n", "b.yaml": "tenants: {}\n"})
+    v3 = {"schema": "da-guard.write/v3", "status": "written"}
+    monkeypatch.setattr(_lib_parse_tree.subprocess, "run", lambda *a, **kw: type(
+        "P", (), {"returncode": 0, "stdout": __import__("json").dumps(v3).encode(), "stderr": b""})())
+    with pytest.raises(ce.PartialWrite) as exc:
+        ce.edit_all(root, [("a.yaml", []), ("b.yaml", [])])
+    assert (exc.value.written, exc.value.maybe_written) == ([], ["a.yaml", "b.yaml"])
+    assert isinstance(exc.value.cause, _lib_parse_tree.NotThisDocument) and exc.value.cause.older is False
+    with pytest.raises(ce.EditCallerError) as dry:
+        ce.edit_all(root, [("a.yaml", [])], dry_run=True)
+    assert dry.value.reason == "da_guard_mismatch"
 
 
 def test_a_batch_that_worsens_the_tree_is_tree_worsened(tmp_path):

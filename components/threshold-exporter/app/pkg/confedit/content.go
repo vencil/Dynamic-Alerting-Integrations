@@ -55,10 +55,15 @@ func ContentSet(c parsetree.Content, path []string, v any) error {
 		if !ok {
 			return &PathError{Reason: "the top level is set to a mapping only"}
 		}
+		// The replacement is copied first: m may be c itself (or share it).
+		repl := make(map[string]any, len(m))
+		for k, e := range m {
+			repl[k] = e
+		}
 		for k := range c {
 			delete(c, k)
 		}
-		for k, e := range m {
+		for k, e := range repl {
 			c[k] = e
 		}
 		return nil
