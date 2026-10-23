@@ -5,7 +5,7 @@
 // replaces.
 //
 // Its users: tenant-api's batch patch and PUT .../custom-alerts merges, and
-// `da-guard edit` / `da-guard emit`, which every Python tool that writes
+// `da-guard write`, which every Python tool that writes
 // conf.d hands its intent to (ADR-036 step 10).
 //
 // ⛔ EDITS ARE NODE SURGERY, never a struct round trip. A file is decoded into

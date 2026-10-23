@@ -1,6 +1,6 @@
 package main
 
-// `da-guard edit` / `da-guard emit` (ADR-036 §2 "One writer", step 10): per
+// `da-guard write` (ADR-036 §2 "One writer", step 10): per
 // op, the file is the original with only the edit — every other node and
 // comment byte for byte; every refusal writes nothing and leaves no
 // temporary file; emit keeps the caller's order.
@@ -39,7 +39,7 @@ func runBatch(t *testing.T, cmd, stdin string, args ...string) (int, writeResult
 }
 
 // oneFile wraps one file's input — the members after its path, as JSON
-// object text: `{"ops":[...]}` or `{"content":...}` — into a batch of one.
+// object text: `{"ops":[...]}` or `{"create":...}` — into a batch of one.
 // The text is spliced, not re-encoded, so input that is not valid JSON
 // (the caller-error cases) reaches da-guard as sent.
 func oneFile(path, body string) string {
@@ -142,7 +142,11 @@ func callReason(r writeResult) string {
 // holds its one result, and w.res.Files[0] is returned.
 func commitOne(w *writer, rel, abs string, out, original []byte, perm os.FileMode, ofi os.FileInfo) (int, writeFileResult) {
 	w.res = writeResult{Schema: writeSchema, Command: w.cmd, Files: []writeFileResult{{Path: rel, Warnings: []string{}}}}
-	f := &writeFile{rel: rel, abs: abs, out: out, original: original, perm: perm, ofi: ofi,
+	kind := writeKindEdit
+	if original == nil {
+		kind = writeKindCreate
+	}
+	f := &writeFile{kind: kind, rel: rel, abs: abs, out: out, original: original, perm: perm, ofi: ofi,
 		pending: true, res: &w.res.Files[0]}
 	code := w.commit([]*writeFile{f})
 	return code, w.res.Files[0]
@@ -180,7 +184,7 @@ func TestEdit_EachOpChangesOnlyTheEdit(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := writeTree(t, map[string]string{"t1.yaml": editBase, "_defaults.yaml": "defaults: {}\n"})
-			code, res := runW(t, editCmd, `{"ops":`+tc.ops+`}`, "--config-dir", root, "--path", "t1.yaml")
+			code, res := runW(t, writeCmd, `{"ops":`+tc.ops+`}`, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitOK || res.Status != writeStatusWritten {
 				t.Fatalf("exit %d, %+v (%v)", code, res, res.Message)
 			}
@@ -198,13 +202,13 @@ func TestEdit_EachOpChangesOnlyTheEdit(t *testing.T) {
 func TestEdit_DryRunAndUnchangedWriteNothing(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": editBase})
 	before := snapshot(t, root)
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","redis_memory"],"value":{"str":"2"}}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","redis_memory"],"value":{"str":"2"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml", "--dry-run")
 	if code != exitOK || res.Status != writeStatusDryRun || res.Content == nil ||
 		*res.Content != strings.Replace(editBase, `redis_memory: "1"`, `redis_memory: "2"`, 1) {
 		t.Fatalf("dry run: exit %d %+v", code, res)
 	}
-	code, res = runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","redis_memory"],"value":{"str":"1"}}]}`,
+	code, res = runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","redis_memory"],"value":{"str":"1"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusUnchanged {
 		t.Fatalf("same value: exit %d %+v", code, res)
@@ -215,7 +219,7 @@ func TestEdit_DryRunAndUnchangedWriteNothing(t *testing.T) {
 	// naming its path.
 	var out, errOut bytes.Buffer
 	in := oneFile("t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t2"]}]}`)
-	if code := runWrite(editCmd, []string{"--config-dir", root, "--input", "-", "--dry-run"},
+	if code := runWrite(writeCmd, []string{"--config-dir", root, "--input", "-", "--dry-run"},
 		strings.NewReader(in), &out, &errOut); code != exitOK || !strings.HasPrefix(out.String(), "==> t1.yaml <==\n# owned by team-a\n") || strings.Contains(out.String(), "t2:") {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errOut.String())
 	}
@@ -234,40 +238,40 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 		in    string
 		want  string
 	}{
-		{"original does not parse", map[string]string{"t1.yaml": "tenants: [\n"}, editCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
-		{"original holds two documents", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n---\nx: 1\n"}, editCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
+		{"original does not parse", map[string]string{"t1.yaml": "tenants: [\n"}, writeCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
+		{"original holds two documents", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n---\nx: 1\n"}, writeCmd, "t1.yaml", setA, writeReasonOriginalUnreadable},
 		// A verdict on the original is no refusal by itself; an edit that
 		// leaves the verdict in place is refused at the read-back.
-		{"an edit that leaves the original's verdict in place", map[string]string{"t1.yaml": "tenants:\n  - t1\n"}, editCmd, "t1.yaml",
+		{"an edit that leaves the original's verdict in place", map[string]string{"t1.yaml": "tenants:\n  - t1\n"}, writeCmd, "t1.yaml",
 			`{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonReadBackMismatch},
 		{"an unselected defaults carrier", map[string]string{"_defaults.yaml": "defaults: {}\n", "_defaults.yml": "defaults: {}\n"},
-			editCmd, "_defaults.yml", `{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonNotRead},
+			writeCmd, "_defaults.yml", `{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonNotRead},
 		// Judged before any op: the path, not the op, is what is refused.
 		{"an unselected defaults carrier, an op that does not apply", map[string]string{"_defaults.yaml": "defaults: {}\n", "_defaults.yml": "defaults: {}\n"},
-			editCmd, "_defaults.yml", `{"ops":[{"op":"set","path":["nope","x"],"value":{"str":"1"}}]}`, writeReasonNotRead},
-		{"emit to a hidden path", map[string]string{}, emitCmd, ".t9.yaml", `{"content":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
-		{"emit to a name no reader reads", map[string]string{}, emitCmd, "t9.json", `{"content":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
-		{"emit under a directory symlink", map[string]string{"real/x.yaml": "a: \"1\"\n"}, emitCmd, "link/t9.yaml",
-			`{"content":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
+			writeCmd, "_defaults.yml", `{"ops":[{"op":"set","path":["nope","x"],"value":{"str":"1"}}]}`, writeReasonNotRead},
+		{"emit to a hidden path", map[string]string{}, writeCmd, ".t9.yaml", `{"create":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
+		{"emit to a name no reader reads", map[string]string{}, writeCmd, "t9.json", `{"create":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
+		{"emit under a directory symlink", map[string]string{"real/x.yaml": "a: \"1\"\n"}, writeCmd, "link/t9.yaml",
+			`{"create":{"map":[["tenants",{"map":[]}]]}}`, writeReasonNotRead},
 		{"a re-encode that changes another tenant", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n  t2:\n    k: [1:20]\n"},
-			editCmd, "t1.yaml", setA, writeReasonNotRoundTrippable},
+			writeCmd, "t1.yaml", setA, writeReasonNotRoundTrippable},
 		{"an unset a merge key still supplies", map[string]string{"t1.yaml": "b: &b {a: \"1\"}\ntenants:\n  t1:\n    <<: *b\n    a: \"2\"\n"},
-			editCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","a"]}]}`, writeReasonNotRoundTrippable},
+			writeCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","a"]}]}`, writeReasonNotRoundTrippable},
 		{"read back: a mapping a merge key supplies", map[string]string{"t1.yaml": "b: &b\n  _routing:\n    group_wait: \"1m\"\ntenants:\n  t1:\n    <<: *b\n"},
-			editCmd, "t1.yaml", `{"ops":[{"op":"ensure-map","path":["tenants","t1","_routing"]}]}`, writeReasonReadBackMismatch},
+			writeCmd, "t1.yaml", `{"ops":[{"op":"ensure-map","path":["tenants","t1","_routing"]}]}`, writeReasonReadBackMismatch},
 		{"read back: a verdict on the written file", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"},
-			editCmd, "t1.yaml", `{"ops":[{"op":"set","path":["tenants"],"value":{"seq":[{"str":"t1"}]}}]}`, writeReasonReadBackMismatch},
-		{"read back: emit a tenant list", map[string]string{}, emitCmd, "t9.yaml",
-			`{"content":{"map":[["tenants",{"seq":[{"str":"t9"}]}]]}}`, writeReasonReadBackMismatch},
-		{"set under a scalar", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"}, editCmd, "t1.yaml",
+			writeCmd, "t1.yaml", `{"ops":[{"op":"set","path":["tenants"],"value":{"seq":[{"str":"t1"}]}}]}`, writeReasonReadBackMismatch},
+		{"read back: emit a tenant list", map[string]string{}, writeCmd, "t9.yaml",
+			`{"create":{"map":[["tenants",{"seq":[{"str":"t9"}]}]]}}`, writeReasonReadBackMismatch},
+		{"set under a scalar", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"}, writeCmd, "t1.yaml",
 			`{"ops":[{"op":"set","path":["tenants","t1","a","b"],"value":{"str":"2"}}]}`, writeReasonEditNotApplicable},
-		{"set under a missing mapping", map[string]string{"t1.yaml": "tenants: {}\n"}, editCmd, "t1.yaml", setA, writeReasonEditNotApplicable},
+		{"set under a missing mapping", map[string]string{"t1.yaml": "tenants: {}\n"}, writeCmd, "t1.yaml", setA, writeReasonEditNotApplicable},
 		// The text in place after the call must read back clean, changed or
 		// not: a no-op edit on a file validation names is no `unchanged`.
 		{"a no-op edit leaves a verdict in place", map[string]string{"_defaults.yaml": "defaults:\n  cpu: \"abc\"\n  mem: 5\n"},
-			editCmd, "_defaults.yaml", `{"ops":[{"op":"set","path":["defaults","mem"],"value":{"int":"5"}}]}`, writeReasonReadBackMismatch},
+			writeCmd, "_defaults.yaml", `{"ops":[{"op":"set","path":["defaults","mem"],"value":{"int":"5"}}]}`, writeReasonReadBackMismatch},
 		{"a no-op unset leaves a verdict in place", map[string]string{"t1.yaml": "tenants:\n  t1:\n    cpu: 5\n    mem:\n      default: [1]\n"},
-			editCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","nope"]}]}`, writeReasonReadBackMismatch},
+			writeCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","nope"]}]}`, writeReasonReadBackMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -295,7 +299,7 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
 	broken := "# kept\ntenants:\n  t1:\n    cpu:\n      default: [1, 2]\n    mem: \"5\"\n"
 	root := writeTree(t, map[string]string{"t1.yaml": broken})
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"70"}}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"70"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v", code, res)
@@ -310,7 +314,7 @@ func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
 	// The repaired file is now one an edit judges like any other: an edit
 	// that would break it again is refused at the read-back.
 	before := snapshot(t, root)
-	code, res = runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"map":[["default",{"seq":[{"int":"1"}]}]]}}]}`,
+	code, res = runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"map":[["default",{"seq":[{"int":"1"}]}]]}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitFindings || reasonOf(res) != writeReasonReadBackMismatch {
 		t.Fatalf("worsening edit: exit %d %+v", code, res)
@@ -329,7 +333,7 @@ func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := writeTree(t, map[string]string{"t1.yaml": tc.text})
-			code, res := runW(t, editCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1"]},`+
+			code, res := runW(t, writeCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1"]},`+
 				`{"op":"set","path":["tenants","t1","a"],"value":{"str":"1"}}]}`, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitOK || res.Status != writeStatusWritten {
 				t.Fatalf("exit %d %+v", code, res)
@@ -346,7 +350,7 @@ func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
 	// An edit that means nothing on it is `unchanged`, the file untouched.
 	root := writeTree(t, map[string]string{"t1.yaml": "# only\n"})
 	before := snapshot(t, root)
-	code, res := runW(t, editCmd, `{"ops":[{"op":"unset","path":["tenants"]}]}`, "--config-dir", root, "--path", "t1.yaml")
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"unset","path":["tenants"]}]}`, "--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusUnchanged {
 		t.Fatalf("exit %d %+v", code, res)
 	}
@@ -355,7 +359,7 @@ func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
 
 func TestWrite_ReadBackNamesTheValue(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "b: &b\n  _routing:\n    group_wait: \"1m\"\ntenants:\n  t1:\n    <<: *b\n"})
-	_, res := runW(t, editCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1","_routing"]}]}`, "--config-dir", root, "--path", "t1.yaml")
+	_, res := runW(t, writeCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1","_routing"]}]}`, "--config-dir", root, "--path", "t1.yaml")
 	if res.Difference == nil || strings.Join(res.Difference.Path, ".") != "tenants.t1._routing.group_wait" ||
 		res.Difference.Want == nil || res.Difference.Got != nil {
 		t.Fatalf("difference %+v", res.Difference)
@@ -368,7 +372,7 @@ func TestWrite_RefusesASymlinkedFile(t *testing.T) {
 		t.Skip(err)
 	}
 	before := snapshot(t, root)
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`, "--config-dir", root, "--path", "t1.yaml")
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`, "--config-dir", root, "--path", "t1.yaml")
 	if code != exitFindings || reasonOf(res) != writeReasonSymlink {
 		t.Fatalf("exit %d %+v", code, res)
 	}
@@ -380,11 +384,11 @@ func TestWrite_RefusesASymlinkedFile(t *testing.T) {
 
 func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	root := writeTree(t, map[string]string{})
-	in := `{"content":{"map":[["tenants",{"map":[["t9",{"map":[
+	in := `{"create":{"map":[["tenants",{"map":[["t9",{"map":[
 		["zeta",{"str":"1"}],["alpha",{"str":"yes"}],["mid",{"int":"10"}],
 		["_custom_alerts",{"seq":[{"map":[["name",{"str":"x"}],["expr",{"str":"up\n== 0\n"}]]}]}]]}]]}],
 		["defaults",{"map":[]}]]}}`
-	code, res := runW(t, emitCmd, in, "--config-dir", root, "--path", "team/t9.yaml")
+	code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "team/t9.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v %v", code, res, res.Message)
 	}
@@ -406,18 +410,18 @@ func TestWrite_CallerErrors(t *testing.T) {
 		args          []string
 		reason        string
 	}{
-		{"edit of a missing file", editCmd, `{"ops":[]}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "path_missing"},
-		{"emit onto an existing file", emitCmd, `{"content":{"map":[]}}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "path_exists"},
-		{"path outside", editCmd, `{"ops":[]}`, []string{"--config-dir", root, "--path", "../x.yaml"}, "bad_path"},
-		{"no ops", editCmd, `{}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
-		{"unknown member", editCmd, `{"ops":[],"x":1}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
-		{"an untyped value", editCmd, `{"ops":[{"op":"set","path":["a"],"value":"1"}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
-		{"a JSON object for a map", emitCmd, `{"content":{"map":{"a":{"str":"1"}}}}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "bad_input"},
-		{"emit of a scalar", emitCmd, `{"content":{"str":"1"}}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "bad_input"},
-		{"unknown op", editCmd, `{"ops":[{"op":"rename","path":["a"]}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
-		{"the merge key", editCmd, `{"ops":[{"op":"unset","path":["<<"]}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
-		{"no config dir", editCmd, `{"ops":[]}`, []string{"--path", "t1.yaml"}, "bad_flags"},
-		{"bad flag", editCmd, `{"ops":[]}`, []string{"--nope"}, "bad_flags"},
+		{"edit of a missing file", writeCmd, `{"ops":[]}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "path_missing"},
+		{"emit onto an existing file", writeCmd, `{"create":{"map":[]}}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "path_exists"},
+		{"path outside", writeCmd, `{"ops":[]}`, []string{"--config-dir", root, "--path", "../x.yaml"}, "bad_path"},
+		{"no ops", writeCmd, `{}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
+		{"unknown member", writeCmd, `{"ops":[],"x":1}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
+		{"an untyped value", writeCmd, `{"ops":[{"op":"set","path":["a"],"value":"1"}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
+		{"a JSON object for a map", writeCmd, `{"create":{"map":{"a":{"str":"1"}}}}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "bad_input"},
+		{"emit of a scalar", writeCmd, `{"create":{"str":"1"}}`, []string{"--config-dir", root, "--path", "t2.yaml"}, "bad_input"},
+		{"unknown op", writeCmd, `{"ops":[{"op":"rename","path":["a"]}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
+		{"the merge key", writeCmd, `{"ops":[{"op":"unset","path":["<<"]}]}`, []string{"--config-dir", root, "--path", "t1.yaml"}, "bad_input"},
+		{"no config dir", writeCmd, `{"ops":[]}`, []string{"--path", "t1.yaml"}, "bad_flags"},
+		{"bad flag", writeCmd, `{"ops":[]}`, []string{"--nope"}, "bad_flags"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -436,7 +440,7 @@ func TestWrite_CallerErrors(t *testing.T) {
 func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "tenants: {}\n"})
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut}
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut}
 	if code, res := commitOne(w, "t1.yaml", filepath.Join(root, "t1.yaml"), []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n# was\n"), 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite || w.res.Status != writeStatusRefused {
 		t.Fatalf("exit %d %+v", code, w.res)
 	}
@@ -444,7 +448,7 @@ func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 	if len(got) != 1 || got["t1.yaml"] != "tenants: {}\n" {
 		t.Fatalf("tree %v", got)
 	}
-	w.cmd = emitCmd
+	w.cmd = writeCmd
 	if code, res := commitOne(w, "t1.yaml", filepath.Join(root, "t1.yaml"), []byte("x: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite {
 		t.Fatalf("emit over a file created meanwhile: exit %d %+v", code, w.res)
 	}
@@ -459,7 +463,7 @@ func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 }
 
 func TestWrite_Help(t *testing.T) {
-	for _, cmd := range []string{editCmd, emitCmd} {
+	for _, cmd := range []string{writeCmd, writeCmd} {
 		var out, errOut bytes.Buffer
 		if code := run([]string{cmd, "-h"}, &out, &errOut); code != exitOK || !strings.Contains(errOut.String(), "Exit codes:") {
 			t.Fatalf("%s -h: exit %d", cmd, code)

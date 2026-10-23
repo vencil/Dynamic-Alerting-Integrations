@@ -807,7 +807,7 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
 
 def test_a_tenant_file_only_yaml_v3_reads_is_written(tmp_path):
     """租戶檔 PyYAML 讀不了、yaml.v3 讀得了（tab）: 掃描照讀（parse-tree，ADR-036 §2），
-    寫回也是 Go 的（da-guard edit，#3206）——照常刪、rc 0。（先前寫回的文字由 PyYAML
+    寫回也是 Go 的（da-guard write，#3206）——照常刪、rc 0。（先前寫回的文字由 PyYAML
     產生，這個形狀整輪不寫、rc 1。）"""
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -922,7 +922,7 @@ def test_an_unreadable_carrier_is_the_tools_problem_in_the_banner_too(
 
 
 def test_under_plane_subtree_a_refused_file_degrades_the_run(tmp_path):
-    """`--plane subtree` 下 da-guard edit 拒寫其中一個檔（這裡是 symlink 的租戶檔：
+    """`--plane subtree` 下 da-guard write 拒寫其中一個檔（這裡是 symlink 的租戶檔：
     edit 不改寫 symlink）時，與 root 平面對稱：兩段式的第一段就停，子樹載體
     也不寫、整輪降級、rc 1、結尾具名。成對反例：拿掉 symlink，子樹載體（含
     root 判不過、子樹平面合法的字串值）與租戶檔照常寫——edit 在 root 上判
@@ -978,7 +978,7 @@ def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
 
 def test_a_tab_the_exporter_accepts_is_no_longer_the_tools_limit(tmp_path):
     """yaml.v3 收得下的 tab：PyYAML 讀不了，先前因此擋寫入（寫回的文字由 PyYAML
-    產生）；寫回改由 da-guard edit 做之後（#3206）照常寫、rc 0，tab 所在的那一行
+    產生）；寫回改由 da-guard write 做之後（#3206）照常寫、rc 0，tab 所在的那一行
     之外照原樣。"""
     body = "# kept\ndefaults:\n  cpu_usage: 80\t\n  mem_usage: 90\t# kept too\n"
     root = tmp_path / "conf.d"
@@ -993,7 +993,7 @@ def test_a_tab_the_exporter_accepts_is_no_longer_the_tools_limit(tmp_path):
 
 
 def test_every_comment_outside_the_removed_keys_survives(tmp_path):
-    """先前寫回只保留檔頭連續的 `#` 行（`_header_of`），其餘註解全丟；da-guard edit
+    """先前寫回只保留檔頭連續的 `#` 行（`_header_of`），其餘註解全丟；da-guard write
     （#3206）只動被刪的節點：檔頭、區塊中間、行尾的註解都留著。"""
     root = tmp_path / "conf.d"
     root.mkdir()

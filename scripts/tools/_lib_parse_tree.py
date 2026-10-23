@@ -133,7 +133,7 @@ SCHEMA = "da-guard.parse-tree/v2"
 #: Schema values of documents a da-guard older than this tool writes: named
 #: as such when refused, so the message says what to do (upgrade it).
 _OLDER_SCHEMAS = frozenset({"da-guard.parse-tree/v1", "da-guard.parse-tree-list/v1",
-                            "da-guard.write/v1"})
+                            "da-guard.write/v1", "da-guard.write/v2"})
 _OLDER = "this da-guard is older than this tool; upgrade or rebuild it"
 
 #: The timeout of a da-guard run nobody named one for (seconds).

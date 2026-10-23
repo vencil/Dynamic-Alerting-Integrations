@@ -11,8 +11,8 @@ as the exporter mounts them — one flat directory: who declares the tenant,
 what its block holds and whether a write changes anything are decided from
 that. The new text of the key is Go's too (ADR-036 §2: only Go writes
 conf.d; step 10b, #3206): the keys are laid out as files of a private
-temporary directory, the change is sent to `da-guard edit --dry-run` (a new
-`<tenant>.yaml` to `da-guard emit --dry-run`) on that copy, and the text it
+temporary directory, the change is sent to `da-guard write --dry-run` as an
+edit (a new `<tenant>.yaml` as a create) on that copy, and the text it
 answers is what the patch carries. Everything outside the change — other
 keys, comments, how each scalar is spelled — stays as written; da-guard only
 re-lays the key out (2-space indentation, one space before a trailing
@@ -173,7 +173,7 @@ signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   and no envelope is printed.
 exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back;
   {EXIT_CALLER_ERROR} caller error, nothing written (also: the change refused by
-  `da-guard edit` / `emit`, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
+  `da-guard write`, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
   {EXIT_EXPORTER_UNREACHABLE} exporter unreachable (before the write: nothing written; after: rolled
   back); {EXIT_ROLLBACK_FAILED} rollback failed - the ConfigMap may still hold the new bytes;
   {EXIT_ABORTED_ROLLED_BACK} interrupted or an unexpected error after the write, rolled back;
@@ -264,7 +264,7 @@ def _cm_keys(cm_data):
 
 
 class _WriteRefused(ConfigMapShapeError):
-    """ADR-036 §2: `da-guard edit` / `emit` refused the change to the key, or
+    """ADR-036 §2: `da-guard write` refused the change to the key, or
     could not take it (the message is da-guard's reason and words); nothing
     is written."""
 
@@ -275,7 +275,7 @@ class _ConfdView:
     a reader selects and each one's content as yaml.v3 reads it. Every
     decision of this tool (who declares a tenant, what its block holds,
     whether a write changes anything) is taken from this, and the text of a
-    rewrite is `da-guard edit`'s on this same directory (`_patch_carrier`)."""
+    rewrite is `da-guard write`'s on this same directory (`_patch_carrier`)."""
 
     def __init__(self, data):
         # Two keys that differ only in case are two files in the exporter's
@@ -452,7 +452,7 @@ def _is_default(value):
 def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
                    shared_key=None):
     """Patch the key declaring `tenant`. None = no-op: `default` for a tenant
-    no key declares, or a change `da-guard edit` finds leaves the key as it
+    no key declares, or a change `da-guard write` finds leaves the key as it
     is. An emptied block is kept: it still declares the tenant. A key
     declaring more than one tenant is refused, except `shared_key`.
 
@@ -490,8 +490,8 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
             f"patch-config only writes a key that declares one. Edit {key} "
             f"by hand.")
     # The text is Go's (ADR-036 §2, #3206): the change goes to `da-guard
-    # edit --dry-run` on the view's directory (the keys as the exporter
-    # mounts them), a new key to `emit --dry-run`; the answered text is the
+    # write --dry-run` as an edit on the view's directory (the keys as the
+    # exporter mounts them), a new key as a create; the answered text is the
     # patch. A typed value is a number only when canonical decimal.
     value_node = _lib_confedit.cli_value(str(value))
     try:
@@ -513,7 +513,7 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
 
 
 def _edit_ops(old_tenants, tenant, metric_key, value, value_node):
-    """The `da-guard edit` operations of this change, from the key as
+    """The `da-guard write` operations of this change, from the key as
     parse-tree reads it (*old_tenants*: its `tenants:` node, None when
     absent). An emptied block is kept (it still declares the tenant); a null
     `tenants:` or tenant block becomes a mapping."""
@@ -632,7 +632,7 @@ def print_diff(diff):
 
 
 def build_patch(cm_data, mode, tenant, metric_key, value):
-    """The merge patch apply sends, or None for a no-op (`da-guard edit`'s
+    """The merge patch apply sends, or None for a no-op (`da-guard write`'s
     `unchanged`, `_patch_carrier`)."""
     patch = patch_legacy if mode == "legacy" else patch_multifile
     return patch(cm_data, tenant, metric_key, value)

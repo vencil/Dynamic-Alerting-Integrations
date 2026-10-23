@@ -1,6 +1,6 @@
 package main
 
-// write_worsen.go — the tree-scope rule of `da-guard edit` / `emit` (#3206):
+// write_worsen.go — the tree-scope rule of `da-guard write` (#3206):
 // a call may repair the tree, never worsen it. Each file of the batch is
 // judged on its own entry (write.go judgeTree); this is the rest of the
 // tree. The tree before the call (the disk) and after it (the batch's texts

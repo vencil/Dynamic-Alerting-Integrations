@@ -34,7 +34,7 @@ func TestWrite_InputIsTakenAsSent(t *testing.T) {
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
 			before := snapshot(t, root)
-			code, res := runW(t, editCmd, in, "--config-dir", root, "--path", "t1.yaml")
+			code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitCallerErr || reasonOf(res) != "bad_input" {
 				t.Fatalf("exit %d %+v (%v)", code, res, res.Message)
 			}
@@ -42,11 +42,11 @@ func TestWrite_InputIsTakenAsSent(t *testing.T) {
 		})
 	}
 	// A valid pair is a character, not an error.
-	code, res := runW(t, editCmd, set(`"b`+esc+`d83d`+esc+`de00"`), "--config-dir", root, "--path", "t1.yaml", "--dry-run")
+	code, res := runW(t, writeCmd, set(`"b`+esc+`d83d`+esc+`de00"`), "--config-dir", root, "--path", "t1.yaml", "--dry-run")
 	if code != exitOK || res.Content == nil || !strings.Contains(*res.Content, `"b`+string(rune(92))+`U0001F600": "2"`) {
 		t.Fatalf("a surrogate pair: exit %d %+v", code, res)
 	}
-	code, res = runW(t, emitCmd, `{"CONTENT":{"map":[]}}`, "--config-dir", root, "--path", "t2.yaml")
+	code, res = runW(t, writeCmd, `{"CREATE":{"map":[]}}`, "--config-dir", root, "--path", "t2.yaml")
 	if code != exitCallerErr || reasonOf(res) != "bad_input" {
 		t.Fatalf("emit, a case-variant member: exit %d %+v", code, res)
 	}
@@ -58,7 +58,7 @@ func TestWrite_InputIsTakenAsSent(t *testing.T) {
 func TestEdit_KeepsFramingAndSkipsLayoutOnlyWrites(t *testing.T) {
 	const crlf = "\xef\xbb\xbf# head\r\ntenants:\r\n  t1:\r\n    a: \"1\"\r\n"
 	root := writeTree(t, map[string]string{"t1.yaml": crlf, "t2.yaml": "tenants:\n  t2:\n    a:    \"1\"    # wide\n"})
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v %v", code, res, res.Message)
@@ -67,7 +67,7 @@ func TestEdit_KeepsFramingAndSkipsLayoutOnlyWrites(t *testing.T) {
 		t.Fatalf("framing not kept: %q", got)
 	}
 	before := snapshot(t, root)
-	code, res = runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t2","a"],"value":{"str":"1"}}]}`,
+	code, res = runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t2","a"],"value":{"str":"1"}}]}`,
 		"--config-dir", root, "--path", "t2.yaml")
 	if code != exitOK || res.Status != writeStatusUnchanged {
 		t.Fatalf("layout-only: exit %d %+v", code, res)
@@ -77,7 +77,7 @@ func TestEdit_KeepsFramingAndSkipsLayoutOnlyWrites(t *testing.T) {
 
 func TestEdit_UnsetTheOnlyKeyOfABlock(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n    _routing:\n      group_wait: \"30s\"\n"})
-	code, res := runW(t, editCmd, `{"ops":[{"op":"unset","path":["tenants","t1","_routing","group_wait"]}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"unset","path":["tenants","t1","_routing","group_wait"]}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v %v", code, res, res.Message)
@@ -92,7 +92,7 @@ func TestEdit_UnsetTheOnlyKeyOfABlock(t *testing.T) {
 func TestEmit_RemovesTheDirectoriesItCreated(t *testing.T) {
 	root := writeTree(t, map[string]string{"keep/x.yaml": "a: \"1\"\n"})
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: emitCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut,
 		link: func(string, string) error { return fs.ErrExist }}
 	if code, res := commitOne(w, "keep/new/deeper/t9.yaml", filepath.Join(root, "keep", "new", "deeper", "t9.yaml"), []byte("a: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite {
 		t.Fatalf("exit %d %+v", code, w.res)

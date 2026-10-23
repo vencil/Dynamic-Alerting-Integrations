@@ -130,7 +130,7 @@ BUILD_EXEMPT = frozenset({
     # §2); imported by the writers. Library, not CLI.
     "_lib_write_check.py",
     # #3206 — sends a Python tool's change of an existing conf.d file to
-    # `da-guard edit` (ADR-036 §2: only Go writes conf.d); imported by
+    # `da-guard write` (ADR-036 §2: only Go writes conf.d); imported by
     # patch_config, threshold_govern and deprecate_rule. Library, not CLI.
     "_lib_confedit.py",
     # #2901 — generator_service's judgement process and its request checks /

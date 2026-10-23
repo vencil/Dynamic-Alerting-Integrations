@@ -12,7 +12,7 @@
 6. **判定是 parse-tree 的**：一個 yaml.v3 與 PyYAML 讀法不同的輸入，工具給的是 yaml.v3
    的判定。
 
-deprecate_rule、patch_config、threshold_govern 改既有檔時改由 `da-guard edit` 寫
+deprecate_rule、patch_config、threshold_govern 改既有檔時改由 `da-guard write` 寫
 （ADR-036 步驟 10b，#3206）：第 2 列對它們是「edit 拒寫就不寫」（PyYAML 換寫法的那種
 讀回不同已不會發生，改釘「沒動到的寫法照原樣」），deprecate_rule 另有一列「多檔中一個
 被拒就都不寫」。
@@ -33,7 +33,7 @@ onboard_platform／migrate_rule／generate_tenant_fixture（#2906 F1）同屬「
 CLI 先以 ADR-035 擋下不合法的 id，函式層呼叫則由確認擋下；migrate_rule 的兩個檔名
 固定，generate_tenant_fixture 的檔名是 `<domain>-<db>-<NNNN>.yaml` 與
 `_defaults.yaml`。第 6 列對產生新檔的工具就是第 2 列：預期內容是工具要寫的資料，
-判定是 yaml.v3 讀回的型別。generate_tenant_fixture 改由 `da-guard emit` 一次一批寫
+判定是 yaml.v3 讀回的型別。generate_tenant_fixture 改由 `da-guard write` 一次一批寫
 （#3206 步驟 10c-2）：文字是 Go 的，第 2 列成為「值沒有契約型別（`inf`）就不寫」與
 「emit 拒寫一個檔就一個都不寫」。
 
@@ -106,7 +106,7 @@ def test_deprecate_rule_writes_what_reads_back(tmp_path):
 
 
 def test_deprecate_rule_keeps_an_untouched_spelling_as_written(tmp_path):
-    # #3206: the text is da-guard edit's, so `!!float 1` stays `!!float 1`
+    # #3206: the text is da-guard write's, so `!!float 1` stays `!!float 1`
     # (PyYAML dumped `1.0` and the parse-tree confirmation refused the run).
     root = _tree(tmp_path / "conf.d", {
         "_defaults.yaml": "defaults:\n  cpu_usage: 80\n  mem_usage: !!float 1\n",
@@ -118,7 +118,7 @@ def test_deprecate_rule_keeps_an_untouched_spelling_as_written(tmp_path):
 
 
 def test_deprecate_rule_writes_nothing_when_one_file_is_refused(tmp_path):
-    # Two-phase (`_lib_confedit.edit_all`): da-guard edit refuses one file
+    # Two-phase (`_lib_confedit.edit_all`): da-guard write refuses one file
     # (a symlinked tenant file: edit never rewrites a link), so neither it nor
     # the carrier and the other tenant file — each fine on its own — is
     # written; every refusal is named, rc 1.
@@ -216,7 +216,7 @@ def test_patch_config_writes_what_reads_back():
 
 
 def test_patch_config_refuses_a_rewrite_that_reads_back_differently():
-    # #3206: the text is da-guard edit's, so an untouched `!!float 1` is kept
+    # #3206: the text is da-guard write's, so an untouched `!!float 1` is kept
     # as written (PyYAML wrote `1.0` and the confirmation refused it). What is
     # refused now is an edit da-guard cannot make without changing another
     # node: `mem: *v` aliases the scalar being replaced.
@@ -387,7 +387,7 @@ def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
 
 
 # ── threshold_govern (the pre-PUT edit) ──────────────────────────────────
-# #3206: the PUT body is `da-guard edit`'s text, so row 2's "a text that
+# #3206: the PUT body is `da-guard write`'s text, so row 2's "a text that
 # reads back differently" is da-guard's own check (pkg/confedit); here: an
 # untouched spelling yaml.v3 and PyYAML read differently is kept as written,
 # and the value is written with the type the plan means (a string).
@@ -947,7 +947,7 @@ def test_generate_tenant_fixture_without_da_guard_is_exit_2(tmp_path):
 
 
 def test_generate_tenant_fixture_one_refused_file_writes_none(tmp_path, capsys):
-    # #3206 10c-2: one `da-guard emit` batch for the whole fixture. Here Go
+    # #3206 10c-2: one `da-guard write` batch for the whole fixture. Here Go
     # refuses it (the `_defaults.yaml` it would add deselects the
     # `_defaults.yml` already there: the tree gets worse), so not one
     # tenant file is written — only what was there stays.

@@ -24,16 +24,18 @@ func TestWrite_NeverReadsANonRegularFile(t *testing.T) {
 		{"char device", func(p string) error { return syscall.Mknod(p, syscall.S_IFCHR|0o600, 1<<8|5) }},
 	}
 	for _, sp := range specials {
-		for _, cmd := range []string{editCmd, emitCmd} {
-			t.Run(sp.name+"/"+cmd, func(t *testing.T) {
+		for _, kind := range []string{writeKindEdit, writeKindCreate, writeKindMove} {
+			cmd := writeCmd
+			t.Run(sp.name+"/"+kind, func(t *testing.T) {
 				root := writeTree(t, map[string]string{"t2.yaml": "tenants:\n  t2:\n    a: \"1\"\n"})
 				if err := sp.make(filepath.Join(root, "t1.yaml")); err != nil {
 					t.Skipf("cannot make a %s here: %v", sp.name, err)
 				}
-				in := `{"ops":[{"op":"set","path":["a"],"value":{"str":"1"}}]}`
-				if cmd == emitCmd {
-					in = `{"content":{"map":[["a",{"str":"1"}]]}}`
-				}
+				in := map[string]string{
+					writeKindEdit:   `{"ops":[{"op":"set","path":["a"],"value":{"str":"1"}}]}`,
+					writeKindCreate: `{"create":{"map":[["a",{"str":"1"}]]}}`,
+					writeKindMove:   `{"from":"t2.yaml"}`, // onto the special file: refused, never read
+				}[kind]
 				type result struct {
 					code int
 					res  writeFileResult
@@ -68,7 +70,7 @@ func TestEdit_KeepsTheOwner(t *testing.T) {
 	if err := os.Chown(p, 4321, 4322); err != nil {
 		t.Skipf("cannot give a file away here: %v", err)
 	}
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten || len(res.Warnings) != 0 {
 		t.Fatalf("exit %d %+v", code, res)

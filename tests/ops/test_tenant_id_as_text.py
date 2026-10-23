@@ -291,7 +291,7 @@ _DEPRECATE_BODY = ('    mysql_connections: "70"\n'
                    '    container_cpu: "80"\n'
                    '    _severity_dedup: "enable"\n')
 
-# What deprecate_rule writes for the CTRL tree since #3206 (da-guard edit:
+# What deprecate_rule writes for the CTRL tree since #3206 (da-guard write:
 # every scalar outside the edit stays as written, here double-quoted; the
 # PyYAML-era write, measured on 96e963cb, re-quoted them as `'80'` / `enable`).
 _DEPRECATE_CTRL_ON_MAIN = ('# header kept\ntenants:\n  acme:\n'
@@ -371,7 +371,7 @@ def test_deprecate_rule_unq_and_quoted_write_the_same_ids(tmp_path, da_guard):
 
     #2220: this pinned the same BYTES, which held only because the write
     quoted every id YAML would retype (`010:` → `'010':`) — the same dump
-    that retyped every plain VALUE (`010` → 8). The write (da-guard edit
+    that retyped every plain VALUE (`010` → 8). The write (da-guard write
     since #3206) keeps each scalar as written, so the two files differ in
     quoting and nothing else; the invariant is unchanged and is asserted
     where it lives: the ids (and values) the exporter reads — by the
