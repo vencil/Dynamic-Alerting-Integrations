@@ -112,7 +112,7 @@ def main() -> int:
     for rel, path in targets:
         path.parent.mkdir(parents=True, exist_ok=True)
         # newline="\n": force LF on every platform (CRLF would taint the portal
-        # bundle's sourcemap; see gen_recipe_status_json.py).
+        # bundle's sourcemap; see gen_recipe_contract.py).
         path.write_text(generated, encoding="utf-8", newline="\n")
         print(f"WROTE: {rel}")
     return 0

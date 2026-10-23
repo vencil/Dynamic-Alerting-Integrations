@@ -40,51 +40,66 @@ import RECIPE_STATUS from '../_common/data/recipe-status.json';
 /* ── i18n helper ───────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
-/* Recipe lifecycle status (ADR-024 §8), derived from shape.py RECIPE_STATUS via
- * recipe-status.json. Unknown → active. This is ADVISORY UX only: the tenant-api
+/* Recipe lifecycle status (ADR-024 §8), generated from the exporter's recipe
+ * contract (pkg/config/recipe_contract.json) into recipe-status.json. Unknown → active. This is ADVISORY UX only: the tenant-api
  * writer is the eol-expansion authority (B2-wide). */
 function recipeStatus(r) {
   return (RECIPE_STATUS.statuses && RECIPE_STATUS.statuses[r]) || 'active';
 }
 
-/* Per-recipe field LAYOUT map (UI concern, not the validation authority;
- * the schema's if/then only covers horizon-vs-window). Order = render
- * order. The metric-typed fields each get their own autocomplete.
+/* The fields this form can render. Which of them a recipe takes, which it
+ * requires and in which order they come is the recipe contract's
+ * (recipe-enums.json recipeSpecs / fields / baseRequired, generated from the
+ * exporter's pkg/config/recipe_contract.json, #3229); only "can the form
+ * render it" is a UI fact.
  *
- * DEFERRED (S6b-1 scope): `selectors` / `selectors_re` (label filters) are
- * NOT yet surfaced — the MVP authors whole-metric recipes. Recipes that
- * commonly want a label filter (rate/ratio status=~"5..", etc.) still work
- * on the bare metric; a dynamic key→value selectors editor is a fast-follow
- * (the schema + compiler already accept them). */
-const FIELDS_BY_RECIPE = {
-  threshold: ['metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
-  rate: ['metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
-  ratio: ['metric', 'denominator_metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
-  absence: ['metric', 'window', 'threshold', 'severity', 'mode', 'for'],
-  p99_latency: ['metric', 'quantile', 'op', 'window', 'threshold', 'severity', 'mode', 'for'],
-  forecast: ['metric', 'capacity_metric', 'op', 'horizon', 'threshold', 'severity', 'mode', 'for'],
-};
+ * DEFERRED (S6b-1 scope): `selectors` / `selectors_re` (label filters) and
+ * `group_by` are NOT yet surfaced — the MVP authors whole-metric recipes; a
+ * dynamic key→value selectors editor is a fast-follow (the schema + compiler
+ * already accept them). */
+const FORM_FIELDS = [
+  'metric', 'denominator_metric', 'capacity_metric', 'op', 'window', 'horizon',
+  'quantile', 'threshold', 'mode', 'for',
+];
 
 const METRIC_FIELDS = ['metric', 'denominator_metric', 'capacity_metric'];
 
-/* A recipe in the schema enum but WITHOUT a FIELDS_BY_RECIPE entry (e.g.
- * slo_burn_rate, ADR-031) has no form support yet. Rendering the generic
- * name/threshold/window skeleton for it would be a dead end — threshold is
- * REJECTED by that recipe and window is ignored, so `ready` could never go
- * true (or worse, would emit an invalid recipe). Instead the builder disables
- * the option for NEW alerts and shows a YAML-only callout (an existing
- * declaration loaded via initialValue keeps its option selectable so the
- * callout — not a wrong form — renders). */
-function formSupported(recipe) {
-  return Object.prototype.hasOwnProperty.call(FIELDS_BY_RECIPE, recipe);
+function recipeSpec(recipe) {
+  return Object.prototype.hasOwnProperty.call(ENUMS.recipeSpecs, recipe)
+    ? ENUMS.recipeSpecs[recipe] : null;
 }
+
+/* A recipe the form cannot fully render (one of its required fields is not a
+ * form field — e.g. slo_burn_rate's objective, ADR-031) has no form support:
+ * rendering the generic skeleton for it would be a dead end, so the builder
+ * disables the option for NEW alerts and shows a YAML-only callout (an
+ * existing declaration loaded via initialValue keeps its option selectable so
+ * the callout — not a wrong form — renders). */
+function formSupported(recipe) {
+  const spec = recipeSpec(recipe);
+  return !!spec && spec.required.every((field) => FORM_FIELDS.includes(field));
+}
+
+/* Render order per form-supported recipe: the contract's field order, the
+ * recipe's params the form can render, with the severity dropdown (the UI
+ * half of threshold's value:severity) right after threshold. */
+const FIELDS_BY_RECIPE = Object.fromEntries(
+  ENUMS.recipe.filter(formSupported).map((recipe) => {
+    const { params } = recipeSpec(recipe);
+    const order = ENUMS.fields.filter((field) => params.includes(field) && FORM_FIELDS.includes(field));
+    return [recipe, order.flatMap((field) => (field === 'threshold' ? ['threshold', 'severity'] : [field]))];
+  }),
+);
 
 const NAME_RE = new RegExp(ENUMS.patterns.name);
 const METRIC_RE = new RegExp(ENUMS.patterns.metric);
 const WINDOW_RE = new RegExp(ENUMS.patterns.window);
+const DECIMAL_RE = new RegExp(ENUMS.patterns.decimal);
 
 /* ── validation (pure UX fast-feedback; the S5 Go preflight + CI are the
- * authority — this never re-implements the cross-language contract) ─── */
+ * authority). Every enum, pattern and bound comes from recipe-enums.json,
+ * which is GENERATED from the recipe contract the exporter embeds (#3229), so
+ * the form cannot accept what the exporter refuses. ─── */
 function isValidName(s) { return typeof s === 'string' && NAME_RE.test(s); }
 function isValidMetric(s) { return typeof s === 'string' && METRIC_RE.test(s); }
 function isValidWindow(s) { return typeof s === 'string' && WINDOW_RE.test(s); }
@@ -106,11 +121,47 @@ function composeThreshold(f) {
 }
 
 function requiredFields(recipe) {
-  const base = ['name', 'metric', 'threshold'];
-  if (recipe === 'forecast') base.push('horizon');
-  else base.push('window');
-  if (recipe === 'ratio') base.push('denominator_metric');
-  return base;
+  const spec = recipeSpec(recipe);
+  const all = [...ENUMS.baseRequired, ...(spec ? spec.required : [])].filter((field) => field !== 'recipe');
+  return ENUMS.fields.filter((field) => all.includes(field));
+}
+
+/* The operators a recipe accepts: `==` only on the contract's eq recipes
+ * (#810 — exact match on a raw gauge; computed floats reject it). */
+function opOptions(recipe) {
+  const spec = recipeSpec(recipe);
+  if (spec && spec.fixedOp) return [spec.fixedOp];
+  return ENUMS.op.filter((op) => op !== '==' || ENUMS.eqRecipes.includes(recipe));
+}
+
+/* The op to keep when the recipe changes: the current one if the new recipe
+ * takes it, else the default — so a `==` picked on threshold does not stay in
+ * state (invisible behind a select showing ">") after switching to rate. */
+function opFor(recipe, op) {
+  const options = opOptions(recipe);
+  if (options.includes(op)) return op;
+  return options.includes(ENUMS.opDefault) ? ENUMS.opDefault : options[0];
+}
+
+/* Why a forecast ratio-mode floor is refused, or null: the exporter refuses a
+ * floor outside (floor minimum, current band) — at or above the band the band
+ * gate neuters it. */
+function forecastFloorError(recipe, f) {
+  if (recipe !== 'forecast' || !f.capacity_metric || !f.threshold) return null;
+  const floor = parseThresholdValue(f.threshold);
+  if (Number.isNaN(floor)) return null;
+  const lo = ENUMS.forecastRatioFloorMin;
+  const hi = ENUMS.forecastCurrentBand;
+  if (floor > lo && floor < hi) return null;
+  return t(`比例模式的閾值須在 (${lo}, ${hi}) 之間：達到或超過現狀 band 的下限會被 band 閘門抵銷`,
+    `a ratio-mode floor must be in (${lo}, ${hi}): at or above the current-state band it is neutered by the band gate`);
+}
+
+/* A decimal strictly inside the open interval (lo, hi). */
+function inOpenRange(s, [lo, hi]) {
+  if (typeof s !== 'string' || !DECIMAL_RE.test(s)) return false;
+  const n = Number(s);
+  return Number.isFinite(n) && n > lo && n < hi;
 }
 
 function isFieldValid(field, value) {
@@ -121,7 +172,7 @@ function isFieldValid(field, value) {
     case 'capacity_metric': return isValidMetric(value);
     case 'window': return isValidWindow(value);
     case 'horizon': return ENUMS.horizon.includes(value);
-    case 'quantile': { const n = Number(value); return Number.isFinite(n) && n > 0 && n < 1; }
+    case 'quantile': return inOpenRange(value, ENUMS.quantileRange);
     case 'threshold': return !Number.isNaN(parseThresholdValue(value));
     default: return true;
   }
@@ -145,11 +196,8 @@ function allRequiredValid(recipe, f) {
   for (const field of (FIELDS_BY_RECIPE[recipe] || [])) {
     if (!required.includes(field) && f[field] && !isFieldValid(field, f[field])) return false;
   }
-  // forecast ratio mode: capacity_metric set → floor ∈ (0,1).
-  if (recipe === 'forecast' && f.capacity_metric) {
-    const floor = parseThresholdValue(f.threshold);
-    if (!(floor > 0 && floor < 1)) return false;
-  }
+  if (f.op && !opOptions(recipe).includes(f.op)) return false;
+  if (forecastFloorError(recipe, f)) return false;
   return true;
 }
 
@@ -174,7 +222,7 @@ function recipeSummary(recipe, f) {
       return t(`當 ${f.metric} 連續 ${f.window} 無數據時，觸發 ${sev} 告警`,
         `fires ${sev} when ${f.metric} has no data for ${f.window}`);
     case 'p99_latency': {
-      const q = f.quantile || '0.99';
+      const q = f.quantile || ENUMS.quantileDefault;
       return t(`當 ${f.metric} 的 p${q} 延遲在 ${f.window} 內 ${op} ${value} 秒時，觸發 ${sev} 告警`,
         `fires ${sev} when the p${q} latency of ${f.metric} ${op} ${value}s over ${f.window}`);
     }
@@ -249,6 +297,9 @@ export {
   composeThreshold,
   requiredFields,
   isFieldValid,
+  opOptions,
+  opFor,
+  forecastFloorError,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
