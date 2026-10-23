@@ -33,13 +33,13 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib (prometheus_instant's shape
 # check, one count reading); a query not answered is a failed check, never
 # a missing one or an advisory.
 from _lib_prometheus import (  # noqa: E402
-    QueryError, alertmanager_alerts, alertmanager_silences, instant_or_error,
-    vector_count, vector_sample)
+    QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
+    instant_or_error, prometheus_rules, vector_count, vector_sample)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
@@ -168,16 +168,19 @@ def _judge_step2_user_threshold_metrics(results, err):
         }
 
 
-def _judge_step3_rule_packs_loaded(data, err):
-    """Judge Step 3 (Rule Packs loaded). Input is the /api/v1/rules JSON dict."""
+def _judge_step3_rule_packs_loaded(groups, err):
+    """Judge Step 3 (Rule Packs loaded). Input is ``data.groups`` of the
+    /api/v1/rules answer, as ``prometheus_rules`` checked it."""
     if err:
         return {
             "check": "step3_rule_packs_loaded",
             "status": "fail",
-            "caller_error": True,  # rules API transport failure = caller-error
+            # #3133: not answered, an error status or a malformed answer —
+            # all caller-error; a `status: error` used to read as "no rule
+            # groups found" (exit 1).
+            "caller_error": True,
             "detail": f"Rules API failed: {err[:60]}",
         }
-    groups = data.get("data", {}).get("groups", [])
     da_groups = [g for g in groups if any(
         kw in g.get("name", "").lower()
         for kw in ["normalization", "threshold", "mariadb", "postgresql",
@@ -440,9 +443,12 @@ def check_prometheus(args):
     results, err = query_prometheus(prom_url, "count(user_threshold)")
     checks.append(_judge_step2_user_threshold_metrics(results, err))
 
-    # Step 3: Rule Packs loaded (http_get_json, not query_prometheus)
-    data, err = http_get_json(f"{prom_url}/api/v1/rules")
-    checks.append(_judge_step3_rule_packs_loaded(data, err))
+    # Step 3: Rule Packs loaded
+    try:
+        groups, err = prometheus_rules(prom_url, timeout=10), None
+    except QueryError as exc:
+        groups, err = None, str(exc)
+    checks.append(_judge_step3_rule_packs_loaded(groups, err))
 
     # Step 3b: Recording rules producing output (no check appended on query error)
     results, err = query_prometheus(
@@ -716,22 +722,20 @@ def check_alertmanager(args):
     # 2. Check AM config for tenant routes
     inhibit_rules = None       # None = config unavailable; [] = none configured
     inhibit_parse_err = None
-    data, err = http_get_json(f"{am_url}/api/v2/status")
-    if err:
+    try:
+        status = alertmanager_status(am_url)
+    except QueryError as exc:
+        # #3133: a status answer not read (unreachable, or malformed: config
+        # null, original not a string) is a failed check — the malformed ones
+        # used to read as "No tenant routing found" (exit 0).
         checks.append({
             "check": "alertmanager_config",
             "status": "fail",
-            "caller_error": True,  # status API transport failure = caller-error
-            "detail": f"Status API failed: {err[:60]}",
+            "caller_error": True,
+            "detail": f"Status API failed: {str(exc)[:60]}",
         })
     else:
-        # config.original is normally the raw YAML string; harden against a
-        # malformed status payload (config null, or original a non-string) so the
-        # membership checks and the safe_load below cannot raise.
-        cfg_obj = data.get("config") if isinstance(data, dict) else None
-        config_str = cfg_obj.get("original") if isinstance(cfg_obj, dict) else ""
-        if not isinstance(config_str, str):
-            config_str = ""
+        config_str = status["config"]["original"]
         has_tenant_routes = "tenant" in config_str
         has_inhibit = "inhibit_rules" in config_str
         checks.append({

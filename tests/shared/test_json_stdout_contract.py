@@ -97,7 +97,7 @@ HOW THE MODES ARE DRIVEN (every dependency is mocked, none is contacted)
   grounds.
 
 The HTTP stub is an *out-of-process server* rather than the in-process
-``monkeypatch(_lib_python.http_get_json)`` seam used by
+``monkeypatch(_lib_prometheus.http_get_json)`` seam used by
 ``tests/ops/test_check_alert.py``.  Reason: only 18 of the tools go through
 ``http_get_json``; the rest reach the network via ``urllib.urlopen`` or
 ``requests`` directly (``maintenance_scheduler``, ``notification_tester``,

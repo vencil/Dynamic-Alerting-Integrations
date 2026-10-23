@@ -32,10 +32,11 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
-from _lib_prometheus import QueryError, instant_or_error, vector_count  # noqa: E402
+from _lib_prometheus import (  # noqa: E402
+    QueryError, instant_or_error, prometheus_rules, prometheus_status_config, vector_count)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
@@ -85,16 +86,18 @@ def check_edge(prom_url):
         return checks
 
     # 2. external_labels configured
-    data, err = http_get_json(f"{prom_url}/api/v1/status/config")
-    if err:
+    try:
+        config_yaml = prometheus_status_config(prom_url)
+    except QueryError as exc:
+        # #3133: unreachable, an error status or a malformed answer — all
+        # caller-error; a `status: error` used to read as "no external_labels".
         checks.append({
             "check": "edge_external_labels",
             "status": "fail",
-            "caller_error": True,  # config API transport failure = caller-error
-            "detail": f"Config API failed: {err[:60]}",
+            "caller_error": True,
+            "detail": f"Config API failed: {str(exc)[:60]}",
         })
     else:
-        config_yaml = data.get("data", {}).get("yaml", "")
         has_external = "external_labels" in config_yaml
         has_cluster = "cluster" in config_yaml
         if has_external and has_cluster:
@@ -134,25 +137,22 @@ def check_edge(prom_url):
             "detail": "No targets with tenant label found",
         })
 
-    # 4. Federate endpoint accessible
-    import urllib.error
-    import urllib.request
+    # 4. Federate endpoint accessible — a probe: not reaching it is the
+    # finding (warn), as for the other probes (#3133 keeps probes as they are).
     federate_url = f"{prom_url}/federate?match[]=" + urllib.parse.quote('{tenant!=""}')
-    try:
-        req = urllib.request.Request(federate_url)  # nosec B310  #operator-supplied internal Prometheus URL
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  #see Request line above
-            content = resp.read().decode()
+    content, probe_err = probe_health(federate_url)
+    if probe_err:
+        checks.append({
+            "check": "edge_federate_endpoint",
+            "status": "warn",
+            "detail": f"Federate endpoint not accessible: {probe_err[:60]}",
+        })
+    else:
         line_count = len(content.strip().split("\n")) if content.strip() else 0
         checks.append({
             "check": "edge_federate_endpoint",
             "status": "pass" if line_count > 0 else "warn",
             "detail": f"Federate endpoint returned {line_count} lines",
-        })
-    except (urllib.error.URLError, ValueError, OSError) as e:
-        checks.append({
-            "check": "edge_federate_endpoint",
-            "status": "warn",
-            "detail": f"Federate endpoint not accessible: {str(e)[:60]}",
         })
 
     return checks
@@ -250,16 +250,18 @@ def check_central(prom_url):
         })
 
     # 5. Alert rules loaded
-    data, err = http_get_json(f"{prom_url}/api/v1/rules?type=alert")
-    if err:
+    try:
+        groups = prometheus_rules(prom_url, rule_type="alert", timeout=10)
+    except QueryError as exc:
+        # #3133: unreachable, an error status or a malformed answer — all
+        # caller-error; the last two used to read as "0 alert rules" (warn).
         checks.append({
             "check": "central_alert_rules",
             "status": "fail",
-            "caller_error": True,  # rules API transport failure = caller-error
-            "detail": f"Rules API failed: {err[:60]}",
+            "caller_error": True,
+            "detail": f"Rules API failed: {str(exc)[:60]}",
         })
     else:
-        groups = data.get("data", {}).get("groups", [])
         alert_count = sum(len(g.get("rules", [])) for g in groups)
         firing = sum(
             len(r.get("alerts", []))

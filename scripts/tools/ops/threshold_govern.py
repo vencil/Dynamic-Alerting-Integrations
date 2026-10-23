@@ -88,12 +88,13 @@ from _lib_python import (  # noqa: E402
     add_prometheus_arg,
     detect_cli_lang,
     exit_on_yaml_file_error,
-    http_get_json,
     non_negative_seconds,
     parse_duration_seconds,
     positive_seconds,
 )
 from _lib_compat import find_project_root  # noqa: E402
+# tenant-api GETs (not Prometheus): the tuple reader, by name in test_query_error's gate
+from _lib_prometheus import http_get_json  # noqa: E402
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §2, #2906)
 # Aliased: the local format_json_report() below (domain report builder,

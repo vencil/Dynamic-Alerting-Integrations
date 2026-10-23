@@ -822,7 +822,7 @@ da-tools shadow-verify <phase> [options]
 | `--report-csv <FILE>` | Path to validation-report.csv (for runtime/convergence) | (none) |
 | `--readiness-json <FILE>` | Path to cutover-readiness.json (for convergence) | (none) |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL. Given and not read (unreachable, errored or answered in the wrong shape), the shadow-route check FAILs and the exit code is 2; not given, the default is read and not answering stays a skip ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL. Given and not read (unreachable, errored or answered in the wrong shape), the shadow-route check FAILs and the exit code is 2; not given, the default is read and not answering stays a skip ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). The wrong shape includes a missing `config` or `config.original` (required by the AM v2 API): such an answer used to read as an empty config, a warn "No migration_status matcher found", exit code 0 | `http://localhost:9093` |
 | `--json` | JSON structured output (for CI) | false |
 
 **Three-Phase Checks**
@@ -899,7 +899,7 @@ da-tools byo-check all --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
-| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed, answered in the wrong shape, or answered a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects. Every step's query counts: a failed Step 3b or E2E query used to produce no check; a failed Step 4 / 5 follow-up query used to be a warn; Alertmanager alerts / silences that could not be read used to be a warn, and an alerts answer that is not an array passed ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
+| `2` | Caller error: Prometheus or Alertmanager unreachable, or a query / rules / status API call failed, answered in the wrong shape, or answered a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1); or arguments argparse rejects. Every step's query counts: a failed Step 3b or E2E query used to produce no check; a failed Step 4 / 5 follow-up query used to be a warn; Alertmanager alerts / silences that could not be read used to be a warn, and an alerts answer that is not an array passed; a Step 3 rules answer with `status: error` or no `groups` used to read as "no rule groups", exit code 1; an Alertmanager status answer missing `config` or `config.original` (required by the AM v2 API), whose `config` is null or not an object, whose `original` is not a string, or whose body is not an object used to read as "no tenant routing" (warn, exit code 0) ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -952,7 +952,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed |
-| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable, a config / query / rules API call failed, a query answered in the wrong shape, or a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1). Every query counts: the central fallback query (no cluster label) used to read a failure as "none found", exit code 1; a failed recording-rules or e2e cross-cluster query used to produce no check ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
+| `2` | Caller error: `e2e` without `--edge-urls`, a target other than edge / central / e2e; edge / central Prometheus unreachable, a config / query / rules API call failed, a query answered in the wrong shape, or a count that is not a finite number (the check is still listed as FAIL, but the exit code is 2, not 1). Every query counts: the central fallback query (no cluster label) used to read a failure as "none found", exit code 1; a failed recording-rules or e2e cross-cluster query used to produce no check; an edge config API answer with `status: error` or no `data.yaml` used to read as "no external_labels", exit code 1; a central alert-rules answer with `status: error` or no `groups` used to read as "0 alert rules" (warn, exit code 0) ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). `/federate` is a probe: not reaching it stays a warn and does not change the exit code |
 
 ---
 

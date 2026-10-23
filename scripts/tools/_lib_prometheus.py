@@ -217,7 +217,8 @@ def probe_health(
     Consolidates the hand-rolled ``urllib.request.urlopen(Request(url))``
     liveness probes (da-tools ROI r3 W2): federation_check ×2 (`/-/healthy`),
     byo_check ×2 (`/-/healthy` + Alertmanager `/-/ready`), shadow_verify ×1
-    (`/-/healthy`, reads the body). NOT Prometheus-specific — the caller
+    (`/-/healthy`, reads the body); and federation_check's `/federate` probe
+    (#3133 batch 4, reads the body). NOT Prometheus-specific — the caller
     composes the full probe URL (base + path), so any HTTP health endpoint
     works.
 
@@ -743,8 +744,10 @@ def alertmanager_status(am_url: str, *, timeout: int = 10) -> dict[str, Any]:
     """Alertmanager's ``/api/v2/status``; return it or raise.
 
     Returns:
-        The status object; its ``config``, when present, is an object whose
-        ``original`` (the loaded config's YAML), when present, is a string.
+        The status object; its ``config`` is an object whose ``original``
+        (the loaded config's YAML) is a string — both required by the AM v2
+        API (``alertmanagerStatus`` / ``alertmanagerConfig``). A body without
+        them used to read as an empty config: "no tenant routing" (#3133).
 
     Raises:
         QueryError: (``source="Alertmanager"``) no connection, an HTTP error,
@@ -755,11 +758,11 @@ def alertmanager_status(am_url: str, *, timeout: int = 10) -> dict[str, Any]:
         raise QueryError(err, source="Alertmanager")
     if not isinstance(data, dict):
         raise _malformed("Alertmanager", "body is not a JSON object")
-    config = data.get("config", {})
+    config = data.get("config")
     if not isinstance(config, dict):
-        raise _malformed("Alertmanager", "'config' is not an object")
-    if not isinstance(config.get("original", ""), str):
-        raise _malformed("Alertmanager", "'config.original' is not a string")
+        raise _malformed("Alertmanager", "'config' is missing or not an object")
+    if not isinstance(config.get("original"), str):
+        raise _malformed("Alertmanager", "'config.original' is missing or not a string")
     return data
 
 
@@ -844,10 +847,29 @@ def rules_groups(body: Any) -> list[dict[str, Any]]:
     return groups
 
 
-def prometheus_rules(prom_url: str, *, timeout: int = 15) -> list[dict[str, Any]]:
-    """Prometheus's ``/api/v1/rules``; return ``data.groups`` (checked by
+def prometheus_rules(prom_url: str, *, rule_type: Optional[str] = None,
+                     timeout: int = 15) -> list[dict[str, Any]]:
+    """Prometheus's ``/api/v1/rules`` (``?type=<rule_type>`` when given:
+    ``alert`` or ``record``); return ``data.groups`` (checked by
     :func:`rules_groups`) or raise ``QueryError``."""
-    data, err = http_get_json(f"{prom_url}/api/v1/rules", timeout=timeout)
+    if rule_type not in (None, "alert", "record"):
+        raise ValueError(f"rule_type {rule_type!r}: expected 'alert' or 'record'")
+    query = f"?type={rule_type}" if rule_type else ""
+    data, err = http_get_json(f"{prom_url}/api/v1/rules{query}", timeout=timeout)
     if err:
         raise QueryError(err)
     return rules_groups(data)
+
+
+def prometheus_status_config(prom_url: str, *, timeout: int = 10) -> str:
+    """Prometheus's ``/api/v1/status/config``; return the loaded config's YAML
+    (``data.yaml``, a string) or raise ``QueryError`` (#3133: a malformed
+    answer used to crash its caller, an error status to read as "no
+    external_labels")."""
+    data = _success_data(prom_url, "/api/v1/status/config", timeout)
+    if not isinstance(data, dict):
+        raise _malformed("Prometheus", "'data' is missing or not an object")
+    yaml_text = data.get("yaml")
+    if not isinstance(yaml_text, str):
+        raise _malformed("Prometheus", "'data.yaml' is missing or not a string")
+    return yaml_text

@@ -354,9 +354,11 @@ def test_prometheus_alerts_and_targets_return_the_rows(monkeypatch):
 @pytest.mark.parametrize("answer,defect", [
     ((None, "refused"), "refused"),
     (([], None), "malformed Alertmanager response: body is not a JSON object"),
-    (({"config": "x"}, None), "'config' is not an object"),
-    (({"config": {"original": 5}}, None), "'config.original' is not a string"),
-], ids=["refused", "list", "config-string", "original-int"])
+    (({"config": "x"}, None), "'config' is missing or not an object"),
+    (({"config": {"original": 5}}, None), "'config.original' is missing or not a string"),
+    (({}, None), "'config' is missing or not an object"),
+    (({"config": {}}, None), "'config.original' is missing or not a string"),
+], ids=["refused", "list", "config-string", "original-int", "no-config", "no-original"])
 def test_alertmanager_status_raises(monkeypatch, answer, defect):
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
     with pytest.raises(lp.QueryError) as exc:
@@ -433,6 +435,53 @@ def test_prometheus_rules_returns_the_groups(monkeypatch):
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=15: (None, "refused"))
     with pytest.raises(lp.QueryError, match="refused"):
         lp.prometheus_rules("http://p")
+
+
+@pytest.mark.parametrize("answer,defect", [
+    ((None, "refused"), "refused"),
+    (({"status": "error", "error": "bad_data"}, None), "bad_data"),
+    (([], None), "body is not a JSON object"),
+    (({"status": "success", "data": None}, None), "'data' is missing or not an object"),
+    (({"status": "success", "data": {}}, None), "'data.yaml' is missing or not a string"),
+    (({"status": "success", "data": {"yaml": 5}}, None), "'data.yaml' is missing or not a string"),
+], ids=["refused", "error", "list", "data-null", "no-yaml", "yaml-int"])
+def test_prometheus_status_config_raises(monkeypatch, answer, defect):
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
+    with pytest.raises(lp.QueryError) as exc:
+        lp.prometheus_status_config("http://p")
+    assert defect in str(exc.value), exc.value
+    assert exc.value.reason == "prometheus_query_error"
+
+
+def test_prometheus_status_config_returns_the_yaml(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (
+        seen.append(url) or {"status": "success", "data": {"yaml": "global: {}\n"}}, None))
+    assert lp.prometheus_status_config("http://p") == "global: {}\n"
+    assert seen == ["http://p/api/v1/status/config"]
+
+
+@pytest.mark.parametrize("rule_type,path", [
+    (None, "/api/v1/rules"), ("alert", "/api/v1/rules?type=alert"), ("record", "/api/v1/rules?type=record")])
+def test_prometheus_rules_asks_for_the_type(monkeypatch, rule_type, path):
+    seen = []
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=15: (
+        seen.append(url) or {"status": "success", "data": {"groups": []}}, None))
+    assert lp.prometheus_rules("http://p", rule_type=rule_type) == []
+    assert seen == ["http://p" + path]
+
+
+def test_prometheus_rules_refuses_an_unknown_type():
+    with pytest.raises(ValueError):
+        lp.prometheus_rules("http://p", rule_type="alerts")
+
+
+def test_the_facade_does_not_re_export_the_tuple_readers():
+    """#3133 batch 4: a tool takes a tuple reader from _lib_prometheus, by
+    name — the shrink-only gate above sees that import."""
+    import _lib_python
+    assert not [n for n in ("http_get_json", "query_prometheus_instant", "query_prometheus_range")
+                if hasattr(_lib_python, n)]
 
 
 def test_query_error_is_a_named_caller_error():
@@ -514,20 +563,13 @@ _RAW_HTTP = frozenset({"urlopen", "build_opener", "OpenerDirector"})
 
 # (repo-relative file, name) — the helper a tool imports or calls by attribute.
 _ALLOWED = frozenset({
-    # the facade re-export goes in batch 4
-    ("scripts/tools/_lib_python.py", "http_get_json"),
-    ("scripts/tools/_lib_python.py", "query_prometheus_instant"),
-    ("scripts/tools/_lib_python.py", "query_prometheus_range"),
     # batch 2: instant callers
-    ("scripts/tools/ops/byo_check.py", "http_get_json"),
     ("scripts/tools/ops/byo_check.py", "instant_or_error"),
-    ("scripts/tools/ops/federation_check.py", "http_get_json"),
     ("scripts/tools/ops/federation_check.py", "instant_or_error"),
     ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
     # batch 3: direct http_get_json / urlopen callers
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe
     ("scripts/tools/ops/discover_instance_mappings.py", "urlopen"),
-    ("scripts/tools/ops/federation_check.py", "urlopen"),
     ("scripts/tools/ops/maintenance_scheduler.py", "urlopen"),
     ("scripts/tools/ops/notification_tester.py", "urlopen"),
     ("scripts/tools/ops/policy_opa_bridge.py", "urlopen"),  # build_opener

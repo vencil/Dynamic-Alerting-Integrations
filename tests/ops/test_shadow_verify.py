@@ -453,8 +453,10 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
     """#3133 (owner 2026-10-23): an optional source counts only when given."""
 
     @pytest.mark.parametrize("am", [(None, "HTTP 503"), ([], None),
-                                    ({"config": {"original": 5}}, None)],
-                             ids=["unreachable", "not-an-object", "original-not-string"])
+                                    ({"config": {"original": 5}}, None),
+                                    ({}, None), ({"config": {}}, None)],
+                             ids=["unreachable", "not-an-object", "original-not-string",
+                                  "no-config", "no-original"])
     def test_a_given_alertmanager_not_answering_is_a_caller_error(self, monkeypatch, am):
         seen = []
 
@@ -469,12 +471,16 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         # the URL given is the one read — not the default (review of fc7596cd3)
         assert [u for u in seen if "/api/v2/status" in u] == ["http://am:9093/api/v2/status"]
 
-    def test_the_default_alertmanager_not_answering_is_a_skip(self, monkeypatch):
+    @pytest.mark.parametrize("am", [(None, "refused"), ({}, None)], ids=["unreachable", "no-config"])
+    def test_the_default_alertmanager_not_answering_is_a_skip(self, monkeypatch, am):
+        """#3133 batch 4: an answer without config.original (required by the
+        AM v2 API) is not an empty config — it used to warn "No
+        migration_status matcher found"; nobody asked for it, so a skip."""
         seen = []
 
         def get(url, **_kw):
             seen.append(url)
-            return (None, "refused") if "/api/v2/status" in url else _vector("3")
+            return am if "/api/v2/status" in url else _vector("3")
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             c = {c["check"]: c for c in sv.check_preflight(_args())}["alertmanager_shadow_route"]
