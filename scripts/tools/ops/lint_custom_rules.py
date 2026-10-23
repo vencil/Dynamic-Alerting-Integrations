@@ -48,6 +48,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
+from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -88,10 +89,10 @@ DEFAULT_POLICY = {
                     "holt_winters",
                     "quantile_over_time",
                 ],
-                # forecast lookback = max(2·horizon, 1h); the contract's horizon
-                # enum caps at 48h → 96h (pkg/config/recipe_contract.json;
-                # tests/ops/test_lint_custom_rules.py compiles the 48h case).
-                "max_range_duration": "96h",
+                # The longest lookback a compiled forecast reads, generated
+                # from pkg/config/recipe_contract.json into _lib_constants
+                # (tests/ops/test_lint_custom_rules.py compiles that case).
+                "max_range_duration": FORECAST_MAX_LOOKBACK,
             },
         },
     ],

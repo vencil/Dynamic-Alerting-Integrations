@@ -181,11 +181,11 @@ func literalBlockKeeps(s string) bool {
 	return reflect.DeepEqual(back, map[string]string{"v": s})
 }
 
-// stringTypedContractFields are the recipe fields whose TEXT enters the
-// cross-language Go↔Python contract and therefore MUST arrive as JSON strings
-// (schema type: string): quantile (#1017, enters the recipe_id slug) and
-// objective (ADR-031, parsed independently by the Go resolver and the Python
-// compiler). The map value is the example quoted in the violation message;
+// stringTypedContractFields are the recipe fields whose authored TEXT is
+// read as written and therefore MUST arrive as JSON strings (schema type:
+// string): quantile (#1017, enters the recipe_id slug) and objective
+// (ADR-031, read by the exporter's resolver and the custom-alert compiler,
+// both pkg/config, #3229). The map value is the example quoted in the violation message;
 // both come from the recipe contract (config.RecipeQuotedTextFields, #3229).
 var stringTypedContractFields, stringTypedContractFieldNames = config.RecipeQuotedTextFields()
 
@@ -197,13 +197,13 @@ var stringTypedContractFields, stringTypedContractFieldNames = config.RecipeQuot
 // kept from the original #1017 quantile-only check; it now covers every
 // string-typed contract field so the handler call site is unchanged.)
 //
-// WHY reject instead of normalise (#1017): the field TEXT is read
-// independently by the Go exporter and the Python compiler. A JSON number has
-// already lost its authored text (0.990 → float64 → "0.99"), and valueNode
-// would emit it as a BARE YAML scalar — which the two YAML readers can
-// disagree on (PyYAML 1.1 reads a dotless exponent like 95e-2 as a string,
-// yaml.v3 as a float), silently splitting the recipe_id join / the objective
-// lockstep and muting the alert. The schema is string-only
+// WHY reject instead of normalise (#1017): the field TEXT is what the
+// exporter and the compiler read. A JSON number has already lost its authored
+// text (0.990 → float64 → "0.99"), and valueNode would emit it as a BARE YAML
+// scalar — which YAML dialects disagree on (YAML 1.1 readers such as PyYAML
+// read a dotless exponent like 95e-2 as a string, yaml.v3 as a float), so a
+// reader of the file other than pkg/config can see another recipe than the
+// one compiled. The schema is string-only
 // (tenant-config.schema.json), so the write plane fails loud here, symmetric
 // with the conf.d schema CI gate (check_confd_schema.py).
 func QuantileStringViolations(recipes []map[string]any) []string {
@@ -220,8 +220,8 @@ func QuantileStringViolations(recipes []map[string]any) []string {
 			name, _ := r["name"].(string)
 			viol = append(viol, fmt.Sprintf(
 				"_custom_alerts[%d] (name %q): %s must be a JSON string (e.g. %s), got %T — "+
-					"the %s text enters the cross-language Go/Python contract; a bare number is "+
-					"YAML-dialect-ambiguous and silently breaks the lockstep (#1017)",
+					"the %s text is read as written; a number has lost that text and a bare "+
+					"YAML number is read differently by YAML dialects (#1017)",
 				i, name, field, stringTypedContractFields[field], v, field))
 		}
 	}

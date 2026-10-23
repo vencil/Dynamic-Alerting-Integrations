@@ -90,6 +90,15 @@ func TestParseRecipeContract_FailsClosed(t *testing.T) {
 		"empty ratio floor interval": mutateContract(t, func(m map[string]any) {
 			sub(m, "forecast")["ratio_floor_exclusive_minimum"] = 0.5
 		}),
+		"lookback factor below one": mutateContract(t, func(m map[string]any) {
+			sub(m, "forecast")["lookback_factor"] = 0
+		}),
+		"lookback floor not one unit": mutateContract(t, func(m map[string]any) {
+			sub(m, "forecast")["lookback_floor"] = "1h30m"
+		}),
+		"horizon not one unit": mutateContract(t, func(m map[string]any) {
+			sub(m, "horizon")["enum"] = []any{"1h", "1d"}
+		}),
 	}
 	for _, k := range []string{"reserved_labels", "template_metachars", "fields", "forecast",
 		"quantile", "group_by", "horizon", "base_required", "patterns", "recipes", "lifecycle", "op"} {
@@ -265,5 +274,21 @@ func TestEmptyGroupByIsNone(t *testing.T) {
 	spec := CustomAlertSpec{Recipe: "absence", Name: "a", Metric: "m", Window: "5m", Threshold: "1", GroupBy: []string{}}
 	if _, err := resolveOneCustomAlert("t", spec); err != nil {
 		t.Errorf("absence with group_by: []: %v", err)
+	}
+}
+
+// The lookback is the larger of lookback_factor·horizon and the floor; with
+// today's contract no horizon of the enum reaches the floor, so both
+// branches are pinned here, from the contract's own values.
+func TestForecastLookback_FromContract(t *testing.T) {
+	floor, err := durationSeconds(contract.Forecast.LookbackFloor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := forecastLookbackSeconds(1); got != floor {
+		t.Errorf("a 1s horizon: lookback %d, want the floor %d", got, floor)
+	}
+	if got, want := forecastLookbackSeconds(floor), contract.Forecast.LookbackFactor*floor; got != want {
+		t.Errorf("a horizon of the floor: lookback %d, want %d", got, want)
 	}
 }

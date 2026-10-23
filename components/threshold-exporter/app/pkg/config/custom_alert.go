@@ -639,9 +639,9 @@ func recipeShape(spec CustomAlertSpec) (customAlertShape, error) {
 	}
 	switch spec.Recipe {
 	case "forecast":
-		// forecast: lookback derives from `horizon` (the compiler computes
-		// max(2·horizon,1h)), so the tenant supplies `horizon` (enum), NOT a
-		// window. capacity_metric present → ratio mode.
+		// forecast: lookback derives from `horizon` (the compiler's
+		// forecastLookbackSeconds), so the tenant supplies `horizon` (enum),
+		// NOT a window. capacity_metric present → ratio mode.
 		h := spec.Horizon // required by the contract (checkRecipeFields)
 		if !customAlertHorizonValid[h] {
 			return sh, fmt.Errorf("horizon %q must be one of %s", h, oneOf(contract.Horizon.Enum))
