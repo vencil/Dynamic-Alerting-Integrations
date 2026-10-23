@@ -251,19 +251,21 @@ def test_remove_from_defaults_execute_mode():
         # 只刪目標，鄰居留著。
         assert data["defaults"]["mem_usage"] == 90
 
-def test_remove_from_defaults_repairs_a_carrier_already_written_as_disable():
-    """舊行為留下的 `<m>: disable` 也是「相關 key」，重跑會把它刪掉。"""
+def test_a_carrier_already_written_as_disable_refuses_the_run(capsys):
+    """舊行為留下的 `defaults: <m>: disable`：exporter 不服務這份載體（da-guard
+    驗證點名它），所以本工具在寫入之前就拒絕整次執行、點名它、rc 2（#3206），
+    不再替它修——要先手動修好。"""
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": "disable",
                                             "mem_usage": 90}},
         })
-        ok, msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
-            "mysql_connections", d, execute=True))
-        assert ok is True
-        data = deprecate_rule.load_yaml_file(os.path.join(d, "_defaults.yaml"))
-        assert "mysql_connections" not in data["defaults"]
-        assert data["defaults"] == {"mem_usage": 90}
+        before = open(os.path.join(d, "_defaults.yaml"), "rb").read()
+        with pytest.raises(SystemExit) as ei:
+            deprecate_rule.remove_from_all_defaults("mysql_connections", d, execute=True)
+        assert ei.value.code == 2
+        assert "ERROR: _defaults.yaml:" in capsys.readouterr().err
+        assert open(os.path.join(d, "_defaults.yaml"), "rb").read() == before
 
 def test_remove_from_defaults_no_related_key_is_a_named_noop():
     """載體沒有任何相關 key ⇒ 具名 no-op，一個位元組都不寫。"""
@@ -410,12 +412,20 @@ def test_extract_value_map_no_tenant_label():
     vmap = validate_migration.extract_value_map(results)
     assert "__no_label__" in vmap
 
-def test_extract_value_map_null_value():
-    """測試空值。"""
-    results = [
-        {"metric": {"tenant": "db-a"}, "value": [0, None]},
-    ]
-    vmap = validate_migration.extract_value_map(results)
+def test_a_null_sample_is_refused_upstream():
+    """#3133：樣本值是 null 時，查詢在上游就被拒（rc 2），不會以「缺值」
+    進到 extract_value_map（以前讀成 None，報成單邊缺值、rc 1）。"""
+    import _lib_prometheus
+    body = {"status": "success", "data": {"resultType": "vector", "result": [
+        {"metric": {"tenant": "db-a"}, "value": [0, None]}]}}
+    with pytest.raises(_lib_prometheus.QueryError, match=r"result\[0\]\.value"):
+        _lib_prometheus._vector_rows(body)
+
+
+def test_extract_value_map_histogram_row_is_none():
+    """只有 histogram 的列沒有浮點樣本，記為 None。"""
+    vmap = validate_migration.extract_value_map(
+        [{"metric": {"tenant": "db-a"}, "histogram": [0, {}]}])
     assert vmap["db-a"] is None
 
 def test_extract_value_map_empty_results():
@@ -517,77 +527,30 @@ def _run_main(monkeypatch, argv):
     return deprecate_rule.main()
 
 
-def test_main_names_unusable_entries_once_per_invocation(
+def test_main_refuses_unusable_entries_once_per_invocation(
         tmp_path, capsys, monkeypatch):
-    """⛔ ONCE per run, not once per metric. `scan_for_metric` runs per metric
-    and one invocation takes several; the report therefore lives in `main`."""
+    """⛔ ONCE per run, not once per metric, and before any metric is
+    processed: the refusal is the run's (#3206), not a warn-and-continue."""
     root = _confd_with_unusable(tmp_path)
-
-    _run_main(monkeypatch,
-              ["pg_connections", "mysql_connections", "redis_memory",
-               "--config-dir", str(root)])
-
-    cap = capsys.readouterr()
-    # da-guard's own stderr (#1822, passed on whole behind DA_GUARD_PREFIX when
-    # a da-guard is found) names the tree's files in its own words; the claim
-    # here is about this tool's report.
-    text = "\n".join(ln for ln in (cap.out + cap.err).split("\n")
-                     if not ln.startswith(deprecate_rule.DA_GUARD_PREFIX))
-    for name in ("notes.yaml", "broken.yaml"):
-        assert text.count(name) == 1, (
-            f"{name} named {text.count(name)} time(s) for three metrics; "
-            f"expected once per invocation.\n{text}")
-    assert "(not_regular_file): a directory with a config file name" in text  # #3206 R7
-    # ⛔ warn-and-CONTINUE: the tool must still have processed every metric.
-    assert text.count("Processing:") == 3, (
-        f"warned but stopped serving; got:\n{text}")
-
-
-def test_main_is_quiet_on_a_clean_tree(tmp_path, capsys, monkeypatch):
-    """⛔ Blast radius: a healthy conf.d gains no unusable-entry output."""
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
-    (root / "alpha.yaml").write_text(
-        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
-
-    _run_main(monkeypatch, ["pg_connections", "--config-dir", str(root)])
-
-    cap = capsys.readouterr()
-    assert "略過" not in (cap.out + cap.err)
-
-
-def test_an_unlistable_config_dir_is_never_a_clean_run(tmp_path, capsys, monkeypatch,
-                                                       unlistable_dir):
-    """An unlistable conf.d — or a directory under it — is never rc 0
-    (#3206): nothing under it was scanned, so whether a residue is left is
-    unknown. Named, and the run ends "未完成" with rc 1.
-
-    ⚠️ Injected into da-guard's document (`unlistable_dir`, the entry its
-    walk writes for a directory it cannot list), not with mode bits: the
-    environment runs as root, so `chmod 000` does not deny anything, and the
-    listing is da-guard's — patching `Path.iterdir` no longer reaches it.
-    """
-    root = _confd_with_unusable(tmp_path)
-    (root / "team").mkdir()
-    (root / "team" / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
-    unlistable_dir(root, root / "team")
     with pytest.raises(SystemExit) as exc:
-        _run_main(monkeypatch, ["pg_connections", "--config-dir", str(root)])
-    assert exc.value.code == 1
-    out = capsys.readouterr()
-    assert "team" in out.out and "列不出" in out.out, out.out[-2000:]
+        _run_main(monkeypatch,
+                  ["pg_connections", "mysql_connections", "redis_memory",
+                   "--config-dir", str(root)])
+    assert exc.value.code == 2
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    for name in ("notes.yaml", "broken.yaml"):
+        assert text.count(f"ERROR: {name}:") == 1, text
+    assert "(not_regular_file: a directory with a config file name" in text
+    assert "Processing:" not in text, text
 
 
-def test_scan_for_metric_skips_unusable_entries(tmp_path):
-    """The scan itself must not try to read a directory as a tenant file."""
+def test_scan_for_metric_refuses_unusable_entries(tmp_path, capsys):
+    """The scan itself must not try to read a directory as a tenant file:
+    it refuses the tree (#3206), naming both."""
     root = _confd_with_unusable(tmp_path)
-
-    findings = deprecate_rule.scan_for_metric("pg_connections", str(root))
-
-    files = {f["filename"] for f in findings}
-    assert "notes.yaml" not in files and "broken.yaml" not in files
-    assert "_defaults.yaml" in files, (
-        f"fixture produced no reference at all, so the assertion above would "
-        f"be vacuous; got {files}")
+    with pytest.raises(SystemExit) as exc:
+        deprecate_rule.scan_for_metric("pg_connections", str(root))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "ERROR: notes.yaml:" in err and "ERROR: broken.yaml:" in err, err

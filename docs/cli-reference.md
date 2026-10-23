@@ -105,6 +105,10 @@ da-tools <command> --help
 
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。消費端請把 `2` 當「工具沒跑」處理，不要與 `1` 合併判定。
 
+#### conf.d refusal
+
+**conf.d 上有讀不了的路徑：conf.d 工具共用一個拒絕**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)，[ADR-036](adr/036-single-parser-effective-config.md) §7 步驟 9）：讀 `--config-dir`（或 `--conf-d`、`--sources`、`--output` 指到的既有 conf.d）的工具，在讀內容、寫任何東西之前，先取這次執行的整棵樹索引（`da-guard parse-tree`）。只要有一條路徑是 `da-guard` 驗證會點名的（`verdict` 為 `unservable`：exporter 讀不了或解不開，例如 YAML 語法錯、一個檔多份文件、懸空或迴圈的 symlink、FIFO、列不出內容的目錄；或 `tree_refused`：路由產生器因它拒收整棵樹，例如指向目錄的 symlink、名稱像設定檔的目錄 `x.yaml/`），工具就在 stderr 逐條印 `ERROR: <路徑>: <原因>`（**全部列出、不截斷**），最後一行點名那棵樹，然後以 `2` 結束，什麼都不寫；帶 `--json` 時 stdout 是一份 envelope，`reason` 為 `conf_d_not_servable`，`refused_paths` 列出每一條被點名的路徑與它的判定（`[{"path": …, "verdict": "unservable" | "tree_refused"}, …]`，與 stderr 一樣全部列出）。`tenant-verify` 以它的輸入錯誤碼 `1` 結束（它的 `2` 是驗證不一致）。以前這些路徑在多支工具只印 `WARN`／`NOTE` 就照常結束碼 `0`（`configmap-assemble`、`assemble_config_dir`、`init`、`offboard`、`deprecate`、`migrate_conf_d` 的 `x.yaml/` 等），現在都是這個拒絕。例外是判定本身就是輸出的工具：`validate-config`（結束碼 `1`）、`generate-routes`、`check_routing_profiles`、`check_confd_schema`、`config-diff`，它們自己點名這些路徑並失敗，見各自章節；`da-tools guard` 本身照舊以 `3`／`4` 結束。`assemble_config_dir --validate` 已移除：它判為 ERROR 的檔（頂層不是 mapping、解析錯誤）現在都在組裝前被這個拒絕擋下，帶這個旗標會是用法錯誤（結束碼 2）。⚠️ 尚未接上這個拒絕、在下一步（β2，#3206）遷移的工具：`config_history`、`drift_detect`、`run_chaos_soak`（仍自己列 conf.d 的檔）；`batch_diagnose`、`migrate_to_operator`（以名稱篩 ConfigMap 匯出檔）；以及以 `-o` 寫進既有 conf.d、寫入前不讀那棵樹的 `scaffold`、`onboard`、`migrate`。
+
 ---
 
 ## 命令分類
@@ -261,6 +265,8 @@ da-tools check-alert MariaDBHighConnections db-a
 
 對單一 tenant 執行健康檢查：MariaDB Pod 狀態、exporter 的 `mysql_up`、運營模式（維護／靜音），以及給了 `--config-dir` 時的 profile 與繼承鏈。
 
+給了 `--config-dir`、而那個 conf.d 上有 da-guard 驗證會點名的路徑時，本工具在任何檢查之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用途**：切換後或排查時快速確認單一租戶。⚠️ Pod 與 exporter 兩項是為 MariaDB 寫的：Pod 檢查查租戶同名 namespace 裡 `app=mariadb` 的 Pod（需要 `kubectl` 與叢集存取權，da-tools 映像不含 `kubectl`），exporter 檢查查 `mysql_up{instance="<tenant>"}`。工具先從 Prometheus 的 `tenant_expected_exporter{tenant="<tenant>"}` 讀租戶的 `db_type`（租戶在 `_metadata.db_type` 宣告了才有這條 series）。只有 `db_type` 是 `mariadb` 時才跑這兩項；其他資料庫或沒宣告的租戶，兩項列在輸出的 `skipped` 並附原因，`status` 是 `unchecked`，不是 `healthy` 也不是 `error`。所以沒宣告 `db_type` 的 MariaDB 租戶也不會做這兩項檢查；要檢查就在 `_metadata.db_type` 宣告 `mariadb`。⚠️ v2.9.0 映像還是舊行為：不看 `db_type`，非 MariaDB 租戶一律回 `status: error`（`Pod not found`）。 <!-- image-caveat: v2.9.0 -->
 
 **語法**
@@ -300,7 +306,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`，模式查詢沒得到回答時它是 `unknown`（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -320,7 +326,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`kubectl` 不在或沒回應、da-guard 這一類）是一份 `"status": "caller_error"` 的 envelope，da-guard 這一類的 `reason` 是 `served_values_unavailable`，其餘是 `caller_error`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗，含維護／靜默模式的查詢（後者先前被當成 `normal`、結束碼 `0`，此時 `operational_mode` 為 `unknown`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`kubectl` 不在或沒回應、da-guard 這一類）是一份 `"status": "caller_error"` 的 envelope，da-guard 這一類的 `reason` 是 `served_values_unavailable`，其餘是 `caller_error`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -405,7 +411,7 @@ da-tools baseline --tenant <name> [options]
 
 **輸出**
 
-統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
+統計摘要印到 stdout；同時在 `--output-dir` 目錄寫入兩個 CSV：`baseline-<tenant>-timeseries.csv`（原始採樣）與 `baseline-<tenant>-summary.csv`（各行為一個指標：min／max／avg／p50／p90／p95／p99 與建議閾值；有採樣點的查詢沒得到回答時，該列 `note` 寫「查詢失敗 N/M 次，本列不完整」，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 觀測的指標與建議寫進的租戶 key：
 
@@ -429,9 +435,9 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
+| `0` | 成功：每一次採樣查詢都得到回答 |
 | `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口。⛔ `--interval 0`（原本是 `duration // interval` 的 `ZeroDivisionError`）自 #2966 起在解析時就回 `2`；輸出路徑寫不進去自 #1789 起是 `2`，兩者都不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
+| `2` | 呼叫端錯誤：任一次採樣的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應格式不對）——失敗的點記為空值，報告與 CSV 照出，stderr 印一行 `ERROR: Prometheus query failed for N sample(s)`（先前是 `0`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）；`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
 
@@ -505,7 +511,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|------|
 | `0` | 全部比對組一致；`--watch --auto-detect-convergence` 時為已收斂 |
 | `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
-| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗、或回應格式不對（樣本值讀不懂先前被報成 `old_missing`／`new_missing`、結束碼 `1`，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。 <!-- image-caveat: v2.9.0 -->
 
@@ -573,6 +579,8 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 
 掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（有 exporter 但無對應 tenant 配置）。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用途**：遷移完成後的定期健檢；確認新增 exporter 已被納管。
 
 **語法**
@@ -630,6 +638,8 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 
 評估 `_state_maintenance.recurring[]` 的排程，對目前落在維護窗口內的租戶，在 Alertmanager 建立 silence。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用途**：自動化排程式維護窗口；設計成每 5 分鐘跑一次的 K8s CronJob。
 
 **語法**
@@ -681,6 +691,8 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 #### backtest
 
 執行 PR 中 threshold 變更的歷史回測。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；兩棵樹（`--config-dir` 與 `--baseline`）都適用。這條路徑照樣寫出 `-o` 與 `--markdown-output`：未執行的報告，`status` 為 `caller_error`、`reason` 為 `conf_d_not_servable`，`refused_paths` 列出被點名的路徑（`--json` 時 stdout 是同一份；markdown 說明原因並逐條列路徑）。以前這條路徑的 `reason` 是 `served_values_unavailable`。
 
 **用途**：驗證閾值調整的影響；評估 PR 對告警的預期影響。
 
@@ -760,7 +772,7 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 
 查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。只查一次，所以沒有別的查詢可換。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
-Prometheus 連得上、但查詢本身失敗（HTTP 400／503、逾時、回 `error` 狀態），或回 HTTP 200＋`success` 但形狀不是 matrix（缺 `data`、`resultType` 不是 `matrix`、`result` 不是 list、某一列不是物件或既沒有 `values` 也沒有 `histograms`、樣本不是 `[時間, 值]`；只有 native histogram 的列照舊略過；[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，先前缺 `data`／列既沒有 `values` 也沒有 `histograms` 被報成 `no_data` 或略過該列、結束碼 0，其他形狀則以 internal error 結束、沒寫 `-o`），該變更標為 `query_error`（風險 `UNKNOWN`），訊息為 `Prometheus query failed: <錯誤說明>`（HTTP 錯誤時是狀態行，例如 `HTTP Error 400: Bad Request`，不含 Prometheus 回應 body 裡的 `error`；形狀不對時是 `malformed Prometheus response: <哪裡不對>`）（控制字元換成 `?`、過長截斷），其他變更照跑（[#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059)；先前被報成 `no_data`、結束碼 0）。報告多一個計數 `query_error`；文字報告印 `Query error: N`，Markdown 註明幾筆沒量成。有任何一筆 `query_error` 時，`--json` 頂層帶 `status: "partial"`、`reason: "query_error"`（全部量成時不帶 `status`，與先前相同），結束碼為 2。
+Prometheus 連得上、但查詢本身失敗（HTTP 400／503、逾時、回 `error` 狀態），或回 HTTP 200＋`success` 但形狀不是 matrix（缺 `data`、`resultType` 不是 `matrix`、`result` 不是 list、某一列不是物件或既沒有 `values` 也沒有 `histograms`、樣本不是 `[時間, 值]`、樣本值讀不懂（例如 `"abc"`；先前該點悄悄略過、結束碼 0，[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）；只有 native histogram 的列照舊略過；[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，先前缺 `data`／列既沒有 `values` 也沒有 `histograms` 被報成 `no_data` 或略過該列、結束碼 0，其他形狀則以 internal error 結束、沒寫 `-o`），該變更標為 `query_error`（風險 `UNKNOWN`），訊息為 `Prometheus query failed: <錯誤說明>`（HTTP 錯誤時是狀態行，例如 `HTTP Error 400: Bad Request`，不含 Prometheus 回應 body 裡的 `error`；形狀不對時是 `malformed Prometheus response: <哪裡不對>`）（控制字元換成 `?`、過長截斷），其他變更照跑（[#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059)；先前被報成 `no_data`、結束碼 0）。報告多一個計數 `query_error`；文字報告印 `Query error: N`，Markdown 註明幾筆沒量成。有任何一筆 `query_error` 時，`--json` 頂層帶 `status: "partial"`、`reason: "query_error"`（全部量成時不帶 `status`，與先前相同），結束碼為 2。
 
 `-o/--output` 與 `--markdown-output` 每一條結束路徑都會寫（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)），例外如下：在檢查輸出路徑之前就結束的參數錯誤（`--lookback` 不可用、`--tenant` 缺參數或不合法、沒有變更來源、給了已移除的 `--git-diff`），以及輸出路徑本身寫不進去；另外，未捕捉的例外（rc 2，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）與通過檢查之後才發生的寫入失敗也不保證寫出。結束碼為 2 時不要讀輸出檔：其中可能是上一次執行留下的內容。`-o` 與 `--markdown-output` 指向同一個檔時，後寫的 Markdown 會蓋掉 JSON。`-o` 寫的是這次 `--json` 會印的同一份 JSON，也就是完整報告，或是 `skipped`／`no_changes`／`caller_error` envelope。沒有回測時，`--markdown-output` 寫一段簡短說明，標題與完整報告相同，內文為 `Backtest not run: <原因>`，原因是 Prometheus 不可用、沒有門檻變更，或 ``caller error `<reason>` ``；有 custom-alert recipe 變更的租戶時，照舊在後面接上 recipe 區塊。先前只有完整報告那條路徑會寫 `-o`；`--skip-if-unavailable` 與沒有變更這兩條，只在有 recipe 租戶時才寫 markdown。CI 以檔案是否非空決定要不要更新 PR 留言，所以留言會停在上一次的結果。
 
@@ -1083,6 +1095,8 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
 | `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）；以及給了 `--alertmanager` 而它沒回答（連不上、HTTP 錯誤、回應不是 alert 物件的 list；[#3073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3073)，之前當成 0 筆被抑制、rc 0，`--ci --min-score` 下本該 rc 1 的也被放行成 0）——此時不印報告，stderr 帶 `Error: <Prometheus\|Alertmanager> query failed: <原文>`；`--json` 印 `{"status": "caller_error", "reason": "prometheus_query_error"（Alertmanager 為 `alertmanager_query_error`）, "error": "<原文>", ...}`（其餘鍵沿用正常報告並歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
 
+**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：`ALERTS` 的每個樣本值由 lib 讀一次。讀不懂的值（例如 `"abc"`，或不是字串）視為回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不算任何狀態，不計入評估；丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped`（每筆告警另有同名欄位），文字報告也會印一行。
+
 ---
 
 #### alert-correlate
@@ -1232,6 +1246,8 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `1` | CI 模式：有 critical 風險 |
 | `2` | 呼叫端錯誤：參數錯誤；或取不到基數資料。`--json` 的 `reason` 分得開兩種：Prometheus 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；或回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data` 時報 `no_cardinality_data`（rc 2），某一列既沒有 `values` 也沒有 `histograms` 時略過該列（rc 0））⇒ `"status": "caller_error"`、`"reason": "prometheus_query_error"`，並帶 `"error": "<原文>"`（#3065，之前與下一種同為 `"status": "no_data"`、`no_cardinality_data`）；查詢成功但沒有任何 `tenant_threshold_*` series ⇒ `"status": "no_data"`、`"reason": "no_cardinality_data"`。`da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
+**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：每個樣本值由 lib 讀一次。讀不懂的值是回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不進迴歸，丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped` 與文字報告；樣本全是非有限值的租戶不列入，所有租戶都如此時是 `no_cardinality_data`（`2`）。
+
 #### config-history
 
 配置快照與歷史追蹤——在 `.da-history/` 中記錄 conf.d/ 的每次變更，提供 git-independent 的輕量級版本控制。
@@ -1278,7 +1294,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
-在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名：檔中 `tenants:` 的 key 算宣告；init 讀不透的檔（讀法見下段）視為可能宣告每一個要求的租戶，跳過訊息會寫出原因與怎麼讓 init 讀得透。這種「讀不透」不會觸發下述並存拒絕：若 init 自有的 `conf.d/<t>.yaml` 已存在**且本身宣告 t**，init 照常重寫它並點名該檔請你用 guard 確認；自有檔存在但沒有宣告 t（例如佔位檔）時則視同沒有自有檔，跳過 t、不改寫它。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個讀得透的檔以 `tenants:` 的 key 宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
+在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名：檔中 `tenants:` 的 key 算宣告。conf.d 上有 init 讀不了的路徑（讀法見下段；例如解不開的檔、懸空 symlink、名稱像設定檔的目錄）時，init 在寫入任何檔之前拒絕執行，逐條點名、rc 2（見[共用的拒絕](#confd-refusal)，`--dry-run` 亦同）；以前這種檔被當成「可能宣告每一個要求的租戶」。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶、讀得了的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個讀得透的檔以 `tenants:` 的 key 宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
 
 **讀法與寫入前確認（ADR-036 §2，#2906）**：另一個檔「宣告了哪些租戶」取自 `da-guard parse-tree`（yaml.v3 的讀法，與 exporter 的讀法相同，不再以文字搜尋近似）；parse-tree 讀不了的檔（語法錯、重複鍵、不在允許清單的 tag、非 UTF-8 等）視為可能宣告每一個要求的租戶。寫入任何檔之前，產生的 `conf.d/_defaults.yaml` 與 `conf.d/<tenant>.yaml` 都以 parse-tree 在要寫入的路徑讀回，內容必須正是產生的內容，否則結束碼 `1`、一個檔都不寫。`conf.d/` 已存在時、或要寫 conf.d 檔時都需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。
 
@@ -1321,6 +1337,8 @@ da-tools init --ci both --tenants db-a --dry-run
 
 GitOps Native Mode 就緒度驗證——檢查 Git 倉庫可達性、本地配置結構、git-sync sidecar 部署狀態。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 ```bash
 da-tools gitops-check <subcommand> [options]
 ```
@@ -1353,7 +1371,7 @@ da-tools gitops-check <subcommand> [options]
 |------|------|
 | `0` | 通過；帶 `--ci` 時 warning 也是 0。只有 `sidecar` 會給 warning（kubectl 不可用，或 git-sync Secret／sidecar 缺一或全缺）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
 | `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）。不帶 `--ci` 時 warning 也是 1 |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
 
 **範例**
 
@@ -1571,10 +1589,10 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 |------|------|
 | `values` | 兩邊讀成不同的值：檔案、行號、路徑、兩邊的讀法、建議寫法（例如 `on` 要布林就寫 `true`、要字串就寫 `"on"`）。`rewrites` 逐一列出可替換的寫法（`meaning`、`text`），`span` 是值寫在哪一行哪幾欄（含型別標記，不含錨點）；每一種寫法照做之後兩邊都讀成一樣，不會給有損的寫法（超出 int64 的整數、`tenants:` 清單裡的項目只給加引號的字串）；非有限數不給數字寫法、只給加引號的字串——門檻必須是有限數，不再建議 `.inf`／`.nan`（[#3140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3140)） |
 | `keys` | 只有一邊有的鍵 |
-| `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一） |
+| `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一）。⚠️ #3206 起永遠是空的：樹上有這種檔時整次稽核以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)）；鍵保留，schema 不變 |
 | `becomes_readable` | 今天整份拒收、`parse-tree` 讀得到的檔，附今天的錯誤與 yaml.v3 讀成的內容 |
 | `selection` | 只有一邊會讀的檔 |
-| `still_unreadable` | 兩邊都讀不了的檔（不是變化，不影響結束碼） |
+| `still_unreadable` | 兩邊都讀不了的檔。⚠️ 同上，永遠是空的 |
 | `files_compared` | 兩邊都讀得到、逐值比對過的檔（文字輸出在第二行列出），讓「沒有差異」與「什麼都沒比」分得開 |
 
 行號取自 PyYAML 的讀法：值標在它寫的那一行，鍵標在鍵所在行；經別名或合併取得的值，標在錨點或被合併 mapping 的定義行——改那一行會同時影響所有引用處。只有 yaml.v3 有的鍵標在父層的鍵那一行。
@@ -1587,7 +1605,7 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 
 | Code | 含義 |
 |------|------|
-| 0 | 兩邊讀法相同（`still_unreadable` 可能非空） |
+| 0 | 兩邊讀法相同 |
 | 1 | 列出了差異 |
 | 2 | caller error（`--config-dir` 不存在或讀不了、找不到 da-guard、da-guard 失敗或輸出不是可讀的 parse-tree 文件）；`--json` 時 stdout 仍是一份 JSON，`status: "caller_error"` 並帶 `reason` |
 
@@ -1603,6 +1621,8 @@ da-tools migration-audit --config-dir conf.d/ --json | jq '.values[] | {file, li
 #### operator-generate
 
 從 Rule Packs 與 Tenant 配置產出 Kubernetes Operator CRD（PrometheusRule、AlertmanagerConfig、ServiceMonitor）。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 **用途**：Prometheus Operator 叢集中的動態告警規則與路由部署；GitOps 友好的 CRD YAML 產生。
 
@@ -1668,6 +1688,8 @@ da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 #### migrate-to-operator
 
 讀取現有 ConfigMap 格式的 Prometheus 規則，產出等效的 CRD YAML 及遷移清單。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 **用途**：從 ConfigMap 原生格式遷移至 Operator 原生 CRD；GitOps 友好的轉換工具；遷移前置檢查與預覽。
 
@@ -2279,7 +2301,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。檔裡的 `min_generator_version` 與 `generate-routes` 同一套規則：本工具比它舊時 routes、policy 兩列都是呼叫端錯誤、結束碼 `2`（先前不讀這個鍵、照樣判定；[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）。`policy` 列 FAIL 時建議的修法是把 receiver 的 host 加進這份檔的 `allowed_domains`，或修正租戶的 receiver URL（[#3208](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3208)）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
@@ -2359,6 +2381,8 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 下架 tenant 配置與相關資源。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用途**：Tenant 生命週期結束時的清理。
 
 **語法**
@@ -2407,7 +2431,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
-| `1` | pre-check 未通過（找不到租戶檔、有 parse-tree 讀不了的設定檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
+| `1` | pre-check 未通過（找不到租戶檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179）。conf.d 上有 parse-tree 讀不了的路徑時不到這一步：pre-check 之前就以 `2` 拒絕（[共用的拒絕](#confd-refusal)，#3206） |
 | `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；找不到可用的 da-guard |
 
 ---
@@ -2415,6 +2439,8 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 #### deprecate
 
 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔移除 `<m>`、`<m>_critical`、`custom_<m>`、`custom_<m>_critical`；租戶平面另含這四個名字的維度鍵 `<名字>{…}`。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。這包括只因為本輪要刪的 key 才被 exporter 丟掉的載體（例如 `defaults:` 裡的 `old_metric: disable`）：本工具不再替這種樹修復，先手動修好那個檔再跑。`--plane subtree` 也一樣：它以 `--root-dir` 那棵樹的索引判，子樹外的路徑同樣會讓它拒絕；子樹載體合法的字串值不受影響。
 
 **用途**：逐步淘汰舊指標；維護版本相容性。
 
@@ -2436,7 +2462,8 @@ da-tools deprecate <metric_keys...> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed | `root` |
+| `--plane {root,subtree}` | 這個 `--config-dir` 是 conf.d 的 root，還是 exporter `-config-dir` 之下的一層子樹載體。`root` 對這一層所有 `_` 前綴檔做載體體檢（`defaults:` 的值 exporter 讀不讀得進去，依 yaml.v3 的判定）；`subtree` 跳過體檢（子樹平面的字串值合法且生效）。工具無法自己判斷，預設 fail-closed；`subtree` 需要 `--root-dir` | `root` |
+| `--root-dir <PATH>` | `--plane subtree` 時必填：exporter 的 `-config-dir`（conf.d 的 root），`--config-dir` 必須是它底下 exporter 會走進的目錄；否則（或在 `root` 平面給了它）結束碼 2。這一輪的索引取自這個 root 的整棵樹，共用的拒絕也以整棵樹判（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；寫入仍只在 `--config-dir` | （無） |
 
 **輸出**
 
@@ -2581,6 +2608,8 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 
 比對 custom rule 與 Rule Pack，找出重複/缺口。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用途**：評估 Rule Pack 涵蓋度；決定是否可刪除 custom rule。
 
 **語法**
@@ -2715,6 +2744,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 
 宣告式策略引擎 — 使用內建 DSL 評估 tenant 配置合規性，零外部依賴。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用法**
 
 ```bash
@@ -2774,6 +2805,8 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 #### opa-evaluate
 
 OPA (Open Policy Agent) 策略評估橋接 — 將 tenant 配置轉為 OPA input JSON，透過 OPA REST API 或本地二進位檔評估，回傳與 evaluate-policy 相容的結果格式。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 **用法**
 
@@ -3144,6 +3177,8 @@ da-tools parser allowlist --format json
 
 印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner`，繼承鏈、`source_hash` 與 `merged_hash` 全部讀自 `da-guard effective`（與 tenant-api `/effective`、exporter 同一個值，不在 Python 端自算，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)），所以需要 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`；da-tools 映像已內建）。本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。同一目錄有不止一個 defaults 載體時，沒被選上、任何一層都不讀的那份在 stderr 以一行 `WARN: <檔> is ignored on every plane (#1674)` 點名，與 `describe_tenant.py` 同一句，結束碼不變（[#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)）。
 
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀任何值之前以它的輸入錯誤碼 `1` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)；`2` 仍只表示驗證不一致）。
+
 ```bash
 # 印單一 tenant 的 effective config + merged_hash
 da-tools tenant-verify db-fin-a --conf-d conf.d/
@@ -3171,7 +3206,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | 意義 |
 |---|---|
 | 0 | tenant 存在且只由一個檔宣告；若有 `--expect-merged-hash` 則一致。`--all`：沒有任何 tenant 被重複宣告 |
-| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或 da-guard 找不到、失敗或拒收整棵樹（stderr 指名原因），或沒有 `merged_hash` 可比：樹中有 exporter 解析不了或讀不到的檔（例如無法解析的 `_defaults.yaml`，不限該租戶的繼承鏈），或 exporter 因另一個 tenant 被重複宣告而拒收整棵樹（條目為 `"error": "merged_hash_unavailable"`，`detail` 帶原因，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。未捕捉的例外（`Traceback` 加一行 `ERROR: unexpected internal error`，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）同樣是 1。argparse 擋下的參數錯（未知旗標、多餘參數）是 2。 |
+| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或 da-guard 找不到、失敗或拒收整棵樹（stderr 指名原因），或沒有 `merged_hash` 可比：exporter 因另一個 tenant 被重複宣告而拒收整棵樹（樹中有 exporter 解析不了或讀不到的檔時是[共用的拒絕](#confd-refusal)，同樣是 1；條目為 `"error": "merged_hash_unavailable"`，`detail` 帶原因，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。未捕捉的例外（`Traceback` 加一行 `ERROR: unexpected internal error`，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）同樣是 1。argparse 擋下的參數錯（未知旗標、多餘參數）是 2。 |
 | 2 | tenant 不存在、`--expect-merged-hash` 不一致，或**重複宣告**（同一 tenant 出現在兩個以上的檔）（incremental migration playbook checklist 第 6 項擋下訊號）。`--all`：有任何 tenant 被重複宣告 |
 
 **重複宣告**（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)）：同一 tenant 由多個檔宣告時，本工具不計算任何 hash——掃描器只會留其中一份、留哪份取決於檔名排序，照算會讓第 6 項在多餘檔排前面時假通過。單一 tenant 模式（不論有沒有帶 `--expect-merged-hash`）回 exit 2，JSON 為 `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}`（`files` 為排序後、相對 conf.d 的路徑），human 輸出逐行列出 `declared in: <檔>`。`--all` 把該 tenant 列成同形的 error 條目（沒有 `merged_hash`），其餘 tenant 照常列出，最後 exit 2；human 輸出的 `# total:` 行把已驗證、重複宣告（未驗證）與沒有 `merged_hash`（未驗證）三類分開計數。⚠️ da-guard 對有重複宣告的樹整棵拒收，所以其餘 tenant 也沒有 `merged_hash`（列成 `merged_hash_unavailable` 條目、不計入已驗證）。處置：刪除多餘的宣告、讓 tenant 只留在一個檔，再重跑（`validate-config` 的 `tenant_uniqueness` 報的是同一件事）。
@@ -3181,6 +3216,8 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 #### threshold-recommend
 
 閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 **用法**
 
@@ -3256,9 +3293,13 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 
 ---
 
+**查詢沒得到回答**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：某個 key 的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應不是讀得懂的 matrix）時，那個 key 標 `query_error`（原因寫在 `reason`）、沒有推薦值，其他 key 照常推薦；報告照印，`--json` 頂層加 `status: "partial"`、`reason: "prometheus_query_error"`，`summary.query_errors` 是沒量到的 key 數，stderr 印一行 `ERROR: Prometheus query failed for N key(s)`，結束碼 `2`（先前只寫成 `reason: query error: …`、結束碼 `0`）。
+
 #### threshold-govern
 
 閾值治理迴路（Renovate-for-thresholds，#656）— 把 `threshold-recommend` 的推薦接成**主動迴路**：過濾出腐敗夠大的閾值，經 tenant-api 為每個租戶開一個可一鍵批准的 proposed-PR（單寫者 ADR-011/023），而非只發通知。**預設 dry-run**，須 `--apply` 才真正開 PR。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 **用法**
 
@@ -3306,12 +3347,14 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 多通道通知連通性測試 — 驗證所有已配置 receiver 的可達性，報告連通性狀態。
 
-受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。受測清單是產生器對每個項目（主 receiver、`overrides[i]`、`routes[i]`）的判定，本工具不另外列舉 `_routing`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)）：只送產生器實際產出的 receiver；沒產出的項目照列、不送出、算失敗——receiver **本身的設定**被產生器（`build_receiver_config`）拒收標 `INVALID_URL`／`INVALID_CONFIG`，在路由層被略過標 `NOT_RENDERED` 並附產生器的原因（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key，以及主 receiver 被拒收或缺少時該租戶的每個 `overrides`／`routes` 項目）。本工具沒有 `--policy`，產生器帶 `--policy` 時因 `allowed_domains` 略過的項目不在判定內。要確認產生器收不收整份設定，跑 `generate-routes --validate`。
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
+受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。受測清單是產生器對每個項目（主 receiver、`overrides[i]`、`routes[i]`）的判定，本工具不另外列舉 `_routing`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)）：只送產生器實際產出的 receiver；沒產出的項目照列、不送出、算失敗——receiver **本身的設定**被產生器（`build_receiver_config`）拒收標 `INVALID_URL`／`INVALID_CONFIG`，在路由層被略過標 `NOT_RENDERED` 並附產生器的原因（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key，以及主 receiver 被拒收或缺少時該租戶的每個 `overrides`／`routes` 項目）。帶 `--policy` 時判定與產生器帶同一份 `--policy` 相同：`allowed_domains` 拒收的項目標 `POLICY_REFUSED`（[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）。要確認產生器收不收整份設定，跑 `generate-routes --validate`。
 
 **用法**
 
 ```bash
-da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>]
+da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>] [--policy <FILE>]
 ```
 
 **參數**
@@ -3325,6 +3368,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
 | `--timeout` | 每個 receiver 的逾時秒數，連線與等待回應兩個階段都適用，任一階段逾時皆回報 `TIMEOUT`（[#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)）。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數（≥ 0，可帶小數；`0` = 不等待；負數、`nan`、`inf` 回 `2`） | `0.5` |
+| `--policy <FILE>` | 部署端 policy 檔（與 `generate-routes --policy` 同一份，由同一個 resolver 讀，[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）：`allowed_domains` 拒收的 receiver 不送出、標 `POLICY_REFUSED`、算失敗；檔案不可用或 `min_generator_version` 比本工具新時結束碼 `2`（`--json` 的 `reason` 為 `policy_unusable`）。沒帶時不套用 allowlist，stderr 印一行 `NOTICE`，結束碼不變；`--json` 的 `policy_applied` 標明有沒有套用 | （不套用） |
 
 **支援的 Receiver 類型**
 
@@ -3347,6 +3391,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `HTTP_ERROR` | 其他 HTTP 錯誤狀態碼，或回應格式錯誤、被截斷（detail 以 `malformed response:` 開頭） |
 | `INVALID_URL` | receiver 本身的設定被路由產生器（`build_receiver_config`）以 URL 欄位（email 為 `smarthost`）有給但格式不合或不是字串拒收、port 不在 1–65535，或送出時主機名無法編碼、URL 被拒（未送出任何請求） |
 | `INVALID_CONFIG` | receiver 本身的設定被路由產生器（`build_receiver_config`）以其他原因拒收（例如缺必填欄位——URL 欄位缺鍵、空字串或 null 也算、`type` 不認得、選填欄位型別不對；項目或租戶沒寫 `receiver`、`receiver` 不是物件也算），與產生器的判定一致 |
+| `POLICY_REFUSED` | `--policy` 的 `allowed_domains` 拒收這個 receiver（host 不在清單內），產生器不產出它，未送出任何請求；detail 是產生器的原因加上修法（把 host 加進 `--policy` 檔的 `allowed_domains`，或修正租戶的 receiver URL）。主 receiver 被拒收時，該租戶的子項目標 `NOT_RENDERED`（[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)） |
 | `NOT_RENDERED` | 路由產生器在路由層略過這個項目，Alertmanager 不會有它（未送出任何請求）：`overrides[i]`／`routes[i]` 本身不合格（例如缺 matcher、有不支援的 key、不是 mapping），或該租戶的主 receiver 沒產出、子項目一個都不產出。detail 是產生器自己的原因；主 receiver 沒產出時，本身另有缺陷的子項目也只報這個原因（`NOT_RENDERED`），修好主 receiver 後才會看到它自己的問題；`overrides`／`routes` 不是清單時標在 `<tenant>-overrides`／`<tenant>-routes`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)） |
 
 `TIMEOUT`、`CONNECTION_REFUSED`、`CONNECTION_ERROR`、`TLS_ERROR` 的 detail 截在 80 字元（含 `via proxy: ` 前綴），較長的錯誤訊息會被切掉。設了 `https_proxy`／`http_proxy` 時，這些狀態可能描述的是到 proxy 的那一段：proxy 的埠沒開是 `CONNECTION_REFUSED`、proxy 主機名解析失敗是 `CONNECTION_ERROR`，http receiver 經 proxy 收到的 `HTTP 502` 是 `HTTP_ERROR`；只有 HTTPS 的 CONNECT 失敗會帶 `via proxy: ` 前綴（含 proxy 回 `504 Connection Timed Out`，這時不標 `TIMEOUT`）。
@@ -3372,20 +3417,22 @@ da-tools test-notification --config-dir conf.d/ --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
-| `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752） |
+| `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED`、`--policy` 拒收的 `POLICY_REFUSED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
+| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752）；`--policy` 不可用或 `min_generator_version` 比本工具新（`reason: policy_unusable`，#3142） |
 
 #### explain-route
 
 路由合併管線除錯器 — 顯示每個 tenant 的四層路由合併展開（ADR-007），包括 `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 `overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。兩份清單都取自產生器對每個項目的判定，與 `test-notification` 同一個來源；租戶的主 receiver 缺少或被拒時，產生器不產出任何子路由，每個 `overrides`／`routes` 項目各列一行「主 receiver 未產出」的原因（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)，先前主 receiver 缺少或被拒時都不列）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。時長寫成 Alertmanager 不接受的寫法時，產生器會換成平台預設值（`--validate` 擋下），這些行另列在「產生器以平台預設值頂替」一節（主 route 與子路由都算），`--json` 放在 `replaced_values`，與 `skipped_sub_routes` 分開——那些條目仍有產出、只是值被換掉（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）。`_routing_enforced` 只列在第 4 層、不併進 `final`：它在產出的設定裡是 tenant 路由之外**另一條** `continue: true` 路由，不會取代 tenant 自己的 receiver 或 timing（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。
 
 **用法**
 
 ```bash
-da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
+da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--policy <FILE>] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--policy <FILE>] [--json]
 ```
 
 **參數**
@@ -3400,6 +3447,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--severity` | 追蹤的 alert 嚴重度（只在 `--trace` 下讀取） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
 | `--base-config` | 追蹤用的 base Alertmanager YAML：`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
+| `--policy <FILE>` | 部署端 policy 檔（與 `generate-routes --policy` 同一份，由同一個 resolver 讀，[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）：列出與追蹤的都是產生器在這份 `allowed_domains` 下產出的路由；被拒收的 receiver 列在「被 --policy 的 allowed_domains 拒收」（`--json` 的 `policy_refused`，每筆 `source`／`status: POLICY_REFUSED`／`detail`／`remedy`），主 receiver 被拒收時該租戶的路由整條不產出。檔案不可用或 `min_generator_version` 比本工具新時結束碼 `2`（`reason: policy_unusable`）。被拒收的平台強制路由（`_routing_enforced`）receiver 也列在其中（`source: _routing_enforced.receiver`）。沒帶時不套用，stderr 印一行 `NOTICE`，結束碼不變；`--json` 每筆的 `policy_applied` 標明有沒有套用。`--show-profile-expansion` 只列 profile、不判 receiver，不讀這份 allowlist、也不印 NOTICE（檔案不可用時仍是 `2`） | （不套用） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
 `--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group`，以及 `routes` 裡 `alertname`／`severity`／`tenant` 以外的 `match` key，只能經 `--label` 帶入，否則追蹤不會命中那條子路由。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。沒有 `--trace` 卻給 `--alertname`／`--severity`（即使給的就是預設值）同樣以結束碼 `2` 拒絕（[#2926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2926)）。
@@ -3433,6 +3481,8 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --sever
 #### explain-keys
 
 逐鍵說明租戶設定（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 9）。對每個租戶列出設定裡的每個 key：來源層與檔案（`da-guard effective`）、哪些讀取端讀它（exporter 以 `da-guard served-values` 實測；路由產生器、自訂告警編譯器、Policy-as-Code 與標註依保留鍵登錄表在該層的宣告；`_policies` 中適用於該租戶的規則以 `target`（或 `when.target`）指名的 key 算 Policy-as-Code 讀了：舊拼法與現行拼法視為同一個，萬用字元不算指名，`_` 開頭的 key 還要是登錄表列出的）、判決與等級、`disable` 的作用（以拿掉它重算一次判斷）、寫下的值與 `/metrics` 實際送出的值。判決來自共用判決函式，與其他閘門同一份。工具會盡量把問題報出來，值是否符合你的預期，請用這個輸出自己檢查，並用 `--assert` 放進自己的 CI。
+
+conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 ```bash
 da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]

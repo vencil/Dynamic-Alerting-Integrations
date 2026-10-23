@@ -279,19 +279,21 @@ def main():
     prom_url = args.prometheus or os.environ.get("PROMETHEUS_URL") or "http://localhost:9090"
     exclude_jobs = [j.strip() for j in args.exclude_jobs.split(",")] if args.exclude_jobs else []
 
-    # 1. Query Prometheus targets
+    # 1. Load monitored DB types from tenant configs — FIRST (#3206): a
+    # conf.d da-guard validation names paths on ends the run through the
+    # shared refusal before anything else is asked (Prometheus included).
+    monitored = load_monitored_db_types(args.config_dir)
+    if monitored is None:
+        sys.exit(EXIT_VIOLATION)
+
+    # 2. Query Prometheus targets
     targets = query_prometheus_targets(prom_url)
     if not targets:
         print("WARN: No active targets found (Prometheus unreachable or empty)",
               file=sys.stderr)
 
-    # 2. Extract DB instances from targets
+    # 3. Extract DB instances from targets
     live_instances = extract_db_instances(targets, exclude_jobs=exclude_jobs)
-
-    # 3. Load monitored DB types from tenant configs
-    monitored = load_monitored_db_types(args.config_dir)
-    if monitored is None:
-        sys.exit(EXIT_VIOLATION)
 
     # 4. Find blind spots
     results = find_blind_spots(live_instances, monitored)

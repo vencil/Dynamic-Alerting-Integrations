@@ -112,6 +112,7 @@ import pytest
 
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
 from _platform_fs import DIR_WRITE_ERROR
+from _go_refusal import assert_refused  # (#3206)
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
@@ -741,10 +742,11 @@ ROWS: list[Row] = [
             "the manifest write, which is the sink under test",
       out_name="assembly-manifest.json"),
     R("ops/baseline_discovery.py", "-o/--output-dir", "dir",
-      lambda c, out: ["--tenant", "t1", "--prometheus", "http://127.0.0.1:1",
+      lambda c, out: ["--tenant", "t1", "--prometheus", c.stub,
                       "--duration", "1", "--interval", "1", "-o", str(out)],
-      reach="a closed port for Prometheus: every query fails, every sample is "
-            "None, and the tool still exits 0 having written both CSVs",
+      reach="the stub Prometheus answers every query (an empty vector), so the "
+            "run exits 0 having written both CSVs (#3133: a closed port is a "
+            "query not answered, rc 2)",
       # Two rows' worth of sinks in one tool: `parent_is_file` reaches the
       # `os.makedirs`, `artifact_is_dir` gets past it and reaches the
       # `open(..., 'wb')` + `chmod` inside `_write_csv_secure`. The FIRST CSV
@@ -1090,8 +1092,10 @@ def test_a_bad_source_entry_does_not_blame_the_output_flag(tmp_path):
         "a source-side failure was mis-attributed to the output flag:\n"
         + proc.stderr[-1500:])
     assert "cannot copy into" not in proc.stderr, proc.stderr[-1500:]
-    # And it is still recognisably the source that failed.
-    assert str(src / "x.yaml") in proc.stderr, proc.stderr[-1500:]
+    # And it is still recognisably the source that failed: since #3206 the
+    # shared conf.d refusal, naming the entry under the source tree.
+    assert_refused(proc.returncode, proc.stderr, ["x.yaml"])
+    assert f"the conf.d at {src} holds" in proc.stderr, proc.stderr[-1500:]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

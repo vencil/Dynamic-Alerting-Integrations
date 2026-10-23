@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # PyYAML reading it had is kept by migration_audit (its "today" half), and
 # that is what the frozen verdicts are recomputed with.
 from migration_audit import read_tree_today  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 from test_merge_key_policy_corpus import _encode, row_id  # noqa: E402
 
 CORPUS_PATH = Path(__file__).parent / "parse_tree_corpus.json"
@@ -335,10 +336,12 @@ _ROWS: tuple[tuple, ...] = (
 def generator_verdict(data: bytes, fname: str) -> tuple[str, str]:
     """("rejected" | "read", the drop's reason) — the generator's reader
     before ADR-036 step 4 (PyYAML, `migration_audit.read_tree_today`) on
-    `data` written as `fname`, alone in a conf.d."""
+    `data` written as `fname`, alone in a conf.d. The route generator is a
+    judge (#3206): its reader reads such a tree, so this runs as one."""
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / fname).write_bytes(data)
-        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()), \
+                _lib_parse_cache.judging():
             _read, refused = read_tree_today(Path(d))
     for f, reason in refused.items():
         if f == fname and not reason.startswith(_NOT_A_YAML_VERDICT):

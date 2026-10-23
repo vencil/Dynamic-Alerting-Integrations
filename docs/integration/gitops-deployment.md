@@ -71,7 +71,7 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 
 | 平台 | 取得方式 | blast radius | 觸發條件 |
 |------|---------|-------------|---------|
-| GitHub Actions | 本 repo 內建 `.github/workflows/config-diff.yaml`，可直接複製套用 | ✅ 自動貼成 PR comment | PR 修改 `conf.d/**` |
+| GitHub Actions | 由 `da-tools init --ci github` 產生 `.github/workflows/dynamic-alerting.yaml` | ✅ 自動貼成 PR comment | PR 修改 `conf.d/**` |
 | GitLab CI | 由 `da-tools init --ci gitlab` 產生 `.gitlab-ci.d/dynamic-alerting.yml`，並以根目錄 `.gitlab-ci.yml` 的 `include: local` 接進 pipeline | ✅ job log＋MR 頁面上的 artifact 連結（見下） | MR 修改 `conf.d/**` |
 
 GitHub Actions 範本會自動將 blast radius 報告貼為 PR comment（冪等更新，不重複建立）。
@@ -150,13 +150,14 @@ steps:
 python3 scripts/ops/configmap_assemble.py \
   --config-dir tenants/conf.d --output .build/threshold-config.yaml
 # rc 1 = 設定違規（重複租戶 / 檔名 / 產物與樹對不上 / 超過 1 MiB / 沒有載體）
-# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席或逾時）
+# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席或逾時、
+#        樹上有 da-guard 驗證會點名的路徑）
 ```
 
 ⚠️ 幾件文件以前沒說的事：
 
 - **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（完整清單在 `validate_config --json` 的 `schema` 列的 `skipped_nested_files`，見 [cli-reference](../cli-reference.md#hierarchical-confd)），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
-- **讀不到的載體會具名但不擋**：`CONFDIR` 頂層若有**斷鏈 symlink** 或**取了 config 名字的目錄**（`db-x.yaml/`），它們進不了 ConfigMap，stderr 會逐個 `WARN` 點名。⛔ 那不是警告性的雜訊——那個租戶在叢集上沒有告警。
+- **樹上有讀不到的路徑就整個拒絕**：`da-guard` 驗證會點名的每一條路徑——**斷鏈 symlink**、**取了 config 名字的目錄**（`db-x.yaml/`）、指向目錄的 symlink、FIFO、列不出內容的子目錄、exporter 解不開的檔（YAML 語法錯、多文件）——這一步都會在 stderr 逐條 `ERROR:` 點名（**全部列出、不截斷**），然後 **rc 2**、什麼都不寫。⛔ 以前這類載體只印 `WARN`、照樣組出少一個租戶的 ConfigMap，那個租戶在叢集上沒有告警；現在要先修好或移走它們才組得出來。其他 conf.d 工具也是同一個行為（#3206）。
 - **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
 - **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
 - **⚠️ 上面那個 1 MiB 不是你先撞到的天花板**：`kubectl apply -f`（client-side，也就是本節教的那條命令）會把**整個物件**寫進 `kubectl.kubernetes.io/last-applied-configuration` 這個 annotation，而 k8s 對一個物件的 annotation 總量上限是 **256 KiB**——`data` 上限的四分之一，而且驗證順序在前。超過時 `kubectl apply` 回的是 `metadata.annotations: Too long`，**不點名任何檔**。產物超過那個大小時 assemble 會印一則 `WARN`（不擋），兩條出路：改用 `kubectl apply --server-side -f`（不存那個 annotation），或把租戶拆開（`make sharded-assemble`）。

@@ -51,11 +51,9 @@ import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
 import _lib_parse_tree  # noqa: E402
 import _lib_write_check  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    WARN_LIMIT,
     configmap_key_problem,
     is_defaults_name,
     printable_name,
-    unusable_reason,
     warn_nested,
 )
 # #1310 — the declared-without-value key names shipped in `optional_overrides:`.
@@ -1624,8 +1622,8 @@ def _gen_github_actions(
         # in that tree took the blast-radius comment away from EVERY config pull
         # request in the repository until somebody fixed it, and what reviewers
         # saw meanwhile was the previous run's report, which looks current.
-        # This platform's own config-diff.yaml computes its blast radius with no
-        # `needs:` at all, for the same reason.
+        # This platform's own config-diff-advisory.yml computes its report with
+        # no `needs:` at all, for the same reason.
         # ⚠️ This is not "validation no longer gates anything": `apply` still
         # needs `validate`, and that is the edge that protects the cluster.
         runs-on: ubuntu-latest
@@ -1720,7 +1718,7 @@ def _gen_github_actions(
             env:
               # Passed through env rather than interpolated into the script, so
               # the expression cannot become shell syntax. Same shape as this
-              # platform's config-diff.yaml.
+              # platform's config-diff-advisory.yml.
               BASE_SHA: ${{{{ github.event.pull_request.base.sha }}}}
             run: |
               # Two DIFFERENT conditions used to collapse into a single
@@ -2991,7 +2989,7 @@ def _kustomize_carrier_files(
     Order: the defaults carrier(s) first, then plain sorted — deterministic,
     so a re-run over an unchanged tree regenerates byte-identical output.
 
-    ⛔ Three kinds of entry are LEFT OUT, and each is named on stderr, never
+    ⛔ Two kinds of entry are LEFT OUT, and each is named on stderr, never
     dropped in silence (a tenant missing behind a green light is #1911's
     shape). None of them changes the exit code: by the time this runs, init
     has already written conf.d/ and the CI files, and rc != 0 would read as
@@ -3001,13 +2999,12 @@ def _kustomize_carrier_files(
         `warn_nested` (the family's channel for "a flat reader skipped
         files"), not a generated comment: a committed comment about the
         tree's shape would go stale the moment the tree changes.
-      * config-NAMED but unreadable (broken symlink, a `db-x.yaml/`
-        directory) — parse-tree lists them as unreadable; they are named
-        here, worded by `unusable_reason`
-        exactly as `configmap_assemble` words them.
       * a name that can never be a ConfigMap key (`db b.yaml`, `a=b.yaml`,
         `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
         `IsConfigMapKey`, shared with `configmap_assemble`.
+    A config-NAMED entry nothing can be read from (a broken symlink, a
+    `db-x.yaml/` directory) is not left out here: `_plan_confd` refused the
+    tree before any write (#3206), so none can be in it.
     """
     names = {f'{t}.yaml' for t in tenants}
     if write_defaults:
@@ -3025,18 +3022,6 @@ def _kustomize_carrier_files(
         top = [n for n in {*confd.files(), *confd.root_defaults()} if "/" not in n]
         entry = (lambda n: None) if listing is None else listing.entry
         names |= {n for n in top if entry(n) is not None and entry(n).config_file}
-        unusable = sorted(Path(conf_dir) / n for n in top
-                          if entry(n) is not None and entry(n).flagged)
-        for p in unusable[:WARN_LIMIT]:
-            print(f"WARN: init_project: {printable_name(p.name)!r} in "
-                  f"{conf_dir} {unusable_reason(p, listing)} — it carries a config "
-                  f"name but nothing can be read from it, so it is left out "
-                  f"of kustomize/base (files: and README) and its tenants are "
-                  f"absent from the ConfigMap.", file=sys.stderr)
-        if len(unusable) > WARN_LIMIT:
-            print(f"WARN: init_project: (+{len(unusable) - WARN_LIMIT} more "
-                  f"unreadable config-named entries in {conf_dir}; this list "
-                  f"is capped at {WARN_LIMIT})", file=sys.stderr)
     illegal = sorted((n, why) for n in names
                      if (why := configmap_key_problem(n)) is not None)
     for name, why in illegal:
@@ -3559,13 +3544,13 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 # search for the id over every decoding replaced them. Since ADR-036 §2
 # (#2906) the question "which tenants does this file declare" is `da-guard
 # parse-tree`'s (`_ConfdTree`, `_mentions`): yaml.v3 itself reads the file,
-# so the answer is the exporter's reading, not an approximation of it. A file
-# parse-tree cannot read (its closed list: a syntax error, a duplicate key,
-# a disallowed tag, a non-UTF-8 encoding …) is (d): it may name anyone, init
-# leaves every requested tenant alone and says how to check (`da-tools guard
-# defaults-impact`). Over-matching costs a tenant init did not generate,
-# named on stderr; under-matching would cost a duplicate the exporter
-# rejects the whole tree for — so every doubt still counts as a mention.
+# so the answer is the exporter's reading, not an approximation of it. A tree
+# with a file parse-tree cannot read (its closed list: a syntax error, a
+# duplicate key, a disallowed tag, a non-UTF-8 encoding …), or any other path
+# Go names, is refused before any write (#3206: `_ConfdTree`, every such path
+# named, exit 2) — it used to be "(d)": a file that may name anyone, every
+# requested tenant left alone. `_mentions` keeps the (d) answer for one file
+# read on its own (file mode), outside a tree.
 #
 # ⛔ The mention is decided by CONTENT, never by the filename: `team.yaml`
 # declares db-c while named nothing like it.
@@ -3579,7 +3564,9 @@ class _ConfdTree:
 
     def __init__(self, conf_dir: Path) -> None:
         self.conf_dir = conf_dir
-        self.tree = (_lib_parse_tree.load(conf_dir, None, _PARSE_TREE_TIMEOUT_S)
+        # The run's index, through the reader: a tree Go names paths on ends
+        # the run here, before init writes anything (#3206).
+        self.tree = (_lib_parse_cache.ConfdReader(conf_dir, timeout=_PARSE_TREE_TIMEOUT_S).tree()
                      if conf_dir.is_dir() else None)
 
     def listing(self) -> "Optional[_lib_parse_tree.Listing]":
@@ -3608,17 +3595,14 @@ class _ConfdTree:
         names = {*self.tree.selected, *self.tree.not_read}
         return sorted(n for n in names if "/" not in n and is_defaults_name(n))
 
-    def declared(self, rel: str) -> "tuple[Optional[set[str]], str]":
-        """(the tenants rel's `tenants:` mapping declares, '') — or (None, why)
-        when parse-tree cannot read it."""
-        try:
-            node = self.tree.node(rel)
-        except _lib_parse_tree.FileUnreadable as exc:
-            return None, f"da-guard parse-tree cannot read it ({exc.kind}: {exc.message})"
-        tenants = node.get("tenants")
+    def declared(self, rel: str) -> "set[str]":
+        """The tenants rel's `tenants:` mapping declares. Every file of the
+        tree is one parse-tree read: a tree with one it cannot read refused
+        the run in `__init__` (#3206)."""
+        tenants = self.tree.node(rel).get("tenants")
         if isinstance(tenants, dict) and not _lib_parse_tree.is_scalar(tenants):
-            return set(tenants), ''
-        return set(), ''
+            return set(tenants)
+        return set()
 
 
 _PARSE_TREE_TIMEOUT_S = 600
@@ -3738,15 +3722,6 @@ class _ConfdPlan(NamedTuple):
     possibly mentions. The parity matrix asserts it covers what the
     exporter reads."""
 
-    unverified: Optional[dict[str, list[tuple[str, str]]]] = None
-    """Tenant init DID (re)write at its own existing path — which itself
-    names it — although another file (d)-possibly mentions it -> [(that
-    file, why init cannot read it)]."""
-
-    blanket: Optional[dict[str, str]] = None
-    """Tenant files init cannot read through (d) -> why; the skip notice
-    quotes it."""
-
     @property
     def write_defaults(self) -> bool:
         return not self.defaults_carriers
@@ -3766,10 +3741,12 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     `conf.d/prod/` counts as the exporter counts it. Which files are tenant
     files, and which entries may hide one, is Go's (`_lib_parse_tree.
     TenantScope`, #3206): a `_` file is a control file and declares no
-    tenant; a directory Go could not list or a link it does not follow is
-    named whatever its name. What each tenant file declares is its
-    `tenants:` keys as parse-tree reads them; a file it cannot read, and an
-    entry that may hide one, is (d).
+    tenant. What each tenant file declares is its `tenants:` keys as
+    parse-tree reads them. ⛔ A tree with a path Go names — a file it cannot
+    read or decode, a directory it could not list, a link it does not
+    follow — never gets a plan: reading it is the run's fail-closed exit
+    (`_ConfdTree`, #3206), every such path named, exit 2, before any write.
+    (Such a file used to be "(d)", read as naming every requested tenant.)
 
     ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
     `db-c.yaml`. And because the two ARE one file on a case-insensitive
@@ -3791,19 +3768,17 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         very file, so after the rewrite it would be declared nowhere);
       * 'drops' — tenants this run was NOT asked for (owner ruling on #1942,
         round-1 F2: refuse, do not overwrite; `--force` included). Found by
-        parse-tree's `tenants:` keys. An own file init cannot read through
-        (d) keeps its existing handling (skip / unverified) and is never
-        listed here, so every 'drops' names the tenants it would lose.
+        parse-tree's `tenants:` keys, so every 'drops' names the tenants it
+        would lose.
     """
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
     requested = list(config['tenants'])
     confd = _ConfdTree(conf_dir)
-    # Tenant files, `mentions` and `blanket` are all keyed by `_rel(p)` — a
-    # str, compared exactly on every platform (see the docstring).
+    # Tenant files and `mentions` are keyed by `_rel(p)` — a str, compared
+    # exactly on every platform (see the docstring).
     tenant_files: list[str] = []
     mentions: dict[str, set[str]] = {}
-    blanket: dict[str, str] = {}           # (d) files -> why
     conflicts: list[_Conflict] = []
 
     def _rel(p: Path) -> str:
@@ -3814,53 +3789,27 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         return _rel(conf_dir / f'{t}.yaml')
 
     root_defaults = [conf_dir / n for n in confd.root_defaults()]
-    # #3206: the tenant files AND what may hide one — both halves of Go's
-    # answer (`_lib_parse_tree.TenantScope`), never a `_` name rule here. A
-    # directory Go could not list is named whatever it is called (`_arch/`
-    # too: the exporter descends `_` directories): what is under it is
-    # unknown, so it counts as a (d) mention of every requested tenant.
+    # #3206: the tenant files of Go's answer (`_lib_parse_tree.TenantScope`),
+    # never a `_` name rule here. Its other half, the entries that may hide a
+    # tenant file (a directory Go could not list, a link it does not
+    # follow), is empty by construction: each carries a problem, so a verdict,
+    # and `_ConfdTree` refused such a tree before this line.
     scope = confd.tenant_scope()
     for rel in scope.files:
         f = _rel(conf_dir / rel)
         tenant_files.append(f)
-        declared, why = confd.declared(rel)
-        mentions[f] = set(requested) if declared is None else declared & set(requested)
-        if why:
-            blanket[f] = why
-            mentions[f] = set(requested)
-    for u in scope.unknown:
-        f = _rel(conf_dir / u.file)
-        tenant_files.append(f)
-        mentions[f] = set(requested)
-        blanket[f] = f"da-guard parse-tree cannot read it ({u.kind}: {u.message})"
+        mentions[f] = confd.declared(rel) & set(requested)
 
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}
-    unverified: dict[str, list[tuple[str, str]]] = {}
     for t in requested:
         own = _own(t)
         others = [f for f in tenant_files if f != own and t in mentions[f]]
-        concrete = [f for f in others if f not in blanket]
         if not others:
             generate.append(t)
-        elif own in mentions and concrete:
+        elif own in mentions:
             conflicts.append(_Conflict(
-                'duplicate', t, [own] + concrete))
-        elif own in mentions and own not in blanket and t in mentions[own]:
-            # ⛔ Coexistence refuses only on a CONCRETE mention. Its purpose
-            # is that init never CREATES a duplicate — not that it validates
-            # the customer's tree. Here `own` exists AND itself concretely
-            # names t, so rewriting it adds no carrier of t: if a file init
-            # cannot read through (d) also declares t, that duplicate
-            # existed before this run. Refusing on (d) let one tagged or
-            # undecodable file block every re-run of every tenant that
-            # already has its init file. Named instead.
-            # ⛔ The "own names t" half is load-bearing (round-5 review F2):
-            # an own path that is a placeholder, empty, or declares someone
-            # else is NOT already a carrier of t, so rewriting it WOULD add
-            # one beside the (d) file. That case falls through to the skip.
-            generate.append(t)
-            unverified[t] = [(f, blanket[f]) for f in others]
+                'duplicate', t, [own] + others))
         else:
             skipped[t] = others
     # ⛔ A requested tenant skipped BECAUSE of a file this run is about to
@@ -3878,10 +3827,9 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     # 'drops': the unrequested half of the same loss (see the docstring).
     for t in generate:
         own = _own(t)
-        if own not in mentions or own in blanket:
+        if own not in mentions:
             continue
-        # Not (d), so parse-tree read it: `declared` lists its keys.
-        lost = sorted((confd.declared(f'{t}.yaml')[0] or set()) - set(requested))
+        lost = sorted(confd.declared(f'{t}.yaml') - set(requested))
         if lost:
             conflicts.append(_Conflict('drops', t, [own], ', '.join(lost)))
 
@@ -3893,8 +3841,7 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
             'defaults', '', [_rel(p) for p in own_defaults + other_defaults]))
 
     plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
-                      {f: sorted(ts) for f, ts in mentions.items()},
-                      unverified, dict(blanket))
+                      {f: sorted(ts) for f, ts in mentions.items()})
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
@@ -3934,59 +3881,6 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
             f"exporter does; the file should be listed under Scanned files; "
             f"exit 4 means the tree holds routing, which "
             f"`da-tools generate-routes --validate --strict` judges)")
-        for f in files:
-            why = (plan.blanket or {}).get(f)
-            if why:
-                lines[-1] += (
-                    f"。init 讀不透 {f}（{why}），因此把它當成提及每一個要求的"
-                    f"租戶；要讓 init 讀得透：{_read_through_hint(why, True)}"
-                    if is_zh else
-                    f". init cannot read {f} through ({why}), so it treats it "
-                    f"as naming every requested tenant; to let init read it: "
-                    f"{_read_through_hint(why, False)}")
-    return lines
-
-
-def _read_through_hint(why: str, is_zh: bool) -> str:
-    """How to make a (d) file one init can read through (round-5 F4); *why*
-    names parse-tree's kind (`_mentions`)."""
-    if 'tag' in why:
-        return ("移除 parse-tree 不讀的 tag（只讀 `!!str` `!!int` `!!float` `!!bool` "
-                "`!!null` `!!timestamp`；`!name`、`!` 這類一律讀不了）"
-                if is_zh else
-                "remove the tags parse-tree does not read (it reads `!!str` "
-                "`!!int` `!!float` `!!bool` `!!null` `!!timestamp` only; "
-                "`!name`, `!` and the like are unreadable)")
-    if 'encoding' in why or 'invalid_utf8' in why or 'bom_not_at_start' in why:
-        return "把檔案存成 UTF-8" if is_zh else "save the file as UTF-8"
-    if 'cannot be read:' in why or 'read_failure' in why:
-        return ("讓執行 init 的使用者讀得到它" if is_zh else
-                "make it readable by the user running init")
-    if 'parse-tree' in why:
-        return ("修掉 da-guard parse-tree 指出的問題（見括號內的 kind 與行號）"
-                if is_zh else
-                "fix what da-guard parse-tree names (the kind and line in the "
-                "parentheses)")
-    return ("簡化它（例如極深的巢狀、`\\U00110000` 這類超出範圍的 escape）"
-            if is_zh else
-            "simplify it (e.g. very deep nesting, or an out-of-range escape "
-            "such as `\\U00110000`)")
-
-
-def _unverified_lines(plan: _ConfdPlan, is_zh: bool,
-                      conf_dir: str = 'conf.d') -> list[str]:
-    """One line per (d) file beside a tenant init rewrote at its own path."""
-    lines: list[str] = []
-    for t, pairs in (plan.unverified or {}).items():
-        for f, why in pairs:
-            lines.append(
-                f"無法讀透 {f}（{why}）；若它也宣告 {t}，會與 conf.d/{t}.yaml "
-                f"重複——請用 `da-tools guard defaults-impact --config-dir "
-                f"{conf_dir}` 確認"
-                if is_zh else
-                f"init cannot read {f} through ({why}); if it also declares "
-                f"{t}, it duplicates conf.d/{t}.yaml — check with `da-tools "
-                f"guard defaults-impact --config-dir {conf_dir}`")
     return lines
 
 
@@ -4034,8 +3928,6 @@ def _report_plan(plan: _ConfdPlan, config: dict, conf_dir: str) -> None:
             "init 不改寫非它產生的載體，上列檔案原封不動。" if is_zh else
             "init never rewrites a carrier it did not generate; the files "
             "above are left untouched."), file=sys.stderr)
-    for line in _unverified_lines(plan, is_zh, conf_dir):
-        print(f"NOTE: init_project: {line}", file=sys.stderr)
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"WARN: init_project: {line}", file=sys.stderr)
 
@@ -4434,9 +4326,6 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
                       "left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
-    for line in _unverified_lines(plan, is_zh,
-                                  str(Path(output_dir) / 'conf.d')):
-        print(f"  ⚠️  {line}")
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"  ⚠️  {line}")
 
@@ -5308,9 +5197,6 @@ def _handle_dry_run(config: dict, output_dir: str,
                            "own files, left untouched):"))
         for line in skip_lines:
             print(f"  ↷ {line}")
-    for line in _unverified_lines(plan, is_zh,
-                                  str(Path(output_dir) / 'conf.d')):
-        print(f"  ⚠️  {line}")
     for line in _nested_kustomize_lines(plan, config, is_zh):
         print(f"  ⚠️  {line}")
 

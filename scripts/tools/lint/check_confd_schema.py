@@ -791,7 +791,9 @@ def main() -> int:
 
 def _main_in_session() -> int:
     """`main`, with one parse-tree reader per conf.d for the whole run."""
-    with _lib_parse_cache.session():
+    # A judge (#3206): every entry parse-tree cannot read is its own finding,
+    # named after the violations of the rest of the tree, exit 2.
+    with _lib_parse_cache.session(), _lib_parse_cache.judging():
         return main()
 
 

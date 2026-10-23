@@ -165,6 +165,30 @@ def _force_utf8_subprocess_io():
 
 
 @pytest.fixture(autouse=True)
+def _no_ignored_signal_outlives_its_test():
+    """A test that leaves SIGINT / SIGTERM at SIG_IGN fails (#3249): the
+    disposition is the worker's, every later test's children inherit it, and
+    a `killpg(SIGTERM)` there does nothing — a later test times out for a
+    reason that says nothing about it. Only SIG_IGN: a Python handler is
+    reset to default across exec, so it reaches no child. The disposition is
+    put back either way, so the leak is reported once, where it happened."""
+    import signal
+    names = ("SIGINT", "SIGTERM")
+    before = {n: signal.getsignal(getattr(signal, n)) for n in names}
+    yield
+    leaked = []
+    for n in names:
+        now = signal.getsignal(getattr(signal, n))
+        if now is signal.SIG_IGN and before[n] is not signal.SIG_IGN:
+            leaked.append(n)
+            signal.signal(getattr(signal, n), before[n])
+    if leaked:
+        pytest.fail(f"left {', '.join(leaked)} at SIG_IGN for the rest of the "
+                    "worker (#3249); restore it in the test (patch_config: "
+                    "SIGNALS.reset())", pytrace=False)
+
+
+@pytest.fixture(autouse=True)
 def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
     process-wide crash envelope (#3094) with whatever ``sys.stdout`` was
@@ -279,6 +303,19 @@ def da_guard_env(monkeypatch, da_guard_binary):
     """`$DA_GUARD_BINARY` 指向 `da_guard_binary`，只在本測試期間（子行程繼承）。"""
     monkeypatch.setenv("DA_GUARD_BINARY", da_guard_binary)
     return da_guard_binary
+
+
+@pytest.fixture
+def judging_run():
+    """The test runs as a judge (`_lib_parse_cache.judging`, #3206): the
+    reader's fail-closed exit on a tree Go names paths on stands aside, as
+    it does for `validate_config` and the route generator. For tests of the
+    library mechanics those judges use on such trees (the unusable-entry
+    wording, a partial served-values read); a tool's own behaviour on such a
+    tree is the shared refusal (`test_confd_behaviour_matrix`)."""
+    import _lib_parse_cache
+    with _lib_parse_cache.judging():
+        yield
 
 
 @pytest.fixture(scope="session")
@@ -567,10 +604,96 @@ def pytest_unconfigure(config):
         shutil.rmtree(_SESSION_DA_GUARD_DIR, ignore_errors=True)
 
 
+# ── A crash is not a named rc 2 (#3092) ──────────────────────────────
+#
+# A crash ends at rc 2 (#3090), like every named caller error, so a test that
+# only checks `returncode == 2` stays green when the tool's own error handler
+# is gone and it crashes instead. For the whole run the crash code is moved
+# off 2: `_lib_exitcodes` and the da-tools entrypoint read
+# DA_TEST_CRASH_EXIT_CODE at every crash and end there (production never
+# sets it). Every child inherits it — and a child given its own `env=`
+# gets it too, through the Popen shim below, unless that env names the
+# variable itself.
+#
+# A test that pins the REAL crash code (2, or a tool's own) opts out with
+# `@pytest.mark.real_crash_exit_code`: the variable is removed from
+# os.environ for that test, and the shim then removes it from an explicit
+# `env=` as well (a module-level `dict(os.environ)` copied it at import).
+# Gate: tests/shared/test_crash_code_under_tests.py.
+TEST_CRASH_EXIT_CODE_ENV = "DA_TEST_CRASH_EXIT_CODE"  # = _lib_exitcodes' (pinned)
+TEST_CRASH_EXIT_CODE = "70"
+_REAL_CRASH_MARKER = "real_crash_exit_code"
+
+
+def _with_test_crash_exit_code(env):
+    """*env* as the child should get it — a new mapping when it changes, the
+    caller's is never touched: plus DA_TEST_CRASH_EXIT_CODE from os.environ
+    unless *env* names it; without it when the test opted out (os.environ
+    has none)."""
+    value = os.environ.get(TEST_CRASH_EXIT_CODE_ENV)
+    as_bytes = any(isinstance(k, bytes) for k in env)
+    key = TEST_CRASH_EXIT_CODE_ENV.encode() if as_bytes else TEST_CRASH_EXIT_CODE_ENV
+    if value is None:
+        if key not in env:
+            return env
+        return {k: v for k, v in env.items() if k != key}
+    if key in env:
+        return env
+    out = dict(env)
+    out[key] = value.encode() if as_bytes else value
+    return out
+
+
+# Popen(args, bufsize, executable, stdin, stdout, stderr, preexec_fn,
+# close_fds, shell, cwd, env, ...): env's position, for a positional call.
+_POPEN_ENV_INDEX = 10
+
+
+def _install_popen_env_shim():
+    """Wrap ``subprocess.Popen.__init__`` (once per process) so an explicit
+    ``env=`` carries the test crash code. ``__init__``, not the name
+    ``subprocess.Popen``: ``subprocess.run`` / ``check_output`` and a module
+    that did ``from subprocess import Popen`` all end up there."""
+    import functools
+    import subprocess
+    inner = subprocess.Popen.__init__
+    if getattr(inner, "_da_test_crash_exit_code_shim", False):
+        return
+
+    @functools.wraps(inner)
+    def __init__(self, *args, **kwargs):
+        if kwargs.get("env") is not None:
+            kwargs["env"] = _with_test_crash_exit_code(kwargs["env"])
+        elif len(args) > _POPEN_ENV_INDEX and args[_POPEN_ENV_INDEX] is not None:
+            args = (*args[:_POPEN_ENV_INDEX],
+                    _with_test_crash_exit_code(args[_POPEN_ENV_INDEX]),
+                    *args[_POPEN_ENV_INDEX + 1:])
+        return inner(self, *args, **kwargs)
+
+    __init__._da_test_crash_exit_code_shim = True
+    subprocess.Popen.__init__ = __init__
+
+
+def _arm_test_crash_exit_code():
+    # The marker itself is registered in pyproject.toml with the others.
+    os.environ[TEST_CRASH_EXIT_CODE_ENV] = TEST_CRASH_EXIT_CODE
+    _install_popen_env_shim()
+
+
+@pytest.fixture(autouse=True)
+def _real_crash_exit_code(request, monkeypatch):
+    """`@pytest.mark.real_crash_exit_code`: no test crash code for this test
+    (os.environ, so its children and the Popen shim see none either)."""
+    if request.node.get_closest_marker(_REAL_CRASH_MARKER) is not None:
+        monkeypatch.delenv(TEST_CRASH_EXIT_CODE_ENV, raising=False)
+
+
 def pytest_configure(config):
-    """Build the session's da-guard (`_provide_session_da_guard`); make
-    subprocess-invoked tools visible to coverage, when coverage is on."""
+    """Build the session's da-guard (`_provide_session_da_guard`); move the
+    crash code off 2 (`_arm_test_crash_exit_code`); make subprocess-invoked
+    tools visible to coverage, when coverage is on."""
     _provide_session_da_guard()
+    _arm_test_crash_exit_code()
     plugin = config.pluginmanager.get_plugin("_cov")
     if plugin is None or getattr(plugin, "_disabled", False):
         return

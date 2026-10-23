@@ -104,6 +104,10 @@ The exit-code table in each command section lists the main triggers and is **not
 
 > ⚠️ The first two rows used to return `1`, colliding with the per-subcommand "findings" `1` — `docker run … da-tools:<moving tag> <subcommand>` looked, in CI, exactly like "the tool ran fine and found something" (with an empty report on stdout) whenever a subcommand was renamed or the image did not ship it yet. Consumers should treat `2` as "the tool did not run" and never fold it into `1`.
 
+#### conf.d refusal
+
+**A path on the conf.d nothing can be read from: one refusal shared by the conf.d tools** ([#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206), [ADR-036](adr/036-single-parser-effective-config.en.md) §7 step 9): a tool that reads `--config-dir` (or `--conf-d`, `--sources`, or an existing conf.d at `--output`) first takes the run's whole-tree index (`da-guard parse-tree`), before it reads content or writes anything. When any path is one `da-guard` validation names (`verdict` `unservable`: the exporter cannot read or decode it — a YAML syntax error, several documents in one file, a dangling or looping symlink, a FIFO, a directory that cannot be listed; or `tree_refused`: the route generator refuses the whole tree on it — a symlink to a directory, a directory with a config file's name such as `x.yaml/`), the tool prints one `ERROR: <path>: <reason>` line per path on stderr (**all of them, none elided**) and a last line naming the tree, then exits `2` and writes nothing; with `--json`, stdout holds one envelope with `reason` `conf_d_not_servable` and `refused_paths`, every named path with its verdict (`[{"path": …, "verdict": "unservable" | "tree_refused"}, …]`, all of them, as on stderr). `tenant-verify` exits with its input-error code `1` (its `2` means a verification mismatch). Several tools used to print a `WARN` / `NOTE` for such paths and exit `0` (`configmap-assemble`, `assemble_config_dir`, `init`, `offboard`, `deprecate`, `migrate_conf_d` on `x.yaml/`, …); they all refuse now. The exceptions are the tools whose verdict on the tree is their output: `validate-config` (exit `1`), `generate-routes`, `check_routing_profiles`, `check_confd_schema` and `config-diff` name such paths themselves and fail (see their sections); `da-tools guard` itself still exits `3` / `4`. `assemble_config_dir --validate` was removed: every file it called an ERROR (a top level that is not a mapping, a parse error) is now stopped by this refusal before assembly, and passing the flag is a usage error (exit 2). ⚠️ Not on this refusal yet, moving in the next step (β2, #3206): `config_history`, `drift_detect` and `run_chaos_soak` (they still list conf.d files themselves); `batch_diagnose` and `migrate_to_operator` (they filter ConfigMap dump files by name); and `scaffold`, `onboard` and `migrate`, which write into an existing conf.d with `-o` without reading that tree first.
+
 ---
 
 ## Command Categories
@@ -260,6 +264,8 @@ da-tools check-alert MariaDBHighConnections db-a
 
 Health check for a single tenant: the MariaDB Pod's status, the exporter's `mysql_up`, the operational mode (maintenance / silent), and, when `--config-dir` is given, the profile and inheritance chain.
 
+When `--config-dir` is given and that conf.d holds a path da-guard validation names, this tool refuses with `2` before any check, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Quick single-tenant check after cutover or while troubleshooting. ⚠️ The Pod and exporter checks are written for MariaDB. The Pod check looks for an `app=mariadb` Pod in the namespace named after the tenant; it needs `kubectl` and cluster access, and the da-tools image does not ship `kubectl`. The exporter check queries `mysql_up{instance="<tenant>"}`. The tool first reads the tenant's `db_type` from Prometheus via `tenant_expected_exporter{tenant="<tenant>"}`; that series exists only when the tenant declares `_metadata.db_type`. Both checks run only when `db_type` is `mariadb`. For any other database, or a tenant that declares none, they are listed under `skipped` with a reason and `status` is `unchecked`: neither `healthy` nor `error`. A MariaDB tenant that does not declare `db_type` therefore skips them too; declare `mariadb` in `_metadata.db_type` to have them checked. ⚠️ The v2.9.0 image still has the old behavior: it ignores `db_type`, and every non-MariaDB tenant comes back `status: error` (`Pod not found`). <!-- image-caveat: v2.9.0 -->
 
 **Syntax**
@@ -299,7 +305,7 @@ When something is wrong it lists `issues` and recent error logs:
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
+When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`, which is `unknown` when a mode query was not answered ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)); with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -319,7 +325,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|-------------|
 | `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
 | `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
-| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr). What stdout carries depends on the case: a missing tenant is rejected by argparse and leaves stdout empty; a failed Prometheus query prints the `status: error` JSON above; the rest (`--show-inheritance` without `--config-dir`, `kubectl` missing or not answering, the da-guard ones) print one `"status": "caller_error"` envelope, with `reason` `served_values_unavailable` for the da-guard ones and `caller_error` for the rest ([#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115); stdout used to be empty) |
+| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query, the maintenance / silent mode queries included (those used to read as `normal` at exit code `0`; `operational_mode` is then `unknown`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr). What stdout carries depends on the case: a missing tenant is rejected by argparse and leaves stdout empty; a failed Prometheus query prints the `status: error` JSON above; the rest (`--show-inheritance` without `--config-dir`, `kubectl` missing or not answering, the da-guard ones) print one `"status": "caller_error"` envelope, with `reason` `served_values_unavailable` for the da-guard ones and `caller_error` for the rest ([#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115); stdout used to be empty) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: it returns `0` whether `status` is `healthy` or `error`, and ends with a Python traceback (rc=1) when `kubectl` is missing. On v2.9.0, read the output's `status`. <!-- image-caveat: v2.9.0 -->
 
@@ -408,7 +414,7 @@ da-tools baseline --tenant <name> [options]
 
 **Output**
 
-The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
+The statistical summary is printed to stdout; two CSVs are also written under `--output-dir`: `baseline-<tenant>-timeseries.csv` (raw samples) and `baseline-<tenant>-summary.csv` (one line per metric: min / max / avg / p50 / p90 / p95 / p99 and the recommended thresholds; when a sampling query was not answered, that line's `note` reads 「查詢失敗 N/M 次，本列不完整」 (queries failed N of M times, the line is incomplete), [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). ⚠️ There is no single-file output flag — `--output <FILE>` is accepted by argparse as an abbreviation of `--output-dir`, so it creates a **directory** named `<FILE>`.
 
 Metrics observed and the tenant key each suggestion goes to:
 
@@ -432,9 +438,9 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 
 | Code | Description |
 |------|-------------|
-| `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
+| `0` | Success: every sampling query was answered |
 | `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit. ⛔ `--interval 0` (formerly `duration // interval` raising `ZeroDivisionError`) has exited `2` at parse time since #2966, and an unwritable output path has been `2` since #1789; neither lands here any more | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
+| `2` | Caller error: a Prometheus query of any sample was not answered (unreachable, an HTTP error, an `error` status, a malformed answer) — the failed points are recorded as empty, the report and CSVs are still written, and stderr carries one `ERROR: Prometheus query failed for N sample(s)` line (it used to be `0`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)); none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
 
@@ -508,7 +514,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|-------------|
 | `0` | Every pair matches; with `--watch --auto-detect-convergence`, converged |
 | `1` | A mismatch, or a value found on only one side (`old_missing` / `new_missing`); with `--watch --auto-detect-convergence`, still not converged after `--rounds` |
-| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure, or a malformed answer (an unreadable sample value used to be reported as `old_missing` / `new_missing` at exit code `1`, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet. It returns `2` only for bad arguments and `0` for everything else, and it still prints "🎉 可以安全切換" (safe to cut over) when Prometheus is unreachable. On v2.9.0, do not gate on the exit code; read the mismatch / missing counts in the summary instead. <!-- image-caveat: v2.9.0 -->
 
@@ -576,6 +582,8 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 
 Scan Prometheus cluster's active targets, cross-reference with tenant config to find blind spots (exporter present but no tenant config).
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Regular post-migration health check; ensure new exporters are managed.
 
 **Syntax**
@@ -633,6 +641,8 @@ On exit 2, every line below the `ERROR` line starts with the prefix `da-guard|` 
 
 Evaluate the `_state_maintenance.recurring[]` schedules and create an Alertmanager silence for every tenant currently inside a maintenance window.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Automate scheduled maintenance windows; designed to run as a K8s CronJob every 5 minutes.
 
 **Syntax**
@@ -684,6 +694,8 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 #### backtest
 
 Execute historical backtest of PR threshold changes.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)); both trees (`--config-dir` and `--baseline`). This path still writes `-o` and `--markdown-output`: a not-run report with `status` `caller_error`, `reason` `conf_d_not_servable`, and `refused_paths` listing the named paths (the same document on stdout under `--json`; the markdown says why and lists each path). This path's `reason` used to be `served_values_unavailable`.
 
 **Purpose**: Validate threshold adjustment impacts; estimate expected alert changes from PR.
 
@@ -763,7 +775,7 @@ The firing percentage is over every sample in the lookback, NaN included: the al
 
 A change with no data at all, or with only NaN samples, is `no_data` (risk `UNKNOWN`, no effect on the exit code); the message is `No historical data found in Prometheus` for the former and `Only NaN samples in lookback window` for the latter ([#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963); all-NaN used to be reported as analyzed). There is one query, so no other query to fall back to. `+Inf` / `-Inf` are real samples and compare as usual.
 
-When Prometheus is reachable but the query itself fails (HTTP 400 / 503, a timeout, an `error` status), or answers HTTP 200 with `success` in a shape that is not a matrix (no `data`, `resultType` other than `matrix`, `result` not a list, a row that is not an object or has neither `values` nor `histograms`, a sample that is not `[time, value]`; a native-histogram-only row is still skipped; [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be reported as `no_data` or the row skipped, exit code 0, and the other shapes ended as an internal error without writing `-o`), the change is `query_error` (risk `UNKNOWN`), with message `Prometheus query failed: <error>` (for an HTTP error, the status line such as `HTTP Error 400: Bad Request`, not the `error` in Prometheus's response body; for a wrong shape, `malformed Prometheus response: <what is wrong>`) (control characters replaced with `?`, truncated when long), and the other changes still run ([#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059); it used to be reported as `no_data` with exit code 0). The report carries a `query_error` count; the text report prints `Query error: N` and the Markdown says how many changes were not measured. When any change is `query_error`, the `--json` top level carries `status: "partial"` and `reason: "query_error"` (a run that measured every change carries no `status`, as before), and the exit code is 2.
+When Prometheus is reachable but the query itself fails (HTTP 400 / 503, a timeout, an `error` status), or answers HTTP 200 with `success` in a shape that is not a matrix (no `data`, `resultType` other than `matrix`, `result` not a list, a row that is not an object or has neither `values` nor `histograms`, a sample that is not `[time, value]`, a sample value it cannot read (for example `"abc"`; before, that point was skipped silently at exit code 0, [#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)); a native-histogram-only row is still skipped; [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be reported as `no_data` or the row skipped, exit code 0, and the other shapes ended as an internal error without writing `-o`), the change is `query_error` (risk `UNKNOWN`), with message `Prometheus query failed: <error>` (for an HTTP error, the status line such as `HTTP Error 400: Bad Request`, not the `error` in Prometheus's response body; for a wrong shape, `malformed Prometheus response: <what is wrong>`) (control characters replaced with `?`, truncated when long), and the other changes still run ([#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059); it used to be reported as `no_data` with exit code 0). The report carries a `query_error` count; the text report prints `Query error: N` and the Markdown says how many changes were not measured. When any change is `query_error`, the `--json` top level carries `status: "partial"` and `reason: "query_error"` (a run that measured every change carries no `status`, as before), and the exit code is 2.
 
 `-o/--output` and `--markdown-output` are written on every terminal path ([#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)), except for: an argument error that ends the run before the output paths are checked (`--lookback` unusable, `--tenant` missing its arguments or not valid, no change source, the removed `--git-diff` given), and an output path that itself cannot be written; an uncaught exception (rc 2, [#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)) and a write that fails after the check passed are not guaranteed to write them either. Do not read the output files when the exit code is 2: they may hold a previous run's content. When `-o` and `--markdown-output` name the same file, the Markdown, written last, replaces the JSON. `-o` holds the same JSON `--json` would print on that run: the full report, or the `skipped` / `no_changes` / `caller_error` envelope. When no backtest ran, `--markdown-output` holds a short note under the same heading as the full report, reading `Backtest not run: <reason>`, where the reason is Prometheus being unavailable, no threshold changes, or ``caller error `<reason>` ``; when a tenant's custom-alert recipes changed, the recipe block follows it as before. Before this, only the full-report path wrote `-o`, and the `--skip-if-unavailable` and no-changes paths wrote the markdown only when a tenant declared recipes. CI decides whether to update the PR comment by whether the file is non-empty, so the comment stayed at the previous run's result.
 
@@ -1086,6 +1098,8 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 | `1` | CI mode: BAD alerts found or score below threshold |
 | `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects; and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be rc 0); and an `--alertmanager` that was given and did not answer (unreachable, an HTTP error, a body that is not a list of alert objects; [#3073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3073) — it used to count as 0 suppressed, rc 0, and under `--ci --min-score` let through a run that should have been rc 1). No report is printed then and stderr carries `Error: <Prometheus\|Alertmanager> query failed: <raw>`; `--json` prints `{"status": "caller_error", "reason": "prometheus_query_error" (`alertmanager_query_error` for Alertmanager), "error": "<raw>", ...}` (the remaining keys follow the normal report, zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
 
+**Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every `ALERTS` sample is read once, by the lib. A value it cannot read (for example `"abc"`, or not a string) is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are no state and are left out of the grades; how many were dropped is in `summary.non_finite_samples_dropped` of `--json` (and the same field on each alert) and on one line of the text report.
+
 ---
 
 #### alert-correlate
@@ -1235,6 +1249,8 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `1` | CI mode: critical risk found |
 | `2` | Caller error: bad arguments, or no cardinality data obtained. The `--json` `reason` separates the two cases: a failed Prometheus query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` used to be reported as `no_cardinality_data` (rc 2) and a row without `values` or `histograms` skipped (rc 0)) ⇒ `"status": "caller_error"`, `"reason": "prometheus_query_error"`, plus `"error": "<raw>"` (#3065; it used to be `"status": "no_data"`, `no_cardinality_data` like the next case); a successful query with no `tenant_threshold_*` series ⇒ `"status": "no_data"`, `"reason": "no_cardinality_data"`. `da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
+**Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every sample is read once, by the lib. A value it cannot read is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are left out of the regression; how many were dropped is in `summary.non_finite_samples_dropped` of `--json` and in the text report. A tenant whose samples are all non-finite is not listed; when that holds for every tenant the run is `no_cardinality_data` (`2`).
+
 #### config-history
 
 Config snapshot & history tracking — records each change to conf.d/ in `.da-history/`, providing git-independent lightweight version control.
@@ -1281,7 +1297,7 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 Initialize Dynamic Alerting integration skeleton in a customer repo. Generates CI/CD pipelines, conf.d/ directory, Kustomize overlays, and pre-commit configuration.
 
-In `conf.d/`, init owns only two kinds of path: `_defaults.yaml` and `<tenant>.yaml` at the **root**. A requested tenant that **may** already be declared by **another file** of yours is **skipped, and that file is left untouched**; stderr and the summary name it (e.g. "db-c may already be declared by conf.d/team.yaml — conf.d/db-c.yaml was not generated") and the exit code stays 0. Likewise `_defaults.yaml` is not written when the root already has a defaults carrier in another spelling (e.g. `_defaults.yml`). "May declare" is judged by **content**, never by filename: the keys of a `tenants:` mapping are declarations; a file init cannot read through (see the next paragraph for how it reads) counts as possibly declaring every requested tenant, and the skip notice says why and how to make it readable to init. Such a file does not trigger the coexistence refusal below: if init's own `conf.d/<t>.yaml` already exists **and itself declares t**, init rewrites it as usual and names the file for you to check with guard; an own file that exists but does not declare t (a placeholder, say) counts as no own file — t is skipped and that file is not rewritten. ⚠️ **init does not check whether the exporter can read that file** — to confirm the skipped tenant really is declared, run [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) (it scans the whole tree the way the exporter does and fails on a duplicate; the file should be listed under Scanned files in its report). A customer file that names no requested tenant draws no comment (init is not a validator). init **refuses with rc 1 and writes nothing** (`.da-init.yaml` included), under `--dry-run` too, when: its own `conf.d/<t>.yaml` already exists while another file it can read declares t as a `tenants:` key (e.g. `db-c.yaml` and `db-c.yml` — the exporter rejects a tree that declares a tenant twice, and which file to keep is your call); `_defaults.yaml` sits beside a defaults carrier in another spelling; the `conf.d/<t>.yaml` it would overwrite may also declare another tenant this run was asked for (after the overwrite that tenant would be declared nowhere); the `conf.d/<t>.yaml` it would overwrite also declares a tenant this run was **not** asked for (e.g. `db-a.yaml` declares db-a and db-z and you run `--tenants db-a`: the rewrite would make db-z's declaration disappear — move db-z into a file of its own such as `conf.d/db-z.yaml`, or add db-z to `--tenants` too) — `--force` is refused just the same; or any path it would write has, at **any level** below the output directory, an existing entry that differs only in case (e.g. `Conf.D/` for `conf.d/` — one path on a case-insensitive filesystem).
+In `conf.d/`, init owns only two kinds of path: `_defaults.yaml` and `<tenant>.yaml` at the **root**. A requested tenant that **may** already be declared by **another file** of yours is **skipped, and that file is left untouched**; stderr and the summary name it (e.g. "db-c may already be declared by conf.d/team.yaml — conf.d/db-c.yaml was not generated") and the exit code stays 0. Likewise `_defaults.yaml` is not written when the root already has a defaults carrier in another spelling (e.g. `_defaults.yml`). "May declare" is judged by **content**, never by filename: the keys of a `tenants:` mapping are declarations. When the conf.d holds a path init cannot read (see the next paragraph for how it reads — a file that does not decode, a dangling symlink, a directory with a config file's name), init refuses before it writes any file, naming each one, rc 2 (the [shared refusal](#confd-refusal); `--dry-run` too); such a file used to count as possibly declaring every requested tenant. ⚠️ **init does not check whether the exporter can read that file** — to confirm the skipped tenant really is declared, run [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) (it scans the whole tree the way the exporter does and fails on a duplicate; the file should be listed under Scanned files in its report). A readable customer file that names no requested tenant draws no comment (init is not a validator). init **refuses with rc 1 and writes nothing** (`.da-init.yaml` included), under `--dry-run` too, when: its own `conf.d/<t>.yaml` already exists while another file it can read declares t as a `tenants:` key (e.g. `db-c.yaml` and `db-c.yml` — the exporter rejects a tree that declares a tenant twice, and which file to keep is your call); `_defaults.yaml` sits beside a defaults carrier in another spelling; the `conf.d/<t>.yaml` it would overwrite may also declare another tenant this run was asked for (after the overwrite that tenant would be declared nowhere); the `conf.d/<t>.yaml` it would overwrite also declares a tenant this run was **not** asked for (e.g. `db-a.yaml` declares db-a and db-z and you run `--tenants db-a`: the rewrite would make db-z's declaration disappear — move db-z into a file of its own such as `conf.d/db-z.yaml`, or add db-z to `--tenants` too) — `--force` is refused just the same; or any path it would write has, at **any level** below the output directory, an existing entry that differs only in case (e.g. `Conf.D/` for `conf.d/` — one path on a case-insensitive filesystem).
 
 **Reading, and the confirmation before a write (ADR-036 §2, #2906)**: which tenants another file declares is `da-guard parse-tree`'s answer (the yaml.v3 reading, the exporter's own — no longer approximated by a text search); a file parse-tree cannot read (a syntax error, a duplicate key, a tag outside its allowed set, not UTF-8, ...) counts as possibly declaring every requested tenant. Before any file is written, the generated `conf.d/_defaults.yaml` and `conf.d/<tenant>.yaml` are read back by parse-tree at the paths they are written to and must hold exactly what was generated — otherwise exit `1` and no file is written. da-guard is needed whenever `conf.d/` exists or a conf.d file is written (`$DA_GUARD_BINARY`, then `$PATH`; the da-tools image ships it); without it, exit `2`.
 
@@ -1324,6 +1340,8 @@ da-tools init --ci both --tenants db-a --dry-run
 
 GitOps Native Mode readiness validation — checks Git repo accessibility, local config structure, and git-sync sidecar deployment status.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 ```bash
 da-tools gitops-check <subcommand> [options]
 ```
@@ -1356,7 +1374,7 @@ da-tools gitops-check <subcommand> [options]
 |------|-------------|
 | `0` | Passed; with `--ci` a warning is 0 too. Only `sidecar` gives warnings (kubectl unavailable, or the git-sync Secret / sidecar partly or entirely missing); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
 | `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`). Without `--ci` a warning is 1 too |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
 
 **Examples**
 
@@ -1574,10 +1592,10 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 |------|------|
 | `values` | Values the two readers read differently: file, line, path, both readings, a suggested spelling (e.g. `on`: write `true` for a boolean, `"on"` for a string). `rewrites` lists each replacement (`meaning`, `text`) and `span` where the value is written (line and columns, its tag included, its anchor not); every replacement makes both readers read the same, and none is lossy (an integer past int64 or an item of a `tenants:` list gets the quoted string only); a non-finite number gets no number spelling, only the quoted string — a threshold must be finite, so `.inf` / `.nan` are no longer suggested ([#3140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3140)) |
 | `keys` | Keys only one side has |
-| `becomes_unreadable` | Files read today that `parse-tree` refuses, with the `kind` (one of the closed list of 13) |
+| `becomes_unreadable` | Files read today that `parse-tree` refuses, with the `kind` (one of the closed list of 13). ⚠️ Always empty since #3206: a tree holding such a file refuses the whole audit with `2`, each one named (the [shared refusal](#confd-refusal)); the key stays, the schema is unchanged |
 | `becomes_readable` | Files refused today that `parse-tree` reads, with today's error and what yaml.v3 reads |
 | `selection` | Files only one side reads |
-| `still_unreadable` | Files both refuse (no change; does not set the exit code) |
+| `still_unreadable` | Files both refuse. ⚠️ Always empty, as above |
 | `files_compared` | Files both read and compared value by value (the text output names them on its second line), so "no difference" and "nothing compared" read apart |
 
 Lines come from PyYAML's reading: a value is at the line it is written on, a key at its own line; a value reached through an alias or a merge is at the line of its anchor or of the merged mapping's definition — changing that line changes every place that uses it. A key only yaml.v3 has is at its parent's key line.
@@ -1590,7 +1608,7 @@ A policy's `tenants: [010, 1e3, 0777]` is listed as a difference (today the sour
 
 | Code | Meaning |
 |------|------|
-| 0 | Both readers read the tree the same way (`still_unreadable` may be non-empty) |
+| 0 | Both readers read the tree the same way |
 | 1 | A difference is listed |
 | 2 | Caller error (`--config-dir` missing or unreadable, no da-guard, da-guard failed or wrote no readable parse-tree document); with `--json`, stdout is still one JSON document with `status: "caller_error"` and a `reason` |
 
@@ -1606,6 +1624,8 @@ da-tools migration-audit --config-dir conf.d/ --json | jq '.values[] | {file, li
 #### operator-generate
 
 Generate Kubernetes Operator CRDs (PrometheusRule, AlertmanagerConfig, ServiceMonitor) from Rule Packs and Tenant configuration.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
 
@@ -1671,6 +1691,8 @@ da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 #### migrate-to-operator
 
 Read existing ConfigMap-based Prometheus rules and produce equivalent CRD YAML files with a migration checklist.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Purpose**: Migrate from ConfigMap native format to Operator native CRD; GitOps-friendly conversion; pre-migration validation and preview.
 
@@ -2291,7 +2313,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). Its `min_generator_version` follows the same rule as `generate-routes`: when this tool is older, the routes and policy rows are caller errors and the exit code is `2` (before, the key was not read and the run judged anyway; [#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)). When the `policy` row fails, the suggested fix is to add the receiver's host to `allowed_domains` in this file, or to correct the tenant's receiver URL ([#3208](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3208)). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | Path to the `rule-packs/` directory for the custom rule lint. ⚠️ A supplied value that cannot be used exits 2; **omitting it removes the `custom_rules` row from the report entirely** (#1556) | (check not run) |
 | `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
 | `--version-check` | Also run the version consistency check | false |
@@ -2371,6 +2393,8 @@ da-tools validate-config --config-dir ./conf.d --policy ./policy.yaml
 
 Offboard tenant configuration and related resources.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Cleanup when tenant lifecycle ends.
 
 **Syntax**
@@ -2419,7 +2443,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 | Code | Description |
 |------|-------------|
 | `0` | Success: the pre-check passed or only warned (e.g. a cross-file reference); with `--execute` the tenant file was deleted |
-| `1` | The pre-check failed (a ❌ item such as the tenant file not found, a config file parse-tree cannot read, or a tenant file that does not declare the tenant or also declares another, named in the report), with or without `--execute`; or I/O failed (#2179) |
+| `1` | The pre-check failed (a ❌ item such as the tenant file not found, or a tenant file that does not declare the tenant or also declares another, named in the report), with or without `--execute`; or I/O failed (#2179). A conf.d holding a path parse-tree cannot read never gets this far: it is refused with `2` before the pre-check (the [shared refusal](#confd-refusal), #3206) |
 | `2` | Caller error: arguments argparse rejects (missing tenant positional, unknown flag); a `--state` that cannot be read, is not a ConfigMap document or directory, holds no records, or holds keys that are not tenant-api state records (for example a saved `threshold-config`, or conf.d itself); `--execute` with neither `--state` nor `--skip-state-check`; no usable da-guard |
 
 ---
@@ -2427,6 +2451,8 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 #### deprecate
 
 Deprecate metrics: remove `<m>`, `<m>_critical`, `custom_<m>`, `custom_<m>_critical` from `defaults:` / `optional_overrides:` / tenant files; on the tenant plane also the dimensional keys `<name>{…}` of those four names.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)). That includes a carrier the exporter drops only because of a key this round would delete (for example `old_metric: disable` under `defaults:`): this tool no longer repairs such a tree; fix that file by hand first, then run it again. `--plane subtree` too: it judges by the index of the `--root-dir` tree, so a path outside the subtree refuses it as well; a subtree carrier's valid string values are not affected.
 
 **Purpose**: Gradually retire old metrics; maintain version compatibility.
 
@@ -2448,7 +2474,8 @@ da-tools deprecate <metric_keys...> [options]
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
-| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` runs the carrier health check on every `_`-prefixed file at this level (whether the exporter can read the values under `defaults:`, judged the way yaml.v3 does); `subtree` skips it (string values are legal on the subtree plane and take effect). The tool cannot infer this, so the default is fail-closed | `root` |
+| `--plane {root,subtree}` | Whether this `--config-dir` is the conf.d root or one subtree carrier below the exporter's `-config-dir`. `root` runs the carrier health check on every `_`-prefixed file at this level (whether the exporter can read the values under `defaults:`, judged the way yaml.v3 does); `subtree` skips it (string values are legal on the subtree plane and take effect). The tool cannot infer this, so the default is fail-closed; `subtree` needs `--root-dir` | `root` |
+| `--root-dir <PATH>` | Required with `--plane subtree`: the exporter's `-config-dir` (the conf.d root); `--config-dir` must be a directory the exporter's walk enters under it, else (or with it on the `root` plane) exit 2. The run's index is that root's whole tree, and the shared refusal is taken on the whole tree ([#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)); the writes stay in `--config-dir` | (none) |
 
 **Output**
 
@@ -2593,6 +2620,8 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 
 Compare custom rules with Rule Pack, find duplicates/gaps.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Purpose**: Evaluate Rule Pack coverage; decide if custom rule can be deleted.
 
 **Syntax**
@@ -2729,6 +2758,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 
 Declarative policy engine — evaluate tenant configuration compliance using built-in DSL, zero external dependencies.
 
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Usage**
 
 ```bash
@@ -2788,6 +2819,8 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 #### opa-evaluate
 
 OPA (Open Policy Agent) policy evaluation bridge — converts tenant configs to OPA input JSON, evaluates via OPA REST API or local binary, and returns results compatible with evaluate-policy format.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Usage**
 
@@ -3158,6 +3191,8 @@ da-tools parser allowlist --format json
 
 Print a tenant's effective config + `merged_hash` (v2.8.0). Supports the verification checklist in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures item 6: after a rollback wave, every tenant's `merged_hash` must return to the pre-Base-PR snapshot. Reuses `describe_tenant.py`'s `ConfDScanner`, whose inheritance chain, `source_hash` and `merged_hash` are all read from `da-guard effective` (the values tenant-api `/effective` and the exporter have, never computed in Python, [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549), [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)), so da-guard is required (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it). This tool is a thin CLI ergonomics layer (terse output + exit code). When a directory holds more than one defaults carrier, the one not selected, which no plane reads, is named on stderr in one `WARN: <file> is ignored on every plane (#1674)` line, the same line as `describe_tenant.py`'s; the exit code is unchanged ([#3230](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3230)).
 
+When the conf.d holds a path da-guard validation names, this tool refuses with its input-error code `1` before it reads any value, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206); `2` still means only a verification mismatch).
+
 ```bash
 # Print effective config + merged_hash for one tenant
 da-tools tenant-verify db-fin-a --conf-d conf.d/
@@ -3185,7 +3220,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | Meaning |
 |---|---|
 | 0 | Tenant exists and is declared by exactly one file; if `--expect-merged-hash` supplied, it matched. `--all`: no tenant is declared more than once |
-| 1 | Missing tenant_id, conf-d not found, `--all` combined with `--expect-merged-hash`, or da-guard missing, failing or refusing the whole tree (reason on stderr), or no `merged_hash` to compare: a file in the tree the exporter cannot decode or read (for example a `_defaults.yaml` that does not parse, not only on the tenant's chain), or the exporter rejecting the whole tree because another tenant is declared twice (entry `"error": "merged_hash_unavailable"`, reason in `detail`, [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549), [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)). An uncaught exception (a `Traceback` plus one `ERROR: unexpected internal error` line, [#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)) is also 1. Argument errors argparse rejects (unknown flag, extra argument) are 2. |
+| 1 | Missing tenant_id, conf-d not found, `--all` combined with `--expect-merged-hash`, or da-guard missing, failing or refusing the whole tree (reason on stderr), or no `merged_hash` to compare: the exporter rejecting the whole tree because another tenant is declared twice (a file in the tree the exporter cannot decode or read is the [shared refusal](#confd-refusal), also 1; entry `"error": "merged_hash_unavailable"`, reason in `detail`, [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549), [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)). An uncaught exception (a `Traceback` plus one `ERROR: unexpected internal error` line, [#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)) is also 1. Argument errors argparse rejects (unknown flag, extra argument) are 2. |
 | 2 | Tenant not found, `--expect-merged-hash` mismatch, OR **duplicate declaration** (the same tenant in two or more files) (this is the incremental migration playbook checklist item 6 stop-signal). `--all`: any tenant is declared more than once |
 
 **Duplicate declaration** ([#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)): when one tenant is declared by several files, the tool computes no hash — the scanner keeps just one of them, chosen by filename order, so hashing it would let item 6 pass falsely whenever the stray file sorts first. Single-tenant mode (with or without `--expect-merged-hash`) exits 2 with JSON `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}` (`files` sorted, conf.d-relative paths); the human output lists each file as `declared in: <file>`. `--all` reports that tenant as an error entry of the same shape (no `merged_hash`), still lists every other tenant, and exits 2; the human `# total:` line counts verified, duplicate-declared (not verified) and without-`merged_hash` (not verified) tenants separately. ⚠️ da-guard refuses a tree with a duplicate declaration as a whole, so the other tenants carry no `merged_hash` either (listed as `merged_hash_unavailable` entries, not counted as verified). Fix: delete the extra declaration so the tenant lives in exactly one file, then re-run (`validate-config`'s `tenant_uniqueness` reports the same state).
@@ -3195,6 +3230,8 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 #### threshold-recommend
 
 Threshold recommendation engine — recommends optimal thresholds based on historical Prometheus P50/P95/P99 percentiles.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Usage**
 
@@ -3270,9 +3307,13 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 
 ---
 
+**A query not answered** ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)): when a key's Prometheus query is not answered (unreachable, an HTTP error, an `error` status, an answer that is not a readable matrix), that key carries `query_error` (the reason in `reason`) and no recommendation, and the other keys are recommended as usual; the report is still printed, `--json` gains top-level `status: "partial"` and `reason: "prometheus_query_error"`, `summary.query_errors` counts the keys not measured, stderr carries one `ERROR: Prometheus query failed for N key(s)` line, and the exit code is `2` (it used to be only `reason: query error: …` at exit code `0`).
+
 #### threshold-govern
 
 Threshold governance loop (Renovate-for-thresholds, #656) — turns `threshold-recommend`'s output into an **active loop**: gate on rot magnitude, then open one approvable per-tenant proposed-PR via the tenant-api (single-writer, ADR-011/023) instead of a nudge. **Dry-run by default** — pass `--apply` to actually open PRs.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 **Usage**
 
@@ -3320,12 +3361,14 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
 
-The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. The list tested is the generator's own verdict on each slot (the main receiver, `overrides[i]`, `routes[i]`); this tool does not walk `_routing` itself ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)). Only receivers the generator renders are sent; a slot it does not render is still listed, never sent, and counts as failed — `INVALID_URL` / `INVALID_CONFIG` when the generator (`build_receiver_config`) refuses the receiver's **own config**, `NOT_RENDERED` with the generator's reason when it skips the slot at the routing level (for example an override with no `alertname` / `metric_group`, `routes[i]` with an unsupported key, and every `overrides` / `routes` entry of a tenant whose main receiver is refused or missing). This tool has no `--policy`, so what the generator skips under `--policy` for `allowed_domains` is not part of the verdict. To check whether the generator accepts the whole config, run `generate-routes --validate`.
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
+The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. The list tested is the generator's own verdict on each slot (the main receiver, `overrides[i]`, `routes[i]`); this tool does not walk `_routing` itself ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)). Only receivers the generator renders are sent; a slot it does not render is still listed, never sent, and counts as failed — `INVALID_URL` / `INVALID_CONFIG` when the generator (`build_receiver_config`) refuses the receiver's **own config**, `NOT_RENDERED` with the generator's reason when it skips the slot at the routing level (for example an override with no `alertname` / `metric_group`, `routes[i]` with an unsupported key, and every `overrides` / `routes` entry of a tenant whose main receiver is refused or missing). With `--policy` the verdict is the generator's under the same `--policy`: a slot its `allowed_domains` refuse is `POLICY_REFUSED` ([#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)). To check whether the generator accepts the whole config, run `generate-routes --validate`.
 
 **Usage**
 
 ```bash
-da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>]
+da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--json] [--ci] [--timeout <SEC>] [--rate-limit <SEC>] [--policy <FILE>]
 ```
 
 **Parameters**
@@ -3339,6 +3382,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
 | `--timeout` | Timeout per receiver in seconds, applied to both connecting and waiting for the response; a timeout in either phase is reported as `TIMEOUT` ([#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)). Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
 | `--rate-limit` | Seconds to wait between each test (>= 0, fractions allowed; `0` = no wait; a negative value, `nan` or `inf` exits `2`) | `0.5` |
+| `--policy <FILE>` | Deployment policy file (the one `generate-routes --policy` takes, read by the same resolver, [#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)): a receiver its `allowed_domains` refuse is not sent, is marked `POLICY_REFUSED` and counts as failed; an unusable file or a `min_generator_version` newer than this tool exits `2` (`--json` `reason`: `policy_unusable`). Without it the allowlist is not applied and one `NOTICE` line goes to stderr; the exit code is unchanged, and `policy_applied` in `--json` says which | (not applied) |
 
 **Supported Receiver Types**
 
@@ -3361,6 +3405,7 @@ Each receiver's result is one of the following (the status column of the text ou
 | `HTTP_ERROR` | Any other HTTP error status, or a malformed or truncated response (detail starts with `malformed response:`) |
 | `INVALID_URL` | The route generator (`build_receiver_config`) refuses the receiver's own config because its URL field (`smarthost` for email) is given but malformed or not a string, the port is not 1-65535, or at send time the hostname cannot be encoded or the URL is refused (no request was sent) |
 | `INVALID_CONFIG` | The route generator (`build_receiver_config`) refuses the receiver's own config for another reason (for example a missing required field — a URL field that is missing, empty or null included, an unknown `type`, an optional field of the wrong type; an entry or tenant with no `receiver`, or a `receiver` that is not a mapping, too), matching the generator's verdict |
+| `POLICY_REFUSED` | The `--policy` `allowed_domains` refuse this receiver (its host is not listed), so the generator does not render it; no request was sent. The detail is the generator's reason plus the fix (add the host to `allowed_domains` in the `--policy` file, or correct the tenant's receiver URL). When the main receiver is refused, the tenant's child slots are `NOT_RENDERED` ([#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)) |
 | `NOT_RENDERED` | The route generator skips this slot at the routing level, so Alertmanager never gets it (no request was sent): `overrides[i]` / `routes[i]` itself is unusable (for example no matcher, an unsupported key, not a mapping), or the tenant's main receiver is not rendered, so none of its children is. The detail is the generator's own reason; under a main receiver that is not rendered, a child with a defect of its own is also reported with that reason (`NOT_RENDERED`) until the main receiver is fixed; when `overrides` / `routes` is not a list, the row is `<tenant>-overrides` / `<tenant>-routes` ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)) |
 
 For `TIMEOUT`, `CONNECTION_REFUSED`, `CONNECTION_ERROR` and `TLS_ERROR` the detail is cut at 80 characters (the `via proxy: ` prefix included); longer error messages are truncated. With `https_proxy` / `http_proxy` set, these statuses may describe the hop to the proxy: a closed proxy port is `CONNECTION_REFUSED`, an unresolvable proxy host is `CONNECTION_ERROR`, and an `HTTP 502` an http receiver gets through the proxy is `HTTP_ERROR`. Only a failed HTTPS CONNECT carries the `via proxy: ` prefix (including a proxy answering `504 Connection Timed Out`, which is then not `TIMEOUT`).
@@ -3386,20 +3431,22 @@ da-tools test-notification --config-dir conf.d/ --ci
 | Code | Description |
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
-| `1` | CI mode: one or more receivers failed (unreachable, an invalid receiver config or URL, or a slot the generator does not render, `NOT_RENDERED`; even under `--dry-run`, which connects to nothing). Without `--ci` the code is always `0`, but `status` in `--json` and `Overall` in the text report still read `fail` / `FAIL` |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752) |
+| `1` | CI mode: one or more receivers failed (unreachable, an invalid receiver config or URL, a slot the generator does not render, `NOT_RENDERED`, or one the `--policy` refuses, `POLICY_REFUSED`; even under `--dry-run`, which connects to nothing). Without `--ci` the code is always `0`, but `status` in `--json` and `Overall` in the text report still read `fail` / `FAIL` |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752); `--policy` unusable or its `min_generator_version` newer than this tool (`reason: policy_unusable`, #3142) |
 
 #### explain-route
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 `overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). Both lists come from the generator's verdict on each slot, the same source `test-notification` reads; when a tenant's main receiver is missing or refused, the generator renders no sub-route, and each `overrides` / `routes` entry is listed with a "main receiver not rendered" reason of its own ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076); before, nothing was listed when the main receiver was missing or refused). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. A duration Alertmanager does not accept is rendered as the platform default (and `--validate` fails); those lines are listed in a "Replaced by the generator" section (main route and sub-routes alike), under `replaced_values` in `--json`, apart from `skipped_sub_routes` — those entries are still rendered, with another value ([#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)). `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
 
 **Usage**
 
 ```bash
-da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--json]
-da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--json]
+da-tools explain-route --config-dir <PATH> [--tenant <NAME>...] [--show-profile-expansion] [--policy <FILE>] [--json]
+da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname <NAME>] [--severity <LEVEL>] [--label <KEY=VALUE>...] [--base-config <PATH>] [--policy <FILE>] [--json]
 ```
 
 **Parameters**
@@ -3414,6 +3461,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--severity` | Alert severity to trace (read only with `--trace`) | `warning` |
 | `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
 | `--base-config` | Base Alertmanager YAML for the trace: `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
+| `--policy <FILE>` | Deployment policy file (the one `generate-routes --policy` takes, read by the same resolver, [#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)): what is listed and traced is what the generator renders under its `allowed_domains`; a refused receiver is listed under "Refused by the --policy allowed_domains" (`policy_refused` in `--json`, each with `source` / `status: POLICY_REFUSED` / `detail` / `remedy`), and a refused main receiver takes the tenant's whole route out. An unusable file or a `min_generator_version` newer than this tool exits `2` (`reason: policy_unusable`). A refused platform-enforced (`_routing_enforced`) receiver is listed there too (`source: _routing_enforced.receiver`). Without it nothing is applied and one `NOTICE` line goes to stderr; the exit code is unchanged, and `policy_applied` on each `--json` entry says which. `--show-profile-expansion` lists profiles, not receivers: it does not apply the allowlist and prints no NOTICE (an unusable file is still `2`) | (not applied) |
 | `--json` | Output in JSON format | `false` |
 
 The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group`, or a `routes` `match` key other than `alertname` / `severity` / `tenant`, can only be supplied through `--label`, otherwise the trace does not reach that sub-route. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)). `--alertname` / `--severity` without `--trace` are rejected with exit code `2` as well, even when the value given is the default ([#2926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2926)).
@@ -3447,6 +3495,8 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --sever
 #### explain-keys
 
 Explain a tenant's keys ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 9). For each tenant it lists every key of its config: the layer and file it comes from (`da-guard effective`), which readers read it (the exporter as measured by `da-guard served-values`; the route generator, the custom-alert compiler, Policy-as-Code and annotations as the reserved-key registry declares for that layer; a key a `_policies` rule that applies to the tenant names as `target` (or `when.target`) counts as read by Policy-as-Code: either #1231 spelling matches, a wildcard names no key, and a `_` key must be one the registry lists), the verdict and its severity, what a `disable` does (judged by resolving again without it), the value as written and what `/metrics` serves. The verdict is the shared one every gate uses. The tools report what they can; whether a value is what you meant is yours to check with this output, and to pin in your own CI with `--assert`.
+
+When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 ```bash
 da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]

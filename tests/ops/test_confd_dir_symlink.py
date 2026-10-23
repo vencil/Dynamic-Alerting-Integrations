@@ -120,6 +120,7 @@ def _run(*argv: object) -> subprocess.CompletedProcess:
 # ── the listing ───────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("judging_run")  # the library as the judges read it (#3206)
 def test_list_config_tree_names_the_directory_link(nested: Path):
     listing = list_config_tree(nested)
     assert [p.name for p in listing.unusable] == ["team-a"], (
@@ -129,6 +130,7 @@ def test_list_config_tree_names_the_directory_link(nested: Path):
     assert unusable_reason(listing.unusable[0], listing.listing) == SYMLINK_REASON
 
 
+@pytest.mark.usefixtures("judging_run")  # the library as the judges read it (#3206)
 def test_list_config_tree_flat_kubelet_layout_is_unchanged(flat: Path):
     listing = list_config_tree(flat)
     assert [p.name for p in listing.files] == ["_defaults.yaml", "t-sym.yaml"]
@@ -138,6 +140,7 @@ def test_list_config_tree_flat_kubelet_layout_is_unchanged(flat: Path):
     assert listing.unscannable == []
 
 
+@pytest.mark.usefixtures("judging_run")  # the library as the judges read it (#3206)
 def test_list_config_tree_alias_to_a_walked_directory_is_not_unusable(alias: Path):
     listing = list_config_tree(alias)
     assert [p.relative_to(alias).as_posix() for p in listing.files] == [
@@ -146,6 +149,7 @@ def test_list_config_tree_alias_to_a_walked_directory_is_not_unusable(alias: Pat
         "a link to a directory the walk reaches anyway loses nothing")
 
 
+@pytest.mark.usefixtures("judging_run")  # the library as the judges read it (#3206)
 def test_list_config_tree_link_outside_the_root_is_unusable(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
@@ -197,13 +201,15 @@ def _source(tmp_path: Path) -> Path:
     return src
 
 
-def test_assemble_check_does_not_call_a_directory_link_unmeasured(
+def test_assemble_check_refuses_an_output_with_a_directory_link(
         nested: Path, tmp_path: Path):
+    """#3206: the link is a path da-guard validation names (exit 4): the run
+    is refused, the link named — not "could not measure", not a WARN."""
     r = _run(ASSEMBLE, "--sources", _source(tmp_path), "--output", nested,
              "--check")
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
     assert "cannot answer the duplicate-tenant question" not in r.stderr
-    assert f"WARN: {nested / 'team-a'} {SYMLINK_REASON}\n" in r.stderr
+    assert "ERROR: team-a: the route generator refuses the whole tree" in r.stderr, r.stderr
 
 
 def test_assemble_check_flat_kubelet_layout_is_silent(flat: Path, tmp_path: Path):
@@ -213,22 +219,20 @@ def test_assemble_check_flat_kubelet_layout_is_silent(flat: Path, tmp_path: Path
     assert "WARN" not in r.stderr and "symlink" not in r.stderr
 
 
-# ── the readers that only report (rc unchanged) ───────────────────────
+# ── the readers that only report: the shared refusal (#3206) ──────────
+
+_REFUSAL = ("ERROR: {name}: the route generator refuses the whole tree on it "
+            "(da-guard validation exits 4) (not_regular_file: a symlink to a directory "
+            "the walk does not follow)")
 
 
 def test_describe_tenant_and_path_metadata_name_it_consistently(nested: Path):
-    d = _run(DESCRIBE, "--conf-d", nested, "t-sym")
-    assert d.returncode == 2  # t-sym is not loaded — same as the exporter
-    # Once, in parse-tree's words — the same listing path-metadata reads, so
-    # both readers name it alike (#3230 removed the custom-alerts loader that
-    # used to name it a second way).
-    assert (d.stdout + d.stderr).count(f"team-a — {PT_SYMLINK_REASON}") == 1, d.stderr
-    assert SYMLINK_REASON not in d.stdout + d.stderr, d.stderr
-    m = _run(PATH_META, "--config-dir", nested)
-    assert m.returncode == 0
-    # #2906: its listing is `da-guard parse-tree`'s, which names the link
-    # in its own words (the same kind the exporter's walk gives it).
-    assert "team-a:0: warning: not checked — " + PT_SYMLINK_REASON in m.stdout + m.stderr
+    """Both refuse the tree in the same words — the shared refusal, once."""
+    for r in (_run(DESCRIBE, "--conf-d", nested, "t-sym"),
+              _run(PATH_META, "--config-dir", nested)):
+        both = r.stdout + r.stderr
+        assert r.returncode == 2, both
+        assert both.count(_REFUSAL.format(name="team-a")) == 1, both
 
 
 def test_describe_tenant_and_path_metadata_flat_are_unchanged(flat: Path):
@@ -244,26 +248,24 @@ def test_underscore_directory_link_is_named_by_name_filtering_readers(shared: Pa
     """F3: both readers drop `_`-prefixed ENTRIES by name; a `_`-prefixed
     directory LINK is a lost subtree (the exporter descends `_` dirs) and
     must be named like `unscannable` is."""
-    d = _run(DESCRIBE, "--conf-d", shared, "t-sym")
-    assert (d.stdout + d.stderr).count(f"_shared — {PT_SYMLINK_REASON}") == 1, d.stderr
-    m = _run(PATH_META, "--config-dir", shared)
-    assert m.returncode == 0
-    assert f"_shared:0: warning: not checked — {PT_SYMLINK_REASON}" in m.stdout + m.stderr
+    for r in (_run(DESCRIBE, "--conf-d", shared, "t-sym"),
+              _run(PATH_META, "--config-dir", shared)):
+        both = r.stdout + r.stderr
+        assert r.returncode == 2, both
+        assert both.count(_REFUSAL.format(name="_shared")) == 1, both
 
 
-def test_compile_custom_alerts_allow_empty_is_not_refused(nested: Path, tmp_path: Path):
-    """F2: a directory link is not a declaration the exporter refuses;
-    `--allow-empty` must still write (rc 0, as on main) and the link must be
-    named — since #3042 by the exporter's own load (da-guard's stderr, which
-    the compiler prints), as it reads the tree through da-guard."""
+def test_compile_custom_alerts_allow_empty_still_refuses_a_directory_link(
+        nested: Path, tmp_path: Path):
+    """F2 / #3206: `--allow-empty` is about a tree with no custom alerts,
+    not one the route generator refuses: the link is named, rc 2, and no
+    pack is written."""
     out = tmp_path / "pack.yaml"
     r = _run(COMPILE, "--config-dir", nested, "--out", out, "--allow-empty")
     both = r.stdout + r.stderr
-    assert r.returncode == 0, both
-    assert "not served" not in both, both
-    assert "team-a is a symlink to a directory and is not followed" in both, both
-    assert both.count("is a symlink to a directory") == 1, both
-    assert out.is_file()
+    assert r.returncode == 2, both
+    assert both.count(_REFUSAL.format(name="team-a")) == 1, both
+    assert not out.exists()
 
 
 def test_compile_custom_alerts_flat_is_unchanged(flat: Path, tmp_path: Path):

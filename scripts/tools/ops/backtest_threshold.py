@@ -57,10 +57,12 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample reading)
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
+import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
     arm_crash_envelope, disarm_crash_envelope,
@@ -167,13 +169,11 @@ def _is_nan_sample(val_str):
     """Whether a Prometheus sample value is NaN (#2963).
 
     Only NaN: ``+Inf`` / ``-Inf`` are real samples (an alert on them does
-    compare and can fire), so they are NOT missing data. An unparseable value
-    is left to :func:`count_threshold_breaches`, which already skips it.
+    compare and can fire), so they are NOT missing data. Read by the lib
+    (``sample_value``, #3213); a value it cannot read never gets here —
+    ``prometheus_range`` refuses the answer.
     """
-    try:
-        return math.isnan(float(val_str))
-    except (ValueError, TypeError):
-        return False
+    return math.isnan(sample_value(val_str))
 
 
 def count_threshold_breaches(values, threshold, direction="above"):
@@ -190,10 +190,7 @@ def count_threshold_breaches(values, threshold, direction="above"):
 
     count = 0
     for _, val_str in values:
-        try:
-            val = float(val_str)
-        except (ValueError, TypeError):
-            continue
+        val = sample_value(val_str)  # #3213: the lib's reading
         if direction == "above" and val > threshold:
             count += 1
         elif direction == "below" and val < threshold:
@@ -1350,7 +1347,14 @@ _NOT_RUN_WHY = {
     ("skipped", "prometheus_unavailable"):
         "Prometheus is unavailable (`--skip-if-unavailable`).",
     ("no_changes", "no_threshold_changes_detected"): "no threshold changes found.",
+    # #3206: the shared conf.d refusal; the paths follow, one per line.
+    ("caller_error", "conf_d_not_servable"):
+        "the conf.d holds paths da-guard validation names; fix or remove them, then run it again.",
 }
+
+
+#: How many refused paths the `--markdown-output` report lists (#3206).
+MARKDOWN_REFUSED_PATHS_MAX = 50
 
 
 def not_run_markdown(report):
@@ -1360,6 +1364,16 @@ def not_run_markdown(report):
     why = _NOT_RUN_WHY.get((report["status"], report["reason"]))
     if why is None:
         why = f"caller error `{report['reason']}` (see the job log)."
+    refused = report.get("refused_paths") or []
+    if refused:
+        # #3206: the paths the refusal named, each its own line — capped, as
+        # a PR comment must stay readable; stderr and the JSON keep them all.
+        shown = refused[:MARKDOWN_REFUSED_PATHS_MAX]
+        why += "\n>\n" + "\n".join(f"> - `{safe_label(r['path'])}` ({r['verdict']})"
+                                     for r in shown)
+        if len(refused) > len(shown):
+            why += (f"\n> - … and {len(refused) - len(shown)} more "
+                    "(all of them on stderr and in the JSON report)")
     return ("## Threshold Backtest Results\n"
             "\n"
             f"> **Backtest not run:** {why}\n"
@@ -1438,6 +1452,22 @@ def _write_outputs(args, report, markdown, recipe_tenants):
         write_text_or_die(args.markdown_output, markdown, flag="--markdown-output")
         if not args.json:
             print(f"  Markdown report: {args.markdown_output}")
+
+
+def _end_refused(args, bad, lines):
+    """#3206: the shared conf.d refusal's ending for this tool — its lines are
+    already on stderr; the not-run report (reason `conf_d_not_servable`, the
+    refused paths and the refusal's last line) goes to stdout under `--json`,
+    to `-o` and to `--markdown-output` (#3089: every terminal path writes
+    both), then rc 2."""
+    report = empty_report(args.lookback, "caller_error", _lib_parse_tree.REFUSAL_REASON)
+    report["refused_paths"] = _lib_parse_tree.refused_paths(bad)
+    report["error"] = lines[-1]
+    if args.json:
+        print(format_json_report(report))
+        disarm_crash_envelope()  # #3094: the document is out
+    _write_outputs(args, report, not_run_markdown(report), ())
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 def _end_not_run(args, status, reason, rc, recipe_tenants=()):
@@ -1579,11 +1609,16 @@ def main():
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
             _end_not_run(args, "caller_error", "baseline_missing", EXIT_CALLER_ERROR)
         try:
-            trees = load_trees(args.config_dir, args.baseline)
-            recipe_tenants = changed_recipe_tenants(trees)
-            if recipe_tenants:
-                print(custom_alert_notice(recipe_tenants), file=sys.stderr)
-            dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline, trees=trees)
+            # #3206 + #3089: a tree da-guard validation names paths on ends
+            # through the shared refusal, and this tool still writes `-o` /
+            # `--markdown-output` for it (`_end_refused`).
+            with _lib_parse_tree.on_refusal(lambda bad, lines: _end_refused(args, bad, lines)):
+                trees = load_trees(args.config_dir, args.baseline)
+                recipe_tenants = changed_recipe_tenants(trees)
+                if recipe_tenants:
+                    print(custom_alert_notice(recipe_tenants), file=sys.stderr)
+                dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline,
+                                                        trees=trees)
         except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
             _exit_served_values_error(exc, args, recipe_tenants)
 

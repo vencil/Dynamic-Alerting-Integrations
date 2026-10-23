@@ -6,7 +6,7 @@
 # `_` file resolves to (scope narrowed to that file's directory when only one
 # directory changed), and posts a sticky Markdown report as a PR comment.
 #
-# Same posting pattern as config-diff.yaml and config-diff-advisory.yml
+# Same posting pattern as config-diff-advisory.yml
 # (marker-based update vs create) so reviewers see ONE comment per PR that
 # updates in-place on each push, not a stack of stale comments.
 #
@@ -169,11 +169,12 @@ permissions:
 # place, so without a group two pushes in quick succession race and the
 # comment ends up describing whichever run finished LAST — which can be the
 # older commit. Cancelling the superseded run removes that race. This is the
-# block config-diff.yaml and config-diff-advisory.yml point to (it lived in
-# blast-radius.yml until #3230 retired that workflow).
+# block config-diff-advisory.yml points to (it lived in blast-radius.yml
+# until #3230 retired that workflow; config-diff.yaml pointed here too until
+# #3258 retired it).
 #   * The group is keyed on the PR NUMBER, not `github.ref`, and prefixed with
 #     `github.workflow`: the report workflows fire on overlapping paths
-#     (config-diff.yaml and config-diff-advisory.yml on the same conf.d), and a
+#     (config-diff-advisory.yml and this one on the same conf.d), and a
 #     shared group would let one workflow cancel another.
 #   * Any non-`pull_request` event gets a group of its own (`run-<run_id>`) and
 #     `cancel-in-progress` false, so such a run never cancels — or displaces a
@@ -330,8 +331,8 @@ jobs:
             echo "::error::base ref origin/${BASE_REF} not found — the checkout step must use fetch-depth: 0"
             exit 1
           fi
-          # ⛔ `-z`, for the same reason config-diff.yaml already passes it
-          # (blast-radius.yml did too, until #3230 retired it): without it git
+          # ⛔ `-z`, for the same reason config-diff.yaml passed it (until #3258
+          # retired it; blast-radius.yml did too, until #3230): without it git
           # C-quotes any non-ASCII path
           # (`"\347\222\260-prod/conf.d/_defaults.yaml"`), and the helper below
           # turns those escapes into path separators. Measured, both directions
@@ -346,7 +347,7 @@ jobs:
           # was also listing changed paths without it, for the string that goes
           # into the PR comment header. Both were fixed, and the rule is
           # asserted over every report workflow rather than this one (#1419).
-          # ⛔ Same branch-topology probe as config-diff.yaml, and for the same
+          # ⛔ Same branch-topology probe config-diff.yaml had (retired, #3258), for the same
           # reason: a PR from a branch with no common ancestor (orphan branch,
           # re-imported or squashed repo) makes the three-dot form exit 128,
           # and under `set -euo pipefail` this step then died with a bare
@@ -377,8 +378,8 @@ jobs:
           else
             # ⛔ The listing gets the SAME wrapper as the probe above, and this
             # is the half the previous round left out while the comment on line
-            # one of this block said "same as config-diff.yaml". It was not: the
-            # sibling wraps its `git diff` in `set +e` / `rc=$?` / `::error::`,
+            # one of this block said "same as config-diff.yaml". It was not: that
+            # workflow (retired, #3258) wrapped its `git diff` in `set +e` / `rc=$?` / `::error::`,
             # this one ran bare under `set -euo pipefail`. The failure mode is
             # not the bare death — it is that the redirect CREATES the file
             # first, so a `git diff` that dies partway leaves a TRUNCATED list
@@ -678,8 +679,8 @@ jobs:
             // silent-green paths into red ones. The SHA and run link are the
             // only way a reader can tell. Read from `context`, never from an
             // Actions expression interpolation (#1021 class house rule). This
-            // is the block config-diff.yaml and config-diff-advisory.yml point
-            // to (it lived in blast-radius.yml until #3230). This workflow's
+            // is the block config-diff-advisory.yml points to (it lived in
+            // blast-radius.yml until #3230). This workflow's
             // posting step does not run on a failed job, so without the stamp
             // a stale verdict is indistinguishable from the current one.
             const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);

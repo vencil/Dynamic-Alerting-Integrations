@@ -31,6 +31,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "dx"))
 from _grar_parse import load_tenant_tree  # noqa: E402
 from describe_tenant import ConfDScanner  # noqa: E402
 from _lib_confd import declared_tenant_ids, overlay_platform_tenants  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
@@ -109,9 +112,32 @@ def _build(tree: dict, root: Path) -> None:
         p.write_text(content, encoding="utf-8")
 
 
+# #3206: the rows whose tree holds a file the exporter cannot read. Go's half
+# still asserts their /metrics column (the exporter serves the rest); a conf.d
+# tool refuses the tree instead, naming the file. Pinned here AND checked
+# against Go's own answer, so a row cannot drift into or out of this set.
+_REFUSED_ROWS = {
+    "a-multi-document-tenant-file-declares-nothing": ["sub/tx.yaml"],
+    "no-existence-from-a-tenant-file-whose-first-document-does-not-parse": ["sub/tx.yaml"],
+}
+
+
+def _refused(tree: dict, root: Path) -> "list[str]":
+    """The paths a conf.d tool must refuse *root* naming ([] for a tree it
+    reads), asserted equal to Go's answer."""
+    got = go_refused(root)
+    assert got == _REFUSED_ROWS.get(tree["name"], []), (tree["name"], got)
+    return got
+
+
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
 def test_routing_plane_matches_the_table(tree, tmp_path: Path, capsys) -> None:
     _build(tree, tmp_path)
+    refused = _refused(tree, tmp_path)
+    if refused:
+        with refuses(*refused):
+            load_tenant_tree(str(tmp_path))
+        return
     got = load_tenant_tree(str(tmp_path))
     parsed_tenants = set(got.dedup_configs)
     for tenant, want in tree["expect"].items():
@@ -131,6 +157,11 @@ def test_walker_plane_matches_the_table(tree, tmp_path: Path) -> None:
     `platform_overlay` attribution (omitted when empty), and no tenant a
     platform file alone names."""
     _build(tree, tmp_path)
+    refused = _refused(tree, tmp_path)
+    if refused:
+        with refuses(*refused):
+            ConfDScanner(tmp_path)
+        return
     scanner = ConfDScanner(tmp_path)
     for tenant, want in tree["expect"].items():
         if want["walker"] is None:
@@ -200,8 +231,14 @@ def test_a_file_that_cannot_be_read_or_parsed_declares_nothing(tmp_path: Path) -
     runs as root in CI containers, where mode 000 does not stop a read, and a
     dangling symlink or a directory named `*.yaml` never reaches this code —
     `iter_config_files` drops both before the read.
+
+    #3206: that skip is what a judge (which names such files itself) reads;
+    any other tool reaching it is refused by the shared exit, both files named.
     """
     (tmp_path / "broken.yaml").write_text("tenants:\n  tb: [\n", encoding="utf-8")
     (tmp_path / "latin1.yaml").write_bytes(b"tenants:\n  tl: {}\n# caf\xe9\n")
     (tmp_path / "ok.yaml").write_text("tenants:\n  tok: {}\n", encoding="utf-8")
-    assert declared_tenant_ids(tmp_path) == {"tok"}
+    with _lib_parse_cache.judging():
+        assert declared_tenant_ids(tmp_path) == {"tok"}
+    with refuses("broken.yaml", "latin1.yaml"):
+        declared_tenant_ids(tmp_path)

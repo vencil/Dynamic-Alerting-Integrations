@@ -893,6 +893,12 @@ class PolicyInputError(ValueError):
     """
 
 
+class PolicyVersionError(PolicyInputError):
+    """The --policy file is usable, but names a ``min_generator_version``
+    this generator does not meet (ADR-036 §6): a caller error whose fix is
+    the da-tools version, not the file (#3142)."""
+
+
 class PolicyDocument(NamedTuple):
     """What the generator reads from a ``--policy`` file."""
 
@@ -932,6 +938,43 @@ def generator_version_problem(own: str | None, minimum: str | None) -> str | Non
         return None
     return (f"this generator is da-tools {own}, older than the policy's "
             f"min_generator_version {minimum} — {remedy}")
+
+
+# ── What every tool taking the deployment --policy says about it (#3142);
+# the resolver itself is generate_alertmanager_routes.resolve_policy.
+
+POLICY_HELP = {
+    "en": ("Deployment policy YAML (the file generate-routes takes): its "
+           "allowed_domains refuse receivers whose host is outside it, its "
+           "min_generator_version refuses an older generator. Without it the "
+           "allowlist is not applied"),
+    "zh": ("部署端 policy YAML（與 generate-routes 同一份）：host 不在 "
+           "allowed_domains 內的 receiver 被拒收；比 min_generator_version "
+           "舊的產生器拒絕判定。沒帶時不套用 allowlist"),
+}
+
+#: printed (stderr) by test-notification / explain-route run without --policy
+#: (the exit code is unchanged); for the CI tools the CI template says it.
+POLICY_NOT_APPLIED_NOTICE = (
+    "NOTICE: no --policy given: the deployment policy's webhook domain "
+    "allowlist (allowed_domains) is not applied, so a receiver it refuses is "
+    "treated as allowed here. Pass the deployment policy file with --policy.")
+
+#: what to do about a receiver the allowlist refuses.
+POLICY_REFUSAL_REMEDY = (
+    "Add the receiver's host to `allowed_domains` in the --policy file, or "
+    "correct the receiver URL (the tenant's `_routing`, or the platform's "
+    "`_routing_enforced`; see docs/cli-reference.md § validate-config).")
+
+#: what to do about a policy whose min_generator_version this generator
+#: does not meet (PolicyVersionError): the file itself is usable.
+POLICY_VERSION_REMEDY = (
+    "Run a da-tools at least as new as the policy's `min_generator_version` "
+    "(raise the image tag); the --policy file itself is usable, and lowering "
+    "its minimum means judging by rules its author did not mean.")
+
+#: the `kind` of the finding that drops a receiver for the allowlist.
+POLICY_REFUSAL_KIND = "receiver_domain_not_allowed"
 
 
 def load_policy(policy_path: str | None) -> list[str]:
