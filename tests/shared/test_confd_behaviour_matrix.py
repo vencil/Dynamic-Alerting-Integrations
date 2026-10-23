@@ -211,6 +211,14 @@ def _am_config(cell: pathlib.Path) -> None:
         "route:\n  receiver: default\nreceivers:\n- name: default\n", encoding="utf-8")
 
 
+def _onboard_hints(cell: pathlib.Path) -> None:
+    """The hints `onboard_platform` leaves for `scaffold_tenant --from-onboard`:
+    one tenant and its DB type."""
+    (cell / "onboard-hints.json").write_text(
+        json.dumps({"tenants": ["newt"], "db_types": {"newt": ["mariadb"]}}),
+        encoding="utf-8")
+
+
 def _threshold_cr(cell: pathlib.Path) -> None:
     """One ThresholdConfig CR for `da_assembler --render-cr`."""
     (cell / "cr.yaml").write_text(
@@ -312,6 +320,9 @@ TOOLS: dict[str, Tool] = {
     "scaffold_tenant --generate-profile": Tool((_PY, _T + "ops/scaffold_tenant.py",
                                                 "--generate-profile", "newp", "--db", "mariadb",
                                                 "-o", "{conf}")),
+    "scaffold_tenant --from-onboard": Tool((_PY, _T + "ops/scaffold_tenant.py", "--from-onboard",
+                                            "{cell}/onboard-hints.json", "-o", "{conf}"),
+                                           prep=_onboard_hints),
     # The CRD controller's one-shot render (da-crdecode is in the box's bin/);
     # the controller loop's fresh judgement is tests/ops/test_da_assembler.py's.
     "da_assembler --render-cr": Tool((_PY, _T + "ops/da_assembler.py", "--render-cr",

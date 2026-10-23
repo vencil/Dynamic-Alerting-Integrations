@@ -2637,3 +2637,86 @@ class TestControllerSharedRefusal:
         assert exc.value.code == 2
         assert "broken.yaml" in capsys.readouterr().err
         assert not (conf / "ctl-cli.yaml").exists()
+
+
+class TestControllerJudgesOncePerCycle:
+    """#3206：controller 每個 reconcile cycle 只判一次樹（一次 `run_once`、
+    一個 watch 事件各一次 tree mode），該 cycle 的每個 CR 共用；跨 cycle 不記憶。"""
+
+    @staticmethod
+    def _count_tree_runs(monkeypatch):
+        import _lib_parse_tree
+        real, calls = _lib_parse_tree.load, []
+
+        def counting(root, *args, **kwargs):
+            calls.append(str(root))
+            return real(root, *args, **kwargs)
+        monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        return calls
+
+    def test_run_once_judges_the_tree_once_for_all_its_crs(self, tmp_path, monkeypatch):
+        calls = self._count_tree_runs(monkeypatch)
+        api = mock.MagicMock()
+        api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name=f"cyc-{i}") for i in range(3)]}
+        assert da_assembler.run_once(api, tmp_path) == 0
+        assert calls == [str(tmp_path)]
+        assert all((tmp_path / f"cyc-{i}.yaml").is_file() for i in range(3))
+        # The next cycle judges again: no process-lifetime memo.
+        assert da_assembler.run_once(api, tmp_path) == 0
+        assert calls == [str(tmp_path)] * 2
+
+    def test_run_once_on_a_refused_tree_writes_no_cr(self, tmp_path, monkeypatch, caplog):
+        calls = self._count_tree_runs(monkeypatch)
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        api = mock.MagicMock()
+        api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name=f"cyc-{i}") for i in range(3)]}
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            assert da_assembler.run_once(api, tmp_path) == 0
+        assert calls == [str(tmp_path)]
+        assert not any((tmp_path / f"cyc-{i}.yaml").exists() for i in range(3))
+        assert caplog.text.count("broken.yaml") == 1  # named once per cycle
+        phases = [c.kwargs["body"]["status"]["phase"]
+                  for c in api.patch_namespaced_custom_object_status.call_args_list]
+        assert phases == ["Error"] * 3
+
+    def test_each_watch_event_judges_the_tree_once(self, tmp_path, monkeypatch):
+        calls = self._count_tree_runs(monkeypatch)
+        _watch_once(monkeypatch, [{"type": "ADDED", "object": _make_cr(name="ev-1")},
+                                  {"type": "MODIFIED", "object": _make_cr(name="ev-2")}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert calls == [str(tmp_path)] * 2
+        assert (tmp_path / "ev-1.yaml").is_file() and (tmp_path / "ev-2.yaml").is_file()
+
+
+def _watch_once(monkeypatch, events):
+    """`run_watch` over one stream of *events*; the loop stops after it."""
+    class _Watch:
+        def stream(self, *args, **kwargs):
+            yield from events
+            monkeypatch.setattr(da_assembler, "_shutdown", True)
+    monkeypatch.setattr(da_assembler, "_shutdown", False)
+    monkeypatch.setattr(da_assembler, "watch",
+                        mock.MagicMock(Watch=_Watch), raising=False)
+
+
+class TestWatchDeleteOnARefusedTree:
+    def test_a_delete_event_on_a_refused_tree_keeps_the_file(self, tmp_path, monkeypatch,
+                                                             caplog):
+        cr = _make_cr(name="gone")
+        reconcile_one(cr, tmp_path)
+        assert (tmp_path / "gone.yaml").is_file()
+        (tmp_path / "x.yaml").mkdir()  # a path Go names (validation exit 4)
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert (tmp_path / "gone.yaml").is_file(), "deleted from a refused tree"
+        assert "x.yaml" in caplog.text
+
+    def test_a_delete_event_on_a_served_tree_removes_the_file(self, tmp_path, monkeypatch):
+        cr = _make_cr(name="gone")
+        reconcile_one(cr, tmp_path)
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert not (tmp_path / "gone.yaml").exists()
