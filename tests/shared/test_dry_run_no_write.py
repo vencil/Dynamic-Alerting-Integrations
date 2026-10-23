@@ -51,9 +51,9 @@ explicit, meta-asserted allowlist (``MENTION_ONLY_ALLOWLIST``):
 * ``drift_detect`` — docstring prose only; the tool has no ``--dry-run`` flag.
 * ``threshold_govern`` — dry-run is the *default* (absence of ``--apply``),
   not a flag; its no-write default is exercised by its own test suite.
-* ``patch_config`` / ``deprecate_rule`` — the mention is ``da-guard edit
-  --dry-run``, which they run themselves (#3206); their own preview is
-  ``--diff`` / the absence of ``--execute``.
+* ``patch_config`` — the mention is ``da-guard edit --dry-run``, which it
+  runs itself (#3206); its own preview is ``--diff``. (``deprecate_rule``
+  no longer dry-runs: its batch is one judged ``da-guard edit`` call.)
 
 SCOPE — HONEST BOUNDARIES
 -------------------------
@@ -193,7 +193,6 @@ MENTION_ONLY_ALLOWLIST: dict[str, str] = {
     "drift_detect": "docstring prose only; no --dry-run flag declared",
     "threshold_govern": "dry-run is the default mode (no --apply), not a flag",
     "patch_config": "mentions `da-guard edit --dry-run`, which it runs (#3206); its preview is --diff",
-    "deprecate_rule": "mentions `da-guard edit --dry-run`, which it runs (#3206); preview = no --execute",
 }
 
 

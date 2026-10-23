@@ -246,7 +246,7 @@ lang: zh
 
 - `scripts/tools/_lib_compat.py`：Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_confd.py`：Single answer to "what is in a conf.d/ directory".
-- `scripts/tools/_lib_confedit.py`：a Python tool's change to a conf.d file, made by Go (ADR-036 §2).
+- `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.

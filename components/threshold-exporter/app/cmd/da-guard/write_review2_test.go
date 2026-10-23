@@ -53,7 +53,6 @@ func TestEmit_NeverRemovesADirectoryItDidNotMake(t *testing.T) {
 	theirs := filepath.Join(root, "a")
 	var out, errOut bytes.Buffer
 	w := &writer{cmd: emitCmd, jsonOut: true, stdout: &out, errOut: &errOut,
-		res:  writeResult{Schema: writeSchema, Command: emitCmd, Path: "a/b/t9.yaml", Warnings: []string{}},
 		link: func(string, string) error { return fs.ErrExist },
 		mkdir: func(p string, perm os.FileMode) error {
 			if p == theirs {
@@ -63,7 +62,7 @@ func TestEmit_NeverRemovesADirectoryItDidNotMake(t *testing.T) {
 			}
 			return os.Mkdir(p, perm)
 		}}
-	if code := w.commit(filepath.Join(root, "a", "b", "t9.yaml"), []byte("a: \"1\"\n"), nil, 0o644, nil); code != exitFindings {
+	if code, res := commitOne(w, "a/b/t9.yaml", filepath.Join(root, "a", "b", "t9.yaml"), []byte("a: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite {
 		t.Fatalf("exit %d %+v", code, w.res)
 	}
 	if fi, err := os.Stat(theirs); err != nil || !fi.IsDir() {
@@ -86,15 +85,16 @@ func TestEdit_RefusesWhatWasNotARegularFileAtOpen(t *testing.T) {
 	before := snapshot(t, root)
 	var out, errOut bytes.Buffer
 	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
-		res:  writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml", Warnings: []string{}},
 		read: func(string) ([]byte, os.FileInfo, bool, error) { return nil, nil, false, nil }}
 	scan, err := config.ScanDirTreeFiles(root, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops := []editOp{{Op: opUnset, Path: []string{"tenants", "t1", "a"}}}
-	if code := w.edit(scan, "t1.yaml", filepath.Join(root, "t1.yaml"), ops, false); code != exitFindings || reasonOf(w.res) != writeReasonNotRead {
-		t.Fatalf("exit %d %+v %v", code, w.res, w.res.Message)
+	res := writeFileResult{Path: "t1.yaml", Warnings: []string{}}
+	f := &writeFile{rel: "t1.yaml", abs: filepath.Join(root, "t1.yaml"), pending: true, res: &res,
+		ops: []editOp{{Op: opUnset, Path: []string{"tenants", "t1", "a"}}}}
+	if w.prepareEdit(scan, f); f.pending || res.Status != writeStatusRefused || reasonOf(res) != writeReasonNotRead || f.out != nil {
+		t.Fatalf("pending %v %+v %v", f.pending, res, res.Message)
 	}
 	sameTree(t, before, snapshot(t, root))
 }

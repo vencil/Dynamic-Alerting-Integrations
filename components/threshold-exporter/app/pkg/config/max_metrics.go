@@ -32,6 +32,18 @@ func EffectiveMaxMetricsPerTenant(configured int) int {
 // from the tree would be wrong, not just the cap.
 func RootMaxMetricsPerTenant(configDir string) (limit int, source string, err error) {
 	path, data, ok := rootDefaultsCarrier(configDir)
+	return maxMetricsOf(path, data, ok)
+}
+
+// RootMaxMetricsPerTenant is the package function's answer for the tree this
+// scan read (an overlay included: `da-guard edit` / `emit` judge the tree as
+// it is once their batch is written, #3206). The scan must hold the root
+// carrier's bytes (a cold ScanDirTree / ScanDirTreeFiles).
+func (s *TreeScan) RootMaxMetricsPerTenant() (limit int, source string, err error) {
+	return maxMetricsOf(rootCarrierOf(s))
+}
+
+func maxMetricsOf(path string, data []byte, ok bool) (int, string, error) {
 	if !ok {
 		return EffectiveMaxMetricsPerTenant(0), "", nil
 	}

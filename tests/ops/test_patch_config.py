@@ -818,13 +818,23 @@ class TestDiffChanged:
 
     @pytest.mark.parametrize("defaults,tenant,value", [
         ("defaults:\n  cpu: '70'\n", "tenants:\n  tenant-x: {}\n", "70"),
-        (_DEFAULTS, "tenants:\n  tenant-x:\n    cpu: ~\n", "None"),
-    ], ids=["inherited-same-number", "null-vs-None"])
+    ], ids=["inherited-same-number"])
     def test_changed_is_what_apply_would_write(self, defaults, tenant, value):
         cm = _cm(**{"_defaults.yaml": defaults, "tenant-x.yaml": tenant})
         diff = pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", value)
         assert diff["changed"] is True
         assert pc.patch_multifile(cm, "tenant-x", "cpu", value)["data"] != cm["data"]
+
+    def test_none_typed_over_a_null_is_no_no_op(self):
+        # `None` over `cpu: ~` is not "the same value" (it would be the
+        # string "None"); since #3206 10c-1 it is refused rather than
+        # written: the exporter cannot read it (validation's
+        # value_unparsed), and a write may not worsen the tree.
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS, "tenant-x.yaml": "tenants:\n  tenant-x:\n    cpu: ~\n"})
+        for run in (lambda: pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "None"),
+                    lambda: pc.patch_multifile(cm, "tenant-x", "cpu", "None")):
+            with pytest.raises(pc.ConfigMapShapeError, match="worsens_tree.*value_unparsed"):
+                run()
 
 
 class TestWriteScope:
@@ -952,10 +962,12 @@ class TestNoOpIsDaGuardsToSay:
         assert "cpu: 60\n" in text, text
 
     def test_typing_null_over_a_null_is_a_change(self):
-        """`cpu: null`（`!!null`）、打 `null`：寫成字串 `"null"`，不是 no-op。"""
+        """`cpu: null`（`!!null`）、打 `null`：會是字串 `"null"`，不是 no-op；
+        exporter 讀不了那個字串（驗證的 value_unparsed），寫入不得讓樹變壞，
+        所以拒寫（#3206 10c-1：`worsens_tree`），不是當成沒變。"""
         cm = _two("tenants:\n  tenant-x:\n    cpu: null\n")
-        text = pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "null")["data"]["tenant-x.yaml"]
-        assert 'cpu: "null"\n' in text, text
+        with pytest.raises(pc.ConfigMapShapeError, match="worsens_tree.*value_unparsed"):
+            pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "null")
 
     def test_a_no_op_on_a_key_validation_names_is_refused(self):
         """改完（沒變）的 key exporter 仍讀不進去：拒寫（read_back_mismatch），

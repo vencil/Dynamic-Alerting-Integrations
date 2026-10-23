@@ -23,13 +23,13 @@ da-guard 的 `key-refs` 答不出來時印「未體檢」與原因，行為與 r
 讀取與寫入（ADR-036 §2，#2906／#3206）：哪些檔、每個檔的內容、要刪哪些 key，
 一律取自 `da-guard parse-tree`（yaml.v3 的讀法）；寫入也是 Go 的——本工具只把
 「刪掉哪些 key」交給 `da-guard edit`，它在 yaml.v3 的節點樹上刪、驗證、原子寫入。
-`--execute` 要寫的每一個檔（所有 metric 合併、每檔一次）分兩段：先對每個檔跑
-`edit --dry-run`，任何一個被拒就一個位元組都不寫、本輪降級為預覽、rc 1，結尾逐檔
-具名；全部通過才逐檔真的寫。刪掉的 key 以外的節點、註解、寫法（`~`、`!!float 1`、
-`0o17`）照原樣保留；da-guard 只重排版面（縮排 2 格、行尾註解前一個空格、空行可能
-消失）。`optional_overrides:` 拿掉項目時整個清單重寫，清單裡的註解不保留。第二段
-寫到一半失敗（寫入錯誤、或期間另一個寫者改了檔）是 rc 2，訊息列出已寫入的檔——
-它們不會還原。symlink 的檔 da-guard 不改寫（拒寫）。沒有任何讀取端讀的 defaults
+`--execute` 要寫的每一個檔（所有 metric 合併、每檔一次）一次全部交給同一次
+`da-guard edit`（#3206 步驟 10c）：它以所有檔都寫進去後的那棵樹整批判定，任何一個
+被拒就一個位元組都不寫、本輪降級為預覽、rc 1，結尾逐檔具名；全部通過才寫。刪掉的
+key 以外的節點、註解、寫法（`~`、`!!float 1`、`0o17`）照原樣保留；da-guard 只重排
+版面（縮排 2 格、行尾註解前一個空格、空行可能消失）。`optional_overrides:` 拿掉
+項目時整個清單重寫，清單裡的註解不保留。判定通過後寫到一半失敗（寫入錯誤、或期間
+另一個寫者改了檔）是 rc 2，訊息列出已寫入的檔——它們不會還原。symlink 的檔 da-guard 不改寫（拒寫）。沒有任何讀取端讀的 defaults
 拼法（目錄另有被選的那一個）不寫：其中若還有該 metric 的 key，結尾具名、rc 1。
 找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）是 rc 2。
 
@@ -606,8 +606,8 @@ _EDIT_ROOTS = {}
 
 def _edit_files(config_dir, items):
     """ADR-036 §2（#3206）：`[(path, ops), ...]` 交給 `da-guard edit`，全部或一個
-    都不寫（`_lib_confedit.edit_all`：先全部 `--dry-run`，任一被拒就
-    `EditsRefused`、一個位元組都不寫；全部通過才逐一寫入，寫到一半失敗是
+    都不寫（`_lib_confedit.edit_all`：一次 da-guard、整批判定，任一被拒就
+    `EditsRefused`、一個位元組都不寫；全部通過才寫，寫到一半失敗是
     `PartialWrite`，列出已寫入的檔）。*config_dir* 是 `--plane subtree` 的子樹時
     （`_EDIT_ROOTS`），edit 在 root 上跑、路徑是子樹裡的那個檔。"""
     base = Path(config_dir)
@@ -625,7 +625,7 @@ def _partial_write_exit(exc):
     done = "、".join(exc.written) or "（無）"
     maybe = (f"；可能已寫入（da-guard 沒有回答）：{'、'.join(exc.maybe_written)}"
              if exc.maybe_written else "")
-    print(f"ERROR: {exc.failed}：寫入失敗（{exc.cause}）；本輪已寫入：{done}{maybe}——"
+    print(f"ERROR: {exc.failed or '（不明的檔）'}：寫入失敗（{exc.cause}）；本輪已寫入：{done}{maybe}——"
           f"已寫入的檔不會還原，請檢查後重跑", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
 
@@ -1059,8 +1059,8 @@ def _deprecate(args):
         print(f"\n  ⛔ 本輪降級為預覽：{safe_label('、'.join(sorted(blocked)))} "
               f"{who}，一個位元組都不寫；請先修掉結尾具名的殘留再重跑")
     # ADR-036 §2 (#2906, #3206): every file this run rewrites — all metrics
-    # merged, one write per file — goes to `da-guard edit`, dry run first for
-    # every file; one refusal (or an edit that cannot be sent) and nothing is
+    # merged, one write per file — goes to ONE `da-guard edit` call, judged as
+    # a batch; one refusal (or an edit that cannot be sent) and nothing is
     # written: the run is a preview, rc 1, each refusal named at the end.
     refused = []
     if write:
