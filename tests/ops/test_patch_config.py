@@ -645,7 +645,7 @@ class TestCarrierAndValueShapes:
     def test_scalar_is_read_as_exporter_text_and_survives_a_write_back(
             self, raw, exporter_text):
         """讀 → 用 patch-config 寫回 → 再讀：兩次都是 exporter 看到的原文。
-        None：da-guard edit 判定寫回的就是原檔（`70` 寫回 `70`，#3206），不送 patch。"""
+        None：da-guard write 判定寫回的就是原檔（`70` 寫回 `70`，#3206），不送 patch。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "tenant-x.yaml": f"tenants:\n  tenant-x:\n    cpu: {raw}\n"})
         assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", exporter_text)
@@ -867,7 +867,7 @@ class TestWriteScope:
             pc.patch_multifile(cm, "tenant-x", "cpu", "6")
 
     def test_an_anchor_shared_block_is_refused_before_the_write(self):
-        """ADR-036 §2：改寫共用 anchor 的區塊會連帶改到另一個租戶——da-guard edit
+        """ADR-036 §2：改寫共用 anchor 的區塊會連帶改到另一個租戶——da-guard write
         （#3206）判定重新輸出會改到 `tenants.other-t.cpu`，整份拒寫（先前要等
         寫入後由 exporter 驗收才回滾，#1950 列 9）。"""
         cm = _cm(**{"config.yaml": "tenants:\n  tenant-x: &s {cpu: '5'}\n"
@@ -877,7 +877,7 @@ class TestWriteScope:
             pc.patch_legacy(cm, "tenant-x", "cpu", "6")
 
     def test_an_untouched_spelling_is_written_as_it_was(self):
-        """未動到的 `!!float 1`、`~` 照原樣寫回（da-guard edit 只改被編輯的節點，
+        """未動到的 `!!float 1`、`~` 照原樣寫回（da-guard write 只改被編輯的節點，
         #3206；PyYAML 改寫時前者會變成 `1.0` 而整份拒寫）。"""
         cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: !!float 1\n")
         text = pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]["tenant-x.yaml"]
@@ -925,7 +925,7 @@ class TestDecisionsAreParseTrees:
 
     def test_a_file_yaml_v3_reads_declares_its_tenant(self):
         """TAB 分隔：PyYAML 讀不了，yaml.v3 照讀——team-x.yaml 宣告 tenant-x；
-        改寫的文字也是 Go 的（da-guard edit，#3206），所以照樣改得了。"""
+        改寫的文字也是 Go 的（da-guard write，#3206），所以照樣改得了。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "team-x.yaml": 'tenants:\n  tenant-x:\n    cpu:\t"70"\n'})
         assert pc.locate_tenant_key(cm, "tenant-x") == "team-x.yaml"
@@ -950,7 +950,7 @@ class TestReaderBounds:
 
 
 class TestNoOpIsDaGuardsToSay:
-    """#3206 review：「有沒有變」是 da-guard edit 判的，本工具不抄捷徑。"""
+    """#3206 review：「有沒有變」是 da-guard write 判的，本工具不抄捷徑。"""
 
     def test_typing_the_written_string_keeps_its_type(self):
         """`cpu: '50'`（字串）、打 `50`：不是型別變更，是 no-op；檔不動。"""
@@ -979,7 +979,7 @@ class TestNoOpIsDaGuardsToSay:
                 pc.build_patch(cm, "multi-file", "tenant-x", metric, value)
 
     def test_a_legacy_config_yaml_of_comments_only_is_patched(self):
-        """只有註解的 `config.yaml` 當成空檔改（da-guard edit），註解留在最前面。"""
+        """只有註解的 `config.yaml` 當成空檔改（da-guard write），註解留在最前面。"""
         patch = pc.patch_legacy(_cm(**{"config.yaml": "# c\n"}), "tb", "m", "1")
         assert patch["data"]["config.yaml"] == "# c\ntenants:\n  tb:\n    m: 1\n", patch
 

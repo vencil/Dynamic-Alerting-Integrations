@@ -1,13 +1,17 @@
 package confedit
 
-// Value is what a caller asks the writer to write (`da-guard edit` / `emit`):
-// a typed scalar, or a mapping whose order the caller states, or a sequence.
+// Value is what a caller asks the writer to write (`da-guard write`): a
+// typed scalar, or a mapping whose order the caller states, or a sequence.
 // Its JSON form names the type, because JSON has no order for an object's
 // members and no way to tell the string "80" from what the caller meant as a
 // number:
 //
 //	{"str": "80"}  {"int": "80"}  {"float": "0.5"}  {"bool": true}  {"null": null}
-//	{"map": [["key", <value>], ...]}  {"seq": [<value>, ...]}
+//	{"map": [["key", <value>], ["key", <value>, {"head": <text>, "line": <text>}], ...]}
+//	{"seq": [<value>, ...]}
+//
+// A map entry's optional third element is its comments (CommentText):
+// layout, not content.
 //
 // A value has two readings, which the writer compares: the yaml.v3 node it
 // writes (Node), and what parse-tree reads that node as (Content) — the
@@ -20,6 +24,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -59,10 +64,73 @@ type Value struct {
 	Items   []Value
 }
 
-// Entry is one key of a mapping Value, in the order written.
+// Entry is one key of a mapping Value, in the order written. Head and Line
+// are its comments (CommentText's form, "" for none): Head the lines above
+// the key, Line the one after it on the key's line. A comment is layout,
+// not content: what parse-tree reads (Content) is the same with or without.
 type Entry struct {
 	Key   string
 	Value Value
+	Head  string
+	Line  string
+}
+
+// CommentText is a comment as the writer writes it: each line of text
+// prefixed `# ` (`#` alone for an empty line), so whatever the text holds it
+// is a comment — never YAML. multiline false: one line only (a line
+// comment). Refused: a carriage return, any other C0 control character but
+// a tab, DEL, and U+0085 / U+2028 / U+2029 (line breaks to some readers);
+// a line break in a line comment.
+func CommentText(text string, multiline bool) (string, error) {
+	if !utf8.ValidString(text) {
+		return "", errors.New("a comment is not valid UTF-8")
+	}
+	for _, r := range text {
+		switch {
+		case r == '\n' && multiline, r == '\t':
+		case r == '\n':
+			return "", errors.New("a line comment is one line (no line break)")
+		case r < 0x20, r == 0x7f, r == 0x85, r == 0x2028, r == 0x2029:
+			return "", fmt.Errorf("a comment holds the control or line-break character %U", r)
+		}
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			lines[i] = "#"
+		} else {
+			lines[i] = "# " + l
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// decodeComments reads a map entry's third element: an object with "head"
+// and/or "line", each a JSON string, nothing else.
+func decodeComments(raw json.RawMessage, e *Entry) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return errors.New(`the comments are an object {"head": <text>, "line": <text>}`)
+	}
+	for k, v := range obj {
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return fmt.Errorf("comment %q is a JSON string", k)
+		}
+		var err error
+		switch k {
+		case "head":
+			e.Head, err = CommentText(s, true)
+		case "line":
+			e.Line, err = CommentText(s, false)
+		default:
+			return fmt.Errorf(`unknown comment member %q ("head", "line")`, k)
+		}
+		if err != nil {
+			return fmt.Errorf("comment %q: %w", k, err)
+		}
+	}
+	return nil
 }
 
 // UnmarshalJSON reads a Value's JSON form strictly: one member naming the
@@ -107,8 +175,8 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 			seen := map[string]bool{}
 			for i, p := range pairs {
 				var kv []json.RawMessage
-				if err := json.Unmarshal(p, &kv); err != nil || len(kv) != 2 {
-					return fmt.Errorf("map entry %d: a [key, value] pair", i)
+				if err := json.Unmarshal(p, &kv); err != nil || (len(kv) != 2 && len(kv) != 3) {
+					return fmt.Errorf("map entry %d: a [key, value] pair, or [key, value, {comments}]", i)
 				}
 				var e Entry
 				if err := json.Unmarshal(kv[0], &e.Key); err != nil || bytes.Equal(bytes.TrimSpace(kv[0]), []byte("null")) {
@@ -123,6 +191,11 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 				seen[e.Key] = true
 				if err := json.Unmarshal(kv[1], &e.Value); err != nil {
 					return fmt.Errorf("map entry %d (%q): %w", i, e.Key, err)
+				}
+				if len(kv) == 3 {
+					if err := decodeComments(kv[2], &e); err != nil {
+						return fmt.Errorf("map entry %d (%q): %w", i, e.Key, err)
+					}
 				}
 				v.Entries = append(v.Entries, e)
 			}
@@ -182,7 +255,12 @@ func (v Value) Node(blocks bool) *yaml.Node {
 	case TypeMap:
 		m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		for _, e := range v.Entries {
-			m.Content = append(m.Content, KeyNode(e.Key), e.Value.Node(blocks || e.Key == CustomAlertsKey))
+			k := KeyNode(e.Key)
+			// On the key node: yaml.v3 writes a key's head comment above it
+			// and its line comment after `key:`, whatever the value's kind
+			// (a line comment on a mapping value node is not written).
+			k.HeadComment, k.LineComment = e.Head, e.Line
+			m.Content = append(m.Content, k, e.Value.Node(blocks || e.Key == CustomAlertsKey))
 		}
 		return m
 	case TypeSeq:

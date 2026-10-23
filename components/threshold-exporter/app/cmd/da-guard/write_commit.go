@@ -1,27 +1,34 @@
 package main
 
-// write_commit.go — the write phase of `da-guard edit` / `emit`, once the
-// whole batch passed its judgement (write.go). Three steps, so that as much
-// as possible fails before anything is in place:
+// write_commit.go — the write phase of `da-guard write`, once the whole batch
+// passed its judgement (write.go). Three steps, so that as much as possible
+// fails before anything is in place:
 //
-//  1. every file's text goes into a hidden temporary file in its own
-//     directory (no walk reads a hidden name), with its mode (and, for edit,
-//     the original's owner and group when they can be set), synced; emit
-//     first makes the missing directories. A failure: every temporary file
-//     and directory made is removed — nothing written.
-//  2. every target is checked once more: edit — the file still holds the
-//     bytes it was read from; emit — the path does not exist. One that
-//     fails: refused changed_during_write, nothing written.
-//  3. each file goes in place: edit renames (checking its bytes once more
-//     right before); emit hard-links, which never replaces a path created
-//     meanwhile (a file system without hard links: check, then rename).
+//  1. every edited and created file's text goes into a hidden temporary file
+//     in its own directory (no walk reads a hidden name), with its mode (and,
+//     for an edit, the original's owner and group when they can be set),
+//     synced; a create or a move first makes its target's missing
+//     directories. A failure: every temporary file and directory made is
+//     removed — nothing written.
+//  2. every file is checked once more: an edited file and a move's source
+//     still hold the bytes they were read from; no create's or move's target
+//     exists. One that fails: refused changed_during_write, nothing written.
+//  3. each file goes in place — creates, then moves, then edits (the order
+//     in which what is done can still be undone comes first): a create
+//     hard-links its temporary file at its path, which never replaces a path
+//     created meanwhile (a file system without hard links: check, then
+//     rename); a move hard-links its source at its target the same way and
+//     then removes the source name (while it is still that file); an edit
+//     renames, checking its bytes once more right before.
 //
-// ⛔ A FAILURE IN STEP 3 is the one that leaves files behind. emit's files
-// are new, so the ones already linked are removed again (nothing is lost;
-// one that cannot be removed is maybe_written). edit's renames cannot be
-// undone: the files renamed by then are written, and the call's reason is
-// partial_write. The checks are comparisons, not locks: what another writer
-// writes between a check and the rename is overwritten.
+// ⛔ A FAILURE IN STEP 3 is the one that leaves files behind. Creates and
+// moves already in place are undone (a created file removed, a moved one
+// linked back at its source), each only while its path still holds the file
+// this call put there (os.SameFile); one that cannot be undone is
+// maybe_written. An edit's rename cannot be undone: the files renamed by then
+// are written, and the call's reason is partial_write. The checks are
+// comparisons, not locks: what another writer writes between a check and the
+// rename is overwritten.
 
 import (
 	"bytes"
@@ -30,7 +37,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 )
+
+// placeOrder is step 3's order: what can be undone first.
+var placeOrder = map[string]int{writeKindCreate: 0, writeKindMove: 1, writeKindEdit: 2}
 
 // commit writes every pending changed file (write_commit.go's steps).
 func (w *writer) commit(files []*writeFile) int {
@@ -44,6 +55,7 @@ func (w *writer) commit(files []*writeFile) int {
 			todo = append(todo, f)
 		}
 	}
+	sort.SliceStable(todo, func(i, j int) bool { return placeOrder[todo[i].kind] < placeOrder[todo[j].kind] })
 	var created []string // the directories this call made, in the order made
 	done := false
 	defer func() {
@@ -59,24 +71,27 @@ func (w *writer) commit(files []*writeFile) int {
 		}
 	}()
 
-	// 1. The temporary files.
+	// 1. The temporary files (a move has none: its file is the source).
 	for _, f := range todo {
-		if w.cmd == emitCmd {
+		if f.kind != writeKindEdit {
 			if err := w.makeDirs(filepath.Dir(f.abs), &created); err != nil {
 				w.fileCallerError(f, writeReasonWriteFailed, "%v", err)
 				return w.stopped(writeReasonWriteFailed)
 			}
+		}
+		if f.kind == writeKindMove {
+			continue
 		}
 		if err := w.temporary(f); err != nil {
 			w.fileCallerError(f, writeReasonWriteFailed, "%v", err)
 			return w.stopped(writeReasonWriteFailed)
 		}
 	}
-	// 2. Every target once more, before any is touched.
+	// 2. Every file once more, before any is touched.
 	changed := false
 	for _, f := range todo {
 		if !w.unchangedOnDisk(f) {
-			w.refuse(f, writeReasonChangedDuringWrite, w.changedMessage())
+			w.refuse(f, writeReasonChangedDuringWrite, changedMessage(f))
 			changed = true
 		}
 	}
@@ -92,13 +107,14 @@ func (w *writer) commit(files []*writeFile) int {
 			} else {
 				w.fileCallerError(f, reason, "%v", err)
 			}
-			if w.cmd == emitCmd {
-				w.rollBack(placed)
+			if f.kind == writeKindMove && f.placed != nil {
+				placed = append(placed, f) // its target link is in place: undone with the rest
 			}
+			w.rollBack(placed)
 			return w.stopped(reason)
 		}
 		placed = append(placed, f)
-		if w.cmd == editCmd {
+		if f.kind == writeKindEdit {
 			f.res.Status = writeStatusWritten // a rename is not undone
 		}
 	}
@@ -107,7 +123,14 @@ func (w *writer) commit(files []*writeFile) int {
 	for _, f := range todo {
 		f.res.Status = writeStatusWritten
 		fmt.Fprintf(w.errOut, "%s %s: wrote %s\n", programName, w.cmd, f.rel)
-		if dir := filepath.Dir(f.abs); !synced[dir] {
+		dirs := []string{filepath.Dir(f.abs)}
+		if f.kind == writeKindMove {
+			dirs = append(dirs, filepath.Dir(f.fromAbs))
+		}
+		for _, dir := range dirs {
+			if synced[dir] {
+				continue
+			}
 			synced[dir] = true
 			if d, err := os.Open(dir); err == nil { // #nosec G304 -- a directory just written
 				_ = d.Sync()
@@ -155,9 +178,12 @@ func (w *writer) stopped(reason string) int {
 	return w.finish(exitCallerErr)
 }
 
-func (w *writer) changedMessage() string {
-	if w.cmd == editCmd {
+func changedMessage(f *writeFile) string {
+	switch f.kind {
+	case writeKindEdit:
 		return "the file changed after it was read; re-run on its new content"
+	case writeKindMove:
+		return "the source changed, or the target was created, after it was judged; nothing was moved"
 	}
 	return "the path was created after it was judged; nothing replaced it"
 }
@@ -194,7 +220,7 @@ func (w *writer) makeDirs(dir string, created *[]string) error {
 }
 
 // temporary writes f.out to a hidden temporary file beside f.abs (f.tmp):
-// its mode, for edit the original's owner and group when they can be set
+// its mode, for an edit the original's owner and group when they can be set
 // (else a warning), synced and closed.
 func (w *writer) temporary(f *writeFile) error {
 	tmp, err := os.CreateTemp(filepath.Dir(f.abs), "."+filepath.Base(f.abs)+".da-guard-*")
@@ -234,37 +260,48 @@ func (w *writer) temporary(f *writeFile) error {
 	return werr
 }
 
-// unchangedOnDisk: edit — f.abs still holds f.original (a regular file);
-// emit — nothing is at f.abs.
-func (w *writer) unchangedOnDisk(f *writeFile) bool {
-	if w.cmd == editCmd {
-		now, _, regular, err := readRegular(f.abs)
-		return err == nil && regular && bytes.Equal(now, f.original)
-	}
-	_, err := os.Lstat(f.abs)
+func holds(abs string, want []byte) bool {
+	now, _, regular, err := readRegular(abs)
+	return err == nil && regular && bytes.Equal(now, want)
+}
+
+func absent(abs string) bool {
+	_, err := os.Lstat(abs)
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// place puts f's temporary file at f.abs; on failure the reason
-// (changed_during_write or write_failed) and the error.
+// unchangedOnDisk: edit — f.abs still holds f.original (a regular file);
+// create — nothing is at f.abs; move — the source still holds the bytes
+// judged and nothing is at the target.
+func (w *writer) unchangedOnDisk(f *writeFile) bool {
+	switch f.kind {
+	case writeKindEdit:
+		return holds(f.abs, f.original)
+	case writeKindMove:
+		return holds(f.fromAbs, f.original) && absent(f.abs)
+	}
+	return absent(f.abs)
+}
+
+// place puts f in place; on failure the reason (changed_during_write or
+// write_failed) and the error.
 func (w *writer) place(f *writeFile) (string, error) {
 	rename := w.rename
 	if rename == nil {
 		rename = os.Rename
 	}
-	if w.cmd == editCmd {
+	switch f.kind {
+	case writeKindEdit:
 		if !w.unchangedOnDisk(f) {
-			return writeReasonChangedDuringWrite, errors.New(w.changedMessage())
+			return writeReasonChangedDuringWrite, errors.New(changedMessage(f))
 		}
 		if err := rename(f.tmp, f.abs); err != nil {
 			return writeReasonWriteFailed, err
 		}
 		f.tmp = ""
 		return "", nil
-	}
-	link := w.link
-	if link == nil {
-		link = os.Link
+	case writeKindMove:
+		return w.placeMove(f, rename)
 	}
 	// The temporary file's inode is the file put in place, by the link or
 	// the rename alike: what a roll-back may remove (rollBack).
@@ -272,57 +309,127 @@ func (w *writer) place(f *writeFile) (string, error) {
 	if serr != nil {
 		return writeReasonWriteFailed, serr
 	}
-	// A hard link never replaces what is there: a path created meanwhile is
-	// not overwritten.
-	switch err := link(f.tmp, f.abs); {
-	case errors.Is(err, fs.ErrExist):
-		return writeReasonChangedDuringWrite, errors.New(w.changedMessage())
-	case err != nil:
-		// A file system without hard links: check, then rename.
-		if _, lerr := os.Lstat(f.abs); !errors.Is(lerr, fs.ErrNotExist) {
-			return writeReasonChangedDuringWrite, errors.New(w.changedMessage())
-		}
-		if err := rename(f.tmp, f.abs); err != nil {
-			return writeReasonWriteFailed, err
-		}
+	moved, reason, err := w.linkOrRename(f.tmp, f.abs, rename, f)
+	if err != nil {
+		return reason, err
+	}
+	if moved {
 		f.tmp = ""
 	}
 	f.placed = staged
 	return "", nil
 }
 
-// rollBack removes the emitted files already in place again: they are new,
-// so nothing is lost. A path is removed only while it is still the file
-// this call put there (os.SameFile against its inode): one another writer
-// replaced meanwhile is left as it is. One that cannot be removed, or no
-// longer can be told to be ours, is maybe_written.
+// linkOrRename puts the file at from also at to without replacing anything
+// there: a hard link, or — on a file system without hard links — a rename
+// after checking once more that to is absent (moved true: from is gone).
+func (w *writer) linkOrRename(from, to string, rename func(string, string) error, f *writeFile) (moved bool, reason string, err error) {
+	link := w.link
+	if link == nil {
+		link = os.Link
+	}
+	switch lerr := link(from, to); {
+	case errors.Is(lerr, fs.ErrExist):
+		return false, writeReasonChangedDuringWrite, errors.New(changedMessage(f))
+	case lerr != nil:
+		if !absent(to) {
+			return false, writeReasonChangedDuringWrite, errors.New(changedMessage(f))
+		}
+		if rerr := rename(from, to); rerr != nil {
+			return false, writeReasonWriteFailed, rerr
+		}
+		return true, "", nil
+	}
+	return false, "", nil
+}
+
+// placeMove links the source at the target, then removes the source name
+// while it is still the file that was linked. f.placed is that file once
+// the target holds it; f.sourceGone once the source name is gone.
+func (w *writer) placeMove(f *writeFile, rename func(string, string) error) (string, error) {
+	src, err := os.Lstat(f.fromAbs)
+	if err != nil {
+		return writeReasonChangedDuringWrite, errors.New(changedMessage(f))
+	}
+	moved, reason, err := w.linkOrRename(f.fromAbs, f.abs, rename, f)
+	if err != nil {
+		return reason, err
+	}
+	f.placed = src
+	if moved {
+		f.sourceGone = true
+		return "", nil
+	}
+	remove := w.remove
+	if remove == nil {
+		remove = os.Remove
+	}
+	if cur, cerr := os.Lstat(f.fromAbs); cerr != nil || !os.SameFile(cur, src) {
+		return writeReasonChangedDuringWrite, errors.New(changedMessage(f))
+	}
+	if err := remove(f.fromAbs); err != nil {
+		return writeReasonWriteFailed, err
+	}
+	f.sourceGone = true
+	return "", nil
+}
+
+// rollBack undoes the creates and moves already in place (placed, in the
+// order placed; edits in it are left: a rename is not undone): a created
+// file removed, a moved one put back at its source. A path is touched only
+// while it is still the file this call put there (os.SameFile against its
+// inode): one another writer replaced meanwhile is left as it is. One that
+// cannot be undone, or no longer can be told to be ours, is maybe_written.
 func (w *writer) rollBack(placed []*writeFile) {
 	remove := w.remove
 	if remove == nil {
 		remove = os.Remove
 	}
-	for _, f := range placed {
+	rename := w.rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	maybe := func(f *writeFile, why string) {
+		msg := "written, and not undone when the call stopped: " + why
+		fmt.Fprintf(w.errOut, "%s %s: %s: %s\n", programName, w.cmd, f.rel, msg)
+		f.res.Status, f.res.Message = writeStatusMaybeWritten, strp(msg)
+	}
+	for i := len(placed) - 1; i >= 0; i-- {
+		f := placed[i]
+		if f.kind == writeKindEdit {
+			continue
+		}
 		now, lerr := os.Lstat(f.abs)
 		switch {
-		case errors.Is(lerr, fs.ErrNotExist):
+		case errors.Is(lerr, fs.ErrNotExist) && f.kind == writeKindCreate:
 			f.res.Status, f.res.Message = writeStatusNotWritten, strp("written, and gone again when the call stopped")
 			continue
-		case lerr != nil || f.placed == nil || !os.SameFile(now, f.placed):
-			why := "the path now holds a file this call did not put there; it is left as it is"
-			if lerr != nil {
-				why = "the path cannot be checked: " + lerr.Error()
-			}
-			msg := "written, and not removed when the call stopped: " + why
-			fmt.Fprintf(w.errOut, "%s %s: %s: %s\n", programName, w.cmd, f.rel, msg)
-			f.res.Status, f.res.Message = writeStatusMaybeWritten, strp(msg)
+		case lerr != nil:
+			maybe(f, "the path cannot be checked: "+lerr.Error())
 			continue
+		case f.placed == nil || !os.SameFile(now, f.placed):
+			maybe(f, "the path now holds a file this call did not put there; it is left as it is")
+			continue
+		}
+		if f.kind == writeKindMove && f.sourceGone {
+			// Back at the source, without replacing what may be there now.
+			if _, _, err := w.linkOrRename(f.abs, f.fromAbs, rename, f); err != nil {
+				maybe(f, "it could not be put back at its source "+f.from+": "+err.Error())
+				continue
+			}
+			if absent(f.abs) { // put back by a rename: nothing left at the target
+				f.res.Status, f.res.Message = writeStatusNotWritten, strp("moved, and moved back when the call stopped")
+				continue
+			}
 		}
 		if err := remove(f.abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			msg := fmt.Sprintf("written, and could not be removed again when the call stopped: %v", err)
-			fmt.Fprintf(w.errOut, "%s %s: %s: %s\n", programName, w.cmd, f.rel, msg)
-			f.res.Status, f.res.Message = writeStatusMaybeWritten, strp(msg)
+			maybe(f, fmt.Sprintf("it could not be removed again: %v", err))
 			continue
 		}
-		f.res.Status, f.res.Message = writeStatusNotWritten, strp("written, and removed again when the call stopped")
+		msg := "written, and removed again when the call stopped"
+		if f.kind == writeKindMove {
+			msg = "moved, and moved back when the call stopped"
+		}
+		f.res.Status, f.res.Message = writeStatusNotWritten, strp(msg)
 	}
 }

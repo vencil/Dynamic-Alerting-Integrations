@@ -110,7 +110,7 @@ def test_plan_empty_when_nothing_actionable():
 
 
 # ---------------------------------------------------------------------------
-# 3. edit_live_yaml — da-guard edit sets the values (ADR-036 §2, #3206)
+# 3. edit_live_yaml — da-guard write sets the values (ADR-036 §2, #3206)
 # ---------------------------------------------------------------------------
 FIXTURE = (
     "# headline tenant — do not delete this comment\n"
@@ -231,7 +231,7 @@ def test_edit_a_config_dir_that_cannot_be_copied_is_that_tenants_error(monkeypat
 
 
 # #2231: a key written twice — not the one being edited — makes a file the
-# exporter drops whole: da-guard edit refuses the original.
+# exporter drops whole: da-guard write refuses the original.
 _DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
                   '    k2: "30"\n')
 

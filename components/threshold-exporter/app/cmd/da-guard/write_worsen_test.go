@@ -34,26 +34,26 @@ func TestWrite_ACallThatWorsensTheTreeWritesNothing(t *testing.T) {
 	}{
 		{"a carrier the batch deselects",
 			map[string]string{"team/_defaults.yml": "defaults:\n  cpu: 5\n", "team/t.yaml": "tenants:\n  t1: {}\n"},
-			`{"files":[{"path":"team/_defaults.yaml","content":{"map":[["defaults",{"map":[]}]]}}]}`,
+			`{"files":[{"path":"team/_defaults.yaml","create":{"map":[["defaults",{"map":[]}]]}}]}`,
 			[]string{"readers_lost team/_defaults.yml"}},
 		{"an emit of a tenant another file declares",
 			map[string]string{"a.yaml": "tenants:\n  t1: {}\n"},
-			`{"files":[{"path":"b.yaml","content":` + tenant("t1") + `}]}`,
+			`{"files":[{"path":"b.yaml","create":` + tenant("t1") + `}]}`,
 			[]string{"duplicate_tenant b.yaml t1"}},
 		{"two emits of one tenant",
 			map[string]string{"x.yaml": "tenants:\n  t9: {}\n"},
-			`{"files":[{"path":"a.yaml","content":` + tenant("t2") + `},{"path":"b.yaml","content":` + tenant("t2") + `}]}`,
+			`{"files":[{"path":"a.yaml","create":` + tenant("t2") + `},{"path":"b.yaml","create":` + tenant("t2") + `}]}`,
 			[]string{"duplicate_tenant b.yaml t2"}},
 		{"a config-named directory the emit creates",
 			map[string]string{"x.yaml": "tenants:\n  t9: {}\n"},
-			`{"files":[{"path":"odd.yaml/a.yaml","content":` + tenant("t3") + `}]}`,
+			`{"files":[{"path":"odd.yaml/a.yaml","create":` + tenant("t3") + `}]}`,
 			[]string{"verdict odd.yaml", "problem odd.yaml"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := writeTree(t, tc.tree)
 			before := snapshot(t, root)
-			code, res := runBatch(t, emitCmd, tc.in, "--config-dir", root)
+			code, res := runBatch(t, writeCmd, tc.in, "--config-dir", root)
 			if code != exitFindings || res.Status != writeStatusRefused || callReason(res) != writeReasonWorsensTree {
 				t.Fatalf("exit %d status %s reason %q worsened %v files %v", code, res.Status, callReason(res),
 					worsenedOf(res), statuses(res))
@@ -91,7 +91,7 @@ func TestEdit_ATenantMovedBetweenTwoFilesPasses(t *testing.T) {
 	in := `{"files":[
 		{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1"]}]},
 		{"path":"b.yaml","ops":[{"op":"set","path":["tenants","t1"],"value":{"map":[["cpu",{"str":"5"}]]}}]}]}`
-	code, res := runBatch(t, editCmd, in, "--config-dir", root)
+	code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 	if code != exitOK || res.Status != writeStatusWritten || len(res.Worsened) != 0 {
 		t.Fatalf("exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
 	}
@@ -100,7 +100,7 @@ func TestEdit_ATenantMovedBetweenTwoFilesPasses(t *testing.T) {
 		t.Fatalf("tree %v", got)
 	}
 	// Each alone would not: the second alone declares t1 twice.
-	if code, res := runBatch(t, editCmd, `{"files":[{"path":"b.yaml","ops":[{"op":"set","path":["tenants","t2"],"value":{"map":[]}}]}]}`,
+	if code, res := runBatch(t, writeCmd, `{"files":[{"path":"b.yaml","ops":[{"op":"set","path":["tenants","t2"],"value":{"map":[]}}]}]}`,
 		"--config-dir", root); code != exitFindings || callReason(res) != writeReasonWorsensTree {
 		t.Fatalf("a duplicate by edit: exit %d %v", code, worsenedOf(res))
 	}
@@ -116,12 +116,12 @@ func TestWrite_WhatIsAlreadyWrongElsewhereDoesNotBlock(t *testing.T) {
 		"dup2.yaml": "tenants:\n  t8: {}\n",
 		"ok.yaml":   "tenants:\n  t1:\n    cpu: \"5\"\n",
 	})
-	code, res := runBatch(t, emitCmd, `{"files":[{"path":"new.yaml","content":{"map":[["tenants",{"map":[["t2",{"map":[]}]]}]]}}]}`,
+	code, res := runBatch(t, writeCmd, `{"files":[{"path":"new.yaml","create":{"map":[["tenants",{"map":[["t2",{"map":[]}]]}]]}}]}`,
 		"--config-dir", root)
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("emit: exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
 	}
-	code, res = runBatch(t, editCmd, `{"files":[{"path":"ok.yaml","ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"str":"6"}}]}]}`,
+	code, res = runBatch(t, writeCmd, `{"files":[{"path":"ok.yaml","ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"str":"6"}}]}]}`,
 		"--config-dir", root)
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("edit: exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
@@ -143,7 +143,7 @@ func TestWrite_ADuplicateTenantCanBeRepaired(t *testing.T) {
 	}
 	t.Run("removing a copy", func(t *testing.T) {
 		root := writeTree(t, tree)
-		code, res := runBatch(t, editCmd, `{"files":[{"path":"d2.yaml","ops":[{"op":"unset","path":["tenants","t8"]}]}]}`,
+		code, res := runBatch(t, writeCmd, `{"files":[{"path":"d2.yaml","ops":[{"op":"unset","path":["tenants","t8"]}]}]}`,
 			"--config-dir", root)
 		if code != exitOK || res.Status != writeStatusWritten {
 			t.Fatalf("exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
@@ -151,7 +151,7 @@ func TestWrite_ADuplicateTenantCanBeRepaired(t *testing.T) {
 	})
 	t.Run("leaving it, touching another file", func(t *testing.T) {
 		root := writeTree(t, tree)
-		code, res := runBatch(t, editCmd, `{"files":[{"path":"ok.yaml","ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"str":"6"}}]}]}`,
+		code, res := runBatch(t, writeCmd, `{"files":[{"path":"ok.yaml","ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"str":"6"}}]}]}`,
 			"--config-dir", root)
 		if code != exitOK || res.Status != writeStatusWritten {
 			t.Fatalf("exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
@@ -160,7 +160,7 @@ func TestWrite_ADuplicateTenantCanBeRepaired(t *testing.T) {
 	t.Run("adding a second duplicate", func(t *testing.T) {
 		root := writeTree(t, tree)
 		before := snapshot(t, root)
-		code, res := runBatch(t, emitCmd, `{"files":[{"path":"new.yaml","content":{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}}]}`,
+		code, res := runBatch(t, writeCmd, `{"files":[{"path":"new.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}}]}`,
 			"--config-dir", root)
 		if code != exitFindings || callReason(res) != writeReasonWorsensTree ||
 			!reflect.DeepEqual(worsenedOf(res), []string{"duplicate_tenant ok.yaml t1"}) { // ok.yaml: second in walk order
@@ -174,7 +174,7 @@ func TestWrite_ADuplicateTenantCanBeRepaired(t *testing.T) {
 // after reading its input (here: --config-dir is no directory) still has
 // one result per input file.
 func TestWrite_EveryInputFileIsAnsweredOnceTheInputIsRead(t *testing.T) {
-	code, res := runBatch(t, editCmd, `{"files":[{"path":"a.yaml","ops":[]},{"path":"b.yaml","ops":[]}]}`,
+	code, res := runBatch(t, writeCmd, `{"files":[{"path":"a.yaml","ops":[]},{"path":"b.yaml","ops":[]}]}`,
 		"--config-dir", filepath.Join(t.TempDir(), "missing"))
 	if code != exitCallerErr || callReason(res) != writeReasonBadPath ||
 		!reflect.DeepEqual(statuses(res), []string{"not_written", "not_written"}) || res.Files[1].Path != "b.yaml" {
@@ -189,7 +189,7 @@ func TestEmit_RollBackLeavesAPathAnotherWriterReplaced(t *testing.T) {
 	root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 	n := 0
 	theirs := "tenants:\n  t7: {}\n"
-	w := &writer{cmd: emitCmd, link: func(o, nn string) error {
+	w := &writer{cmd: writeCmd, link: func(o, nn string) error {
 		if n++; n == 2 {
 			p := filepath.Join(root, "new", "a.yaml")
 			if err := os.Remove(p); err != nil {

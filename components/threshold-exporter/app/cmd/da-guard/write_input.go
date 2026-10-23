@@ -1,6 +1,6 @@
 package main
 
-// The checks edit / emit run on --input before decoding it: Go's
+// The checks `write` runs on --input before decoding it: Go's
 // encoding/json silently turns invalid UTF-8 and an unpaired surrogate escape
 // into U+FFFD (two different keys could then become one), keeps the last of
 // two members with the same name, and matches a struct field's name in any
@@ -136,10 +136,10 @@ func checkDuplicateMembers(raw []byte) error {
 }
 
 // checkMemberNames refuses a member whose name is not spelled exactly as
-// the input names it (encoding/json would match "FILES" to "files"), and a
-// file member of the other command ("content" in an edit, "ops" in an emit).
-// A shape error (a list where an object goes) is left to decodeStrict.
-func checkMemberNames(cmd string, raw []byte) error {
+// the input names it (encoding/json would match "FILES" to "files"). Which
+// members an entry may combine is takeInput's. A shape error (a list where
+// an object goes) is left to decodeStrict.
+func checkMemberNames(raw []byte) error {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return err
@@ -153,22 +153,16 @@ func checkMemberNames(cmd string, raw []byte) error {
 	if err := json.Unmarshal(top["files"], &files); err != nil {
 		return nil
 	}
-	body := "ops"
-	if cmd == emitCmd {
-		body = "content"
-	}
+	known := map[string]bool{"path": true, "ops": true, "create": true, "head_comment": true, "from": true}
 	for i, f := range files {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(f, &m); err != nil {
 			return nil
 		}
 		for k := range m {
-			if k != "path" && k != body {
-				return fmt.Errorf("files[%d]: unknown member %q (%s takes \"path\" and %q)", i, k, cmd, body)
+			if !known[k] {
+				return fmt.Errorf("files[%d]: unknown member %q (path, and ops, create (+ head_comment) or from)", i, k)
 			}
-		}
-		if cmd != editCmd {
-			continue
 		}
 		var ops []json.RawMessage
 		if err := json.Unmarshal(m["ops"], &ops); err != nil {

@@ -257,7 +257,7 @@ def load_all_exporter_keys(stream: Any, *,
 #
 # A tool that loads a conf.d file, deletes or sets one key and dumps the rest
 # (``deprecate_rule --execute`` and ``patch_config`` did, until #3206 moved
-# their writes to ``da-guard edit``) re-serialises every OTHER
+# their writes to ``da-guard write``) re-serialises every OTHER
 # value it did not mean to touch. Through ``safe_load`` + ``safe_dump`` that
 # is a retype, and the exporter's value moves with it (measured with
 # ``da-guard served-values``): ``010`` is written as ``8`` (10 → 8), ``12:30``

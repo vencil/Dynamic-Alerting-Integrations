@@ -36,7 +36,7 @@ func TestCommit_ReportsTheOwnerItCannotSet(t *testing.T) {
 			// temporary file), so the owner differs and is tried.
 			orig := otherOwner{fi, &syscall.Stat_t{Uid: 4321, Gid: 4322}}
 			var out, errOut bytes.Buffer
-			w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+			w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut,
 				chown: func(uid, _ int) error {
 					if tc.refuse(uid) {
 						return fmt.Errorf("chown: %w", fs.ErrPermission)

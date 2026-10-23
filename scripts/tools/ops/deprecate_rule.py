@@ -22,9 +22,9 @@ da-guard 的 `key-refs` 答不出來時印「未體檢」與原因，行為與 r
 
 讀取與寫入（ADR-036 §2，#2906／#3206）：哪些檔、每個檔的內容、要刪哪些 key，
 一律取自 `da-guard parse-tree`（yaml.v3 的讀法）；寫入也是 Go 的——本工具只把
-「刪掉哪些 key」交給 `da-guard edit`，它在 yaml.v3 的節點樹上刪、驗證、原子寫入。
+「刪掉哪些 key」交給 `da-guard write`，它在 yaml.v3 的節點樹上刪、驗證、原子寫入。
 `--execute` 要寫的每一個檔（所有 metric 合併、每檔一次）一次全部交給同一次
-`da-guard edit`（#3206 步驟 10c）：它以所有檔都寫進去後的那棵樹整批判定，任何一個
+`da-guard write`（#3206 步驟 10c）：它以所有檔都寫進去後的那棵樹整批判定，任何一個
 被拒就一個位元組都不寫、本輪降級為預覽、rc 1，結尾逐檔具名；全部通過才寫。刪掉的
 key 以外的節點、註解、寫法（`~`、`!!float 1`、`0o17`）照原樣保留；da-guard 只重排
 版面（縮排 2 格、行尾註解前一個空格、空行可能消失）。`optional_overrides:` 拿掉
@@ -81,7 +81,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 # ADR-036 §2 (#2906): which files there are, what each one holds and what to
 # delete are read from `da-guard parse-tree` (yaml.v3's reading: tenant ids
 # and keys are their source text, `yes` is the string "yes"). The writes are
-# Go's too (#3206): the keys to delete go to `da-guard edit` (`_edit_files`).
+# Go's too (#3206): the keys to delete go to `da-guard write` (`_edit_files`).
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and reading)
 import _lib_parse_tree  # noqa: E402
@@ -242,7 +242,7 @@ def _node_verdicts(node):
 def _verdicts_of(load_node):
     """`_node_verdicts` of the node `load_node()` returns. parse-tree 讀不了的檔
     整份 `UNPARSEABLE`（`read_failure` 是 `UNREADABLE`）。（先前這裡還問「PyYAML
-    ——產生寫回文字的那一個——讀不讀得了」；寫回由 da-guard edit 做之後沒有那一層，
+    ——產生寫回文字的那一個——讀不讀得了」；寫回由 da-guard write 做之後沒有那一層，
     #3206。）"""
     try:
         node = load_node()
@@ -598,14 +598,14 @@ def _carrier_ops(node, keys):
 
 
 #: `--plane subtree`：子樹目錄（realpath）→ conf.d 的 root（`--root-dir`）。
-#: da-guard edit 依路徑在整棵樹裡的位置判它（同 `_lib_parse_cache.subtree_reader`
+#: da-guard write 依路徑在整棵樹裡的位置判它（同 `_lib_parse_cache.subtree_reader`
 #: 的讀法）：在子樹上跑會把子樹當 root 判，子樹載體合法的字串值就被當成 root
 #: defaults 拒寫。
 _EDIT_ROOTS = {}
 
 
 def _edit_files(config_dir, items):
-    """ADR-036 §2（#3206）：`[(path, ops), ...]` 交給 `da-guard edit`，全部或一個
+    """ADR-036 §2（#3206）：`[(path, ops), ...]` 交給 `da-guard write`，全部或一個
     都不寫（`_lib_confedit.edit_all`：一次 da-guard、整批判定，任一被拒就
     `EditsRefused`、一個位元組都不寫；全部通過才寫，寫到一半失敗是
     `PartialWrite`，列出已寫入的檔）。*config_dir* 是 `--plane subtree` 的子樹時
@@ -682,7 +682,7 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False, spellings=(), *
         return False, f"{name}：{exc}，本工具不改寫，請先修檔", removed
     except _lib_confedit.EditsRefused as exc:
         r = exc.refusals[0]
-        return False, f"{name}：da-guard edit 拒寫（{r.reason}），未寫入：{r.message}", removed
+        return False, f"{name}：da-guard write 拒寫（{r.reason}），未寫入：{r.message}", removed
     except _lib_confedit.EditCallerError as exc:
         _caller_error_exit(exc)
     except _lib_confedit.PartialWrite as exc:
@@ -705,7 +705,7 @@ def _tenant_plan(node, belongs):
 
 
 def _tenant_ops(hits):
-    """拿掉 *hits*（`[(tenant, key, _), ...]`，取自 parse-tree）的 `da-guard edit`
+    """拿掉 *hits*（`[(tenant, key, _), ...]`，取自 parse-tree）的 `da-guard write`
     操作；清空的租戶區塊保留（仍宣告該租戶）。"""
     return [_lib_confedit.unset_op(["tenants", t, k]) for t, k, _v in hits]
 
@@ -714,7 +714,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
                         skip=frozenset(), spellings=(), done=False):
     """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key；`skip` 裡的檔不碰。
 
-    判定（哪個檔、哪個 key）取自 parse-tree；`execute` 時交給 da-guard edit，
+    判定（哪個檔、哪個 key）取自 parse-tree；`execute` 時交給 da-guard write，
     一個被拒就這一批都不寫（`_lib_confedit.EditsRefused` 往上丟）。
     """
     removed = []
@@ -737,7 +737,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
 
 
 def plan_rewrites(config_dir, metrics, spellings, *, skip=frozenset()):
-    """本輪 `--execute` 要寫的每一個檔 `[(path, ops), ...]`（`da-guard edit` 的
+    """本輪 `--execute` 要寫的每一個檔 `[(path, ops), ...]`（`da-guard write` 的
     操作），所有 metric 合併（每個檔只寫一次）。判定取自這一輪的 parse-tree 文件；
     一個要改寫的檔的操作送不出去時 `ValueError`（含檔名，`_carrier_ops`）。"""
     base = Path(config_dir)
@@ -1059,7 +1059,7 @@ def _deprecate(args):
         print(f"\n  ⛔ 本輪降級為預覽：{safe_label('、'.join(sorted(blocked)))} "
               f"{who}，一個位元組都不寫；請先修掉結尾具名的殘留再重跑")
     # ADR-036 §2 (#2906, #3206): every file this run rewrites — all metrics
-    # merged, one write per file — goes to ONE `da-guard edit` call, judged as
+    # merged, one write per file — goes to ONE `da-guard write` call, judged as
     # a batch; one refusal (or an edit that cannot be sent) and nothing is
     # written: the run is a preview, rc 1, each refusal named at the end.
     refused = []
@@ -1067,7 +1067,7 @@ def _deprecate(args):
         try:
             _edit_files(base, plan_rewrites(base, args.metrics, spellings))
         except _lib_confedit.EditsRefused as exc:
-            refused = [(r.path, f"da-guard edit 拒寫（{r.reason}）：{r.message}")
+            refused = [(r.path, f"da-guard write 拒寫（{r.reason}）：{r.message}")
                        for r in exc.refusals]
         except ValueError as exc:
             name, _sep, why = str(exc).partition("：")
@@ -1079,7 +1079,7 @@ def _deprecate(args):
         if refused:
             write = False
             names = "、".join(n for n, _why in refused)
-            print(f"\n  ⛔ 本輪降級為預覽：{safe_label(names)} 的寫回被 da-guard edit 拒絕，"
+            print(f"\n  ⛔ 本輪降級為預覽：{safe_label(names)} 的寫回被 da-guard write 拒絕，"
                   f"一個位元組都不寫；請先修掉結尾具名的問題再重跑")
     action = "已移除" if write else ("將移除（本輪未寫入）" if args.execute
                                    else "將移除")

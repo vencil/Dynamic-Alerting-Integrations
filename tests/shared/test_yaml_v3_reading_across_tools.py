@@ -208,10 +208,10 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
 _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes — "
               "tests/shared/test_writers_confirm_parse_tree.py")
-#: The tools that change an EXISTING conf.d file through `da-guard edit`
+#: The tools that change an EXISTING conf.d file through `da-guard write`
 #: (ADR-036 step 10b, #3206): Go writes the text, so what is left to probe
 #: is their reading, which is parse-tree's (same rows).
-_GO_EDIT = (_GO + "; changes existing conf.d files through `da-guard edit` (Go writes) — "
+_GO_EDIT = (_GO + "; changes existing conf.d files through `da-guard write` (Go writes) — "
             "tests/shared/test_writers_confirm_parse_tree.py")
 #: A conf.d file read from `git show` blobs (parse-tree's file mode), one
 #: fixed name at two revisions — no conf.d tree or argument a probe can drive.

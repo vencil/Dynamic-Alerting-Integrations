@@ -33,7 +33,7 @@ func TestEdit_UnchangedNeedsTheMeaningUnchangedToo(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := writeTree(t, map[string]string{"t2.yaml": tc.base})
-			_, res := runW(t, editCmd, `{"ops":`+tc.ops+`}`, "--config-dir", root, "--path", "t2.yaml")
+			_, res := runW(t, writeCmd, `{"ops":`+tc.ops+`}`, "--config-dir", root, "--path", "t2.yaml")
 			if res.Status != tc.status || reasonOf(res) != tc.reason {
 				t.Fatalf("status %s reason %q, want %s %q (%v)", res.Status, reasonOf(res), tc.status, tc.reason, res.Message)
 			}
@@ -52,7 +52,7 @@ func TestEmit_NeverRemovesADirectoryItDidNotMake(t *testing.T) {
 	root := writeTree(t, map[string]string{"x.yaml": "a: \"1\"\n"})
 	theirs := filepath.Join(root, "a")
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: emitCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut,
 		link: func(string, string) error { return fs.ErrExist },
 		mkdir: func(p string, perm os.FileMode) error {
 			if p == theirs {
@@ -84,7 +84,7 @@ func TestEdit_RefusesWhatWasNotARegularFileAtOpen(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"})
 	before := snapshot(t, root)
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut,
 		read: func(string) ([]byte, os.FileInfo, bool, error) { return nil, nil, false, nil }}
 	scan, err := config.ScanDirTreeFiles(root, log.New(io.Discard, "", 0))
 	if err != nil {

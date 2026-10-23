@@ -66,6 +66,7 @@ func TestScanDirTreeFilesWith_IsTheTreeWithTheFilesWritten(t *testing.T) {
 		{Rel: "new/t4.yaml", Data: []byte("tenants:\n  t4: {}\n")},
 		{Rel: "odd.yaml/t5.yaml", Data: []byte("tenants:\n  t5: {}\n")}, // a config-named directory made
 		{Rel: "0.yaml", Data: []byte("tenants:\n  t0: {}\n")},           // first in walk order
+		{Rel: "team/t2.yaml", Remove: true},                             // a move's source: gone
 	}
 	dir := t.TempDir()
 	writeFiles(t, dir, disk)
@@ -75,11 +76,19 @@ func TestScanDirTreeFilesWith_IsTheTreeWithTheFilesWritten(t *testing.T) {
 	}
 
 	oracle := t.TempDir()
-	writeFiles(t, oracle, disk)
+	kept := map[string]string{}
+	for rel, body := range disk {
+		kept[rel] = body
+	}
 	written := map[string]string{}
 	for _, o := range overlays {
+		if o.Remove {
+			delete(kept, o.Rel)
+			continue
+		}
 		written[o.Rel] = string(o.Data)
 	}
+	writeFiles(t, oracle, kept)
 	writeFiles(t, oracle, written)
 	want, err := ScanDirTreeFiles(oracle, discardLogger)
 	if err != nil {
@@ -108,6 +117,8 @@ func TestScanDirTreeFilesWith_Refusals(t *testing.T) {
 		"a file and a directory":         {[]FileOverlay{{Rel: "x.yaml"}, {Rel: "x.yaml/b.yaml"}}, true, "x.yaml"},
 		"under a file":                   {[]FileOverlay{{Rel: "a.yaml/b.yaml"}}, true, "a.yaml/b.yaml"},
 		"a hidden name":                  {[]FileOverlay{{Rel: ".b.yaml"}}, true, ".b.yaml"},
+		"removing what is not listed":    {[]FileOverlay{{Rel: "z.yaml", Remove: true}}, true, "z.yaml"},
+		"removing and creating one path": {[]FileOverlay{{Rel: "a.yaml", Remove: true}, {Rel: "a.yaml"}}, true, "a.yaml"},
 	} {
 		_, err := ScanDirTreeFilesWith(dir, discardLogger, tc.overlays, tc.mkdirs)
 		var oe *OverlayError

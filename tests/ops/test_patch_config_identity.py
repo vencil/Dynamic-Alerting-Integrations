@@ -146,7 +146,7 @@ class TestIdentityVerdicts:
         """(b) #2132：t-a.yaml 寫入前已在 parse_failed（exporter 拒收；本工具可讀），
         計數器每次讀都在漲；寫入可 parse 的內容（讓它被拒的那個值換掉了）
         ⇒ 成功、不回滾。舊驗法（計數器）在同一情境誤判失敗。（先前這裡讓 exporter
-        拒收的是一行註解、靠 PyYAML 改寫丟掉它；da-guard edit 保留註解，#3206。）"""
+        拒收的是一行註解、靠 PyYAML 改寫丟掉它；da-guard write 保留註解，#3206。）"""
         def rejects(key, text):
             return key == "t-a.yaml" and "'70'" in text
         broken = T_A
