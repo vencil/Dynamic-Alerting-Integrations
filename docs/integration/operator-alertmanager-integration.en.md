@@ -226,7 +226,7 @@ inhibitRules:
     equal: ["tenant"]
 ```
 
-⚠️ No rule emits `TenantMaintenanceMode`, so this inhibit has no source alert and never takes effect ([#3310](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3310)). Maintenance mode actually works at the PromQL layer; for its scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes).
+⚠️ No rule in the shipped rule set emits `TenantMaintenanceMode`, so this inhibit currently has no source alert and does not take effect ([#3310](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3310)). Maintenance mode actually works at the PromQL layer; for its scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes).
 
 > In v2.6.0, `operator-generate` automatically generates the complete set of inhibition rules for each tenant (severity dedup + silent + maintenance).
 

@@ -17,7 +17,7 @@ This document shows how the platform **behaves** under key scenarios, and **whic
 
 ## Maintenance Mode & Composite Alerts
 
-Every Alert Rule has built-in `unless maintenance` logic; a tenant can silence everything via a state_filter:
+Most Alert Rules carry a built-in `unless maintenance` condition, and a tenant turns on maintenance mode via a state_filter; alerts without that condition keep firing (for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes)):
 
 ```yaml
 # _defaults.yaml

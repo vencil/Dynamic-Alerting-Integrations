@@ -474,7 +474,10 @@ v1.2.0 introduced **Silent Mode**, which together with the existing Maintenance 
 |-------------------|-----------|-----------------|-------------|--------------|---|
 | Normal | Normal operation | ✅ | ✅ | ✅ | — |
 | Silent | Muted | ✅ | ✅ | ❌ | Alertmanager |
-| Maintenance | True maintenance | ❌ (alerts carrying the maintenance condition) | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance (alerts carrying the maintenance condition) | True maintenance | ❌ | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance `recurring:` window | Recurring maintenance | ✅ | ✅ | ❌ | Alertmanager silence |
+
+Alerts without the maintenance condition follow the Normal row during maintenance (for the scope see the Maintenance Mode paragraph below).
 
 ```mermaid
 stateDiagram-v2
@@ -492,7 +495,7 @@ stateDiagram-v2
         Control — Alertmanager inhibit
     end note
     note right of Maintenance
-        Alert ❌ TSDB ❌ Notification ❌
+        With maintenance condition: Alert ❌ TSDB ❌ Notification ❌
         Control — PromQL unless
     end note
 ```

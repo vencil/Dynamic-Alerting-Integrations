@@ -455,7 +455,10 @@ v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營
 |---------|------|-----------|----------|------|--------|
 | Normal | 正常運行 | ✅ | ✅ | ✅ | — |
 | Silent | 靜音 | ✅ | ✅ | ❌ | Alertmanager |
-| Maintenance | 真正維護 | ❌（帶維護條件的告警） | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance（帶維護條件的告警） | 真正維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance 的 `recurring:` 窗 | 週期維護 | ✅ | ✅ | ❌ | Alertmanager silence |
+
+不帶維護條件的告警在維護期間照 Normal 那一列（範圍見下方 Maintenance Mode 一段）。
 
 ```mermaid
 stateDiagram-v2
@@ -473,7 +476,7 @@ stateDiagram-v2
         控制層 — Alertmanager inhibit
     end note
     note right of Maintenance
-        Alert ❌ TSDB ❌ 通知 ❌
+        帶維護條件的告警：Alert ❌ TSDB ❌ 通知 ❌
         控制層 — PromQL unless
     end note
 ```

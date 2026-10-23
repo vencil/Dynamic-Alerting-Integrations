@@ -226,7 +226,7 @@ inhibitRules:
     equal: ["tenant"]
 ```
 
-⚠️ 沒有任何規則送出 `TenantMaintenanceMode`，所以這條 inhibit 沒有來源告警、不會作用（[#3310](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3310)）。維護模式實際在 PromQL 層生效，範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。
+⚠️ 目前出貨的規則集沒有任何規則送出 `TenantMaintenanceMode`，所以這條 inhibit 目前沒有來源告警、不會作用（[#3310](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3310)）。維護模式實際在 PromQL 層生效，範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。
 
 > `operator-generate` 在 v2.6.0 自動為每個 tenant 產出上述完整的抑制規則集（severity dedup + silent + maintenance）。
 
