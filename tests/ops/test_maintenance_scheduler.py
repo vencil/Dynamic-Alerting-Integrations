@@ -297,10 +297,21 @@ class TestGetExistingSilences:
         assert info["endsAt"] == datetime(2025, 6, 15, 6, 0, tzinfo=timezone.utc)
 
     @mock.patch.object(ms, "_api_request")
-    def test_api_error_returns_empty(self, mock_api):
-        mock_api.side_effect = Exception("connection refused")
-        result = ms.get_existing_silences("http://alertmanager:9093")
-        assert result == {}
+    def test_api_error_raises_query_error(self, mock_api):
+        """#3133: silences that could not be read are not "none active" —
+        that used to defeat the idempotency check and exit 0."""
+        mock_api.side_effect = urllib.error.URLError("connection refused")
+        with pytest.raises(ms.QueryError) as exc:
+            ms.get_existing_silences("http://alertmanager:9093")
+        assert exc.value.reason == "alertmanager_query_error"
+
+    @pytest.mark.parametrize("body", [{}, None, ["x"], [{"status": "active"}]],
+                             ids=["object", "null", "not-object", "status-not-object"])
+    @mock.patch.object(ms, "_api_request")
+    def test_malformed_body_raises_query_error(self, mock_api, body):
+        mock_api.return_value = body
+        with pytest.raises(ms.QueryError):
+            ms.get_existing_silences("http://alertmanager:9093")
 
 
 # ── 5. create_silence ─────────────────────────────────────────────
@@ -514,6 +525,27 @@ tenants:
             created, skipped, errors = ms.evaluate_and_apply(
                 d, None, now=now)
             assert created == 0
+
+    @mock.patch.object(ms, "_api_request")
+    @mock.patch.object(ms, "create_silence")
+    def test_unreadable_silences_create_nothing(self, mock_create, mock_api):
+        """#3133: an Alertmanager whose silences cannot be read stops the run
+        before any silence is created (it used to create a duplicate)."""
+        mock_api.side_effect = urllib.error.URLError("connection refused")
+        with tempfile.TemporaryDirectory() as d:
+            write_yaml(d, "db-a.yaml", """\
+tenants:
+  db-a:
+    _state_maintenance:
+      recurring:
+        - cron: "* * * * *"
+          duration: "1h"
+          reason: "Always active"
+""")
+            now = datetime(2025, 6, 15, 12, 5, tzinfo=timezone.utc)
+            with pytest.raises(ms.QueryError):
+                ms.evaluate_and_apply(d, "http://alertmanager:9093", now=now)
+        mock_create.assert_not_called()
 
     @mock.patch.object(ms, "get_existing_silences")
     @mock.patch.object(ms, "create_silence")
@@ -778,3 +810,14 @@ def test_summary_does_not_claim_silences_were_created(tmp_path, extra, mode, phr
     assert len(summary) == 1 and phrase in summary[0], proc.stderr
     assert "created," not in summary[0]
     assert json.loads(proc.stdout)["mode"] == mode
+
+
+@requires_croniter
+def test_unreadable_silences_exit_2_with_one_envelope(tmp_path):
+    """#3133: apply mode against an Alertmanager whose silences cannot be read
+    used to create the silence anyway (a duplicate when one was active) and exit 0."""
+    proc = _run_scheduler(tmp_path, "--alertmanager", "http://127.0.0.1:9")
+    assert proc.returncode == 2, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert (doc["status"], doc["reason"]) == ("caller_error", "alertmanager_query_error")
+    assert "Summary:" not in proc.stderr

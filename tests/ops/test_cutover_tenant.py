@@ -175,6 +175,38 @@ class TestStepFunctions:
         assert ok
         assert msg == "(dry-run)"
 
+    @staticmethod
+    def _answer(monkeypatch, body, err=None):
+        import _lib_prometheus
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda url, timeout=10: (body, err))
+
+    def test_verify_health_counts(self, monkeypatch):
+        self._answer(monkeypatch, {"status": "success", "data": {
+            "resultType": "vector", "result": [{"metric": {}, "value": [1, "7"]}]}})
+        assert ct.verify_health("t1", "http://prom:9090") == (
+            True, "tenant=t1: 7 threshold metrics active")
+
+    def test_verify_health_empty_vector_is_a_finding(self, monkeypatch):
+        self._answer(monkeypatch, {"status": "success",
+                                   "data": {"resultType": "vector", "result": []}})
+        ok, msg = ct.verify_health("t1", "http://prom:9090")
+        assert not ok and not msg.startswith(ct.CALLER_ERROR_PREFIX)
+
+    @pytest.mark.parametrize("body, err", [
+        (None, "connection refused"),
+        ({"status": "error", "error": "bad_data"}, None),
+        ({"status": "success", "data": None}, None),
+        ({"status": "success", "data": {"resultType": "vector",
+                                        "result": [{"metric": {}, "value": [1, "NaN"]}]}}, None),
+    ], ids=["transport", "status-error", "data-null", "count-not-finite"])
+    def test_verify_health_unanswered_is_caller_error(self, monkeypatch, body, err):
+        """#3133: an answer that could not be read used to read as "no
+        threshold metrics" — a cutover finding (exit 1) instead of exit 2."""
+        self._answer(monkeypatch, body, err)
+        ok, msg = ct.verify_health("t1", "http://prom:9090")
+        assert not ok and msg.startswith(ct.CALLER_ERROR_PREFIX)
+
 
 # ---------------------------------------------------------------------------
 # TestApplyCutover

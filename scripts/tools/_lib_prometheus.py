@@ -637,12 +637,31 @@ def alertmanager_alerts(
     return data
 
 
+def silences_list(body: Any) -> list[dict[str, Any]]:
+    """The silences of an Alertmanager ``/api/v2/silences`` answer, or ``QueryError``.
+
+    A list of silence objects, each ``status`` (when present) an object
+    with ``state`` (when present) a string. The one reading of that answer,
+    whoever fetched it (a tool that retries its own GET passes the body here).
+    """
+    if not isinstance(body, list):
+        raise _malformed("Alertmanager", "body is not a JSON array")
+    for i, silence in enumerate(body):
+        if not isinstance(silence, dict):
+            raise _malformed("Alertmanager", f"silence[{i}] is not an object")
+        status = silence.get("status", {})
+        if not isinstance(status, dict):
+            raise _malformed("Alertmanager", f"silence[{i}].status is not an object")
+        if not isinstance(status.get("state", ""), str):
+            raise _malformed("Alertmanager", f"silence[{i}].status.state is not a string")
+    return body
+
+
 def alertmanager_silences(am_url: str, *, timeout: int = 15) -> list[dict[str, Any]]:
     """Alertmanager's ``/api/v2/silences``; return the silences or raise.
 
     Returns:
-        The silences, each a dict whose ``status``, when present, is an
-        object with ``state`` (when present) a string. ``[]`` only when
+        The silences, checked by :func:`silences_list`. ``[]`` only when
         Alertmanager answered with an empty list.
 
     Raises:
@@ -653,17 +672,7 @@ def alertmanager_silences(am_url: str, *, timeout: int = 15) -> list[dict[str, A
     data, err = http_get_json(f"{am_url}/api/v2/silences", timeout=timeout)
     if err:
         raise QueryError(err, source="Alertmanager")
-    if not isinstance(data, list):
-        raise _malformed("Alertmanager", "body is not a JSON array")
-    for i, silence in enumerate(data):
-        if not isinstance(silence, dict):
-            raise _malformed("Alertmanager", f"silence[{i}] is not an object")
-        status = silence.get("status", {})
-        if not isinstance(status, dict):
-            raise _malformed("Alertmanager", f"silence[{i}].status is not an object")
-        if not isinstance(status.get("state", ""), str):
-            raise _malformed("Alertmanager", f"silence[{i}].status.state is not a string")
-    return data
+    return silences_list(data)
 
 
 def _string_labels(source: str, where: str, labels: Any) -> None:
@@ -752,3 +761,93 @@ def alertmanager_status(am_url: str, *, timeout: int = 10) -> dict[str, Any]:
     if not isinstance(config.get("original", ""), str):
         raise _malformed("Alertmanager", "'config.original' is not a string")
     return data
+
+
+def _success_data(prom_url: str, path: str, timeout: int) -> Any:
+    """``data`` of a ``success`` answer from ``<prom_url><path>``, or ``QueryError``."""
+    data, err = http_get_json(f"{prom_url}{path}", timeout=timeout)
+    if err:
+        raise QueryError(err)
+    if not isinstance(data, dict):
+        raise _malformed("Prometheus", "body is not a JSON object")
+    if data.get("status") != "success":
+        raise QueryError(str(data.get("error", "Unknown Prometheus error")))
+    return data.get("data")
+
+
+def prometheus_series(prom_url: str, match: str, *, timeout: int = 10) -> list[dict[str, str]]:
+    """Prometheus's ``/api/v1/series?match[]=<match>``; return the label sets or raise.
+
+    Raises:
+        QueryError: no connection, an HTTP error, ``status`` other than
+            ``success``, or ``data`` that is not a list of string-valued
+            label sets (#3133).
+    """
+    path = "/api/v1/series?" + urllib.parse.urlencode({"match[]": match})
+    rows = _success_data(prom_url, path, timeout)
+    if not isinstance(rows, list):
+        raise _malformed("Prometheus", "'data' is missing or not a list")
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise _malformed("Prometheus", f"series[{i}] is not an object")
+        bad = next((k for k, v in row.items() if not isinstance(v, str)), None)
+        if bad is not None:
+            raise _malformed("Prometheus", f"series[{i}].{bad} is not a string")
+    return rows
+
+
+def prometheus_label_values(prom_url: str, label: str, *,
+                            timeout: int = 10) -> list[str]:
+    """Prometheus's ``/api/v1/label/<label>/values``; return the values or raise.
+
+    Raises:
+        QueryError: as :func:`prometheus_series`, ``data`` not a list of
+            strings (#3133).
+    """
+    values = _success_data(prom_url, f"/api/v1/label/{urllib.parse.quote(label)}/values",
+                           timeout)
+    if not isinstance(values, list):
+        raise _malformed("Prometheus", "'data' is missing or not a list")
+    bad = next((i for i, v in enumerate(values) if not isinstance(v, str)), None)
+    if bad is not None:
+        raise _malformed("Prometheus", f"data[{bad}] is not a string")
+    return values
+
+
+def rules_groups(body: Any) -> list[dict[str, Any]]:
+    """``data.groups`` of a ``/api/v1/rules`` answer, or ``QueryError``.
+
+    A ``success`` body whose ``data.groups`` is a list of objects, each
+    with ``rules`` (when present) a list of objects (#3133: ``data: null``
+    used to read as "no rule loaded"). The one reading of that answer —
+    whether it came from Prometheus or from a file holding it.
+    """
+    if not isinstance(body, dict):
+        raise _malformed("Prometheus", "body is not a JSON object")
+    if body.get("status") != "success":
+        raise QueryError(str(body.get("error", "Unknown Prometheus error")))
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise _malformed("Prometheus", "'data' is missing or not an object")
+    groups = data.get("groups")
+    if not isinstance(groups, list):
+        raise _malformed("Prometheus", "'data.groups' is missing or not a list")
+    for i, group in enumerate(groups):
+        if not isinstance(group, dict):
+            raise _malformed("Prometheus", f"group[{i}] is not an object")
+        rules = group.get("rules", [])
+        if not isinstance(rules, list):
+            raise _malformed("Prometheus", f"group[{i}].rules is not a list")
+        bad = next((j for j, r in enumerate(rules) if not isinstance(r, dict)), None)
+        if bad is not None:
+            raise _malformed("Prometheus", f"group[{i}].rules[{bad}] is not an object")
+    return groups
+
+
+def prometheus_rules(prom_url: str, *, timeout: int = 15) -> list[dict[str, Any]]:
+    """Prometheus's ``/api/v1/rules``; return ``data.groups`` (checked by
+    :func:`rules_groups`) or raise ``QueryError``."""
+    data, err = http_get_json(f"{prom_url}/api/v1/rules", timeout=timeout)
+    if err:
+        raise QueryError(err)
+    return rules_groups(data)

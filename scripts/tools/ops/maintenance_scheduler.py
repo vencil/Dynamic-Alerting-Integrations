@@ -42,6 +42,7 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_request_with_retry,
 )
+from _lib_prometheus import QueryError, silences_list  # noqa: E402
 # #2751: the tenants and their `_state_maintenance` are threshold-exporter's
 # own resolution (`da-guard effective`), not a Python re-read of the tree.
 from _lib_tenant_values import (  # noqa: E402
@@ -229,13 +230,18 @@ def get_existing_silences(alertmanager_url):
     """Get active silences created by this tool from Alertmanager.
 
     Returns {(tenant, reason): {"id": ..., "endsAt": datetime}}.
+
+    Raises:
+        QueryError: the silences could not be read (#3133). Reading that as
+            "none active" used to create a second silence for every window
+            already silenced, and exit 0.
     """
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         data = _api_request(url, method="GET")
-    except Exception as e:
-        print(f"  WARN: failed to fetch silences: {e}", file=sys.stderr)
-        return {}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise QueryError(str(e), source="Alertmanager") from e
+    data = silences_list(data)
 
     result = {}
     for silence in data:
@@ -502,7 +508,8 @@ def main():
       0 — success (silences created or none needed)
       1 — errors occurred
       2 — fatal error (bad args, missing deps, a tenant file that cannot be read,
-          da-guard missing or failing)
+          da-guard missing or failing, Alertmanager's silences that could
+          not be read)
     """
     try_utf8_stdout()
     parser = build_parser()
