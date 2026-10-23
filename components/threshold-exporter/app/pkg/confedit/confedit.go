@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -187,27 +188,100 @@ func LiteralBlockKeeps(s string) bool {
 	return reflect.DeepEqual(back, map[string]string{"v": s})
 }
 
-// KeyNode is a new mapping key k as the writer writes it: plain when yaml.v3
-// reads the plain form back as the key k (the text is what every reader keys
-// on: `010:` is the key "010"), else double-quoted — `~`, `null` and the empty
-// key would read as a null key, `a: b` does not parse plain.
+// KeyNode is a new mapping key k as the writer writes it (da-guard's writer;
+// tenant-api's SetMapValue keeps writing its keys plain). A key must read
+// back as the same string for every reader — yaml.v3, and the YAML 1.1
+// readers that type `010`, `1:20`, `2001-01-01`, `no`, `on`, `y` or `~` as a
+// number, a time, a bool or null. Rather than model any reader's resolver,
+// a key is plain only when it is plainKey (a letter or `_`, then letters,
+// digits, `_` and `-`) and not a YAML 1.1 bool / null word; every other key
+// is double-quoted.
 func KeyNode(k string) *yaml.Node {
-	plain := &yaml.Node{Kind: yaml.ScalarNode, Value: k}
-	out, err := yaml.Marshal(&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{plain,
-		{Kind: yaml.ScalarNode, Value: "0"}}})
-	if err == nil {
-		var back yaml.Node
-		if yaml.Unmarshal(out, &back) == nil && len(back.Content) == 1 {
-			m := back.Content[0]
-			if m.Kind == yaml.MappingNode && len(m.Content) == 2 {
-				kn := m.Content[0]
-				if kn.Kind == yaml.ScalarNode && kn.Style == 0 && kn.Value == k && kn.ShortTag() != "!!null" && k != MergeKey {
-					return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}
-				}
-			}
-		}
+	if plainKey.MatchString(k) && !yaml11Words[strings.ToLower(k)] {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}
 	}
 	return StringNode(k)
+}
+
+var plainKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+// yaml11Words are the plainKey-shaped words a YAML 1.1 reader takes for a
+// bool or null, in any case.
+var yaml11Words = map[string]bool{
+	"y": true, "n": true, "yes": true, "no": true, "on": true, "off": true,
+	"true": true, "false": true, "null": true,
+}
+
+// KeepFraming gives out — a re-encode of original — the original's framing:
+// its line ending (CRLF when its first line ends in CRLF) and a leading
+// UTF-8 BOM. yaml.v3's encoder writes neither.
+func KeepFraming(original, out []byte) []byte {
+	if i := bytes.IndexByte(original, '\n'); i > 0 && original[i-1] == '\r' {
+		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+	}
+	if bytes.HasPrefix(original, bom) && !bytes.HasPrefix(out, bom) {
+		out = append(append([]byte{}, bom...), out...)
+	}
+	return out
+}
+
+var bom = []byte("\uFEFF")
+
+// WithoutCRLF is original with its CRLF line endings as LF when KeepFraming
+// would write CRLF back \u2014 what an edit parses, so yaml.v3 places comments as
+// it does in an LF file (with CRLF it sets a blank line after a leading
+// comment). Line breaks mean the same to every reader either way.
+func WithoutCRLF(original []byte) []byte {
+	if i := bytes.IndexByte(original, '\n'); i > 0 && original[i-1] == '\r' {
+		return bytes.ReplaceAll(original, []byte("\r\n"), []byte("\n"))
+	}
+	return original
+}
+
+// SameTree reports whether a and b parse to the same node trees: every
+// node's kind, style, tag, text, anchor, comments and alias target — what a
+// re-encode would carry; only the layout (indentation, comment alignment,
+// line endings) may differ.
+func SameTree(a, b []byte) bool {
+	ad, err := ParseAll(a)
+	if err != nil {
+		return false
+	}
+	bd, err := ParseAll(b)
+	if err != nil || len(ad) != len(bd) {
+		return false
+	}
+	seen := map[[2]*yaml.Node]bool{}
+	var eq func(x, y *yaml.Node) bool
+	eq = func(x, y *yaml.Node) bool {
+		if x == nil || y == nil {
+			return x == y
+		}
+		if !sameNode(x, y) || x.HeadComment != y.HeadComment || x.LineComment != y.LineComment ||
+			x.FootComment != y.FootComment || len(x.Content) != len(y.Content) {
+			return false
+		}
+		if x.Kind == yaml.AliasNode {
+			k := [2]*yaml.Node{x.Alias, y.Alias}
+			if seen[k] {
+				return true
+			}
+			seen[k] = true
+			return eq(x.Alias, y.Alias)
+		}
+		for i := range x.Content {
+			if !eq(x.Content[i], y.Content[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	for i := range ad {
+		if !eq(ad[i], bd[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------- one file
@@ -338,9 +412,11 @@ func (d *Doc) Set(path []string, val *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if old := MapValue(parent, path[len(path)-1]); old != nil && old.Kind != yaml.AliasNode {
-		// The comments yaml.v3 hangs on the value it replaces (a trailing
-		// `# …` on the key's line) stay with the key.
+	if old := MapValue(parent, path[len(path)-1]); old != nil && old.Kind == yaml.ScalarNode && val.Kind == yaml.ScalarNode {
+		// The comments yaml.v3 hangs on the scalar it replaces (a trailing
+		// `# …` on the key's line) stay with the new scalar. Not onto a
+		// mapping or a sequence: there they would be written beside its
+		// first key, which they do not describe.
 		if val.HeadComment == "" && val.LineComment == "" && val.FootComment == "" {
 			val.HeadComment, val.LineComment, val.FootComment = old.HeadComment, old.LineComment, old.FootComment
 		}

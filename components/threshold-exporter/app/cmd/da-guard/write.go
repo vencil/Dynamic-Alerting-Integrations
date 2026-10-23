@@ -106,6 +106,9 @@ type writeResult struct {
 	Difference *writeDifference  `json:"difference"`
 	// Content: dry_run — the text that would be written.
 	Content *string `json:"content"`
+	// Warnings: what the write did not carry over but did not refuse for
+	// (e.g. the original's owner could not be set); [] when none.
+	Warnings []string `json:"warnings"`
 }
 
 // writeDifference is where a refused write differs: Path (mapping keys,
@@ -172,7 +175,14 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> --path <rel> --input <file|-> [--dry-run] [--json]\n", programName, cmd)
 	if cmd == editCmd {
 		fmt.Fprintf(errOut, "Rewrite an existing conf.d file: apply ops to its yaml.v3 node tree; every node and\n"+
-			"comment outside the edit is written back as it was (ADR-036 §2, §4).\n\n"+
+			"comment outside the edit is written back as it was (ADR-036 §2, §4). A comment ON an\n"+
+			"edited node may be dropped (a replaced scalar keeps its own; a scalar replaced by a\n"+
+			"mapping or sequence does not). The re-encode also normalises layout, never content:\n"+
+			"indentation becomes 2 spaces, a trailing comment is set one space after its value,\n"+
+			"an explicit key (`? a`) is written `a:`, blank lines may go. The line ending (CRLF\n"+
+			"or LF, from the first line) and a leading UTF-8 BOM are kept. An edit whose result\n"+
+			"is the file's own node tree is unchanged: nothing is written. The written file keeps\n"+
+			"the original's mode, and its owner and group when they can be set (else a warning).\n\n"+
 			"Input: {\"ops\": [<op>, ...]}, applied in order:\n"+
 			"  {\"op\": \"set\", \"path\": [<key>, ...], \"value\": <value>}  the key at path := value; the\n"+
 			"      mapping holding it must be there (ensure-map first); an existing key keeps its place\n"+
@@ -181,7 +191,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 			"      one is created\n")
 	} else {
 		fmt.Fprintf(errOut, "Write a new conf.d file from the content given, keys in the order given (ADR-036 §2).\n"+
-			"The path must not exist; missing directories are created.\n\n"+
+			"The path must not exist; missing directories are created (and removed again when\n"+
+			"the write does not complete).\n\n"+
 			"Input: {\"content\": <value>}, a \"map\" value: the file's top level.\n")
 	}
 	fmt.Fprintf(errOut, "<value> names its type, so a mapping's order and a scalar's type are the caller's:\n"+
@@ -189,8 +200,12 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"                 block when it reads back the same)\n"+
 		"  {\"int\": \"80\"}  {\"float\": \"0.5\"}  canonical decimal text only (other text: send \"str\")\n"+
 		"  {\"bool\": true}  {\"null\": null}\n"+
-		"  {\"map\": [[\"key\", <value>], ...]}  keys unique, never `<<`\n"+
-		"  {\"seq\": [<value>, ...]}\n\n"+
+		"  {\"map\": [[\"key\", <value>], ...]}  keys unique, never `<<`; a new key is written plain\n"+
+		"                 only when it is [A-Za-z_][A-Za-z0-9_-]* and not a YAML 1.1 bool/null word\n"+
+		"                 (y n yes no on off true false null, any case), else double-quoted\n"+
+		"  {\"seq\": [<value>, ...]}\n"+
+		"The input is UTF-8 JSON: invalid UTF-8, an unpaired \\uD800-\\uDFFF escape, a member given\n"+
+		"twice or a member name not spelled exactly as above is a caller error.\n\n"+
 		"Before anything is written, the text is read back with parse-tree's file mode at --path: it must\n"+
 		"have no problem and no verdict, and read as the original file's parse result with the ops applied\n"+
 		"(emit: the content given). The file is written in its own directory and renamed into place.\n\n")
@@ -198,7 +213,9 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "\n--json document: {\"schema\": %q, \"da_guard_version\", \"command\", \"path\",\n"+
 		"  \"status\": written|unchanged|dry_run|refused|caller_error, \"reason\", \"message\",\n"+
 		"  \"entry\" (a parse-tree entry), \"problem\": {\"kind\", \"message\"},\n"+
-		"  \"difference\": {\"path\", \"want\", \"got\"}, \"content\" (dry_run)}; null where it has no value.\n"+
+		"  \"difference\": {\"path\", \"want\", \"got\"}, \"content\" (dry_run), \"warnings\": [<text>]};\n"+
+		"null where it has no value (warnings: []). A path that exists but is no regular file\n"+
+		"(a FIFO, a device, a directory) is judged by parse-tree and refused not_read, never read.\n"+
 		"Refusal reasons: not_read, symlink, original_unreadable, original_unservable,\n"+
 		"edit_not_applicable, not_round_trippable, read_back_mismatch, changed_during_write.\n\n"+
 		"Exit codes:\n"+
@@ -225,9 +242,20 @@ type writer struct {
 	stdout  io.Writer
 	errOut  io.Writer
 	res     writeResult
+	// link puts emit's file in place (os.Link when nil); a test swaps it to
+	// fail after the directories are created.
+	link func(oldname, newname string) error
 }
 
 func strp(s string) *string { return &s }
+
+// warn records something the write did not carry over, on stderr and in the
+// --json document — never silently.
+func (w *writer) warn(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	fmt.Fprintf(w.errOut, "%s %s: warning: %s\n", programName, w.cmd, msg)
+	w.res.Warnings = append(w.res.Warnings, msg)
+}
 
 func (w *writer) finish(code int) int {
 	if w.jsonOut {
@@ -268,7 +296,7 @@ func hasJSONFlag(args []string) bool {
 
 func runWrite(cmd string, args []string, stdin io.Reader, stdout, errOut io.Writer) int {
 	w := &writer{cmd: cmd, stdout: stdout, errOut: errOut,
-		res: writeResult{Schema: writeSchema, DaGuardVersion: Version, Command: cmd}}
+		res: writeResult{Schema: writeSchema, DaGuardVersion: Version, Command: cmd, Warnings: []string{}}}
 	f, err := parseWriteFlags(cmd, args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -298,6 +326,12 @@ func runWrite(cmd string, args []string, stdin io.Reader, stdout, errOut io.Writ
 		raw, err = os.ReadFile(f.input) // #nosec G304 -- the caller names the file to read
 	}
 	if err != nil {
+		return w.callerError("bad_input", "--input: %v", err)
+	}
+	if err := checkInputText(raw); err != nil {
+		return w.callerError("bad_input", "--input: %v", err)
+	}
+	if err := checkMemberNames(cmd, raw); err != nil {
 		return w.callerError("bad_input", "--input: %v", err)
 	}
 	var ops []editOp
@@ -401,6 +435,36 @@ func notReadMessage(e parseTreeEntry) string {
 	return fmt.Sprintf("no reader reads the path (not_read %s)", e.NotRead)
 }
 
+// readRegular reads abs only when the opened handle is a regular file
+// (fstat, not a name check): a FIFO is opened without blocking and a device
+// or a directory is never read. regular false: nothing was read.
+func readRegular(abs string) (data []byte, fi os.FileInfo, regular bool, err error) {
+	f, err := openNoBlock(abs)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err = f.Stat(); err != nil {
+		return nil, nil, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fi, false, nil
+	}
+	data, err = io.ReadAll(f)
+	return data, fi, true, err
+}
+
+// refuseNotAFile judges a path that is no regular file with parse-tree (the
+// walk's own entry for it) and refuses it not_read.
+func (w *writer) refuseNotAFile(scan *config.TreeScan, rel string) int {
+	e, _, _, err := judgeAt(scan, rel, nil)
+	if err != nil {
+		return w.callerError("bad_path", "%v", err)
+	}
+	w.res.Entry, w.res.Problem = &e, e.Problem
+	return w.refuse(writeReasonNotRead, fmt.Sprintf("the path is no regular file (role %s); nothing is read from it", e.Role))
+}
+
 func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryRun bool) int {
 	fi, err := os.Lstat(abs)
 	switch {
@@ -414,8 +478,13 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 			return w.refuse(writeReasonNotRead, notReadMessage(e))
 		}
 		return w.refuse(writeReasonSymlink, "the path is a symlink; writing would replace the link with a file")
+	case err == nil && !fi.Mode().IsRegular():
+		return w.refuseNotAFile(scan, rel)
 	}
-	original, rerr := os.ReadFile(abs) // #nosec G304 -- inside --config-dir, judged below
+	original, ofi, regular, rerr := readRegular(abs)
+	if rerr == nil && !regular { // swapped for a FIFO, a device, … since the Lstat
+		return w.refuseNotAFile(scan, rel)
+	}
 	e, asOnDisk, base, err := judgeAt(scan, rel, original)
 	if err != nil {
 		return w.callerError("bad_path", "%v", err)
@@ -440,7 +509,7 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	}
 	w.res.Entry = nil
 
-	doc, err := confedit.ParseDoc(original)
+	doc, err := confedit.ParseDoc(confedit.WithoutCRLF(original))
 	if err != nil {
 		return w.refuse(writeReasonEditNotApplicable, err.Error())
 	}
@@ -482,9 +551,19 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 			}
 		}
 	}
-	out, err := doc.Bytes()
+	encoded, err := doc.Bytes()
 	if err != nil {
 		return w.refuse(writeReasonEditNotApplicable, "re-encode: "+err.Error())
+	}
+	// The original's line ending and BOM; every check below reads these
+	// very bytes.
+	out := confedit.KeepFraming(original, encoded)
+	if confedit.SameTree(original, out) {
+		// Nothing the edit means changes: a layout-only re-encode is not
+		// worth a write (and a commit).
+		fmt.Fprintf(w.errOut, "%s %s: %s: unchanged; nothing written\n", programName, w.cmd, rel)
+		w.res.Status = writeStatusUnchanged
+		return w.finish(exitOK)
 	}
 	if d := confedit.Verify(original, out, doc.Edits()); d != nil {
 		w.res.Difference = &writeDifference{Path: nonNilPath(d.Path)}
@@ -494,23 +573,23 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	if code, ok := w.readBack(scan, rel, out, want); !ok {
 		return code
 	}
-	if bytes.Equal(out, original) {
-		fmt.Fprintf(w.errOut, "%s %s: %s: unchanged; nothing written\n", programName, w.cmd, rel)
-		w.res.Status = writeStatusUnchanged
-		return w.finish(exitOK)
-	}
 	if dryRun {
 		return w.dryRun(out)
 	}
-	return w.commit(abs, out, original, fi.Mode().Perm())
+	return w.commit(abs, out, original, fi.Mode().Perm(), ofi)
 }
 
 func (w *writer) emit(scan *config.TreeScan, rel, abs string, content confedit.Value, dryRun bool) int {
 	if _, err := os.Lstat(abs); err == nil || !errors.Is(err, fs.ErrNotExist) {
-		if err == nil {
+		if err != nil {
+			return w.callerError("bad_path", "--path %q: %v", rel, err)
+		}
+		if st, serr := os.Stat(abs); serr == nil && st.Mode().IsRegular() {
 			return w.callerError("path_exists", "--path %q exists; emit writes a new file (an existing one is edit's)", rel)
 		}
-		return w.callerError("bad_path", "--path %q: %v", rel, err)
+		// A FIFO, a device, a directory, a link to none of them: no file a
+		// reader reads, and nothing emit may write over.
+		return w.refuseNotAFile(scan, rel)
 	}
 	out, err := confedit.Encode(confedit.NewDoc(content.Node(false)).Node())
 	if err != nil {
@@ -523,7 +602,7 @@ func (w *writer) emit(scan *config.TreeScan, rel, abs string, content confedit.V
 	if dryRun {
 		return w.dryRun(out)
 	}
-	return w.commit(abs, out, nil, 0o644)
+	return w.commit(abs, out, nil, 0o644, nil)
 }
 
 // readBack holds the text to be written to parse-tree's reading at rel:
@@ -576,11 +655,28 @@ func (w *writer) dryRun(out []byte) int {
 
 // commit writes out to abs atomically: a hidden temporary file in abs's own
 // directory (no walk reads a hidden name), synced, then moved into place —
-// for edit (original non-nil) only while abs still holds original; for emit
-// only while abs does not exist.
-func (w *writer) commit(abs string, out, original []byte, perm os.FileMode) int {
+// for edit (original non-nil) only while abs still holds original, with the
+// original's owner and group when they can be set (orig); for emit only
+// while abs does not exist, and the directories it created are removed again
+// when the write does not complete.
+func (w *writer) commit(abs string, out, original []byte, perm os.FileMode, orig os.FileInfo) int {
 	dir := filepath.Dir(abs)
+	var created []string // deepest first
+	done := false
+	defer func() {
+		if !done {
+			for _, d := range created {
+				_ = os.Remove(d) // only ever empty: the temporary file is gone first
+			}
+		}
+	}()
 	if original == nil {
+		for d := dir; ; d = filepath.Dir(d) {
+			if _, err := os.Lstat(d); err == nil || filepath.Dir(d) == d {
+				break
+			}
+			created = append(created, d)
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- conf.d directories are world-readable by convention
 			return w.callerError("write_failed", "%v", err)
 		}
@@ -595,6 +691,11 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode) int 
 	if werr == nil {
 		werr = tmp.Chmod(perm)
 	}
+	if werr == nil && orig != nil {
+		if err := chownLike(tmp, orig); err != nil {
+			w.warn("the written file could not be given the original's owner and group: %v", err)
+		}
+	}
 	if werr == nil {
 		werr = tmp.Sync()
 	}
@@ -605,17 +706,21 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode) int 
 		return w.callerError("write_failed", "%v", werr)
 	}
 	if original != nil {
-		now, err := os.ReadFile(abs) // #nosec G304 -- the file just judged
-		if err != nil || !bytes.Equal(now, original) {
+		now, _, regular, err := readRegular(abs)
+		if err != nil || !regular || !bytes.Equal(now, original) {
 			return w.refuse(writeReasonChangedDuringWrite, "the file changed after it was read; re-run on its new content")
 		}
 		if err := os.Rename(tmpName, abs); err != nil {
 			return w.callerError("write_failed", "%v", err)
 		}
 	} else {
+		link := w.link
+		if link == nil {
+			link = os.Link
+		}
 		// A hard link never replaces what is there: a path created meanwhile
 		// is not overwritten.
-		switch err := os.Link(tmpName, abs); {
+		switch err := link(tmpName, abs); {
 		case errors.Is(err, fs.ErrExist):
 			return w.refuse(writeReasonChangedDuringWrite, "the path was created after it was judged; nothing replaced it")
 		case err != nil:
@@ -628,6 +733,7 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode) int 
 			}
 		}
 	}
+	done = true
 	if d, err := os.Open(dir); err == nil { // #nosec G304 -- the directory just written
 		_ = d.Sync()
 		_ = d.Close()

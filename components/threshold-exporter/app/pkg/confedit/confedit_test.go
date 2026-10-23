@@ -173,8 +173,12 @@ func TestVerify_RefusesAnyChangeOutsideTheEdit(t *testing.T) {
 func strp(s string) *string { return &s }
 
 func TestKeyNode(t *testing.T) {
-	for k, plain := range map[string]bool{"t1": true, "010": true, "mysql_connections": true,
-		"~": false, "null": false, "": false, "a: b": false, "#x": false} {
+	// Plain only for an identifier that no YAML 1.1 reader types: every
+	// other key is double-quoted, whatever yaml.v3 alone would make of it.
+	for k, plain := range map[string]bool{"t1": true, "mysql_connections": true, "db-a": true, "_routing": true,
+		"010": false, "1:20": false, "2001-01-01": false, "no": false, "Yes": false, "ON": false, "y": false,
+		"N": false, "off": false, "True": false, "NULL": false, "~": false, "null": false, "": false,
+		"a: b": false, "#x": false, "-a": false, "a.b": false} {
 		n := KeyNode(k)
 		if got := n.Style == 0; got != plain {
 			t.Errorf("KeyNode(%q) plain = %v, want %v", k, got, plain)
@@ -227,7 +231,7 @@ func TestValue_NodeAndContentAgree(t *testing.T) {
 			keys = append(keys, strings.SplitN(line, ":", 2)[0])
 		}
 	}
-	if strings.Join(keys, ",") != `z,a,m,b,n,010,_custom_alerts,s` {
+	if strings.Join(keys, ",") != `z,a,m,b,"n","010",_custom_alerts,s` {
 		t.Errorf("keys not in the order given: %v\n%s", keys, out)
 	}
 	if !strings.Contains(string(out), "expr: |") || !strings.Contains(string(out), `- "a\nb"`) {

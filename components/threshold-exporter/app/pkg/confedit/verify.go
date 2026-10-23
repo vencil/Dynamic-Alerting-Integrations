@@ -189,6 +189,23 @@ func hasPrefix(p, prefix []string) bool {
 	return true
 }
 
+// emptiedByUnset: b and m are the mapping an unset edits, the unset left it
+// empty, and only its style differs — an empty block mapping is written
+// `{}`. That mapping is part of the edit; everything else about it (tag,
+// anchor) is still compared.
+func (c *compare) emptiedByUnset(b, m *yaml.Node, at []string) bool {
+	if at == nil || b.Kind != yaml.MappingNode || m.Kind != yaml.MappingNode || len(m.Content) != 0 ||
+		b.Tag != m.Tag || b.Value != m.Value || b.Anchor != m.Anchor {
+		return false
+	}
+	for _, op := range c.direct(at) {
+		if op == OpUnset {
+			return true
+		}
+	}
+	return false
+}
+
 func sameNode(b, m *yaml.Node) bool {
 	return b.Kind == m.Kind && b.Style == m.Style && b.Tag == m.Tag && b.Value == m.Value && b.Anchor == m.Anchor
 }
@@ -216,7 +233,7 @@ func (c *compare) eq(b, m *yaml.Node, path, at []string) ([]string, bool) {
 		}
 		return nil, true
 	}
-	if !sameNode(b, m) {
+	if !sameNode(b, m) && !c.emptiedByUnset(b, m, at) {
 		return path, false
 	}
 	if b.Kind == yaml.AliasNode {

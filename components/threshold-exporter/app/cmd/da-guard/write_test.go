@@ -104,7 +104,7 @@ func TestEdit_EachOpChangesOnlyTheEdit(t *testing.T) {
 		{"set", `[{"op":"set","path":["tenants","t1","mysql_connections"],"value":{"str":"90"}}]`,
 			strings.Replace(editBase, `mysql_connections: "80"`, `mysql_connections: "90"`, 1)},
 		{"set typed", `[{"op":"set","path":["tenants","t1","n"],"value":{"int":"5"}},{"op":"set","path":["tenants","t1","on"],"value":{"bool":true}}]`,
-			strings.Replace(editBase, "      group_wait: \"30s\"\n", "      group_wait: \"30s\"\n    n: 5\n    on: true\n", 1)},
+			strings.Replace(editBase, "      group_wait: \"30s\"\n", "      group_wait: \"30s\"\n    \"n\": 5\n    \"on\": true\n", 1)},
 		{"unset", `[{"op":"unset","path":["tenants","t1","_routing"]}]`,
 			strings.Replace(editBase, "    _routing:\n      group_wait: \"30s\"\n", "", 1)},
 		{"ensure-map", `[{"op":"ensure-map","path":["tenants","t3","_routing"]},{"op":"set","path":["tenants","t3","_routing","receiver"],"value":{"map":[["type",{"str":"webhook"}],["url",{"str":"https://a.example/x"}]]}}]`,
@@ -297,7 +297,7 @@ func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "tenants: {}\n"})
 	var out, errOut bytes.Buffer
 	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut, res: writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml"}}
-	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n# was\n"), 0o644); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
+	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n# was\n"), 0o644, nil); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
 		t.Fatalf("exit %d %+v", code, w.res)
 	}
 	got := snapshot(t, root)
@@ -305,7 +305,7 @@ func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 		t.Fatalf("tree %v", got)
 	}
 	w.res = writeResult{Schema: writeSchema, Command: emitCmd, Path: "t1.yaml"}
-	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("x: \"1\"\n"), nil, 0o644); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
+	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("x: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
 		t.Fatalf("emit over a file created meanwhile: exit %d %+v", code, w.res)
 	}
 	keys := make([]string, 0)
