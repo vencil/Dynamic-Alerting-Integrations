@@ -348,7 +348,7 @@ XFAIL: dict[tuple[str, str], str] = {
     **_cells("compile_custom_alerts", _X_EXIT, "link_to_000_dir", "config_named_dir_link",
              "team_link_outside"),
     **_cells("compile_custom_alerts", _X_NAME, "config_named_dir"),
-    **_cells("config_history", _B2, "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
+    **_cells("config_history", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
              "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
              "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
              "config_named_dir_link", "team_link_outside"),
