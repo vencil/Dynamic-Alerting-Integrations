@@ -145,7 +145,7 @@ tenants:
       reason: "Planned DB migration"
 ```
 
-In maintenance mode, alerts don't fire (PromQL-level suppression). Automatically resumes after expiry.
+In maintenance mode, threshold and custom alerts don't fire (PromQL-level suppression); down, cluster-survival and exporter-absent alerts keep firing — for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
 
 > **Timezone:** The `expires` field uses RFC 3339 format (with timezone). Scheduled thresholds' `window` and recurring maintenance's `cron` both use **UTC timezone**.
 

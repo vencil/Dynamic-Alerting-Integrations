@@ -30,7 +30,7 @@ state_filters:
 # 租戶啟用維護模式：
 tenants:
   db-a:
-    _state_maintenance: "enable"  # 所有警報被 unless 抑制
+    _state_maintenance: "enable"  # 帶 unless 維護條件的告警不觸發（不是全部）
 ```
 
 複合警報 (AND 邏輯) 與多層嚴重度 (Critical 自動降級 Warning) 也已完整實現。

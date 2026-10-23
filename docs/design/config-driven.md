@@ -455,7 +455,7 @@ v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營
 |---------|------|-----------|----------|------|--------|
 | Normal | 正常運行 | ✅ | ✅ | ✅ | — |
 | Silent | 靜音 | ✅ | ✅ | ❌ | Alertmanager |
-| Maintenance | 真正維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance | 真正維護 | ❌（帶維護條件的告警） | ❌ | ❌ | Prometheus (PromQL) |
 
 ```mermaid
 stateDiagram-v2
@@ -480,7 +480,7 @@ stateDiagram-v2
 
 **設計原則**：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。
 
-- **Maintenance Mode**（既有）：在 PromQL 層透過 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 消滅 alert。Alert 不觸發，TSDB 無紀錄，無通知。
+- **Maintenance Mode**（既有）：在 PromQL 層透過 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 消滅 alert：帶這個條件的告警（寫在 expr，或寫在它引用的 recording rule）不觸發，TSDB 無紀錄，無通知。⚠️ 不是每條告警都帶。平台哨兵、exporter 缺席類（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md)）與叢集存活類（`*ClusterDown`、`*NoPrimary` 等）刻意不帶，維護期間照常觸發；`PostgreSQLDown`、`RedisDown` 等單實例停機類目前也不帶（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。`recurring:` 週期維護窗走另一條路：`maintenance-scheduler` 在窗內對該租戶建 Alertmanager silence（matcher 是 `tenant` 加 `alert_source=""`），擋的是這個租戶所有告警的通知（平台自我監控除外），告警本身照常觸發、TSDB 有紀錄。
 - **Silent Mode**：Alert 在 Prometheus 正常觸發（TSDB 有 `ALERTS` 紀錄），但 Alertmanager 透過 `inhibit_rules` 攔截通知。
 
 **Silent Mode 資料流**
@@ -509,7 +509,7 @@ tenants:
   db-b:
     _silent_mode: "all"        # 靜音 warning + critical 通知
   db-c:
-    _state_maintenance: "enable"  # 真正維護，完全不觸發 alert
+    _state_maintenance: "enable"  # 真正維護：帶維護條件的告警不觸發
   db-d: {}                        # Normal — 預設行為
 ```
 

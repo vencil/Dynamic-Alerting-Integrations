@@ -474,7 +474,7 @@ v1.2.0 introduced **Silent Mode**, which together with the existing Maintenance 
 |-------------------|-----------|-----------------|-------------|--------------|---|
 | Normal | Normal operation | ✅ | ✅ | ✅ | — |
 | Silent | Muted | ✅ | ✅ | ❌ | Alertmanager |
-| Maintenance | True maintenance | ❌ | ❌ | ❌ | Prometheus (PromQL) |
+| Maintenance | True maintenance | ❌ (alerts carrying the maintenance condition) | ❌ | ❌ | Prometheus (PromQL) |
 
 ```mermaid
 stateDiagram-v2
@@ -499,7 +499,7 @@ stateDiagram-v2
 
 **Design principle:** Prometheus controls "what should trigger an alert," Alertmanager controls "whether to send notification."
 
-- **Maintenance Mode** (existing): Eliminates alerts at the PromQL layer via `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`. Alert does not fire, TSDB has no record, no notification.
+- **Maintenance Mode** (existing): Eliminates alerts at the PromQL layer via `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`: an alert carrying this condition (in its expr, or in a recording rule it uses) does not fire, leaves no TSDB record and sends no notification. ⚠️ Not every alert carries it. Platform sentinels, exporter-absent alerts ([ADR-026](../adr/026-node-maintenance-liveness-suppression.md)) and cluster-survival alerts (`*ClusterDown`, `*NoPrimary` and the like) leave it out on purpose and keep firing during maintenance; single-instance down alerts such as `PostgreSQLDown` and `RedisDown` do not carry it yet either ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)). A `recurring:` maintenance window takes a different path: inside the window `maintenance-scheduler` creates an Alertmanager silence for the tenant (matchers `tenant` plus `alert_source=""`), which blocks the notifications of all of this tenant's alerts (platform self-monitoring excepted); the alerts still fire and stay in the TSDB.
 - **Silent Mode** : Alert fires normally in Prometheus (TSDB records `ALERTS`), but Alertmanager intercepts notifications via `inhibit_rules`.
 
 **Silent Mode Data Flow**
@@ -528,7 +528,7 @@ tenants:
   db-b:
     _silent_mode: "all"        # Mute both warning and critical notifications
   db-c:
-    _state_maintenance: "enable"  # True maintenance, alert completely suppressed
+    _state_maintenance: "enable"  # True maintenance: alerts carrying the maintenance condition do not fire
   db-d: {}                        # Normal — default behavior
 ```
 

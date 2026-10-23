@@ -30,7 +30,7 @@ state_filters:
 # Tenant enables maintenance mode:
 tenants:
   db-a:
-    _state_maintenance: "enable"  # all alerts suppressed by unless
+    _state_maintenance: "enable"  # alerts carrying the unless maintenance condition do not fire (not all)
 ```
 
 Composite alerts (AND logic) and multi-tier severity (Critical auto-downgrade to Warning) are also fully implemented.
