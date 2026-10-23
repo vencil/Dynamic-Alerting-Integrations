@@ -129,6 +129,10 @@ BUILD_EXEMPT = frozenset({
     # #2906 — a conf.d writer's pre-write parse-tree confirmation (ADR-036
     # §2); imported by the writers. Library, not CLI.
     "_lib_write_check.py",
+    # #3206 — sends a Python tool's change of an existing conf.d file to
+    # `da-guard edit` (ADR-036 §2: only Go writes conf.d); imported by
+    # patch_config, threshold_govern and deprecate_rule. Library, not CLI.
+    "_lib_confedit.py",
     # #2901 — generator_service's judgement process and its request checks /
     # result frames / cache store. Libraries of `da-tools generator-service`.
     "_gsvc_child.py",

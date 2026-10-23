@@ -271,12 +271,12 @@ def test_patch_config_changes_only_the_patched_key(tmp_path, da_guard,
                     _minus(after, "mysql_threads_running", {tid})) == []
     assert after[tid][0]["mysql_threads_running"] == 50.0
     # The rewritten key: what was not patched is written as it was read; the
-    # new value is written as before #2220 (`'50'`, quoted: YAML would
-    # retype it).
+    # new value is a canonical decimal, so da-guard edit writes it as a number
+    # (#3206; it was `'50'`, a quoted string, while PyYAML wrote the text).
     rewritten = "config.yaml" if layout == "legacy" else f"{tid}.yaml"
     for line in _KEPT_LINES[tid]:
         assert line in written[rewritten], written[rewritten]
-    assert "mysql_threads_running: '50'" in written[rewritten], written[rewritten]
+    assert "mysql_threads_running: 50\n" in written[rewritten], written[rewritten]
     if layout == "legacy":
         for line in ("mysql_threads_running: 010", "max_metrics_per_tenant: 500"):
             assert line in written["config.yaml"], written["config.yaml"]
@@ -313,16 +313,19 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
                         "--config-dir", str(d), "--execute"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     # ADR-036 §2 (#2906): the scan is parse-tree's. yaml.v3 reads `=` as a
-    # string, so only the rewrite — PyYAML's text — cannot be produced (rc 1);
-    # a plain `<<` value is outside parse-tree's closed list, so the tree is
-    # one the exporter cannot serve: the shared conf.d refusal (#3206).
+    # string, and the rewrite is da-guard edit's (#3206): the key goes, the
+    # `=` stays as written (rc 0; it was rc 1 while PyYAML, which cannot
+    # construct `=`, produced the text). A plain `<<` value is outside
+    # parse-tree's closed list, so the tree is one the exporter cannot
+    # serve: the shared conf.d refusal, nothing written.
     if bad == "=":
         assert go_refused(d) == [], files
-        assert p.returncode == 1, p.stdout + p.stderr
-        assert "PyYAML 讀不了它" in p.stdout + p.stderr, p.stdout + p.stderr
-    else:
-        assert_refused(p.returncode, p.stderr, [target])
-        assert "(tag_not_allowed: " in p.stderr, p.stderr
+        assert p.returncode == 0, p.stdout + p.stderr
+        text = (d / target).read_text(encoding="utf-8")
+        assert "mysql_slave_lag" not in text and "_metadata: {owner: =}" in text, text
+        return
+    assert_refused(p.returncode, p.stderr, [target])
+    assert "(tag_not_allowed: " in p.stderr, p.stderr
     assert (d / target).read_text(encoding="utf-8") == files[target]
 
 
@@ -367,21 +370,32 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
     got = json.loads(p.stdout.strip().splitlines()[-1])
     # ADR-036 §2 (#2906): the read is parse-tree's. yaml.v3 reads `=` as a
-    # string, so the key is found and only PyYAML — which produces the
-    # rewrite — cannot construct it; a plain `<<` value is outside
-    # parse-tree's closed list (tag_not_allowed): the key is unreadable.
-    want = ("PyYAML cannot read it to produce the rewrite" if bad == "="
-            else "tag_not_allowed")
-    assert got["built"].startswith("refused: ") and want in got["built"], (got, p.stderr)
+    # string, and the rewrite is da-guard edit's (#3206), so the key is
+    # patched (it was refused while PyYAML, which cannot construct `=`,
+    # produced the text); `--diff` sends nothing either way. A plain `<<`
+    # value is outside parse-tree's closed list (tag_not_allowed): the key is
+    # unreadable, refused.
+    if bad == "=":
+        assert got == {"built": "built", "rc": 0, "sent": []}, (got, p.stderr)
+        return
+    assert got["built"].startswith("refused: ") and "tag_not_allowed" in got["built"], (
+        got, p.stderr)
     assert got["rc"] == 2 and got["sent"] == [], got
 
 
-def test_patch_config_writes_a_new_severity_value_plain():
-    """`70:critical` is a string to YAML either way: written plain, as before."""
+def test_patch_config_writes_a_typed_severity_value_as_a_string():
+    """`70:critical` typed on the CLI is not canonical decimal: it goes to
+    da-guard edit as a string and is written double-quoted (#3206; PyYAML
+    wrote it plain), and reads back as that same string."""
     written = _patched(_multi_file(), "multi-file", "t-clock",
                        "mysql_connections", "70:critical")
-    assert "mysql_connections: 70:critical\n" in written["t-clock.yaml"]
+    assert 'mysql_connections: "70:critical"\n' in written["t-clock.yaml"]
     assert "mysql_slave_lag: 20\n" in written["t-clock.yaml"]
+    cm = {"data": written}
+    assert pc.tenant_block(cm, "t-clock")[1]["mysql_connections"] == {
+        "text": "70:critical", "tag": "!!str", "value": "70:critical"}
+    assert pc.build_patch(cm, "multi-file", "t-clock", "mysql_connections",
+                          "70:critical") is None
 
 
 # ── the loader / dumper pair itself (no Go) ──────────────────────────────

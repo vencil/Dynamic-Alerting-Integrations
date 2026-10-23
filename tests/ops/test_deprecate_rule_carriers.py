@@ -30,6 +30,7 @@ import yaml
 
 import deprecate_rule  # noqa: E402
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 TOOL = Path(deprecate_rule.__file__).resolve()
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "fixtures"
@@ -804,23 +805,21 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
     assert "cpu_usage" not in (clean / "alpha.yaml").read_text(encoding="utf-8")
 
 
-def test_a_tenant_file_the_tool_cannot_parse_takes_the_unreadable_route(tmp_path):
-    """租戶檔 PyYAML 讀不了、yaml.v3 讀得了（tab）: ADR-036 §2 起掃描照讀（parse-tree），
-    要改寫時 PyYAML 產生不了文字——整輪不寫、結尾具名 rc 1。成對反例：載體同一
-    形狀是「本工具讀不了」的體檢項。"""
+def test_a_tenant_file_only_yaml_v3_reads_is_written(tmp_path):
+    """租戶檔 PyYAML 讀不了、yaml.v3 讀得了（tab）: 掃描照讀（parse-tree，ADR-036 §2），
+    寫回也是 Go 的（da-guard edit，#3206）——照常刪、rc 0。（先前寫回的文字由 PyYAML
+    產生，這個形狀整輪不寫、rc 1。）"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\t\n")
-    before = (root / "alpha.yaml").read_bytes()
+    _write(root, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\t\n    mem: '1'\n")
 
     r = _run(root, "--execute")
 
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 0, r.stdout + r.stderr
     assert "alpha.yaml → [tenants.alpha] cpu_usage: 85" in r.stdout, r.stdout
-    tail = _tail(r.stdout)
-    assert "alpha.yaml" in tail and "PyYAML 讀不了它" in tail, tail
-    assert (root / "alpha.yaml").read_bytes() == before
+    assert (root / "alpha.yaml").read_text(encoding="utf-8") == (
+        "tenants:\n  alpha:\n    mem: '1'\n")
 
 
 def test_under_plane_subtree_a_root_style_underscore_file_is_not_read(tmp_path):
@@ -922,14 +921,17 @@ def test_an_unreadable_carrier_is_the_tools_problem_in_the_banner_too(
     _assert_refused_unchanged(root, ["_defaults.yaml"], "--execute")
 
 
-def test_under_plane_subtree_an_unparseable_own_carrier_degrades_the_run(tmp_path):
-    """`--plane subtree` 下子樹自有 `_defaults.yaml` 本工具讀不了時，與 root 平面
-    對稱：整輪降級、租戶檔也不寫、rc 1。成對反例：讀得了的子樹載體照常寫。"""
-    if not yaml.__with_libyaml__:
-        pytest.skip("沒有 libyaml，tab 形狀走不到「本工具讀不了」")
+def test_under_plane_subtree_a_refused_file_degrades_the_run(tmp_path):
+    """`--plane subtree` 下 da-guard edit 拒寫其中一個檔（這裡是 symlink 的租戶檔：
+    edit 不改寫 symlink）時，與 root 平面對稱：兩段式的第一段就停，子樹載體
+    也不寫、整輪降級、rc 1、結尾具名。成對反例：拿掉 symlink，子樹載體（含
+    root 判不過、子樹平面合法的字串值）與租戶檔照常寫——edit 在 root 上判
+    子樹的路徑（#3206）。"""
     sub = tmp_path / "finance"
     sub.mkdir()
-    _write(sub, "_defaults.yaml", "defaults:\n  cpu_usage: 60\t\n")
+    _write(sub, "_defaults.yaml", 'defaults:\n  cpu_usage: 60\n  _state_maintenance: "disable"\n')
+    _write(sub, "real-t2.yml.txt", "tenants:\n  t2:\n    cpu_usage: '75'\n")
+    symlink_or_skip("real-t2.yml.txt", sub / "t2.yaml")
     _write(sub, "t1.yaml", "tenants:\n  t1:\n    cpu_usage: '70'\n")
     before = _tree_bytes(sub)
 
@@ -937,12 +939,16 @@ def test_under_plane_subtree_an_unparseable_own_carrier_degrades_the_run(tmp_pat
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert "本輪降級為預覽" in r.stdout, r.stdout
+    tail = _tail(r.stdout)
+    assert "t2.yaml" in tail and "symlink" in tail, tail
     assert _tree_bytes(sub) == before, "a degraded subtree run wrote to the tree"
 
-    _write(sub, "_defaults.yaml", "defaults:\n  cpu_usage: 60\n")
+    (sub / "t2.yaml").unlink()
     r2 = _run(sub, "--plane", "subtree", "--root-dir", str(sub.parent), "--execute")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "cpu_usage" not in (sub / "t1.yaml").read_text(encoding="utf-8")
+    assert (sub / "_defaults.yaml").read_text(encoding="utf-8") == (
+        'defaults:\n  _state_maintenance: "disable"\n')
 
 
 def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
@@ -970,30 +976,44 @@ def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
     _assert_refused_unchanged(root2, ["_defaults.yaml"], "--execute")  # #3206
 
 
-def test_a_tab_the_exporter_accepts_is_named_as_the_tools_own_limit(
-        tmp_path, monkeypatch, capsys):
-    """yaml.v3 收得下的 tab，PyYAML（產生寫回文字）讀不了：擋寫入，但訊息說「本工具
-    讀不了」而不是「exporter 讀不進去」，只列一次、不附 `--plane subtree`。
-    成對反例：拿掉 tab 就 rc 0、照寫。"""
-    body = "defaults:\n  cpu_usage: 80\t\n  mem_usage: 90\n"
+def test_a_tab_the_exporter_accepts_is_no_longer_the_tools_limit(tmp_path):
+    """yaml.v3 收得下的 tab：PyYAML 讀不了，先前因此擋寫入（寫回的文字由 PyYAML
+    產生）；寫回改由 da-guard edit 做之後（#3206）照常寫、rc 0，tab 所在的那一行
+    之外照原樣。"""
+    body = "# kept\ndefaults:\n  cpu_usage: 80\t\n  mem_usage: 90\t# kept too\n"
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", body)
 
     r = _run(root, "--execute")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "本工具讀不了（寫回的文字由 PyYAML 產生，它讀不了這份檔）" in r.stdout, r.stdout
-    assert "exporter 讀不進這份檔" not in r.stdout, r.stdout
-    assert "exporter 讀得進去" in r.stdout, r.stdout
-    tail = _tail(r.stdout)
-    assert tail.count("_defaults.yaml") == 1, tail
-    assert "--plane subtree" not in tail, tail
-    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == body
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "本工具讀不了" not in r.stdout, r.stdout
+    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == (
+        "# kept\ndefaults:\n  mem_usage: 90 # kept too\n")
 
-    _write(root, "_defaults.yaml", body.replace("\t", ""))
-    r2 = _run(root, "--execute")
-    assert r2.returncode == 0, r2.stdout + r2.stderr
-    assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
+
+def test_every_comment_outside_the_removed_keys_survives(tmp_path):
+    """先前寫回只保留檔頭連續的 `#` 行（`_header_of`），其餘註解全丟；da-guard edit
+    （#3206）只動被刪的節點：檔頭、區塊中間、行尾的註解都留著。"""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml",
+           "# head\ndefaults:\n  # platform cpu\n  cpu_usage: 80\n"
+           "  # platform mem\n  mem_usage: 90 # GiB\n")
+    _write(root, "alpha.yaml",
+           "# owner: team-a\ntenants:\n  alpha:\n    # raised for batch\n"
+           "    cpu_usage: '85'\n    mem_usage: '95' # temporary\n")
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    carrier = (root / "_defaults.yaml").read_text(encoding="utf-8")
+    tenant = (root / "alpha.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in carrier and "cpu_usage" not in tenant, (carrier, tenant)
+    for kept in ("# head\n", "  # platform mem\n", "  mem_usage: 90 # GiB\n"):
+        assert kept in carrier, carrier
+    for kept in ("# owner: team-a\n", "    mem_usage: '95' # temporary\n"):
+        assert kept in tenant, tenant
 
 
 def test_a_write_that_silently_does_nothing_is_not_masked_by_the_rescan(
@@ -1005,8 +1025,8 @@ def test_a_write_that_silently_does_nothing_is_not_masked_by_the_rescan(
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n")
     before = (root / "_defaults.yaml").read_bytes()
 
-    monkeypatch.setattr(deprecate_rule, "write_conf_text",
-                        lambda *a, **k: None)
+    monkeypatch.setattr(deprecate_rule._lib_confedit, "edit_all",
+                        lambda *a, **k: [])
     monkeypatch.setattr(sys, "argv",
                         ["deprecate_rule.py", "cpu_usage",
                          "--config-dir", str(root), "--execute"])

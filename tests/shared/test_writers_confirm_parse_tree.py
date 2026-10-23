@@ -12,6 +12,11 @@
 6. **判定是 parse-tree 的**：一個 yaml.v3 與 PyYAML 讀法不同的輸入，工具給的是 yaml.v3
    的判定。
 
+deprecate_rule、patch_config、threshold_govern 改既有檔時改由 `da-guard edit` 寫
+（ADR-036 步驟 10b，#3206）：第 2 列對它們是「edit 拒寫就不寫」（PyYAML 換寫法的那種
+讀回不同已不會發生，改釘「沒動到的寫法照原樣」），deprecate_rule 另有一列「多檔中一個
+被拒就都不寫」。
+
 各工具既有測試檔裡同性質的列（例如 patch_config 的 TestDecisionsAreParseTrees、
 deprecate_rule 的封閉清單表）照留，這裡是逐工具、同一張表的那一份。
 
@@ -98,17 +103,34 @@ def test_deprecate_rule_writes_what_reads_back(tmp_path):
     assert "cpu_usage" not in (root / "tenant-a.yaml").read_text(encoding="utf-8")
 
 
-def test_deprecate_rule_refuses_a_rewrite_that_reads_back_differently(tmp_path):
-    # `!!float 1` is dumped `1.0`: another source text — and the tenant file,
-    # fine on its own, is not written either (all files or none).
+def test_deprecate_rule_keeps_an_untouched_spelling_as_written(tmp_path):
+    # #3206: the text is da-guard edit's, so `!!float 1` stays `!!float 1`
+    # (PyYAML dumped `1.0` and the parse-tree confirmation refused the run).
     root = _tree(tmp_path / "conf.d", {
         "_defaults.yaml": "defaults:\n  cpu_usage: 80\n  mem_usage: !!float 1\n",
         "tenant-a.yaml": _DR_TENANT})
+    r = _dr(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == (
+        "defaults:\n  mem_usage: !!float 1\n")
+
+
+def test_deprecate_rule_writes_nothing_when_one_file_is_refused(tmp_path):
+    # Two-phase (`_lib_confedit.edit_all`): da-guard edit refuses one file
+    # (a symlinked tenant file: edit never rewrites a link), so neither it nor
+    # the carrier and the other tenant file — each fine on its own — is
+    # written; every refusal is named, rc 1.
+    from _platform_fs import symlink_or_skip
+    root = _tree(tmp_path / "conf.d", {
+        "_defaults.yaml": _DR_DEFAULTS, "tenant-a.yaml": _DR_TENANT,
+        "b.txt": "tenants:\n  tenant-b:\n    cpu_usage: '70'\n"})
+    symlink_or_skip("b.txt", root / "tenant-b.yaml")
     before = _bytes(root)
     r = _dr(root)
     assert r.returncode == 1, r.stdout + r.stderr
+    assert "本輪降級為預覽" in r.stdout, r.stdout
     tail = r.stdout.split("下架未完成", 1)[1]
-    assert "content_differs" in tail and "defaults.mem_usage" in tail, tail
+    assert "tenant-b.yaml" in tail and "symlink" in tail, tail
     assert _bytes(root) == before
 
 
@@ -192,11 +214,20 @@ def test_patch_config_writes_what_reads_back():
 
 
 def test_patch_config_refuses_a_rewrite_that_reads_back_differently():
+    # #3206: the text is da-guard edit's, so an untouched `!!float 1` is kept
+    # as written (PyYAML wrote `1.0` and the confirmation refused it). What is
+    # refused now is an edit da-guard cannot make without changing another
+    # node: `mem: *v` aliases the scalar being replaced.
     rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
-                      "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n    mem: !!float 1\n"},
+                      "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: &v '5'\n    mem: *v\n"},
                      "tenant-a", "cpu", "6")
     assert (rc, doc["status"], doc["reason"]) == (2, "caller_error", "write_refused"), doc
     assert c.patches == []
+    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+                      "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n    mem: !!float 1\n"},
+                     "tenant-a", "cpu", "6")
+    assert rc == 0, doc
+    assert "mem: !!float 1\n" in c.data["tenant-a.yaml"], c.data
 
 
 def test_patch_config_does_not_write_an_unreadable_key():
@@ -224,7 +255,7 @@ def test_patch_config_locates_the_tenant_yaml_v3_reads():
     cm = {"data": {"_defaults.yaml": _PC_DEFAULTS,
                    "team.yaml": "tenants:\n  on:\n    cpu: '5'\n"}}
     patch = pc.build_patch(cm, "multi-file", "on", "cpu", "6")
-    assert patch == {"data": {"team.yaml": "tenants:\n  on:\n    cpu: '6'\n"}}, patch
+    assert patch == {"data": {"team.yaml": "tenants:\n  on:\n    cpu: 6\n"}}, patch
 
 
 # ── da_assembler ──────────────────────────────────────────────────────────
@@ -353,37 +384,36 @@ def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
     assert _bytes(out) == {}
 
 
-# ── threshold_govern (the pre-PUT check) ─────────────────────────────────
+# ── threshold_govern (the pre-PUT edit) ──────────────────────────────────
+# #3206: the PUT body is `da-guard edit`'s text, so row 2's "a text that
+# reads back differently" is da-guard's own check (pkg/confedit); here: an
+# untouched spelling yaml.v3 and PyYAML read differently is kept as written,
+# and the value is written with the type the plan means (a string).
 
 def test_threshold_govern_passes_an_edit_that_reads_back(tmp_path):
     import threshold_govern as tg
     old = 'tenants:\n  tenant-a:\n    k1: "10"\n    k2: 0o17\n'
-    new = 'tenants:\n  tenant-a:\n    k1: "15"\n    k2: 0o17\n'
-    assert tg.verify_only_changed(old, new, "tenant-a", {"k1": '"15"'},
-                                  config_dir=str(tmp_path)) is None
+    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
+    assert (new, err) == ('tenants:\n  tenant-a:\n    k1: "15"\n    k2: 0o17\n', None)
 
 
-def test_threshold_govern_refuses_a_value_of_another_type(tmp_path):
-    # `k1: 15` reads as an int: not the string "15" the plan writes. The
-    # PyYAML-era compare normalised both to "15" and let it be PUT.
+def test_threshold_govern_writes_the_value_as_the_string_the_plan_means(tmp_path):
+    # `k1: 10` is an int; the plan writes the string "15", never the int 15.
     import threshold_govern as tg
-    old = 'tenants:\n  tenant-a:\n    k1: "10"\n'
-    new = 'tenants:\n  tenant-a:\n    k1: 15\n'
-    err = tg.verify_only_changed(old, new, "tenant-a", {"k1": '"15"'},
-                                 config_dir=str(tmp_path))
-    assert err and "expected !!str '15', read !!int '15'" in err, err
+    old = 'tenants:\n  tenant-a:\n    k1: 10\n'
+    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
+    assert err is None and 'k1: "15"\n' in new, (new, err)
 
 
 def test_threshold_govern_refuses_an_unreadable_original_and_an_unread_path(tmp_path):
     import threshold_govern as tg
     dup = 'tenants:\n  tenant-a:\n    k1: "10"\n    k1: "11"\n'
-    err = tg.verify_only_changed(dup, dup, "tenant-a", {"k1": '"15"'},
-                                 config_dir=str(tmp_path))
-    assert err and "original_unreadable" in err, err
+    new, err = tg.edit_live_yaml(dup, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
+    assert new is None and err and "original_unreadable" in err, err
     ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
-    err = tg.verify_only_changed(ok, ok.replace("10", "15"), "tenant-a", {"k1": '"15"'},
+    new, err = tg.edit_live_yaml(ok, "tenant-a", {"k1": "15"},
                                  config_dir=str(tmp_path), rel=".tenant-a.yaml")
-    assert err and "path_not_read" in err, err
+    assert new is None and err and "(not_read)" in err, err
 
 
 def test_threshold_govern_without_da_guard_raises(tmp_path, monkeypatch):
@@ -391,7 +421,7 @@ def test_threshold_govern_without_da_guard_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
     with pytest.raises(_lib_parse_tree.ParseTreeError):
-        tg.verify_only_changed(ok, ok, "tenant-a", {"k1": '"10"'}, config_dir=str(tmp_path))
+        tg.edit_live_yaml(ok, "tenant-a", {"k1": "10"}, config_dir=str(tmp_path))
 
 
 # ── migrate_conf_d ────────────────────────────────────────────────────────
@@ -547,7 +577,7 @@ def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, mon
 
     def boom(*a, **k):
         raise pt.ParseTreeError("da-guard parse-tree did not finish within 120s")
-    monkeypatch.setattr(tg, "verify_only_changed", boom)
+    monkeypatch.setattr(tg, "edit_live_yaml", boom)
     monkeypatch.setattr(tg, "http_get_json", lambda url, timeout, headers: (
         {"raw_yaml": 'tenants:\n  tenant-a:\n    k1: "10"\n'}, None))
     plan = tg.TenantPlan("tenant-a", [tg.PlannedChange("k1", "10", 15.0, '"15"', 50.0,
@@ -557,7 +587,7 @@ def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, mon
                           "auth_token_file": ""})()
     out = tg.open_governance_pr(plan, args)
     assert out.status == "error" and "verify could not run" in out.message, out
-    monkeypatch.setattr(tg, "verify_only_changed",
+    monkeypatch.setattr(tg, "edit_live_yaml",
                         lambda *a, **k: (_ for _ in ()).throw(pt.BinaryMissing("no da-guard")))
     with pytest.raises(pt.BinaryMissing):
         tg.open_governance_pr(plan, args)
