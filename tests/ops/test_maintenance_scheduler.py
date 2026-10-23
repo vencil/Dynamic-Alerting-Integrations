@@ -305,6 +305,19 @@ class TestGetExistingSilences:
             ms.get_existing_silences("http://alertmanager:9093")
         assert exc.value.reason == "alertmanager_query_error"
 
+    @pytest.mark.parametrize("exc", [
+        json.JSONDecodeError("Expecting value", "<html>", 0),
+        __import__("http.client").client.IncompleteRead(b"[]", 98),
+    ], ids=["not-json", "truncated"])
+    @mock.patch.object(ms, "_api_request")
+    def test_unreadable_body_raises_query_error(self, mock_api, exc):
+        """A 200 whose body is not JSON, or is cut short, is not "none active"
+        either — and is the named error, not an internal-error crash."""
+        mock_api.side_effect = exc
+        with pytest.raises(ms.QueryError) as got:
+            ms.get_existing_silences("http://alertmanager:9093")
+        assert got.value.reason == "alertmanager_query_error"
+
     @pytest.mark.parametrize("body", [{}, None, ["x"], [{"status": "active"}]],
                              ids=["object", "null", "not-object", "status-not-object"])
     @mock.patch.object(ms, "_api_request")
@@ -525,6 +538,25 @@ tenants:
             created, skipped, errors = ms.evaluate_and_apply(
                 d, None, now=now)
             assert created == 0
+
+    @mock.patch.object(ms, "_api_request")
+    def test_nothing_in_window_does_not_read_silences(self, mock_api):
+        """#3133: a run with no schedule in its window needs no silence list,
+        so an Alertmanager that does not answer does not fail it."""
+        mock_api.side_effect = urllib.error.URLError("connection refused")
+        with tempfile.TemporaryDirectory() as d:
+            write_yaml(d, "db-a.yaml", """\
+tenants:
+  db-a:
+    _state_maintenance:
+      recurring:
+        - cron: "0 3 * * *"
+          duration: "1h"
+          reason: "Nightly"
+""")
+            now = datetime(2025, 6, 15, 10, 0, tzinfo=timezone.utc)
+            assert ms.evaluate_and_apply(d, "http://alertmanager:9093", now=now) == (0, 0, 0)
+        mock_api.assert_not_called()
 
     @mock.patch.object(ms, "_api_request")
     @mock.patch.object(ms, "create_silence")

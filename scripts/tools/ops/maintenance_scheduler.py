@@ -16,6 +16,7 @@ Usage:
   maintenance-scheduler --config-dir conf.d/ --dry-run
 """
 import argparse
+import http.client
 import json
 import os
 import re
@@ -239,8 +240,10 @@ def get_existing_silences(alertmanager_url):
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         data = _api_request(url, method="GET")
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        raise QueryError(str(e), source="Alertmanager") from e
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+        # HTTPException: a truncated or garbled answer (IncompleteRead,
+        # BadStatusLine) — neither an OSError nor retried by the helper.
+        raise QueryError(str(e) or type(e).__name__, source="Alertmanager") from e
     data = silences_list(data)
 
     result = {}
@@ -378,10 +381,10 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
     print(f"Found {sum(len(v) for v in schedules.values())} recurring schedule(s) "
           f"across {len(schedules)} tenant(s)", file=sys.stderr)
 
-    # Get existing silences for idempotency / extend checks
-    existing = {}
-    if alertmanager_url and not dry_run:
-        existing = get_existing_silences(alertmanager_url)
+    # Existing silences for the idempotency / extend checks, read once, at the
+    # first schedule in its window (#3133: a run with nothing to silence does
+    # not depend on Alertmanager answering).
+    existing = None
 
     created = 0
     skipped = 0
@@ -395,6 +398,9 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                 continue
 
             reason = entry["reason"]
+            if existing is None:
+                existing = (get_existing_silences(alertmanager_url)
+                            if alertmanager_url and not dry_run else {})
 
             # Idempotency: check if silence already exists
             if (tenant, reason) in existing:

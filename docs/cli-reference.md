@@ -571,7 +571,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|------|
 | `0` | 切換成功 |
 | `1` | readiness 顯示未就緒（沒帶 `--force`），或某個切換步驟失敗 |
-| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 不存在、不是合法 JSON 或缺欄位、Prometheus 連不到或回應格式不對、找不到 `kubectl`。回應格式不對（例如 `status` 不是 `success`、缺 `data`、計數不是有限數字）先前被當成「沒有閾值指標」、rc 1（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
+| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 不存在、不是合法 JSON 或缺欄位、Prometheus 連不到或回應格式不對、找不到 `kubectl`。回應格式不對先前依形狀而異：`status` 不是 `success` 被當成「沒有閾值指標」、rc 1；計數是 `NaN` 或缺 `resultType` 被當成通過、rc 0；`data: null` crash（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
@@ -684,7 +684,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|------|
 | `0` | 成功（已建立、已存在或不需要 silence） |
 | `1` | 至少一個 silence 建立或延長失敗 |
-| `2` | 呼叫端錯誤：`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；或有給 `--alertmanager`（非 `--dry-run`）卻讀不到既有的 silence（連不上、重試後仍失敗或回應格式不對，`--json-output` 時 stdout 印 `alertmanager_query_error` envelope），此時不建立任何 silence。先前讀不到被當成「沒有既有 silence」，照常建立、可能重複，rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
+| `2` | 呼叫端錯誤：`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；或有給 `--alertmanager`（非 `--dry-run`）、有排程落在窗口內，卻讀不到既有的 silence（連不上、重試後仍失敗或回應格式不對，`--json-output` 時 stdout 印 `alertmanager_query_error` envelope），此時不建立任何 silence。先前讀不到被當成「沒有既有 silence」，照常建立、可能重複，rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 

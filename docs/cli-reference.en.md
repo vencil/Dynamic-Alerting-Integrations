@@ -574,7 +574,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|-------------|
 | `0` | Cutover successful |
 | `1` | Readiness says not ready (without `--force`), or a cutover step failed |
-| `2` | Caller error: a required argument is missing, the readiness JSON does not exist, is not valid JSON, or is missing fields, Prometheus is unreachable or its answer is malformed, or `kubectl` is not found. A malformed answer (for example `status` other than `success`, no `data`, a count that is not a finite number) used to read as "no threshold metrics", exit 1 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
+| `2` | Caller error: a required argument is missing, the readiness JSON does not exist, is not valid JSON, or is missing fields, Prometheus is unreachable or its answer is malformed, or `kubectl` is not found. A malformed answer used to read by its shape: `status` other than `success` as "no threshold metrics", exit 1; a `NaN` count or no `resultType` as a pass, exit 0; `data: null` crashed ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -687,7 +687,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|-------------|
 | `0` | Success (silences created, already present, or not needed) |
 | `1` | At least one silence could not be created or extended |
-| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); or `--alertmanager` is given (without `--dry-run`) and its existing silences cannot be read (unreachable, still failing after the retries, or a malformed answer; with `--json-output` stdout holds an `alertmanager_query_error` envelope) — no silence is created then. Unreadable silences used to read as "none exist", so the silences were created anyway, possibly twice, exit 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
+| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); or `--alertmanager` is given (without `--dry-run`), a schedule is in its window, and the existing silences cannot be read (unreachable, still failing after the retries, or a malformed answer; with `--json-output` stdout holds an `alertmanager_query_error` envelope) — no silence is created then. Unreadable silences used to read as "none exist", so the silences were created anyway, possibly twice, exit 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
