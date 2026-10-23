@@ -40,16 +40,22 @@ if _HERE not in sys.path:
 
 from generate_alertmanager_routes import (  # noqa: E402
     BaseConfigInputError,
+    POLICY_NOT_APPLIED_NOTICE,
+    POLICY_REFUSAL_REMEDY,
+    PolicyInputError,
     SlotVerdict,
     _build_tenant_routes,
     _contains_tenant_placeholder,
     _merge_tenant_routing,
     _parse_config_files,
     _substitute_tenant,
+    add_policy_argument,
     generate_inhibit_rules,
     generate_routes,
     load_base_config,
+    is_policy_refusal,
     merge_routing_with_defaults,
+    resolve_policy,
     tree_refusal,
 )
 from _grar_render import (  # noqa: E402
@@ -66,7 +72,7 @@ from _grar_validate import (  # noqa: E402
     routing_not_mapping_warning,
 )
 from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
-from _grar_routes import enforced_route_tenants  # noqa: E402
+from _grar_routes import _build_enforced_routes, enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
@@ -79,7 +85,10 @@ from _grar_merge import (  # noqa: E402
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
+
+#: the status of a receiver slot the --policy domain allowlist refuses (#3142).
+STATUS_POLICY_REFUSED = "POLICY_REFUSED"
 
 
 # ---------------------------------------------------------------------------
@@ -93,13 +102,17 @@ from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, arm_crash_envelope  # noq
 SUB_ROUTE_SOURCE_KEYS = ("overrides", "routes")
 
 
-def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[str]]:
+def effective_sub_routes(tenant: str, merged: dict,
+                         allowed_domains: list[str] | None = None
+                         ) -> tuple[list[dict], list[str]]:
     """``(sub_routes, skipped)`` of :func:`rendered_tenant_routes`."""
-    sub_routes, skipped, _replaced = rendered_tenant_routes(tenant, merged)
+    sub_routes, skipped, _replaced = rendered_tenant_routes(tenant, merged,
+                                                            allowed_domains)
     return sub_routes, skipped
 
 
-def rendered_tenant_routes(tenant: str, merged: dict
+def rendered_tenant_routes(tenant: str, merged: dict,
+                           allowed_domains: list[str] | None = None
                            ) -> tuple[list[dict], list[str], list[str]]:
     """The child routes the generator renders under the tenant's main route.
 
@@ -111,8 +124,9 @@ def rendered_tenant_routes(tenant: str, merged: dict
     ``skipped`` is, per override / ``routes`` slot the generator drops, the
     dropped-entry line (``SkippedEntryWarning``, #2489) that dropped it, read
     from its per-slot verdict (#3076) — a child of a tenant whose main
-    receiver is missing or refused included. No domain allowlist is applied here
-    (explain has no ``--policy``).
+    receiver is missing or refused included. *allowed_domains* is the
+    ``--policy`` domain allowlist (None: not applied, #3142); a slot it
+    refuses is skipped with its reason here too.
 
     #2490: also returns ``replaced`` — every ``ReplacedValueWarning`` line
     (a timing value Alertmanager refuses, rendered as the platform default;
@@ -129,6 +143,7 @@ def rendered_tenant_routes(tenant: str, merged: dict
     # generator's reason (parent_receiver_not_rendered).
     verdicts: list[SlotVerdict] = []
     routes, receivers, warnings = _build_tenant_routes({tenant: merged},
+                                                       allowed_domains,
                                                        verdicts=verdicts)
     types: dict[str, str] = {}
     for recv in receivers:
@@ -160,15 +175,47 @@ def rendered_tenant_routes(tenant: str, merged: dict
     replaced = [w for w in warnings if isinstance(w, ReplacedValueWarning)]
     return out, skipped, replaced
 
+
+def policy_refused_slots(tenant: str, merged: dict,
+                         allowed_domains: list[str] | None,
+                         enforced: dict | None = None) -> list[dict]:
+    """Every receiver slot of *tenant* the --policy domain allowlist refuses
+    (#3142) — the main receiver (``receiver``) included, whose refusal takes
+    the tenant's whole route out, and the platform's enforced (NOC) receiver
+    (``_routing_enforced.receiver``) for *enforced* (the enabled
+    ``_routing_enforced``) — read from the generator's own verdicts and the
+    refusal's ``kind``, never from its text."""
+    if not allowed_domains:
+        return []
+    refused: list[dict] = []
+    if isinstance(merged, dict):
+        verdicts: list[SlotVerdict] = []
+        _build_tenant_routes({tenant: merged}, allowed_domains, verdicts=verdicts)
+        refused += [{"source": v.slot, "status": STATUS_POLICY_REFUSED,
+                     "detail": str(v.reason).strip(), "remedy": POLICY_REFUSAL_REMEDY}
+                    for v in verdicts if not v.rendered and is_policy_refusal(v.reason)]
+    if isinstance(enforced, dict):
+        _r, _recv, warnings = _build_enforced_routes(
+            enforced, {tenant: merged if isinstance(merged, dict) else {}},
+            allowed_domains, tenants=[tenant])
+        refused += [{"source": "_routing_enforced.receiver",
+                     "status": STATUS_POLICY_REFUSED,
+                     "detail": str(w).strip(), "remedy": POLICY_REFUSAL_REMEDY}
+                    for w in warnings if is_policy_refusal(w)]
+    return refused
+
 def explain_tenant_routing(
     parsed: dict,
     tenant: str,
+    allowed_domains: list[str] | None = None,
 ) -> dict:
     """Build a layer-by-layer explanation of a tenant's routing merge.
 
+    *allowed_domains* is the --policy domain allowlist (None: not applied).
+
     Returns dict with keys:
         tenant, profile_ref, layers, final, sub_routes, skipped_sub_routes,
-        replaced_values (#2490)
+        replaced_values (#2490), policy_refused (#3142)
     Each layer is {name, source, config}.
     """
     layers: list[dict] = []
@@ -234,7 +281,8 @@ def explain_tenant_routing(
     final = dict(merged)
 
     # #2245: what the generator actually renders from `overrides` / `routes`.
-    sub_routes, skipped, replaced = rendered_tenant_routes(tenant, merged)
+    sub_routes, skipped, replaced = rendered_tenant_routes(tenant, merged,
+                                                           allowed_domains)
 
     return {
         "tenant": tenant,
@@ -245,6 +293,11 @@ def explain_tenant_routing(
         "skipped_sub_routes": skipped,
         # #2490: values the generator replaced (blocking under --validate).
         "replaced_values": [str(w) for w in replaced],
+        # #3142: slots the --policy domain allowlist refuses.
+        "policy_refused": policy_refused_slots(
+            tenant, merged, allowed_domains,
+            enforced if (isinstance(enforced, dict)
+                         and enforced.get("enabled") is not False) else None),
     }
 
 
@@ -327,6 +380,20 @@ def format_explanation(explanation: dict, *, lang: str = "en") -> str:
     for line in _fmt_yaml(final).splitlines():
         lines.append(f"   {line}")
     lines.append("")
+
+    # #3142: a refused main receiver takes the tenant's whole route out —
+    # the merged result above is then NOT in effect.
+    refused = explanation.get("policy_refused", [])
+    if refused:
+        header = ("被 --policy 的 allowed_domains 拒收（產生器不產生）:"
+                  if lang == "zh" else
+                  "Refused by the --policy allowed_domains (not rendered):")
+        lines.append(f"── {header} ──")
+        for r in refused:
+            lines.append(f"   {safe_label(r['source'])}: {r['status']} — "
+                         f"{safe_label(r['detail'])}")
+        lines.append(f"   {refused[0]['remedy']}")
+        lines.append("")
 
     # #2490: the merged value above is what was WRITTEN; these are rendered
     # as the platform default instead, and --validate refuses the config.
@@ -703,7 +770,8 @@ class UnassemblableBase(ValueError):
     """``assemble_configmap`` crashed on the --base-config (not a refusal)."""
 
 
-def build_trace_tree(parsed: dict, base: dict | None = None
+def build_trace_tree(parsed: dict, base: dict | None = None,
+                     allowed_domains: list[str] | None = None
                      ) -> tuple[str, dict, dict[str, dict], dict[str, str]]:
     """The alertmanager.yml ``--output-configmap`` would emit, and its tree.
 
@@ -711,8 +779,9 @@ def build_trace_tree(parsed: dict, base: dict | None = None
     with the enforced routing, the severity-dedup inhibit rules — assembled by
     the generator's own ``assemble_configmap`` on *base* (the built-in base
     when None, as ``--validate`` uses), so ``global`` / ``templates`` /
-    ``inhibit_rules`` are the ones Alertmanager would load. Raises ValueError
-    where the generator refuses to assemble.
+    ``inhibit_rules`` are the ones Alertmanager would load; *allowed_domains*
+    is the --policy domain allowlist (None: not applied, #3142). Raises
+    ValueError where the generator refuses to assemble.
 
     Returns (alertmanager.yml text, its root route, receivers by name,
     conf.d receiver types by name).
@@ -724,7 +793,7 @@ def build_trace_tree(parsed: dict, base: dict | None = None
         enforced = None
     tenants = parsed.get("dedup_configs") or {}
     routes, receivers, _warnings = generate_routes(
-        routing_configs, None, enforced_routing=enforced, tenants=tenants)
+        routing_configs, allowed_domains, enforced_routing=enforced, tenants=tenants)
     inhibit_rules, _warnings = generate_inhibit_rules(tenants)
     try:
         cm_yaml = assemble_configmap(
@@ -893,6 +962,7 @@ def trace_alert_routing(
     extra_labels: dict | None = None,
     *,
     base_config: dict | None = None,
+    allowed_domains: list[str] | None = None,
 ) -> dict:
     """Simulate how a specific alert would be routed through the pipeline.
 
@@ -914,9 +984,12 @@ def trace_alert_routing(
     itself (``alertname`` / ``severity`` / ``tenant``) raises ValueError
     rather than silently replacing the dedicated argument (#2264).
     ``base_config`` is the loaded ``--base-config`` (None → built-in base).
+    ``allowed_domains`` is the ``--policy`` domain allowlist (None: not
+    applied, #3142): the tree traced is the one the generator renders under it.
 
     Returns dict with keys:
-        tenant, alertname, severity, labels, steps, final_receiver, timing
+        tenant, alertname, severity, labels, steps, final_receiver, timing,
+        policy_refused (#3142)
     """
     reserved = sorted(set(extra_labels or {}) & set(RESERVED_TRACE_LABELS))
     if reserved:
@@ -926,7 +999,7 @@ def trace_alert_routing(
     steps: list[dict] = []
 
     # Step 1: Resolve tenant routing config (4-layer merge)
-    explanation = explain_tenant_routing(parsed, tenant)
+    explanation = explain_tenant_routing(parsed, tenant, allowed_domains)
     final_routing = explanation.get("final", {})
 
     # Build alert label set
@@ -972,7 +1045,7 @@ def trace_alert_routing(
     else:
         try:
             am_yml, root, receivers, conf_types = build_trace_tree(
-                parsed, base_config)
+                parsed, base_config, allowed_domains)
         except UnassemblableBase as exc:
             _warn("the generator cannot assemble this config (malformed "
                   f"--base-config?): {exc}")
@@ -1109,6 +1182,7 @@ def trace_alert_routing(
         "steps": steps,
         "final_receiver": steps[1]["receiver_desc"],
         "timing": timing,
+        "policy_refused": explanation["policy_refused"],
     }
 
 
@@ -1192,6 +1266,10 @@ def format_trace(trace: dict, *, lang: str = "en") -> str:
     lines.append(f"  Timing: group_wait={t_info['group_wait']}, "
                  f"group_interval={t_info['group_interval']}, "
                  f"repeat_interval={t_info['repeat_interval']}")
+    # #3142: why the tenant's own receiver is not where the alert goes.
+    for r in trace.get("policy_refused", []):
+        lines.append(f"  {safe_label(r['source'])}: {r['status']} — "
+                     f"{safe_label(r['detail'])}")
     lines.append("")
 
     return "\n".join(lines)
@@ -1289,6 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-config", default=None, metavar="PATH",
                         help=_h("base_config"))
     parser.add_argument("--json", action="store_true", help=_h("json"))
+    add_policy_argument(parser, lang=lang)  # #3142: the generator's own flag
 
     args = parser.parse_args(argv)
     if args.json:
@@ -1314,6 +1393,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: config directory not found: {safe_label(args.config_dir)}",
               file=sys.stderr)
         return EXIT_CALLER_ERROR
+
+    # #3142: the deployment policy, read by the generator's own resolver —
+    # an unusable file or an unmet min_generator_version is rc 2.
+    try:
+        policy = resolve_policy(args.policy)
+    except PolicyInputError as exc:
+        raise CallerError(str(exc), reason="policy_unusable") from None
+    # --show-profile-expansion lists profiles, not receivers: nothing there is
+    # judged by the allowlist, so there is nothing to say about it either.
+    if not policy.applied and not args.show_profile_expansion:
+        print(POLICY_NOT_APPLIED_NOTICE, file=sys.stderr)
+    allowed_domains = policy.allowed_domains
 
     parsed = _parse_config_files(args.config_dir)
     # #2906: in every mode (--trace too), as the reader's own multi-carrier
@@ -1373,7 +1464,9 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity,
-                extra_labels=extra_labels, base_config=base_config)
+                extra_labels=extra_labels, base_config=base_config,
+                allowed_domains=allowed_domains)
+            trace["policy_applied"] = policy.applied
             traces.append(trace)
         if args.json:
             print(format_json_report(traces))
@@ -1412,7 +1505,8 @@ def main(argv: list[str] | None = None) -> int:
             print(safe_label(routing_not_mapping_warning(t, refused[t])),
                   file=sys.stderr)
             continue
-        explanation = explain_tenant_routing(parsed, t)
+        explanation = explain_tenant_routing(parsed, t, allowed_domains)
+        explanation["policy_applied"] = policy.applied
         results.append(explanation)
 
     if args.json:

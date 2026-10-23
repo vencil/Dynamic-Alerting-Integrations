@@ -440,7 +440,7 @@ tenant-api pod
 
 - tenant-api 的 chart 預設固定一個 da-tools 版本，CI 對這一組版本跑相容性測試。
 - `da-tools init` 產生的設定改成固定版本，不再用 `latest`。
-- policy 檔可以宣告「至少需要哪一版產生器」，容器比它舊就拒收所有會改變檔案內容的寫入；修法是維運者調高 chart 設定的 da-tools 版本。這是新增的鍵，只由產生器讀取；最晚在 tenant-api 改問產生器容器的那一步（§7）加上，否則較舊的產生器不認得它。
+- policy 檔可以宣告「至少需要哪一版產生器」，容器比它舊就拒收所有會改變檔案內容的寫入；修法是維運者調高 chart 設定的 da-tools 版本。這是新增的鍵，只從部署端的 policy 檔（`--policy`）讀，不讀租戶 repo 裡的 policy 檔；讀它的是路由產生器，以及用同一份 `--policy` 判定 receiver 的 CLI（`validate-config`、`test-notification`、`explain-route`，與產生器共用同一個讀取函式），版本比它舊時一律拒絕判定；最晚在 tenant-api 改問產生器容器的那一步（§7）加上，否則較舊的產生器不認得它。
 - tenant-api 以 metric 公開產生器與 da-guard 的版本。
 
 ### 7. 在 main 上依序合併

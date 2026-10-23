@@ -891,7 +891,8 @@ class TestWithoutAmtool:
             in captured.err
         [trace] = json.loads(captured.out)
         assert set(trace) == {"tenant", "alertname", "severity", "labels",
-                              "steps", "final_receiver", "timing"}
+                              "steps", "final_receiver", "timing",
+                              "policy_refused", "policy_applied"}  # #3142
         assert trace["final_receiver"] == "(unknown: amtool not found)"
         step2 = trace["steps"][1]
         assert step2["matched_routes"] == []
