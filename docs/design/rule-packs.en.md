@@ -131,14 +131,8 @@ This pattern is applied in all receiver types (email, webhook, Slack, Teams, Pag
 
 - Rule Packs without `*_zh` annotations continue to work — notifications automatically fall back to English
 - Existing Prometheus rules need no changes
-- New rules should include both English and Chinese for better UX in multi-region deployments
+- Alerts in `rule-packs/` must carry both languages: a missing `*_zh` is blocked by the `bilingual-annotations-check` pre-commit hook
 
-**Three Pilot Rule Packs (v2.0.0):**
-
-- `rule-pack-mariadb.yaml` — 8 alerts with bilingual annotations
-- `rule-pack-postgresql.yaml` — 9 alerts with bilingual annotations
-- `rule-pack-kubernetes.yaml` — 4 alerts with bilingual annotations (Operational alerts)
-
-For full examples, see `rule-packs/` directory.
+For examples, see `rule-packs/` directory.
 
 ### 3.3 Advantages
