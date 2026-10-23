@@ -27,6 +27,7 @@ import generate_alertmanager_routes as gar  # noqa: E402
 import notification_tester as nt  # noqa: E402
 import explain_route as er  # noqa: E402
 from factories import make_tenant_yaml, write_yaml  # noqa: E402
+from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 _OPS = Path(_TOOLS_DIR) / "ops"
 _TESTER = _OPS / "notification_tester.py"
@@ -267,6 +268,14 @@ def test_tester_explain_and_generator_agree_under_a_policy_across_parity_matrix(
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             write_yaml(str(path.parent), path.name, body)
+        # #3206: a tree da-guard validation names a path on is the shared
+        # conf.d refusal for the tester, policy or not.
+        named = go_refused(root)
+        if named:
+            with refuses(*named):
+                nt.run_all_tests(str(root), dry_run=True, rate_limit=0,
+                                 allowed_domains=_ALLOW)
+            continue
         try:
             reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0,
                                        allowed_domains=_ALLOW)
