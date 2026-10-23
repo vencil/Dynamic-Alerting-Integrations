@@ -298,10 +298,10 @@ func (sh customAlertShape) selector() string {
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
-// durationSeconds converts a single-unit duration (`4h`, `30m`, `10s`) — the
-// forecast horizon enum — to integer seconds.
 var singleUnitDuration = regexp.MustCompile(`^(\d+)(h|m|s)$`)
 
+// durationSeconds converts a single-unit duration (`4h`, `30m`, `10s`) — the
+// forecast horizon enum — to integer seconds.
 func durationSeconds(d string) (int, error) {
 	m := singleUnitDuration.FindStringSubmatch(d)
 	if m == nil {
