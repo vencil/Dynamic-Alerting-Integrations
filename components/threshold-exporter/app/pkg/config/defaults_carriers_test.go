@@ -4,9 +4,9 @@ package config
 // as a pure function over a defaults SET, so the rule's cells that need two
 // case variants of ONE name (which a case-insensitive filesystem cannot hold,
 // and which tree_scan_parity_test.go therefore cannot build everywhere) are
-// pinned on every platform. The same rule is restated in Python as
-// `_lib_confd.select_defaults_carrier` and pinned there by
-// tests/shared/test_defaults_carrier_selection.py against this table's rows.
+// pinned on every platform. This table is the rule's only statement: the
+// Python readers take the selected carrier from `da-guard parse-tree`
+// (`defaults_carriers` / `not_read`) and keep no copy of it (#3206).
 //
 // Seams: none — pure function, synthetic paths.
 

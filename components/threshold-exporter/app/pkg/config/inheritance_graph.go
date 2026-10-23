@@ -92,9 +92,9 @@ func (g *InheritanceGraph) TenantsAffectedBy(defaultsPath string) []string {
 // inheritance graph (TreeScan.InheritanceGraph), /effective and da-guard
 // (ResolveEffective / ScopeEffective), the in-memory simulate source
 // (ScanFromConfigSource), and the flat plane's root `Defaults` on /metrics
-// (package main, the ROOT directory's entry). describe_tenant.py mirrors it
-// in `_lib_confd.select_defaults_carrier`, and the golden fixtures pin the
-// two languages to one merged_hash.
+// (package main, the ROOT directory's entry). describe_tenant.py reads it
+// from `da-guard parse-tree` (`defaults_carriers`, #3206), and the golden
+// fixtures pin the two languages to one merged_hash.
 type DefaultsCarriers struct {
 	// ByDir maps a directory (Clean'd, in the path flavour of the input
 	// set) to the one carrier its chain level reads.

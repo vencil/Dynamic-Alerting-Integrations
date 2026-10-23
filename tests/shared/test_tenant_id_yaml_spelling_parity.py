@@ -147,7 +147,7 @@ def test_two_spellings_of_one_id_in_one_mapping_are_a_duplicate_key(how) -> None
 def test_the_non_strict_key_loader_still_folds_them(how) -> None:
     """⚠️ PINS THE REMAINING RESIDUAL. `_lib_yaml_keys` itself is not strict,
     and the readers that were not strict on main still use it that way
-    (`_lib_confd.declared_tenant_ids`, `diagnose`, `analyze_rule_pack_gaps
+    (`diagnose`, `analyze_rule_pack_gaps
     --tenant-config`): there the two spellings fold into one tenant, the
     last value wins. Making those readers strict is #2123's call per reader,
     not this module's."""

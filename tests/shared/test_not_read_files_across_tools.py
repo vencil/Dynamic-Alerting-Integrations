@@ -1,8 +1,8 @@
 """parse-tree 說「沒有讀者讀」的檔，每支改讀 parse-tree 的工具都不讀它（#2906 review）。
 
 缺陷類別：工具自己列舉 conf.d（`_lib_confd.iter_config_files` / `list_config_tree`），
-再用 Python 版的 carrier 選擇（`select_defaults_carrier` / `unselected_carriers` /
-`readable_carriers`）決定讀哪個，然後經 `_lib_parse_cache.ConfdReader` 讀。那是同一條
+再用 Python 版的 carrier 選擇（當時的 `select_defaults_carrier` / `unselected_carriers` /
+`readable_carriers`，#3206 已刪）決定讀哪個，然後經 `_lib_parse_cache.ConfdReader` 讀。那是同一條
 規則的第二份實作：它挑中一個 parse-tree 列在 `not_read` 的檔時，`read` 丟
 `NotSelected`，工具在合法的樹上以 rc 2 結束。根治是「讀或跳過」一律問 parse-tree
 （`ConfdReader.not_read` / `split_not_read` / `carrier`）。

@@ -266,6 +266,23 @@ func TestMatrixStillCoversWhatThesePredicatesCanGetWrong(t *testing.T) {
 			why:   "a name with no YAML extension at all",
 			match: func(r matrixRow) bool { return !r.YAMLExtension },
 		},
+		// Moved here from the Python half of this pin when that half was
+		// deleted with the Python copy of these rules (#3206): this package's
+		// test is the table's only owner now.
+		{
+			why: "a non-lowercase spelling of the chain carrier — the exporter " +
+				"compares that name LOWERCASED; a reader that folds only the " +
+				"extension would drop its defaults: block",
+			match: func(r matrixRow) bool { return r.DefaultsFile && r.Name != strings.ToLower(r.Name) },
+		},
+	}
+
+	seen := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if seen[r.Name] {
+			t.Errorf("the matrix holds row %q twice", r.Name)
+		}
+		seen[r.Name] = true
 	}
 
 	for _, c := range cases {

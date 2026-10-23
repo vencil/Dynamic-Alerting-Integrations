@@ -128,27 +128,23 @@ class _PyYamlReader:
             raise FileUnreadable(rel, "top_level_not_mapping", type(data).__name__)
         return data
 
-    def _chosen(self, directory) -> "Path | None":
-        from _lib_confd import (is_defaults_name, iter_config_files, readable_carriers,
-                                select_defaults_carrier)
-        carriers = [p for p in iter_config_files(self.root)
-                    if p.parent == Path(directory) and is_defaults_name(p.name)]
-        return select_defaults_carrier(readable_carriers(carriers)[0])
-
     def split_not_read(self, paths):
-        """The read loop's carrier selection before step 4 (Python's)."""
-        from _lib_confd import is_defaults_name
+        """The read loop's carrier selection: Go's (the listing's `not_read`;
+        #3206 deleted the Python copy of the rule this stub used before)."""
+        listing = self.listing()
         read, skipped = [], []
         for p in map(Path, paths):
-            chosen = self._chosen(p.parent) if is_defaults_name(p.name) else None
-            if chosen is not None and p != chosen:
-                skipped.append((p, "unselected_defaults_carrier"))
+            e = listing.entry(p.relative_to(self.root).as_posix())
+            if e is not None and e.not_read is not None:
+                skipped.append((p, e.not_read))
             else:
                 read.append(p)
         return read, skipped
 
     def carrier(self, directory) -> "Path | None":
-        return self._chosen(directory)
+        rel = Path(directory).relative_to(self.root).as_posix() if Path(directory) != self.root else "."
+        chosen = self.listing().defaults_carriers.get(rel)
+        return None if chosen is None else self.root / chosen
 
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677

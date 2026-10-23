@@ -30,7 +30,8 @@ import os
 import shutil
 import stat
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Tuple
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -45,16 +46,12 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    CONFIG_SUFFIXES,
     config_listing,
-    has_yaml_extension,
-    is_defaults_name,
-    is_hidden_name,
     iter_config_files,
     list_config_tree,
-    select_defaults_carrier,
     warn_nested,
 )
+from _lib_parse_tree import classify_names, list_tree  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
 import _lib_tenant_uniqueness as tu  # noqa: E402
@@ -63,32 +60,57 @@ import _lib_tenant_uniqueness as tu  # noqa: E402
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 
-# Platform-owned carriers that are merged specially (first source wins).
+# Platform-owned carriers that are merged specially (first source wins):
+# the defaults carrier and the profiles file, in any spelling.
 #
-# ⛔ Derived, not typed out. The two ROLES are a domain fact — the exporter
-# names the same two — but which SPELLINGS carry a role is not: that is
-# `CONFIG_SUFFIXES` plus case folding. Typing the set out as two literal
-# `.yaml` names let `_defaults.yml` / `_defaults.YAML` / `_profiles.yml` fall
-# through to the tenant path, where two sources each holding one of them were
-# reported as `❌ 1 tenant conflict(s)` — a platform file, named a tenant, on
-# the wrong policy (measured, #1794).
-PLATFORM_FILES = frozenset(
-    f"{stem}{suffix}"
-    for stem in ("_defaults", "_profiles")
-    for suffix in CONFIG_SUFFIXES
-)
+# ⛔ Which names those are is Go's answer (#3206), not a name rule here. A
+# defaults carrier is Go's class `defaults`; the profiles file is a platform
+# (`_`) file — Go's class `platform`, which already says the name carries a
+# YAML extension — whose stem is `_profiles`, any case. Typing the set out as
+# two literal `.yaml` names once let `_defaults.yml` / `_defaults.YAML` /
+# `_profiles.yml` fall through to the tenant path, where two sources each
+# holding one of them were reported as `❌ 1 tenant conflict(s)` — a platform
+# file, named a tenant, on the wrong policy (measured, #1794).
+PROFILES_STEM = "_profiles"
 
 
-def is_platform_file(name: str) -> bool:
+def _classes(names: "List[str]") -> Dict[str, str]:
+    """Go's class of each base name (names mode, `classify_names`)."""
+    return {n: e.cls for n, e in classify_names(names).items()} if names else {}
+
+
+def is_platform_file(name: str, cls: "str | None" = None) -> bool:
     """Is `name` a carrier for one of the platform-owned roles, any spelling?
 
-    ⚠️ The defaults half has a shared oracle — `_lib_confd.is_defaults_name`,
-    which answers to `config_hierarchy.go`. This does not restate it and does
-    not call it either (that would leave the profiles half unaccounted for);
-    the two are pinned to agree by
-    `test_the_defaults_half_agrees_with_the_shared_oracle`.
+    *cls*: Go's class of the name when the caller holds its entry, else the
+    name's in names mode (`classify_names`). The defaults half IS Go's class
+    `defaults` — there is no second opinion here to pin against it.
     """
-    return name.lower() in PLATFORM_FILES
+    if cls is None:
+        cls = _classes([name])[name]
+    return cls == "defaults" or (
+        cls == "platform" and PurePosixPath(name).stem.lower() == PROFILES_STEM)
+
+
+def carrier_go_selects(names: "List[str]") -> "str | None":
+    """The defaults carrier Go's chain would read in ONE directory holding
+    exactly *names* (base names), or None: `da-guard parse-tree
+    --list-only`'s `defaults_carriers` over an empty stand-in of each, so the
+    answer is Go's selection rule (#1674), not a copy of it (#3206). For a
+    directory that does not exist yet — what `--output` would hold after the
+    copy — and must not be written before the run is refused. A stand-in it
+    cannot write (the system temp directory, no flag of this tool) ends the
+    run at rc 2, named."""
+    with tempfile.TemporaryDirectory(prefix="assemble-carriers-") as d:
+        for n in names:
+            try:
+                (Path(d) / n).write_bytes(b"")
+            except OSError as e:
+                print(f"ERROR: cannot write a stand-in carrier in the temp directory "
+                      f"{d} to ask da-guard which carrier the exporter would read: {e}",
+                      file=sys.stderr)
+                sys.exit(EXIT_CALLER_ERROR)
+        return list_tree(d).defaults_carriers.get(".")
 
 
 # ── Source discovery ─────────────────────────────────────────────────
@@ -110,9 +132,9 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     top level — so which names it reads is Go's rule, not one of this
     tool's. Hidden entries are NAMED, not silently dropped: excluding
     without saying so would trade a visible error for a quiet loss; the
-    walk does not list them, so the WARN alone asks `is_hidden_name` /
-    `has_yaml_extension` of this directory's own names (wording only: it
-    selects nothing).
+    walk does not list them, so the WARN alone asks Go (names mode,
+    `classify_names`) about this directory's own names — class `hidden`, and
+    a config file's extension (wording only: it selects nothing).
 
     `warn_nested` is called HERE, in the same scope as the `iterdir()`,
     because `test_confd_enumeration_contract` requires the guard to live
@@ -136,18 +158,42 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
         own = sorted(dir_path.iterdir())
     except OSError:
         own = []
-    for p in own:
-        if has_yaml_extension(p.name) and is_hidden_name(p.name):
-            print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
-                  f"does not read it", file=sys.stderr)
+    for p in _hidden_config_named(own):
+        print(f"WARN: {p} is hidden (`.`-prefixed) — skipped, the exporter "
+              f"does not read it", file=sys.stderr)
     return [] if listing is None else [dir_path / e.path for e in listing.entries
                                        if e.depth == 0]
+
+
+def _utf8(name: str) -> bool:
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _hidden_config_named(paths: List[Path]) -> List[Path]:
+    """The *paths* whose name Go classes `hidden` and that carry a config
+    file's extension. Names mode answers `hidden` before the extension, so
+    the extension is asked of the name behind a one-letter, non-`.` prefix:
+    Go's extension test is a suffix test (`confdname.SplitCarrier`), which a
+    prefix cannot change — `x.yaml` for a file named `.yaml` included."""
+    # A name JSON cannot carry (not UTF-8) cannot be asked; its WARN is
+    # wording only, and the listing names what it reads.
+    hidden = [p for p in paths if _utf8(p.name)]
+    if not hidden:
+        return []
+    named = _classes([p.name for p in hidden])
+    hidden = [p for p in hidden if named[p.name] == "hidden"]
+    probes = _classes([f"x{p.name}" for p in hidden])
+    return [p for p in hidden if probes[f"x{p.name}"] != "not_config_name"]
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
     """List every YAML carrier in a source directory (non-recursive).
 
-    `.yaml` / `.yml`, any case — `_lib_confd.has_yaml_extension`, the
+    `.yaml` / `.yml`, any case — Go's `role` (the source's listing), the
     exporter's own rule. #1603 (extension-SPELLING axis): this was
     `glob("*.yaml")`, so a `.yml` shard was silently LEFT OUT of the
     assembled config-dir — measured on byte-identical bodies before the
@@ -157,9 +203,8 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     name with a same-named `.yml` in another shard, which `detect_conflicts`
     reports as before).
 
-    Hidden (`.`-prefixed) entries are EXCLUDED, by `_lib_confd.is_hidden_name`
-    — the exporter's own skip rule (`config_hierarchy.go`), the same predicate
-    the sibling producers apply — and each one is NAMED on stderr (#1911
+    Hidden (`.`-prefixed) entries are EXCLUDED — the exporter's walk does not
+    list them (Go's skip rule) — and each one is NAMED on stderr (#1911
     family, #1827). Before that filter this tool copied `.db-c.yaml` into the
     artifact and counted it in the manifest while the exporter never read it:
     the tenant had no alerts at rc 0 with nothing printed. Excluding without
@@ -169,16 +214,15 @@ def discover_yamls(source_dir: Path) -> List[Path]:
 
     ⚠️ A hidden DIRECTORY (`.draft/db-d.yaml`) is a different case: this scan
     is flat, so it never sees inside it, and `warn_nested` does not name it
-    either — both by the same `_lib_confd._is_hidden`, which is also the
-    exporter's `SkipDir` rule. Not seen, not reported, on every side: that is
-    parity, not a gap, and it is guaranteed by that one predicate rather than
-    by two readers happening to agree.
+    either — both by Go's walk, whose `SkipDir` rule it is. Not seen, not
+    reported, on every side: that is parity, not a gap, and it is guaranteed
+    by that one walk rather than by two readers happening to agree.
 
     Raises FileNotFoundError if directory does not exist.
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(f"source directory not found: {source_dir}")
-    # ⛔ Same predicate as `iter_config_files` (which `carriers_already_in`
+    # ⛔ Same listing as `iter_config_files` (which `carriers_already_in`
     # and the residue question already use), not a second spelling of it:
     # a hidden carrier the exporter will never read must not reach the copy,
     # the count or the manifest. Named first, then excluded, so the operator
@@ -193,17 +237,28 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # every such path named, exit 2, before anything is staged or written.
     # (These were a WARN and "not merged": the generator refuses such a
     # tree, so the artifact would not have been served either.)
+    return [p for p, _e in discover_entries(source_dir)[0]]
+
+
+def discover_entries(source_dir: Path) -> "Tuple[List[Tuple[Path, Any]], str | None]":
+    """`discover_yamls` with each carrier's entry (Go's `role` / `class`),
+    and the root carrier the source's own chain selects (Go's
+    `defaults_carriers`, None when it has none). Raises FileNotFoundError as
+    `discover_yamls`."""
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"source directory not found: {source_dir}")
     listing = config_listing(source_dir)
     named = list_visible_config_entries(source_dir, listing)
+    selected = None if listing is None else listing.defaults_carriers.get(".")
     # A config file is what Go's `role` says is one — not `is_file()`, which
     # answers False for a file it may not stat and so dropped a tenant with
     # no word.
-    return [p for p in named if _config_file_in(listing, p)]
-
-
-def _config_file_in(listing: Any, p: Path) -> bool:
-    e = None if listing is None else listing.entry(p.name)
-    return e is not None and e.config_file
+    out = []
+    for p in named:
+        e = None if listing is None else listing.entry(p.name)
+        if e is not None and e.config_file:
+            out.append((p, e))
+    return out, selected
 
 
 def _file_sha256(path: Path) -> str:
@@ -228,19 +283,23 @@ def detect_conflicts(
     seen: Dict[str, List[Tuple[str, Path]]] = {}
     # (label, path) of every defaults carrier, in source order (#1674).
     carriers: List[Tuple[str, Path]] = []
+    classes: Dict[str, str] = {}
+    winners: Dict[str, "str | None"] = {}
     for src in sources:
         label = str(src)
-        for f in discover_yamls(src):
+        found, winners[label] = discover_entries(src)
+        for f, e in found:
             name = f.name
+            classes[name] = e.cls
             seen.setdefault(name, []).append((label, f))
-            if is_defaults_name(name):
+            if e.cls == "defaults":  # Go's class: the chain carrier
                 carriers.append((label, f))
 
     conflicts: Dict[str, List[Tuple[str, Path]]] = {}
     file_map: Dict[str, Path] = {}
 
     for name, entries in seen.items():
-        if is_platform_file(name):
+        if is_platform_file(name, classes[name]):
             # Platform files: first source wins, warn if multiple
             file_map[name] = entries[0][1]
             if len(entries) > 1:
@@ -264,12 +323,14 @@ def detect_conflicts(
     # `b/_defaults.yml` used to assemble silently (rc 0) into a directory
     # whose `b` defaults every plane then ignores. It is the same duplicate
     # the identical-name branch above reports, with the same policy: the
-    # first source holding a carrier wins (its own carrier by the shared
-    # selection, if it holds several), the rest are reported and not copied.
+    # first source holding a carrier wins (its own carrier by Go's selection,
+    # `defaults_carriers`, if it holds several), the rest are reported and not
+    # copied.
     if len({p.name for _, p in carriers}) > 1:
         first_label = carriers[0][0]
-        winner = select_defaults_carrier(
-            p for lbl, p in carriers if lbl == first_label)
+        chosen = winners.get(first_label)
+        winner = next(p for lbl, p in carriers
+                      if lbl == first_label and (chosen is None or p.name == chosen))
         for _, p in carriers:
             file_map.pop(p.name, None)
             conflicts.pop(p.name, None)
@@ -457,11 +518,14 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     # Report conflicts
+    conflict_classes = _classes(list(conflicts))
     real_conflicts = {
-        k: v for k, v in conflicts.items() if not is_platform_file(k)
+        k: v for k, v in conflicts.items()
+        if not is_platform_file(k, conflict_classes[k])
     }
     platform_dups = {
-        k: v for k, v in conflicts.items() if is_platform_file(k)
+        k: v for k, v in conflicts.items()
+        if is_platform_file(k, conflict_classes[k])
     }
 
     if not args.json:
@@ -552,12 +616,17 @@ def main() -> int:
     # and ignored the produced one everywhere, at rc 0 — under a warning that
     # said the exporter "reads them too". Same remedy as a leftover that
     # duplicates a tenant (below): refuse, name it, say how to clear it.
-    produced_carriers = sorted(n for n in file_map if is_defaults_name(n))
-    stale_carriers = sorted(n for n in residue
-                            if "/" not in n and is_defaults_name(n))
+    # Which names are carriers, and which one the exporter reads, are Go's
+    # (#3206): the class of the produced names, the output listing's entries,
+    # and Go's selection over the directory the copy would leave.
+    produced_classes = _classes(list(file_map))
+    produced_carriers = sorted(n for n in file_map if produced_classes[n] == "defaults")
+    out_entries = (out_tree.listing.config_files()
+                   if out_tree is not None and out_tree.listing is not None else [])
+    stale_carriers = sorted(e.path for e in out_entries
+                            if "/" not in e.path and e.cls == "defaults" and e.path in residue)
     if produced_carriers and stale_carriers:
-        read = select_defaults_carrier(
-            Path(n) for n in produced_carriers + stale_carriers).name
+        read = carrier_go_selects(produced_carriers + stale_carriers)
         if args.json:
             print(format_json_report({
                 "status": "conflict",

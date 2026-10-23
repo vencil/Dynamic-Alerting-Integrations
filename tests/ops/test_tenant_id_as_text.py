@@ -34,7 +34,6 @@ import deprecate_rule  # noqa: E402
 import diagnose  # noqa: E402
 import patch_config as pc  # noqa: E402
 import policy_engine as pe  # noqa: E402
-from _lib_confd import declared_tenant_ids  # noqa: E402
 from _patch_config_fake import FakeCluster  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
@@ -144,11 +143,17 @@ def test_exclude_tenants_from_a_standalone_policy_file(tmp_path, capsys):
 
 # ── shared readers ───────────────────────────────────────────────────
 
+def _declared_ids(d):
+    """The tree's declared ids (Go's `TenantScope`, both halves: #3206)."""
+    declared, _unknown = _lib_parse_cache.declared_tenants(_lib_parse_cache.reader_for(d))
+    return set(declared)
+
+
 def test_declared_tenant_ids_are_the_source_text(tmp_path):
     d = _tree(tmp_path, {
         "a.yaml": "tenants:\n  010: {}\n  0x1F: {}\n",
         "team/b.yaml": "tenants:\n  yes: {}\n  123: {}\n"})
-    assert declared_tenant_ids(d) == {"010", "0x1F", "yes", "123"}
+    assert _declared_ids(d) == {"010", "0x1F", "yes", "123"}
 
 
 def test_describe_tenant_overlays_the_platform_block_for_text_ids(tmp_path):
@@ -222,7 +227,7 @@ _UNREADABLE_TENANT = "tenants:\n  tx:\n    cpu: 80\n    cpu: 90\n"
 
 def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
     """Every reader stays on the parser it had (all pure; libyaml choice is
-    #2123). With `declared_tenant_ids` on libyaml, a tenant file the routing
+    #2123). With the existence set on libyaml, a tenant file the routing
     reader itself drops as unreadable still DECLARED tx, so the platform's
     `tenants.tx` block silently created the tenant and its `ignored` WARN
     vanished — two answers in one run.
@@ -233,7 +238,7 @@ def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
         "_defaults.yaml": "defaults:\n  cpu: 70\ntenants:\n  tx:\n    cpu: 60\n",
         "tx.yaml": _UNREADABLE_TENANT})
     with _lib_parse_cache.judging():
-        assert declared_tenant_ids(d) == set()
+        assert _declared_ids(d) == set()
         got = _grar_parse.load_tenant_tree(str(d))
     assert "tx" not in got.dedup_configs, got.dedup_configs
     err = capsys.readouterr().err

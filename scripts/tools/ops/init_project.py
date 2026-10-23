@@ -52,7 +52,6 @@ import _lib_parse_tree  # noqa: E402
 import _lib_write_check  # noqa: E402
 from _lib_confd import (  # noqa: E402
     configmap_key_problem,
-    is_defaults_name,
     printable_name,
     warn_nested,
 )
@@ -2952,7 +2951,7 @@ def _gen_gitlab_ci(
 
 def _kustomize_carrier_files(
     tenants: list[str], conf_dir: Optional[Path] = None,
-    *, write_defaults: bool = True,
+    *, write_defaults: bool = True, plan: "Optional[_ConfdPlan]" = None,
 ) -> list[str]:
     """Basenames of the conf.d files that become `threshold-config` keys.
 
@@ -3005,23 +3004,16 @@ def _kustomize_carrier_files(
     A config-NAMED entry nothing can be read from (a broken symlink, a
     `db-x.yaml/` directory) is not left out here: `_plan_confd` refused the
     tree before any write (#3206), so none can be in it.
+
+    ⛔ *plan* (`run_init` passes it): every da-guard answer this needs was
+    taken by `_plan_confd` BEFORE the first write — the conf.d snapshot and
+    Go's class of each name — so nothing here can fail on da-guard after
+    init has written conf.d/ and the CI files (a partial tree at rc 2).
+    Without *plan* (a direct caller), they are asked here.
     """
-    names = {f'{t}.yaml' for t in tenants}
-    if write_defaults:
-        names.add('_defaults.yaml')
-    if conf_dir is not None:
-        # #3206: ONE snapshot for the nested warning, the split and every
-        # reason — the entries of the document `_ConfdTree` reads. A config
-        # file is what Go's `role` says is one — never `is_file()`, which
-        # answers False for a file it may not stat and so dropped a tenant
-        # from the base with no word; one that cannot be read fails where
-        # it is read.
-        confd = _ConfdTree(Path(conf_dir))
-        listing = confd.listing()
-        warn_nested(conf_dir, tool='init_project', listing=listing)
-        top = [n for n in {*confd.files(), *confd.root_defaults()} if "/" not in n]
-        entry = (lambda n: None) if listing is None else listing.entry
-        names |= {n for n in top if entry(n) is not None and entry(n).config_file}
+    names, confd, classes = _kustomize_names(tenants, conf_dir, write_defaults, plan)
+    if confd is not None:
+        warn_nested(conf_dir, tool='init_project', listing=confd.listing())
     illegal = sorted((n, why) for n in names
                      if (why := configmap_key_problem(n)) is not None)
     for name, why in illegal:
@@ -3031,7 +3023,47 @@ def _kustomize_carrier_files(
               f"it to match [-._a-zA-Z0-9]+ and list it in files:.",
               file=sys.stderr)
     names -= {n for n, _ in illegal}
-    return sorted(names, key=lambda n: (not is_defaults_name(n), n))
+    # The defaults carrier first: Go's class of each name (names mode — some
+    # are written by this run and not on disk yet; #3206, no name rule here).
+    return sorted(names, key=lambda n: (classes[n] != "defaults", n))
+
+
+def _kustomize_names(tenants: list[str], conf_dir: Optional[Path], write_defaults: bool,
+                     plan: "Optional[_ConfdPlan]" = None,
+                     confd: "Optional[_ConfdTree]" = None,
+                     ) -> "tuple[set[str], Optional[_ConfdTree], dict[str, str]]":
+    """(the kustomize base's candidate names, the conf.d snapshot they were
+    taken from, Go's class of each name) — *plan*'s when given (taken before
+    any write), else asked now (*confd*: a snapshot the caller holds).
+
+    The names: the carriers this run writes, and the config files already at
+    the top level of `conf_dir` (Go's `role`, the snapshot's entries — never
+    `is_file()`, False for a file it may not stat). Their class: names mode
+    (`classify_names`), since some are not on disk yet."""
+    if plan is not None and plan.kustomize is not None:
+        return set(plan.kustomize.classes), plan.kustomize.confd, dict(plan.kustomize.classes)
+    names = {f'{t}.yaml' for t in tenants}
+    if write_defaults:
+        names.add('_defaults.yaml')
+    if conf_dir is not None:
+        if confd is None:
+            confd = _ConfdTree(Path(conf_dir))
+        listing = confd.listing()
+        top = [n for n in {*confd.files(), *confd.root_defaults()} if "/" not in n]
+        entry = (lambda n: None) if listing is None else listing.entry
+        names |= {n for n in top if entry(n) is not None and entry(n).config_file}
+    named = (_lib_parse_tree.classify_names(sorted(names), None, _PARSE_TREE_TIMEOUT_S)
+             if names else {})
+    return names, confd, {n: e.cls for n, e in named.items()}
+
+
+class _KustomizeAnswers(NamedTuple):
+    """What `_kustomize_carrier_files` asks da-guard, asked by `_plan_confd`
+    before any write (#3206): the conf.d snapshot and each candidate name's
+    Go class."""
+
+    confd: "Optional[_ConfdTree]"
+    classes: "dict[str, str]"
 
 
 def _gen_kustomize_base(
@@ -3589,11 +3621,12 @@ class _ConfdTree:
 
     def root_defaults(self) -> list[str]:
         """The root's defaults carriers in every spelling parse-tree saw —
-        the one it selects and any it does not (`not_read`)."""
+        the one it selects and any it does not (`not_read`): the root's
+        config files Go classes `defaults` (#3206)."""
         if self.tree is None:
             return []
-        names = {*self.tree.selected, *self.tree.not_read}
-        return sorted(n for n in names if "/" not in n and is_defaults_name(n))
+        return sorted(e.path for e in self.tree.entries
+                      if "/" not in e.path and e.config_file and e.cls == "defaults")
 
     def declared(self, rel: str) -> "set[str]":
         """The tenants rel's `tenants:` mapping declares. Every file of the
@@ -3722,6 +3755,10 @@ class _ConfdPlan(NamedTuple):
     possibly mentions. The parity matrix asserts it covers what the
     exporter reads."""
 
+    kustomize: "Optional[_KustomizeAnswers]" = None
+    """`--deploy kustomize`: the da-guard answers the kustomize base needs,
+    taken here so no da-guard call follows the first write."""
+
     @property
     def write_defaults(self) -> bool:
         return not self.defaults_carriers
@@ -3840,8 +3877,15 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         conflicts.append(_Conflict(
             'defaults', '', [_rel(p) for p in own_defaults + other_defaults]))
 
+    kustomize = None
+    if config.get('deploy') == 'kustomize':
+        # #3206: every da-guard question the kustomize base asks, asked now —
+        # before init writes anything — and handed to `run_init`.
+        names, _confd, classes = _kustomize_names(
+            generate, conf_dir, not defaults_carriers, confd=confd)
+        kustomize = _KustomizeAnswers(confd, classes)
     plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
-                      {f: sorted(ts) for f, ts in mentions.items()})
+                      {f: sorted(ts) for f, ts in mentions.items()}, kustomize)
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
@@ -4198,11 +4242,13 @@ def run_init(config: dict, output_dir: str,
 
     if deploy == 'kustomize':
         kust_base = out / 'kustomize' / 'base'
-        # #1791: ONE enumeration feeds both files below. Taken here, after
-        # step 1 wrote conf.d/, and unioned with the planned carriers inside
-        # the helper, so the answer does not depend on that ordering.
+        # #1791: ONE enumeration feeds both files below — the planned
+        # carriers unioned with conf.d's top level as the plan saw it before
+        # step 1 (init writes only planned files there), so the answer does
+        # not depend on that ordering. #3206: from the plan's da-guard
+        # answers; no da-guard call after a write.
         carriers = _kustomize_carrier_files(
-            plan.generate, conf_dir, write_defaults=plan.write_defaults)
+            plan.generate, conf_dir, write_defaults=plan.write_defaults, plan=plan)
         _write_file(
             str(kust_base / 'kustomization.yaml'),
             _gen_kustomize_base(plan.generate, namespace, carriers),

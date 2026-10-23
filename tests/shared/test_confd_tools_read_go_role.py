@@ -163,11 +163,14 @@ def test_a_reader_with_a_tree_lists_no_second_time(tmp_path, da_guard_binary,
         "_defaults.yaml", "a.yaml", "b.yaml"]
     assert _lib_confd.unusable_config_paths(root, reader=reader) == [root / "dir.yaml"]
     assert _lib_confd.resolve_defaults_file(root, reader=reader) == root / "_defaults.yaml"
-    assert _lib_confd.declared_tenant_ids(root, reader) == {"a", "b"}
+    assert set(_lib_parse_cache.declared_tenants(reader)[0]) == {"a", "b"}
     assert reader.entry(root / "dir.yaml").is_dir and reader.entry(root / "dir.yaml").flagged
     assert reader.entry("missing.yaml") is None
-    assert [r for r in runs if "--list-only" in r] == []
-    assert len(runs) == 1, runs
+    # A names-mode run (Go classing the flagged directory's NAME for the
+    # tenant scope, #3206) reads no tree; no second LISTING is made.
+    listings = [r for r in runs if "--names" not in r]
+    assert [r for r in listings if "--list-only" in r] == []
+    assert len(listings) == 1, runs
 
 
 @pytest.mark.parametrize("tool", ["deprecate_rule", "offboard_tenant", "migrate_conf_d",

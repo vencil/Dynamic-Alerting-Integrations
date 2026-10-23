@@ -158,7 +158,9 @@ func TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry(t *testing.T) {
 		"same name and shape": {
 			"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n" +
 				"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"200:warning\"}\n",
-			`severity="warning",tenant="tenant-a"} 100`, `} 200`},
+			// The series' own labels, not a bare `} 200`: a process-global
+			// histogram that the package's parallel tests fill can reach 200.
+			`severity="warning",tenant="tenant-a"} 100`, `severity="warning",tenant="tenant-a"} 200`},
 		"slo, same shape": {
 			"      - {recipe: slo_burn_rate, name: avail1, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n" +
 				"      - {recipe: slo_burn_rate, name: avail2, metric: err_total, denominator_metric: req_total, objective: \"99.5\"}\n",

@@ -134,7 +134,7 @@ def _quiet_main(argv):
 
 
 # A tree that reaches every conf.d read: a root platform `tenants:` overlay
-# (declared_tenant_ids), an unselected carrier spelling below the root, a
+# (declared_tenants), an unselected carrier spelling below the root, a
 # route `match`, a domain policy's `tenants:` list.
 _EVERY_READ = {
     "_defaults.yaml": cases.FIXTURES["clean"]["_defaults.yaml"]

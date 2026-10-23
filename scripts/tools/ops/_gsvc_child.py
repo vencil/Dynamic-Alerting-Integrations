@@ -213,17 +213,26 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     (_grar_parse.set_git_irregular_entries). Such an entry is still a tree
     entry at its path: its parent directories are made, so a write of one
     of them meets a directory there and is refused as for a regular file
-    (apply_writes). A hidden one (a component starting with `.`) is left
-    out without a word: every reader skips it, whatever its shape."""
+    (apply_writes). A hidden one (a path component Go classes `hidden`) is
+    left out without a word: every reader skips it, whatever its shape.
+    Which component is hidden is Go's answer (`classify_names`, one names-mode
+    run for every component of every such entry — #3206, no name rule here);
+    raises `_lib_parse_tree.ParseTreeError` when da-guard cannot answer."""
     if tree:
         os.makedirs(root, mode=0o700, exist_ok=True)
-    irregular: dict[str, str] = {}
+    others: list[tuple[str, str]] = []
     for mode, _oid, rel, content in tree:
         if path_problem(rel) is not None:
             raise GitReadError(f"tree entry with an unusable path: {rel!r}")
         if mode in REGULAR_MODES:
             _write_file(root, rel, content, GitReadError)
-        elif not any(part.startswith(".") for part in rel.split("/")):
+        else:
+            others.append((rel, mode))
+    parts = sorted({part for rel, _m in others for part in rel.split("/")})
+    classes = _lib_parse_tree.classify_names(parts) if parts else {}
+    irregular: dict[str, str] = {}
+    for rel, mode in others:
+        if not any(classes[part].cls == "hidden" for part in rel.split("/")):
             _parent_dir(root, rel, GitReadError)
             irregular[rel] = mode
     return irregular
@@ -333,6 +342,13 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     except (GitReadError, OSError) as exc:
         print(f"generator-service: base tree not written: {exc}", file=sys.stderr)
         return {"outcome": "git_read"}
+    except _lib_parse_tree.ParseTreeError as exc:
+        # Not a git read: da-guard could not say which path components are
+        # hidden (names mode). Its own outcome, so the reply does not blame git.
+        msg = " ".join(str(exc).split())
+        print(f"generator-service: da-guard could not classify the base tree's "
+              f"path names: {msg}", file=sys.stderr)
+        return {"outcome": "da_guard", "message": msg}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
     # cache's own key (SHA-256 of the path below conf.d and the content,

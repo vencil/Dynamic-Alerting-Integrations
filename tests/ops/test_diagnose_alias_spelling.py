@@ -158,5 +158,5 @@ def test_routing_readers_keep_literal_key_merge() -> None:
     legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
     entries = [("_p.yaml", "tx", {canon: 70, "_routing": {"group_wait": "10s"}}),
                ("tx.yaml", "tx", {legacy: 90})]
-    merged, _ = overlay_platform_tenants(entries, lambda: {"tx"})
+    merged, _ = overlay_platform_tenants(entries, lambda: {"tx"}, platform={"_p.yaml"})
     assert merged["tx"] == {canon: 70, "_routing": {"group_wait": "10s"}, legacy: 90}

@@ -40,8 +40,8 @@ value instead of calling it (`map(yaml.safe_load, …)`,
 `map(load_yaml_file, …)`). Readers written in a shape the predicate cannot
 see are pinned by behaviour instead, in
 `test_duplicate_key_rejected_across_tools._TOOLS`. The route generator and
-the tools on its read path (`_lib_confd.declared_tenant_ids` /
-`tenant_declarations` included) read conf.d through `da-guard parse-tree`
+the tools on its read path (`_lib_parse_cache.declared_tenants` /
+`_lib_confd.tenant_declarations` included) read conf.d through `da-guard parse-tree`
 since ADR-036 step 4 (#2906), not with PyYAML; that no PyYAML call in the
 generator's modules reads conf.d is pinned by
 `tests/ops/test_lib_parse_cache.py::test_no_pyyaml_call_in_the_reader_modules_reads_confd`.

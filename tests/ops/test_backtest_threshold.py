@@ -837,7 +837,7 @@ class TestConfdSpellingParityWithTheExporter:
         )
 
     def test_dir_comparison_still_ignores_non_config_extensions(self, tmp_path, da_guard_env):
-        """UPPER: widened to CONFIG_SUFFIXES, not to 'any file'."""
+        """UPPER: widened to both config extensions, not to 'any file'."""
         cur, base = tmp_path / "cur", tmp_path / "base"
         for where, value in ((cur, 50), (base, 70)):
             where.mkdir()

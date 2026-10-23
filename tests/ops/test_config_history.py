@@ -286,7 +286,7 @@ class TestScanConfigDir:
         assert sorted(seen["other"].values()) == sorted(seen["yaml"].values())
 
     def test_skip_non_yaml_files(self):
-        """只掃描設定載體（`CONFIG_SUFFIXES`），`.txt` / `.py` 不算。
+        """只掃描設定載體（`.yaml` / `.yml`，Go 的 `role`），`.txt` / `.py` 不算。
 
         ⚠️ 這行 docstring 原本寫「只掃描 *.yaml 檔案」——#1603 之後那句是假的
         （`.yml` 也是載體）。這支測試本身沒變，它餵的兩個鄰居本來就不是任何
@@ -1270,7 +1270,7 @@ class TestScanAcceptsBothSpellings:
         assert got == {"db-a.yaml", "db-b.yml"}
 
     def test_non_config_extensions_stay_out(self, tmp_path):
-        """UPPER — `*.y*` 只是預過濾，判定仍是 has_yaml_extension。"""
+        """UPPER — `*.y*` 只是預過濾，判定是 Go 的 `role`（#3206）。"""
         got = self._scan(tmp_path,
                          ["db-a.yaml", "db-c.json", "db-d.yang",
                           "plain.y", "notes.txt"])
