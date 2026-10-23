@@ -1,24 +1,26 @@
 """_lib_confedit.py — a Python tool's change to conf.d files, made by Go (ADR-036 §2).
 
-ADR-036 §2: only Go writes conf.d. A Python tool that changes an EXISTING
-conf.d file (ADR-036 step 10b, #3206) does not produce the file's text
-itself: it says what to change — `set` / `unset` / `ensure-map` operations
-on key paths, each value with its type — and `da-guard edit` applies them on
-yaml.v3's node tree, verifies the result (ADR-036 §4: no node outside the
-edit changes; read back by `parse-tree` in the tree with every file of the
-call in place, its content is the original's with these edits applied) and
-writes it atomically, or writes nothing. A NEW file goes to `da-guard emit`
-the same way. The contract is `da-guard edit`'s and `emit`'s rows in
-docs/cli-reference.md; this module only sends the files and reads the
-answer (`da-guard.write/v2`).
+ADR-036 §2: only Go writes conf.d. A Python tool that changes conf.d
+(#3206) does not produce a file's text itself: it says what to change, and
+`da-guard write` does it — an EDIT of an existing file (`set` / `unset` /
+`ensure-map` operations on key paths, each value with its type, applied on
+yaml.v3's node tree; ADR-036 §4: no node outside the edit changes), a
+CREATE of a new file from a typed value (its comments are layout:
+`comments()`, `head_comment`), or a MOVE of an existing file, byte for
+byte. Every file is read back by `parse-tree` in the tree with every file
+of the call in place, and written atomically, or nothing is. The contract
+is `da-guard write`'s row in docs/cli-reference.md; this module only sends
+the files and reads the answer (`da-guard.write/v3`).
 
 One call is one batch (#3206 step 10c): every file goes to ONE da-guard run,
-judged once, all or nothing. `edit` / `emit` are a batch of one.
+judged once, all or nothing (`write_all`; `edit_all` / `emit_all` are its
+edit-only and create-only forms). `edit` / `emit` / `move` are a batch of
+one.
 
 Which da-guard, and how long it may run, is `_lib_parse_tree`'s one
 resolution (`_lib_parse_tree._run`: an explicit argument, else the tool's
 `use_da_guard` selection, else `$DA_GUARD_BINARY`, then `$PATH`). No usable
-da-guard, a timeout or an answer that is not a `da-guard.write/v2` document
+da-guard, a timeout or an answer that is not a `da-guard.write/v3` document
 raise `_lib_parse_tree.ParseTreeError` (`BinaryMissing` for no binary), as
 for every other da-guard run — except where a real write may have begun
 (`edit_all` / `emit_all`, below).
@@ -54,21 +56,22 @@ contract). Where the value came from decides which:
 
 Several files, all or nothing
 -----------------------------
-`edit_all` / `emit_all` send every file in one batch: da-guard judges the
-tree with all of them in place, and if any is refused nothing is written
+`write_all` (and `edit_all` / `emit_all`) send every file in one batch:
+da-guard judges the tree with all of them in place (a move's source gone),
+and if any is refused nothing is written
 and `EditsRefused` names every refusal. A batch whose every file passes but
 which would worsen the rest of the tree (a carrier it deselects, a tenant
 declared twice, a new verdict anywhere: da-guard's `worsens_tree`) is
 `TreeWorsened`, an `EditsRefused` naming each place. A da-guard older than
-this tool's (one answering `da-guard.write/v1`, or one that does not know
-the command) took nothing: `EditCallerError`, reason `da_guard_mismatch`
+this tool's (one answering `da-guard.write/v1` or `/v2`, or one that does
+not know the command) took nothing: `EditCallerError`, reason `da_guard_mismatch`
 (also any other schema on a dry run). One answering a schema not known to
 be older (a newer da-guard) may have written: on a real write that is
 `PartialWrite`, every file of the batch maybe written. ⚠️ The write itself can still stop
 part-way — a write error (a full disk, a permission changed), or a file
-another writer changed between the judgement and its rename: an emitted
-file is removed again by da-guard, but an edited file already renamed
-stays. That is `PartialWrite`, which names the files written, and the tool
+another writer changed between the judgement and its rename: a created
+file is removed again by da-guard and a move put back, but an edited file
+already renamed stays. That is `PartialWrite`, which names the files written, and the tool
 must say which ones they are: they are NOT rolled back. When da-guard gave
 no answer for a real write (it was killed, timed out, or wrote no document),
 every file of the batch is named as one that MAY have been written.
@@ -87,9 +90,10 @@ from typing import Any, Iterable, Optional, Sequence
 
 import _lib_parse_tree
 
-SUBCOMMAND = "edit"
-EMIT = "emit"
-SCHEMA = "da-guard.write/v2"
+#: The one da-guard command every change goes through (edit, create, move).
+COMMAND = "write"
+SUBCOMMAND = COMMAND
+SCHEMA = "da-guard.write/v3"
 
 WRITTEN = "written"
 UNCHANGED = "unchanged"
@@ -201,9 +205,52 @@ def str_value(text: str) -> dict:
     return {"str": str(text)}
 
 
-def map_value(entries: "Iterable[tuple[str, dict]]") -> dict:
-    """A mapping value, its keys in the order given."""
-    return {"map": [[str(k), v] for k, v in entries]}
+def map_value(entries: "Iterable[tuple]") -> dict:
+    """A mapping value, its keys in the order given. An entry is `(key,
+    value)`, or `(key, value, comments)` with *comments* from `comments()`
+    (or None: none)."""
+    out = []
+    for entry in entries:
+        k, v, *rest = entry
+        if len(rest) > 1:
+            raise ValueError(f"a map entry is (key, value) or (key, value, comments), not {entry!r}")
+        out.append([str(k), v, rest[0]] if rest and rest[0] else [str(k), v])
+    return {"map": out}
+
+
+def comments(head: Optional[str] = None, line: Optional[str] = None) -> dict:
+    """A map entry's comments (`map_value`'s third element): *head* above
+    the key (several lines), *line* after `key:` (one line). Layout, not
+    content: da-guard writes each line `# <line>` and never reads it back. A
+    carriage return or another control character is da-guard's bad_input."""
+    out = {}
+    if head is not None:
+        out["head"] = str(head)
+    if line is not None:
+        out["line"] = str(line)
+    return out
+
+
+# ── batch entries (`write_all`) ─────────────────────────────────────
+
+def edit_entry(rel: str, ops: "Sequence[dict]") -> dict:
+    """Edit the existing file *rel* with *ops*."""
+    return {"path": rel, "ops": list(ops)}
+
+
+def create_entry(rel: str, content: dict, head_comment: Optional[str] = None) -> dict:
+    """A NEW file at *rel* whose top level is *content* (a `map_value`),
+    *head_comment* (several lines, a comment) above it."""
+    entry = {"path": rel, "create": content}
+    if head_comment is not None:
+        entry["head_comment"] = str(head_comment)
+    return entry
+
+
+def move_entry(rel: str, from_rel: str) -> dict:
+    """Move the existing file *from_rel* to the new path *rel*, byte for
+    byte; *from_rel* is gone after."""
+    return {"path": rel, "from": from_rel}
 
 
 def is_canonical_int(text: str) -> bool:
@@ -316,7 +363,8 @@ def _check(doc: dict) -> None:
 
 def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
          binary: Optional[str], timeout: Optional[float]) -> dict:
-    """One da-guard run of *files* (each `{"path": …, "ops"|"content": …}`):
+    """One da-guard run of *files* (each an `edit_entry` / `create_entry` /
+    `move_entry`):
     its document, the files answered in the order sent."""
     args = [command, "--config-dir", str(root), "--input", "-", "--json"]
     if dry_run:
@@ -332,6 +380,17 @@ def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
             f"da-guard {command} did not answer the files it was given, in order; "
             "nothing of it is used")
     return doc
+
+
+def _touched(files: "list[dict]") -> "list[str]":
+    """Every path the batch may change: each entry's path, and a move's
+    source."""
+    out = []
+    for f in files:
+        out.append(f["path"])
+        if "from" in f:
+            out.append(f["from"])
+    return out
 
 
 def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
@@ -354,17 +413,19 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
         if exc.older or dry_run:
             raise EditCallerError({"path": "", "status": CALLER_ERROR, "reason": "da_guard_mismatch",
                                    "message": str(exc)}, command) from exc
-        raise PartialWrite([], "", exc, maybe_written=[f["path"] for f in files]) from exc
+        raise PartialWrite([], "", exc, maybe_written=_touched(files)) from exc
     except _lib_parse_tree.ParseTreeError as exc:
         if dry_run:
             raise
-        raise PartialWrite([], "", exc, maybe_written=[f["path"] for f in files]) from exc
+        raise PartialWrite([], "", exc, maybe_written=_touched(files)) from exc
     results = doc["files"]
     status = doc["status"]
     if status in (WRITTEN, UNCHANGED, DRY_RUN):
         return results
     written = [r["path"] for r in results if r["status"] == WRITTEN]
-    maybe = [r["path"] for r in results if r["status"] == MAYBE_WRITTEN]
+    # A move whose outcome is not known may have changed its source too.
+    maybe = [p for r in results if r["status"] == MAYBE_WRITTEN
+             for p in (r["path"], r.get("from")) if p]
     failed = next((r for r in results if r["status"] in (CALLER_ERROR, REFUSED)), None)
     if written or maybe:
         cause: EditError = (EditRefused(failed, command) if failed and failed["status"] == REFUSED
@@ -392,39 +453,56 @@ def _one(command: str, root: "Path | str", body: dict, dry_run: bool,
 
 def edit(root: "Path | str", rel: str, ops: "Sequence[dict]", *, dry_run: bool = False,
          binary: Optional[str] = None, timeout: Optional[float] = None) -> dict:
-    """`da-guard edit --config-dir <root> --json [--dry-run]` of the one file
-    *rel* with *ops*: its result (status `written`, `unchanged` or
+    """`da-guard write --config-dir <root> --json [--dry-run]` editing the
+    one file *rel* with *ops*: its result (status `written`, `unchanged` or
     `dry_run`). Raises EditRefused / EditCallerError / ParseTreeError."""
-    return _one(SUBCOMMAND, root, {"path": rel, "ops": list(ops)}, dry_run, binary, timeout)
+    return _one(COMMAND, root, edit_entry(rel, ops), dry_run, binary, timeout)
 
 
-def emit(root: "Path | str", rel: str, content: dict, *, dry_run: bool = False,
+def emit(root: "Path | str", rel: str, content: dict, *, head_comment: Optional[str] = None,
+         dry_run: bool = False, binary: Optional[str] = None,
+         timeout: Optional[float] = None) -> dict:
+    """`da-guard write` creating a NEW file at *rel* whose top level is
+    *content* (a `map_value`), *head_comment* above it; answers and raises as
+    `edit` (PartialWrite when the file may be left in place)."""
+    return _one(COMMAND, root, create_entry(rel, content, head_comment), dry_run, binary, timeout)
+
+
+def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
          binary: Optional[str] = None, timeout: Optional[float] = None) -> dict:
-    """`da-guard emit` of a NEW file at *rel* whose top level is *content*
-    (a `map_value`); answers and raises as `edit` (PartialWrite when the
-    file may be left in place)."""
-    return _one(EMIT, root, {"path": rel, "content": content}, dry_run, binary, timeout)
+    """`da-guard write` moving *from_rel* to the new path *rel*, byte for
+    byte (the target first, as `move_entry` and every entry take it);
+    answers and raises as `edit`."""
+    return _one(COMMAND, root, move_entry(rel, from_rel), dry_run, binary, timeout)
+
+
+def write_all(root: "Path | str", entries: "Sequence[dict]", *, dry_run: bool = False,
+              binary: Optional[str] = None, timeout: Optional[float] = None) -> "list[dict]":
+    """Every entry of *entries* (`edit_entry` / `create_entry` /
+    `move_entry`) or none, in ONE da-guard run (module docstring, "Several
+    files"): the files' results, in order.
+
+    Raises EditsRefused (one or more refused: nothing written; TreeWorsened
+    when the batch would worsen the tree), EditCallerError (nothing
+    written), PartialWrite (the write stopped part-way, or da-guard gave no
+    answer), ParseTreeError (dry run only)."""
+    return _batch(COMMAND, root, list(entries), dry_run, binary, timeout)
 
 
 def edit_all(root: "Path | str", edits: "Sequence[tuple[str, Sequence[dict]]]", *,
              dry_run: bool = False, binary: Optional[str] = None,
              timeout: Optional[float] = None) -> "list[dict]":
-    """Edit every `(rel, ops)` of *edits* or none, in ONE da-guard run
-    (module docstring, "Several files"): the files' results, in order.
-
-    Raises EditsRefused (one or more refused: nothing written),
-    EditCallerError (nothing written), PartialWrite (the write stopped
-    part-way, or da-guard gave no answer), ParseTreeError (dry run only)."""
-    return _batch(SUBCOMMAND, root, [{"path": rel, "ops": list(ops)} for rel, ops in edits],
-                  dry_run, binary, timeout)
+    """`write_all` of an edit per `(rel, ops)` of *edits*."""
+    return write_all(root, [edit_entry(rel, ops) for rel, ops in edits],
+                     dry_run=dry_run, binary=binary, timeout=timeout)
 
 
 def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
              dry_run: bool = False, binary: Optional[str] = None,
              timeout: Optional[float] = None) -> "list[dict]":
-    """Write every NEW `(rel, content)` of *files* or none, in ONE da-guard
-    run; answers and raises as `edit_all` (da-guard removes the emitted
-    files again when its write stops part-way: PartialWrite then names only
-    the ones it could not remove, as maybe written)."""
-    return _batch(EMIT, root, [{"path": rel, "content": content} for rel, content in files],
-                  dry_run, binary, timeout)
+    """`write_all` of a NEW file per `(rel, content)` of *files* (da-guard
+    removes the created files again when its write stops part-way:
+    PartialWrite then names only the ones it could not remove, as maybe
+    written)."""
+    return write_all(root, [create_entry(rel, content) for rel, content in files],
+                     dry_run=dry_run, binary=binary, timeout=timeout)

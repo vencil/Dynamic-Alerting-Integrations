@@ -483,7 +483,7 @@ type ScanOptions struct {
 	// tree in place of the disk (`da-guard effective --overlay`, #2906).
 	Overlay *FileOverlay
 	// Overlays are more files read in place of the disk, in the same walk
-	// (`da-guard edit` / `emit` judging the tree with their whole batch
+	// (`da-guard write` judging the tree with its whole batch
 	// written, #3206); no two (Overlay included) may name one path.
 	// OverlayMakesDirs is ScanDirTreeFilesWith's mkdirs for them.
 	Overlays         []FileOverlay
@@ -491,7 +491,7 @@ type ScanOptions struct {
 	// SkipDuplicated (ScopeEffectiveWith): a tenant declared in two or more
 	// files is set aside (ScopedTenants.Duplicated) instead of stopping the
 	// scope with a DuplicateTenantError, so every other tenant is still
-	// judged — what `da-guard edit` / `emit` compare a tree's validation by
+	// judged — what `da-guard write` compares a tree's validation by
 	// (#3206). The scan ignores it.
 	SkipDuplicated bool
 	// Tenants, when non-nil, is the only tenants EffectiveTreeWith resolves
@@ -519,6 +519,10 @@ type ScanOptions struct {
 type FileOverlay struct {
 	Rel  string
 	Data []byte
+	// Remove: the file the walk lists at Rel is taken as gone (Data is not
+	// read) — the source of a move (`da-guard write`, #3206). Rel must be a
+	// file the walk lists.
+	Remove bool
 }
 
 // ErrOverlay is wrapped by every refusal of a FileOverlay.
@@ -619,7 +623,7 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 }
 
 // ScanDirTreeFilesWith is ScanDirTreeFiles of the tree as it is once every
-// overlay is written (`da-guard edit` / `emit`, #3206): each one's bytes are
+// overlay is written (`da-guard write`, #3206): each one's bytes are
 // read at its path in place of the disk, as FileOverlay says, all in the one
 // walk; no two may name one path. mkdirs: a create whose directories are
 // missing is taken as the writer that makes them leaves it — each missing
@@ -968,12 +972,20 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		overlayData = make(map[string][]byte, len(ov.files))
 		var creates []entry
-		made := map[string]bool{} // directories the creates take as made
+		made := map[string]bool{}    // directories the creates take as made
+		removed := map[string]bool{} // listed files taken as gone
 		for _, o := range ov.files {
-			if _, twice := overlayData[o.Rel]; twice {
+			if _, twice := overlayData[o.Rel]; twice || removed[o.Rel] {
 				return nil, &OverlayError{Rel: o.Rel, Reason: "is given twice"}
 			}
 			at, isListed := listed[o.Rel]
+			if o.Remove {
+				if !isListed {
+					return nil, &OverlayError{Rel: o.Rel, Reason: "is no file the walk lists; there is nothing to remove"}
+				}
+				removed[o.Rel] = true
+				continue
+			}
 			missing, oerr := overlayCheck(absRoot, o.Rel, isListed, ov.mkdirs, unreadable)
 			if oerr != nil {
 				return nil, oerr
@@ -995,6 +1007,15 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				}
 			}
 			overlayData[o.Rel] = append(make([]byte, 0, len(o.Data)), o.Data...) // never nil: Data marks "cached"
+		}
+		if len(removed) > 0 {
+			kept := entries[:0:0]
+			for _, e := range entries {
+				if !removed[e.rel] {
+					kept = append(kept, e)
+				}
+			}
+			entries = kept
 		}
 		if len(creates) > 0 {
 			// Walk order is lexical per directory, depth first: the creates

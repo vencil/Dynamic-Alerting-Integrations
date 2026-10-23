@@ -269,7 +269,7 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 }
 
 // ScopeEffectiveWith is ScopeEffective of the whole tree (no scope) as opts
-// makes it read (ScanOptions: the overlays a `da-guard edit` / `emit` batch
+// makes it read (ScanOptions: the overlays a `da-guard write` batch
 // would write, #3206) — the validation `da-guard --config-dir` runs, of
 // that tree.
 func ScopeEffectiveWith(configDir string, opts ScanOptions) (*ScopedTenants, error) {

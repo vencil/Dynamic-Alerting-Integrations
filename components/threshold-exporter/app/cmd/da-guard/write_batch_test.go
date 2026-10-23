@@ -1,6 +1,6 @@
 package main
 
-// `da-guard edit` / `emit` take a batch (#3206 step 10c): every file of the
+// `da-guard write` takes a batch (#3206 step 10c): every file of the
 // call is judged in one tree, with every other file of the batch in place;
 // one refusal and nothing is written, every refused file named; a write
 // that fails part-way removes the files emit created, and names the files
@@ -46,7 +46,7 @@ func TestEdit_OneRefusalWritesNoFileAndNamesEveryRefusal(t *testing.T) {
 		{"path":"b.yaml","ops":[{"op":"ensure-map","path":["tenants","t2"]}]},
 		{"path":"c.yaml","ops":[{"op":"unset","path":["tenants","t3","cpu"]}]},
 		{"path":"d.yaml","ops":[{"op":"unset","path":["tenants","t4","nothing"]}]}]}`
-	code, res := runBatch(t, editCmd, in, "--config-dir", root)
+	code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 	want := []string{"not_written", "refused/edit_not_applicable", "refused/symlink", "not_written"}
 	if code != exitFindings || res.Status != writeStatusRefused || callReason(res) != "" ||
 		!reflect.DeepEqual(statuses(res), want) {
@@ -70,7 +70,7 @@ func TestEdit_EveryFilePassesThenEachIsWritten(t *testing.T) {
 		{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1","cpu"]}]},
 		{"path":"b.yaml","ops":[{"op":"unset","path":["tenants","t2","nothing"]}]},
 		{"path":"team/c.yaml","ops":[{"op":"set","path":["tenants","t3","cpu"],"value":{"int":"8"}}]}]}`
-	code, res := runBatch(t, editCmd, in, "--config-dir", root)
+	code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 	if want := []string{"written", "unchanged", "written"}; code != exitOK || res.Status != writeStatusWritten ||
 		!reflect.DeepEqual(statuses(res), want) {
 		t.Fatalf("exit %d status %s files %v, want %v (%v)", code, res.Status, statuses(res), want, res.Message)
@@ -93,22 +93,22 @@ func TestEmit_TheBatchIsJudgedAsOneTree(t *testing.T) {
 	root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t1: {}\n"})
 	body := `{"map":[["defaults",{"map":[["cpu",{"int":"5"}]]}]]}`
 	for _, p := range []string{"team/_defaults.yaml", "team/_defaults.yml"} {
-		if code, res := runBatch(t, emitCmd, `{"files":[{"path":"`+p+`","content":`+body+`}]}`,
+		if code, res := runBatch(t, writeCmd, `{"files":[{"path":"`+p+`","create":`+body+`}]}`,
 			"--config-dir", root, "--dry-run"); code != exitOK || res.Status != writeStatusDryRun {
 			t.Fatalf("%s alone: exit %d %+v", p, code, res)
 		}
 	}
 	before := snapshot(t, root)
-	in := `{"files":[{"path":"team/_defaults.yaml","content":` + body + `},` +
-		`{"path":"team/_defaults.yml","content":` + body + `}]}`
-	code, res := runBatch(t, emitCmd, in, "--config-dir", root)
+	in := `{"files":[{"path":"team/_defaults.yaml","create":` + body + `},` +
+		`{"path":"team/_defaults.yml","create":` + body + `}]}`
+	code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 	if want := []string{"not_written", "refused/not_read"}; code != exitFindings || !reflect.DeepEqual(statuses(res), want) {
 		t.Fatalf("exit %d files %v, want %v", code, statuses(res), want)
 	}
 	// The entry is the tree's (decoded raw: parseTreeEntry has no
 	// UnmarshalJSON).
 	var out, errOut bytes.Buffer
-	runWrite(emitCmd, []string{"--config-dir", root, "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
+	runWrite(writeCmd, []string{"--config-dir", root, "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
 	var raw struct {
 		Files []struct {
 			Entry map[string]any `json:"entry"`
@@ -128,16 +128,14 @@ func TestWrite_APathGivenTwiceIsACallerError(t *testing.T) {
 	root := writeTree(t, map[string]string{"a.yaml": "tenants: {}\n"})
 	before := snapshot(t, root)
 	for name, in := range map[string]string{
-		"edit":                   `{"files":[{"path":"a.yaml","ops":[]},{"path":"a.yaml","ops":[]}]}`,
-		"edit, spelled two ways": `{"files":[{"path":"a.yaml","ops":[]},{"path":"x/../a.yaml","ops":[]}]}`,
-		"emit":                   `{"files":[{"path":"n.yaml","content":{"map":[]}},{"path":"n.yaml","content":{"map":[]}}]}`,
+		"edit":                            `{"files":[{"path":"a.yaml","ops":[]},{"path":"a.yaml","ops":[]}]}`,
+		"edit, spelled two ways":          `{"files":[{"path":"a.yaml","ops":[]},{"path":"x/../a.yaml","ops":[]}]}`,
+		"create":                          `{"files":[{"path":"n.yaml","create":{"map":[]}},{"path":"n.yaml","create":{"map":[]}}]}`,
+		"a move's source as another path": `{"files":[{"path":"n.yaml","from":"a.yaml"},{"path":"a.yaml","ops":[]}]}`,
+		"two moves of one source":         `{"files":[{"path":"n.yaml","from":"a.yaml"},{"path":"m.yaml","from":"a.yaml"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			cmd := editCmd
-			if strings.HasPrefix(name, "emit") {
-				cmd = emitCmd
-			}
-			code, res := runBatch(t, cmd, in, "--config-dir", root)
+			code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 			if code != exitCallerErr || res.Status != writeStatusCallerError || callReason(res) != "bad_input" ||
 				len(res.Files) != 0 || res.Message == nil || !strings.Contains(*res.Message, "given once") {
 				t.Fatalf("exit %d %+v", code, res)
@@ -151,26 +149,28 @@ func TestWrite_APathGivenTwiceIsACallerError(t *testing.T) {
 		"no files member":    `{}`,
 		"a case-variant top": `{"FILES":[]}`,
 		"no path":            `{"files":[{"ops":[]}]}`,
-		"emit's member":      `{"files":[{"path":"a.yaml","content":{"map":[]}}]}`,
+		"two kinds in one":   `{"files":[{"path":"a.yaml","ops":[],"create":{"map":[]}}]}`,
+		"head_comment alone": `{"files":[{"path":"a.yaml","ops":[],"head_comment":"x"}]}`,
+		"no kind":            `{"files":[{"path":"a.yaml"}]}`,
 		"the old shape":      `{"ops":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if code, res := runBatch(t, editCmd, in, "--config-dir", root); code != exitCallerErr || callReason(res) != "bad_input" {
+			if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitCallerErr || callReason(res) != "bad_input" {
 				t.Fatalf("exit %d %+v", code, res)
 			}
 		})
 	}
 	// --path is gone: the input names every file.
-	if code, res := runBatch(t, editCmd, `{"files":[{"path":"a.yaml","ops":[]}]}`, "--config-dir", root, "--path", "a.yaml"); code != exitCallerErr || callReason(res) != "bad_flags" {
+	if code, res := runBatch(t, writeCmd, `{"files":[{"path":"a.yaml","ops":[]}]}`, "--config-dir", root, "--path", "a.yaml"); code != exitCallerErr || callReason(res) != "bad_flags" {
 		t.Fatalf("--path: exit %d %+v", code, res)
 	}
 }
 
 // emitBatch is three new tenant files under a missing directory.
 const emitBatch = `{"files":[
-	{"path":"new/a.yaml","content":{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}},
-	{"path":"new/b.yaml","content":{"map":[["tenants",{"map":[["t2",{"map":[]}]]}]]}},
-	{"path":"new/c.yaml","content":{"map":[["tenants",{"map":[["t3",{"map":[]}]]}]]}}]}`
+	{"path":"new/a.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}},
+	{"path":"new/b.yaml","create":{"map":[["tenants",{"map":[["t2",{"map":[]}]]}]]}},
+	{"path":"new/c.yaml","create":{"map":[["tenants",{"map":[["t3",{"map":[]}]]}]]}}]}`
 
 // runSeamed runs w (its seams set) on stdin with --json.
 func runSeamed(t *testing.T, w *writer, stdin string, args ...string) (int, writeResult) {
@@ -207,7 +207,7 @@ func TestEmit_AWriteThatStopsPartWayRemovesWhatItCreated(t *testing.T) {
 			root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 			before := snapshot(t, root)
 			n := 0
-			w := &writer{cmd: emitCmd, rename: tc.rename, link: func(o, nn string) error {
+			w := &writer{cmd: writeCmd, rename: tc.rename, link: func(o, nn string) error {
 				if n++; n == 2 {
 					return tc.linkErr
 				}
@@ -231,7 +231,7 @@ func TestEmit_AWriteThatStopsPartWayRemovesWhatItCreated(t *testing.T) {
 	// says some files may be in place.
 	root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 	n := 0
-	w := &writer{cmd: emitCmd,
+	w := &writer{cmd: writeCmd,
 		link: func(o, nn string) error {
 			if n++; n == 2 {
 				return fs.ErrExist
@@ -256,7 +256,7 @@ func TestEdit_AWriteThatStopsPartWayNamesTheFilesWritten(t *testing.T) {
 		"c.yaml": "tenants:\n  t3:\n    cpu: \"7\"\n",
 	})
 	n := 0
-	w := &writer{cmd: editCmd, rename: func(o, nn string) error {
+	w := &writer{cmd: writeCmd, rename: func(o, nn string) error {
 		if n++; n == 2 {
 			return errors.New("disk full")
 		}
@@ -292,13 +292,13 @@ func TestEdit_ChangedBeforeAnyRenameWritesNothing(t *testing.T) {
 		"b.yaml": "tenants:\n  t2:\n    cpu: \"6\"\n",
 	})
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut}
-	w.res = writeResult{Schema: writeSchema, Command: editCmd, Files: []writeFileResult{
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut}
+	w.res = writeResult{Schema: writeSchema, Command: writeCmd, Files: []writeFileResult{
 		{Path: "a.yaml", Warnings: []string{}}, {Path: "b.yaml", Warnings: []string{}}}}
 	files := []*writeFile{
-		{rel: "a.yaml", abs: filepath.Join(root, "a.yaml"), out: []byte("tenants:\n  t1: {}\n"),
+		{kind: writeKindEdit, rel: "a.yaml", abs: filepath.Join(root, "a.yaml"), out: []byte("tenants:\n  t1: {}\n"),
 			original: []byte("tenants:\n  t1:\n    cpu: \"5\"\n"), perm: 0o644, pending: true, res: &w.res.Files[0]},
-		{rel: "b.yaml", abs: filepath.Join(root, "b.yaml"), out: []byte("tenants:\n  t2: {}\n"),
+		{kind: writeKindEdit, rel: "b.yaml", abs: filepath.Join(root, "b.yaml"), out: []byte("tenants:\n  t2: {}\n"),
 			original: []byte("tenants:\n  t2:\n    cpu: \"was\"\n"), perm: 0o644, pending: true, res: &w.res.Files[1]},
 	}
 	before := snapshot(t, root)
@@ -317,19 +317,19 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 	root := writeTree(t, map[string]string{"gen.yaml": "# generated\nold: &a {x: \"1\"}\nkeep: *a\n"})
 	body := `{"ops":[{"op":"set","path":[],"value":{"map":[["tenants",{"map":[["t1",{"map":[["cpu",{"int":"5"}]]}]]}]]}},` +
 		`{"op":"set","path":["tenants","t1","mem"],"value":{"str":"6"}}]}`
-	code, res := runW(t, editCmd, body, "--config-dir", root, "--path", "gen.yaml", "--dry-run")
+	code, res := runW(t, writeCmd, body, "--config-dir", root, "--path", "gen.yaml", "--dry-run")
 	want := "tenants:\n  t1:\n    cpu: 5\n    mem: \"6\"\n"
 	if code != exitOK || res.Status != writeStatusDryRun || res.Content == nil || *res.Content != want {
 		t.Fatalf("exit %d %+v", code, res)
 	}
-	if code, res = runW(t, editCmd, body, "--config-dir", root, "--path", "gen.yaml"); code != exitOK || res.Status != writeStatusWritten {
+	if code, res = runW(t, writeCmd, body, "--config-dir", root, "--path", "gen.yaml"); code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v", code, res)
 	}
 	if got := snapshot(t, root)["gen.yaml"]; got != want {
 		t.Fatalf("written %q, want %q", got, want)
 	}
 	// The same content again is unchanged.
-	if code, res = runW(t, editCmd, body, "--config-dir", root, "--path", "gen.yaml"); code != exitOK || res.Status != writeStatusUnchanged {
+	if code, res = runW(t, writeCmd, body, "--config-dir", root, "--path", "gen.yaml"); code != exitOK || res.Status != writeStatusUnchanged {
 		t.Fatalf("again: exit %d %+v", code, res)
 	}
 	// The whole top level is a mapping only; a set below a key the new top
@@ -343,7 +343,7 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := snapshot(t, root)
-			if _, res := runW(t, editCmd, tc.body, "--config-dir", root, "--path", "gen.yaml"); res.Status != tc.status || reasonOf(res) != tc.reason {
+			if _, res := runW(t, writeCmd, tc.body, "--config-dir", root, "--path", "gen.yaml"); res.Status != tc.status || reasonOf(res) != tc.reason {
 				t.Fatalf("%+v (%v)", res, res.Message)
 			}
 			sameTree(t, before, snapshot(t, root))
@@ -351,20 +351,20 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 	}
 }
 
-// TestWrite_SchemaV2Shape: the document's members, and each file's, are
+// TestWrite_SchemaV3Shape: the document's members, and each file's, are
 // exactly the documented ones, on a success and on a refusal.
-func TestWrite_SchemaV2Shape(t *testing.T) {
+func TestWrite_SchemaV3Shape(t *testing.T) {
 	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1: {}\n"})
 	top := []string{"command", "da_guard_version", "files", "message", "reason", "schema", "status", "worsened"}
-	file := []string{"content", "difference", "entry", "message", "path", "problem", "reason", "status", "warnings"}
+	file := []string{"content", "difference", "entry", "from", "kind", "message", "path", "problem", "reason", "status", "warnings"}
 	for name, in := range map[string]string{
-		"written": `{"files":[{"path":"b.yaml","content":{"map":[["tenants",{"map":[]}]]}}]}`,
-		"refused": `{"files":[{"path":"b.yaml","content":{"map":[]}},{"path":".c.yaml","content":{"map":[]}}]}`,
+		"written": `{"files":[{"path":"b.yaml","create":{"map":[["tenants",{"map":[]}]]}}]}`,
+		"refused": `{"files":[{"path":"b.yaml","create":{"map":[]}},{"path":".c.yaml","create":{"map":[]}}]}`,
 		"no file": `{"files":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			runWrite(emitCmd, []string{"--config-dir", root, "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
+			runWrite(writeCmd, []string{"--config-dir", root, "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
 			var doc map[string]json.RawMessage
 			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 				t.Fatal(err)
@@ -372,7 +372,7 @@ func TestWrite_SchemaV2Shape(t *testing.T) {
 			if got := keysOf(doc); !reflect.DeepEqual(got, top) {
 				t.Fatalf("members %v, want %v", got, top)
 			}
-			if string(doc["schema"]) != `"da-guard.write/v2"` {
+			if string(doc["schema"]) != `"da-guard.write/v3"` {
 				t.Fatalf("schema %s", doc["schema"])
 			}
 			var files []map[string]json.RawMessage

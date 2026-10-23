@@ -271,7 +271,7 @@ def test_patch_config_changes_only_the_patched_key(tmp_path, da_guard,
                     _minus(after, "mysql_threads_running", {tid})) == []
     assert after[tid][0]["mysql_threads_running"] == 50.0
     # The rewritten key: what was not patched is written as it was read; the
-    # new value is a canonical decimal, so da-guard edit writes it as a number
+    # new value is a canonical decimal, so da-guard write writes it as a number
     # (#3206; it was `'50'`, a quoted string, while PyYAML wrote the text).
     rewritten = "config.yaml" if layout == "legacy" else f"{tid}.yaml"
     for line in _KEPT_LINES[tid]:
@@ -313,7 +313,7 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
                         "--config-dir", str(d), "--execute"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     # ADR-036 §2 (#2906): the scan is parse-tree's. yaml.v3 reads `=` as a
-    # string, and the rewrite is da-guard edit's (#3206): the key goes, the
+    # string, and the rewrite is da-guard write's (#3206): the key goes, the
     # `=` stays as written (rc 0; it was rc 1 while PyYAML, which cannot
     # construct `=`, produced the text). A plain `<<` value is outside
     # parse-tree's closed list, so the tree is one the exporter cannot
@@ -370,7 +370,7 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
     got = json.loads(p.stdout.strip().splitlines()[-1])
     # ADR-036 §2 (#2906): the read is parse-tree's. yaml.v3 reads `=` as a
-    # string, and the rewrite is da-guard edit's (#3206), so the key is
+    # string, and the rewrite is da-guard write's (#3206), so the key is
     # patched (it was refused while PyYAML, which cannot construct `=`,
     # produced the text); `--diff` sends nothing either way. A plain `<<`
     # value is outside parse-tree's closed list (tag_not_allowed): the key is
@@ -385,7 +385,7 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
 
 def test_patch_config_writes_a_typed_severity_value_as_a_string():
     """`70:critical` typed on the CLI is not canonical decimal: it goes to
-    da-guard edit as a string and is written double-quoted (#3206; PyYAML
+    da-guard write as a string and is written double-quoted (#3206; PyYAML
     wrote it plain), and reads back as that same string."""
     written = _patched(_multi_file(), "multi-file", "t-clock",
                        "mysql_connections", "70:critical")

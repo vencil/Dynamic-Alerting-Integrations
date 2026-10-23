@@ -18,7 +18,7 @@ In hierarchical mode, _defaults.yaml is placed at domain and env levels.
 In flat mode, a single _defaults.yaml is placed at the conf.d/ root.
 
 The files are written by Go (ADR-036 §2, #3206): the generated data goes to
-ONE `da-guard emit` batch, which writes the YAML text, judges the whole tree
+ONE `da-guard write` batch, which writes the YAML text, judges the whole tree
 once (every file read back by `da-guard parse-tree` at its path, a reader
 reading it, holding exactly what was generated) and writes all of them or
 none. A refusal, or no usable da-guard ($DA_GUARD_BINARY / PATH), is exit 2
@@ -110,7 +110,7 @@ def _seed_rng(seed: int) -> random.Random:
 def _gen_threshold_value(rng: random.Random) -> int | str:
     """Generate a random threshold value in various formats.
 
-    A plain threshold is an ``int``: it goes to `da-guard emit` as an int
+    A plain threshold is an ``int``: it goes to `da-guard write` as an int
     and is written unquoted (yaml.v3 ``!!int``); a ``str`` here would be
     written as a double-quoted ``!!str``."""
     fmt = rng.choice(["scalar", "scalar", "scalar", "severity", "disable"])
@@ -602,7 +602,7 @@ def _domain_defaults(rng: random.Random,
 def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
                        flag: str | None = OUTPUT_FLAG) -> None:
     """Write every ``(root-relative path, data)`` of one run under
-    *output_dir* through ONE `da-guard emit` batch (ADR-036 §2: only Go
+    *output_dir* through ONE `da-guard write` batch (ADR-036 §2: only Go
     writes conf.d; #3206 step 10c-2): the data goes as typed values
     (`_lib_confedit.data_value`, key order as generated), Go writes the
     text, judges the whole tree once — every file read back by
@@ -628,7 +628,7 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
     except _lib_confedit.EditsRefused as exc:
         for r in exc.refusals:
             print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
-        _die(f"da-guard emit refused {len(exc.refusals)} file(s) under "
+        _die(f"da-guard write refused {len(exc.refusals)} file(s) under "
              f"{output_dir}{where} — nothing was written")
     except _lib_confedit.EditCallerError as exc:
         _die(f"{exc} — nothing was written")
@@ -638,7 +638,7 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
              f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
              f"been written, not rolled back: {', '.join(left) or '(none)'}")
     except _lib_parse_tree.ParseTreeError as exc:
-        _die(f"cannot write the generated conf.d files through `da-guard emit` "
+        _die(f"cannot write the generated conf.d files through `da-guard write` "
              f"(ADR-036 §2): {exc}; nothing was written")
 
 

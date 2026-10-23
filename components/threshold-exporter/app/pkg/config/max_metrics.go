@@ -36,7 +36,7 @@ func RootMaxMetricsPerTenant(configDir string) (limit int, source string, err er
 }
 
 // RootMaxMetricsPerTenant is the package function's answer for the tree this
-// scan read (an overlay included: `da-guard edit` / `emit` judge the tree as
+// scan read (an overlay included: `da-guard write` judges the tree as
 // it is once their batch is written, #3206). The scan must hold the root
 // carrier's bytes (a cold ScanDirTree / ScanDirTreeFiles).
 func (s *TreeScan) RootMaxMetricsPerTenant() (limit int, source string, err error) {

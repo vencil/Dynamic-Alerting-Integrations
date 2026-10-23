@@ -63,7 +63,7 @@ func TestEdit_AnOwnerItCannotSetIsAWarning(t *testing.T) {
 	if conf == "" {
 		t.Fatal("no fixture: the unprivileged run lost " + chownFixtureEnv)
 	}
-	code, res := runW(t, editCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
+	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","a"],"value":{"str":"2"}}]}`,
 		"--config-dir", conf, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v %v", code, res, res.Message)

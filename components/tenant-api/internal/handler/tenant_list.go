@@ -514,7 +514,7 @@ type partialEdit struct {
 // refusal may name (describePath).
 //
 // The invariant itself is confedit.Verify (ADR-036 §4: the one writer's
-// check, shared with `da-guard edit`); this maps the edits onto it and its
+// check, shared with `da-guard write`); this maps the edits onto it and its
 // first difference onto the refusal's text.
 func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdit, names gitops.TenantNames) error {
 	// The tenant's block: a batch patch for a tenant the file does not hold

@@ -223,7 +223,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --metric <key> [--metric <key> ...]\n", programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--path <rel> --input <file|->]\n", programName, parseTreeCmd)
-		fmt.Fprintf(errOut, "       %s %s|%s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, editCmd, emitCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, writeCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
@@ -234,8 +234,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			keyRefsCmd, programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "'%s' prints which conf.d files each reader reads and what each holds as yaml.v3 decodes it, "+
 			"or why it cannot be read, as JSON (see '%s %s -h').\n", parseTreeCmd, programName, parseTreeCmd)
-		fmt.Fprintf(errOut, "'%s' rewrites existing conf.d files and '%s' writes new ones from the caller's ops or "+
-			"content, every file of the call judged with parse-tree before any is written (see '%s %s -h').\n\n", editCmd, emitCmd, programName, editCmd)
+		fmt.Fprintf(errOut, "'%s' edits, creates and moves conf.d files from the caller's ops, values or paths, "+
+			"every file of the call judged with parse-tree before any is written (see '%s %s -h').\n\n", writeCmd, programName, writeCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n"+
 			"  2  caller error, or a conf.d path that is not valid UTF-8 (no output can carry it)\n"+
@@ -286,11 +286,8 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if len(args) > 0 && args[0] == compileCustomAlertsCmd {
 		return runCompileCustomAlerts(args[1:], stdout, errOut)
 	}
-	if len(args) > 0 && args[0] == editCmd {
-		return runEdit(args[1:], os.Stdin, stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == emitCmd {
-		return runEmit(args[1:], os.Stdin, stdout, errOut)
+	if len(args) > 0 && args[0] == writeCmd {
+		return runWriteCmd(args[1:], os.Stdin, stdout, errOut)
 	}
 
 	f, err := parseFlags(args, errOut)

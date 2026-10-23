@@ -29,7 +29,7 @@ the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
   - **安全預設 dry-run**：不帶 ``--apply`` 只印出「會開哪些 PR」，**不發任何寫入**。
 
 讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 把那份文字放進 ``--config-dir``
-的私有複本、當成租戶檔所在路徑的那個檔 → 交給 ``da-guard edit --dry-run``（ADR-036 §2：寫
+的私有複本、當成租戶檔所在路徑的那個檔 → 交給 ``da-guard write --dry-run``（ADR-036 §2：寫
 conf.d 的只有 Go，#3206）把被推薦的 key 設成推薦值（字串，寫成 ``"45"``）→ 拿它回的文字 PUT。
 要改的 key 必須已是該租戶區塊的直接子純量（不新增 key）；da-guard 只改被編輯的節點，其餘鍵、
 註解、每個純量的寫法照舊，只重排版面（縮排 2 格、行尾註解前一個空格、空行可能消失；CRLF 與
@@ -462,7 +462,7 @@ def collect_not_measured(
 # ---------------------------------------------------------------------------
 # The edit: Go applies it (ADR-036 §2 — only Go writes conf.d; #3206)
 # ---------------------------------------------------------------------------
-#: Staged copies of a --config-dir for `da-guard edit` (`_stage`), one per
+#: Staged copies of a --config-dir for `da-guard write` (`_stage`), one per
 #: directory for the process; removed at exit.
 _STAGES: dict[str, str] = {}
 
@@ -477,7 +477,7 @@ def _cleanup_stages() -> None:
 def _stage(config_dir: Optional[str]) -> Path:
     """A private copy of *config_dir* (`<tmp>/conf.d`; an empty one for a
     missing or unnamed directory), made once per process: the tree the live
-    text is edited in, so `da-guard edit` reads the tenant file with the role
+    text is edited in, so `da-guard write` reads the tenant file with the role
     it has in the real tree. Directories, regular files and symlinks are
     copied (a symlink as a link); anything else (a FIFO, a socket) is left
     out — a tree holding one is refused by the run's read before any edit."""
@@ -516,7 +516,7 @@ def edit_live_yaml(
     raw_yaml: str, tenant: str, new_values: dict[str, str],
     *, config_dir: Optional[str] = None, rel: str = "",
 ) -> tuple[Optional[str], Optional[str]]:
-    """The live tenant text with ``new_values`` set, as ``da-guard edit``
+    """The live tenant text with ``new_values`` set, as ``da-guard write``
     writes it (ADR-036 §2, #3206): ``(text, None)``, or ``(None, why)``
     when the edit is refused.
 
@@ -527,7 +527,7 @@ def edit_live_yaml(
     missing there is refused, never added. The live text is laid out as the
     file at *rel* (``<tenant>.yaml`` when unknown) of a private copy of
     *config_dir* (`_stage`; a missing *config_dir* is an empty tree) and sent
-    to ``da-guard edit --dry-run``: it applies the edits on yaml.v3's node
+    to ``da-guard write --dry-run``: it applies the edits on yaml.v3's node
     tree — every other node, comment and spelling kept, the file only
     re-laid out (2-space indentation, one space before a trailing comment,
     blank lines may go; CRLF and a BOM kept) — and refuses an original it
@@ -566,7 +566,7 @@ def edit_live_yaml(
         try:
             node = _lib_parse_tree.load_file(root, rel, data).node(rel)
         except (_lib_parse_tree.FileUnreadable, KeyError):
-            node = None  # da-guard edit names it (original_unreadable / not_read)
+            node = None  # da-guard write names it (original_unreadable / not_read)
         if node is not None:
             tenants = node.get("tenants")
             block = (tenants.get(tenant) if isinstance(tenants, dict)
@@ -580,7 +580,7 @@ def edit_live_yaml(
         try:
             doc = _lib_confedit.edit(root, rel, ops, dry_run=True)
         except _lib_confedit.EditError as exc:
-            return None, f"da-guard edit {exc.status} ({exc.reason}): {exc.message}"
+            return None, f"da-guard write {exc.status} ({exc.reason}): {exc.message}"
     finally:
         # The stage back as it was copied, for the next tenant: best effort
         # (a stage that cannot be restored shows in that tenant's own read).
@@ -837,7 +837,7 @@ def _error_answer_message(status: int, body: Any, code: str, remedy: str,
 
 def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
                       headers: dict, keys: list[str]) -> "str | TenantOutcome":
-    """GET the live tenant YAML, have da-guard edit set the changes; the body to PUT.
+    """GET the live tenant YAML, have da-guard write set the changes; the body to PUT.
 
     Returns a TenantOutcome (``error``) instead when any step refuses.
     """
@@ -917,7 +917,7 @@ def _classify_200(plan: TenantPlan, keys: list[str], body: Any) -> TenantOutcome
 def open_governance_pr(
     plan: TenantPlan, args: argparse.Namespace
 ) -> TenantOutcome:
-    """GET → da-guard edit (verified) → PUT a per-tenant governance PR.
+    """GET → da-guard write (verified) → PUT a per-tenant governance PR.
 
     Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
     200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
@@ -1369,7 +1369,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
-@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT da-guard edit has no da-guard → rc 2
+@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT da-guard write has no da-guard → rc 2
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(
