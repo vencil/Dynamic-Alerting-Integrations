@@ -937,6 +937,12 @@ func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
 	if err != nil {
 		return "", nil, false
 	}
+	return rootCarrierOf(scan)
+}
+
+// rootCarrierOf is the root defaults carrier scan's chain selects: its path
+// and bytes, false when the root has none (or its bytes were not kept).
+func rootCarrierOf(scan *TreeScan) (path string, data []byte, ok bool) {
 	p, found := scan.DefaultsCarriers().ByDir[scan.AbsRoot]
 	if !found {
 		return "", nil, false

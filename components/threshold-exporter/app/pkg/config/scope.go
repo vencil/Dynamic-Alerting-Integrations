@@ -263,6 +263,14 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	return scopeEffective(configDir, scopeDir, false, nil, ScanOptions{})
 }
 
+// ScopeEffectiveWith is ScopeEffective of the whole tree (no scope) as opts
+// makes it read (ScanOptions: the overlays a `da-guard edit` / `emit` batch
+// would write, #3206) — the validation `da-guard --config-dir` runs, of
+// that tree.
+func ScopeEffectiveWith(configDir string, opts ScanOptions) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", false, nil, opts)
+}
+
 // EffectiveTree is ScopeEffective over the whole tree (scopeDir = configDir)
 // with every tenant's KeySources filled (#2564): the per-tenant /effective
 // answer — the same resolver, the same one walk, the same merge — plus, per

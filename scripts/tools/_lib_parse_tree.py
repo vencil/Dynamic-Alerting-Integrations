@@ -208,6 +208,13 @@ class BinaryMissing(ParseTreeError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
 
+class NotThisDocument(ParseTreeError):
+    """da-guard answered, but not with the document this reader reads: a
+    document of another schema (an older or newer da-guard), or exit 2
+    because it does not know the command. It did what that answer says,
+    not what was asked."""
+
+
 class FileUnreadable(ParseTreeError):
     """A selected file parse-tree could not read: `kind` is its closed-list code
     (pkg/parsetree Kinds), `message` the reason for a person."""
@@ -298,8 +305,9 @@ def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
         if proc.returncode == 2 and not _accepts(cmd, timeout):
             older = (f" — this da-guard does not know `{what}`: it is older "
                      "than this tool; upgrade or rebuild it")
-        raise ParseTreeError(f"da-guard {what} exited {proc.returncode}{older}"
-                             + (f": {' '.join(stderr.split())}" if stderr else ""))
+        cls = NotThisDocument if older else ParseTreeError
+        raise cls(f"da-guard {what} exited {proc.returncode}{older}"
+                  + (f": {' '.join(stderr.split())}" if stderr else ""))
     return read_document(proc.stdout, check=check, what=what, schema=schema)
 
 
@@ -310,17 +318,20 @@ def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,
     ParseTreeError — naming a da-guard older than this tool as such — for
     anything else: a document wrong anywhere is unusable whole (ADR-036 §2)."""
     check = check_shape if check is None else check
+    wrong_schema = False
     try:
         doc = json.loads(raw.decode("utf-8"))
         if not isinstance(doc, dict) or doc.get("schema") != schema:
             got = doc.get("schema") if isinstance(doc, dict) else None
+            wrong_schema = isinstance(got, str)
             hint = f" — {_OLDER}" if got in _OLDER_SCHEMAS else ""
             raise ValueError(f"schema {got!r}, this reader reads {schema!r}{hint}")
         check(doc)
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.
-        raise ParseTreeError(f"da-guard {what} wrote no document this tool can "
-                             f"read ({e}); nothing of it is used") from e
+        cls = NotThisDocument if wrong_schema else ParseTreeError
+        raise cls(f"da-guard {what} wrote no document this tool can "
+                  f"read ({e}); nothing of it is used") from e
     return doc
 
 

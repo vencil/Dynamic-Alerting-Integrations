@@ -286,5 +286,24 @@ def test_an_older_da_guard_is_named_as_such(tmp_path, monkeypatch):
     v1 = {"schema": "da-guard.write/v1", "status": "written"}
     monkeypatch.setattr(_lib_parse_tree.subprocess, "run", lambda *a, **kw: type(
         "P", (), {"returncode": 0, "stdout": __import__("json").dumps(v1).encode(), "stderr": b""})())
-    with pytest.raises(_lib_parse_tree.ParseTreeError, match="older than this tool"):
-        ce.edit(root, "a.yaml", [], dry_run=True)
+    # #3206 review: it answered as another da-guard and took nothing — not a
+    # maybe-written PartialWrite, on a dry run or a real write alike.
+    for dry in (True, False):
+        with pytest.raises(ce.EditCallerError, match="older than this tool") as exc:
+            ce.edit_all(root, [("a.yaml", [])], dry_run=dry)
+        assert exc.value.reason == "da_guard_mismatch"
+
+
+def test_a_batch_that_worsens_the_tree_is_tree_worsened(tmp_path):
+    # Each file passes alone; together with the tree a tenant is declared
+    # twice: refused whole, every place named, nothing written.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants:\n  t-a: {}\n"})
+    content = ce.map_value([("tenants", ce.map_value([("t-a", ce.map_value([]))]))])
+    before = _bytes(root)
+    with pytest.raises(ce.TreeWorsened) as exc:
+        ce.emit_all(root, [("b.yaml", content)])
+    assert [(w["kind"], w["path"], w["tenant"]) for w in exc.value.worsened] == [
+        ("duplicate_tenant", "b.yaml", "t-a")]
+    assert [(r.path, r.reason) for r in exc.value.refusals] == [("b.yaml", "worsens_tree")]
+    assert isinstance(exc.value, ce.EditsRefused)
+    assert _bytes(root) == before

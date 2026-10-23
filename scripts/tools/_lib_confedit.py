@@ -52,7 +52,13 @@ Several files, all or nothing
 -----------------------------
 `edit_all` / `emit_all` send every file in one batch: da-guard judges the
 tree with all of them in place, and if any is refused nothing is written
-and `EditsRefused` names every refusal. ⚠️ The write itself can still stop
+and `EditsRefused` names every refusal. A batch whose every file passes but
+which would worsen the rest of the tree (a carrier it deselects, a tenant
+declared twice, a new verdict anywhere: da-guard's `worsens_tree`) is
+`TreeWorsened`, an `EditsRefused` naming each place. A da-guard that is not
+this tool's (an older one answering `da-guard.write/v1`, or one that does
+not know the command) took nothing: `EditCallerError`, reason
+`da_guard_mismatch`. ⚠️ The write itself can still stop
 part-way — a write error (a full disk, a permission changed), or a file
 another writer changed between the judgement and its rename: an emitted
 file is removed again by da-guard, but an edited file already renamed
@@ -88,6 +94,8 @@ MAYBE_WRITTEN = "maybe_written"
 #: The call's statuses, and a file's (which adds the last two).
 STATUSES = frozenset({WRITTEN, UNCHANGED, DRY_RUN, REFUSED, CALLER_ERROR})
 FILE_STATUSES = STATUSES | {NOT_WRITTEN, MAYBE_WRITTEN}
+#: The call's reason when the batch would worsen the tree.
+WORSENS_TREE = "worsens_tree"
 
 #: The edit contract's canonical decimal forms (pkg/confedit value.go): an
 #: `int` of at most 18 digits, a `float` of digits, '.', digits.
@@ -127,6 +135,21 @@ class EditsRefused(Exception):
     def __init__(self, refusals: "Sequence[EditRefused]") -> None:
         self.refusals = list(refusals)
         super().__init__("; ".join(str(r) for r in self.refusals))
+
+
+class TreeWorsened(EditsRefused):
+    """The batch passes file by file but would worsen the tree (da-guard
+    reason `worsens_tree`; nothing written): `.worsened` is da-guard's list
+    (`kind`, `path`, `tenant`, `finding`, `message`), and `.refusals` names
+    each as an `EditRefused` (reason `worsens_tree`), so a caller that lists
+    refusals lists these too."""
+
+    def __init__(self, worsened: "Sequence[dict]", command: str = SUBCOMMAND) -> None:
+        self.worsened = list(worsened)
+        super().__init__([EditRefused({
+            "path": w.get("path") or (f"(tenant {w['tenant']})" if w.get("tenant") else "(the tree)"),
+            "status": REFUSED, "reason": WORSENS_TREE,
+            "message": f"{w.get('kind')}: {w.get('message')}"}, command) for w in self.worsened])
 
 
 class PartialWrite(Exception):
@@ -272,6 +295,12 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
         doc = _run(command, root, files, dry_run, binary, timeout)
     except _lib_parse_tree.BinaryMissing:
         raise  # nothing was run
+    except _lib_parse_tree.NotThisDocument as exc:
+        # It answered, as another da-guard than this tool's (an older one
+        # writes v1, or knows no such command): it did not take this batch,
+        # so nothing of it was written.
+        raise EditCallerError({"path": "", "status": CALLER_ERROR, "reason": "da_guard_mismatch",
+                               "message": str(exc)}, command) from exc
     except _lib_parse_tree.ParseTreeError as exc:
         if dry_run:
             raise
@@ -287,6 +316,8 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
         cause: EditError = (EditRefused(failed, command) if failed and failed["status"] == REFUSED
                             else EditCallerError(failed or doc, command))
         raise PartialWrite(written, failed["path"] if failed else "", cause, maybe_written=maybe)
+    if status == REFUSED and doc.get("reason") == WORSENS_TREE:
+        raise TreeWorsened(doc.get("worsened") or [], command)
     if status == REFUSED:
         raise EditsRefused([EditRefused(r, command) for r in results if r["status"] == REFUSED])
     blamed = next((r for r in results if r["status"] == CALLER_ERROR), None)

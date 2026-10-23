@@ -266,6 +266,12 @@ func (w *writer) place(f *writeFile) (string, error) {
 	if link == nil {
 		link = os.Link
 	}
+	// The temporary file's inode is the file put in place, by the link or
+	// the rename alike: what a roll-back may remove (rollBack).
+	staged, serr := os.Lstat(f.tmp)
+	if serr != nil {
+		return writeReasonWriteFailed, serr
+	}
 	// A hard link never replaces what is there: a path created meanwhile is
 	// not overwritten.
 	switch err := link(f.tmp, f.abs); {
@@ -281,17 +287,36 @@ func (w *writer) place(f *writeFile) (string, error) {
 		}
 		f.tmp = ""
 	}
+	f.placed = staged
 	return "", nil
 }
 
 // rollBack removes the emitted files already in place again: they are new,
-// so nothing is lost. One that cannot be removed is maybe_written.
+// so nothing is lost. A path is removed only while it is still the file
+// this call put there (os.SameFile against its inode): one another writer
+// replaced meanwhile is left as it is. One that cannot be removed, or no
+// longer can be told to be ours, is maybe_written.
 func (w *writer) rollBack(placed []*writeFile) {
 	remove := w.remove
 	if remove == nil {
 		remove = os.Remove
 	}
 	for _, f := range placed {
+		now, lerr := os.Lstat(f.abs)
+		switch {
+		case errors.Is(lerr, fs.ErrNotExist):
+			f.res.Status, f.res.Message = writeStatusNotWritten, strp("written, and gone again when the call stopped")
+			continue
+		case lerr != nil || f.placed == nil || !os.SameFile(now, f.placed):
+			why := "the path now holds a file this call did not put there; it is left as it is"
+			if lerr != nil {
+				why = "the path cannot be checked: " + lerr.Error()
+			}
+			msg := "written, and not removed when the call stopped: " + why
+			fmt.Fprintf(w.errOut, "%s %s: %s: %s\n", programName, w.cmd, f.rel, msg)
+			f.res.Status, f.res.Message = writeStatusMaybeWritten, strp(msg)
+			continue
+		}
 		if err := remove(f.abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			msg := fmt.Sprintf("written, and could not be removed again when the call stopped: %v", err)
 			fmt.Fprintf(w.errOut, "%s %s: %s: %s\n", programName, w.cmd, f.rel, msg)

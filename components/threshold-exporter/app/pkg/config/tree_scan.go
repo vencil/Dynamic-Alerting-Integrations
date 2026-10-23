@@ -482,6 +482,12 @@ type ScanOptions struct {
 	// Overlay, when non-nil, is one file's bytes read at one path of the
 	// tree in place of the disk (`da-guard effective --overlay`, #2906).
 	Overlay *FileOverlay
+	// Overlays are more files read in place of the disk, in the same walk
+	// (`da-guard edit` / `emit` judging the tree with their whole batch
+	// written, #3206); no two (Overlay included) may name one path.
+	// OverlayMakesDirs is ScanDirTreeFilesWith's mkdirs for them.
+	Overlays         []FileOverlay
+	OverlayMakesDirs bool
 	// Tenants, when non-nil, is the only tenants EffectiveTreeWith resolves
 	// (`da-guard effective --tenant`, ADR-038 §5): the walk, the platform
 	// files and every file's verdict are the whole tree's as always; a
@@ -536,8 +542,12 @@ func ScanDirTreeWith(root string, prior *TreeScan, obs ScanObserver, logger *log
 		defer func() { obs.ObserveScanElapsed(time.Since(t0)) }()
 	}
 	var ov *overlaySet
-	if opts.Overlay != nil {
-		ov = &overlaySet{files: []FileOverlay{*opts.Overlay}}
+	if opts.Overlay != nil || len(opts.Overlays) > 0 {
+		ov = &overlaySet{mkdirs: opts.OverlayMakesDirs}
+		if opts.Overlay != nil {
+			ov.files = append(ov.files, *opts.Overlay)
+		}
+		ov.files = append(ov.files, opts.Overlays...)
 	}
 	scan, err := walkDirTree(root, prior, obs, logger, walkFull, ov)
 	if err != nil {

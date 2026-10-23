@@ -355,7 +355,7 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 // exactly the documented ones, on a success and on a refusal.
 func TestWrite_SchemaV2Shape(t *testing.T) {
 	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1: {}\n"})
-	top := []string{"command", "da_guard_version", "files", "message", "reason", "schema", "status"}
+	top := []string{"command", "da_guard_version", "files", "message", "reason", "schema", "status", "worsened"}
 	file := []string{"content", "difference", "entry", "message", "path", "problem", "reason", "status", "warnings"}
 	for name, in := range map[string]string{
 		"written": `{"files":[{"path":"b.yaml","content":{"map":[["tenants",{"map":[]}]]}}]}`,

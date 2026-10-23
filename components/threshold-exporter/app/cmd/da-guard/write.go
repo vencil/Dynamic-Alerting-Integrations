@@ -34,6 +34,9 @@ package main
 //     has readers, role config, no problem and no verdict, and its content
 //     equals the original's parse result with the ops applied (emit: the
 //     content given);
+//   - the call does not worsen the tree outside its files' own entries
+//     (write_worsen.go: readers lost, a new verdict or problem anywhere, a
+//     new error of da-guard's own validation) — reason worsens_tree;
 //   - before anything is put in place: for edit, every file still holds the
 //     bytes it was read from; for emit, no target exists. This is a
 //     comparison, not a lock (write_commit.go).
@@ -136,9 +139,13 @@ type writeResult struct {
 	Reason         *string `json:"reason"`
 	// Message: for a person, on every status but written / unchanged / dry_run.
 	Message *string `json:"message"`
-	// Files: one result per input file, in the input's order; [] when the
-	// call stopped before any file was taken (bad flags or input).
+	// Files: one result per input file, in the input's order, once the
+	// input is read; [] when the call stopped before (bad flags or input).
 	Files []writeFileResult `json:"files"`
+	// Worsened: what the tree would have after the call that it does not
+	// have now, outside the batch's own entries (write_worsen.go; reason
+	// worsens_tree); [] when nothing.
+	Worsened []writeWorsened `json:"worsened"`
 }
 
 // writeFileResult is one file's result.
@@ -224,6 +231,9 @@ type writeFile struct {
 	perm      os.FileMode
 	ofi       os.FileInfo // edit: the original's, for its owner
 	tmp       string      // the temporary file, once made
+	// placed (emit): the file this call put at abs, as it was right after
+	// (its inode): a roll-back removes abs only while it is still this file.
+	placed os.FileInfo
 }
 
 func parseWriteFlags(cmd string, args []string, errOut io.Writer) (*writeFlags, error) {
@@ -287,16 +297,21 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"file's text in place at its path (one walk, in memory) and judged by parse-tree's tree\n"+
 		"mode. Each file must have readers, no problem and no verdict there, and read as the\n"+
 		"original's parse result with the ops applied (emit: the content given). One refusal and\n"+
-		"no file is written; every refused file is named. Each file is written in its own\n"+
+		"no file is written; every refused file is named. The call may repair the tree, never\n"+
+		"worsen it: it is refused whole (worsens_tree) when the tree after it has what the tree\n"+
+		"before it has not — a path outside the batch losing readers, a verdict or problem on any\n"+
+		"entry, an error of da-guard's own validation (a tenant declared twice, ...). Each file is written in its own\n"+
 		"directory and renamed (edit) or linked (emit) into place.\n\n")
 	fs.PrintDefaults()
 	fmt.Fprintf(errOut, "\n--json document: {\"schema\": %q, \"da_guard_version\", \"command\",\n"+
 		"  \"status\": written|unchanged|dry_run|refused|caller_error, \"reason\", \"message\",\n"+
 		"  \"files\": [{\"path\", \"status\": written|unchanged|dry_run|refused|caller_error|not_written|\n"+
 		"  maybe_written, \"reason\", \"message\", \"entry\" (a parse-tree entry), \"problem\": {\"kind\",\n"+
-		"  \"message\"}, \"difference\": {\"path\", \"want\", \"got\"}, \"content\" (dry_run), \"warnings\": [<text>]}]};\n"+
-		"null where it has no value (warnings: []). The call's reason: bad_flags, bad_input, bad_path,\n"+
-		"write_failed, partial_write, or null when its status is the files'. A path that exists but\n"+
+		"  \"message\"}, \"difference\": {\"path\", \"want\", \"got\"}, \"content\" (dry_run), \"warnings\": [<text>]}],\n"+
+		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding, \"path\",\n"+
+		"  \"tenant\", \"finding\", \"message\"}]}; null where it has no value (warnings, worsened: []). The call's\n"+
+		"reason: bad_flags, bad_input, bad_path, write_failed, partial_write, worsens_tree, or null\n"+
+		"when its status is the files'. A path that exists but\n"+
 		"is no regular file (a FIFO, a device, a directory) is judged by parse-tree and refused\n"+
 		"not_read, never read. An original that parse-tree reads but validation names under a\n"+
 		"verdict may be edited: the write is judged by the text in place after the call, which must\n"+
@@ -449,7 +464,8 @@ func runWrite(cmd string, args []string, stdin io.Reader, stdout, errOut io.Writ
 }
 
 func (w *writer) run(args []string, stdin io.Reader) int {
-	w.res = writeResult{Schema: writeSchema, DaGuardVersion: Version, Command: w.cmd, Files: []writeFileResult{}}
+	w.res = writeResult{Schema: writeSchema, DaGuardVersion: Version, Command: w.cmd, Files: []writeFileResult{},
+		Worsened: []writeWorsened{}}
 	f, err := parseWriteFlags(w.cmd, args, w.errOut)
 	if errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -478,6 +494,13 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 	if !ok {
 		return code
 	}
+	// From here on every input file has its result: one no step reaches is
+	// not_written (finish).
+	w.res.Files = make([]writeFileResult, len(files))
+	for i, wf := range files {
+		w.res.Files[i] = writeFileResult{Path: wf.rel, Warnings: []string{}}
+		wf.res = &w.res.Files[i]
+	}
 
 	scan, err := config.ScanDirTreeFiles(f.configDir, log.New(io.Discard, "", 0))
 	if err != nil {
@@ -486,10 +509,7 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 	if p := nonUTF8Path(scan); p != "" {
 		return w.callerError(writeReasonBadPath, "%v", nonUTF8Error(p))
 	}
-	w.res.Files = make([]writeFileResult, len(files))
-	for i, wf := range files {
-		w.res.Files[i] = writeFileResult{Path: wf.rel, Warnings: []string{}}
-		wf.res = &w.res.Files[i]
+	for _, wf := range files {
 		wf.abs = filepath.Join(scan.AbsRoot, filepath.FromSlash(wf.rel))
 		wf.pending = true
 		if w.cmd == editCmd {
@@ -498,11 +518,25 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 			w.prepareEmit(scan, wf)
 		}
 	}
-	if code, ok := w.judgeTree(scan.AbsRoot, files); !ok {
+	after, afterDoc, overlays, code, ok := w.judgeTree(scan.AbsRoot, files)
+	if !ok {
 		return code
 	}
 	if code, stop := w.concludeJudgement(files); stop {
 		return code
+	}
+	if len(overlays) > 0 {
+		batch := make(map[string]bool, len(files))
+		for _, wf := range files {
+			batch[wf.rel] = true
+		}
+		worse, err := worsening(scan, after, afterDoc, overlays, w.cmd == emitCmd, batch)
+		if err != nil {
+			return w.callerError(writeReasonBadPath, "%v", err)
+		}
+		if len(worse) > 0 {
+			return w.refuseWorsening(worse)
+		}
 	}
 	if f.dryRun {
 		return w.dryRun(files)
@@ -862,7 +896,7 @@ func (w *writer) prepareEmit(scan *config.TreeScan, f *writeFile) {
 // then held to its entry there: readers, role config, no problem, no
 // verdict, and its content equal to f.want. ok false: the call ended (a
 // caller error).
-func (w *writer) judgeTree(root string, files []*writeFile) (int, bool) {
+func (w *writer) judgeTree(root string, files []*writeFile) (*config.TreeScan, *parseTreeDoc, []config.FileOverlay, int, bool) {
 	var overlays []config.FileOverlay
 	for _, f := range files {
 		if f.pending && !f.unchanged {
@@ -870,7 +904,7 @@ func (w *writer) judgeTree(root string, files []*writeFile) (int, bool) {
 		}
 	}
 	if len(overlays) == 0 && !anyPending(files) {
-		return 0, true
+		return nil, nil, nil, 0, true
 	}
 	byRel := make(map[string]*writeFile, len(files))
 	for _, f := range files {
@@ -890,7 +924,7 @@ func (w *writer) judgeTree(root string, files []*writeFile) (int, bool) {
 			continue
 		}
 		if err != nil {
-			return w.callerError(writeReasonBadPath, "%v", err), false
+			return nil, nil, nil, w.callerError(writeReasonBadPath, "%v", err), false
 		}
 		break
 	}
@@ -899,7 +933,7 @@ func (w *writer) judgeTree(root string, files []*writeFile) (int, bool) {
 		err = setVerdicts(doc.Entries, treeDropped(after))
 	}
 	if err != nil {
-		return w.callerError(writeReasonBadPath, "%v", err), false
+		return nil, nil, nil, w.callerError(writeReasonBadPath, "%v", err), false
 	}
 	entries := make(map[string]*parseTreeEntry, len(doc.Entries))
 	for i := range doc.Entries {
@@ -937,7 +971,19 @@ func (w *writer) judgeTree(root string, files []*writeFile) (int, bool) {
 			}
 		}
 	}
-	return 0, true
+	return after, doc, overlays, 0, true
+}
+
+// refuseWorsening ends the call, nothing written: every file passes on its
+// own entry, but the batch would worsen the tree (write_worsen.go).
+func (w *writer) refuseWorsening(worse []writeWorsened) int {
+	for _, x := range worse {
+		fmt.Fprintf(w.errOut, "%s %s: the call would worsen the tree: %s %s: %s\n", programName, w.cmd, x.Kind, x.Path, x.Message)
+	}
+	msg := fmt.Sprintf("the call would worsen the tree in %d place(s) outside its own files' entries; nothing was written", len(worse))
+	fmt.Fprintf(w.errOut, "%s %s: %s\n", programName, w.cmd, msg)
+	w.res.Status, w.res.Reason, w.res.Message, w.res.Worsened = writeStatusRefused, strp(writeReasonWorsensTree), strp(msg), worse
+	return w.finish(exitFindings)
 }
 
 func anyPending(files []*writeFile) bool {
