@@ -61,7 +61,7 @@ def _mock_urlopen_ok():
 # query_prometheus
 # ---------------------------------------------------------------------------
 class TestQueryPrometheus:
-    """Tests via monkeypatch — query_prometheus is now an alias to _lib_python.query_prometheus_instant."""
+    """Tests via monkeypatch — query_prometheus is an alias to _lib_prometheus.instant_or_error."""
 
     def test_success(self, monkeypatch):
         fake = lambda prom_url, promql: ([{"metric": {}, "value": [1, "42"]}], None)
@@ -514,6 +514,7 @@ class TestBatch4AnswersReadByTheLib:
         by = self._checks(fc.check_edge, {"status/config": (answer, None)})
         c = by["edge_external_labels"]
         assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert "malformed Prometheus response" in c["detail"] or "bad_data" in c["detail"], c
 
     @pytest.mark.parametrize("answer", [
         {"status": "error", "error": "bad_data"},
@@ -527,6 +528,7 @@ class TestBatch4AnswersReadByTheLib:
         by = self._checks(fc.check_central, {"rules": (answer, None)})
         c = by["central_alert_rules"]
         assert (c["status"], c.get("caller_error")) == ("fail", True), c
+        assert "malformed Prometheus response" in c["detail"] or "bad_data" in c["detail"], c
 
     def test_alert_rules_are_asked_for_by_type(self):
         seen = []

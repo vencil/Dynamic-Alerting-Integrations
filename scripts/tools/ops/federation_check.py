@@ -251,7 +251,7 @@ def check_central(prom_url):
 
     # 5. Alert rules loaded
     try:
-        groups = prometheus_rules(prom_url, rule_type="alert")
+        groups = prometheus_rules(prom_url, rule_type="alert", timeout=10)
     except QueryError as exc:
         # #3133: unreachable, an error status or a malformed answer — all
         # caller-error; the last two used to read as "0 alert rules" (warn).

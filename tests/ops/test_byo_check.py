@@ -71,7 +71,7 @@ def _mock_query_prometheus(mapping):
 # query_prometheus
 # ---------------------------------------------------------------------------
 class TestQueryPrometheus:
-    """Tests via monkeypatch — query_prometheus is now an alias to _lib_python.query_prometheus_instant."""
+    """Tests via monkeypatch — query_prometheus is an alias to _lib_prometheus.instant_or_error."""
 
     def test_success(self, monkeypatch):
         fake = lambda prom_url, promql: ([{"metric": {}, "value": [1, "42"]}], None)
@@ -679,6 +679,9 @@ class TestJudgeStep3RulePacksLoaded:
                     checks = bc.check_prometheus(_args())
         step3 = next(c for c in checks if c["check"] == "step3_rule_packs_loaded")
         assert (step3["status"], step3.get("caller_error")) == ("fail", True), step3
+        # the lib's reading, not any failure: a reverted tool reaching the
+        # faked urlopen would fail too, on a JSON decode error
+        assert "malformed Prometheus response" in step3["detail"] or "bad_data" in step3["detail"], step3
 
     def test_err_caller_error(self):
         c = bc._judge_step3_rule_packs_loaded(None, "rules boom")
@@ -1165,6 +1168,7 @@ class TestCheckAlertmanagerInhibitSemantics:
             by = {c["check"]: c for c in checks}
             assert by["alertmanager_config"]["status"] == "fail", body
             assert by["alertmanager_config"]["caller_error"] is True, body
+            assert "malformed Alertmanager response" in by["alertmanager_config"]["detail"], body
             assert "alertmanager_tenant_routes" not in by, body
 
 

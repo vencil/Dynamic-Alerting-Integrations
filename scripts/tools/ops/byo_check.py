@@ -445,7 +445,7 @@ def check_prometheus(args):
 
     # Step 3: Rule Packs loaded
     try:
-        groups, err = prometheus_rules(prom_url), None
+        groups, err = prometheus_rules(prom_url, timeout=10), None
     except QueryError as exc:
         groups, err = None, str(exc)
     checks.append(_judge_step3_rule_packs_loaded(groups, err))
