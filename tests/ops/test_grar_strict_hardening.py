@@ -260,14 +260,14 @@ class TestStrictFailOpenClosures:
                 "domain_policies": {"fin": {"tenants": ["tenant-x"]}},
                 "tenants": {"tenant-x": {"cpu": "90"}},
             })
-            warnings = load_tenant_tree(
-                d, strict_policies=True).schema_warnings
-            assert any("only _domain_policy.yaml is loaded" in w
-                       and w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                       for w in warnings), warnings
-            lenient = load_tenant_tree(d).schema_warnings
-            assert not any(w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                           for w in lenient)
+            # #3126：以前只有 strict 升 ERROR、非 strict 只印 WARN；現在兩種模式
+            # 都是拒收整棵樹的 field-type error（與 #3116 的不可用 policy 檔同一條路）。
+            for strict in (True, False):
+                errs = load_tenant_tree(d, strict_policies=strict).field_type_errors
+                assert [(e.kind, e.file, e.field) for e in errs] == [
+                    ("domain_policy_unusable", "tenant-x.yaml",
+                     "domain_policies")], errs
+                assert "is not read from this file" in errs[0].message, errs
 
 
 # ============================================================
@@ -584,11 +584,14 @@ class TestStrictBypassScenariosCLI:
             # 非 strict：同一 config 照舊通過（向後相容）——除了 #2490：
             # `-1h` 是 Alertmanager 拒收的時長，產生器自己的阻擋行（不是
             # policy ERROR）讓 --validate 回 1；以及 #3116：policy 本身寫壞
-            # （讀不出的 bound、壞掉的 policy 檔）所有模式整棵樹拒收。
+            # （讀不出的 bound、壞掉的 policy 檔）所有模式整棵樹拒收；以及
+            # #3284：不是 list 的 group_by 本身就所有模式整棵樹拒收（過去
+            # 非 strict 照樣 rc 0，route 上沒有 group_by）。
             lenient = self._run(d)
             refused = defaults_patch.get("repeat_interval") == "-1h"
             policy_unusable = raw_policy is not None or (
-                constraints or {}).get("max_repeat_interval") == "banana"
+                constraints or {}).get("max_repeat_interval") == "banana" or (
+                isinstance(defaults_patch.get("group_by"), str))
             assert lenient.returncode == (1 if refused or policy_unusable else 0), (
                 lenient.stdout + lenient.stderr)
             if refused:

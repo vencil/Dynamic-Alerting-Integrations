@@ -50,14 +50,13 @@ const TWO_TENANT_FIXTURE = {
   config_derivation: { evaluated_at: '2099-01-01T00:00:00Z', config_loaded_at: '2099-01-01T00:00:00Z', parse_failed_files: [] },
 };
 
-const SAVED_VIEWS_FIXTURE = {
-  views: {
-    'prod-finance':    { label: 'Production Finance',    created_by: 'admin@example.com',
-                         filters: { environment: 'production', domain: 'finance' } },
-    'critical-silent': { label: 'Critical + Silent',     created_by: 'sre@example.com',
-                         filters: { tier: 'tier-1', operational_mode: 'silent' } },
-  },
-};
+// GET /api/v1/views returns ViewResponse[] (#3231).
+const SAVED_VIEWS_FIXTURE = [
+  { id: 'prod-finance',    label: 'Production Finance',    created_by: 'admin@example.com',
+    filters: { environment: 'production', domain: 'finance' } },
+  { id: 'critical-silent', label: 'Critical + Silent',     created_by: 'sre@example.com',
+    filters: { tier: 'tier-1', operational_mode: 'silent' } },
+];
 
 async function mockMe(page: Page) {
   // LD-6 P7 (#962): an authed /me now triggers a first-visit callout on

@@ -280,11 +280,12 @@ def test_scalar_text() -> None:
 
 
 def _entry(path, readers=("exporter", "generator"), *, cls="tenant", tenant="t", not_read=None,
-           role="config", problem=None, document=False) -> dict:
+           role="config", problem=None, document=False, verdict=None) -> dict:
     return {"path": path, "depth": path.count("/"), "class": cls,
             "tenant_named": tenant if cls == "tenant" else None, "defaults_document": document,
             "readers": list(readers), "not_read": not_read, "role": role,
-            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
+            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]},
+            "verdict": verdict}
 
 
 def _doc(**over) -> dict:

@@ -32,7 +32,9 @@
 //
 //	0  clean run, no errors
 //	1  guard found one or more SeverityError findings
-//	2  caller error (bad flags, missing/invalid path, IO failure)
+//	2  caller error (bad flags, missing/invalid path, IO failure), or a
+//	   conf.d path that is not valid UTF-8 — refused by every subcommand
+//	   that walks conf.d, through one check (utf8_names.go, #3206)
 //	3  config files the exporter drops (#2123, #2179; the one definition
 //	   of which files: docs/cli-reference.md §guard): the files
 //	   ScopeEffective reports in ParseFailed — the exporter's own load's
@@ -225,7 +227,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "'%s' prints which conf.d files each reader reads and what each holds as yaml.v3 decodes it, "+
 			"or why it cannot be read, as JSON (see '%s %s -h').\n\n", parseTreeCmd, programName, parseTreeCmd)
 		fs.PrintDefaults()
-		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
+		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n"+
+			"  2  caller error, or a conf.d path that is not valid UTF-8 (no output can carry it)\n"+
 			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n"+
 			"  4  routing or domain policy in the tree, which this check does not judge; the report names it\n"+
 			"     (run 'da-tools generate-routes --validate --strict'). 3 wins over 1, 1 over 4.\n")
@@ -306,6 +309,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		return exitCallerErr
 	}
 
+	if refuseNonUTF8Tree(f.configDir, programName, errOut) {
+		return exitCallerErr // utf8_names.go: every subcommand that walks conf.d (#3206)
+	}
 	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)

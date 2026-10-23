@@ -112,7 +112,9 @@ func TestValidateTenantKeys_UnregisteredUnderscoreKeyTheDefaultsDeclare(t *testi
 
 // `expires:` on a registered `_` key a `defaults:` declares is out of scope
 // for the write check like on any key with no base row: the expiry event
-// skips it, so accepting it would be a silent no-op (#3045, #656).
+// skips it, so accepting it would be a silent no-op (#3045, #656). Since
+// #3269 the one error is the reserved key's schedule finding (a ValueFinding,
+// so the ratchet applies), not the threshold `expires:` message.
 func TestValidateTenantKeys_ExpiresOnUnderscoreKeyIsOutOfScope(t *testing.T) {
 	t.Parallel()
 	c := &ThresholdConfig{
@@ -121,8 +123,12 @@ func TestValidateTenantKeys_ExpiresOnUnderscoreKeyIsOutOfScope(t *testing.T) {
 			"_namespaces": {Default: "7", Expiry: &ExpiryMeta{Expires: "2026-01-01T00:00:00Z"}},
 		}},
 	}
-	errs := c.ValidateTenantKeys().Errors
-	if len(errs) != 1 || !strings.Contains(errs[0], "expires") || !strings.Contains(errs[0], `"_namespaces"`) {
+	kv := c.ValidateTenantKeys()
+	errs := kv.Errors
+	if len(errs) != 1 || !strings.Contains(errs[0], "_namespaces writes `expires:`") {
 		t.Errorf("errors = %q, want one `expires:` error on _namespaces", errs)
+	}
+	if len(kv.Values) != 1 || kv.Values[0].Message != errs[0] {
+		t.Errorf("values = %+v, want the error as the one value finding", kv.Values)
 	}
 }

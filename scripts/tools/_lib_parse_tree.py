@@ -52,6 +52,26 @@ from the other fields. `not_a_file` and `unlistable_dir` always carry a
 when its name is a config file's (`x.yaml/`). `Entry.flagged` is exactly
 those three cases.
 
+⛔ An entry's `verdict` is Go's answer to "what does this path make
+`da-guard` validation do" — `unservable` (named under exit 3: parse_failed
+or unreadable, the exporter cannot serve it), `tree_refused` (named under
+exit 4 as unreadable_outside_run: the route generator refuses the whole
+tree on it), or None. Go computes it from validation's own lists; a reader
+that must fail closed on every path validation names reads this field and
+composes nothing from role and problem (a file the exporter's decode
+refuses can have no `problem` at all). ⚠️ Per mode: tree mode answers for
+every entry of the tree on disk; file mode gives the full verdict for the
+target path alone, once the text is written there (None for a path no walk
+records) — read tree mode for the rest; list mode reads no byte, so it
+knows only the walk's half of exit 3 — a file whose content the exporter
+refuses is None there and `unservable` in tree mode: a reader that must
+name every path validation names reads tree mode, not a listing. Names
+mode: always None. A broken unselected `_defaults` carrier below the root is
+both `not_read` unselected_defaults_carrier and `unservable`. ⛔ Per path
+only: None on every entry is NOT "validation passes" — a tenant declared
+twice (exit 2) or routing content (exit 4) falls on no path; a reader that
+needs the whole verdict runs validation (`da-tools guard defaults-impact`).
+
 "Which files can declare a tenant" is ONE answer with two halves
 (`tenant_scope`): the tenant files, and the entries that leave the set
 unknown (a directory Go could not list, a link it does not follow, …). A
@@ -316,9 +336,11 @@ NAME_CLASSES = frozenset({"tenant", "defaults", "platform", "hidden", "not_confi
 LIST_PROBLEM_KINDS = frozenset({"read_failure", "not_regular_file"})
 #: Classes whose name is `_`-prefixed: a platform file, read for no tenant.
 RESERVED_CLASSES = frozenset({"defaults", "platform"})
+#: `verdict` values, a closed set (cmd/da-guard verdict.go); None = nothing.
+VERDICTS = frozenset({"unservable", "tree_refused"})
 #: Every field an entry carries, in every mode (null where it has no value).
 ENTRY_FIELDS = ("path", "depth", "class", "tenant_named", "defaults_document",
-                "readers", "not_read", "role", "problem")
+                "readers", "not_read", "role", "problem", "verdict")
 MODES = frozenset({"tree", "file", "list", "names"})
 
 
@@ -330,7 +352,10 @@ class Entry:
     only); *defaults_document* whether it is a platform-defaults document;
     *readers* who reads it (None in names mode); *not_read* why nobody does;
     *role* Go's verdict on what the path is (None in names mode); *problem*
-    ``(kind, message)`` when a read of it fails.
+    ``(kind, message)`` when a read of it fails; *verdict* what the path makes
+    da-guard validation do — `unservable` (exit 3), `tree_refused` (exit 4),
+    None — as Go computes it from validation's own lists (see the module
+    docstring for what list, file and names mode can know).
 
     ⚠️ In file mode *role* says only whether the path on disk holds a
     regular file the walk can reach (or nothing yet) — not that its name is
@@ -345,6 +370,7 @@ class Entry:
     not_read: Optional[str]
     role: Optional[str]
     problem: Optional[tuple[str, str]]
+    verdict: Optional[str]
 
     @property
     def name(self) -> str:
@@ -399,6 +425,17 @@ class Entry:
         """A `_`-prefixed config name (class defaults or platform)."""
         return self.cls in RESERVED_CLASSES
 
+    @property
+    def root_platform_file(self) -> bool:
+        """A root platform file (#2743): a `_`-prefixed config file at the
+        conf.d root that the exporter reads — Go's `isRootPlatformKey`
+        (flat_build.go), whose `tenants:` block is the platform's per-tenant
+        default (platform_overlay.go). Go's three fields, composed: class
+        (reserved), depth 0, `exporter` among the readers (an unselected
+        carrier has none; parse_tree.go `readersFor`). False in names mode."""
+        return (self.reserved and self.depth == 0
+                and self.readers is not None and "exporter" in self.readers)
+
 
 def _entry_of(e: Any, i: int, mode: str) -> Entry:
     """One raw entry, checked whole. A field absent from it is a da-guard
@@ -427,9 +464,16 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     if not isinstance(e["defaults_document"], bool):
         raise ValueError(f"{where}: defaults_document is not a boolean")
     readers, role, not_read, bad = e["readers"], e["role"], e["not_read"], e["problem"]
+    verdict = e["verdict"]
+    if verdict is not None and verdict not in VERDICTS:
+        raise ValueError(f"{where}: verdict {verdict!r} is not one this reader knows")
+    if verdict == "tree_refused" and bad is None:
+        # Go names a path tree_refused only for its problem.
+        raise ValueError(f"{where}: verdict tree_refused with no problem")
     if names:
-        if readers is not None or role is not None or not_read is not None or bad is not None:
-            raise ValueError(f"{where}: readers, role, not_read or problem in names mode")
+        if readers is not None or role is not None or not_read is not None or bad is not None \
+                or verdict is not None:
+            raise ValueError(f"{where}: readers, role, not_read, problem or verdict in names mode")
     else:
         if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
             raise ValueError(f"{where}: readers is not a list of reader names")
@@ -459,7 +503,7 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     return Entry(path=path, depth=depth, cls=cls, tenant_named=tenant,
                  defaults_document=e["defaults_document"],
                  readers=None if readers is None else tuple(readers),
-                 not_read=not_read, role=role, problem=problem)
+                 not_read=not_read, role=role, problem=problem, verdict=verdict)
 
 
 def entries_of(doc: dict) -> "tuple[Entry, ...]":

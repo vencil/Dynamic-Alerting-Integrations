@@ -411,7 +411,7 @@ def _fake_da_guard(tmp_path: Path, body: str) -> str:
 
 _ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
           '"defaults_document": false, "readers": ["exporter"], "not_read": null, '
-          '"role": "config", "problem": null}')
+          '"role": "config", "problem": null, "verdict": null}')
 
 
 @pytest.mark.parametrize("body,needle", [
@@ -547,10 +547,10 @@ def test_lines_of_aliased_and_merged_values(tmp_path, da_guard_binary) -> None:
     ('{"entries": [{"path": "t.yaml"}]}', "entries[0] ('t.yaml'): no depth"),
     ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
      '"defaults_document": false, "readers": "exporter", "not_read": null, "role": "config", '
-     '"problem": null}]}', "readers is not a list"),
+     '"problem": null, "verdict": null}]}', "readers is not a list"),
     ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
      '"defaults_document": false, "readers": ["exporter"], "not_read": null, "role": "maybe", '
-     '"problem": null}]}', "role 'maybe'"),
+     '"problem": null, "verdict": null}]}', "role 'maybe'"),
     ('{"files": {"t.yaml": [1]}}', "files['t.yaml'] is not a mapping"),
     ('{"files": {"t.yaml": {"a": 1}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x", "tag": "!!str", "value": [1]}}}}', "wrong shape"),
