@@ -100,9 +100,8 @@ _TOOLS = {
     "gitops_check_local": ("ops/gitops_check.py", ["local", "--dir", "{d}"], _TD, False),
     "describe_tenant": ("dx/describe_tenant.py", ["tenant-a", "--conf-d", "{d}"], _TD, False),
     "tenant_verify": ("dx/tenant_verify.py", ["tenant-a", "--conf-d", "{d}"], _TD, False),
-    "assemble_config_dir_validate": ("ops/assemble_config_dir.py",
-                                     ["--sources", "{d}", "--output", "{out}/asm", "--validate"],
-                                     _TDP, False),
+    "assemble_config_dir": ("ops/assemble_config_dir.py",
+                            ["--sources", "{d}", "--output", "{out}/asm"], _TDP, False),
     # --dry-run: stops at the OPA input document, no OPA needed.
     "policy_opa_bridge": ("ops/policy_opa_bridge.py", ["--config-dir", "{d}", "--dry-run"],
                           _TD, False),

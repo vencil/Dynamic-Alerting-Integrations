@@ -554,7 +554,9 @@ def _confd_with_webhook(tmp: Path, stub: str) -> str:
     Slack/PagerDuty endpoint.
     """
     d = tmp / "confd_webhook"
-    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: '100'\n")
+    # A number, not '100': a root default the exporter cannot serve is a tree
+    # no conf.d tool reads (#3206), and that is not what this fixture is for.
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 100\n")
     _write(d / "tenant-one.yaml",
            "tenants:\n"
            "  tenant-one:\n"
@@ -684,6 +686,21 @@ def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
         if got != ("caller_error", reason):
             return f"(status, reason) must be ('caller_error', {reason!r}), got {got}"
         return None
+    return check
+
+
+def _refusal_doc(paths: "list[dict[str, str]]") -> Callable[[object], str | None]:
+    """The shared conf.d refusal's envelope (#3206): reason
+    `conf_d_not_servable` and `refused_paths` — every refused path with its
+    verdict, as stderr names them."""
+    base = _caller_error_doc("conf_d_not_servable")
+
+    def check(doc: object) -> str | None:
+        why = base(doc)
+        if why is None and doc.get("refused_paths") != paths:  # type: ignore[union-attr]
+            why = (f"refused_paths must be {paths!r}, "
+                   f"got {doc.get('refused_paths')!r}")  # type: ignore[union-attr]
+        return why
     return check
 
 
@@ -927,13 +944,15 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--sources", str(SEED_CONF_D),
                     "--output", _out(t, "assembled"), "--json"]),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--check` returns before
-    # anything is assembled, so `--validate` used to be silently ignored and
+    # anything is assembled, so `--manifest` used to be silently ignored and
     # the pair answered rc 0 (#1828). It is refused now — rc 2, and the
-    # rejection still emits exactly one document naming why.
-    R("assemble_config_dir", "check-validate",
-      lambda t, s: ["--sources", str(SEED_CONF_D), "--check", "--validate", "--json"],
+    # rejection still emits exactly one document naming why. (`--validate`,
+    # the other such flag, was removed in #3206.)
+    R("assemble_config_dir", "check-manifest",
+      lambda t, s: ["--sources", str(SEED_CONF_D), "--check",
+                    "--manifest", _out(t, "m.json"), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("check_with_validate")),
+      doc_check=_caller_error_doc("check_with_manifest")),
     # #1829: `--manifest` alone (no `--sources`) has no load path to take.
     R("assemble_config_dir", "manifest-without-sources",
       lambda t, s: ["--manifest", _out(t, "m.json"),
@@ -1296,12 +1315,12 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--policy", _policy_file(t), "--json"]),
     # #2115 0-B: a file the exporter drops — rc 2 before any rule is checked,
-    # with the caller-error envelope.
+    # with the caller-error envelope; since #3206 the shared conf.d refusal's.
     R("policy_engine", "exporter-drops-a-file",
       lambda t, s: ["--config-dir", _confd_the_exporter_drops(t),
                     "--policy", _policy_file(t), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("yaml_file_unreadable")),
+      doc_check=_refusal_doc([{"path": "_platform.yaml", "verdict": "unservable"}])),
 
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
@@ -1749,6 +1768,8 @@ def test_crash_in_json_mode_emits_one_envelope(
             assert isinstance(own, dict), (
                 f"the tool's own caller_error document is "
                 f"{type(own).__name__}, the crash envelope an object: {where}")
-            missing = sorted(set(own) - set(doc))
+            # `refused_paths` is the shared conf.d refusal's own field (#3206):
+            # the paths that refusal names, with no meaning on a crash.
+            missing = sorted(set(own) - set(doc) - {"refused_paths"})
             assert not missing, (f"crash envelope lacks keys of the tool's own "
                                  f"caller_error document {missing}: {where}")

@@ -372,6 +372,7 @@ def die_caller_error(message: str, reason: Optional[str] = None, *,
 
 def exit_caller_error(error: str, reason: Optional[str] = None, *,
                       code: Optional[int] = None,
+                      fields: Optional[dict[str, Any]] = None,
                       _exc: Optional[BaseException] = None) -> NoReturn:
     """``die_caller_error`` for a caller that already printed its own
     stderr lines: only the armed envelope (``error`` = *error*) and the
@@ -382,10 +383,12 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
     from — stdout's own recorded write failure (a tool's broad handler
     around the code that prints its report), it leaves by the lost-stdout
     exit instead (#3124): stdout failed, the tool's reason does not apply.
-    *code* is honoured there too. *_exc*: as in ``die_caller_error``."""
+    *code* is honoured there too. *fields*: extra keys of the envelope (the
+    shared conf.d refusal's ``refused_paths``, #3206). *_exc*: as in
+    ``die_caller_error``."""
     exc = sys.exc_info()[1] if _exc is None else _exc
     _exit_if_stdout_lost(exc, code=code)
-    _print_armed_envelope(reason or CallerError.reason, error)
+    _print_armed_envelope(reason or CallerError.reason, error, fields)
     _leave(_caller_error_code if code is None else code, exc)
 
 
@@ -753,7 +756,8 @@ def _last_stderr_line() -> str:
     return lines[-1] if lines else "caller error (no message)"
 
 
-def _print_armed_envelope(reason: str, error: str) -> None:
+def _print_armed_envelope(reason: str, error: str,
+                          extra: Optional[dict[str, Any]] = None) -> None:
     """Print the armed envelope with *reason* / *error*, at most once, and
     not after the tool wrote to stdout itself."""
     global _crash_envelope_armed
@@ -776,7 +780,8 @@ def _print_armed_envelope(reason: str, error: str) -> None:
     import io
     import json  # deferred: only an exit in --json mode needs it
     import os
-    data = (json.dumps(caller_error_envelope(reason, _one_line(error), base, **fields),
+    data = (json.dumps(caller_error_envelope(reason, _one_line(error), base,
+                                             **{**fields, **(extra or {})}),
                        ensure_ascii=False, indent=2, default=str) + "\n").encode(
         getattr(out, "encoding", None) or "utf-8", "replace")
     # Straight to the fd, never through the stdout buffer: on a closed pipe a

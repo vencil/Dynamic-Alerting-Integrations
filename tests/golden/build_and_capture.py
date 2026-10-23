@@ -5,9 +5,10 @@ capture expected source_hash + merged_hash, emit golden.json.
 
 Every captured value is `da-guard effective`'s (#2906: describe_tenant shows
 Go's values and has no merge or hash of its own). merged_hash is read from
-da-guard directly, because describe_tenant reports none for a tree whose root
-file the exporter drops (not_served.json); where describe_tenant reports
-one, it must be the same. Run this with da-guard
+da-guard directly; where describe_tenant reports one, it must be the same.
+describe_tenant refuses a tree whose root file the exporter drops
+(not_served.json, #3206), so every value of those rows is read from
+`da-guard effective` directly. Run this with da-guard
 (`bash scripts/ops/with_da_guard.sh python3 tests/golden/build_and_capture.py`
 builds one from this checkout).
 
@@ -40,6 +41,11 @@ ROOT = HERE / "fixtures"
 DESCRIBE = HERE.parent.parent / "scripts" / "tools" / "dx" / "describe_tenant.py"
 sys.path.insert(0, str(DESCRIBE.parent.parent))
 from _lib_tenant_values import run_effective  # noqa: E402  (the golden merged_hash, #2906)
+import _lib_parse_cache  # noqa: E402
+
+# #3206: describe_tenant refuses these trees (their root file is not served);
+# their row is `da-guard effective`'s, read directly.
+NOT_SERVED = set(json.loads((HERE / "not_served.json").read_text(encoding="utf-8"))["trees"])
 
 
 def write(path: Path, content: str) -> None:
@@ -691,6 +697,12 @@ SCENARIOS = [
 
 def run_describe(scenario_dir: str, tenant_id: str) -> dict:
     conf_d = ROOT / scenario_dir / "conf.d"
+    if scenario_dir in NOT_SERVED:
+        with _lib_parse_cache.judging():
+            t = run_effective(conf_d).tenants[tenant_id]
+        return {"source_file": t.source_file, "source_hash": t.source_hash,
+                "merged_hash": t.merged_hash, "defaults_chain": list(t.defaults_chain),
+                "effective_config": t.effective_config}
     cmd = [
         sys.executable,
         str(DESCRIBE),
@@ -717,7 +729,8 @@ def run_describe(scenario_dir: str, tenant_id: str) -> dict:
     # root file the exporter drops (not_served.json); the golden value is
     # da-guard effective's, read directly, and must equal describe_tenant's
     # where it prints one.
-    go = run_effective(conf_d).tenants[tenant_id].merged_hash
+    with _lib_parse_cache.judging():
+        go = run_effective(conf_d).tenants[tenant_id].merged_hash
     shown = out.get("merged_hash")
     if shown is not None and shown != go:
         why = f"describe_tenant's merged_hash {shown} != da-guard effective's {go}"

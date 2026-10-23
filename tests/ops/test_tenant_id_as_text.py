@@ -36,6 +36,8 @@ import patch_config as pc  # noqa: E402
 import policy_engine as pe  # noqa: E402
 from _lib_confd import declared_tenant_ids  # noqa: E402
 from _patch_config_fake import FakeCluster  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206)
 
 
 def _tree(root: Path, files: dict[str, str]) -> Path:
@@ -201,15 +203,15 @@ def test_check_routing_profiles_reads_text_ids(tmp_path):
 def test_a_map_tag_on_a_sequence_keeps_policy_engine_at_rc_2(tmp_path, capsys):
     """`tenants: !!map [a, b]` — the loader leaked TypeError, which escaped
     every `except yaml.YAMLError` and turned policy-engine's rc 2
-    caller-error JSON (main) into an rc 1 traceback. Measured end to end."""
+    caller-error JSON (main) into an rc 1 traceback. Measured end to end.
+    #3206: the rc 2 is now the shared conf.d refusal, the file named."""
     d = _tree(tmp_path, {"conf.d/t.yaml": "tenants: !!map [a, b]\n"})
     pol = tmp_path / "p.yaml"
     pol.write_text("policies:\n  - name: need-cpu\n    target: cpu\n"
                    "    operator: required\n", encoding="utf-8")
-    rc = pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"])
-    out = json.loads(capsys.readouterr().out)
-    assert rc == 2, out
-    assert out["status"] == "caller_error" and out["reason"] == "yaml_file_unreadable", out
+    with refuses("t.yaml") as err:
+        pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"])
+    assert "(tag_not_allowed: " in err.getvalue(), err.getvalue()
 
 
 # A file `da-guard parse-tree` refuses (duplicate_key). Since ADR-036 step 4
@@ -223,15 +225,21 @@ def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
     #2123). With `declared_tenant_ids` on libyaml, a tenant file the routing
     reader itself drops as unreadable still DECLARED tx, so the platform's
     `tenants.tx` block silently created the tenant and its `ignored` WARN
-    vanished — two answers in one run."""
+    vanished — two answers in one run.
+
+    #3206: that is the route generator's reading (a judge); a tool that is
+    not one refuses the tree, naming the file."""
     d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  cpu: 70\ntenants:\n  tx:\n    cpu: 60\n",
         "tx.yaml": _UNREADABLE_TENANT})
-    assert declared_tenant_ids(d) == set()
-    got = _grar_parse.load_tenant_tree(str(d))
+    with _lib_parse_cache.judging():
+        assert declared_tenant_ids(d) == set()
+        got = _grar_parse.load_tenant_tree(str(d))
     assert "tx" not in got.dedup_configs, got.dedup_configs
     err = capsys.readouterr().err
     assert "tenants.tx ignored" in err, err
+    with refuses("tx.yaml"):
+        _grar_parse.load_tenant_tree(str(d))
 
 
 def test_tenant_uniqueness_agrees_with_yaml_syntax_about_one_file(tmp_path):
@@ -243,7 +251,8 @@ def test_tenant_uniqueness_agrees_with_yaml_syntax_about_one_file(tmp_path):
         "_defaults.yaml": "defaults:\n  cpu: 70\n",
         "a.yaml": "tenants:\n  tx:\n    cpu: 80\n",
         "b.yaml": _UNREADABLE_TENANT})
-    r = vc.check_tenant_uniqueness(str(d))
+    with _lib_parse_cache.judging():   # validate-config's row: a judge's (#3206)
+        r = vc.check_tenant_uniqueness(str(d))
     assert r["status"] == vc.WARN, r
     assert "b.yaml" in " ".join(r["details"]), r
 

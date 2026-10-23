@@ -102,11 +102,6 @@ _SKIP_CASES = [
     ("M", "team.yaml", _TWO, "db-c"),
     ("C", "DB-C.YAML", _ONE, "db-c"),
     ("S", "prod/db-c.yaml", _ONE, "db-c"),
-    # 第 1 輪 F1 的 1a（矩陣列 F1-1a-*，Go 實測 exporter 接受並宣告該租戶）
-    ("1a-trailing-doc", "team.yaml",
-     '---\ntenants:\n  db-c:\n    mysql_connections: "80"\n---\n', "db-c"),
-    ("1a-second-doc", "team.yaml", "tenants:\n  db-c: {}\n---\nfoo: 1\n",
-     "db-c"),
     ("1a-on", "team.yaml", "tenants:\n  on: {}\n", "on"),
     ("1a-007", "team.yaml", "tenants:\n  007: {}\n", "007"),
     # 第 3 輪 E2：escape 寫法的 key（矩陣列 R3-*，Go 讀成 db-c）——舊判定看
@@ -116,12 +111,25 @@ _SKIP_CASES = [
      'tenants:\n  "\\x64\\x62\\x2d\\x63": {}\n', "db-c"),
     ("escaped-key-multiline", "team.yaml",
      'tenants:\n  ? "db-\\\n    c"\n  : {}\n', "db-c"),
-    ("utf16", "team.yaml",
-     "\ufefftenants:\n  db-c: {}\n".encode("utf-16-le"), "db-c"),
     ("flow-tab", "team.yaml", "tenants: {db-c:\t{}}\n", "db-c"),
-    # exporter 整檔拒收的檔也一樣跳過：init 不判斷 exporter 能否讀取，
-    # 訊息叫客戶用 guard 驗證（第 1 輪 1b 的形狀）。
-    ("1b-scalar-body", "team.yaml", 'tenants:\n  db-c: "oops"\n', "db-c"),
+]
+
+# 樹上有 exporter 不服務的檔（da-guard 驗證會點名的路徑）：init 不再跳過租戶、
+# 照常寫其餘的檔，而是在寫入任何東西之前拒絕整次執行，逐條點名、rc 2（#3206）。
+# (情境, 客戶檔相對 conf.d 的路徑, 內容)
+_REFUSED_CASES = [
+    ("1a-trailing-doc", "team.yaml",
+     '---\ntenants:\n  db-c:\n    mysql_connections: "80"\n---\n'),
+    ("1a-second-doc", "team.yaml", "tenants:\n  db-c: {}\n---\nfoo: 1\n"),
+    ("utf16", "team.yaml", "\ufefftenants:\n  db-c: {}\n".encode("utf-16-le")),
+    ("1b-scalar-body", "team.yaml", 'tenants:\n  db-c: "oops"\n'),
+    ("out-of-range-U-escape", "team.yaml", 'tenants:\n  db-c:\n    note: "\\U00110000"\n'),
+    ("past-yaml-v3-depth", "team.yaml",
+     "tenants:\n  db-c:\n    note: " + "[" * 20000 + "]" * 20000 + "\n"),
+    ("explicit-tag", "team.yaml", "tenants:\n  !!binary ZGItYw==: {}\n"),
+    ("local-tag", "team.yaml", "tenants:\n  db-a:\n    mysql_connections: !foo 5\n"),
+    # 沒提到要求租戶的檔也一樣：拒絕的是整棵樹，不是某個租戶。
+    ("unrelated", "other.yaml", 'tenants:\n  db-x: "oops"\n'),
 ]
 
 
@@ -153,27 +161,23 @@ def test_a_tenant_the_customers_file_may_declare_is_skipped(
     assert "Traceback" not in run.stderr
 
 
-@pytest.mark.parametrize("body", [
-    'tenants:\n  db-c:\n    note: "\\U00110000"\n',
-    "tenants:\n  db-c:\n    note: " + "[" * 20000 + "]" * 20000 + "\n",
-    "tenants:\n  !!binary ZGItYw==: {}\n",
-], ids=["out-of-range-U-escape", "past-yaml-v3-depth", "explicit-tag"])
-def test_a_file_init_cannot_read_through_counts_as_mentioning_everyone(
-        tmp_path, body):
-    """第 3 輪：讀不了的檔是「可能提及**每一個**要求的租戶」，而且不能是
-    traceback。ADR-036 §2（#2906）起「讀不了」是 da-guard parse-tree 的判定：
-    超出範圍的 `\\U00110000`、超過 yaml.v3 深度上限的巢狀、不在允許清單的 tag。
-
-    ⚠️ 用沒有 init 自有檔的樹：在 `_brownfield` 上，「提及每一個」也包括
-    已存在的 `db-a.yaml`／`db-b.yaml` 的租戶，那是並存拒絕（下方拒絕表）。"""
-    out = tmp_path / "repo"
-    _place(out, "team.yaml", body)
-    run = _run(out, "db-c,db-d")
-    assert run.returncode == 0, run.stderr[-800:]
-    assert "Traceback" not in run.stderr
-    for t in ("db-c", "db-d"):
-        assert f"{t} may already be declared by conf.d/team.yaml" in run.stderr
-        assert not (out / "conf.d" / f"{t}.yaml").exists()
+@pytest.mark.parametrize("dry", [False, True], ids=["run", "dry-run"])
+@pytest.mark.parametrize("case,rel,body", _REFUSED_CASES,
+                         ids=[c[0] for c in _REFUSED_CASES])
+def test_a_tree_with_a_file_the_exporter_cannot_serve_is_refused(
+        tmp_path, case, rel, body, dry):
+    """#3206：讀不了的檔不再是「可能提及每一個要求的租戶」(d)：那是 da-guard
+    驗證會點名的路徑，init 在寫入任何東西之前拒絕整次執行，逐條點名、rc 2，
+    不是 traceback。在既有樹（有 init 自有檔）與全新樹上都一樣。"""
+    for out in (_brownfield(tmp_path / "brown"), tmp_path / "fresh" / "repo"):
+        theirs = _place(out, rel, body)
+        before = _snapshot(out)
+        run = _run(out, f"{BASE_TENANTS},db-c", *(["--dry-run"] if dry else []))
+        assert run.returncode == 2, (run.returncode, run.stderr[-800:])
+        assert f"ERROR: {theirs.name}:" in run.stderr, run.stderr[-800:]
+        assert "Traceback" not in run.stderr
+        assert _snapshot(out) == before, "拒絕時不得寫入任何檔案"
+        assert not (out / ".da-init.yaml").exists()
 
 
 def test_what_a_file_declares_is_yaml_v3_s_reading(tmp_path):
@@ -188,18 +192,6 @@ def test_what_a_file_declares_is_yaml_v3_s_reading(tmp_path):
     assert "db-d may already be declared" not in run.stderr
     assert not (out / "conf.d" / "db-c.yaml").exists()
     assert (out / "conf.d" / "db-d.yaml").is_file()
-
-
-def test_a_customer_file_that_mentions_no_requested_tenant_draws_no_comment(
-        tmp_path):
-    """init 不是 validator：沒提到要求租戶的客戶檔，壞了也不說話。"""
-    out = _brownfield(tmp_path)
-    _place(out, "other.yaml", 'tenants:\n  db-x: "oops"\n')
-    run = _run(out, RERUN_TENANTS)
-    assert run.returncode == 0, run.stderr[-800:]
-    assert "other.yaml" not in run.stderr
-    assert "init_project" not in run.stderr
-    assert (out / "conf.d" / "db-c.yaml").is_file()
 
 
 def test_a_customer_defaults_carrier_in_another_spelling_is_kept(tmp_path):
@@ -262,77 +254,6 @@ def test_a_tree_init_cannot_safely_extend_is_refused(
     assert "init refused" in run.stderr
     for phrase in says:
         assert phrase in run.stderr, run.stderr
-
-
-def test_a_file_init_cannot_read_through_does_not_block_its_own_paths(
-        tmp_path):
-    """並存拒絕只在**具體**提及時觸發（為了不讓 init 造出新的重複，不是替客戶
-    驗證既有樹）。讀不透的檔（這裡是明確 tag）在自有檔已存在的租戶旁：init 照常
-    重寫自有檔、點名那個檔；沒有自有檔的要求租戶照舊跳過。"""
-    out = _brownfield(tmp_path)
-    conf = out / "conf.d"
-    own = conf / "db-a.yaml"
-    own.write_text(own.read_text(encoding="utf-8") + "\n# HAND-EDIT\n",
-                   encoding="utf-8")
-    theirs = _place(out, "team.yaml", "tenants:\n  !!binary ZGItYw==: {}\n")
-    before = theirs.read_bytes()
-
-    run = _run(out, RERUN_TENANTS)
-
-    assert run.returncode == 0, run.stderr[-800:]
-    assert "HAND-EDIT" not in own.read_text(encoding="utf-8")   # 重寫了
-    assert theirs.read_bytes() == before
-    for t in ("db-a", "db-b"):
-        assert ("init cannot read conf.d/team.yaml through (da-guard parse-tree "
-                "cannot read it (tag_not_allowed: ") in run.stderr, run.stderr
-        assert (f"; if it also declares {t}, it duplicates conf.d/{t}.yaml"
-                in run.stderr), run.stderr
-    assert "da-tools guard defaults-impact" in run.stderr
-    assert "init cannot read conf.d/team.yaml through" in run.stdout
-    # db-c 沒有自有檔：(d) 照舊視為可能提及 ⇒ 跳過
-    assert "db-c may already be declared by conf.d/team.yaml" in run.stderr
-    assert not (conf / "db-c.yaml").exists()
-
-
-_PLACEHOLDER_OWN = {
-    "db-a.yaml": "# placeholder\n",
-    # a tag parse-tree does not read: (d), not a concrete mention
-    "team.yaml": "tenants:\n  db-a:\n    mysql_connections: !foo 5\n",
-}
-
-
-def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_plan(
-        tmp_path):
-    """第 5 輪 F2（plan 層）：own 存在但本身**沒有**宣告 t（佔位檔），另一檔只落
-    在 (d)。重寫 own 會多出一個 t 的載體 ⇒ 必須當成「沒有自有檔」：跳過。"""
-    sys.path.insert(0, str(TOOL.parent))
-    import init_project as ip
-    for rel, body in _PLACEHOLDER_OWN.items():
-        _place(tmp_path, rel, body)
-    plan = ip._plan_confd(
-        {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
-         "tenants": ["db-a"], "namespace": "monitoring",
-         "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
-    assert plan.generate == [] and not plan.conflicts, plan
-    assert plan.skipped == {"db-a": ["conf.d/team.yaml"]}
-    assert not plan.unverified
-
-
-def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_cli(
-        tmp_path):
-    """同上，走 CLI：rc 0、own 位元組不變、沒有第二個宣告、訊息附 (d) 原因。"""
-    out = tmp_path / "repo"
-    for rel, body in _PLACEHOLDER_OWN.items():
-        _place(out, rel, body)
-    own_before = (out / "conf.d" / "db-a.yaml").read_bytes()
-    run = _run(out, "db-a")
-    assert run.returncode == 0, run.stderr[-800:]
-    assert (out / "conf.d" / "db-a.yaml").read_bytes() == own_before
-    assert "db-a may already be declared by conf.d/team.yaml" in run.stderr
-    # 第 5 輪 F4：跳過訊息寫出 (d) 的原因與怎麼讓它可讀
-    assert ("init cannot read conf.d/team.yaml through (da-guard parse-tree "
-            "cannot read it (tag_not_allowed: ") in run.stderr, run.stderr
-    assert "remove the tags parse-tree does not read" in run.stderr
 
 
 # ── owner 裁決（2026-09-25，第 1 輪 F2 的另一半）：重寫 init 自有路徑時，那個

@@ -41,6 +41,8 @@ from _lib_io import (DuplicateKeyError, load_yaml_file_for_rewrite,
                      strict_load_for_rewrite)
 from _lib_yaml_keys import RawPlain, dump_for_rewrite, load_for_rewrite
 from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
+import _lib_parse_cache
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 REPO = Path(__file__).resolve().parents[2]
 APP = REPO / "components" / "threshold-exporter" / "app"
@@ -310,12 +312,17 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
     p = subprocess.run([sys.executable, str(DEPRECATE), "mysql_slave_lag",
                         "--config-dir", str(d), "--execute"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-    assert p.returncode == 1, p.stdout + p.stderr
     # ADR-036 §2 (#2906): the scan is parse-tree's. yaml.v3 reads `=` as a
-    # string, so only the rewrite — PyYAML's text — cannot be produced; a
-    # plain `<<` value is outside parse-tree's closed list: unreadable.
-    want = "PyYAML 讀不了它" if bad == "=" else "無法讀取"
-    assert want in p.stdout + p.stderr, p.stdout + p.stderr
+    # string, so only the rewrite — PyYAML's text — cannot be produced (rc 1);
+    # a plain `<<` value is outside parse-tree's closed list, so the tree is
+    # one the exporter cannot serve: the shared conf.d refusal (#3206).
+    if bad == "=":
+        assert go_refused(d) == [], files
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert "PyYAML 讀不了它" in p.stdout + p.stderr, p.stdout + p.stderr
+    else:
+        assert_refused(p.returncode, p.stderr, [target])
+        assert "(tag_not_allowed: " in p.stderr, p.stderr
     assert (d / target).read_text(encoding="utf-8") == files[target]
 
 
@@ -478,10 +485,16 @@ def test_dump_for_rewrite_is_safe_dump_for_ordinary_data():
 
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
     """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
-    ADR-036 §2), not `RawPlain`."""
-    (tmp_path / "_defaults.yaml").write_text("defaults: 5\n", encoding="utf-8")
-    [(_p, ok, msg, _r)] = deprecate_rule.remove_from_all_defaults(
-        "mysql_slave_lag", str(tmp_path))
+    ADR-036 §2), not `RawPlain`. A scalar `defaults:` is servable only in a
+    subtree carrier, so this is the `--plane subtree` reading: the subtree's
+    reader cut from the root's index (#3206)."""
+    (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 1\n", encoding="utf-8")
+    (tmp_path / "team").mkdir()
+    (tmp_path / "team" / "_defaults.yaml").write_text("defaults: 5\n", encoding="utf-8")
+    with _lib_parse_cache.session():
+        _lib_parse_cache.subtree_reader(tmp_path / "team", tmp_path)
+        [(_p, ok, msg, _r)] = deprecate_rule.remove_from_all_defaults(
+            "mysql_slave_lag", str(tmp_path / "team"))
     assert not ok and "（!!int）" in msg, msg
 
 

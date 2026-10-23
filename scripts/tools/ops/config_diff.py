@@ -47,6 +47,7 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error)
@@ -1663,6 +1664,16 @@ def build_parser():
 
 
 def main():
+    """Entry point: `_main` as a judge (#3206) — a side with a path Go names
+    is this tool's own finding (a PR side: exit 2, named; a base side: that
+    view is not compared, exit 1, so a PR that repairs it is not blocked),
+    so the reader's fail-closed exit stands aside."""
+    import _lib_parse_cache  # noqa: PLC0415
+    with _lib_parse_cache.judging():
+        return _main()
+
+
+def _main():
     """Entry point.
 
     Exit codes (SSOT: ``scripts/tools/_lib_exitcodes.py``): 0 no change,
@@ -1716,7 +1727,7 @@ def _run(args):
         die_caller_error(
             f"ERROR: cannot compare configs (--old-dir {args.old_dir} --new-dir "
             f"{args.new_dir}): {VIEW_TITLES[VIEW_PLATFORM]}: not computed: "
-            f"{printable_name(view.reason)}",
+            f"{safe_label(view.reason)}",
             reason="compare_failed",
         )
     has = (_has_config_file(old_doc), _has_config_file(new_doc))
@@ -1727,8 +1738,11 @@ def _run(args):
 
     # The reasons go to stderr too: a CI log shows them even where the report
     # is only posted, and an exit 2 never comes with an empty stderr (#1405).
+    # `safe_label`, not `printable_name`: a reason is prose that may already
+    # carry da-guard's escapes (`"bad-\xff.yaml"`); doubling its backslashes
+    # would name a file that is not there (#3206).
     for name, v in report["views"].items():
-        reason = printable_name(v.reason)
+        reason = safe_label(v.reason)
         if v.status == "not_computed":
             print(f"ERROR: cannot compare configs (--old-dir {args.old_dir} --new-dir "
                   f"{args.new_dir}): {VIEW_TITLES[name]}: not computed: {reason}", file=sys.stderr)

@@ -86,6 +86,10 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+#: The route generator's reader, called in process: a judge's
+#: (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))

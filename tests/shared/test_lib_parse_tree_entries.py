@@ -266,3 +266,57 @@ def test_a_write_onto_a_directory_is_refused_not_a_da_guard_failure(unprivileged
         wc.confirm(conf, target, "tenants: {x: {}}\n", {}, binary=str(wrapper))
     assert ei.value.reason == wc.NOT_READ, ei.value
     assert "directory" in str(ei.value) and "older" not in str(ei.value), ei.value
+
+
+# ── the fail-closed exit (#3206) ─────────────────────────────────────
+
+def _entry(path: str, verdict, problem=("read_failure", "the path cannot be statted")) -> lpt.Entry:
+    return lpt.Entry(path=path, depth=0, cls="tenant", tenant_named=None, defaults_document=False,
+                     readers=("exporter",), not_read=None, role="config",
+                     problem=problem if verdict else None, verdict=verdict)
+
+
+def test_the_refusal_names_every_path_with_a_verdict_and_exits_2(capsys) -> None:
+    """One `ERROR:` line per entry Go gives a verdict — every one, none
+    elided — then the tree's line, and exit 2; an entry without one is not
+    named, and a document without any returns."""
+    many = [_entry(f"t{i:03d}.yaml", "unservable") for i in range(40)]
+    entries = [_entry("ok.yaml", None), _entry("team", "tree_refused"), *many]
+    with pytest.raises(SystemExit) as ei:
+        lpt.refuse_unservable(entries, "conf.d")
+    assert ei.value.code == 2
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 1 + 40 + 1, err
+    assert err[0].startswith("ERROR: team: the route generator refuses the whole tree")
+    assert all(f"ERROR: t{i:03d}.yaml: the exporter cannot read or decode it" in "\n".join(err)
+               for i in range(40))
+    assert "ok.yaml" not in "\n".join(err)
+    assert "41 path(s)" in err[-1]
+    lpt.refuse_unservable([_entry("ok.yaml", None)], "conf.d")  # returns
+
+
+def test_the_refusal_escapes_a_name_for_the_terminal(capsys) -> None:
+    with pytest.raises(SystemExit):
+        lpt.refuse_unservable([_entry("a\x1b[2Jb.yaml", "unservable")], "conf.d")
+    assert "\x1b" not in capsys.readouterr().err
+
+
+def test_the_reader_refuses_a_flagged_tree_unless_the_run_judges(tmp_path, da_guard_env, capsys) -> None:
+    """`ConfdReader.tree` is the exit: a tree with a dangling link ends the
+    run (exit 2, the link named) — the listing, the tenant set and a read
+    all go through it; inside `judging()` the same tree reads."""
+    import _lib_confd
+    import _lib_parse_cache as pc
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "a.yaml").write_text("tenants: {a: {}}\n", encoding="utf-8")
+    symlink_or_skip("nowhere", conf / "gone.yaml")
+    for take in (lambda r: r.tree(), lambda r: r.listing(), lambda r: pc.tenant_scope(r),
+                 lambda r: r.read("a.yaml"), lambda r: _lib_confd.config_listing(conf)):
+        with pytest.raises(SystemExit) as ei:
+            take(pc.ConfdReader(conf))
+        assert ei.value.code == 2
+        assert "ERROR: gone.yaml:" in capsys.readouterr().err
+    with pc.judging():
+        tree = pc.ConfdReader(conf).tree()
+    assert [e.path for e in lpt.refused_entries(tree.entries)] == ["gone.yaml"]

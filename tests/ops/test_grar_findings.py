@@ -27,6 +27,10 @@ from pathlib import Path
 
 import pytest
 
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _grar_findings_cases as cases  # noqa: E402
 

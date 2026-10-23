@@ -31,6 +31,10 @@ from pathlib import Path
 
 import pytest
 
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 from factories import make_routing_config, make_tenant_yaml
 from generate_alertmanager_routes import (
     TenantTree,

@@ -16,10 +16,12 @@ Exit codes:
        tool's own policy; only one copy could ever ship), or one tenant id
        declared by two carriers (the exporter rejects the WHOLE config-dir in
        that state). Nothing is written in either case.
-    2  validation error (malformed YAML), the duplicate-tenant question
-       could not be answered, or the flags contradict each other
-       (`--check` with `--validate` / `--manifest`, `--manifest` without
-       `--sources`) — refused before anything is read or written
+    2  a source or the output holds a path da-guard validation names (the
+       shared conf.d refusal, #3206), the duplicate-tenant question could
+       not be answered, or the flags contradict each other (`--check` with
+       `--manifest`, `--manifest` without `--sources`) — refused before
+       anything is read or written. `--validate` was removed (#3206): every
+       file it called an ERROR is refused before assembly.
 """
 
 import argparse
@@ -51,14 +53,10 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     list_config_tree,
     select_defaults_carrier,
-    unusable_config_entries,
-    unusable_entry,
-    unusable_reason,
     warn_nested,
 )
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
 
@@ -99,8 +97,8 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     """Config-NAMED entries of `dir_path`, flat, minus the hidden ones —
     each of which is named on stderr before it is left out.
 
-    ⛔ The ONE listing behind both scan sites of this tool, `discover_yamls`
-    (the sources) and `validate_merged` (the artifact). #1827 was fixed at
+    ⛔ The ONE listing behind this tool's scan sites (`discover_yamls`, the
+    sources; until #3206 also `--validate`, the artifact). #1827 was fixed at
     the first site and blind review found the second still validating a
     `.`-prefixed carrier the exporter never reads — refusing a deploy (rc 2)
     over a file that is not part of it. Two readers, one question, two
@@ -124,8 +122,7 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
     Returns every entry the walk lists at this level (any role); whether
     each is a config file is the caller's question, asked of *listing* — the
     caller's snapshot of `dir_path` (`config_listing(dir_path)` when None),
-    the one it also words each unusable entry from (#3206) — which the
-    nested warning reads too.
+    the one the nested warning reads too (#3206).
     """
     if listing is None:
         listing = config_listing(dir_path)
@@ -145,10 +142,6 @@ def list_visible_config_entries(dir_path: Path, listing: Any = None) -> List[Pat
                   f"does not read it", file=sys.stderr)
     return [] if listing is None else [dir_path / e.path for e in listing.entries
                                        if e.depth == 0]
-
-
-class SourceUnreadable(FileNotFoundError):
-    """A source directory the exporter's walk cannot list (`main` → rc 2)."""
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
@@ -191,31 +184,21 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     # the count or the manifest. Named first, then excluded, so the operator
     # learns WHICH tenant just lost its carrier instead of finding out from
     # a missing alert. The listing (and the nested-config guard) is the
-    # shared one — `validate_merged` reads the artifact through it too.
+    # shared one.
+    #
+    # ⛔ #3206: taking the listing is the run's fail-closed exit
+    # (`_lib_parse_cache.ConfdReader.tree`): a source Go names paths on — a
+    # shard's broken symlink, a directory called `subteam.yaml`, a source it
+    # cannot list, a file the exporter cannot decode — ends the run there,
+    # every such path named, exit 2, before anything is staged or written.
+    # (These were a WARN and "not merged": the generator refuses such a
+    # tree, so the artifact would not have been served either.)
     listing = config_listing(source_dir)
-    root = None if listing is None else listing.entry(".")
-    if root is not None and root.unlistable_dir:
-        # #3206: the source itself cannot be listed — nothing of it can be
-        # merged, and an empty merge would read as "no tenants": rc 2, named.
-        raise SourceUnreadable(f"source directory cannot be listed: {source_dir} — "
-                               f"{unusable_reason(source_dir, listing)}")
     named = list_visible_config_entries(source_dir, listing)
-
-    # ⛔ A config-NAMED entry that is not a readable file (a shard's broken
-    # symlink, a directory called `subteam.yaml`) is a fact about the input,
-    # not a failure to measure: the exporter logs a WARN and serves the tree,
-    # and the sibling producer passes it. Without this filter the gate stages
-    # it, the copy raises, and `sharded-check` answers "could not measure".
-    # Named, not silently dropped — `unusable_config_entries` is the shared
-    # wording so this reader phrases it like every other one.
-    unusable = set(unusable_config_entries(named, listing=listing))
-    for p in sorted(unusable):
-        print(f"WARN: {p} {unusable_reason(p, listing)} — not merged",
-              file=sys.stderr)
-    # #3206: a config file is what Go's `role` says is one — not `is_file()`,
-    # which answers False for a file it may not stat and so dropped a tenant
-    # with no word. One it cannot read fails at the copy.
-    return [p for p in named if p not in unusable and _config_file_in(listing, p)]
+    # A config file is what Go's `role` says is one — not `is_file()`, which
+    # answers False for a file it may not stat and so dropped a tenant with
+    # no word.
+    return [p for p in named if _config_file_in(listing, p)]
 
 
 def _config_file_in(listing: Any, p: Path) -> bool:
@@ -389,103 +372,6 @@ def build_manifest(
     }
 
 
-# ── Validation (optional) ───────────────────────────────────────────
-
-ERROR_PREFIX = "ERROR: "
-WARN_PREFIX = "WARN: "
-
-
-def has_errors(issues: List[str]) -> bool:
-    """Do these `validate_merged` issues include an ERROR (not just a WARN)?
-
-    Both sides use `ERROR_PREFIX`, so the classification cannot drift the way
-    a second copy of the word would. #1794: `validate_merged`'s issues were
-    only printed and `main()` returned `EXIT_OK` on every path below, so the
-    flag could not fail the command while the module's own exit table promised
-    `2  validation error`. Measured on a malformed carrier and on a non-mapping
-    top level, with a clean tree as the must-stay-quiet control.
-    """
-    return any(i.startswith(ERROR_PREFIX) for i in issues)
-
-
-def validate_merged(output_dir: Path) -> List[str]:
-    """Read the assembled config-dir through `da-guard parse-tree` (the
-    exporter's yaml.v3 reading) and report what the exporter cannot read.
-
-    Returns list of warning/error messages.
-    """
-    issues = []
-    # ⛔ Second scan site, SAME listing as `discover_yamls` — not the same
-    # predicate re-typed. What this validates is what the exporter will read:
-    # a `.yml` this tool copies (#1603) is validated; a `.`-prefixed file
-    # already sitting in `--output` (#1827) is named on stderr and NOT
-    # validated, because failing the deploy over a carrier the exporter
-    # skips blocks a tree that is in fact fine. The nested-config guard
-    # (#1911) rides along inside the helper, where the scan is.
-    # ADR-036 step 4 (#2906): the artifact is read the way the exporter
-    # reads it — `da-guard parse-tree` (yaml.v3), one run over the output
-    # directory, whose entries are also the listing (#3206: no second walk).
-    # No usable da-guard raises `ParseTreeError` (exit 2 in main).
-    reader = _lib_parse_cache.ConfdReader(output_dir)
-    reader.require()
-    listing = config_listing(output_dir, reader=reader)
-    visible = list_visible_config_entries(output_dir, listing)
-    # A config-NAMED entry the exporter cannot read (a directory called
-    # `stale.yaml`, a dangling symlink) is a fact about the artifact, not a
-    # reason to crash: `open()` on it raises outside `yaml.YAMLError`. Same
-    # predicate `discover_yamls` applies to the sources, and the same
-    # non-fatal wording — the exporter WARNs and serves the rest of the tree,
-    # so this face must not turn that into a traceback or an ERROR.
-    unusable = set(unusable_config_entries(visible, listing=listing))
-    for p in sorted(unusable):
-        issues.append(
-            f"{WARN_PREFIX}{p.name} {unusable_reason(p, listing)} — not validated, "
-            f"the exporter cannot read it either")
-    for f in visible:
-        if f in unusable:
-            continue
-        # #2906 review: parse-tree decides which files the exporter reads —
-        # one it lists as `not_read` (the `_defaults` spelling a directory
-        # does not select) is not validated, and said so; not an ERROR: the
-        # exporter serves the rest of the tree.
-        why = reader.not_read(f)
-        if why is not None:
-            issues.append(f"{WARN_PREFIX}{f.relative_to(output_dir).as_posix()} is read by "
-                          f"no reader ({why}) — not validated")
-            continue
-        try:
-            root = reader.node(f)
-        except FileUnreadable as e:
-            if e.kind == "top_level_not_mapping":
-                issues.append(
-                    f"{ERROR_PREFIX}{f.name} top-level is not a mapping")
-            else:
-                issues.append(f"{ERROR_PREFIX}{f.name} parse error ({e.kind}): "
-                              f"{' '.join(e.message.split())}")
-            continue
-        if root == {} and not _has_content(f):
-            issues.append(f"{WARN_PREFIX}{f.name} is empty")
-
-    return issues
-
-
-#: Lines that leave a document with no value: a document marker, or the
-#: whole document written as null (yaml.v3's null spellings).
-_NO_VALUE_LINES = frozenset({"---", "...", "~", "null", "Null", "NULL"})
-
-
-def _has_content(path: Path) -> bool:
-    """Whether *path* holds a value. parse-tree reads an empty file, a
-    comment-only one, a null document and `{}` all as an empty mapping; only
-    the first three are the "empty" placeholder this WARN is about."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return True
-    return any(ln.strip() and not ln.lstrip().startswith("#")
-               and ln.strip() not in _NO_VALUE_LINES for ln in text.splitlines())
-
-
 # ── Main ─────────────────────────────────────────────────────────────
 
 @exit_on_output_write_error
@@ -509,10 +395,6 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true",
         help="Dry-run: detect conflicts without writing files",
-    )
-    parser.add_argument(
-        "--validate", action="store_true",
-        help="Run YAML validation on assembled output (not with --check)",
     )
     parser.add_argument(
         "--manifest", type=str, default="",
@@ -542,13 +424,7 @@ def main() -> int:
 
     # ⛔ `--check` returns before anything is assembled, so a flag that acts
     # on the assembled output is never reached under it. Accepting the pair
-    # turned `--check --validate` into a green that validated nothing (#1828)
-    # and `--check --manifest` into rc 0 with no manifest written.
-    if args.check and args.validate:
-        return reject("check_with_validate",
-                      "--validate checks the assembled output and --check "
-                      "assembles nothing; drop --check and pass --output to "
-                      "validate")
+    # turned `--check --manifest` into rc 0 with no manifest written (#1828).
     if args.check and args.manifest:
         return reject("check_with_manifest",
                       "--manifest records an assembly and --check assembles "
@@ -654,50 +530,15 @@ def main() -> int:
     #
     # ⚠️ `--check` without `--output` cannot see that second half, and says so
     # below rather than implying it answered for the artifact.
-    # ⛔ `iter_config_files` walks with `onerror=None`, so a subdirectory it
-    # cannot enumerate disappears silently — and a second declaration of one of
-    # our tenants can be sitting in it. Measured as a non-root user (as root the
-    # mode bits are ignored, so the first probe wrongly showed nothing): with
-    # the subtree unreadable the gate answered rc 0 and said nothing, while the
-    # same tree readable was correctly refused. A subtree we could not read is
-    # "could not measure", which is the one thing this gate must never round
-    # down to clean. An unreadable FILE is different and only gets named: the
-    # exporter cannot read it either, so it declares nothing we would miss.
-    #
-    # A DIRECTORY SYMLINK is not blind (#1972): the exporter does not follow
-    # it, so nothing under it is read and nothing under it can be a second
-    # declaration. It is named, like an unreadable file, and not counted
-    # as "could not measure".
-    # #3206: "could not measure" is Go's `unlistable_dir` (a directory the
-    # walk could not list), not a stat of this tool's — a config-named
-    # directory the walk DID list is named, and its files are in the listing.
+    # #3206: the output directory is read through the run's index, whose
+    # taking is the fail-closed exit (`_lib_parse_cache.ConfdReader.tree`): a
+    # subtree Go could not list ("could not measure"), a dangling link or a
+    # directory with a config file's name there ends the run, every such
+    # path named, exit 2 — before anything is written. (They were a WARN, or
+    # the UNMEASURED verdict, here.)
     out_tree = None
     if output_dir is not None:
         out_tree = list_config_tree(output_dir)
-        blind = list(out_tree.unscannable)
-        unreadable_files = [p for p in out_tree.unusable if p not in blind]
-        for p in sorted(unreadable_files):
-            # A directory link's reason already says what the exporter does.
-            entry = unusable_entry(p, out_tree.listing)
-            tail = ("" if entry is not None and entry.dir_link
-                    else " — the exporter cannot read it either")
-            print(f"WARN: {p} {unusable_reason(p, out_tree.listing)}{tail}", file=sys.stderr)
-        if blind:
-            print(f"\n❌ cannot answer the duplicate-tenant question for "
-                  f"{output_dir}: " +
-                  ", ".join(f"{p} {unusable_reason(p, out_tree.listing)}"
-                            for p in sorted(blind)),
-                  file=sys.stderr)
-            print("   This is 'could not measure', NOT 'measured clean' — a "
-                  "second declaration of one of these tenants could be in "
-                  "there.", file=sys.stderr)
-            if args.json:
-                print(format_json_report({
-                    "status": tu.UNMEASURED,
-                    "reason": f"unreadable subtree under {output_dir}",
-                    "details": [str(p) for p in sorted(blind)],
-                }))
-            return tu.EXIT_FOR[tu.UNMEASURED]
 
     preexisting = (carriers_already_in(output_dir, out_tree.listing)
                    if output_dir and out_tree is not None else {})
@@ -819,20 +660,6 @@ def main() -> int:
     # Assemble (`--output` presence was settled before anything was read)
     count = assemble(file_map, output_dir)
 
-    # Validate
-    validation_issues: List[str] = []
-    if args.validate:
-        try:
-            validation_issues = validate_merged(output_dir)
-        except ParseTreeError as e:
-            msg = ("cannot validate the assembled config-dir through `da-guard "
-                   f"parse-tree` (ADR-036): {' '.join(str(e).split())}")
-            if args.json:
-                print(format_json_report({"status": "caller_error",
-                                          "reason": "da_guard_parse_tree"}))
-            print(f"ERROR: {msg}", file=sys.stderr)
-            return EXIT_CALLER_ERROR
-
     # Manifest
     if args.manifest:
         manifest = build_manifest(sources, file_map, conflicts)
@@ -852,17 +679,10 @@ def main() -> int:
             os.chmod(manifest_path,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
-    # ⛔ `--validate` has to be able to fail, or it is a report with a name
-    # that reads like a gate. WARN stays non-fatal (an empty carrier is a
-    # placeholder, not a broken one); ERROR is the module's documented exit 2.
-    # The artifact is NOT removed: it may have been written into a directory
-    # that already held files, and deleting those would be a second bug.
-    failed_validation = has_errors(validation_issues)
-
     # Output
     if args.json:
         result = {
-            "status": "validation_error" if failed_validation else "ok",
+            "status": "ok",
             "output": str(output_dir),
             "file_count": count,
             "sources": [str(s) for s in sources],
@@ -880,8 +700,6 @@ def main() -> int:
             # `count` included hidden entries before #1827; it no longer does,
             # and the re-derivation is what keeps that from mattering.)
             result["artifact_file_count"] = len(carriers_already_in(output_dir))
-        if validation_issues:
-            result["validation"] = validation_issues
         print(format_json_report(result))
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
@@ -890,17 +708,6 @@ def main() -> int:
                   f"{len(carriers_already_in(output_dir))} carrier(s) the "
                   f"exporter will read — {len(residue)} of them left over "
                   f"from an earlier run (listed above).")
-        if validation_issues:
-            print(f"\nValidation ({len(validation_issues)} issue(s)):")
-            for issue in validation_issues:
-                print(f"   {issue}")
-        if failed_validation:
-            print(f"\n❌ {output_dir} was written but does not validate — "
-                  f"the exporter will not read it as intended.",
-                  file=sys.stderr)
-
-    if failed_validation:
-        return EXIT_CALLER_ERROR
 
     return EXIT_OK
 

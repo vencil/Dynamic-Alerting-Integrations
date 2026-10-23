@@ -3534,8 +3534,9 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
 # ============================================================
 def main() -> None:
     """CLI entry point: One-stop configuration validation. Every row reads
-    one `da-guard parse-tree` document of the tree (ADR-036 step 4)."""
-    with _lib_parse_cache.session():
+    one `da-guard parse-tree` document of the tree (ADR-036 step 4). A
+    judge (`judging`, #3206): a path Go names is its finding, exit 1."""
+    with _lib_parse_cache.session(), _lib_parse_cache.judging():
         _main()
 
 

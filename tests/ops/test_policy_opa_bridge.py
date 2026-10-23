@@ -21,7 +21,6 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import YamlFileError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +124,13 @@ class TestLoadDefaults:
 
     def test_non_mapping_is_a_file_parse_tree_cannot_read(self, tmp_path):
         """#2906: a top level that is not a mapping is a file parse-tree
-        (and the exporter) cannot read — named, rc 2 in `main` — not `{}`."""
+        (and the exporter) cannot read — named, rc 2 — not `{}`. #3206:
+        through the shared conf.d refusal."""
+        from _go_refusal import refuses  # noqa: PLC0415
         (tmp_path / "_defaults.yaml").write_text("- list\n", encoding="utf-8")
-        with pytest.raises(YamlFileError, match="top_level_not_mapping"):
+        with refuses("_defaults.yaml") as err:
             pob.load_defaults(str(tmp_path))
+        assert "(top_level_not_mapping: " in err.getvalue(), err.getvalue()
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ tenant-a 沒宣告，鍵再像 mysql 也是空字串；tenant-b 宣告 redis，�
 舊讀取端（ee778a42 以前）只平鋪讀根目錄租戶檔本身：平台 `tenants:` 的 owner 讀成空字串、
 子目錄的租戶整個消失、繼承的鍵不進推斷、exporter 丟掉的檔照讀（fail-open）。
 
-另有幾格：exporter 丟掉的檔（fail-closed rc 2，da-guard 的 stderr 整份轉出）、平面格式檔
+另有幾格：exporter 丟掉的檔（fail-closed rc 2：共用的 conf.d 拒絕點名該檔，#3206）、平面格式檔
 （沒有 `tenants:`，Go 列進 `skipped`，WARN 點名）、數字型租戶 id（`010` 是 "010"，
 不是 8）、過期的維護時間盒（Go 判定已不在維護中）。
 
@@ -37,6 +37,8 @@ import pytest
 
 import _lib_tenant_values as tv
 import generate_tenant_metadata as gtm
+import _lib_parse_cache
+from _go_refusal import assert_refused, go_refused, refuses  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL = REPO_ROOT / "scripts" / "tools" / "dx" / "generate_tenant_metadata.py"
@@ -166,38 +168,37 @@ _DROPPED = {
 @pytest.mark.parametrize("case", sorted(_DROPPED))
 def test_a_file_the_exporter_drops_fails_closed(case, tmp_path):
     conf_d = _tree(tmp_path, _DROPPED[case])
-    with pytest.raises(tv.ParseFailedError):          # 前提：Go 丟掉這個檔
-        tv.load_served_values(conf_d)
-    with pytest.raises(tv.ParseFailedError):
+    dropped = "tenant-a.yaml" if case == "duplicate key" else "_defaults.yaml"
+    assert go_refused(conf_d) == [dropped], case      # 前提：Go 點名這個檔
+    with _lib_parse_cache.judging():                  # 前提：Go 丟掉這個檔
+        with pytest.raises(tv.ParseFailedError):
+            tv.load_served_values(conf_d)
+    with refuses(dropped):                            # #3206：共用拒絕
         gtm.build_tenant_metadata(conf_d)
 
     out = tmp_path / "out.json"
     proc = _cli(conf_d, "--output", str(out))
-    assert proc.returncode == 2, (case, proc.returncode, proc.stdout, proc.stderr)
+    assert_refused(proc.returncode, proc.stderr, [dropped])
     assert proc.stdout == "", proc.stdout
     assert not out.exists(), "a run that failed must not write --output"
-    lines = proc.stderr.splitlines()
-    assert lines[0].startswith("ERROR: cannot read "), proc.stderr
-    assert any(ln.startswith(tv.DA_GUARD_PREFIX) for ln in lines[1:]), proc.stderr
-    dropped = "tenant-a.yaml" if case == "duplicate key" else "_defaults.yaml"
-    assert dropped in lines[0], proc.stderr
 
 
 def test_an_entry_the_exporter_cannot_read_fails_closed(tmp_path):
     """A dangling symlink named like a carrier: the exporter's load cannot read
-    it (`unreadable`), so the run fails (rc 2) and names it. Before #2115
-    0-B/B4 this tool warned about it from its own scan and carried on."""
+    it (`unreadable`), so the run fails (rc 2, the shared refusal since
+    #3206) and names it. Before #2115 0-B/B4 this tool warned about it from
+    its own scan and carried on."""
     from _platform_fs import symlink_or_skip  # noqa: PLC0415
 
     conf_d = _tree(tmp_path, POSITIONS["tenant-file"])
     symlink_or_skip(conf_d / "no-such-target.yaml", conf_d / "broken.yaml")
-    with pytest.raises(tv.ParseFailedError) as excinfo:               # 前提
-        tv.load_served_values(conf_d)
+    with _lib_parse_cache.judging():
+        with pytest.raises(tv.ParseFailedError) as excinfo:           # 前提
+            tv.load_served_values(conf_d)
     assert [u.file for u in excinfo.value.unreadable] == ["broken.yaml"]
     proc = _cli(conf_d)
-    assert proc.returncode == 2, proc.stderr
+    assert_refused(proc.returncode, proc.stderr, ["broken.yaml"])
     assert proc.stdout == ""
-    assert "broken.yaml" in proc.stderr.splitlines()[0], proc.stderr
 
 
 def test_missing_da_guard_fails_closed(tmp_path, monkeypatch):
