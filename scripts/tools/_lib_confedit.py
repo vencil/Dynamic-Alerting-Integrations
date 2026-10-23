@@ -232,14 +232,17 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = ()) -> dict:
     `bool` / `None` / `str` as themselves, an `int` an int, a finite `float`
     a float spelled in canonical decimal (`1e-05` → `0.00001`, `2.0` stays
     `2.0`). Raises ValueError, naming the key path, for anything else (a
-    NaN / infinite float, an int past the contract's 18 digits, another
-    type): no spelling is guessed for it."""
+    NaN / infinite float, an int past the contract's 18 digits, a mapping
+    key that is not a `str`, another type): no spelling is guessed for it."""
     def bad(why: str) -> ValueError:
         where = ".".join(_at) or "(the top level)"
         return ValueError(f"{where}: {why}")
 
     if isinstance(obj, dict):
-        return map_value((str(k), data_value(v, (*_at, str(k)))) for k, v in obj.items())
+        for k in obj:
+            if not isinstance(k, str):
+                raise bad(f"the key {k!r} is a {type(k).__name__}, not a str")
+        return map_value((k, data_value(v, (*_at, k))) for k, v in obj.items())
     if isinstance(obj, (list, tuple)):
         return {"seq": [data_value(v, (*_at, f"[{i}]")) for i, v in enumerate(obj)]}
     if obj is None:
@@ -251,7 +254,8 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = ()) -> dict:
     if isinstance(obj, int):
         text = str(obj)
         if not is_canonical_int(text):
-            raise bad(f"the int {obj} has more than {_MAX_INT_DIGITS} digits")
+            raise bad(f"the int {obj} is longer than {_MAX_INT_DIGITS} characters"
+                      " (the edit contract's limit, a sign included)")
         return {"int": text}
     if isinstance(obj, float):
         if obj != obj or obj in (float("inf"), float("-inf")):

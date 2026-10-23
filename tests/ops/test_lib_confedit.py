@@ -90,10 +90,19 @@ def test_a_generated_value_has_its_python_type_and_key_order(obj, want):
     ({"defaults": {"k": float("nan")}}, "defaults.k"),
     ({"x": [10 ** 18]}, r"x\.\[0\]"),
     ({"x": {1, 2}}, "x"),
+    ({"x": {1: "a"}}, "x"),
+    ({"x": {None: 1}}, "x"),
 ])
 def test_a_generated_value_with_no_contract_type_is_refused_by_its_key(obj, where):
     with pytest.raises(ValueError, match=f"^{where}: "):
         ce.data_value(obj)
+
+
+def test_a_negative_int_at_the_limit_is_named_by_its_length_not_its_digits():
+    # 18 digits plus a sign is past the contract's 18 characters; the message
+    # must not claim more digits than there are.
+    with pytest.raises(ValueError, match="longer than 18 characters"):
+        ce.data_value(-(10 ** 18 - 1))
 
 
 def test_a_generated_float_reads_back_as_the_number_meant(tmp_path):
