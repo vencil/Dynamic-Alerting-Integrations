@@ -172,6 +172,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "generate_rulepack_configmaps.py": _R_DX,
     "generate_tenant_fixture.py": _R_DX,
     "generate_tenant_metadata.py": _R_DX,
+    "measure_judgement_budget.py": _R_DX,
     "migrate_conf_d.py": _R_DX,
     "pair_bench_ratio.py": _R_DX,
     "paired_trend_watch.py": _R_DX,
