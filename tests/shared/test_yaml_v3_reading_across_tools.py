@@ -249,6 +249,9 @@ _NOT_PROBED: dict[str, str] = {
                                "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _GO_WRITER, "dx/run_chaos_soak.py": _NAMES,
+    "dx/measure_judgement_budget.py": (_GO + "; a benchmark of the generator container's "
+                                       "judgement (#3206): it runs the generator in-process, "
+                                       "whose own row probes the reading"),
     "lint/check_account_registry_monotonic.py": _GO_BLOB,
     "_lib_exitcodes.py": _PROSE_ONLY + ("; the exit/envelope library: it carries the shared "
                                         "conf.d refusal's `refused_paths` into the --json "

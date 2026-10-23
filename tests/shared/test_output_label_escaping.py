@@ -379,6 +379,11 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # a reporter; there is nothing to point it at in a unit test.
     "run_chaos_soak.py":
         "argparse: the following arguments are required: --target-url, --output-dir",
+    # Takes no --config-dir: the string is in its source as an argument it
+    # hands to the generator and da-guard. A benchmark (#3206) needing helm,
+    # amtool and several full judgements; the conf.d names it prints (the
+    # written path, tenant ids) go through safe_label all the same.
+    "measure_judgement_budget.py": "argparse: unrecognized arguments",
     # ⛔ `diagnose.py` used to sit here. It does not belong: see EXTRA_ARGS.
     # Removing it turned up a live line-start forgery. Treat this list as a
     # standing invitation to check whether an entry is really unmeasurable or
