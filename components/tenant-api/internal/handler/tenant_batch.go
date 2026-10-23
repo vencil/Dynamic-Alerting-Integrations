@@ -13,13 +13,13 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
-	"github.com/vencil/tenant-api/internal/customalerts"
 	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	"github.com/vencil/threshold-exporter/pkg/confedit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1101,11 +1101,11 @@ func tenantAbsentIn(existing []byte, tenantID string) bool {
 	if root.Kind != yaml.MappingNode {
 		return false
 	}
-	tenants := yamlMapValue(root, "tenants")
+	tenants := confedit.MapValue(root, "tenants")
 	if tenants == nil || tenants.Kind != yaml.MappingNode {
 		return false
 	}
-	return yamlMapValue(tenants, tenantID) == nil
+	return confedit.MapValue(tenants, tenantID) == nil
 }
 
 // mergePatchYAML sets each patch key on `tenants.<tenantID>` in the existing
@@ -1117,8 +1117,8 @@ func tenantAbsentIn(existing []byte, tenantID string) bool {
 // (buildPatchYAML). A non-empty but unparseable / structurally-wrong existing
 // file returns an error — the caller must NOT fall back to an overwrite, which
 // would reintroduce the very data loss this prevents.
-// ⛔ COST NOTE (#1722): this is quadratic in len(patch) — yamlMapValue and
-// yamlSetMapValue each scan the mapping's Content once per key — and it runs
+// ⛔ COST NOTE (#1722): this is quadratic in len(patch) — confedit.MapValue and
+// confedit.SetMapValue each scan the mapping's Content once per key — and it runs
 // inside the single-writer token, BEFORE the merged document reaches
 // TA_MAX_TENANT_DOC_BYTES. The byte caps therefore do not cover the most
 // expensive step on this path; BatchOperation.Patch's `max` is what bounds it.
@@ -1172,12 +1172,12 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 	if root.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("current tenant yaml root is not a mapping")
 	}
-	tenantsVal := yamlMapValue(root, "tenants")
+	tenantsVal := confedit.MapValue(root, "tenants")
 	if tenantsVal == nil || tenantsVal.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("current tenant yaml has no `tenants:` mapping")
 	}
-	tenantVal := yamlMapValue(tenantsVal, tenantID)
-	if len(patch) == 0 && (tenantVal == nil || (tenantVal.Kind == yaml.MappingNode && !carriesAny(tenantVal, unset))) {
+	tenantVal := confedit.MapValue(tenantsVal, tenantID)
+	if len(patch) == 0 && (tenantVal == nil || (tenantVal.Kind == yaml.MappingNode && !confedit.CarriesAny(tenantVal, unset))) {
 		// Nothing to set and nothing there to remove. A section that is not
 		// a mapping still gets the structural error below.
 		return "", gitops.ErrMergeNoOp
@@ -1185,7 +1185,7 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 	if tenantVal == nil {
 		// File exists (perhaps other content) but not this tenant's section: add it.
 		tenantVal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		yamlSetMapValue(tenantsVal, tenantID, tenantVal)
+		confedit.SetMapValue(tenantsVal, tenantID, tenantVal)
 	} else if tenantVal.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("current tenant yaml `tenants.%s` is not a mapping", tenantID)
 	}
@@ -1206,7 +1206,7 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 		// corruption, so it maps like every other bad-patch rejection. (Before
 		// this, `_custom_alerts` was caught by the downstream validator but
 		// `_metadata` was silently overwritten — an inconsistency this closes.)
-		if cur := yamlMapValue(tenantVal, k); cur != nil && (cur.Kind == yaml.MappingNode || cur.Kind == yaml.SequenceNode) {
+		if cur := confedit.MapValue(tenantVal, k); cur != nil && (cur.Kind == yaml.MappingNode || cur.Kind == yaml.SequenceNode) {
 			return "", fmt.Errorf("%w: batch patch cannot overwrite structured key %q with a scalar value", gitops.ErrValidation, k)
 		}
 		var vn yaml.Node
@@ -1217,23 +1217,19 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 		// holds, so no reader takes it for a timestamp, a number or a
 		// boolean (`2001-12-14t21:59:43` plain is a datetime to PyYAML).
 		vn.Style = yaml.DoubleQuotedStyle
-		yamlSetMapValue(tenantVal, k, &vn)
+		confedit.SetMapValue(tenantVal, k, &vn)
 	}
 	for _, k := range unset {
-		yamlDeleteMapValue(tenantVal, k)
+		confedit.DeleteMapValue(tenantVal, k)
 	}
 
-	customalerts.DropImplicitTags(&doc)
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	// SetIndent(2) matches the conf.d 2-space convention, under which a file
-	// round-trips unchanged (see customalerts.MergeCustomAlerts). A file authored
-	// with a different indent reflows to 2-space — comments still survive.
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
+	// confedit.Encode: implicit tags cleared, the conf.d 2-space indent,
+	// under which a file round-trips unchanged. A file authored with a
+	// different indent reflows to 2-space — comments still survive.
+	out, err := confedit.Encode(&doc)
+	if err != nil {
 		return "", fmt.Errorf("re-encode tenant yaml: %w", err)
 	}
-	_ = enc.Close()
 	// #2903: the re-encode must change nothing the edit does not.
 	edits := make([]partialEdit, 0, len(keys)+len(unset))
 	for _, k := range keys {
@@ -1242,10 +1238,10 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 	for _, k := range unset {
 		edits = append(edits, partialEdit{key: k})
 	}
-	if err := verifyPartialWrite(existing, buf.Bytes(), tenantID, edits, names); err != nil {
+	if err := verifyPartialWrite(existing, out, tenantID, edits, names); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	return string(out), nil
 }
 
 // buildPatchYAML constructs a minimal, full-document YAML for a tenant patch —
@@ -1270,48 +1266,4 @@ func buildPatchYAML(tenantID string, patch map[string]string) string {
 	}
 	_ = enc.Close()
 	return buf.String()
-}
-
-// yamlMapValue returns the value node for key in a mapping node, or nil.
-func yamlMapValue(m *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return m.Content[i+1]
-		}
-	}
-	return nil
-}
-
-// yamlSetMapValue replaces the value node for key (preserving the key node and
-// its comments / position), or appends a new key/value pair if absent.
-func yamlSetMapValue(m *yaml.Node, key string, val *yaml.Node) {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content[i+1] = val
-			return
-		}
-	}
-	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
-}
-
-// carriesAny reports whether mapping m carries at least one of keys.
-func carriesAny(m *yaml.Node, keys []string) bool {
-	for _, k := range keys {
-		if yamlMapValue(m, k) != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// yamlDeleteMapValue removes key and its value from a mapping node; a key the
-// mapping does not carry is a no-op.
-func yamlDeleteMapValue(m *yaml.Node, key string) {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content = append(m.Content[:i], m.Content[i+2:]...)
-			return
-		}
-	}
 }

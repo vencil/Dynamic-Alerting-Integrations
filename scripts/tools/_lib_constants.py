@@ -152,6 +152,7 @@ RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...
 # BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
 # block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
 MAX_CUSTOM_RECIPES: Final[int] = 20
+FORECAST_MAX_LOOKBACK: Final[str] = "96h"
 # END GENERATED recipe contract
 
 # ============================================================

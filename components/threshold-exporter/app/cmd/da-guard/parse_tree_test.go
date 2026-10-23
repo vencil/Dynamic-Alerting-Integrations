@@ -127,13 +127,13 @@ func checkSelectedInvariant(t *testing.T, doc map[string]any) {
 	}
 	for p, e := range byPath {
 		for _, k := range []string{"path", "depth", "class", "tenant_named", "defaults_document",
-			"readers", "not_read", "role", "problem", "verdict"} {
+			"config_extension", "readers", "not_read", "role", "problem", "verdict"} {
 			if _, ok := e[k]; !ok {
 				t.Errorf("%s: no %q", p, k)
 			}
 		}
-		if len(e) != 10 {
-			t.Errorf("%s: %d fields, want 10: %v", p, len(e), e)
+		if len(e) != 11 {
+			t.Errorf("%s: %d fields, want 11: %v", p, len(e), e)
 		}
 		_, hasContent := files[p]
 		readers := stringsOf(e["readers"])

@@ -212,7 +212,7 @@ file_overrides:
     require_generated_marker: true   # header must carry the GENERATED marker, else fully linted
     policy:
       denied_functions: [holt_winters, quantile_over_time]  # predict_linear exempted
-      max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h), horizon ≤ 48h
+      max_range_duration: 96h        # forecast lookback cap = max(lookback_factor·largest horizon, lookback_floor), generated from the recipe contract
 ```
 
 > **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at

@@ -30,7 +30,6 @@ import os
 import shutil
 import stat
 import sys
-import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Tuple
 
@@ -51,7 +50,7 @@ from _lib_confd import (  # noqa: E402
     list_config_tree,
     warn_nested,
 )
-from _lib_parse_tree import classify_names, list_tree  # noqa: E402  (#3206: Go judges names)
+from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
 import _lib_tenant_uniqueness as tu  # noqa: E402
@@ -90,27 +89,6 @@ def is_platform_file(name: str, cls: "str | None" = None) -> bool:
         cls = _classes([name])[name]
     return cls == "defaults" or (
         cls == "platform" and PurePosixPath(name).stem.lower() == PROFILES_STEM)
-
-
-def carrier_go_selects(names: "List[str]") -> "str | None":
-    """The defaults carrier Go's chain would read in ONE directory holding
-    exactly *names* (base names), or None: `da-guard parse-tree
-    --list-only`'s `defaults_carriers` over an empty stand-in of each, so the
-    answer is Go's selection rule (#1674), not a copy of it (#3206). For a
-    directory that does not exist yet — what `--output` would hold after the
-    copy — and must not be written before the run is refused. A stand-in it
-    cannot write (the system temp directory, no flag of this tool) ends the
-    run at rc 2, named."""
-    with tempfile.TemporaryDirectory(prefix="assemble-carriers-") as d:
-        for n in names:
-            try:
-                (Path(d) / n).write_bytes(b"")
-            except OSError as e:
-                print(f"ERROR: cannot write a stand-in carrier in the temp directory "
-                      f"{d} to ask da-guard which carrier the exporter would read: {e}",
-                      file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
-        return list_tree(d).defaults_carriers.get(".")
 
 
 # ── Source discovery ─────────────────────────────────────────────────
@@ -175,19 +153,15 @@ def _utf8(name: str) -> bool:
 
 def _hidden_config_named(paths: List[Path]) -> List[Path]:
     """The *paths* whose name Go classes `hidden` and that carry a config
-    file's extension. Names mode answers `hidden` before the extension, so
-    the extension is asked of the name behind a one-letter, non-`.` prefix:
-    Go's extension test is a suffix test (`confdname.SplitCarrier`), which a
-    prefix cannot change — `x.yaml` for a file named `.yaml` included."""
+    file's extension (the entry's `config_extension`, names mode)."""
     # A name JSON cannot carry (not UTF-8) cannot be asked; its WARN is
     # wording only, and the listing names what it reads.
-    hidden = [p for p in paths if _utf8(p.name)]
-    if not hidden:
+    asked = [p for p in paths if _utf8(p.name)]
+    if not asked:
         return []
-    named = _classes([p.name for p in hidden])
-    hidden = [p for p in hidden if named[p.name] == "hidden"]
-    probes = _classes([f"x{p.name}" for p in hidden])
-    return [p for p in hidden if probes[f"x{p.name}"] != "not_config_name"]
+    named = classify_names([p.name for p in asked])
+    return [p for p in asked
+            if named[p.name].cls == "hidden" and named[p.name].config_extension]
 
 
 def discover_yamls(source_dir: Path) -> List[Path]:
@@ -618,7 +592,8 @@ def main() -> int:
     # duplicates a tenant (below): refuse, name it, say how to clear it.
     # Which names are carriers, and which one the exporter reads, are Go's
     # (#3206): the class of the produced names, the output listing's entries,
-    # and Go's selection over the directory the copy would leave.
+    # and Go's selection over the names the copy would leave there (names
+    # mode: the directory does not exist yet).
     produced_classes = _classes(list(file_map))
     produced_carriers = sorted(n for n in file_map if produced_classes[n] == "defaults")
     out_entries = (out_tree.listing.config_files()
@@ -626,7 +601,7 @@ def main() -> int:
     stale_carriers = sorted(e.path for e in out_entries
                             if "/" not in e.path and e.cls == "defaults" and e.path in residue)
     if produced_carriers and stale_carriers:
-        read = carrier_go_selects(produced_carriers + stale_carriers)
+        read = names_carrier(produced_carriers + stale_carriers)
         if args.json:
             print(format_json_report({
                 "status": "conflict",

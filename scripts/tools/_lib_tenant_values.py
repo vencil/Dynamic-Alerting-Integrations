@@ -248,7 +248,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, TextIO, TypeVar
+from typing import Any, Callable, Iterable, NamedTuple, TextIO, TypeVar
 
 _HERE = Path(__file__).resolve().parent
 # guard_dispatch lives in ops/ in the repo; the image ships it flat beside
@@ -480,6 +480,9 @@ class ServedTree(NamedTuple):
     # and cannot read; their tenants are absent from `tenants`.
     parse_failed: "tuple[str, ...] | list[str]" = ()
     unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
+    # With `tenants` only (the subset mode): the requested tenants the tree
+    # has no tenant for; `tenants` then holds the others.
+    absent: "tuple[str, ...]" = ()
 
 
 class UnreadableFile(NamedTuple):
@@ -551,6 +554,7 @@ class TenantEffective(NamedTuple):
 class EffectiveTree(NamedTuple):
     tenants: dict[str, TenantEffective]
     skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
+    absent: "tuple[str, ...]" = ()  # as ServedTree.absent
 
 
 class EffectiveRun(NamedTuple):
@@ -898,6 +902,57 @@ def load_served_values(
                             disable_effects=disable_effects).tenants
 
 
+def requested_tenants(tenants: "Iterable[str] | None") -> "list[str] | None":
+    """The requested tenants as da-guard writes them back (sorted,
+    deduplicated); None for the whole tree. The caller's mistakes are
+    refused, never read as some other request: a bare string (its
+    characters would be the tenants), an id that is not a string, an empty
+    one, one that is not valid UTF-8 (JSON cannot carry it back), and no
+    tenant at all (not the whole tree)."""
+    if tenants is None:
+        return None
+    if isinstance(tenants, (str, bytes)):
+        raise TypeError(f"tenants must be an iterable of tenant ids, not one {type(tenants).__name__}")
+    requested = list(tenants)
+    for t in requested:
+        if not isinstance(t, str):
+            raise TypeError(f"tenant id {t!r} is not a string")
+        try:
+            t.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError(f"tenant id {t!r} is not valid UTF-8") from None
+    if not requested or "" in requested:
+        raise ValueError("tenants must name at least one tenant, and no empty one")
+    return sorted(set(requested))
+
+
+def _subset_args(tenants: "Iterable[str] | None") -> "tuple[list[str], list[str] | None]":
+    """`--tenant` per requested tenant, and `requested_tenants`; ([], None)
+    for the whole tree."""
+    requested = requested_tenants(tenants)
+    if requested is None:
+        return [], None
+    return [a for t in requested for a in ("--tenant", t)], requested
+
+
+def _subset_absent(doc: dict[str, Any], requested: "list[str] | None") -> "tuple[str, ...]":
+    """The document's `tenants_absent`, checked: it answers exactly the
+    tenants asked for (every one in `tenants` or absent, never both, none
+    other), so a tenant not asked for is never read as one not served.
+    () for the whole tree, whose document carries neither field."""
+    if requested is None:
+        if "tenants_requested" in doc or "tenants_absent" in doc:
+            raise ValueError("a whole-tree document carries tenants_requested / tenants_absent")
+        return ()
+    got, absent = doc["tenants_requested"], doc["tenants_absent"]
+    if not isinstance(absent, list) or got != requested:
+        raise ValueError(f"tenants_requested {got!r}, this reader asked for {requested!r}")
+    present = set(doc["tenants"])
+    if present & set(absent) or present | set(absent) != set(requested):
+        raise ValueError(f"tenants {sorted(present)!r} / tenants_absent {absent!r} do not answer {requested!r}")
+    return tuple(str(t) for t in absent)
+
+
 def load_served_tree(
     conf_d: str | Path,
     at: str | None = None,
@@ -906,6 +961,7 @@ def load_served_tree(
     schedules: bool = False,
     disable_effects: bool = False,
     partial: bool = False,
+    tenants: "Iterable[str] | None" = None,
 ) -> ServedTree:
     """`load_served_values`'s tenants plus the files the load serves no
     tenant from. Same arguments and exceptions — except that with `partial`
@@ -917,16 +973,19 @@ def load_served_tree(
         extra.append("--schedules")
     if disable_effects:
         extra.append("--disable-effects")
+    subset, requested = _subset_args(tenants)
+    extra += subset
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases, dropped), returncode, stderr = _run_da_guard(
+    (tenants, skipped, aliases, dropped, absent), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
-                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]])),
+                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
+                          _subset_absent(doc, requested)),
         reads_unreadable=True, dropped_ok=partial)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
@@ -1019,7 +1078,7 @@ def load_served_tree(
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped)
+    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent)
 
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
@@ -1251,12 +1310,15 @@ def load_effective_tree(
     conf_d: str | Path,
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    tenants: "Iterable[str] | None" = None,
 ) -> EffectiveTree:
     """`load_effective`'s tenants plus the files the walk takes no tenant
     from. Same arguments and exceptions; a da-guard without `skipped` in its
     effective document is named as older than this tool (`load_effective`
-    does not read the field, so it does not require it)."""
-    return _load_effective(conf_d, binary, timeout, reads_skipped=True)
+    does not read the field, so it does not require it). With `tenants`,
+    only those are resolved (`--tenant`; `absent` names the ones the tree
+    has none for), as `load_served_tree`."""
+    return _load_effective(conf_d, binary, timeout, reads_skipped=True, tenants=tenants)
 
 
 def run_effective(
@@ -1282,14 +1344,16 @@ def run_effective(
 
 
 def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
-                    reads_skipped: bool) -> EffectiveTree:
-    (tenants, skipped), returncode, stderr = _run_da_guard(
-        EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+                    reads_skipped: bool, tenants: "Iterable[str] | None" = None) -> EffectiveTree:
+    subset, requested = _subset_args(tenants)
+    (got, skipped, absent), returncode, stderr = _run_da_guard(
+        EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
-                          if reads_skipped else []),
+                          if reads_skipped else [],
+                          _subset_absent(doc, requested)),
         reads_unreadable=True)
-    return EffectiveTree(_effective_tenants(tenants, returncode, stderr), skipped)
+    return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent)
 
 
 def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:

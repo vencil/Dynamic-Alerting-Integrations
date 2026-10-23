@@ -356,3 +356,77 @@ def test_an_inherited_undeclared_state_filter_is_the_root_files_notice(tmp_path)
     v = _by_key(t, "ta")["_state_ghost"]
     assert (v.verdict, v.severity, v.reason) == ("unread", "notice", "state_filter_undeclared")
     assert [f.file for f in t.findings if f.key == "_state_ghost"] == ["_defaults.yaml"]
+
+
+# ── 子集模式（ADR-038 §5：一筆寫入的租戶）────────────────────────────────
+
+_TWO_TENANTS = {
+    "_defaults.yaml": _ADR_DEFAULTS,
+    "db-a.yaml": _ADR_TENANT,
+    "db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: \"50\"\n    mysql_conections_b: \"1\"\n",
+}
+
+
+def test_a_subset_verdict_is_the_whole_trees_for_those_tenants(tmp_path):
+    """`tenants=` 判的就是全樹判決裡那些租戶的部分：每個鍵的判決相同，
+    finding 只剩它們的，沒要求的租戶不出現、也不被當成「沒人讀」。"""
+    conf_d = _tree(tmp_path, _TWO_TENANTS)
+    full = kv.judge_tree(conf_d)
+    sub = kv.judge_tree(conf_d, tenants=["db-b"])
+    assert sorted(sub.keys) == ["db-b"]
+    assert sub.keys["db-b"] == full.keys["db-b"]
+    assert sub.findings == [f for f in full.findings if f.tenants == ("db-b",)]
+    assert {f.key for f in sub.findings} == {"mysql_conections_b"}, sub.findings
+
+
+def test_a_whole_tree_effective_reading_does_not_widen_a_subset(tmp_path):
+    """validate-config 一類的呼叫者把整棵樹的 effective 傳進來時，子集判決仍只
+    判要求的租戶：只在一邊有的租戶，會被讀成每個鍵都沒人讀。"""
+    import _lib_tenant_values as tv
+    conf_d = _tree(tmp_path, _TWO_TENANTS)
+    sub = kv.judge_tree(conf_d, tenants=["db-b"], effective_tree=tv.load_effective_tree(conf_d))
+    assert sorted(sub.keys) == ["db-b"]
+    assert all(f.tenants == ("db-b",) for f in sub.findings), sub.findings
+
+
+def test_a_requested_tenant_the_tree_lacks_has_no_key(tmp_path):
+    conf_d = _tree(tmp_path, _TWO_TENANTS)
+    sub = kv.judge_tree(conf_d, tenants=["db-gone"])
+    assert sub.keys == {} and sub.findings == []
+
+
+def test_a_bare_string_is_not_read_as_its_characters(tmp_path):
+    """`tenants="db-b"` 不能被拆成 `-`、`b`、`d` 三個不存在的租戶——那樣
+    什麼都沒判、判決卻是空的、看起來像通過。"""
+    conf_d = _tree(tmp_path, _TWO_TENANTS)
+    with pytest.raises(TypeError):
+        kv.judge_tree(conf_d, tenants="db-b")
+
+
+def test_an_effective_reading_lacking_a_requested_tenant_is_refused(tmp_path):
+    """傳進來的 effective 少了某個要求的租戶時，那個租戶的鍵會只剩 served
+    那一邊（layer、file 為 None），所以拒絕，而不是靜默判錯。"""
+    import _lib_tenant_values as tv
+    conf_d = _tree(tmp_path, _TWO_TENANTS)
+    with pytest.raises(ValueError, match="db-b"):
+        kv.judge_tree(conf_d, tenants=["db-a", "db-b"],
+                      effective_tree=tv.load_effective_tree(conf_d, tenants=["db-a"]))
+
+
+def test_a_profile_finding_in_a_subset_is_judged_over_the_requested_tenants(tmp_path):
+    """profile 鍵的 finding 不屬於單一租戶：子集裡只看得到要求的租戶。這裡
+    規則讀 `_namespaces`、但排除 db-a，所以全樹裡 db-b 讀到它、profile 不出
+    notice；只要求 db-a 時看不到 db-b，profile notice 就出現了。這是 ADR-038
+    §5 記下的差異，不是「每個租戶跟全樹一樣」的那部分。"""
+    from types import SimpleNamespace
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n",
+        "db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n",
+        "db-b.yaml": "tenants:\n  db-b:\n    _profile: gold\n",
+    })
+    rules = [SimpleNamespace(target="_namespaces", when=None, exclude_tenants=["db-a"])]
+    reasons = lambda v: [(f.key, f.file, f.tenants, f.reason) for f in v.findings if f.key == "_namespaces"]  # noqa: E731
+    assert reasons(kv.judge_tree(conf_d, rules=rules)) == [
+        ("_namespaces", "_defaults.yaml", ("db-a",), "not_exporter_key")]
+    assert reasons(kv.judge_tree(conf_d, rules=rules, tenants=["db-a"])) == [
+        ("_namespaces", "_defaults.yaml", ("db-a",), "not_read_in_profile")]
