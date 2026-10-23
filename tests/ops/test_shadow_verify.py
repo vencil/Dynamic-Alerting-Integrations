@@ -456,13 +456,18 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
                                     ({"config": {"original": 5}}, None)],
                              ids=["unreachable", "not-an-object", "original-not-string"])
     def test_a_given_alertmanager_not_answering_is_a_caller_error(self, monkeypatch, am):
+        seen = []
+
         def get(url, **_kw):
+            seen.append(url)
             return am if "/api/v2/status" in url else _vector("3")
         args = _args(alertmanager="http://am:9093")
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             c = {c["check"]: c for c in sv.check_preflight(args)}["alertmanager_shadow_route"]
         assert (c["status"], c.get("caller_error")) == ("fail", True)
+        # the URL given is the one read — not the default (review of fc7596cd3)
+        assert [u for u in seen if "/api/v2/status" in u] == ["http://am:9093/api/v2/status"]
 
     def test_the_default_alertmanager_not_answering_is_a_skip(self, monkeypatch):
         seen = []
@@ -479,7 +484,8 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
     def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch):
         def get(url, **_kw):
             return (({"config": {"original": "route: {matchers: [migration_status=shadow]}"}}, None)
-                    if "/api/v2/status" in url else _vector("3"))
+                    if url == "http://am:9093/api/v2/status" else
+                    (None, "refused") if "/api/v2/status" in url else _vector("3"))
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
