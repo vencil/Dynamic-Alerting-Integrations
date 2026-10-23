@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "tools"))
 import _lib_tenant_uniqueness as tu  # noqa: E402
@@ -1297,7 +1298,8 @@ class TestAnUnreadableSubtreeUnderOutputIsNotClean:
     first probe wrongly showed nothing wrong): with the subtree unreadable the
     gate answered rc 0 and printed nothing, while the identical tree readable
     was correctly refused. A subtree we could not read is "could not measure",
-    which is the single thing this gate must not round down to clean.
+    which is the single thing this gate must not round down to clean — since
+    #3206 the shared conf.d refusal, which names it before the gate runs.
     """
 
     def _tree(self, config_dir):
@@ -1319,10 +1321,9 @@ class TestAnUnreadableSubtreeUnderOutputIsNotClean:
         try:
             cli_argv("assemble", "--sources", str(s), "--output", str(out),
                      "--check")
-            assert main() == 2
-            err = capsys.readouterr().err
-            assert "could not measure" in err.lower(), err
-            assert "locked" in err, err
+            with refuses("locked") as err:
+                main()
+            assert "(read_failure: " in err.getvalue(), err.getvalue()
         finally:
             os.chmod(out / "locked", 0o755)
 

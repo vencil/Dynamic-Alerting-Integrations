@@ -2562,7 +2562,9 @@ class TestRecipeNoteFromTheWholeTree:
                         reason="as root the permission bits decide nothing")
     def test_an_unreadable_file_under_config_dir_is_named(self, monkeypatch, cli_argv, capsys,
                                                           tmp_path):
-        """73c1e2da: a PermissionError traceback, rc 2 `internal_error`."""
+        """73c1e2da: a PermissionError traceback, rc 2 `internal_error`. Since
+        #3206 the unreadable file is a path da-guard validation names: the
+        shared conf.d refusal (reason `conf_d_not_servable`), the file named."""
         cur, base = _dirs(tmp_path, {**_D, "t.yaml": self._t("t", "    mysql_connections: 1\n")},
                           {**_D, "t.yaml": self._t("t", "    mysql_connections: 2\n")})
         os.chmod(os.path.join(cur, "t.yaml"), 0)
@@ -2571,8 +2573,10 @@ class TestRecipeNoteFromTheWholeTree:
                                 "--prometheus", "http://prom:9090", "--json")
         finally:
             os.chmod(os.path.join(cur, "t.yaml"), 0o600)
-        assert (rc, json.loads(out.out)["reason"]) == (2, "served_values_unavailable")
-        assert "Traceback" not in out.err and "t.yaml" in out.err
+        doc = json.loads(out.out)
+        assert (rc, doc["reason"]) == (2, "conf_d_not_servable"), doc
+        assert doc["refused_paths"] == [{"path": "t.yaml", "verdict": "unservable"}], doc
+        assert_refused(rc, out.err, ["t.yaml"])
 
 
 

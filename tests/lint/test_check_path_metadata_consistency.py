@@ -841,7 +841,9 @@ def test_the_session_da_guard_is_executable_by_the_unprivileged_uid():
 def test_unreadable_directories_are_named_even_when_underscored():
     """A directory the walk cannot enumerate hides every tenant under it, so
     it is named — `_locked/` exactly like `locked/`: the `_` filter is for
-    ENTRIES (the exporter descends `_`-prefixed directories)."""
+    ENTRIES (the exporter descends `_`-prefixed directories). Since #3206
+    both are paths da-guard validation names, so the lint ends through the
+    shared conf.d refusal (rc 2), naming both — not a partial scan."""
     # Not `tmp_path`: under root it sits in a 0700 directory `nobody` cannot
     # traverse, which would make conf.d itself the unreadable thing.
     base = Path(tempfile.mkdtemp(prefix="cpmc-2081-"))
@@ -863,10 +865,10 @@ def test_unreadable_directories_are_named_even_when_underscored():
             [sys.executable, str(script), "--config-dir", str(conf), "--ci"],
             cwd=str(base),
         )
-        # 必響對照: the readable part of the tree WAS scanned.
-        assert "1 mismatch(es) across 1 tenant file(s)" in r.stderr, r
-        for d in locked:
-            assert f"{d}:0: warning: not checked" in r.stderr, (d, r.stderr)
+        assert_refused(r.returncode, r.stderr, ["_locked", "locked"])
+        assert "(read_failure: " in r.stderr, r.stderr
+        # Refused before any scan: no finding from the readable part either.
+        assert "mismatch(es)" not in r.stderr + r.stdout, r
     finally:
         for d in locked:
             if d.exists():

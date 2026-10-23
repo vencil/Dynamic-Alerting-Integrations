@@ -208,17 +208,18 @@ def test_dangling_symlink_fails_closed(script, extra, tmp_path):
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_file_without_read_permission_fails_closed(script, extra, name, tmp_path):
     """讀取權限不足：租戶檔（該租戶消失）或 `_defaults.yaml`（所有鍵變成沒有預設值）
-    都是 rc 2、指名該檔（`read_error`），不再 rc 0 只轉印一行 WARN。"""
+    都是 rc 2、指名該檔（`read_error`），不再 rc 0 只轉印一行 WARN。#3206 起是共用的
+    conf.d 拒絕：點名該檔與 parse-tree 的 kind。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK, "tenant-b.yaml": _B})
     (conf_d / name).chmod(0)
     try:
         p = _cli(script, conf_d, *extra)
     finally:
         (conf_d / name).chmod(0o644)
-    assert p.returncode == 2, (p.returncode, p.stderr)
-    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
-    assert len(err) == 1 and f"{name} (read_error)" in err[0], p.stderr
-    assert "Traceback" not in p.stderr, p.stderr
+    assert_refused(p.returncode, p.stderr, [name])
+    # Refused before anything else is asked — Prometheus included (#3206).
+    assert "Prometheus" not in p.stderr, p.stderr
+    assert "(read_failure: the file cannot be read (read_error))" in p.stderr, p.stderr
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
@@ -226,7 +227,8 @@ def test_file_without_read_permission_fails_closed(script, extra, name, tmp_path
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_subdir_without_permission_fails_closed(script, extra, tmp_path):
     """讀不到的子目錄（chmod 000）：底下的租戶全部從 /metrics 消失。Go 列進
-    `unreadable`（`walk_error`，路徑是該目錄），讀取端 rc 2、指名該目錄（原為 rc 0）。"""
+    `unreadable`（`walk_error`，路徑是該目錄），讀取端 rc 2、指名該目錄（原為 rc 0）；
+    #3206 起是共用的 conf.d 拒絕。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK,
                               "team/tenant-b.yaml": _B})
     (conf_d / "team").chmod(0)
@@ -234,10 +236,9 @@ def test_subdir_without_permission_fails_closed(script, extra, tmp_path):
         p = _cli(script, conf_d, *extra)
     finally:
         (conf_d / "team").chmod(0o755)
-    assert p.returncode == 2, (p.returncode, p.stderr)
-    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
-    assert len(err) == 1 and "team (walk_error)" in err[0], p.stderr
-    assert "Traceback" not in p.stderr, p.stderr
+    assert_refused(p.returncode, p.stderr, ["team"])
+    # Refused before anything else is asked — Prometheus included (#3206).
+    assert "Prometheus" not in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
