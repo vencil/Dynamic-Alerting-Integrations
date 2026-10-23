@@ -28,6 +28,7 @@ import generate_alertmanager_routes as gar  # noqa: E402
 import notification_tester as nt  # noqa: E402
 from _grar_merge import SkippedEntryWarning  # noqa: E402
 from factories import make_tenant_yaml, write_yaml  # noqa: E402
+from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 _TESTER = os.path.join(_TOOLS_DIR, "ops", "notification_tester.py")
 _GENERATOR = os.path.join(_TOOLS_DIR, "ops", "generate_alertmanager_routes.py")
@@ -313,6 +314,13 @@ def test_tested_set_equals_generator_receivers_across_parity_matrix(tmp_path):
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             write_yaml(str(path.parent), path.name, body)
+        # #3206: a tree da-guard validation names a path on is the shared
+        # conf.d refusal for the tester (the generator, a judge, reads it).
+        named = go_refused(root)
+        if named:
+            with refuses(*named):
+                nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
+            continue
         try:
             reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
         except nt.RoutingTreeRefused:
@@ -403,6 +411,13 @@ def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             write_yaml(str(path.parent), path.name, body)
+        # #3206: a tree da-guard validation names a path on is the shared
+        # conf.d refusal for the tester (the generator, a judge, reads it).
+        named = go_refused(root)
+        if named:
+            with refuses(*named):
+                nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
+            continue
         try:
             reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
         except nt.RoutingTreeRefused:

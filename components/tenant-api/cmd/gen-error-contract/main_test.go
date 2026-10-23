@@ -125,14 +125,15 @@ func TestRender_Bytes(t *testing.T) {
 func TestRun_ExitCodes(t *testing.T) {
 	t.Parallel()
 	out := filepath.Join(t.TempDir(), "errors.json")
+	docs := copyDocs(t)
 	var so, se bytes.Buffer
-	if rc := run([]string{"--check", "--out", out}, &so, &se); rc != 1 || !strings.Contains(se.String(), "missing") {
+	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "missing") {
 		t.Errorf("--check of a missing file: rc %d, stderr %q", rc, se.String())
 	}
-	if rc := run([]string{"--out", out}, &so, &se); rc != 0 {
+	if rc := run([]string{"--out", out, "--docs", docs}, &so, &se); rc != 0 {
 		t.Fatalf("write: rc %d, stderr %q", rc, se.String())
 	}
-	if rc := run([]string{"--check", "--out", out}, &so, &se); rc != 0 {
+	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 0 {
 		t.Errorf("--check after write: rc %d, stderr %q", rc, se.String())
 	}
 	b, _ := os.ReadFile(out)
@@ -140,14 +141,26 @@ func TestRun_ExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	se.Reset()
-	if rc := run([]string{"--check", "--out", out}, &so, &se); rc != 1 || !strings.Contains(se.String(), "DRIFT") {
+	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "DRIFT") {
 		t.Errorf("--check of an edited file: rc %d, stderr %q", rc, se.String())
 	}
 	if err := os.WriteFile(out, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rc := run([]string{"--check", "--out", out}, &so, &se); rc != 1 {
+	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 {
 		t.Errorf("--check of a CRLF copy: rc %d, want 1 (bytes, not text)", rc)
+	}
+	// #3272: docs/ as swag alone writes it (no Extra properties) drifts.
+	if err := os.WriteFile(out, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	y, _ := os.ReadFile(filepath.Join(docs, swaggerYAML))
+	if err := os.WriteFile(filepath.Join(docs, swaggerYAML), bytes.Replace(y, []byte("      pr_number:\n"), []byte("      pr_numbr:\n"), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	se.Reset()
+	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "swagger.yaml") {
+		t.Errorf("--check of an edited swagger.yaml: rc %d, stderr %q", rc, se.String())
 	}
 	for _, args := range [][]string{{"--nope"}, {"extra"}} {
 		if rc := run(args, &so, &se); rc != 2 {
@@ -200,8 +213,9 @@ func TestScanDirect_ReadsTheDirectAnswers(t *testing.T) {
 	}
 }
 
-// plantedModule is a copy of this module's internal/ and cmd/ with file
-// added as internal/handler/zz_planted.go.
+// plantedModule is a copy of this module's internal/ and cmd/ — with its
+// go.mod (relative replace targets made absolute) and go.sum, so the copy
+// type-checks — with file added as internal/handler/zz_planted.go.
 func plantedModule(t *testing.T, file string) string {
 	t.Helper()
 	wd, _ := os.Getwd()
@@ -214,6 +228,21 @@ func plantedModule(t *testing.T, file string) string {
 		if err := os.CopyFS(filepath.Join(dst, dir), os.DirFS(filepath.Join(mod, dir))); err != nil {
 			t.Fatal(err)
 		}
+	}
+	gomod, err := os.ReadFile(filepath.Join(mod, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gomod = bytes.ReplaceAll(gomod, []byte("=> ../"), []byte("=> "+filepath.Dir(mod)+"/"))
+	gosum, err := os.ReadFile(filepath.Join(mod, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "go.mod"), gomod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "go.sum"), gosum, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dst, "internal", "handler", "zz_planted.go"), []byte(file), 0o644); err != nil {
 		t.Fatal(err)

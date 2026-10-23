@@ -50,7 +50,6 @@ from _lib_io import YamlFileError  # noqa: E402
 # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
-from _lib_parse_tree import FileUnreadable  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -158,17 +157,15 @@ def parse_mapping_file(path: str) -> list[InstanceMapping]:
 
     Read through `da-guard parse-tree` (ADR-036 step 4, #2906): the file at
     the root of the conf.d it sits in, as yaml.v3 reads it. A file parse-tree
-    cannot read raises YamlFileError (rc 2 via exit_on_yaml_file_error).
+    cannot read is a path da-guard validation names: the read is the shared
+    conf.d refusal (#3206, rc 2), naming it.
 
     #2216: an entry's ``tenant:`` value is a tenant id, read as its source
     text — ``tenant: 010`` is tenant "010", not the int 8 ``.strip()``
     raised on. ``filter:`` is its source text as well (a PromQL matcher).
     """
     p = Path(path)
-    try:
-        root = _lib_parse_cache.reader_for(p.parent).node(p.name)
-    except FileUnreadable as exc:
-        raise YamlFileError(str(path), exc) from exc
+    root = _lib_parse_cache.reader_for(p.parent).node(p.name)
     raw = root.get('instance_tenant_mapping')
     if not isinstance(raw, dict) or _lib_parse_tree.is_scalar(raw):
         return []

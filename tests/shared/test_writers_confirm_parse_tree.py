@@ -118,8 +118,9 @@ def test_deprecate_rule_does_not_write_an_unreadable_file(tmp_path):
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu_usage: '85'\n    cpu_usage: '86'\n"})
     before = (root / "tenant-a.yaml").read_bytes()
     r = _dr(root)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "duplicate_key" in r.stdout.split("下架未完成", 1)[1]
+    # #3206: a file the exporter cannot decode refuses the run before any write.
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "ERROR: tenant-a.yaml:" in r.stderr and "duplicate_key" in r.stderr, r.stderr
     assert (root / "tenant-a.yaml").read_bytes() == before
 
 
@@ -314,7 +315,6 @@ def test_init_project_reads_declarations_the_yaml_v3_way(tmp_path):
     plan = ip._plan_confd(_init_config(["tenant-a", "tenant-b"]), str(tmp_path))
     assert plan.generate == ["tenant-a"] and plan.skipped == {
         "tenant-b": ["conf.d/team.yaml"]}, plan
-    assert not plan.blanket
 
 
 # ── scaffold_tenant ───────────────────────────────────────────────────────
@@ -462,8 +462,8 @@ def test_offboard_tenant_does_not_delete_beside_an_unreadable_file(tmp_path):
         "tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
         "other.yaml": "tenants:\n  other: {}\n  other: {}\n"})
     r = _ob(root)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "other.yaml" in r.stdout and "duplicate_key" in r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr  # #3206: refused before the pre-check
+    assert "ERROR: other.yaml:" in r.stderr and "duplicate_key" in r.stderr, r.stderr
     assert (root / "tenant-a.yaml").exists()
 
 
@@ -487,8 +487,8 @@ def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_p
     root = _tree(tmp_path / "conf.d", {
         "tenant-a.yaml": "tenants:\n  tenant-a: {}\n  tenant-a: {}\n"})
     r = _ob(root)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "✅ 設定檔案" in r.stdout and "duplicate_key" in r.stdout, r.stdout
+    assert r.returncode == 2, r.stdout + r.stderr  # #3206: refused before the pre-check
+    assert "ERROR: tenant-a.yaml:" in r.stderr and "duplicate_key" in r.stderr, r.stderr
     assert (root / "tenant-a.yaml").exists()
 
 

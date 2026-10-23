@@ -28,11 +28,15 @@ from pathlib import Path
 import pytest
 
 import _lib_tenant_values as tv
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
 
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+# The oracle reads Go's answer in process (`tv.load_effective`) on trees Go
+# names paths on: as a judge (`judging_run`, #3206). describe_tenant itself
+# runs as a process, so it meets the shared refusal.
+pytestmark = pytest.mark.usefixtures("da_guard_env", "judging_run")
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 _PROFILES = "profiles:\n  p1:\n    mysql_connections: 20\n"
@@ -99,19 +103,18 @@ def test_tree_tenant_file_with_a_non_mapping_body(tmp_path, name, body, decodes,
         assert p.returncode == 0, p.stderr
         assert json.loads(p.stdout)["tenant_id"] == tid
         return
-    # Go serves neither tenant of that file (the oracle's own words).
+    # Go serves neither tenant of that file (the oracle's own words), and
+    # names it: the run is refused, the file named (#3206).
     assert _served_tenants(conf_d) == {"tz"}
-    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert go_refused(conf_d) == ["tx.yaml"]
+    assert_refused(p.returncode, p.stderr, ["tx.yaml"])
     assert p.stdout == "", p.stdout
-    # #2906: named in this tool's words, the reason in da-guard's own line.
-    assert "WARNING: skipped tx.yaml — " in p.stderr, p.stderr
-    assert "da-guard| " in p.stderr and "tx.yaml" in p.stderr.split("da-guard| ", 1)[1], p.stderr
-    assert f"Tenant '{tid}' not found" in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("name,body,decodes", BODIES, ids=[b[0] for b in BODIES])
-def test_tree_tenant_file_skip_leaves_the_rest_of_the_tree(tmp_path, name, body, decodes):
-    """整檔跳過只拿掉那一檔：其他檔的租戶照常描述（`--all`）。"""
+def test_tree_tenant_file_the_exporter_drops_refuses_the_rest_of_the_tree(tmp_path, name, body, decodes):
+    """Go 讀得了時照常描述每個租戶（`--all`）；Go 拒收那一檔時，整次執行被拒、點名該檔，
+    不再描述其餘檔的租戶（#3206：少了一檔的答案不是那棵樹的答案）。"""
     conf_d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _DEFAULTS,
         "tx.yaml": f"tenants:\n  tx: {body}\n  ty: {{}}\n",
@@ -120,8 +123,11 @@ def test_tree_tenant_file_skip_leaves_the_rest_of_the_tree(tmp_path, name, body,
     p = subprocess.run([sys.executable, str(DESCRIBE), "--all", "--conf-d", str(conf_d)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120)
+    if not decodes:
+        assert_refused(p.returncode, p.stderr, ["tx.yaml"])
+        return
     assert p.returncode == 0, p.stderr
-    assert set(json.loads(p.stdout)) == ({"tx", "ty", "tz"} if decodes else {"tz"})
+    assert set(json.loads(p.stdout)) == {"tx", "ty", "tz"}
 
 
 @pytest.mark.parametrize("name,body,decodes", BODIES, ids=[b[0] for b in BODIES])

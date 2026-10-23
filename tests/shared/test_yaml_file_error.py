@@ -407,8 +407,15 @@ assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 # Rows whose tool reads `_routing` through the route generator's own reader
 # (#2752, #2115 ruling (c)): the file is named and the rc is 2, but the words
 # are the generator's #1460 refusal (`tree_refusal`), not a Python cause class.
-_ROUTE_GENERATOR_ROWS = {"notification_tester --dry-run"}
+_ROUTE_GENERATOR_ROWS: "set[str]" = set()
 assert _ROUTE_GENERATOR_ROWS <= set(_ROW_IDS), _ROUTE_GENERATOR_ROWS - set(_ROW_IDS)
+# Rows whose tool, since #3206, refuses the tree on the file with the shared
+# fail-closed exit before it reads anything: rc 2, `ERROR: <file>:` with
+# parse-tree's kind (`invalid_utf8`).
+_REFUSED_ROWS = {"blind_spot_discovery", "policy_engine tenant", "policy_opa_bridge --dry-run",
+                 "policy_opa_bridge _defaults", "threshold_recommend",
+                 "maintenance_scheduler --dry-run", "notification_tester --dry-run"}
+assert _REFUSED_ROWS <= set(_ROW_IDS), _REFUSED_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
     """Derived from the tool's CLASS, not a per-label table (re-review).
@@ -433,6 +440,10 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         f"a lint finding from a crash.\nstderr={p.stderr[-500:]!r}")
     assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
     assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
+    if label in _REFUSED_ROWS:
+        assert f"ERROR: {named}:" in p.stderr and "(invalid_utf8:" in p.stderr, p.stderr[-500:]
+        assert "da-guard validation names" in p.stderr, p.stderr[-500:]
+        return
     if label in _ROUTE_GENERATOR_ROWS:
         # #2752: the route generator's own refusal of a tree with an
         # unreadable file, carrying its decode reason.
@@ -468,16 +479,17 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
 
 
 @pytest.mark.parametrize("label, script, argv, cwd, reason", [
+    # #3206: the shared refusal's envelope (`conf_d_not_servable`).
     ("backtest --config-dir", OPS / "backtest_threshold.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
                 "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
-     None, "served_values_unavailable"),
+     None, "conf_d_not_servable"),
     ("policy_engine tenant", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--policy",
-                str(f["files"] / "policy.yaml"), "--json"], None, "yaml_file_unreadable"),
+                str(f["files"] / "policy.yaml"), "--json"], None, "conf_d_not_servable"),
     ("policy_engine _defaults", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad_defaults"]), "--json"], None,
-     "yaml_file_unreadable"),
+     "conf_d_not_servable"),
 ], ids=["backtest --config-dir", "policy_engine tenant", "policy_engine _defaults"])
 def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
     """These two tools promise --json one document on EVERY terminal path
@@ -493,12 +505,12 @@ def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cw
 
 @pytest.mark.parametrize("label, script, argv, reason", [
     ("analyze_gaps --json", OPS / "analyze_rule_pack_gaps.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "conf_d_not_servable"),
     ("onboard --json", OPS / "onboard_platform.py",
      lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"),
                 "--dry-run", "--json"], "yaml_file_unreadable"),
     ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "conf_d_not_servable"),
 ], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
 def test_decorated_tools_emit_one_envelope_under_json(fx, label, script, argv, reason):
     """The decorators exit through ``_lib_exitcodes.die_caller_error`` (#3115):
@@ -509,7 +521,8 @@ def test_decorated_tools_emit_one_envelope_under_json(fx, label, script, argv, r
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
     doc = json.loads(p.stdout)
     assert (doc["status"], doc["reason"]) == ("caller_error", reason), doc
-    assert doc["error"].startswith("ERROR: cannot read"), doc
+    assert doc["error"].startswith("ERROR: cannot read" if reason != "conf_d_not_servable"
+                                   else "ERROR: the conf.d at "), doc
     assert "Traceback" not in p.stderr
 
 
@@ -532,16 +545,13 @@ def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
     assert "cannot read" in err and "alpha.yaml" in err, err
 
 
-def test_deprecate_rule_names_and_continues(fx):
-    """Class (ii): the decode failure is a NAMED finding, not a traceback. The
-    tool keeps going, but an unreadable tenant file withholds the completion
-    claim (#1787): rc 1 (EXIT_VIOLATION), the file named in the 下架未完成
-    summary."""
+def test_deprecate_rule_names_and_refuses(fx):
+    """Class (ii): the decode failure is NAMED, not a traceback — and since
+    #3206 it refuses the run before anything is written (rc 2)."""
     p = _run(OPS / "deprecate_rule.py", ["cpu_usage", "--config-dir", str(fx["confd_bad"])])
-    assert p.returncode == EXIT_VIOLATION, p.stderr[-500:]
+    assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
     assert "Traceback" not in p.stderr
-    assert "alpha.yaml" in p.stdout and "無法讀取" in p.stdout, p.stdout[-500:]
-    assert "下架未完成" in p.stdout, p.stdout[-500:]
+    assert "ERROR: alpha.yaml:" in p.stderr and "(invalid_utf8:" in p.stderr, p.stderr[-500:]
 
 
 def test_validate_config_unchanged_rc_1_named(fx):
@@ -913,11 +923,13 @@ def test_routing_lint_reports_the_bad_file_and_still_reads_the_rest(tmp_path):
     finding (rc 1) and the other control files are still collected."""
     sys.path.insert(0, str(LINT))
     import check_routing_profiles as crp
+    import _lib_parse_cache
     confd = tmp_path / "conf.d"
     confd.mkdir()
     (confd / "_routing_profiles.yaml").write_text(
         "routing_profiles:\n  standard:\n    receiver: r\n", encoding="utf-8")
     (confd / "alpha.yaml").write_bytes(b"# \xff\ntenants:\n  alpha: {}\n")
-    data = crp._collect_data(str(confd))
+    with _lib_parse_cache.judging():  # the lint's `main` reads as a judge (#3206)
+        data = crp._collect_data(str(confd))
     assert "standard" in data["profiles"], data
     assert len(data["unreadable"]) == 1 and "alpha.yaml" in data["unreadable"][0], data["unreadable"]

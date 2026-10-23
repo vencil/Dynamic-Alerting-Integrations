@@ -83,6 +83,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (#3206: the run's reader)
 import _lib_parse_tree  # noqa: E402
 
 SCHEMA = "da-tools.migration-audit/v1"
@@ -172,12 +173,14 @@ def read_tree_today(root: Path, listing: Any = None) -> tuple[dict[str, Any], di
 
 # ── after: da-guard parse-tree ───────────────────────────────────────────
 
-def run_parse_tree(root: Path, binary: Optional[str], timeout: float) -> dict:
-    """`da-guard parse-tree --config-dir <root>`'s document (`_lib_parse_tree`).
-    Raises AuditError when there is no binary, it fails, or its output is not a
-    parse-tree document this reader reads — never a partial reading."""
+def run_parse_tree(root: Path, binary: Optional[str], timeout: float) -> "_lib_parse_tree.Tree":
+    """`da-guard parse-tree --config-dir <root>`'s document, through the
+    run's reader (`_lib_parse_cache.ConfdReader`): a tree Go names paths on
+    ends the run there, exit 2 (#3206). Raises AuditError when there is no
+    binary, it fails, or its output is not a parse-tree document this reader
+    reads — never a partial reading."""
     try:
-        return _lib_parse_tree.run(root, binary, timeout)
+        return _lib_parse_cache.ConfdReader(root, binary=binary, timeout=timeout).tree()
     except _lib_parse_tree.BinaryMissing as e:
         raise AuditError(
             str(e) + "\nThis audit reads yaml.v3's reading from `da-guard parse-tree` only; it does "
@@ -520,24 +523,19 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
 def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
     if not root.is_dir():
         raise AuditError(f"config directory not found: {root}")
-    doc = run_parse_tree(root, binary, timeout)
-    try:
-        listing = _lib_parse_tree.listing_of(_lib_parse_tree.tree_of(doc), root)
-    except _lib_parse_tree.ParseTreeError as e:
-        raise AuditError(str(e)) from e
+    tree = run_parse_tree(root, binary, timeout)
+    listing = _lib_parse_tree.listing_of(tree, root)
     # #3206: today's selection is asked of the same snapshot parse-tree read.
     today_read, today_refused = read_tree_today(root, listing)
     report = empty_report()
     report["config_dir"] = str(root)
-    report["da_guard_version"] = doc.get("da_guard_version")
+    report["da_guard_version"] = tree.da_guard_version
 
-    entries = {e.path: e for e in _lib_parse_tree.entries_of(doc)}
+    entries = {e.path: e for e in tree.entries}
     # The reader's own `selected` (content or a problem): no filter of ours. A
     # config-named directory is in it by its problem, as today's reader
     # refuses it too; a plain directory (readers []) is not.
-    after_selected = set(_lib_parse_tree.tree_of(doc).selected)
-    after_unreadable = {f: {"kind": e.problem[0], "message": e.problem[1]}
-                        for f, e in entries.items() if e.problem is not None}
+    after_selected = set(tree.selected)
     today_selected = set(today_read) | set(today_refused)
 
     for f in sorted(after_selected - today_selected):
@@ -548,24 +546,20 @@ def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
         report["selection"].append({"file": f, "read_by": "pyyaml",
                                     "detail": "today's reader reads it; parse-tree does not"})
 
+    # `becomes_unreadable` / `still_unreadable` stay empty (keys kept: the
+    # schema shipped in tools/v2.9.0): a file parse-tree cannot read is a path
+    # da-guard validation names, and the shared conf.d refusal (#3206) ended
+    # the run when the tree was read.
     for f in sorted(after_selected & today_selected):
-        bad = after_unreadable.get(f)
-        if bad is not None:
-            entry = {"file": f, "kind": bad["kind"], "message": bad["message"]}
-            if f in today_refused:
-                report["still_unreadable"].append({**entry, "pyyaml_error": today_refused[f]})
-            else:
-                report["becomes_unreadable"].append(entry)
-            continue
         if f in today_refused:
             report["becomes_readable"].append({"file": f, "pyyaml_error": today_refused[f],
-                                               "yaml_v3": doc["files"].get(f, {})})
+                                               "yaml_v3": tree.node(f)})
             continue
         report["files_compared"].append(f)
         text = (root / f).read_bytes().decode("utf-8")
         walk = _Walk(f, text)
         try:
-            walk.run(today_read[f], doc["files"].get(f, {}))
+            walk.run(today_read[f], tree.node(f))
         finally:
             walk.close()
         report["values"].extend(walk.values)
@@ -679,10 +673,6 @@ def render_text(report: dict) -> str:
                 side = "today's reader" if e["only_in"] == "pyyaml" else "yaml.v3"
                 lines.append(f"  {s(_where(e))}  {s(_path_text(e['path']))}: key "
                              f"{s(json.dumps(e['key'], ensure_ascii=False))} only in {side}")
-            elif key in ("becomes_unreadable", "still_unreadable"):
-                lines.append(f"  {s(e['file'])}: {e['kind']} — {s(e['message'])}")
-                if key == "still_unreadable":
-                    lines.append(f"    today: {s(e['pyyaml_error'])}")
             else:
                 lines.append(f"  {s(e['file'])}: today: {s(e['pyyaml_error'])}")
                 lines.append("    yaml.v3 reads:" + (" {}" if not e["yaml_v3"] else ""))

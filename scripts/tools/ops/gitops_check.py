@@ -43,7 +43,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -262,36 +262,19 @@ def check_local(dir_path: str) -> CheckResult:
             details=details,
         )
 
-    # Validate the root defaults carrier
-    try:
-        reader.node(defaults_rel)
-    except FileUnreadable as e:
-        return CheckResult(
-            check="local",
-            status="fail",
-            message=_h(
-                f"{defaults_rel} 無效: {e.kind}: {e.message}",
-                f"{defaults_rel} is invalid: {e.kind}: {e.message}"
-            ),
-            details=details,
-        )
-
     # Every file the exporter reads (tenant files at any depth, and the
-    # platform `_` files): a file it cannot read is named, never skipped.
+    # platform `_` files). A file it cannot read is a path da-guard validation
+    # names: the shared conf.d refusal (#3206) named it and stopped the run at
+    # `reader.tree()` above, so every file read here is readable.
     tenant_files = []
-    parse_errors = []
     total_alerts = 0
     tenant_set = set(_lib_parse_cache.tenant_files(tree))
     for rel in sorted(tree.selected):
         if rel == defaults_rel:
             continue
-        try:
-            data = reader.read(rel)
-        except FileUnreadable as e:
-            parse_errors.append({"file": rel, "error": f"{e.kind}: {e.message}"})
-            continue
         if rel not in tenant_set:
             continue
+        data = reader.read(rel)
         # Count metric keys (top-level keys without the `_` prefix)
         metric_count = sum(1 for k in data if not k.startswith("_"))
         tenant_files.append({"name": rel, "metrics": metric_count})
@@ -304,19 +287,6 @@ def check_local(dir_path: str) -> CheckResult:
     details["defaults_file"] = "present"
     details["tenant_files"] = len(tenant_files)
     details["total_metrics"] = total_alerts
-    if parse_errors:
-        details["parse_errors"] = parse_errors
-
-    if parse_errors:
-        return CheckResult(
-            check="local",
-            status="fail",
-            message=_h(
-                f"{len(parse_errors)} 個 YAML 檔案無效",
-                f"{len(parse_errors)} YAML files are invalid"
-            ),
-            details=details,
-        )
 
     return CheckResult(
         check="local",

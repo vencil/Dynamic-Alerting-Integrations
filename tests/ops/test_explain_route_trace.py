@@ -937,10 +937,22 @@ def _refused_tree(tmp_path, kind):
     return conf
 
 
+def _assert_trace_refused(conf, *extra):
+    """A file da-guard validation names: the trace refuses the run with the
+    shared refusal, the file named (#3206) — it no longer reports a tree it
+    could not read whole as unknown, rc 0."""
+    from _go_refusal import go_refused, refuses
+    with refuses(*go_refused(conf)):
+        er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace", *extra])
+
+
 @pytest.mark.parametrize("kind", ["duplicate-tenant", "unreadable-file"])
 class TestGeneratorRefusedTree:
     """`--output-configmap` exits 1 on these trees (#1460 / #2315), so the
-    trace has no tree to show: unknown + the generator's own words, rc 0."""
+    trace has no tree to show: unknown + the generator's own words, rc 0 —
+    for a tree the generator refuses for its content (a tenant declared
+    twice). A file it cannot read is a path da-guard validation names: the
+    trace itself refuses then (#3206)."""
 
     def _generator(self, conf):
         return subprocess.run(
@@ -962,6 +974,9 @@ class TestGeneratorRefusedTree:
     def test_json_is_unknown_with_the_generator_message(
             self, capsys, tmp_path, kind):
         conf = _refused_tree(tmp_path, kind)
+        if kind == "unreadable-file":
+            _assert_trace_refused(conf, "--json")
+            return
         trace, err = _trace_err(capsys, conf)
         assert trace["final_receiver"] == _REFUSED
         assert trace["steps"][1]["matched_routes"] == []
@@ -974,6 +989,9 @@ class TestGeneratorRefusedTree:
 
     def test_text_is_unknown(self, capsys, tmp_path, kind):
         conf = _refused_tree(tmp_path, kind)
+        if kind == "unreadable-file":
+            _assert_trace_refused(conf)
+            return
         assert er.main(["--config-dir", str(conf), "--tenant", _TT,
                         "--trace"]) == 0
         captured = capsys.readouterr()

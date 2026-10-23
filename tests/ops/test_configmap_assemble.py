@@ -165,15 +165,15 @@ _REAL_RUN = subprocess.run
 
 
 def _listing_passes(fake):
-    """*fake* for every subprocess but `da-guard parse-tree --list-only`.
+    """*fake* for every subprocess but `da-guard parse-tree`.
 
-    #3206: the script lists the conf.d through da-guard (a subprocess)
+    #3206: the script reads the conf.d through da-guard (a subprocess)
     before it shells out to the validator or kubectl; a blanket patch of
     `subprocess.run` would hand that call the validator's stub. The arms
-    here fake the validator / kubectl only, so the listing runs for real."""
+    here fake the validator / kubectl only, so the read runs for real."""
     def run(*a, **k):
         cmd = a[0] if a else k.get("args")
-        if isinstance(cmd, (list, tuple)) and "--list-only" in cmd:
+        if isinstance(cmd, (list, tuple)) and "parse-tree" in cmd:
             return _REAL_RUN(*a, **k)
         return fake(*a, **k)
     return run
@@ -1152,9 +1152,12 @@ class TestTheArtifactIsReconciledAgainstTheTree:
 
 class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
     """`is_file()` is a SILENT filter, and this module's own docstring calls
-    dropping a carrier silently "how a tenant disappears with a green light"."""
+    dropping a carrier silently "how a tenant disappears with a green light".
+    #3206: such an entry is a path da-guard validation names, so the run is
+    refused — every one named, rc 2, nothing written — never a WARN and a
+    ConfigMap one tenant short."""
 
-    def test_a_broken_symlink_and_a_config_named_directory_are_named(
+    def test_a_broken_symlink_and_a_config_named_directory_refuse_the_run(
             self, tmp_path, kubectl_shim):
         d = _tree(tmp_path, ["db-a.yaml"])
         try:
@@ -1165,17 +1168,14 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
         dump = tmp_path / "argv.json"
         r = _run(d, _out(tmp_path), shim=kubectl_shim,
                  env_extra={"KUBECTL_SHIM_ARGV": str(dump)})
-        # Non-blocking on purpose: a tree that deploys today must keep
-        # deploying. What may not happen is silence.
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert "db-gone.yaml" in r.stderr, r.stderr
-        assert "db-dir.yaml" in r.stderr, r.stderr
-        # #3206 R7: da-guard's words — a dangling link cannot be statted.
-        assert "(read_failure): the path cannot be statted" in r.stderr, r.stderr
-        assert "(not_regular_file): a directory with a config file name" in r.stderr, r.stderr
-        # …and they really are absent from the artifact, which is why being
-        # silent about them was the defect.
-        assert _keys(_argv_of(dump)) == {"_defaults.yaml", "db-a.yaml"}
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "ERROR: db-gone.yaml: the exporter cannot read or decode it" in r.stderr, r.stderr
+        assert "ERROR: db-dir.yaml: the route generator refuses the whole tree" in r.stderr, r.stderr
+        # da-guard's words — a dangling link cannot be statted.
+        assert "(read_failure: the path cannot be statted" in r.stderr, r.stderr
+        assert "(not_regular_file: a directory with a config file name" in r.stderr, r.stderr
+        # Refused before kubectl ran or anything was written.
+        assert not dump.exists() and not _out(tmp_path).exists()
 
     @pytest.mark.skipif(
         hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -1183,11 +1183,10 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
     def test_an_unreadable_regular_file_is_refused_not_dropped(
             self, tmp_path, kubectl_shim):
         """#3206 round 2 (M1): a REGULAR file that cannot be read is a
-        carrier, not an unusable entry — the uniqueness check cannot read it
-        and the run refuses (rc 2). Round 1 listed it as unusable: a WARN,
-        a ConfigMap one tenant short, rc 0 — a deployment gate letting a
-        tenant disappear with a green light. In-process twin at any uid:
-        `test_an_unopenable_regular_file_is_a_carrier`."""
+        carrier, not an unusable entry — and a path validation names, so the
+        run refuses (rc 2). Round 1 listed it as unusable: a WARN, a
+        ConfigMap one tenant short, rc 0 — a deployment gate letting a tenant
+        disappear with a green light."""
         require_posix_modes()
         d = _tree(tmp_path, ["db-a.yaml", "db-locked.yaml"])
         (d / "db-locked.yaml").chmod(0o000)
@@ -1197,54 +1196,25 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
             (d / "db-locked.yaml").chmod(0o644)
         assert r.returncode == 2, r.stdout + r.stderr
         assert not _out(tmp_path).exists()
-        assert "absent from the ConfigMap" not in r.stderr, r.stderr
+        assert "ERROR: db-locked.yaml:" in r.stderr, r.stderr
 
-    def test_an_unopenable_regular_file_is_a_carrier(self, tmp_path, monkeypatch):
-        """The same at any uid, at the enumeration: da-guard's listing says the
-        file cannot be opened, and its role is `config` (Go's verdict: nothing
-        proves it is not a file), so it is a carrier the rest of the run must
-        read — not a WARNed drop. The role alone decides (#3206)."""
-        import _lib_parse_tree as pt
-        mod = _import_script("cma_probe_m1")
-        d = _tree(tmp_path, ["db-a.yaml", "db-locked.yaml"])
-        real = pt.run_list
-
-        def run_list(r, binary=None, timeout=None):
-            doc = real(r, binary, timeout)
-            for e in doc["entries"]:
-                if e["path"] == "db-locked.yaml":
-                    e["problem"] = {"kind": "read_failure",
-                                    "message": "the file cannot be read (read_error)"}
-            return doc
-
-        monkeypatch.setattr(pt, "run_list", run_list)
-        carriers, unusable, _listing = mod._carriers(d)
-        assert d / "db-locked.yaml" in carriers
-        assert unusable == []
-
-    def test_a_long_list_is_capped_and_says_that_it_is(self, tmp_path,
-                                                       kubectl_shim):
-        """⛔ Same stderr, same truncation. `_lib_confd`'s nested warning caps
-        its list at `WARN_LIMIT` and says `(+N more)`; this reader printed to
-        the same plane without a cap, so an operator reading five names could
-        not tell from the output whether five was all there was — the answer
-        depended on which reader wrote the line.
-
-        The count is imported, not spelled again: two literals would drift.
-        """
+    def test_a_long_list_is_named_in_full(self, tmp_path, kubectl_shim):
+        """⛔ The refusal names EVERY path, not the first `WARN_LIMIT`: an
+        operator reading five names must not have to guess whether five was
+        all there was — and each of them stops the run."""
         from _lib_confd import WARN_LIMIT  # noqa: PLC0415
 
         d = _tree(tmp_path, ["db-a.yaml"])
         for i in range(WARN_LIMIT + 1):
             (d / f"db-dir{i}.yaml").mkdir()
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
-        assert r.returncode == 0, r.stdout + r.stderr
-        named = [ln for ln in r.stderr.splitlines() if "db-dir" in ln]
-        assert len(named) == WARN_LIMIT, r.stderr
-        assert "(+1 more" in r.stderr, r.stderr
+        assert r.returncode == 2, r.stdout + r.stderr
+        named = [ln for ln in r.stderr.splitlines() if ln.startswith("ERROR: db-dir")]
+        assert len(named) == WARN_LIMIT + 1, r.stderr
+        assert "more" not in r.stderr, r.stderr
 
     def test_a_clean_tree_says_nothing(self, tmp_path, kubectl_shim):
-        """必響對照組: without this the WARN above could be unconditional."""
+        """必響對照組: without this the refusal above could be unconditional."""
         d = _tree(tmp_path, ["db-a.yaml"])
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
         assert r.returncode == 0, r.stdout + r.stderr
@@ -1303,7 +1273,7 @@ class TestAnArtifactTooLargeToBeAConfigMap:
 
     def test_a_small_tree_hears_nothing_about_annotations(
             self, tmp_path, kubectl_shim):
-        """必響對照組: without this the WARN above could be unconditional."""
+        """必響對照組: without this the refusal above could be unconditional."""
         d = _tree(tmp_path, ["db-a.yaml"])
         r = _run(d, _out(tmp_path), shim=kubectl_shim)
         assert r.returncode == 0, r.stdout + r.stderr

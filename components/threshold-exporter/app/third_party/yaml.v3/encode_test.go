@@ -19,15 +19,14 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"strconv"
-	"strings"
-	"time"
-
 	"net"
 	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
 
-	. "gopkg.in/check.v1"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var marshalIntTest = 123
@@ -170,7 +169,7 @@ var marshalTests = []struct {
 		"a:\n    - 1\n    - 2\n",
 	}, {
 		&struct {
-			B int "a"
+			B int `yaml:"a"`
 		}{1},
 		"a: 1\n",
 	}, {
@@ -187,54 +186,54 @@ var marshalTests = []struct {
 	// Conditional flag
 	{
 		&struct {
-			A int "a,omitempty"
-			B int "b,omitempty"
+			A int `yaml:"a,omitempty"`
+			B int `yaml:"b,omitempty"`
 		}{1, 0},
 		"a: 1\n",
 	}, {
 		&struct {
-			A int "a,omitempty"
-			B int "b,omitempty"
+			A int `yaml:"a,omitempty"`
+			B int `yaml:"b,omitempty"`
 		}{0, 0},
 		"{}\n",
 	}, {
 		&struct {
-			A *struct{ X, y int } "a,omitempty,flow"
+			A *struct{ X, y int } `yaml:"a,omitempty,flow"`
 		}{&struct{ X, y int }{1, 2}},
 		"a: {x: 1}\n",
 	}, {
 		&struct {
-			A *struct{ X, y int } "a,omitempty,flow"
+			A *struct{ X, y int } `yaml:"a,omitempty,flow"`
 		}{nil},
 		"{}\n",
 	}, {
 		&struct {
-			A *struct{ X, y int } "a,omitempty,flow"
+			A *struct{ X, y int } `yaml:"a,omitempty,flow"`
 		}{&struct{ X, y int }{}},
 		"a: {x: 0}\n",
 	}, {
 		&struct {
-			A struct{ X, y int } "a,omitempty,flow"
+			A struct{ X, y int } `yaml:"a,omitempty,flow"`
 		}{struct{ X, y int }{1, 2}},
 		"a: {x: 1}\n",
 	}, {
 		&struct {
-			A struct{ X, y int } "a,omitempty,flow"
+			A struct{ X, y int } `yaml:"a,omitempty,flow"`
 		}{struct{ X, y int }{0, 1}},
 		"{}\n",
 	}, {
 		&struct {
-			A float64 "a,omitempty"
-			B float64 "b,omitempty"
+			A float64 `yaml:"a,omitempty"`
+			B float64 `yaml:"b,omitempty"`
 		}{1, 0},
 		"a: 1\n",
 	},
 	{
 		&struct {
-			T1 time.Time  "t1,omitempty"
-			T2 time.Time  "t2,omitempty"
-			T3 *time.Time "t3,omitempty"
-			T4 *time.Time "t4,omitempty"
+			T1 time.Time  `yaml:"t1,omitempty"`
+			T2 time.Time  `yaml:"t2,omitempty"`
+			T3 *time.Time `yaml:"t3,omitempty"`
+			T4 *time.Time `yaml:"t4,omitempty"`
 		}{
 			T2: time.Date(2018, 1, 9, 10, 40, 47, 0, time.UTC),
 			T4: newTime(time.Date(2098, 1, 9, 10, 40, 47, 0, time.UTC)),
@@ -252,24 +251,24 @@ var marshalTests = []struct {
 	// Flow flag
 	{
 		&struct {
-			A []int "a,flow"
+			A []int `yaml:"a,flow"`
 		}{[]int{1, 2}},
 		"a: [1, 2]\n",
 	}, {
 		&struct {
-			A map[string]string "a,flow"
+			A map[string]string `yaml:"a,flow"`
 		}{map[string]string{"b": "c", "d": "e"}},
 		"a: {b: c, d: e}\n",
 	}, {
 		&struct {
 			A struct {
 				B, D string
-			} "a,flow"
+			} `yaml:"a,flow"`
 		}{struct{ B, D string }{"c", "e"}},
 		"a: {b: c, d: e}\n",
 	}, {
 		&struct {
-			A string "a,flow"
+			A string `yaml:"a,flow"`
 		}{"b\nc"},
 		"a: \"b\\nc\"\n",
 	},
@@ -287,7 +286,7 @@ var marshalTests = []struct {
 	{
 		&struct {
 			A int
-			B int "-"
+			B int `yaml:"-"`
 		}{1, 2},
 		"a: 1\n",
 	},
@@ -496,46 +495,68 @@ var marshalTests = []struct {
 	},
 }
 
-func (s *S) TestMarshal(c *C) {
+func TestMarshal(t *testing.T) {
 	defer os.Setenv("TZ", os.Getenv("TZ"))
 	os.Setenv("TZ", "UTC")
 	for i, item := range marshalTests {
-		c.Logf("test %d: %q", i, item.data)
-		data, err := yaml.Marshal(item.value)
-		c.Assert(err, IsNil)
-		c.Assert(string(data), Equals, item.data)
+		t.Run(fmt.Sprintf("test %d: %q", i, item.data), func(t *testing.T) {
+			data, err := yaml.Marshal(item.value)
+			if err != nil {
+				t.Fatalf("Marshal() returned error: %v", err)
+			}
+			if string(data) != item.data {
+				t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), item.data)
+			}
+		})
 	}
 }
 
-func (s *S) TestEncoderSingleDocument(c *C) {
+func TestEncoderSingleDocument(t *testing.T) {
 	for i, item := range marshalTests {
-		c.Logf("test %d. %q", i, item.data)
-		var buf bytes.Buffer
-		enc := yaml.NewEncoder(&buf)
-		err := enc.Encode(item.value)
-		c.Assert(err, Equals, nil)
-		err = enc.Close()
-		c.Assert(err, Equals, nil)
-		c.Assert(buf.String(), Equals, item.data)
+		t.Run(fmt.Sprintf("test %d. %q", i, item.data), func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := yaml.NewEncoder(&buf)
+			err := enc.Encode(item.value)
+			if err != nil {
+				t.Fatalf("Encode() returned error: %v", err)
+			}
+			err = enc.Close()
+			if err != nil {
+				t.Fatalf("Close() returned error: %v", err)
+			}
+			if buf.String() != item.data {
+				t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), item.data)
+			}
+		})
 	}
 }
 
-func (s *S) TestEncoderMultipleDocuments(c *C) {
+func TestEncoderMultipleDocuments(t *testing.T) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	err := enc.Encode(map[string]string{"a": "b"})
-	c.Assert(err, Equals, nil)
+	if err != nil {
+		t.Fatalf("Encode() returned error: %v", err)
+	}
 	err = enc.Encode(map[string]string{"c": "d"})
-	c.Assert(err, Equals, nil)
+	if err != nil {
+		t.Fatalf("Encode() returned error: %v", err)
+	}
 	err = enc.Close()
-	c.Assert(err, Equals, nil)
-	c.Assert(buf.String(), Equals, "a: b\n---\nc: d\n")
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	if buf.String() != "a: b\n---\nc: d\n" {
+		t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), "a: b\n---\nc: d\n")
+	}
 }
 
-func (s *S) TestEncoderWriteError(c *C) {
+func TestEncoderWriteError(t *testing.T) {
 	enc := yaml.NewEncoder(errorWriter{})
 	err := enc.Encode(map[string]string{"a": "b"})
-	c.Assert(err, ErrorMatches, `yaml: write error: some write error`) // Data not flushed yet
+	if err == nil || !strings.Contains(err.Error(), `yaml: write error: some write error`) {
+		t.Fatalf("Encode() returned %v, want error containing %q", err, `yaml: write error: some write error`)
+	}
 }
 
 type errorWriter struct{}
@@ -551,42 +572,57 @@ var marshalErrorTests = []struct {
 }{{
 	value: &struct {
 		B       int
-		inlineB ",inline"
+		inlineB `yaml:",inline"`
 	}{1, inlineB{2, inlineC{3}}},
 	panic: `duplicated key 'b' in struct struct \{ B int; .*`,
 }, {
 	value: &struct {
 		A int
-		B map[string]int ",inline"
+		B map[string]int `yaml:",inline"`
 	}{1, map[string]int{"a": 2}},
 	panic: `cannot have key "a" in inlined map: conflicts with struct field`,
 }}
 
-func (s *S) TestMarshalErrors(c *C) {
+func TestMarshalErrors(t *testing.T) {
 	for _, item := range marshalErrorTests {
-		if item.panic != "" {
-			c.Assert(func() { yaml.Marshal(item.value) }, PanicMatches, item.panic)
-		} else {
-			_, err := yaml.Marshal(item.value)
-			c.Assert(err, ErrorMatches, item.error)
-		}
+		t.Run(item.panic, func(t *testing.T) {
+			if item.panic != "" {
+				defer func() {
+					if r := recover(); r == nil {
+						t.Fatalf("expected panic")
+					}
+				}()
+				yaml.Marshal(item.value)
+			} else {
+				_, err := yaml.Marshal(item.value)
+				if err == nil || !strings.Contains(err.Error(), item.error) {
+					t.Fatalf("Marshal() returned %v, want error containing %q", err, item.error)
+				}
+			}
+		})
 	}
 }
 
-func (s *S) TestMarshalTypeCache(c *C) {
+func TestMarshalTypeCache(t *testing.T) {
 	var data []byte
 	var err error
 	func() {
 		type T struct{ A int }
 		data, err = yaml.Marshal(&T{})
-		c.Assert(err, IsNil)
+		if err != nil {
+			t.Fatalf("Marshal() returned error: %v", err)
+		}
 	}()
 	func() {
 		type T struct{ B int }
 		data, err = yaml.Marshal(&T{})
-		c.Assert(err, IsNil)
+		if err != nil {
+			t.Fatalf("Marshal() returned error: %v", err)
+		}
 	}()
-	c.Assert(string(data), Equals, "b: 0\n")
+	if string(data) != "b: 0\n" {
+		t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), "b: 0\n")
+	}
 }
 
 var marshalerTests = []struct {
@@ -613,25 +649,35 @@ func (o marshalerType) MarshalYAML() (interface{}, error) {
 }
 
 type marshalerValue struct {
-	Field marshalerType "_"
+	Field marshalerType `yaml:"_"`
 }
 
-func (s *S) TestMarshaler(c *C) {
+func TestMarshaler(t *testing.T) {
 	for _, item := range marshalerTests {
-		obj := &marshalerValue{}
-		obj.Field.value = item.value
-		data, err := yaml.Marshal(obj)
-		c.Assert(err, IsNil)
-		c.Assert(string(data), Equals, string(item.data))
+		t.Run(string(item.data), func(t *testing.T) {
+			obj := &marshalerValue{}
+			obj.Field.value = item.value
+			data, err := yaml.Marshal(obj)
+			if err != nil {
+				t.Fatalf("Marshal() returned error: %v", err)
+			}
+			if string(data) != string(item.data) {
+				t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), string(item.data))
+			}
+		})
 	}
 }
 
-func (s *S) TestMarshalerWholeDocument(c *C) {
+func TestMarshalerWholeDocument(t *testing.T) {
 	obj := &marshalerType{}
 	obj.value = map[string]string{"hello": "world!"}
 	data, err := yaml.Marshal(obj)
-	c.Assert(err, IsNil)
-	c.Assert(string(data), Equals, "hello: world!\n")
+	if err != nil {
+		t.Fatalf("Marshal() returned error: %v", err)
+	}
+	if string(data) != "hello: world!\n" {
+		t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), "hello: world!\n")
+	}
 }
 
 type failingMarshaler struct{}
@@ -640,23 +686,31 @@ func (ft *failingMarshaler) MarshalYAML() (interface{}, error) {
 	return nil, failingErr
 }
 
-func (s *S) TestMarshalerError(c *C) {
+func TestMarshalerError(t *testing.T) {
 	_, err := yaml.Marshal(&failingMarshaler{})
-	c.Assert(err, Equals, failingErr)
+	if err != failingErr {
+		t.Fatalf("Marshal() returned %v, want %v", err, failingErr)
+	}
 }
 
-func (s *S) TestSetIndent(c *C) {
+func TestSetIndent(t *testing.T) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(8)
 	err := enc.Encode(map[string]interface{}{"a": map[string]interface{}{"b": map[string]string{"c": "d"}}})
-	c.Assert(err, Equals, nil)
+	if err != nil {
+		t.Fatalf("Encode() returned error: %v", err)
+	}
 	err = enc.Close()
-	c.Assert(err, Equals, nil)
-	c.Assert(buf.String(), Equals, "a:\n        b:\n                c: d\n")
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	if buf.String() != "a:\n        b:\n                c: d\n" {
+		t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), "a:\n        b:\n                c: d\n")
+	}
 }
 
-func (s *S) TestSortedOutput(c *C) {
+func TestSortedOutput(t *testing.T) {
 	order := []interface{}{
 		false,
 		true,
@@ -710,7 +764,9 @@ func (s *S) TestSortedOutput(c *C) {
 		m[k] = 1
 	}
 	data, err := yaml.Marshal(m)
-	c.Assert(err, IsNil)
+	if err != nil {
+		t.Fatalf("Marshal() returned error: %v", err)
+	}
 	out := "\n" + string(data)
 	last := 0
 	for i, k := range order {
@@ -722,10 +778,10 @@ func (s *S) TestSortedOutput(c *C) {
 		}
 		index := strings.Index(out, "\n"+repr+":")
 		if index == -1 {
-			c.Fatalf("%#v is not in the output: %#v", k, out)
+			t.Fatalf("%#v is not in the output: %#v", k, out)
 		}
 		if index < last {
-			c.Fatalf("%#v was generated before %#v: %q", k, order[i-1], out)
+			t.Fatalf("%#v was generated before %#v: %q", k, order[i-1], out)
 		}
 		last = index
 	}
@@ -733,4 +789,173 @@ func (s *S) TestSortedOutput(c *C) {
 
 func newTime(t time.Time) *time.Time {
 	return &t
+}
+
+func TestCompactSeqIndentDefault(t *testing.T) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.CompactSeqIndent()
+	err := enc.Encode(map[string]interface{}{"a": []string{"b", "c"}})
+	if err != nil {
+		t.Fatalf("Encode() returned error: %v", err)
+	}
+	err = enc.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	// The default indent is 4, so these sequence elements get 2 indents as before
+	if buf.String() != `a:
+  - b
+  - c
+` {
+		t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), `a:
+  - b
+  - c
+`)
+	}
+}
+
+func TestCompactSequenceWithSetIndent(t *testing.T) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.CompactSeqIndent()
+	enc.SetIndent(2)
+	err := enc.Encode(map[string]interface{}{"a": []string{"b", "c"}})
+	if err != nil {
+		t.Fatalf("Encode() returned error: %v", err)
+	}
+	err = enc.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	// The sequence indent is 2, so these sequence elements don't get indented at all
+	if buf.String() != `a:
+- b
+- c
+` {
+		t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), `a:
+- b
+- c
+`)
+	}
+}
+
+type normal string
+type compact string
+
+// newlinePlusNormalToNewlinePlusCompact maps the normal encoding (prefixed with a newline)
+// to the compact encoding (prefixed with a newline), for test cases in marshalTests
+var newlinePlusNormalToNewlinePlusCompact = map[normal]compact{
+	normal(`
+v:
+    - A
+    - B
+`): compact(`
+v:
+  - A
+  - B
+`),
+
+	normal(`
+v:
+    - A
+    - |-
+      B
+      C
+`): compact(`
+v:
+  - A
+  - |-
+    B
+    C
+`),
+
+	normal(`
+v:
+    - A
+    - 1
+    - B:
+        - 2
+        - 3
+`): compact(`
+v:
+  - A
+  - 1
+  - B:
+      - 2
+      - 3
+`),
+
+	normal(`
+a:
+    - 1
+    - 2
+`): compact(`
+a:
+  - 1
+  - 2
+`),
+
+	normal(`
+a:
+    b:
+        - c: 1
+          d: 2
+`): compact(`
+a:
+    b:
+      - c: 1
+        d: 2
+`),
+}
+
+func TestEncoderCompactIndents(t *testing.T) {
+	for i, item := range marshalTests {
+		t.Run(fmt.Sprintf("test %d. %q", i, item.data), func(t *testing.T) {
+			var buf bytes.Buffer
+			enc := yaml.NewEncoder(&buf)
+			enc.CompactSeqIndent()
+			err := enc.Encode(item.value)
+			if err != nil {
+				t.Fatalf("Encode() returned error: %v", err)
+			}
+			err = enc.Close()
+			if err != nil {
+				t.Fatalf("Close() returned error: %v", err)
+			}
+
+			// Default to expecting the item data
+			expected := item.data
+			// If there's a different compact representation, use that
+			if c, ok := newlinePlusNormalToNewlinePlusCompact[normal("\n"+item.data)]; ok {
+				expected = string(c[1:])
+			}
+
+			if buf.String() != expected {
+				t.Fatalf("Encode() returned\n%q\nbut expected\n%q", buf.String(), expected)
+			}
+		})
+	}
+}
+
+func TestNewLinePreserved(t *testing.T) {
+	obj := &marshalerValue{}
+	obj.Field.value = "a:\n        b:\n                c: d\n"
+	data, err := yaml.Marshal(obj)
+	if err != nil {
+		t.Fatalf("Marshal() returned error: %v", err)
+	}
+	if string(data) != "_: |\n    a:\n            b:\n                    c: d\n" {
+		t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), "_: |\n    a:\n            b:\n                    c: d\n")
+	}
+
+	obj.Field.value = "\na:\n        b:\n                c: d\n"
+	data, err = yaml.Marshal(obj)
+	if err != nil {
+		t.Fatalf("Marshal() returned error: %v", err)
+	}
+	// the newline at the start of the file should be preserved
+	if string(data) != "_: |4\n\n    a:\n            b:\n                    c: d\n" {
+		t.Fatalf("Marshal() returned\n%q\nbut expected\n%q", string(data), "_: |4\n\n    a:\n            b:\n                    c: d\n")
+	}
 }

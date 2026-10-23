@@ -52,6 +52,26 @@ from the other fields. `not_a_file` and `unlistable_dir` always carry a
 when its name is a config file's (`x.yaml/`). `Entry.flagged` is exactly
 those three cases.
 
+⛔ An entry's `verdict` is Go's answer to "what does this path make
+`da-guard` validation do" — `unservable` (named under exit 3: parse_failed
+or unreadable, the exporter cannot serve it), `tree_refused` (named under
+exit 4 as unreadable_outside_run: the route generator refuses the whole
+tree on it), or None. Go computes it from validation's own lists; a reader
+that must fail closed on every path validation names reads this field and
+composes nothing from role and problem (a file the exporter's decode
+refuses can have no `problem` at all). ⚠️ Per mode: tree mode answers for
+every entry of the tree on disk; file mode gives the full verdict for the
+target path alone, once the text is written there (None for a path no walk
+records) — read tree mode for the rest; list mode reads no byte, so it
+knows only the walk's half of exit 3 — a file whose content the exporter
+refuses is None there and `unservable` in tree mode: a reader that must
+name every path validation names reads tree mode, not a listing. Names
+mode: always None. A broken unselected `_defaults` carrier below the root is
+both `not_read` unselected_defaults_carrier and `unservable`. ⛔ Per path
+only: None on every entry is NOT "validation passes" — a tenant declared
+twice (exit 2) or routing content (exit 4) falls on no path; a reader that
+needs the whole verdict runs validation (`da-tools guard defaults-impact`).
+
 "Which files can declare a tenant" is ONE answer with two halves
 (`tenant_scope`): the tenant files, and the entries that leave the set
 unknown (a directory Go could not list, a link it does not follow, …). A
@@ -316,9 +336,11 @@ NAME_CLASSES = frozenset({"tenant", "defaults", "platform", "hidden", "not_confi
 LIST_PROBLEM_KINDS = frozenset({"read_failure", "not_regular_file"})
 #: Classes whose name is `_`-prefixed: a platform file, read for no tenant.
 RESERVED_CLASSES = frozenset({"defaults", "platform"})
+#: `verdict` values, a closed set (cmd/da-guard verdict.go); None = nothing.
+VERDICTS = frozenset({"unservable", "tree_refused"})
 #: Every field an entry carries, in every mode (null where it has no value).
 ENTRY_FIELDS = ("path", "depth", "class", "tenant_named", "defaults_document",
-                "readers", "not_read", "role", "problem")
+                "readers", "not_read", "role", "problem", "verdict")
 MODES = frozenset({"tree", "file", "list", "names"})
 
 
@@ -330,7 +352,10 @@ class Entry:
     only); *defaults_document* whether it is a platform-defaults document;
     *readers* who reads it (None in names mode); *not_read* why nobody does;
     *role* Go's verdict on what the path is (None in names mode); *problem*
-    ``(kind, message)`` when a read of it fails.
+    ``(kind, message)`` when a read of it fails; *verdict* what the path makes
+    da-guard validation do — `unservable` (exit 3), `tree_refused` (exit 4),
+    None — as Go computes it from validation's own lists (see the module
+    docstring for what list, file and names mode can know).
 
     ⚠️ In file mode *role* says only whether the path on disk holds a
     regular file the walk can reach (or nothing yet) — not that its name is
@@ -345,6 +370,7 @@ class Entry:
     not_read: Optional[str]
     role: Optional[str]
     problem: Optional[tuple[str, str]]
+    verdict: Optional[str]
 
     @property
     def name(self) -> str:
@@ -399,6 +425,17 @@ class Entry:
         """A `_`-prefixed config name (class defaults or platform)."""
         return self.cls in RESERVED_CLASSES
 
+    @property
+    def root_platform_file(self) -> bool:
+        """A root platform file (#2743): a `_`-prefixed config file at the
+        conf.d root that the exporter reads — Go's `isRootPlatformKey`
+        (flat_build.go), whose `tenants:` block is the platform's per-tenant
+        default (platform_overlay.go). Go's three fields, composed: class
+        (reserved), depth 0, `exporter` among the readers (an unselected
+        carrier has none; parse_tree.go `readersFor`). False in names mode."""
+        return (self.reserved and self.depth == 0
+                and self.readers is not None and "exporter" in self.readers)
+
 
 def _entry_of(e: Any, i: int, mode: str) -> Entry:
     """One raw entry, checked whole. A field absent from it is a da-guard
@@ -427,9 +464,16 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     if not isinstance(e["defaults_document"], bool):
         raise ValueError(f"{where}: defaults_document is not a boolean")
     readers, role, not_read, bad = e["readers"], e["role"], e["not_read"], e["problem"]
+    verdict = e["verdict"]
+    if verdict is not None and verdict not in VERDICTS:
+        raise ValueError(f"{where}: verdict {verdict!r} is not one this reader knows")
+    if verdict == "tree_refused" and bad is None:
+        # Go names a path tree_refused only for its problem.
+        raise ValueError(f"{where}: verdict tree_refused with no problem")
     if names:
-        if readers is not None or role is not None or not_read is not None or bad is not None:
-            raise ValueError(f"{where}: readers, role, not_read or problem in names mode")
+        if readers is not None or role is not None or not_read is not None or bad is not None \
+                or verdict is not None:
+            raise ValueError(f"{where}: readers, role, not_read, problem or verdict in names mode")
     else:
         if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
             raise ValueError(f"{where}: readers is not a list of reader names")
@@ -459,7 +503,95 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     return Entry(path=path, depth=depth, cls=cls, tenant_named=tenant,
                  defaults_document=e["defaults_document"],
                  readers=None if readers is None else tuple(readers),
-                 not_read=not_read, role=role, problem=problem)
+                 not_read=not_read, role=role, problem=problem, verdict=verdict)
+
+
+# ── the fail-closed exit (ADR-036 §7 step 9, #3206) ─────────────────
+
+#: Each `verdict`, in the words the refusal prints.
+VERDICT_WORDS = {
+    "unservable": ("the exporter cannot read or decode it, so the tree cannot be served "
+                   "(da-guard validation exits 3)"),
+    "tree_refused": ("the route generator refuses the whole tree on it "
+                     "(da-guard validation exits 4)"),
+}
+#: The `reason` of the `--json` envelope the refusal prints.
+REFUSAL_REASON = "conf_d_not_servable"
+
+
+def refused_entries(entries: "Iterable[Entry]") -> "tuple[Entry, ...]":
+    """Every entry Go gives a verdict (`verdict` not None), in order."""
+    return tuple(e for e in entries if e.verdict is not None)
+
+
+def refusal_lines(entries: "Iterable[Entry]", root: "Path | str") -> "list[str]":
+    """The refusal's stderr lines for *entries* (each with a verdict): one
+    `ERROR:` line per entry — every one, none elided: a reader must name
+    every path validation names — then one naming the tree. Every name is
+    escaped for the terminal (`safe_label`)."""
+    from _lib_io import safe_label  # lazy: _lib_io imports this module lazily too
+    bad = list(entries)
+    lines = []
+    for e in bad:
+        why = f" ({e.problem[0]}: {' '.join(e.problem[1].split())})" if e.problem else ""
+        lines.append(f"ERROR: {safe_label(e.path)}: {VERDICT_WORDS[e.verdict]}{safe_label(why)}")
+    lines.append(f"ERROR: the conf.d at {safe_label(str(root))} holds {len(bad)} path(s) "
+                 "da-guard validation names; this tool cannot read its whole input and "
+                 "stops before it reads or writes anything (fix or remove them, then "
+                 "run it again)")
+    return lines
+
+
+#: A tool's own ending for the refusal (`on_refusal`), or None.
+_ON_REFUSAL: "contextvars.ContextVar[Optional[Callable[[tuple[Entry, ...], list[str]], Any]]]" = \
+    contextvars.ContextVar("_lib_parse_tree._ON_REFUSAL", default=None)
+
+
+@contextlib.contextmanager
+def on_refusal(handler: "Callable[[tuple[Entry, ...], list[str]], Any]") -> Iterator[None]:
+    """For the length of the block, the refusal (`refuse_unservable`) ends
+    the run through *handler* — called with the refused entries and the
+    `ERROR:` lines already printed, and expected not to return — for a tool
+    whose contract owes every exit path its own report (backtest's `-o` /
+    `--markdown-output`, #3089). The decision and the lines stay this
+    module's; only the ending is the tool's. Should *handler* return, the
+    shared exit follows."""
+    token = _ON_REFUSAL.set(handler)
+    try:
+        yield
+    finally:
+        _ON_REFUSAL.reset(token)
+
+
+def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
+    """THE fail-closed exit of a conf.d tool run (#3206): when any of a
+    tree-mode document's *entries* has a `verdict`, print `refusal_lines`
+    to stderr and end the process with the caller-error code (2, the tool
+    could not read its whole input; `_lib_exitcodes.exit_caller_error`, so a
+    `--json` run prints its one envelope, reason `REFUSAL_REASON`). Returns
+    only when no entry has one.
+
+    ⛔ Tree mode only: list mode knows only the walk's half of the verdict
+    and file mode judges only its `--path` (see the module docstring). The
+    tools reach this through `_lib_parse_cache.ConfdReader.tree`, which every
+    accessor of a run's index goes through; nothing calls it by hand."""
+    bad = refused_entries(entries)
+    if not bad:
+        return
+    lines = refusal_lines(bad, root)
+    for line in lines:
+        print(line, file=sys.stderr)
+    handler = _ON_REFUSAL.get()
+    if handler is not None:
+        handler(bad, lines)
+    from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
+    exit_caller_error(lines[-1], REFUSAL_REASON, fields={"refused_paths": refused_paths(bad)})
+
+
+def refused_paths(entries: "Iterable[Entry]") -> "list[dict[str, str]]":
+    """The refusal's `--json` field: every refused entry as {path, verdict},
+    in order — all of them, as on stderr (#3206)."""
+    return [{"path": e.path, "verdict": e.verdict} for e in entries]
 
 
 def entries_of(doc: dict) -> "tuple[Entry, ...]":
@@ -663,7 +795,8 @@ class Tree:
     (content or a problem) → its readers; `unreadable`, path → (kind,
     message) of every entry with a problem; `not_read`, path → why no reader
     reads it. `rendered_by`: file → key → readers. `defaults_carriers`:
-    directory ("." for the root) → the one defaults carrier its chain reads."""
+    directory ("." for the root) → the one defaults carrier its chain reads.
+    `da_guard_version`: the version the document names."""
     selected: Mapping[str, tuple[str, ...]]
     unreadable: Mapping[str, tuple[str, str]]
     not_read: Mapping[str, str]
@@ -671,6 +804,7 @@ class Tree:
     _files: Mapping[str, Any]
     defaults_carriers: Optional[Mapping[str, str]] = None
     entries: "tuple[Entry, ...]" = ()
+    da_guard_version: Optional[str] = None
 
     def node(self, rel: str) -> Any:
         """File `rel`'s content as parse-tree's tagged nodes (shared with this
@@ -710,6 +844,7 @@ def tree_of(doc: dict) -> Tree:
         _files=MappingProxyType(dict(files)),
         defaults_carriers=MappingProxyType(dict(doc["defaults_carriers"])),
         entries=entries,
+        da_guard_version=doc["da_guard_version"],
     )
 
 
@@ -848,6 +983,43 @@ def list_tree(root: Path | str, binary: Optional[str] = None,
     `Listing` and passes it down. Raises as `run_list`."""
     doc = run_list(root, binary, timeout)
     return Listing(Path(root), entries_of(doc), MappingProxyType(dict(doc["defaults_carriers"])))
+
+
+def subtree_of(tree: Tree, prefix: str) -> Tree:
+    """The part of a tree-mode document under directory *prefix* (root-
+    relative, '/'), its paths relative to *prefix* — Go's verdicts, roles and
+    classes left as the whole tree's run gave them (#3206). A directory below
+    the exporter's root is not a root: run on it, parse-tree judges it as one
+    (a subtree carrier's string value reads as a root default the exporter
+    drops); cut from the root's document, every path keeps the answer it has
+    where it really is."""
+    lead = prefix.rstrip("/") + "/"
+    cut = len(prefix.rstrip("/").split("/"))
+
+    def under(path: str) -> Optional[str]:
+        return path[len(lead):] if path.startswith(lead) else None
+
+    def remap(mapping: Optional[Mapping[str, Any]]) -> "dict[str, Any]":
+        return {under(k): v for k, v in (mapping or {}).items() if under(k) is not None}
+
+    carriers = {}
+    for directory, carrier in (tree.defaults_carriers or {}).items():
+        if directory == prefix.rstrip("/"):
+            carriers["."] = under(carrier)
+        elif under(directory) is not None:
+            carriers[under(directory)] = under(carrier)
+    return Tree(
+        selected=MappingProxyType(remap(tree.selected)),
+        unreadable=MappingProxyType(remap(tree.unreadable)),
+        not_read=MappingProxyType(remap(tree.not_read)),
+        rendered_by=(None if tree.rendered_by is None
+                     else MappingProxyType(remap(tree.rendered_by))),
+        _files=MappingProxyType(remap(tree._files)),
+        defaults_carriers=MappingProxyType(carriers),
+        entries=tuple(Entry(**{**e.__dict__, "path": under(e.path), "depth": e.depth - cut})
+                      for e in tree.entries if under(e.path) is not None),
+        da_guard_version=tree.da_guard_version,
+    )
 
 
 def listing_of(tree: Tree, root: Path | str) -> Listing:

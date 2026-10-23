@@ -414,13 +414,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		return nil, err
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
-	unreadable := scopeUnreadable(scan, filepath.ToSlash(rel))
-	if scopeStatDenied {
-		unreadable = withUnreadable(unreadable, UnreadableFile{RelKey: filepath.ToSlash(rel), Reason: UnreadableStatError})
-	}
+	unreadable := scopeUnreadableOf(scan, filepath.ToSlash(rel), scopeStatDenied)
 	var rootListErr error
 	if rootUnlistable {
-		unreadable = withUnreadable(unreadable, RootUnreadable)
 		rootListErr = fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
 	var noTenant []string
@@ -641,6 +637,27 @@ func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
 		}
 	}
 	return out
+}
+
+// scopeUnreadableOf is ScopedTenants.Unreadable whole: scopeUnreadable, the
+// scope itself when the process may not stat it (scopeStatDenied), and the
+// root when the walk kept no file and could not list it (RootUnreadable).
+func scopeUnreadableOf(scan *TreeScan, scopeRel string, scopeStatDenied bool) []UnreadableFile {
+	unreadable := scopeUnreadable(scan, scopeRel)
+	if scopeStatDenied {
+		unreadable = withUnreadable(unreadable, UnreadableFile{RelKey: scopeRel, Reason: UnreadableStatError})
+	}
+	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
+		unreadable = withUnreadable(unreadable, RootUnreadable)
+	}
+	return unreadable
+}
+
+// TreeUnreadable is ScopedTenants.Unreadable of a whole-tree run over a walk
+// already made (#3206): the function ScopeEffective fills it with, for a
+// reader that has the walk but runs no load (`da-guard parse-tree`).
+func TreeUnreadable(scan *TreeScan) []UnreadableFile {
+	return scopeUnreadableOf(scan, ".", false)
 }
 
 // RootUnreadable is the Unreadable entry for a configDir the walk could not

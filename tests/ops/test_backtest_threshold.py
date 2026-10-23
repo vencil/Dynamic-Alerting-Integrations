@@ -24,6 +24,7 @@ import pytest
 from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
 
 
 class TestParseLookback:
@@ -1711,14 +1712,6 @@ def _path_served_values(mp, tmp, prom):
     return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
 
 
-def _path_conf_unreadable(mp, tmp, prom):
-    mp.setattr(bt, "prometheus_available", _boom)
-    d = tmp / "bad-conf.d"
-    d.mkdir()
-    (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
-    return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
-
-
 def _path_query_error(mp, tmp, prom):
     p = prom(errors={"t-x": 400})
     return [*_TENANT, "--prometheus", p.url]
@@ -1746,9 +1739,8 @@ _EVERY_PATH = [
      ("Backtest not run", "baseline_missing")),
     ("served-values", _path_served_values, 2, ("caller_error", "served_values_unavailable"),
      ("Backtest not run", "served_values_unavailable")),
-    # #3111: da-guard names an undecodable file on either side.
-    ("conf-unreadable", _path_conf_unreadable, 2, ("caller_error", "served_values_unavailable"),
-     ("Backtest not run", "served_values_unavailable")),
+    # #3111's "da-guard names an undecodable file" path is the shared conf.d
+    # refusal since #3206: TestConfdRefusalWritesNothing below.
     ("query-error", _path_query_error, 2, ("partial", "query_error"),
      ("Threshold Backtest Results", "not measured")),
     ("high", _path_high, 1, None, ("Threshold Backtest Results", "HIGH")),
@@ -1800,6 +1792,70 @@ class TestOutputsOnEveryPath:
         assert "check the value given to" not in out.err   # no write error
         assert json.loads(out_json.read_text(encoding="utf-8"))["lookback"] == "7d"
         assert out_md.read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestConfdRefusalWritesBothOutputs:
+    """#3206: a tree da-guard validation names a path on (here a file that is
+    not UTF-8) ends through the shared conf.d refusal before either tree is
+    read — rc 2, the file named on stderr — and, #3089, still writes `-o`
+    and `--markdown-output` as a not-run report: the `--json` document (status
+    `caller_error`, reason `conf_d_not_servable`, `refused_paths`), the same
+    document in `-o`, and the markdown naming the reason and the path."""
+
+    @pytest.mark.parametrize("json_mode", [True, False])
+    def test_refusal_names_the_file_and_writes_both_outputs(self, tmp_path, json_mode):
+        d = tmp_path / "bad-conf.d"
+        d.mkdir()
+        (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
+        out_json, out_md = tmp_path / "r.json", tmp_path / "r.md"
+        out_json.write_text("stale\n", encoding="utf-8")
+        p = subprocess.run(
+            [sys.executable, bt.__file__, "--config-dir", str(d), "--baseline", str(d),
+             "--prometheus", "http://127.0.0.1:9", *(["--json"] if json_mode else []),
+             "-o", str(out_json), "--markdown-output", str(out_md)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        assert_refused(p.returncode, p.stderr, ["db.yaml"])
+        assert "(invalid_utf8: " in p.stderr, p.stderr
+        doc = json.loads(out_json.read_text(encoding="utf-8"))
+        assert (doc["status"], doc["reason"], doc["changes"], doc["refused_paths"]) == (
+            "caller_error", "conf_d_not_servable", [],
+            [{"path": "db.yaml", "verdict": "unservable"}]), doc
+        assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}, doc
+        if json_mode:
+            assert json.loads(p.stdout) == doc
+        else:
+            assert "{" not in p.stdout, p.stdout
+        md = out_md.read_text(encoding="utf-8")
+        assert "Backtest not run" in md and "da-guard validation names" in md, md
+        assert "`db.yaml` (unservable)" in md, md
+
+    def test_the_markdown_caps_the_paths_and_the_json_keeps_all(self, tmp_path):
+        """A tree with more refused paths than the markdown lists: the first
+        `MARKDOWN_REFUSED_PATHS_MAX`, then one "… and N more" line; stderr
+        and `-o` name every one."""
+        d = tmp_path / "bad-conf.d"
+        d.mkdir()
+        n = bt.MARKDOWN_REFUSED_PATHS_MAX + 7
+        for i in range(n):
+            (d / f"t{i:03d}.yaml").write_text("tenants: [\n", encoding="utf-8")
+        out_json, out_md = tmp_path / "r.json", tmp_path / "r.md"
+        p = subprocess.run(
+            [sys.executable, bt.__file__, "--config-dir", str(d), "--baseline", str(d),
+             "--prometheus", "http://127.0.0.1:9",
+             "-o", str(out_json), "--markdown-output", str(out_md)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        names = [f"t{i:03d}.yaml" for i in range(n)]
+        assert_refused(p.returncode, p.stderr, names)
+        doc = json.loads(out_json.read_text(encoding="utf-8"))
+        assert [r["path"] for r in doc["refused_paths"]] == names
+        md = out_md.read_text(encoding="utf-8")
+        listed = [ln for ln in md.splitlines() if ln.startswith("> - `")]
+        assert len(listed) == bt.MARKDOWN_REFUSED_PATHS_MAX, md
+        assert "> - … and 7 more" in md, md
+        assert f"`{names[-1]}`" not in md, md
 
 
 def _unwritable(tmp, shape, name):
@@ -2266,7 +2322,7 @@ class TestTwoTreesCompare:
 
     @pytest.mark.parametrize("name", [
         b"has\nnewline.yaml", b'has"quote.yaml', b"has\\backslash.yaml", b"has space.yaml",
-        "İSTANBUL.YAML".encode("utf-8"), b"legacy-\xff.yaml"])
+        "İSTANBUL.YAML".encode("utf-8")])
     def test_any_file_name_is_read(self, tmp_path, cli_argv, capsys, fake_prom, name):
         """The tenant is the `tenants:` key the exporter reads; a file's name is
         only a path."""
@@ -2276,6 +2332,20 @@ class TestTwoTreesCompare:
             {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert self._changes(doc) == [("acme", "mysql_connections", "80", "50")], err
+
+    def test_a_name_that_is_not_utf8_refuses_the_tree(self, tmp_path, cli_argv, capsys,
+                                                       fake_prom):
+        """A config file name that is not UTF-8 is one no da-guard output can carry:
+        served-values refuses the tree (#3206), so this is rc 2, the name escaped —
+        never a comparison that silently lacks that file's tenants."""
+        name = b"legacy-\xff.yaml"
+        require_file_name(name)
+        cur, base = _dirs(
+            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
+            {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
+        rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert (rc, doc["reason"]) == (2, "served_values_unavailable"), (doc, err)
+        assert r"legacy-\xff.yaml" in err and "not valid UTF-8" in err
 
 
 _RECIPE = ("    _custom_alerts:\n      - recipe: threshold\n        name: q\n"
@@ -2492,7 +2562,9 @@ class TestRecipeNoteFromTheWholeTree:
                         reason="as root the permission bits decide nothing")
     def test_an_unreadable_file_under_config_dir_is_named(self, monkeypatch, cli_argv, capsys,
                                                           tmp_path):
-        """73c1e2da: a PermissionError traceback, rc 2 `internal_error`."""
+        """73c1e2da: a PermissionError traceback, rc 2 `internal_error`. Since
+        #3206 the unreadable file is a path da-guard validation names: the
+        shared conf.d refusal (reason `conf_d_not_servable`), the file named."""
         cur, base = _dirs(tmp_path, {**_D, "t.yaml": self._t("t", "    mysql_connections: 1\n")},
                           {**_D, "t.yaml": self._t("t", "    mysql_connections: 2\n")})
         os.chmod(os.path.join(cur, "t.yaml"), 0)
@@ -2501,8 +2573,10 @@ class TestRecipeNoteFromTheWholeTree:
                                 "--prometheus", "http://prom:9090", "--json")
         finally:
             os.chmod(os.path.join(cur, "t.yaml"), 0o600)
-        assert (rc, json.loads(out.out)["reason"]) == (2, "served_values_unavailable")
-        assert "Traceback" not in out.err and "t.yaml" in out.err
+        doc = json.loads(out.out)
+        assert (rc, doc["reason"]) == (2, "conf_d_not_servable"), doc
+        assert doc["refused_paths"] == [{"path": "t.yaml", "verdict": "unservable"}], doc
+        assert_refused(rc, out.err, ["t.yaml"])
 
 
 

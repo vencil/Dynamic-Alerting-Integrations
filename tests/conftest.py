@@ -224,7 +224,8 @@ def unlistable_dir(monkeypatch):
                     "role": "unlistable_dir",
                     "problem": {"kind": "read_failure",
                                 "message": "the directory cannot be listed; nothing under "
-                                           "it is read (walk_error)"}})
+                                           "it is read (walk_error)"},
+                    "verdict": "unservable"})
                 out["entries"].sort(key=lambda e: e["path"])
         return real(_json.dumps(out).encode("utf-8"), check=check, what=what)
 
@@ -278,6 +279,19 @@ def da_guard_env(monkeypatch, da_guard_binary):
     """`$DA_GUARD_BINARY` 指向 `da_guard_binary`，只在本測試期間（子行程繼承）。"""
     monkeypatch.setenv("DA_GUARD_BINARY", da_guard_binary)
     return da_guard_binary
+
+
+@pytest.fixture
+def judging_run():
+    """The test runs as a judge (`_lib_parse_cache.judging`, #3206): the
+    reader's fail-closed exit on a tree Go names paths on stands aside, as
+    it does for `validate_config` and the route generator. For tests of the
+    library mechanics those judges use on such trees (the unusable-entry
+    wording, a partial served-values read); a tool's own behaviour on such a
+    tree is the shared refusal (`test_confd_behaviour_matrix`)."""
+    import _lib_parse_cache
+    with _lib_parse_cache.judging():
+        yield
 
 
 @pytest.fixture(scope="session")

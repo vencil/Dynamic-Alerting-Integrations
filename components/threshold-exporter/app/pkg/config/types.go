@@ -253,10 +253,24 @@ type ThresholdConfig struct {
 	// only a file's own decode carries it.
 	spelled bool
 
-	// stringMetadata is set by ParseConfigFile: the `tenants:` / `profiles:`
-	// entries of the file that write `_metadata` as a string rather than a
-	// mapping (stringMetadataEntries, #2859). Not merged, like spelled.
+	// notes is set by ParseConfigFile when the file has something to say
+	// about entries it decoded (fileNotes); nil otherwise, and for a merged
+	// config. Behind a pointer so the common file pays one word, not a slice
+	// header per note (#3269: ThresholdConfig is held per file and copied on
+	// every merge).
+	notes *fileNotes
+}
+
+// fileNotes is what one file's decode records, without changing any value
+// the readers read, about its `tenants:` / `profiles:` entries.
+type fileNotes struct {
+	// stringMetadata: the entries that write `_metadata` as a string rather
+	// than a mapping (stringMetadataEntries, #2859).
 	stringMetadata []string
+	// scheduledReserved: the entries whose reserved key the file wrote with
+	// a schedule, which the decode kept only the `default` of
+	// (stripScheduledReserved, #3269).
+	scheduledReserved []string
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
