@@ -20,7 +20,7 @@ package config
 //     carries the window: not /metrics, not da-guard's served-values;
 //   - the planes that do not decode through it take servedValue too: the
 //     subtree defaults overlay (applySubtreeDefaults, which judges the
-//     stripped value — subtreeLevelShaped, #3295), tenant-api's merge
+//     stripped value — subtreeLevelRead, #3295), tenant-api's merge
 //     (mergeTenantConfig's display copy, which keeps the tenant layer as
 //     written for the write gate), and the walker's reported config
 //     (effectiveView, rawServedValue);

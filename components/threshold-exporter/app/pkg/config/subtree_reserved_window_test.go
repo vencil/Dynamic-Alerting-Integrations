@@ -3,7 +3,7 @@ package config
 // subtree_reserved_window_test.go — #3295: a reserved key a subtree
 // `_defaults.yaml` writes with a schedule (a time window, or `expires:`) is
 // exactly its `default` written alone at the same level. The overlay strips
-// the schedule (servedValue) BEFORE judging the value (subtreeLevelShaped),
+// the schedule (servedValue) BEFORE judging the value (subtreeLevelRead),
 // so no window decides what is handed down, while the readers read the
 // `default` alone (#3269).
 //
@@ -46,13 +46,25 @@ func swYAML(v string) string {
 // finance/us/_defaults.yaml (deep) + finance/us/t1.yaml, and returns the dir.
 func swTree(t *testing.T, shallow, deep string) string {
 	t.Helper()
+	return swTreeWith(t, swPlace{shallow: shallow}, deep)
+}
+
+// swPlace is where around the cell's subtree level the tree also writes the
+// key: a shallower subtree level, a root `optional_overrides:` listing
+// (rootExtra) or the tenant's own entry (tenant, one indented line).
+type swPlace struct {
+	name, shallow, rootExtra, tenant string
+}
+
+func swTreeWith(t *testing.T, p swPlace, deep string) string {
+	t.Helper()
 	files := map[string]string{
-		"_defaults.yaml":            swRoot,
+		"_defaults.yaml":            swRoot + p.rootExtra,
 		"finance/us/_defaults.yaml": "defaults:\n" + deep,
-		"finance/us/t1.yaml":        "tenants:\n  t1:\n    mysql_connections: \"70\"\n",
+		"finance/us/t1.yaml":        "tenants:\n  t1:\n    mysql_connections: \"70\"\n" + p.tenant,
 	}
-	if shallow != "" {
-		files["finance/_defaults.yaml"] = "defaults:\n" + shallow
+	if p.shallow != "" {
+		files["finance/_defaults.yaml"] = "defaults:\n" + p.shallow
 	}
 	return writeUndeliverableTree(t, files)
 }
@@ -86,11 +98,14 @@ func swServed(t *testing.T, dir string) (map[string]ScheduledValue, string) {
 // refused per file, which it found unreachable, which it applied, and the
 // #3269 WARN's split of the scheduled entries (SubtreeScheduledReserved).
 type swBuildView struct {
-	rejected    map[string]map[string]bool
-	unreachable map[string][]string
-	applied     map[string]bool
-	defaultOnly []string
-	notApplied  []string
+	rejected     map[string]map[string]bool
+	tenantSets   map[string]map[string]map[string]bool
+	unreachable  map[string][]string
+	applied      map[string]bool
+	appliedTSet  map[string]bool
+	reservedKeys map[string]map[string][]string // subtreeReservedKeys (da-guard subtree_default_reserved_key)
+	defaultOnly  []string
+	notApplied   []string
 }
 
 // swBuild is swBuildView for the tree at dir, from BuildFlatConfig over
@@ -106,22 +121,28 @@ func swBuild(t *testing.T, dir string) swBuildView {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := swBuildView{rejected: built.RejectedChainValues, unreachable: built.Unreachable}
+	v := swBuildView{
+		rejected: built.RejectedChainValues, tenantSets: built.rejectedTenantSets,
+		unreachable:  built.Unreachable,
+		reservedKeys: subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults),
+	}
 	for k, verdict := range built.SubtreeRefusedVerdicts["t1"] {
 		if v.applied == nil {
-			v.applied = map[string]bool{}
+			v.applied, v.appliedTSet = map[string]bool{}, map[string]bool{}
 		}
-		v.applied[k] = verdict.Applied
+		v.applied[k], v.appliedTSet[k] = verdict.Applied, verdict.TenantSets
 	}
 	v.defaultOnly, v.notApplied = SubtreeScheduledReserved(dir, in.ParsedDefaults, &built.Config)
 	return v
 }
 
 // TestSubtreeScheduledReserved_IsItsDefaultAlone is the property: for every
-// reserved key × default × window value (and the `expires:`-only form), a
-// subtree level writing the schedule serves, row for row, what the same level
-// writing the default alone serves — on one level, and as the deep level of
-// a two-level chain under a shallow scalar `disable`.
+// reserved key × default (null included) × window value (and the
+// `expires:`-only form), a subtree level writing the schedule serves, row for
+// row, what the same level writing the default alone serves, and the build
+// accounts for it identically (refused / unreachable / applied / named) —
+// on its own, under a shallower level writing `disable`, with the key listed
+// in the root `optional_overrides:`, and with the tenant setting it itself.
 func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 	t.Parallel()
 	keys := []string{
@@ -131,7 +152,7 @@ func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 		"_silent_mode",
 		"_severity_dedup",
 	}
-	defaults := []string{"enable", "disable", "warning", "critical", "all", "80", ""}
+	defaults := []string{"enable", "disable", "warning", "critical", "all", "80", "", "null"}
 	var forms []string // the schedule written after `default: D`
 	for _, w := range []string{"enable", "disable", "90", "warning"} {
 		forms = append(forms, `, overrides: [{window: "03:00-04:00", value: `+w+`}]`)
@@ -139,47 +160,47 @@ func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 	forms = append(forms, `, expires: "2099-01-01T00:00:00Z"`)
 
 	for _, key := range keys {
+		places := []swPlace{
+			{name: "alone"},
+			{name: "under a shallow disable", shallow: "  " + key + ": disable\n"},
+			{name: "listed in optional_overrides", rootExtra: "optional_overrides:\n  - " + key + "\n"},
+			{name: "the tenant sets it", tenant: "    " + key + ": disable\n"},
+		}
 		for _, d := range defaults {
 			scalar := "  " + key + ": " + swYAML(d) + "\n"
 			for _, form := range forms {
 				windowed := "  " + key + ": {default: " + swYAML(d) + form + "}\n"
-				name := key + "/" + windowed
-				t.Run(name, func(t *testing.T) {
-					// One level.
-					wDir, sDir := swTree(t, "", windowed), swTree(t, "", scalar)
-					wMap, wRows := swServed(t, wDir)
-					sMap, sRows := swServed(t, sDir)
-					if !reflect.DeepEqual(wMap, sMap) {
-						t.Errorf("t1 map:\n windowed %v\n scalar   %v", wMap, sMap)
-					}
-					if wRows != sRows {
-						t.Errorf("served:\n windowed:\n%s\n scalar:\n%s", wRows, sRows)
-					}
-					wb, sb := swBuild(t, wDir), swBuild(t, sDir)
-					if !reflect.DeepEqual(wb.rejected, sb.rejected) ||
-						!reflect.DeepEqual(wb.unreachable, sb.unreachable) ||
-						!reflect.DeepEqual(wb.applied, sb.applied) {
-						t.Errorf("build verdicts:\n windowed %+v\n scalar   %+v", wb, sb)
-					}
-					// The #3269 WARN's split says what the scalar tree did.
-					_, applied := sMap[key]
-					entry := "finance/us/_defaults.yaml: defaults." + key
-					wantOnly, wantNot := []string(nil), []string{entry}
-					if applied {
-						wantOnly, wantNot = []string{entry}, nil
-					}
-					if !reflect.DeepEqual(wb.defaultOnly, wantOnly) || !reflect.DeepEqual(wb.notApplied, wantNot) {
-						t.Errorf("SubtreeScheduledReserved = %v / %v, want %v / %v (scalar applied=%v)",
-							wb.defaultOnly, wb.notApplied, wantOnly, wantNot, applied)
-					}
-
-					// Two levels: a shallow scalar `disable`, the cell deeper.
-					shallow := "  " + key + ": disable\n"
-					cwMap, cwRows := swServed(t, swTree(t, shallow, windowed))
-					csMap, csRows := swServed(t, swTree(t, shallow, scalar))
-					if !reflect.DeepEqual(cwMap, csMap) || cwRows != csRows {
-						t.Errorf("chain under shallow disable:\n windowed %v\n%s\n scalar   %v\n%s",
-							cwMap, cwRows, csMap, csRows)
+				t.Run(key+"/"+windowed, func(t *testing.T) {
+					for _, p := range places {
+						wDir, sDir := swTreeWith(t, p, windowed), swTreeWith(t, p, scalar)
+						wMap, wRows := swServed(t, wDir)
+						sMap, sRows := swServed(t, sDir)
+						if !reflect.DeepEqual(wMap, sMap) || wRows != sRows {
+							t.Errorf("%s: served:\n windowed %v\n%s\n scalar   %v\n%s", p.name, wMap, wRows, sMap, sRows)
+						}
+						wb, sb := swBuild(t, wDir), swBuild(t, sDir)
+						if !reflect.DeepEqual(wb.rejected, sb.rejected) ||
+							!reflect.DeepEqual(wb.tenantSets, sb.tenantSets) ||
+							!reflect.DeepEqual(wb.unreachable, sb.unreachable) ||
+							!reflect.DeepEqual(wb.applied, sb.applied) ||
+							!reflect.DeepEqual(wb.appliedTSet, sb.appliedTSet) ||
+							!reflect.DeepEqual(wb.reservedKeys, sb.reservedKeys) {
+							t.Errorf("%s: build verdicts:\n windowed %+v\n scalar   %+v", p.name, wb, sb)
+						}
+						if p.shallow != "" || p.tenant != "" {
+							continue
+						}
+						// The #3269 WARN's split says what the overlay did
+						// with the scalar at this level.
+						entry := "finance/us/_defaults.yaml: defaults." + key
+						wantOnly, wantNot := []string(nil), []string{entry}
+						if sb.applied[key] {
+							wantOnly, wantNot = []string{entry}, nil
+						}
+						if !reflect.DeepEqual(wb.defaultOnly, wantOnly) || !reflect.DeepEqual(wb.notApplied, wantNot) {
+							t.Errorf("%s: SubtreeScheduledReserved = %v / %v, want %v / %v",
+								p.name, wb.defaultOnly, wb.notApplied, wantOnly, wantNot)
+						}
 					}
 				})
 				if t.Failed() {
@@ -206,6 +227,9 @@ func TestSubtreeScheduledReserved_PredicatesAgree(t *testing.T) {
 			// default threshold-shaped, window not.
 			{map[string]any{"default": "disable", "overrides": []any{map[string]any{"window": "03:00-04:00", "value": "enable"}}}, "disable"},
 			{map[string]any{"default": 80, "expires": "2099-01-01T00:00:00Z"}, 80},
+			// a null default writes nothing, as the scalar null (#3295).
+			{map[string]any{"default": nil, "overrides": []any{map[string]any{"window": "03:00-04:00", "value": "disable"}}}, nil},
+			{map[string]any{"default": nil, "expires": "2099-01-01T00:00:00Z"}, nil},
 		} {
 			w, s := map[string]any{key: c.windowed}, map[string]any{key: c.scalar}
 			_, verdict := subtreeLevelValue(cfg, key, c.windowed)
@@ -213,7 +237,11 @@ func TestSubtreeScheduledReserved_PredicatesAgree(t *testing.T) {
 			if verdict != sVerdict {
 				t.Errorf("%s %v: subtreeLevelValue verdict %v, scalar %v", key, c.windowed, verdict, sVerdict)
 			}
-			if got, want := refusedKeys(w)[key], verdict == subtreeRefused; got != want || got != refusedKeys(s)[key] {
+			_, written, _ := subtreeLevelRead(key, c.windowed)
+			if _, sWritten, _ := subtreeLevelRead(key, c.scalar); written != sWritten {
+				t.Errorf("%s %v: written %v, scalar %v", key, c.windowed, written, sWritten)
+			}
+			if got, want := refusedKeys(w)[key], written && verdict == subtreeRefused; got != want || got != refusedKeys(s)[key] {
 				t.Errorf("%s %v: refusedKeys = %v, verdict says %v, scalar %v", key, c.windowed, got, want, refusedKeys(s)[key])
 			}
 			if got, want := levelWritesSpelling(w, key), verdict != subtreeRefused; got != want || got != levelWritesSpelling(s, key) {

@@ -323,14 +323,14 @@ const (
 )
 
 // subtreeLevelValue is applySubtreeDefaults' verdict on raw, one subtree
-// level's value of key, with the value it applies (subtreeLevelShaped). The
+// level's value of key, with the value it applies (subtreeLevelRead). The
 // one judgement of "does the overlay apply it": applySubtreeDefaults acts on
 // it, and the load's #3269 WARN words a scheduled reserved key by it
 // (SubtreeScheduledReserved).
 func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValue, subtreeLevelVerdict) {
-	value, shaped := subtreeLevelShaped(key, raw)
-	if !shaped {
-		return value, subtreeRefused
+	value, written, shaped := subtreeLevelRead(key, raw)
+	if !written || !shaped {
+		return value, subtreeRefused // or fills nothing: not applied either way
 	}
 	if !keyCanReachTheOutputPlane(cfg, key) {
 		return value, subtreeUnreachable
@@ -338,12 +338,19 @@ func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValu
 	return value, subtreeApplied
 }
 
-// subtreeLevelShaped is raw, one defaults level's value of key, as the
+// subtreeLevelRead is raw, one defaults level's value of key, as the
 // overlay reads it — servedValue's: a reserved key's time window and
-// `expires:` / `reason:` dropped, its `default` alone — and whether that
-// value is threshold-shaped, i.e. one the overlay could hand down. Every
+// `expires:` / `reason:` dropped, its `default` alone — with whether the
+// level writes the key at all (written) and whether that value is
+// threshold-shaped, i.e. one the overlay could hand down (shaped). Every
 // "does this level write key" question asks it (subtreeLevelValue,
-// refusedKeys, levelWritesSpelling).
+// refusedKeys, levelWritesSpelling, subtreeReservedKeys).
+//
+// written is false for a value that writes nothing — the level is as if it
+// did not name key: a null; a schedule with a null `default:` and no window
+// (nullSchedule, #2708); and a reserved key's schedule whose `default:` is
+// null, since its `default` alone is what is read (#3295). A `default: ""`
+// is written (an empty string, not a null), as before.
 //
 // ⛔ STRIP FIRST, THEN JUDGE (#3295). The readers of a reserved key read its
 // `default` alone (#3269), so judging the whole schedule let a window decide
@@ -353,13 +360,23 @@ func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValu
 // first, a windowed reserved key is exactly its `default` written alone at
 // the same level. A threshold key is untouched: servedValue returns it
 // whole, and its `default: ""` + windows shape still passes (#1569).
-func subtreeLevelShaped(key string, raw any) (ScheduledValue, bool) {
+func subtreeLevelRead(key string, raw any) (value ScheduledValue, written, shaped bool) {
+	if raw == nil || nullSchedule(raw) {
+		return value, false, false
+	}
 	value, ok := scheduledValueFromRaw(raw)
 	if !ok {
-		return value, false
+		return value, true, false
+	}
+	if scheduledReserved(key, value) {
+		// scheduledValueFromRaw renders a null default as "", as it does a
+		// written ""; only the raw mapping tells them apart.
+		if d, has := raw.(map[string]any)["default"]; has && d == nil {
+			return ScheduledValue{}, false, false
+		}
 	}
 	value = servedValue(key, value)
-	return value, isThresholdShaped(value)
+	return value, true, isThresholdShaped(value)
 }
 
 // chainRejections is applySubtreeDefaults' account of the subtree values it
@@ -370,17 +387,14 @@ type chainRejections struct {
 }
 
 // refusedKeys is the keys of a subtree defaults level whose value
-// applySubtreeDefaults refuses as not threshold-shaped (subtreeLevelShaped,
-// the overlay's own reading), for any tenant that
-// does not set the key itself. A null is not refused: it fills nothing. nil
-// when none.
+// applySubtreeDefaults refuses as not threshold-shaped (subtreeLevelRead,
+// the overlay's own reading), for any tenant that does not set the key
+// itself. A value that writes nothing (a null) is not refused: it fills
+// nothing. nil when none.
 func refusedKeys(level map[string]any) map[string]bool {
 	var out map[string]bool
 	for key, raw := range level {
-		if raw == nil {
-			continue
-		}
-		if _, shaped := subtreeLevelShaped(key, raw); shaped {
+		if _, written, shaped := subtreeLevelRead(key, raw); !written || shaped {
 			continue
 		}
 		if out == nil {
@@ -562,7 +576,7 @@ func needsDoubleQuote(s string) bool {
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
 // present, not null, and threshold-shaped as the overlay reads it
-// (subtreeLevelShaped) — the values this overlay would hand down. It is the
+// (subtreeLevelRead) — the values this overlay would hand down. It is the
 // one definition both planes use for "this level wrote that spelling": the
 // overlay above (a spelling the same level writes is not displaced) and the
 // walker's MergedDefaults fold (noteSpellingWriters).
@@ -575,11 +589,11 @@ func needsDoubleQuote(s string) bool {
 // deleting a tenant key whose removal moved /metrics. (#2414 round 2.)
 func levelWritesSpelling(level map[string]any, s string) bool {
 	raw, ok := level[s]
-	if !ok || raw == nil {
+	if !ok {
 		return false
 	}
-	_, shaped := subtreeLevelShaped(s, raw)
-	return shaped
+	_, written, shaped := subtreeLevelRead(s, raw)
+	return written && shaped
 }
 
 // tenantAuthoredThreshold reports whether the tenant's own map (overrides
@@ -710,7 +724,7 @@ func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
 		// neither the divergence report nor any WARN. (#1569 sweep B-1.)
 		_, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]
 		// ⚠️ NO WINDOW REACHES HERE. `ResolveStateFiltersAt` reads `Default`
-		// alone, and subtreeLevelShaped hands this gate servedValue's value —
+		// alone, and subtreeLevelRead hands this gate servedValue's value —
 		// the `default` without its windows — so a windowed `_state_` key is
 		// judged as that `default` written alone (#3295; before it, a window
 		// was refused here, #1569).
@@ -959,7 +973,9 @@ func subtreeDefaultsRefusedKey(k string) bool {
 // ⚠️ A NULL VALUE IS NOT LISTED (#2388 r1b): per the #2518 ruling a null in a
 // defaults level deletes that level's value and the next level's applies, so
 // a null reserved key writes nothing — it is treated as not written. A
-// shallower level writing the same key non-null is still listed.
+// shallower level writing the same key non-null is still listed. "Writes
+// nothing" is subtreeLevelRead's: a schedule whose `default:` is null is a
+// null too (#2708, #3295).
 //
 // ⚠️ The `_custom_alerts` (and any other guard.TopLevelReadElsewhere) key at
 // the TOP level of an unwrapped subtree file is listed here — `parsed` cannot
@@ -981,7 +997,10 @@ func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed
 				rel = filepath.ToSlash(r)
 			}
 			for key, raw := range parsed[defaultsPath] {
-				if raw == nil || !subtreeDefaultsRefusedKey(key) || IsRoutingKey(key) {
+				if !subtreeDefaultsRefusedKey(key) || IsRoutingKey(key) {
+					continue
+				}
+				if _, written, _ := subtreeLevelRead(key, raw); !written {
 					continue
 				}
 				if out == nil {
