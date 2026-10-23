@@ -1,16 +1,15 @@
 r"""A comparison baseline must never be silently replaced by an empty one.
 
-#1419. Two workflows build a BASELINE — the "before" side of a comparison —
-and hand it to a consumer that cannot tell *empty because nothing was there*
-from *empty because the command that built it failed*:
+#1419. A workflow that builds a BASELINE — the "before" side of a
+comparison — hands it to a consumer that cannot tell *empty because nothing
+was there* from *empty because the command that built it failed*:
 
-    .github/workflows/config-diff.yaml
-        `Extract base branch configs`     -> /tmp/old-conf.d/
     .github/workflows/guard-defaults-impact.yml
         `Run da-guard`                    -> steps.guard.outputs.exit
 
-(`blast-radius.yml` was a third, with its `{}` effective-config baseline,
-until #3230 retired it.)
+(`blast-radius.yml`, with its `{}` effective-config baseline, was another
+until #3230 retired it; `config-diff.yaml`, with its `/tmp/old-conf.d/`
+baseline, until #3258 retired it.)
 
 An empty baseline is not a neutral value. Against an empty conf.d baseline
 every threshold in the PR reads as newly added; and a missing
@@ -102,19 +101,13 @@ pre-fix scripts; that is what it is for, so it cannot be part of the set that
 is supposed to stay green. An earlier phrasing said "the 20 modules the grep
 finds", which reads as though the grep returned 20 including this one.
 
-The load-bearing shapes are paired with the pre-fix script text from
-`origin/main` at `64a320ff`, run through the same harness, and required to
-SWALLOW (exit 0, degraded artifact present). Without that pairing "the step
-fails when the producer fails" would also pass on a step that fails for an
-unrelated reason, and there would be no evidence the change bought any
-detection at all.
-
-⚠️ "The load-bearing shapes", not "every assertion" — an earlier draft claimed
-the latter, and blind review counted the actual ratio. The controls below cover
-the swallows that existed in the shipped scripts; the structural rules are
-controlled instead by synthetic workflows, and the two shapes that only ever
-existed as a possibility (an exit-0 tool writing nothing, a failing `ls-tree`)
-are pinned forward-only.
+The controls that ran the pre-fix script text from `origin/main` at
+`64a320ff` through the same harness belonged to `config-diff.yaml`'s baseline
+extraction, and were removed with that workflow (#3258). What remains is
+controlled two ways: each "must fail" shape has its opposite (a healthy
+producer must still exit 0, so a fix cannot degenerate into "always red"), and
+the structural rules are controlled by synthetic workflows they must accept or
+refuse.
 """
 
 from __future__ import annotations
@@ -144,7 +137,6 @@ from test_ci_aggregate_gate_contract import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG_DIFF = ROOT / ".github/workflows/config-diff.yaml"
 GUARD_DEFAULTS = ROOT / ".github/workflows/guard-defaults-impact.yml"
 
 needs_bash = pytest.mark.skipif(
@@ -170,8 +162,6 @@ EXPORTER_CONF_D = "components/threshold-exporter/config/conf.d"
 # steps have no distinctive statement to anchor on, which is why it pins
 # names. The cost here is one constant per rename, and the failure message
 # says which one.
-_S_EXTRACT_BASE = "Extract base branch configs"
-_S_RUN_CONFIG_DIFF = "Run config diff"
 _S_RUN_DA_GUARD = "Run da-guard"
 # ⛔ Per workflow, not one shared string. Measured while checking the repair
 # cost above (when blast-radius.yml spelt it the same way, until #3230):
@@ -394,10 +384,10 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 _TEMPLATE_ROOT: Path | None = None
-_TEMPLATES: dict[tuple[bool, bool], Path] = {}
+_TEMPLATES: dict[bool, Path] = {}
 
 
-def _template(conf_d: bool, base_ref: bool) -> Path:
+def _template(conf_d: bool) -> Path:
     """Build each repo shape once per process, then hand out copies.
 
     Every fixture repo costs six to nine `git` spawns, and on a Windows host
@@ -410,23 +400,22 @@ def _template(conf_d: bool, base_ref: bool) -> Path:
     if _TEMPLATE_ROOT is None:
         _TEMPLATE_ROOT = Path(tempfile.mkdtemp(prefix="ci-baseline-templates-"))
         atexit.register(shutil.rmtree, _TEMPLATE_ROOT, True)
-    key = (conf_d, base_ref)
-    if key not in _TEMPLATES:
-        dest = _TEMPLATE_ROOT / f"{int(conf_d)}{int(base_ref)}"
-        _build_repo(dest, conf_d=conf_d, base_ref=base_ref)
-        _TEMPLATES[key] = dest
-    return _TEMPLATES[key]
+    if conf_d not in _TEMPLATES:
+        dest = _TEMPLATE_ROOT / f"{int(conf_d)}"
+        _build_repo(dest, conf_d=conf_d)
+        _TEMPLATES[conf_d] = dest
+    return _TEMPLATES[conf_d]
 
 
-def _base_repo(tmp: Path, *, conf_d: bool = True, base_ref: bool = True) -> Path:
+def _base_repo(tmp: Path, *, conf_d: bool = True) -> Path:
     repo = tmp / "repo"
-    shutil.copytree(_template(conf_d, base_ref), repo)
+    shutil.copytree(_template(conf_d), repo)
     return repo
 
 
-def _build_repo(repo: Path, *, conf_d: bool, base_ref: bool) -> Path:
+def _build_repo(repo: Path, *, conf_d: bool) -> Path:
     """A repo whose `origin/main` looks like the base of a config PR."""
-    (repo / EXPORTER_CONF_D / "examples").mkdir(parents=True)
+    (repo / EXPORTER_CONF_D).mkdir(parents=True)
     _git(repo, "init", "-q", ".")
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
@@ -445,27 +434,17 @@ def _build_repo(repo: Path, *, conf_d: bool, base_ref: bool) -> Path:
                                         encoding="utf-8", newline="\n")
         (base / "db-b.yaml").write_text("tenants:\n  db-b:\n    cpu: 70\n",
                                         encoding="utf-8", newline="\n")
-        # A sub-directory: `git show <ref>:<dir>` succeeds on it and writes a
-        # tree listing, which is how a non-config file used to land in the
-        # baseline directory looking like a tenant.
-        (base / "examples" / "redis.yaml").write_text(
-            "tenants:\n  redis:\n    cpu: 60\n", encoding="utf-8", newline="\n")
     else:
         (repo / "README.md").write_text("no conf.d here\n",
                                         encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
-    if base_ref:
-        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     return repo
 
 
 _GIT_STUB = """#!/usr/bin/env bash
 # Delegates to the real git except for the one subcommand under test.
-# FAIL_GIT_SHOW_BLOB is deliberately narrower than FAIL_GIT_SHOW: the failure
-# that actually happened in CI is per-FILE (one object unreadable), and the
-# pre-fix script probed the directory with `git show` first, so failing every
-# `show` exercises the probe rather than the extraction loop.
 #
 # ⛔ Leading `-c key=value` options are skipped before deciding what the
 # subcommand is. Reading `$1` directly looked fine until the scripts grew a
@@ -477,15 +456,7 @@ args=("$@")
 i=0
 while [ "${args[$i]:-}" = "-c" ]; do i=$((i + 2)); done
 sub="${args[$i]:-}"
-subarg="${args[$((i + 1))]:-}"
 case "$sub" in
-  show)
-    [ -n "${FAIL_GIT_SHOW:-}" ] && { echo "fatal: injected" >&2; exit 128; }
-    case "$subarg" in
-      *.yaml) [ -n "${FAIL_GIT_SHOW_BLOB:-}" ] && { echo "fatal: injected" >&2; exit 128; } ;;
-    esac
-    ;;
-  ls-tree)   [ -n "${FAIL_GIT_LS_TREE:-}" ]   && { echo "fatal: injected" >&2; exit 128; } ;;
   # ⛔ Writes a PARTIAL listing before dying, because that is the shape that
   # matters. A `git diff` that fails after emitting some records leaves a file
   # that is indistinguishable from a complete one, and the redirect has already
@@ -509,247 +480,6 @@ def _git_stub_dir(tmp: Path) -> Path:
     _stub(bin_dir, "git", _GIT_STUB)
     return bin_dir
 
-
-# ══ config-diff.yaml — `Extract base branch configs` ═══════════════════════
-
-
-def _extract_script(tmp: Path) -> tuple[Step, str]:
-    step = _step(CONFIG_DIFF, _S_EXTRACT_BASE)
-    script = _render(_sandbox(step.script, tmp), {"github.base_ref": "main"})
-    return step, script
-
-
-def _extract_env(tmp: Path) -> dict[str, str]:
-    return {
-        "BASE_REF": "main",
-        "REAL_GIT": shutil.which("git") or "git",
-        # The step publishes its blind-spot disclosure here. Under `set -u` an
-        # unset GITHUB_OUTPUT aborts the step, which is how the harness noticed
-        # the new write in the first place.
-        "GITHUB_OUTPUT": str((tmp / "gh-output").as_posix()),
-    }
-
-
-@needs_bash
-def test_config_diff_baseline_is_complete_on_a_healthy_base(tmp_path) -> None:
-    """Positive control: the tolerant paths must not have become 'always red'."""
-    repo = _base_repo(tmp_path)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-
-    assert proc.returncode == 0, proc.stderr
-    landed = sorted(p.name for p in (tmp_path / "old-conf.d").iterdir())
-    assert landed == ["_defaults.yaml", "db-a.yaml", "db-b.yaml"], landed
-    assert (tmp_path / "old-conf.d" / "db-a.yaml").read_text(
-        encoding="utf-8") == "tenants:\n  db-a:\n    cpu: 90\n"
-    # The sub-directory must not be materialised: the consumer reads conf.d/
-    # flat, and `git show <ref>:<dir>` writes a tree listing that would sit in
-    # the baseline looking like a config.
-    assert not (tmp_path / "old-conf.d" / "examples").exists()
-
-
-@needs_bash
-@pytest.mark.parametrize("injection", ["FAIL_GIT_SHOW_BLOB", "FAIL_GIT_SHOW"])
-def test_config_diff_baseline_fails_when_git_show_fails(
-        tmp_path, injection: str) -> None:
-    repo = _base_repo(tmp_path)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_extract_env(tmp_path), injection: "1"},
-                _git_stub_dir(tmp_path))
-
-    assert proc.returncode != 0, (
-        "a failed `git show` left the baseline short and the step still "
-        f"succeeded:\n{proc.stdout}\n{proc.stderr}")
-    # And nothing half-written may be left standing in for a real config: an
-    # empty file is read back as a tenant with zero thresholds, so every
-    # threshold in the PR would be reported as newly added.
-    stray = [p for p in (tmp_path / "old-conf.d").glob("*") if p.stat().st_size == 0]
-    assert not stray, f"zero-byte files left in the baseline: {stray}"
-
-
-@needs_bash
-def test_config_diff_baseline_fails_when_the_tree_listing_fails(tmp_path) -> None:
-    repo = _base_repo(tmp_path)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo,
-                {**_extract_env(tmp_path), "FAIL_GIT_LS_TREE": "1"},
-                _git_stub_dir(tmp_path))
-    assert proc.returncode != 0, f"{proc.stdout}\n{proc.stderr}"
-
-
-@needs_bash
-def test_config_diff_baseline_fails_when_the_base_ref_is_missing(tmp_path) -> None:
-    """A shallow clone: every git call below would fail, so none may be read
-    as 'the base simply had no conf.d/'."""
-    repo = _base_repo(tmp_path, base_ref=False)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode != 0, f"{proc.stdout}\n{proc.stderr}"
-    assert "fetch-depth" in (proc.stdout + proc.stderr), (
-        "the failure must name the fix; a bare non-zero exit sends the reader "
-        "looking in the wrong place")
-
-
-@needs_bash
-def test_config_diff_accepts_a_base_that_has_no_confd(tmp_path) -> None:
-    """⚠️ MUST stay tolerant: an empty baseline is correct here."""
-    repo = _base_repo(tmp_path, conf_d=False)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert not any((tmp_path / "old-conf.d").iterdir())
-
-
-@needs_bash
-@pytest.mark.skipif(os.name == "nt",
-                    reason="POSIX file modes; the runner is Linux")
-def test_the_extracted_baseline_is_readable_by_the_consuming_container(
-        tmp_path) -> None:
-    """The baseline is mounted into an image that runs as a DIFFERENT uid.
-
-    ⛔ `mktemp` creates 0600 and `mv` preserves it, so promoting through a
-    scratch file quietly made every baseline config unreadable to
-    `ghcr.io/vencil/da-tools` (uid 10001,
-    `components/da-tools/app/Dockerfile:73-75`). The tool then dies with
-    PermissionError → exit 1, which this workflow cannot distinguish from
-    "changes detected" → empty report → `has_changes` unset → no comment →
-    green. A silent green, created by the fix for silent greens, on every
-    conf.d PR.
-
-    ⚠️ This test is why it is checked on POSIX only: a Windows dev host's
-    `mktemp` already yields 0644, so the whole class is invisible there —
-    which is exactly how it got written.
-    """
-    repo = _base_repo(tmp_path)
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-
-    extracted = sorted(p for p in (tmp_path / "old-conf.d").iterdir() if p.is_file())
-    assert extracted, "nothing was extracted, so this proves nothing"
-    unreadable = [p.name for p in extracted if not (p.stat().st_mode & 0o044)]
-    assert not unreadable, (
-        f"baseline files are not readable by other users: {unreadable}. The "
-        f"consuming container runs as uid 10001 and will fail to open them.")
-
-
-@needs_bash
-def test_config_diff_baseline_skips_entries_that_are_not_regular_files(
-        tmp_path) -> None:
-    """Same hardening as blast-radius.yml had (retired, #3230), which had a
-    test while this did not.
-
-    Matching on `blob` alone accepts mode 120000, whose "content" is the
-    symlink TARGET PATH. That lands in the baseline as a non-mapping document,
-    the tenant drops out of it, and every one of its thresholds reports as
-    newly added — a confidently wrong report, with nothing failing.
-    """
-    repo = _base_repo(tmp_path)
-    _git(repo, "update-index", "--add", "--cacheinfo",
-         f"120000,{_blob(repo, '../../../../etc/passwd')},"
-         f"{EXPORTER_CONF_D}/link.yaml")
-    _git(repo, "commit", "-qm", "symlink in conf.d")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert not (tmp_path / "old-conf.d" / "link.yaml").exists(), (
-        "a symlink entry was materialised into the baseline as a regular file")
-
-
-@needs_bash
-def test_config_diff_names_a_nested_inherited_file_as_both_blind_spots(
-        tmp_path) -> None:
-    """`team-x/_defaults.yaml` is inherited AND nested.
-
-    A single first-match `case` counted it only as a sub-directory, so the
-    inherited half — the one that makes every tenant under it read as
-    unchanged — was never named.
-    """
-    repo = _base_repo(tmp_path)
-    shutil.rmtree(repo / EXPORTER_CONF_D / "examples")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base: flat conf.d")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    (repo / EXPORTER_CONF_D / "team-x").mkdir()
-    (repo / EXPORTER_CONF_D / "team-x" / "_defaults.yaml").write_text(
-        "defaults:\n  cpu: 1\n", encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "PR adds a nested inherited file")
-
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    published = (tmp_path / "gh-output").read_text(encoding="utf-8")
-    assert "inherited file" in published, published
-    assert "sub-directories" in published, published
-
-
-@needs_bash
-def test_config_diff_declares_what_it_cannot_compare(tmp_path) -> None:
-    """"No changes detected." must not be the whole story.
-
-    `config-diff` reads conf.d FLAT and skips `_`-prefixed files, so a change to
-    `_defaults.yaml` — inherited by every tenant — or a tenant in a
-    sub-directory produces a confident "no changes". No command fails; the
-    report simply answers a question the tool never asked.
-
-    ⚠️ The disclosure is emitted by the WORKFLOW rather than by
-    `config_diff.py`, because the step runs a pinned published image and no
-    released `tools/v*` tag contains `_lib_confd.warn_nested` (added in
-    PR #1343; conf.d family #1911). Fixing repo source would not reach CI.
-    """
-    repo = _base_repo(tmp_path)
-    # ⛔ Flatten the BASE REF first, before anything the PR is supposed to own.
-    # Two things had to be measured here, and both were wrong on the first try:
-    # deleting `examples/` from HEAD alone leaves `origin/main` pointing at the
-    # template commit that still has it (a base-scoped implementation reads the
-    # REF), and doing this after the `_defaults.yaml` write folds that edit into
-    # the base so the inherited-file arm stops firing.
-    shutil.rmtree(repo / EXPORTER_CONF_D / "examples")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base: flat conf.d")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    (repo / EXPORTER_CONF_D / "_defaults.yaml").write_text(
-        "tenants: {}\n", encoding="utf-8", newline="\n")
-    # ⛔ The PR must ADD the nested file. An earlier version leaned on the
-    # fixture's base-resident `examples/redis.yaml`, so this assertion passed
-    # off something the PR never touched — the same base-scoped mistake the
-    # disclosure itself had, which meant the test was pinning it in place.
-    (repo / EXPORTER_CONF_D / "team-x").mkdir()
-    (repo / EXPORTER_CONF_D / "team-x" / "db-z.yaml").write_text(
-        "tenants:\n  db-z:\n    cpu: 1\n", encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "PR edits inherited defaults, adds a nested tenant")
-
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-
-    published = (tmp_path / "gh-output").read_text(encoding="utf-8")
-    assert "blind_spots" in published, (
-        f"the step said nothing about the inherited file it cannot read:\n"
-        f"{proc.stdout}\n{published}")
-    # ⛔ The COUNTS, not the filename. `_defaults.yaml` is a hardcoded
-    # `(e.g. …)` inside the disclosure, so `assert "_defaults.yaml" in
-    # published` fired for ANY inherited file while reading as though the tool
-    # had identified this PR's — the sibling test below deliberately asserts
-    # only category words for exactly that reason. `$inherited` and `$nested`
-    # ARE derived from the change list, so breaking the counting is what should
-    # turn this red. This fixture changes one file of each kind.
-    assert "1 `_`-prefixed inherited file(s)" in published, published
-    assert "1 file(s) in sub-directories" in published, published
-
-
-def _blob(repo: Path, content: str) -> str:
-    return subprocess.run(
-        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content,
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=120, check=True).stdout.strip()
 
 
 # ══ guard-defaults-impact.yml — the verdict step ═══════════════════════════
@@ -992,58 +722,9 @@ def test_the_verdict_step_treats_an_absent_exit_code_as_a_failure(
 # ══ negative controls ══════════════════════════════════════════════════════
 #
 # Everything above would also pass on a harness that cannot tell the two
-# outcomes apart. These run the PRE-FIX text of the same steps — quoted from
-# `origin/main` at 64a320ff — through the same harness and require it to
-# report the swallow. They are historical fixtures on purpose: their job is to
-# prove this module discriminates, not to track the workflows.
-
-_PRE_FIX_EXTRACT = """\
-mkdir -p /tmp/old-conf.d
-git show "origin/$BASE_REF:components/threshold-exporter/config/conf.d/" > /dev/null 2>&1 || exit 0
-for f in $(git ls-tree --name-only "origin/$BASE_REF" components/threshold-exporter/config/conf.d/); do
-  fname=$(basename "$f")
-  git show "origin/$BASE_REF:$f" > "/tmp/old-conf.d/$fname" 2>/dev/null || true
-done
-"""
-
-
-@needs_bash
-def test_control_the_pre_fix_extraction_left_zero_byte_configs(tmp_path) -> None:
-    """`> "$dest"` created the file before git ran, `|| true` hid the error."""
-    repo = _base_repo(tmp_path)
-    step = _step(CONFIG_DIFF, _S_EXTRACT_BASE)
-    old = (tmp_path / "old-conf.d").as_posix()
-    script = _sandbox(_PRE_FIX_EXTRACT, tmp_path)
-    proc = _run(step, script, repo,
-                {**_extract_env(tmp_path), "FAIL_GIT_SHOW_BLOB": "1"},
-                _git_stub_dir(tmp_path))
-
-    assert proc.returncode == 0, (
-        "the pre-fix control did not reproduce the swallow, so the assertions "
-        f"above prove nothing:\n{proc.stdout}\n{proc.stderr}")
-    zero_byte = sorted(p.name for p in Path(old).glob("*") if p.stat().st_size == 0)
-    assert zero_byte == ["_defaults.yaml", "db-a.yaml", "db-b.yaml"], (
-        f"the control must show every tenant config reduced to zero bytes; "
-        f"got {zero_byte}")
-
-
-@needs_bash
-def test_control_the_pre_fix_probe_collapsed_git_failure_into_no_confd(
-        tmp_path) -> None:
-    """`git show <dir> ... || exit 0` read "git is broken" as "the base had no
-    conf.d/", and an empty baseline makes every tenant look brand new."""
-    repo = _base_repo(tmp_path)
-    step = _step(CONFIG_DIFF, _S_EXTRACT_BASE)
-    old = (tmp_path / "old-conf.d").as_posix()
-    script = _sandbox(_PRE_FIX_EXTRACT, tmp_path)
-    proc = _run(step, script, repo,
-                {**_extract_env(tmp_path), "FAIL_GIT_SHOW": "1"},
-                _git_stub_dir(tmp_path))
-
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert not list(Path(old).glob("*")), (
-        "the control must show the empty baseline the probe's `exit 0` left "
-        "behind on a base branch that really did have three configs")
+# outcomes apart. The pre-fix-text controls that used to open this section ran
+# `config-diff.yaml`'s old extraction and went with that workflow (#3258); the
+# ones below feed the structural rules synthetic workflows.
 
 
 @needs_bash
@@ -1209,7 +890,7 @@ def test_control_the_detect_step_lookup_refuses_a_file_it_has_no_name_for(
     another file's spelling — left the module green.
     """
     with pytest.raises(AssertionError, match="no entry in `_S_DETECT`"):
-        _detect_step(CONFIG_DIFF)
+        _detect_step(ROOT / ".github/workflows/config-diff-advisory.yml")
 
 
 # ⚠️ DISCLOSED, once, for every `parametrize` control in this file: emptying a
@@ -1619,8 +1300,6 @@ def test_da_guard_exit_4_counts_only_beside_the_generator_run(tmp_path, generato
 
 @needs_bash
 @pytest.mark.parametrize("injection, subcommand", [
-    ("FAIL_GIT_LS_TREE", "ls-tree"),
-    ("FAIL_GIT_SHOW", "show"),
     # ⛔ Born in the same edit as the `diff` arm itself. A stub arm with no
     # control of its own is how this module already lost an injector once —
     # it kept being passed and kept injecting nothing.
@@ -1637,8 +1316,7 @@ def test_control_the_git_stub_still_injects_behind_a_dash_c_option(
     """
     repo = _base_repo(tmp_path, conf_d=False)
     bin_dir = _git_stub_dir(tmp_path)
-    target = {"ls-tree": "HEAD", "show": "HEAD:README.md",
-              "diff": "--name-only HEAD"}[subcommand]
+    target = {"diff": "--name-only HEAD"}[subcommand]
     probe = tmp_path / "probe.sh"
     probe.write_text(
         f'git -c core.quotePath=false {subcommand} {target} >/dev/null\n',
@@ -1764,7 +1442,7 @@ def test_control_the_scope_helper_detector_separates_running_from_naming(
 
 def test_control_the_step_locator_is_fail_closed() -> None:
     with pytest.raises(AssertionError, match="exactly one step named"):
-        _step(CONFIG_DIFF, "a step that does not exist")
+        _step(GUARD_DEFAULTS, "a step that does not exist")
 
 
 def test_control_the_expression_renderer_is_fail_closed() -> None:
@@ -1811,40 +1489,6 @@ def test_control_the_sandbox_is_fail_closed_on_an_assembled_path(tmp_path, scrip
 
 # ── the producer and the consumer must agree on where the baseline is ──────
 
-@pytest.mark.parametrize("workflow, producer_name, consumer_name", [
-    (CONFIG_DIFF, _S_EXTRACT_BASE, _S_RUN_CONFIG_DIFF),
-], ids=["config-diff"])
-def test_the_baseline_the_producer_writes_is_the_one_the_consumer_reads(
-        workflow: Path, producer_name: str, consumer_name: str) -> None:
-    """A producer/consumer split is invisible to every behavioural test above.
-
-    The harness sandboxes both ends into one directory, so a run where the
-    producer writes A and the consumer reads B would still be green there.
-    This is the assertion that says they are one artifact.
-
-    ⛔ Compared as artifact NAMES, not as literal paths. Pinning
-    `"/tmp/base-effective.json"` made an ordinary portability edit — moving to
-    `$RUNNER_TEMP`, which the third workflow in this same PR already uses —
-    red here as well as across this module's behavioural tests, and the
-    message named the constant nowhere.
-
-    ⚠️ What this does NOT catch, stated rather than left to be discovered: if
-    the producer names two artifacts and only one of them moves, the
-    intersection can stay non-empty. There is no shape that answers "which of
-    these paths is THE output" without re-implementing each tool's argv, so the
-    behavioural tests above — which run the step and read the file — are what
-    covers that; this one covers the split.
-    """
-    produced = _artifact_names(_step(workflow, producer_name).script)
-    consumed = _artifact_names(_step(workflow, consumer_name).script)
-    assert produced, (
-        f"{producer_name} names no scratch artifact at all, so this assertion "
-        f"would be comparing two empty sets and passing")
-    assert produced & consumed, (
-        f"{producer_name} writes {sorted(produced)} and {consumer_name} reads "
-        f"{sorted(consumed)} — they no longer share an artifact, so the "
-        f"consumer is reading something this workflow never wrote. Either end "
-        f"may be renamed; both ends have to move together")
 
 
 # ── hardening added after this module was written ──────────────────────────
@@ -1859,55 +1503,6 @@ def test_the_baseline_the_producer_writes_is_the_one_the_consumer_reads(
 # report bodies, and for the blast-radius upload condition.
 
 
-@needs_bash
-@pytest.mark.parametrize("rc, body, must_fail", [
-    # Both accepted exit codes, with nothing written. rc=1 is the live one:
-    # the pinned image tracebacks with rc=1 on malformed YAML, and rc=1 is
-    # also "changes detected", so the exit code cannot separate them.
-    ("0", "", True),
-    ("1", "", True),
-    # …and the same two codes WITH a report must stay green, or the check is
-    # just a way to make every run red.
-    ("0", "# Config Diff Report\n\nNo changes detected.\n", False),
-    ("1", "# Config Diff Report\n\n- db-a: mysql_connections 70 -> 35\n", False),
-    # Control that the harness can see a failure at all: the pre-existing
-    # `rc > 1` branch, which is not what this test is about.
-    ("2", "irrelevant\n", True),
-], ids=["rc0-empty", "rc1-empty", "rc0-report", "rc1-report", "rc2-control"])
-def test_config_diff_fails_when_an_accepted_rc_wrote_no_report(
-        tmp_path, rc: str, body: str, must_fail: bool) -> None:
-    """An accepted exit code with an empty report is not "no changes".
-
-    "The comparison produced nothing" and "the comparison found nothing" reach
-    the reviewer as the same green check with no comment, which is this
-    workflow's own defect class.
-    """
-    step = _step(CONFIG_DIFF, _S_RUN_CONFIG_DIFF)
-    script = _render(_sandbox(step.script, tmp_path),
-                     {"github.workspace": str(tmp_path.as_posix())})
-    report = tmp_path / "diff-report.md"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    # The step redirects the tool's stdout into the report, so the stub only
-    # has to print and pick an exit code — no knowledge of docker's argv.
-    _stub(bin_dir, "docker",
-          '#!/usr/bin/env bash\nprintf "%s" "$FAKE_BODY"\nexit "$FAKE_RC"\n')
-    out = tmp_path / "gh-output"
-    proc = _run(step, script, tmp_path, {
-        "GITHUB_OUTPUT": str(out.as_posix()),
-        "FAKE_RC": rc,
-        "FAKE_BODY": body,
-    }, bin_dir)
-    assert (proc.returncode != 0) is must_fail, (
-        f"rc={rc} body={body!r} -> step rc={proc.returncode}\n"
-        f"{proc.stdout}\n{proc.stderr}")
-    published = out.read_text(encoding="utf-8") if out.exists() else ""
-    if must_fail:
-        assert "has_changes=true" not in published, (
-            "the step failed but still told the comment step there is a report")
-    else:
-        assert "has_changes=true" in published, (
-            f"a real report did not reach the comment step: {published!r}")
 
 
 @needs_bash
@@ -2048,106 +1643,10 @@ def test_the_override_error_shows_both_the_raw_and_the_trimmed_value(
         f"the annotation does not show what it actually tried:\n{proc.stdout}")
 
 
-@needs_bash
-def test_the_blind_spot_disclosure_survives_a_base_with_no_confd(
-        tmp_path) -> None:
-    """The bootstrap PR is the one that needs the disclosure most.
-
-    A PR that CREATES the first `conf.d/` adds an inherited `_defaults.yaml`
-    every future tenant picks up, and `config-diff` cannot read it. The step
-    short-circuited before the disclosure block whenever the base had no tree,
-    so this shape got a green run and a posted comment reading "No changes
-    detected." with nothing said about what was not compared.
-
-    ⚠️ The sibling shape (first nested tenant against a flat base) already had
-    a test; the early exit above it did not. Removing the exit is the fix, and
-    this is the assertion that stops it coming back as an optimisation.
-    """
-    repo = _base_repo(tmp_path, conf_d=False)
-    base = repo / EXPORTER_CONF_D
-    (base / "_defaults.yaml").write_text("defaults:\n  cpu: 80\n",
-                                         encoding="utf-8", newline="\n")
-    (base / "team-x").mkdir(parents=True, exist_ok=True)
-    (base / "team-x" / "db-z.yaml").write_text(
-        "tenants:\n  db-z:\n    cpu: 1\n", encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "PR creates the first conf.d")
-
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    published = (tmp_path / "gh-output").read_text(encoding="utf-8")
-    assert "blind_spots" in published, (
-        f"a PR that created conf.d/ from nothing was told nothing about the "
-        f"inherited defaults and nested tenant it just added:\n"
-        f"{proc.stdout}\n{published}")
-    assert "_defaults.yaml" in published, published
-    assert "sub-directories" in published, published
 
 
-@needs_bash
-def test_a_pr_with_no_merge_base_says_unknown_rather_than_failing(
-        tmp_path) -> None:
-    """Branch topology is not a broken git, and must not be answered with red.
-
-    A PR whose branch shares no history with the base (orphan branch, or a
-    re-imported repo) makes `git diff A...B` exit 128. Removing the early
-    `exit 0` above dropped that shape into the disclosure block, turning a
-    previously-green run red — for which the cheapest fix is to put the early
-    exit back, i.e. revert the change that made the disclosure reachable at all.
-
-    ⛔ The other direction matters as much: it must not go SILENT. "Could not
-    compute the disclosure" and "nothing to disclose" are different answers and
-    the comment has to carry which one it is.
-    """
-    repo = _base_repo(tmp_path, conf_d=False)
-    _git(repo, "checkout", "-q", "--orphan", "pr-branch")
-    base = repo / EXPORTER_CONF_D
-    base.mkdir(parents=True, exist_ok=True)
-    (base / "_defaults.yaml").write_text("defaults:\n  cpu: 80\n",
-                                         encoding="utf-8", newline="\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "unrelated history")
-
-    step, script = _extract_script(tmp_path)
-    proc = _run(step, script, repo, _extract_env(tmp_path))
-    assert proc.returncode == 0, (
-        f"a PR with no merge base turned the step red:\n"
-        f"{proc.stdout}\n{proc.stderr}")
-    published = (tmp_path / "gh-output").read_text(encoding="utf-8")
-    assert "blind_spots" in published, (
-        f"the disclosure went silent instead of saying it could not be "
-        f"computed:\n{proc.stdout}\n{published}")
-    assert "no history" in published, published
 
 
-@needs_bash
-def test_a_broken_merge_base_is_not_reported_as_branch_topology(
-        tmp_path) -> None:
-    """⛔ rc=128 is "I cannot answer", not "no common ancestor".
-
-    The probe that keeps an orphan-branch PR green was first written as
-    `! git merge-base … 2>&1`, which reads both exit codes as the same answer
-    and throws the `fatal:` away. On a HEALTHY PR whose git is broken, that
-    published a claim about the branch's history — in the comment body, to the
-    reviewer — that it had not established. Same shape as the `|| true`
-    wrappers condemned at the top of that same block.
-    """
-    repo = _base_repo(tmp_path)                    # genuinely shares history
-    step, script = _extract_script(tmp_path)
-    env = dict(_extract_env(tmp_path))
-    env["FAIL_GIT_MERGE_BASE"] = "1"
-    proc = _run(step, script, repo, env, _git_stub_dir(tmp_path))
-    published = (tmp_path / "gh-output").read_text(encoding="utf-8") \
-        if (tmp_path / "gh-output").exists() else ""
-    assert proc.returncode != 0, (
-        f"a broken `git merge-base` was accepted as an answer:\n"
-        f"{proc.stdout}\n{proc.stderr}")
-    assert "no history" not in published, (
-        f"the reviewer was told this branch shares no history, which git never "
-        f"said:\n{published}")
-    assert "merge-base exited" in proc.stdout, (
-        f"the failure was not attributed to merge-base:\n{proc.stdout}")
 
 
 _HELPER_MARKER = "STUB-SAW-INPUT"
@@ -2387,8 +1886,9 @@ def test_the_guard_refuses_a_truncated_change_listing(tmp_path) -> None:
     """⛔ The redirect creates the file, so a partial listing looks complete.
 
     This step ran `git diff` bare under `set -euo pipefail` while the comment
-    at the top of the block claimed it was "the same as config-diff.yaml",
-    which wraps its own listing in `set +e` / `rc=$?` / `::error::`. The gap
+    at the top of the block claimed it was "the same as config-diff.yaml"
+    (retired, #3258), which wrapped its own listing in `set +e` / `rc=$?` /
+    `::error::`. The gap
     is not the bare death — it is that a `git diff` dying after some records
     leaves a TRUNCATED `changed-defaults.txt` that the next step resolves
     scopes from: fewer trees validated, no annotation, and a comment that
@@ -3421,10 +2921,8 @@ def _shell_commands(workflow: Path) -> list[str]:
 _DISPLAY_ONLY_LISTINGS: set[str] = set()
 
 
-@pytest.mark.parametrize("workflow", [CONFIG_DIFF, GUARD_DEFAULTS],
-                         ids=["config-diff", "guard-defaults"])
-def test_no_path_listing_lets_git_encode_the_paths(workflow: Path):
-    """⛔ EVERY path listing in both files, exemptions named one by one.
+def test_no_path_listing_lets_git_encode_the_paths():
+    """⛔ EVERY path listing in the file, exemptions named one by one.
 
     git encodes non-ASCII paths unless given `-z`, and the readers here split
     on the raw bytes — measured on the scope helper, that yields a target on a
@@ -3440,18 +2938,18 @@ def test_no_path_listing_lets_git_encode_the_paths(workflow: Path):
     was unchanged — measured, and the resulting non-compliance was caught by
     unrelated behavioural tests rather than by the rule claiming to cover it.
     There is no shape that answers "is this output parsed?"; the closed thing
-    is the SET of listings in three files, so that is what this pins.
+    is the SET of listings in the file, so that is what this pins.
     """
-    listings = [ln for ln in _shell_commands(workflow) if _lists_paths(ln)]
+    listings = [ln for ln in _shell_commands(GUARD_DEFAULTS) if _lists_paths(ln)]
     assert listings, (
-        f"{workflow.name}: no path listing was discovered — either the reader "
+        f"{GUARD_DEFAULTS.name}: no path listing was discovered — either the reader "
         f"broke or the file stopped listing paths; both leave this rule "
         f"asserting nothing")
     for line in listings:
         if line in _DISPLAY_ONLY_LISTINGS:
             continue
         assert " -z " in f" {line} ", (
-            f"{workflow.name}: without -z git C-quotes non-ASCII names, and "
+            f"{GUARD_DEFAULTS.name}: without -z git C-quotes non-ASCII names, and "
             f"every consumer here splits on the raw bytes. If this listing is "
             f"genuinely display-only, add it to _DISPLAY_ONLY_LISTINGS with the "
             f"measurement that justifies it — do not widen the rule: {line!r}")
@@ -3470,7 +2968,7 @@ def test_no_path_listing_lets_git_encode_the_paths(workflow: Path):
         # instruction attached, so the missing half is asserted here rather
         # than added to the prose.
         assert not re.search(r"=\s*\$\(\s*(?:\S*/)?git\b", line), (
-            f"{workflow.name}: this listing passes `-z` and captures the "
+            f"{GUARD_DEFAULTS.name}: this listing passes `-z` and captures the "
             f"result with `$( )`. Bash drops NUL bytes from a command "
             f"substitution, so every path arrives concatenated into one "
             f"string. Route it through a file instead — `git diff -z … > "
@@ -3488,8 +2986,7 @@ def test_control_the_display_only_exemption_is_not_stale():
     cheaper-but-worse repair is how a guard gets disarmed by someone doing what
     it told them.
     """
-    live = {ln for wf in (CONFIG_DIFF, GUARD_DEFAULTS)
-            for ln in _shell_commands(wf)}
+    live = set(_shell_commands(GUARD_DEFAULTS))
     assert _DISPLAY_ONLY_LISTINGS <= live, (
         f"exempted listing(s) no longer exist verbatim: "
         f"{sorted(_DISPLAY_ONLY_LISTINGS - live)}.\n"

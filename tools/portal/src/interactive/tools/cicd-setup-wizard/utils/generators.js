@@ -539,8 +539,8 @@ ${_CICD_GH_POLICY_PRELUDE}
     # in that tree took the blast-radius comment away from EVERY config pull
     # request in the repository until somebody fixed it, and what reviewers
     # saw meanwhile was the previous run's report, which looks current.
-    # This platform's own config-diff.yaml computes its blast radius with no
-    # \`needs:\` at all, for the same reason.
+    # This platform's own config-diff-advisory.yml computes its report with
+    # no \`needs:\` at all, for the same reason.
     # ⚠️ This is not "validation no longer gates anything": \`apply\` still
     # needs \`validate\`, and that is the edge that protects the cluster.
     runs-on: ubuntu-latest
@@ -635,7 +635,7 @@ ${_CICD_GH_POLICY_PRELUDE}
         env:
           # Passed through env rather than interpolated into the script, so
           # the expression cannot become shell syntax. Same shape as this
-          # platform's config-diff.yaml.
+          # platform's config-diff-advisory.yml.
           BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
           # Two DIFFERENT conditions used to collapse into a single

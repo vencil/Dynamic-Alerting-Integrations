@@ -160,7 +160,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "diag_pr_ci.py": _R_DX,
     "doc_coverage.py": _R_DX,
     "gen_agent_adapters.py": _R_DX,
-    "gen_recipe_status_json.py": _R_DX,
+    "gen_recipe_contract.py": _R_DX,
     "gen_tenant_id_json.py": _R_DX,
     "gen_am_duration_json.py": _R_DX,
     "generate_alert_reference.py": _R_DX,

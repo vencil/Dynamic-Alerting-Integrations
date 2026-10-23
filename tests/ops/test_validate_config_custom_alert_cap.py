@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-import re
+import json
 from pathlib import Path
 
 import pytest
@@ -46,10 +46,10 @@ def _tree(root: Path, files: dict[str, str]) -> str:
 
 
 def test_the_cap_is_the_write_checks():
-    """Python 與 Go 的上限是同一個數字：tenant-api 寫入檢查與這一列一致。"""
-    go = (_REPO / "components/threshold-exporter/app/pkg/config/custom_alert.go").read_text(encoding="utf-8")
-    m = re.search(r"^const MaxCustomRecipesDefault = (\d+)$", go, re.M)
-    assert m and int(m.group(1)) == MAX_CUSTOM_RECIPES
+    """Python 與 Go 的上限是同一個數字：兩邊都取 recipe 契約檔的 custom_alert_cap。"""
+    path = _REPO / "components/threshold-exporter/app/pkg/config/recipe_contract.json"
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    assert contract["custom_alert_cap"] == MAX_CUSTOM_RECIPES
 
 
 @pytest.mark.parametrize("recipes, status, rows", [

@@ -1,5 +1,5 @@
 {
-  "_generated": "GENERATED from scripts/tools/dx/custom_alerts/shape.py RECIPE_STATUS by gen_recipe_status_json.py \u2014 DO NOT EDIT. Run `make recipe-status-json`.",
+  "_generated": "GENERATED from components/threshold-exporter/app/pkg/config/recipe_contract.json by scripts/tools/dx/gen_recipe_contract.py --update — DO NOT EDIT.",
   "statuses": {
     "absence": "active",
     "forecast": "active",

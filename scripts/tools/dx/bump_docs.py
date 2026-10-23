@@ -316,8 +316,7 @@ def _build_tools_rules():
     # derived from the VERSION file this same rule set bumps. Without this rule
     # the release bump moves the generator and leaves the matrix behind, and
     # the nightly matrix-drift guard goes red on the release PR.
-    for f in [".github/workflows/config-diff.yaml",
-              ".github/workflows/nightly-image-scan.yaml",
+    for f in [".github/workflows/nightly-image-scan.yaml",
               "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
               "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
         rules.append({

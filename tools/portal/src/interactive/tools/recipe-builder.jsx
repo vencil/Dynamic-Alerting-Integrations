@@ -14,6 +14,9 @@ import {
   formSupported,
   isValidName,
   isValidMetric,
+  opOptions,
+  opFor,
+  forecastFloorError,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
@@ -39,8 +42,8 @@ const t = window.__t || ((zh, en) => en);
  * The recipe/validation/YAML engine (status, field model, per-field +
  * whole-recipe validation, plain-English summary, RecipeObject + YAML
  * snippet) lives in ./recipe-builder/engine.js — imported above and unit
- * tested directly. All enums derive from recipe-enums.json (schema-
- * extracted; a Vitest drift-guard keeps it honest) — NO hardcoded enums.
+ * tested directly. All enums derive from recipe-enums.json (generated from
+ * the exporter's recipe contract, #3229) — NO hardcoded enums.
  * ─────────────────────────────────────────────────────────────────── */
 
 /* ── default live S6a fetcher (overridable for tests / tenant-manager) ─ */
@@ -374,7 +377,7 @@ export default function RecipeBuilder(props) {
   const [recipe, setRecipe] = useState((initialValue && initialValue.recipe) || 'threshold');
   const [f, setF] = useState(() => ({
     name: '', metric: '', denominator_metric: '', capacity_metric: '',
-    op: ENUMS.opDefault, window: '5m', horizon: '4h', quantile: '0.99',
+    op: ENUMS.opDefault, window: '5m', horizon: '4h', quantile: ENUMS.quantileDefault,
     threshold: '', severity: ENUMS.severityDefault,
     mode: ENUMS.modeDefault, for: ENUMS.forDefault,
     ...(initialValue || {}),
@@ -431,7 +434,7 @@ export default function RecipeBuilder(props) {
 
   function renderField(field) {
     if (['op', 'severity', 'mode', 'for', 'horizon'].includes(field)) {
-      return select(field, LABELS[field], ENUMS[field === 'severity' ? 'severity' : field]);
+      return select(field, LABELS[field], field === 'op' ? opOptions(recipe) : ENUMS[field]);
     }
     if (METRIC_FIELDS.includes(field)) {
       return (
@@ -456,7 +459,11 @@ export default function RecipeBuilder(props) {
       <div className="mb-3">
         <label className={labelClass}>{t('Recipe 類型', 'Recipe type')}</label>
         <select className={inputClass} value={recipe} aria-label="recipe" data-testid="field-recipe"
-          onChange={(e) => setRecipe(e.target.value)}>
+          onChange={(e) => {
+            const next = e.target.value;
+            setRecipe(next);
+            setF((prev) => ({ ...prev, op: opFor(next, prev.op) }));
+          }}>
           {ENUMS.recipe.map((r) => {
             const st = recipeStatus(r);
             // An eol recipe can't be picked for a NEW alert; an existing instance
@@ -503,12 +510,17 @@ export default function RecipeBuilder(props) {
               onChange={(e) => set('name', e.target.value)} placeholder="queue_depth_high" />
             {f.name && !isValidName(f.name) && (
               <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]">
-                {t('名稱須符合 ^[a-z][a-z0-9_]*$', 'name must match ^[a-z][a-z0-9_]*$')}
+                {t(`名稱須符合 ${ENUMS.patterns.name}`, `name must match ${ENUMS.patterns.name}`)}
               </p>
             )}
           </div>
 
           {fields.map((field) => renderField(field))}
+          {forecastFloorError(recipe, f) && (
+            <p className="text-xs mt-1 pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error-text)]" data-testid="forecast-floor-error">
+              {forecastFloorError(recipe, f)}
+            </p>
+          )}
 
           {/* plain-English summary state machine */}
           <div className="my-4 p-3 rounded-md bg-[color:var(--da-color-accent-soft)]" data-testid="summary">

@@ -1519,7 +1519,7 @@ VAR_PREFIX = re.compile(r"^\$\{?(?:GITHUB_WORKSPACE|CI_PROJECT_DIR)\}?/")
 # ⛔ The same root has a THIRD spelling, and an earlier version of the comment
 # above claimed the two env vars were "the ones that actually denote the
 # checkout" — false: `${{ github.workspace }}` is the GitHub-expression form and
-# this repo's workflows use it (e.g. config-diff.yaml). It cannot
+# this repo's workflows use it (e.g. bench-record.yaml). It cannot
 # be handled by VAR_PREFIX, because `${{ github.workspace }}/x` contains spaces:
 # tokenising splits it into `${{`, `github.workspace`, `}}/x`, the interpreter
 # branch takes `${{` as the script argument and stops — the real path never
@@ -2236,7 +2236,6 @@ TRACED_INDIRECT_INPUTS = {
     ("validate.yaml", "validate", "components/da-tools/README.md"),
     ("validate.yaml", "validate", "components/da-tools/app/VERSION"),
     ("validate.yaml", "validate", "components/threshold-exporter/README.md"),
-    ("validate.yaml", "validate", ".github/workflows/config-diff.yaml"),
     # validate-config's generator step routes the try-local seed as a second
     # `--config-dir` (#2315). A DIRECTORY argument — the blind spot
     # `_job_step_files` documents — so no scanner here derives it; one tracked
