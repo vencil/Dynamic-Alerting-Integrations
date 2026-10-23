@@ -24,8 +24,11 @@ func TestEdit_AnOwnerItCannotSetIsAWarning(t *testing.T) {
 	const name = "TestEdit_AnOwnerItCannotSetIsAWarning"
 	if os.Getenv(testutil.UnprivChildEnv) == "" {
 		if os.Geteuid() != 0 {
-			testutil.SkipOrFail(t, "the fixture is a file another user owns: preparing it needs uid 0")
-			return
+			// A plain skip, not testutil.SkipOrFail: the retry and the warning
+			// it measures are TestOwnerWarning's (a fake chown, in every
+			// environment); only this real-kernel path needs uid 0 to build a
+			// file another user owns, which a CI runner is not.
+			t.Skip("the fixture is a file another user owns: preparing it needs uid 0")
 		}
 		box, err := os.MkdirTemp("/var/tmp", "vibe-chown-")
 		if err != nil {

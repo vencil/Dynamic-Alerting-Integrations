@@ -248,6 +248,25 @@ type writer struct {
 	// mkdir makes one directory for emit (os.Mkdir when nil); a test swaps
 	// it to have another process make one first.
 	mkdir func(name string, perm os.FileMode) error
+	// chown sets the temporary file's owner and group (its File.Chown when
+	// nil); a test swaps it to have the kernel refuse.
+	chown func(uid, gid int) error
+}
+
+// ownerWarning gives the written file the original's owner and group with
+// chown, best effort, and returns what it could not carry over ("" when
+// nothing): a process that is not uid 0 cannot give a file away, but may
+// still set the group when it is a member — so the group is tried alone
+// (uid -1) after the pair fails, and only what still fails is reported.
+func ownerWarning(chown func(uid, gid int) error, uid, gid int) string {
+	err := chown(uid, gid)
+	if err == nil {
+		return ""
+	}
+	if gerr := chown(-1, gid); gerr == nil {
+		return fmt.Sprintf("the written file could not be given the original's owner (uid %d): %v; its group (gid %d) is kept", uid, err, gid)
+	}
+	return fmt.Sprintf("the written file could not be given the original's owner and group (uid %d, gid %d): %v", uid, gid, err)
 }
 
 func strp(s string) *string { return &s }
@@ -717,8 +736,14 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode, orig
 		werr = tmp.Chmod(perm)
 	}
 	if werr == nil && orig != nil {
-		if msg := chownLike(tmp, orig); msg != "" {
-			w.warn("%s", msg)
+		if uid, gid, ok := ownerOf(orig); ok {
+			chown := w.chown
+			if chown == nil {
+				chown = tmp.Chown
+			}
+			if msg := ownerWarning(chown, uid, gid); msg != "" {
+				w.warn("%s", msg)
+			}
 		}
 	}
 	if werr == nil {

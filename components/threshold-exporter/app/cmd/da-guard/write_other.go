@@ -10,5 +10,5 @@ func openNoBlock(abs string) (*os.File, error) {
 	return os.Open(abs) // #nosec G304 -- inside --config-dir
 }
 
-// chownLike: file ownership is not carried on this platform.
-func chownLike(*os.File, os.FileInfo) string { return "" }
+// ownerOf: file ownership is not carried on this platform.
+func ownerOf(os.FileInfo) (uid, gid int, ok bool) { return 0, 0, false }
