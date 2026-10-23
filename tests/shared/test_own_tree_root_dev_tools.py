@@ -36,7 +36,7 @@ sys.path.insert(0, str(TOOLS / "lint"))
 # (module, sub-directory) for every tool whose root is a `_repo_root()`.
 ROOT_FNS = [
     ("gen_am_duration_json", "dx"),
-    ("gen_recipe_status_json", "dx"),
+    ("gen_recipe_contract", "dx"),
     ("gen_tenant_id_json", "dx"),
     ("generate_rulepack_configmaps", "dx"),
     ("check_ha_threshold_aggregation", "lint"),
