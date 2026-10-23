@@ -450,7 +450,7 @@ def _label(argv: "list[str]") -> str:
 
 def _vm_hwm_kib() -> "int | None":
     try:
-        for line in Path("/proc/self/status").read_text().splitlines():
+        for line in Path("/proc/self/status").read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("VmHWM:"):
                 return int(line.split()[1])
     except (OSError, ValueError, IndexError):
@@ -700,7 +700,7 @@ def _programs(run: dict) -> "dict[str, dict]":
 def _machine() -> dict:
     model = ""
     try:
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
+        for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("model name"):
                 model = line.split(":", 1)[1].strip()
                 break
