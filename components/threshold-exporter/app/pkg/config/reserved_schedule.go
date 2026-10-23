@@ -19,7 +19,8 @@ package config
 //     the exporter WARNs at commit), so no ThresholdConfig built from a file
 //     carries the window: not /metrics, not da-guard's served-values;
 //   - the planes that do not decode through it take servedValue too: the
-//     subtree defaults overlay (applySubtreeDefaults), tenant-api's merge
+//     subtree defaults overlay (applySubtreeDefaults, which judges the
+//     stripped value — subtreeLevelShaped, #3295), tenant-api's merge
 //     (mergeTenantConfig's display copy, which keeps the tenant layer as
 //     written for the write gate), and the walker's reported config
 //     (effectiveView, rawServedValue);
@@ -175,10 +176,10 @@ func sameSchedule(a, b ScheduledValue) bool {
 //
 //   - defaultOnly: applied to the tenants that do not set the key, as its
 //     `default` alone (servedValue);
-//   - notApplied: not applied at all, schedule or not — a value the overlay
-//     refuses (not threshold-shaped: `_silent_mode: {default: warning, …}`)
-//     or no resolver would read from the tenant's map (a windowed `_state_`
-//     key, #1569).
+//   - notApplied: not applied at all — exactly as its `default` written
+//     alone would not be (#3295): a default the overlay refuses (not
+//     threshold-shaped: `_silent_mode: {default: warning, …}`), or a key no
+//     resolver would read from the tenant's map (`_state_<undeclared>`).
 //
 // parsed is the defaults-chain cache (absolute path → the file's defaults
 // level, as applySubtreeDefaults reads it); the conf.d root's own

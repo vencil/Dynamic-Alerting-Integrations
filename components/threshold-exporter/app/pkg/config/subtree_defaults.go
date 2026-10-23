@@ -257,13 +257,9 @@ func applySubtreeDefaults(
 					filled++ // count keys filled, not times overwritten
 				}
 				inherited[key] = struct{}{}
-				// #3269: a reserved key's schedule is read by no one —
-				// the `default` alone, as ParseConfigFile hands a tenant's
-				// own value over (servedValue). Taken here, after the
-				// reachability verdict above, so what is applied does not
-				// change: the `_state_` arm still refuses a windowed value
-				// (whose window could only ever have been ignored).
-				overrides[key] = servedValue(key, value)
+				// value is already servedValue's (subtreeLevelValue, #3295):
+				// a reserved key's window was dropped before any verdict.
+				overrides[key] = value
 				if subtreeDefaultsRefusedKey(key) {
 					if refusedSource == nil {
 						refusedSource = map[string]SubtreeRefusedVerdict{}
@@ -327,19 +323,43 @@ const (
 )
 
 // subtreeLevelValue is applySubtreeDefaults' verdict on raw, one subtree
-// level's value of key, with the value it decodes to. The one judgement of
-// "does the overlay apply it": applySubtreeDefaults acts on it, and the
-// load's #3269 WARN words a scheduled reserved key by it
+// level's value of key, with the value it applies (subtreeLevelShaped). The
+// one judgement of "does the overlay apply it": applySubtreeDefaults acts on
+// it, and the load's #3269 WARN words a scheduled reserved key by it
 // (SubtreeScheduledReserved).
 func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValue, subtreeLevelVerdict) {
-	value, ok := scheduledValueFromRaw(raw)
-	if !ok || !isThresholdShaped(value) {
+	value, shaped := subtreeLevelShaped(key, raw)
+	if !shaped {
 		return value, subtreeRefused
 	}
-	if !keyCanReachTheOutputPlane(cfg, key, value) {
+	if !keyCanReachTheOutputPlane(cfg, key) {
 		return value, subtreeUnreachable
 	}
 	return value, subtreeApplied
+}
+
+// subtreeLevelShaped is raw, one defaults level's value of key, as the
+// overlay reads it — servedValue's: a reserved key's time window and
+// `expires:` / `reason:` dropped, its `default` alone — and whether that
+// value is threshold-shaped, i.e. one the overlay could hand down. Every
+// "does this level write key" question asks it (subtreeLevelValue,
+// refusedKeys, levelWritesSpelling).
+//
+// ⛔ STRIP FIRST, THEN JUDGE (#3295). The readers of a reserved key read its
+// `default` alone (#3269), so judging the whole schedule let a window decide
+// what is handed down although no reader sees it: `_silent_mode: {default:
+// warning, overrides: [{value: 90}]}` passed on the window's 90 and silenced
+// the tenant's warnings, while the scalar `warning` is refused. Stripped
+// first, a windowed reserved key is exactly its `default` written alone at
+// the same level. A threshold key is untouched: servedValue returns it
+// whole, and its `default: ""` + windows shape still passes (#1569).
+func subtreeLevelShaped(key string, raw any) (ScheduledValue, bool) {
+	value, ok := scheduledValueFromRaw(raw)
+	if !ok {
+		return value, false
+	}
+	value = servedValue(key, value)
+	return value, isThresholdShaped(value)
 }
 
 // chainRejections is applySubtreeDefaults' account of the subtree values it
@@ -350,7 +370,8 @@ type chainRejections struct {
 }
 
 // refusedKeys is the keys of a subtree defaults level whose value
-// applySubtreeDefaults refuses as not threshold-shaped, for any tenant that
+// applySubtreeDefaults refuses as not threshold-shaped (subtreeLevelShaped,
+// the overlay's own reading), for any tenant that
 // does not set the key itself. A null is not refused: it fills nothing. nil
 // when none.
 func refusedKeys(level map[string]any) map[string]bool {
@@ -359,7 +380,7 @@ func refusedKeys(level map[string]any) map[string]bool {
 		if raw == nil {
 			continue
 		}
-		if value, ok := scheduledValueFromRaw(raw); ok && isThresholdShaped(value) {
+		if _, shaped := subtreeLevelShaped(key, raw); shaped {
 			continue
 		}
 		if out == nil {
@@ -540,10 +561,11 @@ func needsDoubleQuote(s string) bool {
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
-// present, not null, and threshold-shaped — the values this overlay would
-// hand down. It is the one definition both planes use for "this level wrote
-// that spelling": the overlay above (a spelling the same level writes is not
-// displaced) and the walker's MergedDefaults fold (noteSpellingWriters).
+// present, not null, and threshold-shaped as the overlay reads it
+// (subtreeLevelShaped) — the values this overlay would hand down. It is the
+// one definition both planes use for "this level wrote that spelling": the
+// overlay above (a spelling the same level writes is not displaced) and the
+// walker's MergedDefaults fold (noteSpellingWriters).
 //
 // ⛔ ONE PREDICATE, NOT TWO. The first version asked `level[s]` here and
 // skipped only nil in the walker, so a level writing the canonical spelling
@@ -556,8 +578,8 @@ func levelWritesSpelling(level map[string]any, s string) bool {
 	if !ok || raw == nil {
 		return false
 	}
-	sv, ok := scheduledValueFromRaw(raw)
-	return ok && isThresholdShaped(sv)
+	_, shaped := subtreeLevelShaped(s, raw)
+	return shaped
 }
 
 // tenantAuthoredThreshold reports whether the tenant's own map (overrides
@@ -612,8 +634,8 @@ func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[
 // So the refusal is now narrowed to exactly the shape it was built for: a
 // plain base key that only `resolveBaseRows` / `resolveDeclaredRows` could
 // serve, and that neither of them will find. (#1569 blind review.)
-func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string, sv ScheduledValue) bool {
-	if keyBypassesTheDeclaredSurface(cfg, key, sv) {
+func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
+	if keyBypassesTheDeclaredSurface(cfg, key) {
 		return true
 	}
 	if declaredAnywhere(cfg, key) {
@@ -650,7 +672,7 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string, sv ScheduledVal
 // no base default produces two WARN lines, an unparseable dimensional key
 // two more; `_state_<undeclared>` and `_routing_bogus` produced none, which
 // is why only those two moved.
-func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string, sv ScheduledValue) bool {
+func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string) bool {
 	// ⛔ A KEY CAN MATCH TWO ARMS, AND A `switch` TAKES THE FIRST.
 	// `_state_bogus_critical` is `_critical`-shaped, `_state_bogus{env="x"}`
 	// is dimensional-shaped: both matched an unconditional arm and never
@@ -686,19 +708,13 @@ func keyBypassesTheDeclaredSurface(cfg *ThresholdConfig, key string, sv Schedule
 		// no `state_filters:` at all: `_state_no_such_filter: disable` landed
 		// in the tenant map, changed no resolver output, and appeared in
 		// neither the divergence report nor any WARN. (#1569 sweep B-1.)
-		if _, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]; !declared {
-			return false
-		}
-		// ⛔ AND THE CONSUMER READS `Default`, NOT `ResolveValue(now)`.
-		// `ResolveStateFiltersAt` takes `sv.Default` verbatim, so a
-		// schedule's windows are invisible to it — while `isThresholdShaped` accepts a schedule and
-		// `/effective` renders it. Measured: a subtree declaring
-		// `_state_maintenance` as `default: enable` with a window saying
-		// `disable` resolved to "disable" on the config plane and left the
-		// filter ACTIVE on the collector plane. An active maintenance filter
-		// INHIBITS the tenant's alerts, so this direction loses real pages.
-		// Refusing it makes the gap loud instead. (#1569 blind review.)
-		return len(sv.Overrides) == 0
+		_, declared := cfg.StateFilters[strings.TrimPrefix(key, "_state_")]
+		// ⚠️ NO WINDOW REACHES HERE. `ResolveStateFiltersAt` reads `Default`
+		// alone, and subtreeLevelShaped hands this gate servedValue's value —
+		// the `default` without its windows — so a windowed `_state_` key is
+		// judged as that `default` written alone (#3295; before it, a window
+		// was refused here, #1569).
+		return declared
 	case key == "_silent_mode", // ResolveSilentModesAt
 		key == "_severity_dedup": // ResolveSeverityDedup
 		return true
@@ -850,10 +866,11 @@ func optionalOverridesCanDeclare(key string) bool {
 //     conflicting threshold row (measured: a root `_namespaces: 1` grows a
 //     user_threshold row, a root `_metadata` makes served-values fail), and
 //     declaring it in `optional_overrides:` silences the verdict while the
-//     subtree value still does not take effect (measured with a scheduled
-//     `_state_maintenance`). Some are even listed although a deeper level
-//     delivers the key (`_state_<f>` as a schedule at one level, a scalar
-//     below). Reported by subtreeReservedKeys instead (#2388).
+//     subtree value still does not take effect (measured, before #3295,
+//     with a scheduled `_state_maintenance`). Some were even listed although
+//     a deeper level delivers the key (before #3295, `_state_<f>` as a
+//     schedule at one level, a scalar below). Reported by
+//     subtreeReservedKeys instead (#2388).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
 //     row: every `_` key (#3045), whether declared or not — `_silent_bogus`,
 //     `_myth2` or `_namespaces` declared at the root still serves nothing, so
