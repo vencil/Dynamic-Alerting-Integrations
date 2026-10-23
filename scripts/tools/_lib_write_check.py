@@ -382,37 +382,50 @@ def keep_null_spelling(doc: Any, nodes: Any) -> Any:
     return doc
 
 
+def require_output_tree(root: "str | os.PathLike[str]", *,
+                        binary: Optional[str] = None,
+                        timeout: float = DEFAULT_TIMEOUT) -> None:
+    """⛔ THE writers' fail-closed exit (#3206), for a one-shot CLI: a run
+    that writes ANYTHING under *root* — a conf.d file, a report, a CSV —
+    calls this before its first write. When *root* is a directory that
+    already exists, the run writes INTO a tree it did not build, so that
+    tree must pass the shared refusal (`_lib_parse_cache.require_servable`:
+    any entry Go gives a `verdict` ends the process with exit 2, every such
+    path named, `--json` reason `conf_d_not_servable` with
+    `refused_paths`), and nothing is written.
+
+    * *root* missing (or not a directory): a fresh tree; nothing to refuse.
+    * *root* an existing directory that holds no conf.d (an empty one, or
+      only files no reader reads): Go serves it (no entry has a verdict), so
+      the run goes on — Go is the judge of whether it can be a conf.d root,
+      not a Python "looks like a conf.d" test.
+
+    `confirm_all` calls this first, whatever it is given (an empty list
+    too: a run with no conf.d file to confirm may still write reports into
+    the tree), so every writer that confirms through it carries no copy;
+    a writer that writes without confirming (`migrate_rule --triage`)
+    calls it itself. Judged once per tree and process (a reader of this run
+    that already read the tree whole is not asked again). A long-running
+    writer, which must judge afresh before every write and must not exit,
+    takes `_lib_parse_cache.refusal_now` instead (`da_assembler`'s
+    controller). Raises ParseTreeError for no usable da-guard."""
+    if Path(root).is_dir():
+        import _lib_parse_cache  # lazy: a reader library, not needed to judge a text
+        _lib_parse_cache.require_servable(root, binary=binary, timeout=timeout)
+
+
 def confirm_all(root: "str | os.PathLike[str]",
                 items: "Iterable[tuple[str, str | bytes, Any]]", *,
                 binary: Optional[str] = None,
                 timeout: float = DEFAULT_TIMEOUT) -> None:
     """:func:`confirm` every ``(rel, text, expected)`` of one run, all before
-    the caller writes any; raises at the first refusal.
-
-    ⛔ THE writers' fail-closed exit (#3206): when *root* is a directory that
-    already exists, the run writes INTO a tree it did not build, so before
-    any text is judged that tree must pass the shared refusal
-    (`_lib_parse_cache.require_servable`, tree mode once per tree and
-    process): any entry Go gives a `verdict` ends the process with exit 2,
-    every such path named (`--json`: reason `conf_d_not_servable`,
-    `refused_paths`), nothing written. Every conf.d writer that names an
-    output root confirms through here (`scaffold_tenant`, `onboard_platform`,
-    `migrate_rule`, `init_project`, `deprecate_rule`; `confirm_tree` on a
-    non-empty root), so none carries its own copy.
-
-    * *root* missing: a fresh tree; nothing to refuse.
-    * *root* an existing directory that holds no conf.d (an empty one, or
-      only files no reader reads): Go serves it (no entry has a verdict), so
-      the run goes on — the directory becomes a conf.d root by this write,
-      and Go is the judge of whether it can be one, not a Python "looks
-      like a conf.d" test.
-    * no item: the run writes no conf.d file, so there is no tree to judge.
-
-    Raises ParseTreeError for no usable da-guard."""
-    items = list(items)
-    if items and Path(root).is_dir():
-        import _lib_parse_cache  # lazy: it is a reader library, not needed to judge a text
-        _lib_parse_cache.require_servable(root, binary=binary, timeout=timeout)
+    the caller writes any; raises at the first refusal. First of all the
+    output tree passes :func:`require_output_tree` (an empty *items* too).
+    Every conf.d writer that names an output root confirms through here
+    (`scaffold_tenant`, `onboard_platform`, `migrate_rule`, `init_project`,
+    `deprecate_rule`; `confirm_tree` on a non-empty root). Raises
+    ParseTreeError for no usable da-guard."""
+    require_output_tree(root, binary=binary, timeout=timeout)
     for rel, text, expected in items:
         confirm(root, rel, text, expected, binary=binary, timeout=timeout)
 

@@ -196,6 +196,29 @@ def _alert_rules(cell: pathlib.Path) -> None:
         "    labels: {severity: warning}\n", encoding="utf-8")
 
 
+def _scrape_config(cell: pathlib.Path) -> None:
+    """A scrape config with one job: `onboard_platform`'s Phase 3 alone,
+    which writes relabel suggestions and no conf.d file at all."""
+    (cell / "scrape.yaml").write_text(
+        "scrape_configs:\n- job_name: mysql\n  static_configs:\n"
+        "  - targets: [\"db:9104\"]\n", encoding="utf-8")
+
+
+def _am_config(cell: pathlib.Path) -> None:
+    """An Alertmanager config with no tenant route: Phase 1 writes only its
+    routing summary (CSV), no tenant file."""
+    (cell / "am.yaml").write_text(
+        "route:\n  receiver: default\nreceivers:\n- name: default\n", encoding="utf-8")
+
+
+def _threshold_cr(cell: pathlib.Path) -> None:
+    """One ThresholdConfig CR for `da_assembler --render-cr`."""
+    (cell / "cr.yaml").write_text(
+        "apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
+        "metadata:\n  name: newt\n  namespace: ns\nspec:\n  tenants:\n"
+        "    newt: {}\n", encoding="utf-8")
+
+
 def _what_if(cell: pathlib.Path) -> None:
     (cell / "what-if.yaml").write_text("tenants:\n  a:\n    mysql_connections: \"90\"\n",
                                        encoding="utf-8")
@@ -276,6 +299,24 @@ TOOLS: dict[str, Tool] = {
                               "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
     "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml", "-o", "{conf}"),
                          prep=_alert_rules),
+    # Every other write mode of those writers: each writes into the tree
+    # without a conf.d file to confirm, or a different one.
+    "migrate_rule --triage": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
+                                   "--triage", "-o", "{conf}"), prep=_alert_rules),
+    "onboard_platform --scrape-config": Tool((_PY, _T + "ops/onboard_platform.py",
+                                              "--scrape-config", "{cell}/scrape.yaml",
+                                              "-o", "{conf}"), prep=_scrape_config),
+    "onboard_platform --alertmanager-config": Tool((_PY, _T + "ops/onboard_platform.py",
+                                                    "--alertmanager-config", "{cell}/am.yaml",
+                                                    "-o", "{conf}"), prep=_am_config),
+    "scaffold_tenant --generate-profile": Tool((_PY, _T + "ops/scaffold_tenant.py",
+                                                "--generate-profile", "newp", "--db", "mariadb",
+                                                "-o", "{conf}")),
+    # The CRD controller's one-shot render (da-crdecode is in the box's bin/);
+    # the controller loop's fresh judgement is tests/ops/test_da_assembler.py's.
+    "da_assembler --render-cr": Tool((_PY, _T + "ops/da_assembler.py", "--render-cr",
+                                      "{cell}/cr.yaml", "--config-dir", "{conf}"),
+                                     prep=_threshold_cr),
     # The four below query a Prometheus as well; {prom} refuses at once, and
     # each reads the tree whatever the query answered.
     "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom}",
@@ -300,7 +341,6 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/cutover_tenant.py": "drives a cluster (kubectl); takes no conf.d operand",
     "tools/ops/byo_check.py": "queries a live Prometheus / Alertmanager; takes no conf.d operand",
     "tools/ops/baseline_discovery.py": "queries a live Prometheus and writes suggestions; reads no conf.d",
-    "tools/ops/da_assembler.py": "its --config-dir is an OUTPUT (a CRD controller writing conf.d files)",
     "tools/ops/generator_service.py": "tenant-api's long-running judge over a stdin protocol, "
                                       "not a CLI over a tree",
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
@@ -402,8 +442,11 @@ def matrix_box():
 
 
 @pytest.fixture(scope="module")
-def box():
+def box(da_crdecode_binary):
     with matrix_box() as b:
+        crdecode = b[0] / "bin" / "da-crdecode"
+        shutil.copyfile(da_crdecode_binary, crdecode)
+        crdecode.chmod(0o755)
         yield b
 
 

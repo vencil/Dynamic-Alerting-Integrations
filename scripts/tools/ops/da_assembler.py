@@ -28,6 +28,12 @@ Prerequisites:
     dump writes plain that yaml.v3 reads as a number, a `defaults` value
     that is not a number) or a path no reader reads is not written —
     `--render-cr` exits 2, the controller sets the CR's status to Error.
+    And an existing --config-dir is a tree this writes INTO (#3206): it
+    must first pass the shared conf.d refusal — any path da-guard
+    validation names. `--render-cr` then exits 2 naming every such path,
+    nothing written; the controller judges the tree afresh before every
+    write, logs every such path as ERROR, skips that write (the CR's
+    status is Error) and keeps running.
 """
 
 import argparse
@@ -369,6 +375,29 @@ def update_cr_status(
 
 # ── Reconcile loop ───────────────────────────────────────────────────
 
+def controller_refusal(config_dir: Path) -> list[str]:
+    """The controller's shared conf.d refusal (#3206): the tree under
+    *config_dir*, judged by Go AFRESH before every write of the loop
+    (`_lib_parse_cache.refusal_now` — never the once-per-process memo: the
+    tree changes under a long-running controller). [] when the directory
+    does not exist yet or Go serves it; else every refused path is logged
+    as ERROR and the lines are returned — the caller skips this write and
+    the next event or cycle judges again. The process never exits on it.
+    Raises ParseTreeError for no usable da-guard."""
+    if not config_dir.is_dir():
+        return []
+    import _lib_parse_cache  # noqa: PLC0415
+    lines = _lib_parse_cache.refusal_now(config_dir)
+    for line in lines[:-1]:
+        log.error("%s", line.removeprefix("ERROR: "))
+    if lines:
+        log.error("the conf.d at %s holds %d path(s) da-guard validation names; "
+                  "nothing is written this time (fix or remove them; the next "
+                  "reconcile judges the tree again)", safe_label(str(config_dir)),
+                  len(lines) - 1)
+    return lines
+
+
 def reconcile_one(
     cr: dict,
     config_dir: Path,
@@ -401,6 +430,17 @@ def reconcile_one(
         # file it replaces is not read: it is not the base of a change. A
         # destination that exists and is not a file (a directory) is the
         # write's own failure (#1789's one line), not a parse-tree verdict.
+        # #3206: the tree this writes INTO passes the shared refusal first.
+        # `--render-cr` (one shot): exit 2, every path named, nothing
+        # written. The controller: judged afresh on every reconcile; refused
+        # ⇒ every path logged, this write skipped, the loop goes on.
+        if cli:
+            _lib_write_check.require_output_tree(config_dir)
+        elif controller_refusal(config_dir):
+            if api and not dry_run:
+                update_cr_status(api, cr, "Error", message=(
+                    "conf.d holds paths da-guard validation names; not written")[:200])
+            return
         dest = config_dir / filename
         if dest.exists() and not dest.is_file():
             write_rendered(config_dir, filename, content, dry_run=dry_run)
@@ -521,6 +561,8 @@ def run_watch(
                                   api=None if dry_run else api)
                 elif event_type == "DELETED":
                     filename = _output_filename(cr)
+                    if controller_refusal(config_dir):
+                        continue  # #3206: no write (a delete too) this event
                     removed = remove_rendered(config_dir, filename,
                                               dry_run=dry_run)
                     if removed:

@@ -184,10 +184,14 @@ def test_confirm_all_into_a_fresh_or_servable_directory_goes_on(tmp_path, make):
     wc.confirm_all(root, [_NEW])
 
 
-def test_confirm_all_with_no_item_judges_no_tree(tmp_path):
-    """這一輪不寫任何 conf.d 檔：沒有樹要判。"""
+def test_confirm_all_with_no_item_still_judges_the_tree(tmp_path, capsys):
+    """這一輪沒有 conf.d 檔要確認，仍可能把報表、CSV 寫進這棵樹
+    （`onboard_platform --scrape-config`）：照樣先過共用拒絕。"""
     (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
-    wc.confirm_all(tmp_path, [])
+    with pytest.raises(SystemExit) as exc:
+        wc.confirm_all(tmp_path, [])
+    assert exc.value.code == 2
+    assert "broken.yaml" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("value", [80.0, 70.5, -0.25, 1e20, 1e-7, float("inf")])

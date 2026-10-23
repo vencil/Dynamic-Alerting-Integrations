@@ -677,16 +677,16 @@ ROWS: list[Row] = [
             "offline path needs no Kubernetes client",
       # ⛔ This tool used to exit 0 here having written nothing: `reconcile_one`
       # logged the OSError and `render_cr_file` returned EXIT_OK regardless
-      # (measured rc=0 on both shapes). `parent_is_file` reaches the mkdir;
-      # `artifact_is_dir` reaches the rendered file itself — which is also
-      # where the idempotence read of that same path dies, and that is as far
-      # as a row can get: with `db-a.yaml` a directory the run never returns
-      # from that read, so the `write_text` + `chmod` behind it are masked
-      # (verified: deleting THEIR wrapper leaves this row green and turns the
-      # static pin red — the two gates cover this file between them, neither
-      # alone).
-      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
-      artifact="db-a.yaml"),
+      # (measured rc=0 on both shapes). `parent_is_file` reaches the mkdir.
+      # ⛔ No `artifact_is_dir` since #3206: a directory named `db-a.yaml` in
+      # the existing --config-dir is a path da-guard validation names (exit
+      # 4, a directory with a config file name), so the shared conf.d
+      # refusal ends the run (rc 2, that path named — the behaviour matrix's
+      # `config_named_dir` row) before any sink is reached; no CLI run can
+      # put a directory where the rendered file goes. The sinks behind it
+      # (`write_text` + `chmod`) were already masked from this row and are
+      # held by the static pin.
+      shapes=("parent_is_file", "target_is_file")),
     R("ops/state_reconcile.py", "--manifest-path", "file",
       lambda c, out: ["--state-dir", _state_dir(c.tmp), "--manifest-path", str(out)],
       reach="a state dir with one current-schema file: no migration runs, so "

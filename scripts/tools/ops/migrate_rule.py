@@ -1403,6 +1403,21 @@ def _confirm_confd_files(output_dir, items):
         sys.exit(EXIT_CALLER_ERROR)
 
 
+def _require_output_tree(output_dir):
+    """寫進 -o 之前（不論寫什麼）：既有的目錄先過共用的 conf.d 拒絕
+    （`_lib_write_check.require_output_tree`，#3206）；沒有可用的 da-guard
+    ⇒ 結束碼 2、一個檔都不寫。"""
+    import _lib_parse_tree
+    import _lib_write_check
+    try:
+        _lib_write_check.require_output_tree(output_dir)
+    except _lib_parse_tree.ParseTreeError as exc:
+        print(f"ERROR: cannot judge the existing output directory through "
+              f"`da-guard parse-tree` (ADR-036): {exc}; nothing was written",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
 def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
 
@@ -1623,7 +1638,9 @@ def main():
 
     # 輸出
     if args.triage:
-        # Triage mode: 只產 CSV + 統計
+        # Triage mode: 只產 CSV + 統計。沒有 conf.d 檔要確認，但 CSV 一樣寫進
+        # -o：既有的目錄先過共用的 conf.d 拒絕（#3206）。
+        _require_output_tree(args.output_dir)
         ensure_dir_or_die(args.output_dir, flag=_OUTPUT_FLAG)
         csv_path = write_triage_csv(results, args.output_dir, dictionary)
         print_triage(results)

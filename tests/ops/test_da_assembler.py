@@ -2589,3 +2589,51 @@ class TestMain:
             ]):
                 rc = da_assembler.main()
             assert rc == EXIT_CALLER_ERROR
+
+
+class TestControllerSharedRefusal:
+    """#3206：controller 寫進的 conf.d 先過共用拒絕——每次 reconcile 都重新
+    判（不是整個行程只判一次）；被拒時 ERROR 逐條點名、這次不寫、行程不結束。"""
+
+    def test_each_reconcile_judges_the_tree_afresh(self, tmp_path, caplog):
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="ctl-one"), tmp_path, api=api)
+        assert (tmp_path / "ctl-one.yaml").is_file()  # served: written
+
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        api.reset_mock()
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            reconcile_one(_make_cr(name="ctl-two"), tmp_path, api=api)
+        assert not (tmp_path / "ctl-two.yaml").exists()
+        assert "broken.yaml" in caplog.text
+        phase = api.patch_namespaced_custom_object_status.call_args.kwargs[
+            "body"]["status"]["phase"]
+        assert phase == "Error"
+
+        (tmp_path / "broken.yaml").unlink()  # fixed: the next reconcile writes
+        reconcile_one(_make_cr(name="ctl-two"), tmp_path, api=api)
+        assert (tmp_path / "ctl-two.yaml").is_file()
+
+    def test_a_tree_judged_servable_once_is_judged_again(self, tmp_path):
+        """No process-lifetime memo: a servable verdict does not carry over."""
+        assert da_assembler.controller_refusal(tmp_path) == []
+        (tmp_path / "x.yaml").mkdir()
+        lines = da_assembler.controller_refusal(tmp_path)
+        assert any("x.yaml" in ln for ln in lines)
+
+    def test_a_missing_config_dir_is_a_fresh_tree(self, tmp_path):
+        assert da_assembler.controller_refusal(tmp_path / "absent") == []
+
+    def test_render_cr_into_a_refused_tree_exits_2_and_writes_nothing(self, tmp_path, capsys):
+        conf = tmp_path / "conf.d"
+        conf.mkdir()
+        (conf / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        cr = tmp_path / "cr.yaml"
+        cr.write_text("apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
+                      "metadata:\n  name: ctl-cli\n  namespace: ns\nspec:\n  tenants:\n"
+                      "    ctl-cli: {}\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            da_assembler.render_cr_file(cr, conf)
+        assert exc.value.code == 2
+        assert "broken.yaml" in capsys.readouterr().err
+        assert not (conf / "ctl-cli.yaml").exists()

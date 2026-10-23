@@ -504,6 +504,20 @@ def require_servable(root: "str | os.PathLike[str]", *, binary: Optional[str] = 
         reader_for(root).require()
 
 
+def refusal_now(root: "str | os.PathLike[str]", *, binary: Optional[str] = None,
+                timeout: Optional[float] = None) -> "list[str]":
+    """The shared refusal's lines for *root* as Go judges it NOW — [] when
+    no entry has a verdict — for a long-running writer (the CRD controller,
+    `da_assembler`) that must judge the tree afresh before every write and
+    go on running when it is refused. ⛔ The explicit bypass of
+    `require_servable`'s once-per-process memo: one tree-mode run every
+    call, nothing kept in `_SERVABLE`, never exits; the caller names every
+    line and skips its writes. Raises ParseTreeError."""
+    tree = _lib_parse_tree.load(root, binary, timeout)
+    bad = _lib_parse_tree.refused_entries(tree.entries)
+    return _lib_parse_tree.refusal_lines(bad, root) if bad else []
+
+
 def subtree_reader(subtree: "str | os.PathLike[str]", root: "str | os.PathLike[str]", *,
                    fresh: bool = False) -> ConfdReader:
     """The reader of *subtree*, a directory the walk enters below conf.d root
