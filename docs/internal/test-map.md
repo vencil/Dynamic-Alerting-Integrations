@@ -172,6 +172,20 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `benchmark` | 效能基線測試 | `pytest -m benchmark` |
 | `regression` | 已知 bug 回歸 | `pytest -m regression` |
 | `snapshot` | 輸出格式穩定性快照 | `pytest -m snapshot` |
+| `real_crash_exit_code` | 這支測試釘的是**真正的** crash 結束碼（2，或工具自設的碼），本測試期間移除 `DA_TEST_CRASH_EXIT_CODE`（見下） | 註冊於 `pyproject.toml`、由 `tests/conftest.py` 執行；`grep -rn real_crash_exit_code tests/` 列出全部 |
+
+### crash 在測試下不是 rc 2（#3092）
+
+crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的測試分不出兩者：具名 handler 被拿掉、工具改成 crash，測試照樣綠。所以 `tests/conftest.py` 在整個測試行程設 `DA_TEST_CRASH_EXIT_CODE=70`：`_lib_exitcodes` 與 da-tools entrypoint 在 crash 時讀它、以 70 結束（只接受 3..255，優先於工具自設的 crash 碼；正式環境不設）。子行程會繼承；用 `env=` 自建環境的子行程，由 conftest 對 `subprocess.Popen.__init__` 的墊片補上。呼叫端錯誤碼（具名錯誤、stdout 已關）不受影響。
+
+- 寫新測試**不必**做任何事：斷言 `returncode == 2` 已自動排除 crash。
+- 測試本身在驗 crash 結束碼時，標 `@pytest.mark.real_crash_exit_code`；墊片在該測試期間也會把變數從明確傳入的 `env=` 拿掉（模組層 `dict(os.environ)` 在 import 時就複製了它）。
+- 守衛：`tests/shared/test_crash_code_under_tests.py`（變數不生效、墊片拿掉、opt-out 失效都會轉紅）。
+- 涵蓋不到的：
+  - Go 的 panic（rc 2）。
+  - 墊片只包 `subprocess.Popen`；`os.posix_spawn`、`os.spawn*e`、`os.exec*e` 帶自建 env 時不會補上變數（目前 `tests/`、`scripts/` 都沒有用到）。
+  - 工具自己用寬的 `except Exception` 接住例外、再以 `EXIT_CALLER_ERROR` 結束的（例如 `dx/waveform_score.py` 的 `main` 的 `ERR_UNEXPECTED`），不會經過 crash 出口：這類工具的 rc 2 斷言仍分不出「具名錯誤」與「意外例外」，要另外比對 stderr 的具名錯誤。
+  - 輸出也可能不同：`run()` 只在結束碼等於呼叫端錯誤碼時補印 armed envelope。正式環境 crash 碼與呼叫端錯誤碼同為 2，這段會執行；測試下 crash 碼是 70，就不會執行。目前沒有工具同時用 `run(main)`、`arm_crash_envelope` 與自行處理 crash 的 `@main(on_crash=)`，所以實際上碰不到（#3278）。
 
 ## 測試檔案對照
 

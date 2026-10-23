@@ -150,23 +150,26 @@ var patchDiffCases = []patchDiffCase{
 	{name: "not-yaml", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: [\n"},
 
-	// Blind review #2903: a block scalar the re-encode rewrites (a leading
-	// blank line, a more-indented folded line, kept or stripped trailing
-	// blanks) — in the edited tenant or another one.
-	{name: "block-literal-strip-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+	// Blind review #2903: a block scalar the re-encode rewrites (a
+	// more-indented folded line, kept or stripped trailing blanks) — in the
+	// edited tenant or another one. One opening with blank lines is merged:
+	// go.yaml.in/yaml/v3 v3.0.5's encoder writes them back (v3.0.1's dropped
+	// them, and these were refused until the vendored base moved, #3206), and
+	// the generator reads the merge as base + patch.
+	{name: "block-literal-strip-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
 		base: "tenants:\n  t1:\n    d: |-\n\n      a\n"},
-	{name: "block-literal-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+	{name: "block-literal-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
 		base: "tenants:\n  t1:\n    d: |\n\n      a\n"},
-	{name: "block-literal-leading-space-line", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+	{name: "block-literal-leading-space-line", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
 		base: "tenants:\n  t1:\n    d: |\n      \n      a\n"},
 	{name: "block-folded-more-indented", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    d: >\n      a\n       b\n      c\n"},
 	{name: "block-folded-keep-trailing", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    d: >+\n      a\n\n"},
-	{name: "block-folded-leading-blanks", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+	{name: "block-folded-leading-blanks", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
 		base: "tenants:\n  t1:\n    d: >\n\n\n      a\n"},
 	{name: "block-in-other-tenant", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
-		base: "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n"},
+		base: "tenants:\n  t1: {}\n  t2:\n    d: >\n      a\n       b\n      c\n"},
 	// A TAB inside a block scalar: yaml.v3 refuses the file (malformed_yaml),
 	// the generator reads it (Go stricter).
 	{name: "block-literal-tab", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
@@ -396,10 +399,10 @@ func TestVerifyPartialWrite_NamesOnlyTheOwnBlock(t *testing.T) {
 			base: "x: &s\n  _routing: disable\ntenants:\n  t1:\n    <<: *s\n    _routing:\n      receiver: {type: webhook, url: \"https://a.example/x\"}\n",
 			want: "first difference: tenants.t1._routing"},
 		{name: "other tenant", patch: map[string]string{"z": "1"},
-			base: "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n",
+			base: "tenants:\n  t1: {}\n  t2:\n    d: >\n      a\n       b\n      c\n",
 			want: "first difference: another place in the file", never: "t2"},
 		{name: "other tenant the caller may read", patch: map[string]string{"z": "1"},
-			base:  "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n",
+			base:  "tenants:\n  t1: {}\n  t2:\n    d: >\n      a\n       b\n      c\n",
 			names: func(id string) bool { return id == "t2" },
 			want:  "first difference: tenants.t2.d"},
 	} {

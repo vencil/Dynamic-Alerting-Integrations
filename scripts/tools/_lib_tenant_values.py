@@ -679,6 +679,30 @@ def _run_da_guard(
     if exe is None:
         raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
 
+    # ⛔ The run's fail-closed exit (#3206), before this read: the tenants come from a tree
+    # Go serves, or from none. served-values carries only exit 3's half of
+    # Go's per-path verdict; the whole of it is parse-tree's, read once per
+    # tree and run (`reader_for`, the reader every other read of this tree
+    # in the run shares), with the da-guard and the limit this run used.
+    # A judge (`judging()`) reads such a tree on purpose, and runs no
+    # parse-tree for it here; nor does a run whose reader already read it.
+    import _lib_parse_cache  # lazy: it imports modules that import this one
+    # A parse-tree that cannot answer is this loader's own failure: its error
+    # type, so every caller's handler for a failing da-guard applies (rc 2) —
+    # never a traceback out of a served-values read.
+    # Not a directory: served-values names that itself, as before.
+    try:
+        if os.path.isdir(conf_d):
+            _lib_parse_cache.require_servable(conf_d, binary=exe, timeout=timeout)
+    except _lib_parse_cache.ParseTreeError as e:
+        import _lib_parse_tree  # lazy, as above
+        text = ' '.join(str(e).split())
+        if isinstance(e, _lib_parse_tree.BinaryMissing):
+            raise DaGuardNotFoundError(text) from e
+        # parse-tree's own words name a da-guard older than this tool.
+        stale = "older than this tool" in text
+        raise error(f"da-guard parse-tree (the tree's index): {text}", None, "",
+                    stale=stale, broken=not stale) from e
     cmd = [exe, subcommand, "--config-dir", str(conf_d), *extra]
     try:
         # Bytes, not text: stderr may carry a file name that is not UTF-8

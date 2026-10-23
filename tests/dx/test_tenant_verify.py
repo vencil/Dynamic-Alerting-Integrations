@@ -447,8 +447,25 @@ def test_unparseable_defaults_is_a_named_usage_error(
     go = subprocess.run([os.environ["DA_GUARD_BINARY"], "effective", "--config-dir", str(conf_d)],
                         capture_output=True, text=True, encoding="utf-8", timeout=60)
     cli_argv("tenant-verify", *mode, "--conf-d", str(conf_d))
-    code = verify_module.main()
+    import _lib_exitcodes
+    from _go_refusal import assert_refused, go_refused
+    outer = _lib_exitcodes.get_caller_error_code()
+    _lib_exitcodes.set_caller_error_code(1)  # as `__main__` sets it
+    try:
+        code = verify_module.main()
+    except SystemExit as exc:
+        code = exc.code
+    finally:
+        _lib_exitcodes.set_caller_error_code(outer)
     captured = capsys.readouterr()
+    refused = go_refused(conf_d)
+    if refused:
+        # #3206: a file the exporter drops is a path Go names — the shared
+        # refusal with this tool's input-error code 1, the file named.
+        assert refused == [carrier], refused
+        assert_refused(code, captured.err, refused, code=1)
+        assert "merged_hash: " not in captured.out, "nothing verified"
+        return
     if go.returncode == 0:
         # The exporter serves this shape at this level (a sub-directory
         # document that is not a `defaults:` mapping is read whole): it
@@ -472,6 +489,7 @@ def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, 
 # ── Crash exit code stays 1 (#3090) ────────────────────────────────
 
 
+@pytest.mark.real_crash_exit_code
 def test_crash_exits_1_not_the_verification_failed_2(tmp_path):
     """An uncaught exception in tenant-verify must end at 1 (its caller /
     usage error), not the SSOT default crash code 2 — here 2 means

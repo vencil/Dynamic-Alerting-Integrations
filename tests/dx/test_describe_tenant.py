@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "dx"))
 import describe_tenant as dt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
@@ -88,7 +89,7 @@ class TestConfDScanner:
 
         # L0: root _defaults.yaml
         (conf_d / "_defaults.yaml").write_text(
-            yaml.dump({"defaults": {"timeout": 10, "region": "us"}}),
+            yaml.dump({"defaults": {"timeout": 10, "retries": 2}}),
             encoding="utf-8"
         )
 
@@ -113,7 +114,7 @@ class TestConfDScanner:
         scanner = dt.ConfDScanner(conf_d)
         assert "acme-prod" in scanner.tenants
         assert scanner.tenants["acme-prod"].defaults_chain == ["_defaults.yaml", "acme/_defaults.yaml"]
-        assert scanner.effective_config("acme-prod") == {"timeout": 20, "region": "us", "replicas": 3}
+        assert scanner.effective_config("acme-prod") == {"timeout": 20, "retries": 2, "replicas": 3}
 
     def test_scanner_effective_config_with_defaults(self, tmp_path):
         conf_d = tmp_path / "conf.d"
@@ -121,7 +122,7 @@ class TestConfDScanner:
 
         # Root defaults
         (conf_d / "_defaults.yaml").write_text(
-            yaml.dump({"defaults": {"timeout": 10, "retries": 1, "debug": False}}),
+            yaml.dump({"defaults": {"timeout": 10, "retries": 1, "threads": 1}}),
             encoding="utf-8"
         )
 
@@ -129,7 +130,7 @@ class TestConfDScanner:
         (conf_d / "tenants.yaml").write_text(
             yaml.dump({
                 "tenants": {
-                    "test-tenant": {"timeout": 30, "debug": True}
+                    "test-tenant": {"timeout": 30, "threads": 4}
                 }
             }),
             encoding="utf-8"
@@ -139,7 +140,7 @@ class TestConfDScanner:
         effective = scanner.effective_config("test-tenant")
         assert effective["timeout"] == 30  # overridden
         assert effective["retries"] == 1   # from defaults
-        assert effective["debug"] is True  # overridden
+        assert effective["threads"] == 4  # overridden
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +233,11 @@ class TestDiffTenants:
         assert "only_in_t-b" in diff
 
 
-def test_entries_the_exporter_cannot_read_are_named_and_the_rest_described(tmp_path):
-    """#2054 / #2588: an entry the exporter's walk cannot read — `_`-prefixed
-    or not — is named on stderr (da-guard's `unreadable`), the rest of the
-    tree is still described, and no merged_hash is reported (a value it
-    would have given may be missing). Dangling links, because root ignores
-    the mode bits a `chmod 000` would rely on."""
+def test_entries_the_exporter_cannot_read_refuse_the_run(tmp_path):
+    """#2054 / #2588 / #3206: an entry the exporter's walk cannot read —
+    `_`-prefixed or not — is named on stderr, and the run is refused (exit
+    2): a description of the rest would miss a value it may hold. Dangling
+    links, because root ignores the mode bits a `chmod 000` would rely on."""
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
     (conf_d / "a.yaml").write_text("tenants:\n  a: {}\n", encoding="utf-8")
@@ -248,11 +248,9 @@ def test_entries_the_exporter_cannot_read_are_named_and_the_rest_described(tmp_p
             pytest.skip(f"symlinks unavailable here: {exc}")
     r = subprocess.run([sys.executable, DESCRIBE, "a", "--conf-d", str(conf_d), "--show-sources"],
                        capture_output=True, text=True, encoding="utf-8", timeout=60)
-    assert r.returncode == 0, r.stderr
-    out = json.loads(r.stdout)
-    assert out["merged_hash"] is None and out["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE
-    for name in ("_locked.yaml", "locked.yaml"):
-        assert f"{name} (stat_error)" in r.stderr, r.stderr
+    assert go_refused(conf_d) == ["_locked.yaml", "locked.yaml"]
+    assert_refused(r.returncode, r.stderr, ["_locked.yaml", "locked.yaml"])
+    assert r.stdout == ""
 
 
 # ---------------------------------------------------------------------------
@@ -467,12 +465,10 @@ class TestDuplicateDeclaration:
         cpu_pct 70 (`da-guard effective`: parse_failed [zbad.yaml], acme 70).
 
         This was a pinned KNOWN divergence (#1942): describe counted zbad.yaml
-        as a second carrier and refused acme as a duplicate (rc 1). A file in
-        da-guard effective's `parse_failed` declares nothing to the duplicate
-        check (#2906), so it answers as Go does: acme from good.yaml, rc 0,
-        zbad.yaml named on stderr, no merged_hash (the tree drops a file).
-        ⚠️ validate_config's `tenant_uniqueness` still counts zbad.yaml
-        (`_lib_confd.declared_tenant_ids`) — a divergence left to that tool.
+        as a second carrier and refused acme as a duplicate (rc 1). A file the
+        exporter drops is a path da-guard validation names, so the run is
+        refused with Go's verdict (#3206): zbad.yaml named, exit 2 — never a
+        duplicate-tenant finding.
         """
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
@@ -481,10 +477,9 @@ class TestDuplicateDeclaration:
         (conf_d / "zbad.yaml").write_text(
             "tenants:\n  acme:\n    cpu_pct: 10\n  other: 5\n", encoding="utf-8")
         r = self._run(conf_d, "acme")
-        assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
-        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
+        assert_refused(r.returncode, r.stderr, go_refused(conf_d))
+        assert go_refused(conf_d) == ["zbad.yaml"]
         assert "duplicate" not in r.stderr, r.stderr
-        assert "WARNING: skipped zbad.yaml — " in r.stderr, r.stderr
 
     @pytest.mark.parametrize("shape", SHAPES)
     def test_validate_config_flags_the_same_tenant_and_files(self, tmp_path, shape):
@@ -1165,20 +1160,17 @@ class TestPlatformOverlayCLI:
         conf_d = self._tree(tmp_path, tm__yaml="tenants:\n  tm: {}\n---\nfoo: 1\n",
                             tb__yaml="tenants:\n  tb: [\n")
         res = self._run("--all", "--conf-d", str(conf_d))
-        assert res.returncode == 0, res.stderr
-        out = json.loads(res.stdout)
-        # tm: a second document — dropped since ADR-036 step 6 (#3206).
-        assert set(out) == {"tx", "ty"}
-        assert "WARNING: skipped tb.yaml — " in res.stderr, res.stderr
-        assert "WARNING: skipped tm.yaml — " in res.stderr, res.stderr
-        assert all(t["merged_hash"] is None for t in out.values())
+        # tm: a second document — dropped since ADR-036 step 6; tb does not
+        # parse: both refuse the run, both named, no traceback (#3206).
+        assert go_refused(conf_d) == ["tb.yaml", "tm.yaml"]
+        assert_refused(res.returncode, res.stderr, ["tb.yaml", "tm.yaml"])
 
     def test_an_unparseable_file_declares_nothing_for_the_duplicate_check(self, tmp_path):
-        """#2049 × #2019: a tenant file skipped as unparseable declares no
-        tenant, so it cannot make its neighbour's tenant a duplicate."""
+        """#2049 × #2019: a tenant file that does not parse never makes its
+        neighbour's tenant a duplicate — it refuses the run (#3206)."""
         conf_d = self._tree(tmp_path, tx2__yaml="tenants:\n  tx: [\n")
         res = self._run("tx", "--conf-d", str(conf_d))
-        assert res.returncode == 0, res.stderr
+        assert_refused(res.returncode, res.stderr, go_refused(conf_d))
         assert "duplicate" not in res.stderr
 
     def test_a_numeric_tenant_id_is_one_id_for_the_duplicate_check(self, tmp_path):
@@ -1594,6 +1586,13 @@ class TestShowsGoValuesVerbatim:
         res = subprocess.run([sys.executable, DESCRIBE, "--all", "--conf-d", str(conf_d)],
                              capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert "Traceback" not in res.stderr, res.stderr
+        refused = go_refused(conf_d)
+        if refused:
+            # A path Go names (a value the exporter drops the file for, a
+            # file it cannot decode): the shared refusal, nothing described.
+            assert_refused(res.returncode, res.stderr, refused)
+            assert res.stdout == ""
+            return
         if go is None or not go["tenants"]:
             # Go resolves no tenant (it refuses the tree, or a chain file
             # stops the resolve): nothing is described, rc 2, said.
@@ -1603,18 +1602,15 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert set(out) == set(go["tenants"])
-        dropped = bool(go["parse_failed"] or go["unreadable"])
+        # Past the refusal Go drops no file (#3206), so every merged_hash is given.
+        assert not (go["parse_failed"] or go["unreadable"]), go
         for tid, info in out.items():
             want = go["tenants"][tid]
             for field in self.FIELDS:
                 assert info[field] == want[field], (tid, field)
             for field in ("platform_overlay", "profile_overlay"):
                 assert info.get(field) == want.get(field), (tid, field)
-            assert info["merged_hash"] == (None if dropped else want["merged_hash"])
-            if dropped:
-                assert info["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE
-        if dropped:
-            assert "skips or cannot read file(s) of this tree" in res.stderr, res.stderr
+            assert info["merged_hash"] == want["merged_hash"]
 
     @pytest.mark.parametrize("case", sorted(DEFAULTS_DOCUMENTS))
     def test_merged_hash_is_the_exporters(self, tmp_path, case):
@@ -1626,6 +1622,9 @@ class TestShowsGoValuesVerbatim:
         assert go["tenants"]["tx"]["merged_hash"] == go_hash
         res = subprocess.run([sys.executable, DESCRIBE, "tx", "--show-sources", "--conf-d", str(conf_d)],
                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+        if go_refused(conf_d):  # the exporter drops the document (#3206)
+            assert_refused(res.returncode, res.stderr, go_refused(conf_d))
+            return
         assert res.returncode == 0, res.stderr
         # Reported only on a tree the exporter's load reads whole (#1549).
         dropped = go["parse_failed"] or go["unreadable"]
@@ -1661,8 +1660,11 @@ class TestShowsGoValuesVerbatim:
         conf_d = _write(tmp_path, files)
         res = subprocess.run([sys.executable, DESCRIBE, *mode, "--conf-d", str(conf_d)],
                              capture_output=True, text=True, encoding="utf-8", timeout=60)
-        assert res.returncode == 0, res.stderr
         assert "Traceback" not in res.stderr
+        if go_refused(conf_d):  # e.g. non-finite values: the file is dropped (#3206)
+            assert_refused(res.returncode, res.stderr, go_refused(conf_d))
+            return
+        assert res.returncode == 0, res.stderr
         out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
         effective = (out["t1"] if "--all" in mode else out)["effective_config"]
         assert effective == _go_effective(conf_d)[1]["tenants"]["t1"]["effective_config"]
@@ -1702,21 +1704,17 @@ class TestTreesGoDoesNotResolve:
     @pytest.mark.parametrize("mode", [["tr"], ["--all"], ["--all", "--format", "yaml"]],
                              ids=lambda m: " ".join(m))
     def test_unparseable_defaults_is_named_and_the_values_are_gos(self, tmp_path, mode):
-        """#2906: a root `_defaults.yaml` that does not parse is the
-        exporter's to judge. Its load skips the file and still resolves the
-        tenants (without that level) — so they are described as Go resolves
-        them, the file named and no merged_hash, where this tool used to stop
-        the whole run (rc 2, #2413)."""
+        """#2906 / #3206: a root `_defaults.yaml` that does not parse is a
+        path da-guard validation names (its load skips the file, exit 3): the
+        run is refused, the file named — a description without that level
+        would show values the platform does not serve as configured."""
         conf_d = self._tree(tmp_path, b"defaults: [\n")
         go_rc, go = _go_effective(conf_d)
         assert go_rc == 3 and go["tenants"], (go_rc, go)
         res = self._run(*mode, "--conf-d", str(conf_d))
-        assert "Traceback" not in res.stderr, res.stderr
-        assert res.returncode == 0, (res.returncode, res.stderr)
-        assert "WARNING: skipped _defaults.yaml — " in res.stderr, res.stderr
-        out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
-        got = out if mode == ["tr"] else out["tr"]
-        assert got["effective_config"] == go["tenants"]["tr"]["effective_config"]
+        assert go_refused(conf_d) == ["_defaults.yaml"]
+        assert_refused(res.returncode, res.stderr, ["_defaults.yaml"])
+        assert res.stdout == ""
 
     @pytest.mark.parametrize("shape", sorted(DEFAULTS_SHAPES))
     def test_a_draft_that_does_not_decode_there_is_named(self, tmp_path, shape):
@@ -1754,19 +1752,18 @@ class TestTreesGoDoesNotResolve:
         assert out["ts"]["effective_config"] == {"mysql_connections": 50}
         assert "skips or cannot read" not in res.stderr
 
-    def test_control_unparseable_tenant_file_is_still_skipped(self, tmp_path):
+    def test_control_unparseable_tenant_file_refuses_too(self, tmp_path):
         conf_d = self._tree(tmp_path, tenant="tenants: [\n")
         res = self._run("--all", "--conf-d", str(conf_d))
-        assert res.returncode == 0, res.stderr
-        assert set(json.loads(res.stdout)) == {"ts"}
-        assert "WARNING: skipped tr.yaml — " in res.stderr, res.stderr
+        assert_refused(res.returncode, res.stderr, ["tr.yaml"])
 
     def test_a_tenant_in_a_skipped_file_is_not_found_and_says_why(self, tmp_path):
         conf_d = self._tree(tmp_path, tenant='tenants:\n  tr:\n    x: !!bool yes\n')
         res = self._run("tr", "--conf-d", str(conf_d))
-        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-        assert "Tenant 'tr' not found — the exporter's load skips" in res.stderr, res.stderr
-        assert "tr.yaml" in res.stderr
+        # #3206: the file the exporter skips refuses the run, named — before
+        # any "not found" could be read as "there is no such tenant".
+        assert_refused(res.returncode, res.stderr, ["tr.yaml"])
+        assert "not found" not in res.stderr, res.stderr
 
     def test_multi_document_what_if_is_a_draft_the_exporter_drops(self, tmp_path):
         """The draft is read as the exporter reads that path. It used to be its

@@ -243,6 +243,9 @@ _NOT_PROBED: dict[str, str] = {
     "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _GO_WRITER, "dx/run_chaos_soak.py": _NAMES,
     "lint/check_account_registry_monotonic.py": _GO_BLOB,
+    "_lib_exitcodes.py": _PROSE_ONLY + ("; the exit/envelope library: it carries the shared "
+                                        "conf.d refusal's `refused_paths` into the --json "
+                                        "envelope (#3206), and reads no file"),
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",

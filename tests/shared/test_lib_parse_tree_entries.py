@@ -138,8 +138,13 @@ def test_permission_refusals_are_config_files_in_both_modes(unprivileged) -> Non
         assert e.config_file and e.problem is not None and e.problem[0] == "read_failure", e
         with pytest.raises(lpt.FileUnreadable):
             tree.value(rel)
-    # List mode: tree mode's entries, but for the problems only reading finds.
+    # List mode: tree mode's entries, but for what only reading finds — the
+    # content problems, and the `unservable` verdict of a file the exporter's
+    # load drops for its content (list mode knows the walk's records alone).
     def without_content_problem(e: lpt.Entry) -> lpt.Entry:
+        walk_record = e.problem is not None and e.problem[0] in lpt.LIST_PROBLEM_KINDS
+        if e.verdict == "unservable" and not walk_record:
+            e = lpt.Entry(**{**e.__dict__, "verdict": None})
         if e.problem is not None and e.problem[0] not in lpt.LIST_PROBLEM_KINDS:
             return lpt.Entry(**{**e.__dict__, "problem": None})
         return e
@@ -153,7 +158,7 @@ def test_config_file_is_the_role_and_nothing_else() -> None:
     of these wrong (a stat refused and a dangling link share their problem)."""
     facts = dict(path="x.yaml", depth=0, cls="tenant", tenant_named="x", defaults_document=False,
                  readers=("exporter", "generator"), not_read=None,
-                 problem=("read_failure", "the path cannot be statted (stat_error)"))
+                 problem=("read_failure", "the path cannot be statted (stat_error)"), verdict=None)
     got = {role: lpt.Entry(**facts, role=role) for role in sorted(lpt.ROLES)}
     assert {r: (e.config_file, e.is_dir, e.not_a_file, e.unlistable_dir)
             for r, e in got.items()} == {
@@ -199,7 +204,7 @@ def test_a_list_document_is_no_tree_document() -> None:
     list document (no content) refuses it whole, and the other way round."""
     entry = {"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t",
              "defaults_document": False, "readers": ["exporter"], "not_read": None,
-             "role": "config", "problem": None}
+             "role": "config", "problem": None, "verdict": None}
     listed = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
               "defaults_carriers": {}, "entries": [entry]}
     import json
@@ -220,7 +225,8 @@ def test_a_dir_entry_names_no_reader(role, problem) -> None:
     import json
     base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
             "defaults_document": False, "readers": [], "not_read": None,
-            "role": role, "problem": problem}
+            "role": role, "problem": problem,
+            "verdict": None if problem is None else "unservable"}
     doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
            "defaults_carriers": {}}
     listing = lpt.read_document(json.dumps({**doc, "entries": [base]}).encode(),
@@ -260,3 +266,57 @@ def test_a_write_onto_a_directory_is_refused_not_a_da_guard_failure(unprivileged
         wc.confirm(conf, target, "tenants: {x: {}}\n", {}, binary=str(wrapper))
     assert ei.value.reason == wc.NOT_READ, ei.value
     assert "directory" in str(ei.value) and "older" not in str(ei.value), ei.value
+
+
+# ── the fail-closed exit (#3206) ─────────────────────────────────────
+
+def _entry(path: str, verdict, problem=("read_failure", "the path cannot be statted")) -> lpt.Entry:
+    return lpt.Entry(path=path, depth=0, cls="tenant", tenant_named=None, defaults_document=False,
+                     readers=("exporter",), not_read=None, role="config",
+                     problem=problem if verdict else None, verdict=verdict)
+
+
+def test_the_refusal_names_every_path_with_a_verdict_and_exits_2(capsys) -> None:
+    """One `ERROR:` line per entry Go gives a verdict — every one, none
+    elided — then the tree's line, and exit 2; an entry without one is not
+    named, and a document without any returns."""
+    many = [_entry(f"t{i:03d}.yaml", "unservable") for i in range(40)]
+    entries = [_entry("ok.yaml", None), _entry("team", "tree_refused"), *many]
+    with pytest.raises(SystemExit) as ei:
+        lpt.refuse_unservable(entries, "conf.d")
+    assert ei.value.code == 2
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 1 + 40 + 1, err
+    assert err[0].startswith("ERROR: team: the route generator refuses the whole tree")
+    assert all(f"ERROR: t{i:03d}.yaml: the exporter cannot read or decode it" in "\n".join(err)
+               for i in range(40))
+    assert "ok.yaml" not in "\n".join(err)
+    assert "41 path(s)" in err[-1]
+    lpt.refuse_unservable([_entry("ok.yaml", None)], "conf.d")  # returns
+
+
+def test_the_refusal_escapes_a_name_for_the_terminal(capsys) -> None:
+    with pytest.raises(SystemExit):
+        lpt.refuse_unservable([_entry("a\x1b[2Jb.yaml", "unservable")], "conf.d")
+    assert "\x1b" not in capsys.readouterr().err
+
+
+def test_the_reader_refuses_a_flagged_tree_unless_the_run_judges(tmp_path, da_guard_env, capsys) -> None:
+    """`ConfdReader.tree` is the exit: a tree with a dangling link ends the
+    run (exit 2, the link named) — the listing, the tenant set and a read
+    all go through it; inside `judging()` the same tree reads."""
+    import _lib_confd
+    import _lib_parse_cache as pc
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "a.yaml").write_text("tenants: {a: {}}\n", encoding="utf-8")
+    symlink_or_skip("nowhere", conf / "gone.yaml")
+    for take in (lambda r: r.tree(), lambda r: r.listing(), lambda r: pc.tenant_scope(r),
+                 lambda r: r.read("a.yaml"), lambda r: _lib_confd.config_listing(conf)):
+        with pytest.raises(SystemExit) as ei:
+            take(pc.ConfdReader(conf))
+        assert ei.value.code == 2
+        assert "ERROR: gone.yaml:" in capsys.readouterr().err
+    with pc.judging():
+        tree = pc.ConfdReader(conf).tree()
+    assert [e.path for e in lpt.refused_entries(tree.entries)] == ["gone.yaml"]

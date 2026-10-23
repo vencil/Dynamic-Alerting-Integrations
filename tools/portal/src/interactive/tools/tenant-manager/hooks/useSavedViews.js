@@ -6,19 +6,26 @@ purpose: |
   operations + a snapshot of the current views map, so the
   SavedViewsPanel UI doesn't have to know about HTTP details.
 
-  Backend contract recap (components/tenant-api/internal/views/views.go):
-    GET    /api/v1/views          → { views: { [id]: View } }
-    GET    /api/v1/views/{id}     → View
+  Backend contract (components/tenant-api/internal/handler/view.go;
+  the generated spec is components/tenant-api/docs/swagger.json):
+    GET    /api/v1/views          → ViewResponse[]   (a JSON array)
+    GET    /api/v1/views/{id}     → ViewResponse     (not used here)
     PUT    /api/v1/views/{id}     → upsert (RBAC: PermWrite)
     DELETE /api/v1/views/{id}     → (RBAC: PermWrite)
 
-  View shape:
+  ViewResponse:
     {
+      id:          string    (the view id — the key for apply / delete)
       label:       string    (required, ≤ 256 chars)
-      description: string    (optional, ≤ 4096 chars)
+      description: string    (optional, ≤ 1024 chars)
       created_by:  string    (server-injected from auth context)
       filters:     {[key]: string}   (≤ 20 entries)
     }
+
+  The list is an array, never an object keyed by id (#3231): reading it
+  as one turned the array indexes '0', '1' into view ids, so apply and
+  delete went to the wrong view. A 200 whose body is not an array is
+  reported through onError, not read as "no views".
 
   C-6 Smart Views (S#100): backend was ALREADY query-criteria shaped
   in v2.5.0 — `View.filters` is `map[string]string` storing
@@ -38,7 +45,7 @@ purpose: |
 
   Returns:
     {
-      views: { [id]: View },     // current snapshot
+      views: ViewResponse[],     // current snapshot, as the API sent it
       loading: boolean,          // true during initial load
       reachable: boolean,        // false if /api/v1/views 404s
                                  // (e.g. demo mode) or 403s (the
@@ -63,7 +70,7 @@ import { useState, useEffect, useCallback, useRef } from "react";  // TRK-233 ES
 const VIEWS_ENDPOINT = '/api/v1/views';
 
 function useSavedViews(onError) {
-  const [views, setViews] = useState({});
+  const [views, setViews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [reachable, setReachable] = useState(true);
 
@@ -93,7 +100,7 @@ function useSavedViews(onError) {
         // org-scoped "*" rule is refused by design), not a failure.
         // Silent — panel hides itself via the `reachable` flag.
         setReachable(false);
-        setViews({});
+        setViews([]);
         return;
       }
       if (!resp.ok) {
@@ -103,18 +110,25 @@ function useSavedViews(onError) {
         }
         return;
       }
-      const data = await resp.json().catch(() => ({}));
-      // Server may return { views: {...} } OR {...} directly per
-      // existing handler shape — accept both.
-      const nextViews = (data && data.views) ? data.views : (data || {});
-      setViews(nextViews);
+      const data = await resp.json().catch(() => undefined);
+      // GET /api/v1/views returns ViewResponse[] (#3231). Anything else
+      // is a contract break, so it is reported rather than shown as an
+      // empty list.
+      if (!Array.isArray(data)) {
+        setViews([]);
+        if (onErrorRef.current) {
+          onErrorRef.current('Failed to list saved views: the response is not a list of views.');
+        }
+        return;
+      }
+      setViews(data);
       setReachable(true);
     } catch (err) {
       // Network failure — treat as unreachable but don't toast
       // (demo mode is the common cause). Caller surfaces details
       // only on user-initiated mutations.
       setReachable(false);
-      setViews({});
+      setViews([]);
     } finally {
       setLoading(false);
     }

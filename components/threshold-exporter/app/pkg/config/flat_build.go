@@ -233,17 +233,13 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		// recursion introduced). The probe below separates the two: a syntax
 		// error is still counted and still loud; content this plane simply
 		// does not want is skipped in silence. (#1569 blind review.)
-		if isNestedPlatformFile(name) {
-			if probe, ok := reportUnparseableNestedPlatformFile(fullPath, data, in.Obs, logger); ok {
-				reportNestedPlatformTenants(fullPath, probe, logger)
-			} else {
-				parseFailed = append(parseFailed, name)
-			}
-			continue
-		}
-		partial, ok := parsePartialConfig(name, fullPath, data, in.Obs, logger)
+		partial, probe, nested, ok := decodeBuildFile(name, fullPath, data, in.Obs, logger)
 		if !ok {
 			parseFailed = append(parseFailed, name)
+			continue
+		}
+		if nested {
+			reportNestedPlatformTenants(fullPath, probe, logger)
 			continue
 		}
 		if name == rootCarrier {
@@ -284,6 +280,52 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		rejectedTenantSets:     rejected.tenantSets,
 		respelledChain:         respelledChainFiles(in.ParsedDefaults),
 	}, nil
+}
+
+// decodeBuildFile is the decode BuildFlatConfig hands one file's bytes to,
+// and its verdict: a nested `_` file is only probed (nested true, probe its
+// content; see reportUnparseableNestedPlatformFile), every other file is
+// decoded whole (parsePartialConfig — ParseTenantFile for a tenant file, the
+// walker's own decode). ok false: the build drops the file (ParseFailed).
+// DropsConfFile asks the same function, so the two cannot disagree.
+func decodeBuildFile(name, fullPath string, data []byte, obs ScanObserver, logger *log.Logger) (partial ThresholdConfig, probe any, nested, ok bool) {
+	if isNestedPlatformFile(name) {
+		probe, ok = reportUnparseableNestedPlatformFile(fullPath, data, obs, logger)
+		return ThresholdConfig{}, probe, true, ok
+	}
+	partial, ok = parsePartialConfig(name, fullPath, data, obs, logger)
+	return partial, nil, false, ok
+}
+
+// DropsConfFile reports whether the exporter's build drops the config file
+// at rel (a root-relative slash scan key) holding data — whether it is in
+// FlatBuild.ParseFailed, and so in da-guard validation's parse_failed
+// (#3206) — judged alone: decodeBuildFile, BuildFlatConfig's own per-file
+// decode, nothing logged or counted. selectedCarrier is false only for a
+// defaults carrier its directory's chain does not select: an unselected ROOT
+// carrier is never parsed (isUnselectedRootCarrier), an unselected nested one
+// is probed like any nested `_` file. No verdict depends on another file.
+func DropsConfFile(rel string, data []byte, selectedCarrier bool) bool {
+	if !selectedCarrier && isRootCarrierKey(rel) {
+		return false
+	}
+	_, _, _, ok := decodeBuildFile(rel, rel, data, nil, discardLogger)
+	return !ok
+}
+
+// DroppedFiles is DropsConfFile over every file a ScanDirTreeFiles walk
+// kept, sorted: FlatBuild.ParseFailed of a cold build of that tree, without
+// the build (`da-guard parse-tree`, #3206). TestDroppedFiles_IsTheBuilds
+// holds the two equal.
+func (s *TreeScan) DroppedFiles() []string {
+	root := selectedRootCarrierKey(s)
+	var out []string
+	for _, k := range s.Keys { // sorted
+		if DropsConfFile(k, s.Files[k].Data, !isUnselectedRootCarrier(k, root)) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // bothSpellings reports whether block also holds another #1231 spelling of k.

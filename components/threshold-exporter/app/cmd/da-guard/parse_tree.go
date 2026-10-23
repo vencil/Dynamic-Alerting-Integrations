@@ -150,6 +150,22 @@ type parseTreeEntry struct {
 	// without reading (read_failure, not_regular_file); tree and file mode
 	// add the content kinds (syntax_error, …) for a config file they read.
 	Problem *parseTreeProblem
+	// Verdict is what the path makes da-guard's validation (no --scope) do
+	// (verdict.go, a closed set): "unservable" — validation names it under
+	// exit 3 (parse_failed or unreadable: the exporter cannot serve it) —,
+	// "tree_refused" — under exit 4 as unreadable_outside_run (the route
+	// generator refuses the whole tree on it) —, else null. Tree mode: of the
+	// tree on disk, every entry. File mode: the full verdict of --path once
+	// its text is written (setFileVerdict; no load of the tree). List mode
+	// reads no byte, so it knows only the walk's half of exit 3 (unreadable):
+	// a file whose content the exporter refuses (parse_failed) is null there
+	// and unservable in tree mode. Names mode: always null (no tree).
+	// ⚠️ Per path only: null on every entry is not "validation passes" — a
+	// tenant declared twice (exit 2) or routing evidence (exit 4) is no
+	// path's verdict. An entry can be unselected_defaults_carrier AND
+	// unservable: a broken carrier below the root that its directory does not
+	// select is still probed, and dropped, by the exporter's build.
+	Verdict string
 }
 
 type parseTreeProblem struct {
@@ -157,8 +173,8 @@ type parseTreeProblem struct {
 	Message string         `json:"message"`
 }
 
-// MarshalJSON writes every field, an empty TenantNamed / NotRead / Role as
-// null, and does not escape HTML characters (a path is data, not markup).
+// MarshalJSON writes every field, an empty TenantNamed / NotRead / Role /
+// Verdict as null, and does not escape HTML characters (a path is data, not markup).
 func (e parseTreeEntry) MarshalJSON() ([]byte, error) {
 	orNull := func(s string) *string {
 		if s == "" {
@@ -181,8 +197,9 @@ func (e parseTreeEntry) MarshalJSON() ([]byte, error) {
 		NotRead          *string           `json:"not_read"`
 		Role             *config.Role      `json:"role"`
 		Problem          *parseTreeProblem `json:"problem"`
+		Verdict          *string           `json:"verdict"`
 	}{e.Path, e.Depth, e.Class, orNull(e.TenantNamed), e.DefaultsDocument, e.Readers,
-		orNull(e.NotRead), role, e.Problem}
+		orNull(e.NotRead), role, e.Problem, orNull(e.Verdict)}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -238,7 +255,7 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  tree and file mode only\n"+
 			"<entry> holds every field, null where it has no value:\n"+
 			"  {\"path\", \"depth\", \"class\", \"tenant_named\", \"defaults_document\", \"readers\",\n"+
-			"   \"not_read\", \"role\", \"problem\": {\"kind\", \"message\"}}\n"+
+			"   \"not_read\", \"role\", \"problem\": {\"kind\", \"message\"}, \"verdict\"}\n"+
 			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root.\n"+
 			"\"depth\": directories between the root and the path. \"class\": tenant, defaults,\n"+
 			"platform (another `_` name) or directory (file and names mode also hidden,\n"+
@@ -272,7 +289,24 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"a name too long, …) is config.\n"+
 			"\"problem\": a kind from the closed list below; list mode decides only read_failure and\n"+
 			"not_regular_file (files are opened and closed, never read), so a file that opens but\n"+
-			"fails mid-read has no problem there.\n\n"+
+			"fails mid-read has no problem there.\n"+
+			"\"verdict\": what the path makes `da-guard --config-dir <dir>` (no --scope) do, a\n"+
+			"closed list, null when nothing. Always the whole tree's judgement: a superset of what a\n"+
+			"--scope'd run lists under parse_failed / unreadable — compare it with unscoped validation.\n"+
+			"  unservable      named under exit 3 (parse_failed or unreadable): the exporter cannot\n"+
+			"                  serve it.\n"+
+			"  tree_refused    named under exit 4 as unreadable_outside_run: the route generator\n"+
+			"                  refuses the whole tree on it.\n"+
+			"Tree mode: every entry, of the tree on disk. File mode: the full verdict of --path\n"+
+			"once its text is written (null when the walk would not record it: hidden,\n"+
+			"not_config_name, parent_not_walked); file mode judges no other path — read tree mode\n"+
+			"for the rest. List mode reads no byte and so knows only the walk's half of exit 3: a\n"+
+			"file the exporter cannot decode is null there and unservable in tree mode — a reader\n"+
+			"that must name every path validation names reads tree mode. Names mode: always null.\n"+
+			"An unselected_defaults_carrier below the root can be unservable (the exporter still\n"+
+			"probes it). Per path only: null everywhere is not \"validation passes\" — a tenant\n"+
+			"declared twice (exit 2) or routing content (exit 4) is no path's verdict; a reader that\n"+
+			"needs the whole verdict runs validation.\n\n"+
 			"\"files\" holds every config entry with readers and no problem (tree mode), or the\n"+
 			"text of --path (file mode). <content> is the top-level mapping, aliases and unquoted\n"+
 			"`<<` merges expanded. A mapping is a JSON object keyed by each key's source text\n"+
@@ -388,11 +422,19 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	if err != nil {
 		return fail("%v", err)
 	}
+	if p := nonUTF8Path(scan); p != "" {
+		return fail("%v", nonUTF8Error(p))
+	}
 	var doc *parseTreeDoc
 	if f.path == "" {
-		doc, err = parseTreeOf(scan)
+		if doc, err = parseTreeOf(scan); err == nil {
+			err = setVerdicts(doc.Entries, treeDropped(scan))
+		}
 	} else {
-		doc, err = parseFileIn(scan, rel, input)
+		var asOnDisk, selected bool
+		if doc, asOnDisk, selected, err = parseFileIn(scan, rel, input); err == nil {
+			setFileVerdict(scan, &doc.Entries[0], asOnDisk, selected, rel, input)
+		}
 	}
 	if err != nil {
 		return fail("%v", err)
@@ -445,18 +487,22 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 }
 
 // parseFileIn is file mode: input read as the text of rel, in the tree scan
-// holds once rel is written.
-func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc, error) {
-	doc := newParseTreeDoc("file")
-	// A directory the walk recorded (entered: role dir; could not list:
-	// unlistable_dir) is what tree mode says it is — the very entry, from
-	// the same walk and the same function (walkEntries), never a second
-	// verdict here. Its text is not read.
+// holds once rel is written. asOnDisk: the one entry is tree mode's entry of
+// rel in the tree on disk (a walk record that is no config file, or a path
+// that is no regular file), whose text is not read. selectedCarrier: false
+// only for a defaults carrier its directory's chain would not select.
+func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTreeDoc, asOnDisk, selectedCarrier bool, err error) {
+	doc = newParseTreeDoc("file")
+	// A path the walk recorded as no config file (a directory it entered or
+	// could not list, a symlink to a directory, a path that is no regular
+	// file — whatever its name: `etc/`, `etc -> /etc`) is what tree mode says
+	// it is — the very entry, from the same walk and the same function
+	// (walkEntries), never a second verdict here. Its text is not read.
 	if d, err := walkedDirEntry(scan, rel); err != nil {
-		return nil, err
+		return nil, false, false, err
 	} else if d != nil {
 		doc.Entries = append(doc.Entries, *d)
-		return doc, nil
+		return doc, true, false, nil
 	}
 	e := nameEntry(rel)
 	e.Role = config.RoleConfig
@@ -474,13 +520,13 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 			// What tree mode gives the same path: the same entry, and the
 			// text is not read.
 			doc.Entries = append(doc.Entries, *issue)
-			return doc, nil
+			return doc, true, false, nil
 		}
 	}
 	readers := []string{}
 	carrier := false
+	selected := true
 	if reason == "" {
-		selected := true
 		if confdname.IsDefaults(path.Base(rel)) {
 			// The directory's carriers once rel is written: the readable
 			// ones the walk found there, rel among them.
@@ -497,11 +543,11 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 			carrier = selected
 			d, err := relTo(scan.AbsRoot, dir)
 			if err != nil {
-				return nil, err
+				return nil, false, false, err
 			}
 			c, err := relTo(scan.AbsRoot, chosen)
 			if err != nil {
-				return nil, err
+				return nil, false, false, err
 			}
 			doc.DefaultsCarriers[d] = c
 		}
@@ -520,7 +566,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		}
 	}
 	doc.Entries = append(doc.Entries, e)
-	return doc, nil
+	return doc, false, selected, nil
 }
 
 // notFileEntry is the readers and the message of a path that is not a file
@@ -572,16 +618,17 @@ func fileOnDisk(root, rel string) *parseTreeEntry {
 	return nil
 }
 
-// walkedDirEntry is tree mode's entry of rel when the walk recorded rel as a
-// directory (role dir or unlistable_dir), else nil: walkEntries over the
-// same scan, so file and tree mode cannot disagree about a directory.
+// walkedDirEntry is tree mode's entry of rel when the walk recorded rel as
+// anything but a config file (role dir, unlistable_dir or not_a_file), else
+// nil: walkEntries over the same scan, so file and tree mode cannot disagree
+// about such a path.
 func walkedDirEntry(scan *config.TreeScan, rel string) (*parseTreeEntry, error) {
 	idx := newParseTreeIndex("tree")
 	if err := walkEntries(scan, &idx); err != nil {
 		return nil, err
 	}
 	for _, e := range idx.Entries {
-		if e.Path == rel && (e.Role == config.RoleDir || e.Role == config.RoleUnlistableDir) {
+		if e.Path == rel && e.Role != config.RoleConfig {
 			return &e, nil
 		}
 	}
@@ -684,7 +731,7 @@ func relTo(root, p string) (string, error) {
 	}
 	r = filepath.ToSlash(r)
 	if !utf8.ValidString(r) {
-		return "", fmt.Errorf("the path %q is not valid UTF-8; JSON cannot carry it", r)
+		return "", nonUTF8Error(r)
 	}
 	return r, nil
 }
@@ -697,7 +744,7 @@ func relTo(root, p string) (string, error) {
 func writeParseTree(w io.Writer, entries []parseTreeEntry, doc any) error {
 	for _, e := range entries {
 		if !utf8.ValidString(e.Path) {
-			return fmt.Errorf("the path %q is not valid UTF-8; JSON cannot carry it", e.Path)
+			return nonUTF8Error(e.Path)
 		}
 	}
 	enc := json.NewEncoder(w)

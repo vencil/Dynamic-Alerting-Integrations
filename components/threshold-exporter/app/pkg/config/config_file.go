@@ -43,15 +43,18 @@ import (
 //
 // Semantics are a plain yaml.Unmarshal into ThresholdConfig — the flat
 // plane's historical decode — pinned against that oracle over a variant
-// corpus by config_file_test.go, with THREE post-decode steps: a reserved
+// corpus by config_file_test.go, with FOUR post-decode steps: a reserved
 // key's mapping is kept whole even when it has a `default` key
 // (keepReservedMappings, #2859), a value written
 // as null is no write (dropNullThresholds, #2518 — a `defaults:` key, and a
-// threshold key of a `tenants:` / `profiles:` body), and inside `defaults:`
+// threshold key of a `tenants:` / `profiles:` body), inside `defaults:`
 // a spelling that writes nothing beside one that does is dropped
-// (dropNullShadowingSpellings, #2418). The tenant set of a file is the key
-// set of the returned Tenants. It also records, without changing any value,
-// which entries write `_metadata` as a string (StringMetadataEntries, #2859).
+// (dropNullShadowingSpellings, #2418), and a reserved key written with a
+// schedule keeps only its `default` — the part its readers read
+// (stripScheduledReserved, #3269; recorded in ScheduledReservedEntries). The
+// tenant set of a file is the key set of the returned Tenants. It also
+// records, without changing any value, which entries write `_metadata` as a
+// string (StringMetadataEntries, #2859).
 //
 // ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
 // that is not valid UTF-8, and a document only the typed decode accepts
@@ -75,6 +78,28 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 // before the post-decode steps run.
 // It does NOT ask parse-tree (ParseConfigFile and ParseTenantFile do, first).
 func parseConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
+	cfg, err := decodeConfigFile(data, generic)
+	if err == nil {
+		// #3269: a reserved key's schedule is read by no one; what every
+		// reader of this decode sees is its `default` alone, and where the
+		// file wrote one is recorded for the load's WARN.
+		if sr := append(stripScheduledReserved("tenants", cfg.Tenants),
+			stripScheduledReserved("profiles", cfg.Profiles)...); sr != nil {
+			if cfg.notes == nil {
+				cfg.notes = &fileNotes{}
+			}
+			cfg.notes.scheduledReserved = sr
+		}
+	}
+	return cfg, err
+}
+
+// decodeConfigFile is parseConfigFile before its last step: the reserved
+// keys' schedules are still in the values, as written. For the one reader
+// that judges what a tenant wrote rather than what is served —
+// MergeTenantOverRootPlatform's tenant layer, which its ValidateTenantKeys
+// judges as the write gate judges a body (#3269).
+func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	// Through a yaml.Node rather than straight into cfg: yaml.Unmarshal builds
 	// that node anyway, so the typed decode costs the same, and the node still
@@ -94,7 +119,9 @@ func parseConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 		}
 	}
 	if err == nil {
-		cfg.stringMetadata = stringMetadataEntries(&doc)
+		if sm := stringMetadataEntries(&doc); sm != nil {
+			cfg.notes = &fileNotes{stringMetadata: sm}
+		}
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
@@ -404,7 +431,12 @@ func mayHaveStructuredReserved(bodies map[string]map[string]ScheduledValue) bool
 // write `_metadata` as a string, as "tenants.<id>" / "profiles.<name>"
 // (stringMetadataEntries). Set by ParseConfigFile only; nil for a merged
 // config.
-func (c *ThresholdConfig) StringMetadataEntries() []string { return c.stringMetadata }
+func (c *ThresholdConfig) StringMetadataEntries() []string {
+	if c.notes == nil {
+		return nil
+	}
+	return c.notes.stringMetadata
+}
 
 // TenantWritesStringMetadata reports whether a tenant config document writes
 // tenants.<tenantID>._metadata as a string. The write side refuses that

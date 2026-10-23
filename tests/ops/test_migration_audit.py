@@ -4,14 +4,17 @@ The cases are the fixed corpus, not new hand-written files:
 tests/shared/parse_tree_corpus.json (`rows`, one per kind of the closed list,
 the PyYAML-only refusals, the values whose meaning changes) and every row of
 merge_key_policy_corpus.json with its parse-tree category
-(parse_tree_merge_key_categories.json). Each row is written to its own
-directory of ONE conf.d, so one da-guard run audits them all, and every row
-must land in exactly the list its category names:
+(parse_tree_merge_key_categories.json). Each row the exporter serves is
+written to its own directory of ONE conf.d, so one da-guard run audits them
+all, and every row must land in exactly the list its category names:
 
 * ``pyyaml_only``                         → ``becomes_readable``
-* ``unreadable:<kind>``, generator reads  → ``becomes_unreadable`` (that kind)
-* ``unreadable:<kind>``, generator refuses → ``still_unreadable`` (that kind)
-* ``both_read``                           → none of those three
+* ``both_read``                           → none of the lists
+
+A row parse-tree cannot read (``unreadable:<kind>``) is a path da-guard
+validation names: a tree holding one is refused whole (#3206) — every such
+path named, exit 2 — so those rows are one tree of their own, and
+``becomes_unreadable`` / ``still_unreadable`` are always empty.
 
 The "today" half is held to the generator: `_read_today` must give every
 corpus row the verdict the corpus froze from `_parse_config_files`.
@@ -62,6 +65,9 @@ def _cases() -> list[tuple[str, str, bytes, str, str]]:
 
 
 CASES = _cases()
+#: The rows the exporter serves (no path of them has a verdict), and the rest.
+SERVED = [c for c in CASES if not c[3].startswith("unreadable:")]
+REFUSED = [c for c in CASES if c[3].startswith("unreadable:")]
 
 
 def _write(root: Path, files: dict[str, bytes]) -> Path:
@@ -74,7 +80,7 @@ def _write(root: Path, files: dict[str, bytes]) -> Path:
 
 @pytest.fixture(scope="module")
 def corpus_tree(tmp_path_factory, da_guard_binary) -> tuple[Path, dict]:
-    root = _write(tmp_path_factory.mktemp("corpus-tree"), {rel: data for rel, _, data, _, _ in CASES})
+    root = _write(tmp_path_factory.mktemp("corpus-tree"), {rel: data for rel, _, data, _, _ in SERVED})
     return root, ma.audit(root, da_guard_binary)
 
 
@@ -115,24 +121,17 @@ def check_categories(report: dict) -> None:
             assert e["file"] not in where, f"{e['file']} in two lists"
             where[e["file"]] = (name, e)
     bad = []
-    for rel, _, _, category, generator in CASES:
+    for rel, _, _, category, generator in SERVED:
         got = where.get(rel)
-        if category == "pyyaml_only":
-            want = ("becomes_readable", None)
-        elif category == "both_read":
-            want = None
-        else:
-            kind = category.removeprefix("unreadable:")
-            want = ("becomes_unreadable" if generator == "read" else "still_unreadable", kind)
+        want = ("becomes_readable", None) if category == "pyyaml_only" else None
         if want is None:
             if got is not None:
                 bad.append((rel, category, got[0]))
-        elif got is None or got[0] != want[0] or (want[1] and got[1]["kind"] != want[1]):
-            bad.append((rel, category, generator, got and (got[0], got[1].get("kind"))))
+        elif got is None or got[0] != want[0]:
+            bad.append((rel, category, generator, got and got[0]))
     assert not bad, bad[:10]
-    # Every kind the corpus has, in the list its generator verdict picks.
-    kinds = {e["kind"] for e in report["becomes_unreadable"]} | {e["kind"] for e in report["still_unreadable"]}
-    assert set(CORPUS["text_kinds"]) <= kinds
+    # A tree the audit reads holds no file parse-tree cannot read (#3206).
+    assert report["becomes_unreadable"] == [] and report["still_unreadable"] == []
 
 
 def test_every_corpus_row_lands_in_its_list(corpus_report) -> None:
@@ -141,7 +140,7 @@ def test_every_corpus_row_lands_in_its_list(corpus_report) -> None:
     assert corpus_report["selection"] == []
     assert corpus_report["summary"] == {**{k: len(corpus_report[k]) for k in ma.ALL_LISTS},
                                          "files_compared": len(corpus_report["files_compared"])}
-    both_read = {rel for rel, _, _, cat, _ in CASES if cat == "both_read"}
+    both_read = {rel for rel, _, _, cat, _ in SERVED if cat == "both_read"}
     assert set(corpus_report["files_compared"]) == both_read
 
 
@@ -158,14 +157,28 @@ def test_becomes_readable_carries_what_yaml_v3_reads(corpus_report) -> None:
                if e["pyyaml_error"].count('"') >= 2)
 
 
-def test_becomes_unreadable_names_the_kind(corpus_report) -> None:
-    by_file = {e["file"]: e for e in corpus_report["becomes_unreadable"]}
-    assert by_file["rows/bool-tag-yes/t.yaml"]["kind"] == "decode_error"
-    assert by_file["rows/escaped-slash/t.yaml"]["kind"] == "syntax_error"
-    assert by_file["rows/2700-merge-tagged-key/t1.yaml"]["kind"] == "tag_not_allowed"
-    assert by_file["rows/tilde-key/t.yaml"]["kind"] == "null_key"
-    assert by_file["rows/nonspecific-quoted/t.yaml"]["kind"] == "non_specific_tag"
-    assert by_file["rows/bom-in-value/t.yaml"]["kind"] == "bom_not_at_start"
+def test_a_tree_with_a_row_parse_tree_cannot_read_is_refused(tmp_path, da_guard_binary,
+                                                             capsys) -> None:
+    """#3206: every row parse-tree cannot read, in one tree: the audit is
+    refused before it compares anything — exit 2, each of them named (all
+    of them, none elided), with its kind."""
+    root = _write(tmp_path / "refused-tree", {rel: data for rel, _, data, _, _ in REFUSED})
+    with pytest.raises(SystemExit) as ei:
+        ma.audit(root, da_guard_binary)
+    assert ei.value.code == EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    lines = {ln.split(": ", 2)[1] for ln in err.splitlines() if ln.startswith("ERROR: ") and ": " in ln[7:]}
+    missing = sorted({rel for rel, *_ in REFUSED} - lines)
+    assert not missing, missing[:10]
+    for rel, kind in (("rows/bool-tag-yes/t.yaml", "decode_error"),
+                      ("rows/escaped-slash/t.yaml", "syntax_error"),
+                      ("rows/2700-merge-tagged-key/t1.yaml", "tag_not_allowed"),
+                      ("rows/tilde-key/t.yaml", "null_key"),
+                      ("rows/nonspecific-quoted/t.yaml", "non_specific_tag"),
+                      ("rows/bom-in-value/t.yaml", "bom_not_at_start")):
+        line = next(ln for ln in err.splitlines() if ln.startswith(f"ERROR: {rel}:"))
+        assert f"({kind}:" in line, line
+    assert set(CORPUS["text_kinds"]) <= {c.removeprefix("unreadable:") for *_, c, _ in REFUSED}
 
 
 # ── values ───────────────────────────────────────────────────────────────
@@ -256,10 +269,10 @@ def test_audit_lists_key_differences(tmp_path, da_guard_binary, monkeypatch) -> 
     real = ma.run_parse_tree
 
     def renamed(*args, **kwargs):
-        doc = real(*args, **kwargs)
-        t1 = doc["files"]["t.yaml"]["tenants"]["t1"]
+        tree = real(*args, **kwargs)
+        t1 = tree.node("t.yaml")["tenants"]["t1"]
         t1["mem"] = t1.pop("cpu")
-        return doc
+        return tree
 
     monkeypatch.setattr(ma, "run_parse_tree", renamed)
     report = ma.audit(root, da_guard_binary)
@@ -297,11 +310,21 @@ def test_selection_agrees_on_carriers_and_nested_files(tmp_path, da_guard_binary
         "team/t.yaml": b"tenants: {t1: {cpu: 1}}\n", ".hidden/t.yaml": b"tenants: {t2: {}}\n",
         "notes.txt": b"x\n",
     })
-    (root / "dir.yaml").mkdir()
     report = ma.audit(root, da_guard_binary)
     assert report["selection"] == []
-    assert [(e["file"], e["kind"]) for e in report["still_unreadable"]] == [("dir.yaml", "not_regular_file")]
+    assert report["still_unreadable"] == []
     assert not ma.has_differences(report)
+
+
+def test_a_config_named_directory_refuses_the_audit(tmp_path, da_guard_binary, capsys) -> None:
+    """`dir.yaml/` is a path da-guard validation names: the audit is refused
+    (#3206), the directory named — it was a `still_unreadable` row."""
+    root = _write(tmp_path / "conf.d", {"t.yaml": b"tenants: {t1: {cpu: 1}}\n"})
+    (root / "dir.yaml").mkdir()
+    with pytest.raises(SystemExit) as ei:
+        ma.audit(root, da_guard_binary)
+    assert ei.value.code == EXIT_CALLER_ERROR
+    assert "ERROR: dir.yaml:" in capsys.readouterr().err
 
 
 # ── CLI: exit codes, --json, no fallback ─────────────────────────────────
@@ -356,14 +379,12 @@ def test_cli_exit_0_on_a_tree_both_read_the_same(tmp_path, da_guard_binary) -> N
 
 def test_cli_exit_1_and_text_report(tmp_path, da_guard_binary) -> None:
     files = {f"{n}/{ROWS[n]['file']}": _encode(ROWS[n]["doc"], None)
-             for n in ("bool-words-are-strings", "tab-after-colon", "bool-tag-yes",
-                       "nonspecific-slo-objective", "duplicate-key")}
+             for n in ("bool-words-are-strings", "tab-after-colon")}
     root = _write(tmp_path / "conf.d", files)
     proc = _cli(["--config-dir", str(root)], da_guard_binary)
     assert proc.returncode == EXIT_VIOLATION, proc.stderr
     out = proc.stdout
-    for title in ("Values read differently", "Files read today that parse-tree refuses",
-                  "Files refused today that parse-tree reads", "Files both refuse (no change)"):
+    for title in ("Values read differently", "Files refused today that parse-tree reads"):
         assert title in out, title
     assert "bool-words-are-strings/t.yaml:4  tenants.t1._routing.receiver.send_resolved" in out
     assert "cpu: !!int 80 (written \"80\")" in out
@@ -411,7 +432,7 @@ def _fake_da_guard(tmp_path: Path, body: str) -> str:
 
 _ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
           '"defaults_document": false, "readers": ["exporter"], "not_read": null, '
-          '"role": "config", "problem": null}')
+          '"role": "config", "problem": null, "verdict": null}')
 
 
 @pytest.mark.parametrize("body,needle", [
@@ -547,10 +568,10 @@ def test_lines_of_aliased_and_merged_values(tmp_path, da_guard_binary) -> None:
     ('{"entries": [{"path": "t.yaml"}]}', "entries[0] ('t.yaml'): no depth"),
     ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
      '"defaults_document": false, "readers": "exporter", "not_read": null, "role": "config", '
-     '"problem": null}]}', "readers is not a list"),
+     '"problem": null, "verdict": null}]}', "readers is not a list"),
     ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
      '"defaults_document": false, "readers": ["exporter"], "not_read": null, "role": "maybe", '
-     '"problem": null}]}', "role 'maybe'"),
+     '"problem": null, "verdict": null}]}', "role 'maybe'"),
     ('{"files": {"t.yaml": [1]}}', "files['t.yaml'] is not a mapping"),
     ('{"files": {"t.yaml": {"a": 1}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x", "tag": "!!str", "value": [1]}}}}', "wrong shape"),
@@ -610,7 +631,7 @@ def test_missing_da_guard_message_keeps_its_lines(tmp_path) -> None:
     assert any(ln.startswith("  This audit reads yaml.v3") for ln in lines[1:]), lines
 
 
-def test_today_selection_is_the_generators(tmp_path, monkeypatch) -> None:
+def test_today_selection_is_the_generators(tmp_path, monkeypatch, judging_run) -> None:
     """Differential: the files `_grar_parse._parse_config_files` actually
     reads (through `_lib_parse_cache.ConfdReader.read` since ADR-036 step 4),
     against `read_tree_today`. If the generator's file selection moves, this

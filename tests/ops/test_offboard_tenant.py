@@ -81,14 +81,13 @@ class TestLoadAllConfigs:
         result = ot.load_all_configs(str(d))
         assert len(result) == 0
 
-    def test_invalid_yaml_handled(self, tmp_path):
+    def test_invalid_yaml_refuses_the_run(self, tmp_path, capsys):
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "bad.yaml").write_text("this: is: not: valid: yaml: {{{\n")
         (d / "good.yaml").write_text("tenants:\n  db-a:\n    x: '1'\n")
-        result = ot.load_all_configs(str(d))
-        # bad.yaml may fail to load, but good.yaml should succeed
-        assert "good.yaml" in result
+        err = _refused(capsys, ot.load_all_configs, str(d))
+        assert "ERROR: bad.yaml:" in err and "good.yaml" not in err, err
 
 
 # ---------------------------------------------------------------------------
@@ -290,17 +289,23 @@ def _confd_with_unusable(tmp_path):
     return root
 
 
-def test_load_all_configs_names_unusable_entries(tmp_path, capsys):
+def _refused(capsys, fn, *args):
+    """*fn(*args)* ends the run through the shared refusal (#3206): exit 2;
+    returns its stderr."""
+    with pytest.raises(SystemExit) as ei:
+        fn(*args)
+    assert ei.value.code == 2
+    return capsys.readouterr().err
+
+
+def test_load_all_configs_refuses_a_tree_with_unusable_entries(tmp_path, capsys):
+    """#3206: they were a ⚠️ line and skipped; a path da-guard validation
+    names now refuses the run, every one named, before the pre-check."""
     root = _confd_with_unusable(tmp_path)
-
-    configs = ot.load_all_configs(str(root))
-
-    assert set(configs) == {"_defaults.yaml", "alpha.yaml"}, (
-        f"unusable entries must not be loaded as configs; got {set(configs)}")
-    out = capsys.readouterr().out
-    assert "notes.yaml" in out and "broken.yaml" in out
-    assert "(not_regular_file): a directory with a config file name" in out  # #3206 R7
-    assert "(read_failure): the path cannot be statted" in out
+    err = _refused(capsys, ot.load_all_configs, str(root))
+    assert "ERROR: notes.yaml:" in err and "ERROR: broken.yaml:" in err, err
+    assert "(not_regular_file: a directory with a config file name" in err
+    assert "(read_failure: the path cannot be statted" in err
 
 
 def test_load_all_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
@@ -315,14 +320,14 @@ def test_load_all_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_find_config_file_returns_none_for_a_directory_shaped_carrier(
-        tmp_path):
-    """`notes.yaml/` is not a config file, so the carrier lookup must miss —
-    the pre-check's job is then to explain why, not to imply nothing exists."""
+def test_find_config_file_refuses_beside_a_directory_shaped_carrier(
+        tmp_path, capsys):
+    """`notes.yaml/` is not a config file — and a path da-guard validation
+    names: the lookup refuses the run (#3206), naming it, instead of a miss
+    an operator could read as "there is nothing here to remove"."""
     root = _confd_with_unusable(tmp_path)
-
-    assert ot.find_config_file("notes", str(root)) is None
-    assert ot.find_config_file("alpha", str(root)) == str(root / "alpha.yaml")
+    err = _refused(capsys, ot.find_config_file, "alpha", str(root))
+    assert "ERROR: notes.yaml:" in err, err
 
 
 def test_find_config_file_survives_a_config_dir_that_cannot_be_listed(
@@ -338,18 +343,12 @@ def test_find_config_file_survives_a_config_dir_that_cannot_be_listed(
 
 def test_precheck_explains_a_tenant_whose_carrier_is_unusable(
         tmp_path, capsys):
-    """The report says "找不到設定檔案"; the run must also say WHY, or an
-    operator reads it as "there is nothing here to remove"."""
+    """A pre-check that answered "找不到設定檔案" for `notes.yaml/` let an
+    operator read it as "there is nothing here to remove"; the run is
+    refused instead, saying why (#3206)."""
     root = _confd_with_unusable(tmp_path)
-
-    can_proceed, report = ot.run_precheck("notes", str(root))
-    printed = capsys.readouterr().out
-    text = "\n".join(report) + printed
-
-    assert can_proceed is False
-    assert "找不到設定檔案" in text
-    assert "(not_regular_file): a directory with a config file name" in text, (  # #3206 R7
-        f"the pre-check refused without saying why.\n{text}")
+    err = _refused(capsys, ot.run_precheck, "notes", str(root))
+    assert "ERROR: notes.yaml:" in err and "(not_regular_file: a directory" in err, err
 
 
 # ---------------------------------------------------------------------------
@@ -373,16 +372,11 @@ def _confd_with_unreadable_platform(tmp_path):
     return root
 
 
-def test_precheck_counts_and_names_an_unreadable_file(tmp_path):
+def test_precheck_names_an_unreadable_file_and_never_passes(tmp_path, capsys):
     root = _confd_with_unreadable_platform(tmp_path)
-
-    can_proceed, report = ot.run_precheck("tenant-a", str(root))
-    text = "\n".join(report)
-
-    assert can_proceed is False, text
-    assert "_platform.yaml" in text, f"the report must name the unreadable file:\n{text}"
-    assert "Pre-check 通過" not in text
-    assert "Pre-check 失敗" in text
+    err = _refused(capsys, ot.run_precheck, "tenant-a", str(root))
+    assert "ERROR: _platform.yaml:" in err, err
+    assert "Pre-check 通過" not in err
 
 
 def test_precheck_mode_exits_nonzero_when_the_precheck_fails(tmp_path, monkeypatch):
@@ -391,7 +385,7 @@ def test_precheck_mode_exits_nonzero_when_the_precheck_fails(tmp_path, monkeypat
 
     with pytest.raises(SystemExit) as exc_info:
         ot.main()
-    assert exc_info.value.code == 1
+    assert exc_info.value.code == 2  # #3206: the shared refusal, before the pre-check
 
 
 def test_precheck_mode_exits_nonzero_for_a_missing_tenant(tmp_path, monkeypatch):
@@ -410,7 +404,7 @@ def test_execute_refuses_when_a_file_is_unreadable(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit) as exc_info:
         ot.main()
-    assert exc_info.value.code == 1
+    assert exc_info.value.code == 2  # #3206: refused before anything is deleted
     assert (root / "tenant-a.yaml").exists(), "the tenant file must not be deleted"
 
 

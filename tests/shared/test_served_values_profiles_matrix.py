@@ -37,6 +37,10 @@ from test_served_values_readers_matrix import _tree
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 
+#: validate-config's profiles row is a judge's (#3206): its in-process calls,
+#: and the loader preconditions beside them, run as a judge (`judging_run`).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 _PROFILES = "profiles:\n  gold:\n    mysql_connections: 70\n"
 _BASE = "defaults:\n  mysql_connections: 80\n"
 _A_PLAIN = "tenants:\n  tenant-a:\n    mysql_connections: \"60\"\n"

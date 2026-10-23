@@ -51,12 +51,18 @@ import "strings"
 // A threshold written as null, or as a schedule that writes nothing
 // (`{default: null}`, nullThreshold), writes nothing here either, as in
 // deepMerge: the value below shows through.
+//
+// A reserved key written with a schedule (#3269) is shown as the `default`
+// it wrote — what every reader of it reads (withRawServedValues, the
+// walker's form of servedValue) — once the layers are laid, so a schedule
+// merged leaf by leaf across layers is judged as the one value it became.
+// merged_hash keeps the schedule, as above.
 func effectiveView(chainBlocks []map[string]any, override map[string]any) map[string]any {
 	view := make(map[string]any)
 	for _, block := range chainBlocks {
 		view = layerPerThreshold(view, block)
 	}
-	return layerPerThreshold(view, override)
+	return withRawServedValues(layerPerThreshold(view, override))
 }
 
 // layerPerThreshold is one effectiveView step: over deduplicated, then laid

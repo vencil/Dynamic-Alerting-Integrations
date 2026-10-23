@@ -93,7 +93,7 @@ _TOOLS: dict[str, tuple[list[str], tuple[str, ...]]] = {
     "ops/policy_engine.py": (["--config-dir", "{d}", "--json", "--ci"], ()),
     "ops/explain_keys.py": (["--config-dir", "{d}", "--json"], ()),
     "ops/assemble_config_dir.py": (
-        ["--sources", "{d}", "--output", "{out}/asm", "--validate"], ("asm",)),
+        ["--sources", "{d}", "--output", "{out}/asm"], ("asm",)),
     "lint/check_routing_profiles.py": (["--config-dir", "{d}", "--strict"], ()),
     "lint/check_confd_schema.py": (["--config-dir", "{d}"], ()),
 }

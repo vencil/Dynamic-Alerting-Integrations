@@ -365,6 +365,7 @@ modules:
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"
       value_type_text: "#2906 message helper (type + value of a decoded value); no law to property-test"
       routing_block_file_reference_errors: "#3257 whole-block walk of a routing block with _lib_validation.file_reference_paths (match label names exempt); every block and every rendered receiver position example-pinned by tests/shared/test_receiver_file_reference_rule.py, incl. the subset test against routing_block_receivers"
+      routing_block_group_by_type_errors: "#3284 closed walk (main / overrides[i] / routes[i] group_by per block kind, as routing_block_receivers), type test only (not None, not list); every block, position and value shape example-pinned by test_grar_group_by_type.py"
       receiver_bool_type_errors: "#2906 closed walk (routing_block_receivers) over the schema's boolean receiver fields, type test only; every field and block position example-pinned by test_grar_field_types.py"
       unknown_receiver_type_entries: "#3116 membership filter of a list against the RECEIVER_TYPES keys; every entry shape (unknown name, opsgenie, bool, number, null, mapping) example-pinned by test_grar_policy_unusable.py"
       unknown_receiver_types_text: "#3116 message helper (the bad entries via value_type_text + the sorted RECEIVER_TYPES); no law to property-test"

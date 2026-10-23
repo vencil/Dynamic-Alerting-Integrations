@@ -1216,7 +1216,10 @@ jobs:
       # internal/errcode and its error kind table. Add a code or change a
       # kind's answer but forget `make error-contract` → fail here. Go comes
       # from the da-guard setup step above (same go version as tenant-api).
-      - name: "tenant-api-errors.json matches errcode + the kind table (HARD gate — #3202)"
+      # #3272: also every Extra field a handler sets is declared for its code
+      # in errcode (exit 2 otherwise), and the swagger ErrorResponse in
+      # components/tenant-api/docs/ carries the declared fields.
+      - name: "tenant-api-errors.json + swagger ErrorResponse match errcode + the kind table (HARD gate — #3202, #3272)"
         working-directory: components/tenant-api
         run: go run ./cmd/gen-error-contract --check
 
@@ -2366,7 +2369,11 @@ jobs:
 
       - name: Generate OpenAPI spec from swag annotations
         working-directory: components/tenant-api
-        run: swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency
+        # #3272: swag does not write the ErrorResponse Extra fields declared in
+        # internal/errcode; gen-error-contract adds them (as `make api-docs`).
+        run: |
+          swag init -g cmd/server/main.go -o ./docs --parseInternal --parseDependency
+          go run ./cmd/gen-error-contract
 
       - name: Verify OpenAPI spec is up-to-date (drift check)
         run: |

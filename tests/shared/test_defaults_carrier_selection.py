@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
 
 from _lib_confd import (
     resolve_defaults_file,
@@ -121,15 +122,17 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     assert out["effective_config"] == {"cpu_pct": 50}
 
 
-def test_describe_tenant_skips_a_dangling_carrier(tmp_path: Path) -> None:
-    """A carrier the walker cannot read is not a candidate: the readable
-    `.yml` is the carrier even though a (dangling) `.yaml` name exists."""
+def test_describe_tenant_refuses_a_tree_with_a_dangling_carrier(tmp_path: Path) -> None:
+    """A carrier the walker cannot read is not a candidate (the readable
+    `.yml` is the exporter's carrier), but the dangling `.yaml` is a path da-guard
+    validation names (exit 3): describe_tenant refuses the tree, naming it
+    (the shared conf.d refusal, #3206)."""
     (tmp_path / "_defaults.yml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
     _symlink_or_skip(tmp_path / "_defaults.yaml", tmp_path / "missing.yaml")
     (tmp_path / "t.yaml").write_text("tenants:\n  t-dang: {}\n", encoding="utf-8")
     r = _describe(tmp_path, "t-dang")
-    assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout)["defaults_chain"] == ["_defaults.yml"]
+    assert_refused(r.returncode, r.stderr, ["_defaults.yaml"])
+    assert "(read_failure: " in r.stderr, r.stderr
 
 
 def test_describe_tenant_single_carrier_is_silent(tmp_path: Path) -> None:

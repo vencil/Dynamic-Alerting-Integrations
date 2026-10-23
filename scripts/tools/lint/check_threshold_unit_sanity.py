@@ -84,7 +84,7 @@ from _lib_validation import (  # noqa: E402
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
 
@@ -318,13 +318,14 @@ def _as_source_text(node):
     return node
 
 
-def _iter_confd_docs(root: str, unread: list[str]):
+def _iter_confd_docs(root: str):
     """(surface, document) for every file `da-guard parse-tree` selects in
     each `_YAML_DIRS` conf.d (ADR-036 step 4, #2906: the exporter's own
     walk — both spellings in any case, `.`-prefixed entries skipped, #1588 /
     #1630 — and yaml.v3's reading, every scalar as its source text). A file
-    parse-tree cannot read is appended to *unread* (an error: its values were
-    not checked), never skipped. No usable da-guard raises ParseTreeError."""
+    parse-tree cannot read is a path da-guard validation names: taking the
+    index is the shared conf.d refusal (#3206), never a skip. No usable
+    da-guard raises ParseTreeError."""
     for d in _YAML_DIRS:
         base = os.path.join(root, d)
         if not os.path.isdir(base):
@@ -332,11 +333,7 @@ def _iter_confd_docs(root: str, unread: list[str]):
         reader = _lib_parse_cache.reader_for(base)
         for rel in sorted(reader.tree().selected):
             surface = f"{d}/{rel}"
-            try:
-                yield surface, _as_source_text(reader.node(rel))
-            except FileUnreadable as exc:
-                unread.append(f"NOT-READ: {surface}: da-guard parse-tree cannot read it "
-                              f"({exc.kind}: {exc.message}); its values were not checked.")
+            yield surface, _as_source_text(reader.node(rel))
 
 
 def _iter_doc_files(root: str):
@@ -355,19 +352,16 @@ def _read(path: str) -> str:
         return fh.read()
 
 
-def _collect(root: str, unread: list[str] | None = None
-             ) -> list[tuple[str, str, float, bool]]:
+def _collect(root: str) -> list[tuple[str, str, float, bool]]:
     """Return [(surface, key, value, is_threshold)] over every scannable artifact.
 
     `is_threshold` is False for OBSERVED values (the recommendation file's
     percentiles): they share the key's unit, so the domain check applies, but
     they are not a configured threshold and must not feed tier ordering.
-    `unread` collects one NOT-READ error per conf.d file parse-tree cannot
-    read (`_iter_confd_docs`).
     """
     found: list[tuple[str, str, float, bool]] = []
 
-    for rel, doc in _iter_confd_docs(root, unread if unread is not None else []):
+    for rel, doc in _iter_confd_docs(root):
         for key, val in _walk_values(doc):
             found.append((rel, key, val, True))
 
@@ -497,9 +491,7 @@ def run_check(
 
     # 2. Value-in-domain.
     per_surface: dict[str, dict[str, float]] = {}
-    unread: list[str] = []
-    collected = _collect(root, unread)
-    errors.extend(unread)
+    collected = _collect(root)
     for surface, key, value, is_threshold in collected:
         meta = spec[key]
         unit = meta.get("unit")

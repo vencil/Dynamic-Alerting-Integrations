@@ -408,6 +408,7 @@ class TestRunToolExitPassthrough:
             entrypoint.run_tool("fake_tool_xyz.py", ["--flag"])
         assert exc_info.value.code == code
 
+    @pytest.mark.real_crash_exit_code
     def test_uncaught_exception_becomes_caller_error(self, tmp_path, monkeypatch, capsys):
         """工具拋出未捕捉例外 → run_tool 是最後防線：印 Traceback 與一行
         ERROR，以 EXIT_CALLER_ERROR (2) 結束（#3090；之前原樣竄出、直譯器
@@ -423,6 +424,7 @@ class TestRunToolExitPassthrough:
         assert err.rstrip().splitlines()[-1] == \
             "ERROR: unexpected internal error (RuntimeError): boom"
 
+    @pytest.mark.real_crash_exit_code
     def test_tool_crash_exit_code_is_honoured(self, tmp_path, monkeypatch, capsys):
         """工具自己 set_crash_exit_code(1)（tenant_verify 的倒置契約）→
         run_tool 用它，不蓋成 2。"""
@@ -454,6 +456,20 @@ class TestRunToolExitPassthrough:
         for exc in (RuntimeError("boom"), KeyError("k"), ValueError(),
                     OSError("a\nb\tc"), RuntimeError("x" * 2000), Unprintable()):
             assert entrypoint._crash_message(exc) == _lib_exitcodes.crash_message(exc)
+
+    @pytest.mark.parametrize("raw", [
+        None, "70", "3", "255", "070", "2", "1", "0", "256", "-5", "+70", " 70",
+        "", "abc", "７０"])
+    def test_test_crash_code_rule_matches_the_ssot(self, monkeypatch, raw):
+        """DA_TEST_CRASH_EXIT_CODE（#3092）的解析規則在這裡也有一份鏡像；
+        兩份對同一個值必須給出同一個結果。"""
+        assert entrypoint.TEST_CRASH_EXIT_CODE_ENV == _lib_exitcodes.TEST_CRASH_EXIT_CODE_ENV
+        if raw is None:
+            monkeypatch.delenv(entrypoint.TEST_CRASH_EXIT_CODE_ENV, raising=False)
+        else:
+            monkeypatch.setenv(entrypoint.TEST_CRASH_EXIT_CODE_ENV, raw)
+        assert entrypoint._crash_exit_code_from_env() == \
+            _lib_exitcodes.crash_exit_code_from_env()
 
     def test_normal_return_is_exit_zero(self, tmp_path, monkeypatch):
         """工具正常返回（不呼叫 sys.exit）→ run_tool 正常返回 → 直譯器 rc 0。"""
@@ -812,6 +828,7 @@ def _run_dispatcher(entry, *args):
     )
 
 
+@pytest.mark.real_crash_exit_code
 def test_dispatcher_turns_a_crash_of_a_tool_without_the_lib_into_rc_2(tmp_path):
     """The tool never imports _lib_exitcodes (so no excepthook is installed):
     only run_tool's own catch stands between the crash and rc 1."""
@@ -825,6 +842,7 @@ def test_dispatcher_turns_a_crash_of_a_tool_without_the_lib_into_rc_2(tmp_path):
     assert p.stdout == "partial\n"
 
 
+@pytest.mark.real_crash_exit_code
 def test_dispatcher_honours_the_tools_crash_exit_code(tmp_path):
     """Tool loads _lib_exitcodes from the source tree and sets its own crash
     code; the dispatcher's catch hands the crash to it instead of using 2."""
@@ -839,6 +857,15 @@ def test_dispatcher_honours_the_tools_crash_exit_code(tmp_path):
     assert p.returncode == 1, p.stderr
     assert "ERROR: unexpected internal error (RuntimeError): boom" in p.stderr
     assert p.stderr.count("ERROR: unexpected internal error") == 1, p.stderr
+
+
+def test_dispatcher_fallback_ends_at_the_test_crash_code(tmp_path):
+    """#3092: the fallback (a tool without the lib) reads DA_TEST_CRASH_EXIT_CODE
+    like _lib_exitcodes does — red when the mirror stops reading it."""
+    entry = _image_layout(tmp_path, "raise RuntimeError('boom')\n")
+    p = _run_dispatcher(entry)
+    assert p.returncode == 70, p.stderr
+    assert "ERROR: unexpected internal error (RuntimeError): boom" in p.stderr
 
 
 @pytest.mark.parametrize("code", [0, 1, 2])

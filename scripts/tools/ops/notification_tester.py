@@ -20,7 +20,13 @@ the entry is dropped at the routing level (an override with no alertname /
 metric_group, routes[i] with an unsupported key, or any child of a tenant
 whose main receiver is not rendered). On top of that the port must be
 1-65535. Hostname encoding (IDNA) is checked only when a request is sent, so
---dry-run does not cover it. The --policy domain allowlist is not applied (this tool takes no --policy).
+--dry-run does not cover it.
+
+#3142: --policy is the deployment policy, read by the generator's own
+resolver (`resolve_policy`): a receiver its allowed_domains refuse is never
+sent and counts as failed (POLICY_REFUSED); an unusable file or an unmet
+min_generator_version is rc 2. Without --policy a NOTICE says the allowlist
+is not applied.
 
 Usage:
   # Test all receivers for all tenants in config directory
@@ -93,7 +99,8 @@ from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
+    disarm_crash_envelope,
 )
 
 _LANG = detect_cli_lang()
@@ -151,6 +158,9 @@ STATUS_SKIPPED = "SKIPPED"
 # #3076: the route generator does not render this slot (routing-level skip);
 # never sent, counted as failed.
 STATUS_NOT_RENDERED = "NOT_RENDERED"
+# #3142: the --policy domain allowlist refuses this receiver; never sent,
+# counted as failed.
+STATUS_POLICY_REFUSED = "POLICY_REFUSED"
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +204,15 @@ def _slot_label(tenant_name: str, slot: str) -> str:
     return f"{tenant_name}-{kind}-{idx.rstrip(']')}" if idx else f"{tenant_name}-{field_name}"
 
 
-def slot_verdicts(tenant_name: str, routing: dict[str, Any]) -> list[Any]:
+def slot_verdicts(tenant_name: str, routing: dict[str, Any],
+                  allowed_domains: Optional[list[str]] = None) -> list[Any]:
     """The route generator's verdict for every receiver slot of *routing*
-    (``_grar_routes.tenant_slot_verdicts``): what it renders, and why it
-    drops the rest. No domain allowlist (this tool has no --policy)."""
+    (``_grar_routes.tenant_slot_verdicts``) under the --policy domain
+    allowlist *allowed_domains* (None: not applied): what it renders, and why
+    it drops the rest."""
     import generate_alertmanager_routes as gar  # the generator's own verdict
 
-    return gar.tenant_slot_verdicts(tenant_name, routing)
+    return gar.tenant_slot_verdicts(tenant_name, routing, allowed_domains)
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +750,7 @@ def test_tenant_receivers(
     timeout: float = 10,
     dry_run: bool = False,
     rate_limit: float = 0.5,
+    allowed_domains: Optional[list[str]] = None,
 ) -> TenantTestReport:
     """Test all receivers for a tenant.
 
@@ -747,6 +760,7 @@ def test_tenant_receivers(
         timeout: HTTP timeout per receiver.
         dry_run: Validate URLs only, don't send.
         rate_limit: Seconds between requests (rate limiting).
+        allowed_domains: the --policy domain allowlist (None: not applied).
 
     Returns:
         TenantTestReport with per-receiver results.
@@ -758,7 +772,7 @@ def test_tenant_receivers(
 
     # #3076: the generator's verdict per slot, in render order (main,
     # overrides[i], routes[i]); only what it renders is tested.
-    verdicts = slot_verdicts(tenant_name, routing)
+    verdicts = slot_verdicts(tenant_name, routing, allowed_domains)
     left_to_send = sum(1 for v in verdicts if v.rendered)
     for verdict in verdicts:
         label = _slot_label(tenant_name, verdict.slot)
@@ -788,12 +802,18 @@ def test_tenant_receivers(
 def _unrendered_result(verdict: Any, label: str) -> ReceiverTestResult:
     """The result for a slot the generator does not render (#3076): never
     sent. Its own receiver refused → INVALID_URL / INVALID_CONFIG, as for a
-    receiver handed in directly; dropped at the routing level → NOT_RENDERED
-    with the generator's reason."""
+    receiver handed in directly — POLICY_REFUSED when it is the --policy
+    domain allowlist that refuses it (#3142); dropped at the routing level →
+    NOT_RENDERED with the generator's reason."""
+    import generate_alertmanager_routes as gar  # the generator's own words
+
     recv = verdict.receiver if isinstance(verdict.receiver, dict) else {}
     rtype = receiver_type(recv)
     reason: Optional[Finding] = verdict.reason
-    if verdict.stage == "receiver":
+    if verdict.stage == "receiver" and gar.is_policy_refusal(reason):
+        status = STATUS_POLICY_REFUSED
+        detail = f"{_generator_detail(reason)}. {gar.POLICY_REFUSAL_REMEDY}"
+    elif verdict.stage == "receiver":
         type_err = _non_string_type_problem(recv)
         if type_err:
             status, detail = STATUS_INVALID_CONFIG, type_err
@@ -852,6 +872,7 @@ def run_all_tests(
     timeout: float = 10,
     dry_run: bool = False,
     rate_limit: float = 0.5,
+    allowed_domains: Optional[list[str]] = None,
 ) -> list[TenantTestReport]:
     """Run notification tests for all (or filtered) tenants.
 
@@ -861,6 +882,7 @@ def run_all_tests(
         timeout: HTTP timeout per receiver.
         dry_run: Validate URLs only.
         rate_limit: Seconds between requests.
+        allowed_domains: the --policy domain allowlist (None: not applied).
 
     Returns:
         List of TenantTestReport, one per tenant with receivers.
@@ -884,6 +906,7 @@ def run_all_tests(
             timeout=timeout,
             dry_run=dry_run,
             rate_limit=rate_limit,
+            allowed_domains=allowed_domains,
         )
         # Only include tenants that have receivers configured
         if report.receivers:
@@ -908,6 +931,7 @@ _STATUS_SYMBOLS = {
     STATUS_INVALID_CONFIG: "✗",
     STATUS_HTTP_ERROR: "✗",
     STATUS_NOT_RENDERED: "✗",
+    STATUS_POLICY_REFUSED: "✗",
 }
 
 
@@ -959,11 +983,13 @@ def format_text_report(reports: list[TenantTestReport]) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(reports: list[TenantTestReport]) -> str:
+def format_json_report(reports: list[TenantTestReport], *,
+                       policy_applied: bool = False) -> str:
     """Format reports as JSON string.
 
     Args:
         reports: List of TenantTestReport.
+        policy_applied: whether a --policy was applied (#3142).
 
     Returns:
         JSON string with tool metadata and all results.
@@ -972,6 +998,7 @@ def format_json_report(reports: list[TenantTestReport]) -> str:
     output = {
         "tool": "test-notification",
         "status": "fail" if has_failure else "pass",
+        "policy_applied": policy_applied,
         "tenants": [asdict(r) for r in reports],
         "summary": {
             "total_receivers": sum(len(r.receivers) for r in reports),
@@ -1030,13 +1057,24 @@ def main() -> None:
         default=0.5,
         help=_HELP['rate_limit'][_LANG],
     )
+    import generate_alertmanager_routes as gar  # the one --policy resolver (#3142)
+    gar.add_policy_argument(parser, lang=_LANG)
     args = parser.parse_args()
     if args.json_output:
         # #3094: a crash in --json mode still prints one envelope, with the
         # keys of the routing_tree_refused document below
-        arm_crash_envelope(tool="test-notification", tenants=[],
-                           summary={"total_receivers": 0, "passed": 0,
-                                    "failed": 0, "skipped": 0})
+        arm_crash_envelope(tool="test-notification", policy_applied=False,
+                           tenants=[], summary={"total_receivers": 0, "passed": 0,
+                                                "failed": 0, "skipped": 0})
+
+    # #3142: decided before any receiver is sent — an unusable --policy (or
+    # an unmet min_generator_version) is the caller's input, rc 2.
+    try:
+        policy = gar.resolve_policy(args.policy)
+    except gar.PolicyInputError as exc:
+        raise CallerError(str(exc), reason="policy_unusable") from None
+    if not policy.applied:
+        print(gar.POLICY_NOT_APPLIED_NOTICE, file=sys.stderr)
 
     if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
@@ -1050,6 +1088,7 @@ def main() -> None:
             timeout=args.timeout,
             dry_run=args.dry_run,
             rate_limit=args.rate_limit,
+            allowed_domains=policy.allowed_domains,
         )
     except RoutingTreeRefused as exc:
         # #2752: not "no receivers" — the tree cannot be read the way the
@@ -1063,6 +1102,7 @@ def main() -> None:
                 "tool": "test-notification",
                 "status": "caller_error",
                 "reason": "routing_tree_refused",
+                "policy_applied": policy.applied,
                 "tenants": [],
                 "summary": {"total_receivers": 0, "passed": 0,
                             "failed": 0, "skipped": 0},
@@ -1070,7 +1110,7 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     if args.json_output:
-        print(format_json_report(reports))
+        print(format_json_report(reports, policy_applied=policy.applied))
         disarm_crash_envelope()  # the document is out; a late crash must not add a second
     else:
         print(format_text_report(reports))

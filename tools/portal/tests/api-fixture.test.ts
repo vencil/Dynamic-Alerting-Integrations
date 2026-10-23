@@ -78,3 +78,28 @@ describe('apiFixture — definition names come from the spec, never guessed', ()
     expect(resolveDefinition('Other', defs)).toBe('pkg_a.Other');
   });
 });
+
+describe('apiFixture — an ErrorResponse carries the fields its code declares (#3272)', () => {
+  it('accepts a code with its own fields, zero values included', () => {
+    const body = { error: 'pending_pr_exists', code: 'PENDING_PR_EXISTS', existing_pr_url: '', pr_number: 0, message: 'm' };
+    expect(apiFixture('ErrorResponse', body)).toBe(body);
+  });
+
+  it('rejects a field another code carries but this one does not', () => {
+    const errs = apiFixtureErrors('ErrorResponse', { error: 'x', code: 'CONFLICT', tenant_id: 't-1' });
+    expect(errs.map(e => [e.keyword, e.params.additionalProperty])).toEqual([['carriedByCode', 'tenant_id']]);
+    expect(apiFixtureErrors('ErrorResponse', { error: 'x', code: 'TENANT_GIT_MANAGED', tenant_id: 't-1' })).toEqual([]);
+  });
+
+  it('rejects any field on INTERNAL_ERROR, and a field no code carries', () => {
+    expect(apiFixtureErrors('ErrorResponse', { error: 'x', code: 'INTERNAL_ERROR', message: 'm' })
+      .map(e => e.params.additionalProperty)).toEqual(['message']);
+    expect(apiFixtureErrors('ErrorResponse', { error: 'x', code: 'CONFLICT', group_id: 'g' })
+      .map(e => e.params.additionalProperty)).toEqual(['group_id']);
+  });
+
+  it('checks a field\'s type against the spec', () => {
+    expect(apiFixtureErrors('ErrorResponse', { error: 'x', code: 'PENDING_PR_EXISTS', pr_number: '7' })
+      .map(e => e.instancePath)).toEqual(['/pr_number']);
+  });
+});
