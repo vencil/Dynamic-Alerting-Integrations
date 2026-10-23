@@ -356,11 +356,16 @@ class TestLocalDirNotAccessibleIsCallerError:
         locked = base / "locked"
         (locked / "conf.d").mkdir(parents=True)
         locked.chmod(0o700 if prefix else 0o000)
+        # nobody cannot write the parent's coverage data (root's pytest tmp is
+        # 0700): with COVERAGE_PROCESS_START exported (tests/conftest.py, under
+        # --cov) the child's coverage .pth would print a Traceback of its own.
+        env = {k: v for k, v in os.environ.items()
+               if not (prefix and k.startswith("COVERAGE_PROCESS_"))}
         try:
             proc = subprocess.run(
                 [*prefix, sys.executable, str(Path(gc.__file__)), "local",
                  "--dir", str(locked / "conf.d"), "--json"],
-                capture_output=True, text=True, encoding="utf-8", timeout=120)
+                capture_output=True, text=True, encoding="utf-8", timeout=120, env=env)
         finally:
             locked.chmod(0o755)
             if base is not tmp_path:
