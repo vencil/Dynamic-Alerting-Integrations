@@ -845,7 +845,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗（`--mapping` 指到不存在的檔也算，列為 FAIL，不是呼叫端錯誤） |
-| `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）或 `runtime`（含 `all`）的 Prometheus 連不上、查詢失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。`runtime` 的維護／靜默模式查詢失敗先前不產生檢查項，結果是 `Overall: PASS`、結束碼 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。Alertmanager 連不上時那一項仍是 skip |
 
 ---
 
@@ -896,7 +896,7 @@ da-tools byo-check all --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數。每一步的查詢都算：Step 3b、E2E 的查詢失敗先前不產生檢查項；Step 4／5 的後續查詢失敗先前是 warn；Alertmanager 的 alerts／silences 讀不到先前是 warn，alerts 回應不是陣列時還判 pass（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
@@ -949,7 +949,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：`e2e` 沒帶 `--edge-urls`、target 不是 edge／central／e2e；edge／central Prometheus 連不上或 config／query／rules API 失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1） |
+| `2` | 呼叫端錯誤：`e2e` 沒帶 `--edge-urls`、target 不是 edge／central／e2e；edge／central Prometheus 連不上、config／query／rules API 失敗、查詢回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）。每一項查詢都算：central 沒有 cluster label 時的備援查詢失敗先前被當成「找不到」、結束碼 1；recording rules 與 e2e 跨叢集比對的查詢失敗先前不產生檢查項（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
