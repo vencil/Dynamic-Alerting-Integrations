@@ -19,6 +19,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import operator_check as oc  # noqa: E402
+import _lib_prometheus  # noqa: E402  (#3133: the targets are read by the lib)
 
 
 def _make_args(**overrides) -> SimpleNamespace:
@@ -267,16 +268,19 @@ class TestCheckTargetHealth:
         result = oc.OperatorChecker(_make_args()).check_target_health()
         assert result.status == "skip"
 
-    def test_api_error_warns(self, monkeypatch):
-        monkeypatch.setattr(oc, "http_get_json",
+    def test_api_error_is_a_caller_error(self, monkeypatch):
+        """#3133 (owner 2026-10-23): --prometheus was given, so targets that
+        cannot be read are a caller error (exit 2) — it used to be a warn."""
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
                             lambda *a, **kw: (None, "connection refused"))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
-        assert result.status == "warn"
+        assert (result.status, result.caller_error) == ("fail", True)
+        assert "connection refused" in result.detail
 
     def test_no_targets_warns(self, monkeypatch):
-        monkeypatch.setattr(oc, "http_get_json",
-                            lambda *a, **kw: ({"data": {"activeTargets": []}}, None))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda *a, **kw: ({"status": "success", "data": {"activeTargets": []}}, None))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
         assert result.status == "warn"
@@ -287,8 +291,8 @@ class TestCheckTargetHealth:
             {"labels": {"job": "kubernetes-nodes"}, "health": "up"},
             {"labels": {"job": "prometheus"}, "health": "up"},
         ]
-        monkeypatch.setattr(oc, "http_get_json",
-                            lambda *a, **kw: ({"data": {"activeTargets": targets}}, None))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda *a, **kw: ({"status": "success", "data": {"activeTargets": targets}}, None))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
         assert result.status == "warn"
@@ -299,8 +303,8 @@ class TestCheckTargetHealth:
             {"labels": {"job": "threshold-exporter"}, "health": "up"},
             {"labels": {"job": "threshold-exporter-2"}, "health": "UP"},
         ]
-        monkeypatch.setattr(oc, "http_get_json",
-                            lambda *a, **kw: ({"data": {"activeTargets": targets}}, None))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda *a, **kw: ({"status": "success", "data": {"activeTargets": targets}}, None))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
         assert result.status == "pass"
@@ -310,8 +314,8 @@ class TestCheckTargetHealth:
             {"labels": {"job": "threshold-exporter"}, "health": "up"},
             {"labels": {"job": "threshold-exporter-2"}, "health": "down"},
         ]
-        monkeypatch.setattr(oc, "http_get_json",
-                            lambda *a, **kw: ({"data": {"activeTargets": targets}}, None))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda *a, **kw: ({"status": "success", "data": {"activeTargets": targets}}, None))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
         assert result.status == "fail"
@@ -321,24 +325,23 @@ class TestCheckTargetHealth:
         # returns "" so neither "threshold" nor "exporter" matches → no
         # exporter targets → warn.
         targets = [{"labels": {}, "health": "up"}]
-        monkeypatch.setattr(oc, "http_get_json",
-                            lambda *a, **kw: ({"data": {"activeTargets": targets}}, None))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda *a, **kw: ({"status": "success", "data": {"activeTargets": targets}}, None))
         checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
         result = checker.check_target_health()
         assert result.status == "warn"
 
-    def test_malformed_response_does_not_crash(self, monkeypatch):
-        # PR #291 audit follow-up: when http_get_json returns a non-dict
-        # body (None / string / list), `data.get(...)` raises AttributeError.
-        # The except clause now catches AttributeError too, so the function
-        # degrades gracefully to the "no targets found" warn path.
-        for malformed in (None, "not a dict", ["list-not-dict"], 42):
-            monkeypatch.setattr(oc, "http_get_json",
+    def test_malformed_response_is_a_caller_error(self, monkeypatch):
+        """#3133: a body that is not a target list is not an answer — it used
+        to degrade to the "no targets found" warn (PR #291 kept it from crashing)."""
+        for malformed in (None, "not a dict", ["list-not-dict"], 42,
+                          {"status": "success", "data": {}},
+                          {"status": "success", "data": {"activeTargets": [{"labels": {"job": 1}}]}}):
+            monkeypatch.setattr(_lib_prometheus, "http_get_json",
                                 lambda *a, _body=malformed, **kw: (_body, None))
             checker = oc.OperatorChecker(_make_args(prometheus="http://localhost:9090"))
             result = checker.check_target_health()
-            assert result.status == "warn"
-            assert "no targets" in result.detail
+            assert (result.status, result.caller_error) == ("fail", True), malformed
 
 
 # ---------------------------------------------------------------------------

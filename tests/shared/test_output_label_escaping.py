@@ -76,6 +76,7 @@ from pathlib import Path
 
 import pytest
 from _platform_fs import require_file_name  # noqa: E402
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
@@ -131,6 +132,11 @@ EXTRA_ARGS: dict[str, list[str]] = {
     # and forged a report line at column 0. "Unmeasurable" was hiding a real hole.
     "diagnose.py": ["victim", "--show-inheritance"],
 }
+
+# Tools that query Prometheus while they read the conf.d. #3133: one that
+# gets no answer fails closed (rc 2) before printing what is measured here, so
+# they get the suite's stub, which answers empty and well-formed.
+UPSTREAM_TOOLS = {"blind_spot_discovery.py"}
 
 # `migrate_to_operator` names the same input `--source-dir`.
 SOURCE_DIR_TOOLS = {"migrate_to_operator.py"}
@@ -224,6 +230,8 @@ def _run(tool: Path, config_dir: str, sandbox: Path) -> tuple[bytes, bytes, int]
     flag = "--source-dir" if tool.name in SOURCE_DIR_TOOLS else "--config-dir"
     args = [sys.executable, str(tool), flag, config_dir]
     args += EXTRA_ARGS.get(tool.name, [])
+    if tool.name in UPSTREAM_TOOLS:
+        args += ["--prometheus", _stub_upstream.url()]
     if tool.name in REPO_ANCHORED_OUTPUT:
         args += [REPO_ANCHORED_OUTPUT[tool.name], str(sandbox / "out.yaml")]
     env = dict(os.environ, PYTHONIOENCODING="utf-8")

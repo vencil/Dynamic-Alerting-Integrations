@@ -34,6 +34,7 @@ import _lib_tenant_values as tv
 import analyze_rule_pack_gaps as arg
 import blind_spot_discovery as bsd
 from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -134,12 +135,14 @@ def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
 
 def _cli(script: str, conf_d: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(OPS / script), "--config-dir", str(conf_d), *extra],
+        [sys.executable, str(OPS / script), "--config-dir", str(conf_d),
+         *(a.format(prom_up=_stub_upstream.url()) for a in extra)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 
 
 _CLIS = [
-    ("blind_spot_discovery.py", ("--prometheus", "http://127.0.0.1:1", "--json-output")),
+    # A Prometheus that answers, empty: one that does not is rc 2 (#3133).
+    ("blind_spot_discovery.py", ("--prometheus", "{prom_up}", "--json-output")),
     ("analyze_rule_pack_gaps.py", ("--json",)),
 ]
 

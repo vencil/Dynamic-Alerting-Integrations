@@ -285,9 +285,9 @@ class TestCLI:
 # ── 7. query_prometheus_targets ───────────────────────────────────
 
 class TestQueryPrometheusTargets:
-    """query_prometheus_targets() 測試。"""
+    """query_prometheus_targets() 測試：經 lib 的 prometheus_targets 讀（#3133）。"""
 
-    @patch("blind_spot_discovery.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_success(self, mock_http):
         """正常回傳 targets。"""
         mock_http.return_value = (
@@ -309,32 +309,26 @@ class TestQueryPrometheusTargets:
         assert result[0]["job"] == "mysqld"
         assert result[1]["namespace"] == "db-b"
 
-    @patch("blind_spot_discovery.http_get_json")
-    def test_http_error(self, mock_http):
-        """HTTP 錯誤回傳空列表。"""
-        mock_http.return_value = (None, "connection refused")
-        result = bsd.query_prometheus_targets("http://prom:9090")
-        assert result == []
+    @pytest.mark.parametrize("answer,message", [
+        ((None, "connection refused"), "connection refused"),
+        (({"status": "error", "error": "bad query"}, None), "bad query"),
+        (({"status": "success", "data": {}}, None), "'data.activeTargets' is missing"),
+    ], ids=["http-error", "error-status", "no-targets-key"])
+    def test_not_answered_raises(self, answer, message):
+        """#3133：沒得到回答不再回空列表（以前報告會把所有 DB 列為盲點、rc 0）。"""
+        from _lib_prometheus import QueryError
+        with patch("_lib_prometheus.http_get_json", return_value=answer):
+            with pytest.raises(QueryError, match=message.replace("'", ".")):
+                bsd.query_prometheus_targets("http://prom:9090")
 
-    @patch("blind_spot_discovery.http_get_json")
-    def test_non_success_status(self, mock_http):
-        """非 success 狀態回傳空列表。"""
-        mock_http.return_value = (
-            {"status": "error", "error": "bad query"},
-            None,
-        )
-        result = bsd.query_prometheus_targets("http://prom:9090")
-        assert result == []
-
-    @patch("blind_spot_discovery.http_get_json")
+    @patch("_lib_prometheus.http_get_json")
     def test_empty_targets(self, mock_http):
-        """空 targets 回傳空列表。"""
+        """有回答但沒有 target 才是空列表。"""
         mock_http.return_value = (
             {"status": "success", "data": {"activeTargets": []}},
             None,
         )
-        result = bsd.query_prometheus_targets("http://prom:9090")
-        assert result == []
+        assert bsd.query_prometheus_targets("http://prom:9090") == []
 
 
 # ── 8. render_report 進階分支 ─────────────────────────────────────

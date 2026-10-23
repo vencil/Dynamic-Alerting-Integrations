@@ -17,6 +17,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import shadow_verify as sv  # noqa: E402
+import _lib_prometheus  # noqa: E402  (#3133: queries are read by the lib)
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +29,7 @@ def _args(**kwargs):
         "report_csv": None,
         "readiness_json": None,
         "prometheus": "http://localhost:9090",
-        "alertmanager": "http://localhost:9093",
+        "alertmanager": None,  # the CLI default: not given (#3133)
         "json": False,
         "phase": "all",
     }
@@ -109,7 +110,7 @@ class TestCheckPreflight:
         mp = _write_mapping(tmp_path, mapping)
         args = _args(mapping=mp)
 
-        with patch.object(sv, "http_get_json", return_value=(None, "unreachable")):
+        with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
                 checks = sv.check_preflight(args)
 
@@ -119,7 +120,7 @@ class TestCheckPreflight:
 
     def test_mapping_file_missing(self, tmp_path):
         args = _args(mapping=str(tmp_path / "nonexistent.yaml"))
-        with patch.object(sv, "http_get_json", return_value=(None, "unreachable")):
+        with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
                 checks = sv.check_preflight(args)
 
@@ -128,7 +129,7 @@ class TestCheckPreflight:
 
     def test_no_mapping_provided(self):
         args = _args(mapping=None)
-        with patch.object(sv, "http_get_json", return_value=(None, "unreachable")):
+        with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
                 checks = sv.check_preflight(args)
 
@@ -146,7 +147,7 @@ class TestCheckPreflight:
         prom_data = {"status": "success", "data": {"result": [{"value": [0, "5"]}]}}
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(sv, "http_get_json", return_value=(prom_data, None)):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(prom_data, None)):
                 checks = sv.check_preflight(args)
 
         health_check = next(c for c in checks if c["check"] == "prometheus_healthy")
@@ -155,7 +156,7 @@ class TestCheckPreflight:
     def test_prometheus_unreachable(self):
         args = _args()
         with patch("urllib.request.urlopen", side_effect=OSError("Connection refused")):
-            with patch.object(sv, "http_get_json", return_value=(None, "unreachable")):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
                 checks = sv.check_preflight(args)
 
         health_check = next(c for c in checks if c["check"] == "prometheus_healthy")
@@ -359,7 +360,7 @@ class TestMainCLI:
         prom_data = {"status": "success", "data": {"result": [{"value": [0, "5"]}]}}
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(sv, "http_get_json", return_value=(prom_data, None)):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(prom_data, None)):
                 with patch.object(sv, "query_prometheus", return_value=([], None)):
                     with patch("sys.argv", ["shadow_verify.py", "all",
                                             "--mapping", mp,
@@ -401,7 +402,6 @@ def _run(check, answer_for):
     healthy.__exit__ = MagicMock(return_value=False)
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("urllib.request.urlopen", return_value=healthy))
-        stack.enter_context(patch.object(sv, "http_get_json", side_effect=_get))
         stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=_get))
         return {c["check"]: c for c in check(_args())}
 
@@ -447,3 +447,46 @@ def test_every_count_refuses_a_non_finite_count(marker, check, value):
     c = _run(sv.check_preflight, lambda q: _vector(value) if marker in q
              else _vector("3"))[check]
     assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+
+class TestAlertmanagerIsReadOnlyWhenGiven:
+    """#3133 (owner 2026-10-23): an optional source counts only when given."""
+
+    @pytest.mark.parametrize("am", [(None, "HTTP 503"), ([], None),
+                                    ({"config": {"original": 5}}, None)],
+                             ids=["unreachable", "not-an-object", "original-not-string"])
+    def test_a_given_alertmanager_not_answering_is_a_caller_error(self, monkeypatch, am):
+        seen = []
+
+        def get(url, **_kw):
+            seen.append(url)
+            return am if "/api/v2/status" in url else _vector("3")
+        args = _args(alertmanager="http://am:9093")
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
+        with patch("urllib.request.urlopen", side_effect=OSError("fail")):
+            c = {c["check"]: c for c in sv.check_preflight(args)}["alertmanager_shadow_route"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+        # the URL given is the one read — not the default (review of fc7596cd3)
+        assert [u for u in seen if "/api/v2/status" in u] == ["http://am:9093/api/v2/status"]
+
+    def test_the_default_alertmanager_not_answering_is_a_skip(self, monkeypatch):
+        seen = []
+
+        def get(url, **_kw):
+            seen.append(url)
+            return (None, "refused") if "/api/v2/status" in url else _vector("3")
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
+        with patch("urllib.request.urlopen", side_effect=OSError("fail")):
+            c = {c["check"]: c for c in sv.check_preflight(_args())}["alertmanager_shadow_route"]
+        assert c["status"] == "skip"
+        assert "http://localhost:9093/api/v2/status" in seen
+
+    def test_a_given_alertmanager_with_the_route_passes(self, monkeypatch):
+        def get(url, **_kw):
+            return (({"config": {"original": "route: {matchers: [migration_status=shadow]}"}}, None)
+                    if url == "http://am:9093/api/v2/status" else
+                    (None, "refused") if "/api/v2/status" in url else _vector("3"))
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
+        with patch("urllib.request.urlopen", side_effect=OSError("fail")):
+            c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
+        assert c["alertmanager_shadow_route"]["status"] == "pass"

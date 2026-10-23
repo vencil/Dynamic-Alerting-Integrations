@@ -310,6 +310,67 @@ def test_alertmanager_silences_returns_the_list(monkeypatch):
     assert seen == [("http://am/api/v2/silences", 4)]
 
 
+@pytest.mark.parametrize("call,answer,defect", [
+    ("alerts", (None, "refused"), "refused"),
+    ("alerts", ({"status": "error", "error": "bad_data"}, None), "bad_data"),
+    ("alerts", ([], None), "malformed Prometheus response: body is not a JSON object"),
+    ("alerts", ({"status": "success"}, None), "'data' is missing or not an object"),
+    ("alerts", ({"status": "success", "data": {}}, None), "'data.alerts' is missing or not a list"),
+    ("alerts", ({"status": "success", "data": {"alerts": ["x"]}}, None), "alert[0] is not an object"),
+    ("alerts", ({"status": "success", "data": {"alerts": [{"labels": []}]}}, None),
+     "alert[0].labels is not an object"),
+    ("alerts", ({"status": "success", "data": {"alerts": [{"labels": {"a": 1}}]}}, None),
+     "alert[0].labels.a is not a string"),
+    ("targets", ({"status": "success", "data": {}}, None),
+     "'data.activeTargets' is missing or not a list"),
+    ("targets", ({"status": "success", "data": {"activeTargets": [{"labels": {"job": 1}}]}}, None),
+     "target[0].labels.job is not a string"),
+], ids=["a-refused", "a-error", "a-list", "a-no-data", "a-no-key", "a-item", "a-labels",
+        "a-label-int", "t-no-key", "t-label-int"])
+def test_prometheus_alerts_and_targets_raise(monkeypatch, call, answer, defect):
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
+    read = lp.prometheus_alerts if call == "alerts" else lp.prometheus_targets
+    with pytest.raises(lp.QueryError) as exc:
+        read("http://p")
+    assert defect in str(exc.value), exc.value
+    assert exc.value.reason == "prometheus_query_error"
+
+
+def test_prometheus_alerts_and_targets_return_the_rows(monkeypatch):
+    seen = []
+    alerts = [{"labels": {"alertname": "A"}}, {}]
+    targets = [{"labels": {"job": "j"}, "health": "up"}]
+
+    def get(url, timeout=10):
+        seen.append((url, timeout))
+        key, rows = ("alerts", alerts) if "/alerts" in url else ("activeTargets", targets)
+        return {"status": "success", "data": {key: rows}}, None
+    monkeypatch.setattr(lp, "http_get_json", get)
+    assert lp.prometheus_alerts("http://p", timeout=3) == alerts
+    assert lp.prometheus_targets("http://p", state="any") == targets
+    assert seen == [("http://p/api/v1/alerts", 3), ("http://p/api/v1/targets?state=any", 10)]
+
+
+@pytest.mark.parametrize("answer,defect", [
+    ((None, "refused"), "refused"),
+    (([], None), "malformed Alertmanager response: body is not a JSON object"),
+    (({"config": "x"}, None), "'config' is not an object"),
+    (({"config": {"original": 5}}, None), "'config.original' is not a string"),
+], ids=["refused", "list", "config-string", "original-int"])
+def test_alertmanager_status_raises(monkeypatch, answer, defect):
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
+    with pytest.raises(lp.QueryError) as exc:
+        lp.alertmanager_status("http://am")
+    assert defect in str(exc.value)
+    assert (exc.value.source, exc.value.reason) == ("Alertmanager", "alertmanager_query_error")
+
+
+def test_alertmanager_status_returns_the_object(monkeypatch):
+    body = {"config": {"original": "route: {}"}, "cluster": {}}
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (body, None))
+    assert lp.alertmanager_status("http://am") == body
+
+
 def test_query_error_is_a_named_caller_error():
     exc = lp.QueryError("timeout")
     assert isinstance(exc, _lib_exitcodes.CallerError)
@@ -398,13 +459,9 @@ _ALLOWED = frozenset({
     ("scripts/tools/ops/byo_check.py", "instant_or_error"),
     ("scripts/tools/ops/federation_check.py", "http_get_json"),
     ("scripts/tools/ops/federation_check.py", "instant_or_error"),
-    ("scripts/tools/ops/shadow_verify.py", "http_get_json"),
     ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
     # batch 3: direct http_get_json / urlopen callers
-    ("scripts/tools/ops/alert_correlate.py", "http_get_json"),
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe
-    ("scripts/tools/ops/blind_spot_discovery.py", "http_get_json"),
-    ("scripts/tools/ops/check_alert.py", "http_get_json"),
     ("scripts/tools/ops/cutover_tenant.py", "http_get_json"),
     ("scripts/tools/ops/discover_instance_mappings.py", "http_get_json"),
     ("scripts/tools/ops/discover_instance_mappings.py", "urlopen"),
@@ -412,7 +469,6 @@ _ALLOWED = frozenset({
     ("scripts/tools/ops/maintenance_scheduler.py", "urlopen"),
     ("scripts/tools/ops/notification_tester.py", "urlopen"),
     ("scripts/tools/ops/policy_opa_bridge.py", "urlopen"),  # build_opener
-    ("scripts/tools/ops/operator_check.py", "http_get_json"),
     ("scripts/tools/ops/runtime_audit.py", "http_get_json"),
     ("scripts/tools/ops/threshold_govern.py", "http_get_json"),
     ("scripts/tools/ops/threshold_govern.py", "urlopen"),

@@ -97,6 +97,7 @@ for _p in (HERE, TESTS):
         sys.path.insert(0, str(_p))
 
 from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
 CATALOG_PATH = HERE / "confd_fixture_catalog.json"
 CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
@@ -150,8 +151,8 @@ class Tool:
     """One row of the table. *argv* is formatted with {py} (the
     interpreter), {scripts} (the sandbox's scripts/), {box}, {cell} (this
     cell's directory, the tree's parent), {conf} (the tree), {out} (a
-    directory the tool may write) and {prom} (a Prometheus URL that refuses
-    at once). *prep* readies operands before the oracle runs. *script* is
+    directory the tool may write), {prom} (a Prometheus URL that refuses
+    at once) and {prom_up} (one that answers, empty: `_stub_upstream`). *prep* readies operands before the oracle runs. *script* is
     the file under `scripts/` the row runs, when argv does not name it."""
     argv: tuple[str, ...]
     prep: Callable[[pathlib.Path], None] | None = None
@@ -258,8 +259,10 @@ TOOLS: dict[str, Tool] = {
     "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}", "--ci")),
     "guard_dispatch": Tool((_PY, _T + "ops/guard_dispatch.py", "defaults-impact", "--config-dir", "{conf}")),
     # The four below query a Prometheus as well; {prom} refuses at once, and
-    # each reads the tree whatever the query answered.
-    "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom}",
+    # each reads the tree whatever the query answered. blind_spot_discovery
+    # fails closed on a Prometheus that does not answer (#3133), so it gets
+    # {prom_up}, one that answers with no target.
+    "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom_up}",
                                   "--config-dir", "{conf}")),
     "threshold_recommend": Tool((_PY, _T + "ops/threshold_recommend.py", "--config-dir", "{conf}",
                                  "--prometheus", "{prom}", "--dry-run")),
@@ -471,7 +474,8 @@ def run_cell(box: pathlib.Path, run, tool: str, row: str) -> Cell:
             if oracle.returncode in (0, 1, 3, 4):
                 named = go_named(json.loads(oracle.stdout))
         fmt = {"py": sys.executable, "scripts": str(box / "scripts"), "box": str(box),
-               "cell": str(cell), "conf": str(conf), "out": str(out), "prom": _PROM}
+               "cell": str(cell), "conf": str(conf), "out": str(out), "prom": _PROM,
+               "prom_up": _stub_upstream.url()}
         argv = [a.format(**fmt) for a in spec.argv]
         env_path = f"PATH={box / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
         r = run([*_TIMEOUT, shutil.which("env") or "/usr/bin/env", env_path, *argv])
