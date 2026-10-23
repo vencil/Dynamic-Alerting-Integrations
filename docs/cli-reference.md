@@ -1367,7 +1367,7 @@ da-tools gitops-check <subcommand> [options]
 |------|------|
 | `0` | 通過；帶 `--ci` 時 warning 也是 0。只有 `sidecar` 會給 warning（kubectl 不可用，或 git-sync Secret／sidecar 缺一或全缺）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
 | `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）。不帶 `--ci` 時 warning 也是 1 |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
 
 **範例**
 

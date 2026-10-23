@@ -1370,7 +1370,7 @@ da-tools gitops-check <subcommand> [options]
 |------|-------------|
 | `0` | Passed; with `--ci` a warning is 0 too. Only `sidecar` gives warnings (kubectl unavailable, or the git-sync Secret / sidecar partly or entirely missing); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
 | `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`). Without `--ci` a warning is 1 too |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
 
 **Examples**
 
