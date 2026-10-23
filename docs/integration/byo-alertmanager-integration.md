@@ -22,7 +22,7 @@ lang: zh
 | 根因 | 解法 | 機制 | 配置來源 |
 |------|------|------|----------|
 | 備份/維護期間假陽性風暴 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知（TSDB 有紀錄） | `_silent_mode` |
-| 計畫性維護忘記關閉 | **Maintenance Mode** | PromQL 層完全不觸發（可設 `expires` 自動失效） | `_state_maintenance` |
+| 計畫性維護忘記關閉 | **Maintenance Mode** | 帶維護條件的告警在 PromQL 層不觸發，不是全部（[範圍](../design/config-driven.md#27-三態運營模式-operational-modes)；可設 `expires` 自動失效） | `_state_maintenance` |
 | Warning + Critical 重複告警 | **Severity Dedup** | Per-tenant inhibit_rules（`metric_group` 配對） | `_severity_dedup` |
 | 通知目的地寫死在中央 | **Alert Routing** | Per-tenant route + receiver（6 種 type） | `_routing` |
 

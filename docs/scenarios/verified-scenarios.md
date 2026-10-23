@@ -17,7 +17,7 @@ lang: zh
 
 ## 維護模式與複合警報
 
-所有 Alert Rules 內建 `unless maintenance` 邏輯，租戶可透過 state_filter 一鍵靜音：
+多數 Alert Rules 內建 `unless maintenance` 條件，租戶可透過 state_filter 開啟維護模式；不帶這個條件的告警照常觸發（範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)）：
 
 ```yaml
 # _defaults.yaml
@@ -30,7 +30,7 @@ state_filters:
 # 租戶啟用維護模式：
 tenants:
   db-a:
-    _state_maintenance: "enable"  # 所有警報被 unless 抑制
+    _state_maintenance: "enable"  # 帶 unless 維護條件的告警不觸發（不是全部）
 ```
 
 複合警報 (AND 邏輯) 與多層嚴重度 (Critical 自動降級 Warning) 也已完整實現。
