@@ -234,6 +234,17 @@ class ForceManualKey:
 
 
 @dataclass
+class NotMeasuredKey:
+    """A threshold whose Prometheus query was not answered (#3133): it has no
+    measurement, so it is neither governed nor "within margin" — the run is
+    partial (exit 2). ``error`` is the QueryError text."""
+
+    tenant: str
+    key: str
+    error: str
+
+
+@dataclass
 class InheritedKey:
     """A threshold a tenant inherits from a defaults / platform / profile file
     (#2116): its value is not in the tenant's file, so a governance PR on that
@@ -259,6 +270,7 @@ class GovernanceResult:
     not_applicable: list[NotApplicableKey] = field(default_factory=list)
     force_manual: list[ForceManualKey] = field(default_factory=list)
     inherited: list[InheritedKey] = field(default_factory=list)
+    not_measured: list[NotMeasuredKey] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +439,18 @@ def collect_force_manual(
                     report.tenant, r.key,
                     r.guardrail_reason or r.reason, r.delta_pct,
                 ))
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
+
+
+def collect_not_measured(
+    reports: list["recommend.TenantRecommendation"],
+) -> list[NotMeasuredKey]:
+    """Keys whose query was not answered (#3133). They used to drop out of the
+    run silently — a Prometheus that answered nothing read as "no thresholds
+    need governance" at exit 0."""
+    out = [NotMeasuredKey(report.tenant, r.key, r.query_error)
+           for report in reports for r in report.keys + report.inherited if r.query_error]
     out.sort(key=lambda u: (u.tenant, u.key))
     return out
 
@@ -991,6 +1015,7 @@ def format_text_report(
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
     max_prs: Optional[int] = None,
+    not_measured: Optional[list["NotMeasuredKey"]] = None,
 ) -> str:
     lines: list[str] = []
     mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
@@ -1062,13 +1087,32 @@ def format_text_report(
         )
         return ["", "-" * 78, head]
 
+    def _not_measured_lines() -> list[str]:
+        nm = not_measured or []
+        if not nm:
+            return []
+        head = (
+            f"✗ {len(nm)} 個閾值沒量成（Prometheus 查詢沒得到回答，#3133），報告不完整："
+            if _LANG == "zh" else
+            f"✗ {len(nm)} threshold(s) not measured (the Prometheus query was not "
+            "answered — #3133); the report is partial:"
+        )
+        return ["", "-" * 78, head] + [
+            f"  {safe_label(u.tenant)}/{safe_label(u.key)}: {safe_label(u.error[:80])}"
+            for u in nm]
+
     def _deferred_note() -> str:
         # Fold the two review-worthy counts into Summary so a tail-scan catches
         # them even when the per-tenant output is long; N/A is complete (INFO), so
         # it is NOT folded into the bottom line (its detail line above suffices).
         n_ung = len(ungoverned or [])
         n_fm = len(force_manual or [])
+        n_nm = len(not_measured or [])
         parts: list[str] = []
+        if n_nm:
+            parts.append(
+                f" ✗ 另有 {n_nm} 個閾值沒量成，報告不完整。" if _LANG == "zh"
+                else f" ✗ {n_nm} threshold(s) not measured; the report is partial.")
         if n_fm:
             parts.append(
                 f" ⚠ 另有 {n_fm} 個閾值需人工 review。" if _LANG == "zh"
@@ -1081,16 +1125,28 @@ def format_text_report(
 
     def _deferred_block() -> list[str]:
         # All surfaced-but-no-auto-PR categories, above the bottom line.
-        return (_force_manual_lines() + _ungoverned_lines() + _not_applicable_lines()
-                + _inherited_lines())
+        return (_not_measured_lines() + _force_manual_lines() + _ungoverned_lines()
+                + _not_applicable_lines() + _inherited_lines())
 
     if not plans:
-        lines.append(
-            "未發現需要治理的閾值（全部在閾值內或樣本不足）。"
-            if _LANG == "zh" else
-            "No thresholds need governance (all within margin or low-confidence)."
-        )
+        if not_measured:
+            # #3133: "all within margin" is not what a run that measured
+            # nothing (or not everything) found.
+            lines.append(
+                "量到的閾值中沒有需要治理的；有閾值沒量成（見下），報告不完整。"
+                if _LANG == "zh" else
+                "No measured threshold needs governance; some were not measured "
+                "(below), the report is partial."
+            )
+        else:
+            lines.append(
+                "未發現需要治理的閾值（全部在閾值內或樣本不足）。"
+                if _LANG == "zh" else
+                "No thresholds need governance (all within margin or low-confidence)."
+            )
         lines += _deferred_block()
+        if not_measured:  # the bottom line a tail-scan reads
+            lines.append(_deferred_note().strip())
         return "\n".join(lines)
 
     for plan in plans:
@@ -1173,8 +1229,10 @@ def format_json_report(
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
+    not_measured: Optional[list["NotMeasuredKey"]] = None,
 ) -> str:
     ung = ungoverned or []
+    nm = not_measured or []
     na = not_applicable or []
     fm = force_manual or []
     inh = inherited or []
@@ -1188,6 +1246,7 @@ def format_json_report(
         "not_applicable": [asdict(u) for u in na],
         "force_manual": [asdict(u) for u in fm],
         "inherited": [asdict(u) for u in inh],
+        "not_measured": [asdict(u) for u in nm],
         "summary": {
             # As the text Summary counts them (#2116): a tenant whose file is in
             # a sub-directory gets no PR, in a dry run or with --apply, so it is
@@ -1207,8 +1266,12 @@ def format_json_report(
             "not_applicable": len(na),
             "force_manual": len(fm),
             "inherited": len(inh),
+            "not_measured": len(nm),
         },
     }
+    if nm:
+        # #3133: as threshold-recommend marks its own report.
+        out.update({"status": "partial", "reason": "prometheus_query_error"})
     return _dump_json(out)
 
 
@@ -1237,11 +1300,12 @@ def run(args: argparse.Namespace) -> GovernanceResult:
     not_applicable = collect_not_applicable(reports)
     force_manual = collect_force_manual(reports)
     inherited = collect_inherited(reports)
+    not_measured = collect_not_measured(reports)
 
     outcomes: list[TenantOutcome] = []
     if not args.apply:
         return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
-                                inherited)
+                                inherited, not_measured)
 
     opened = 0
     attempted = 0
@@ -1288,7 +1352,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         else:
             consecutive_errors = 0
     return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
-                            inherited)
+                            inherited, not_measured)
 
 
 def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
@@ -1494,12 +1558,22 @@ def main() -> None:
     if args.json_output:
         print(format_json_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual, result.inherited))
+            result.not_applicable, result.force_manual, result.inherited,
+            result.not_measured))
     else:
         print(format_text_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
             result.not_applicable, result.force_manual, result.inherited,
-            max_prs=args.max_prs))
+            max_prs=args.max_prs, not_measured=result.not_measured))
+
+    # #3133: a threshold not measured makes the run partial — a caller error
+    # (exit 2), and it outranks the write-plane verdict below.
+    if result.not_measured:
+        first = result.not_measured[0]
+        print(f"ERROR: Prometheus query failed for {len(result.not_measured)} threshold(s); "
+              f"the report is partial (first: {safe_label(first.tenant)}/"
+              f"{safe_label(first.key)}: {safe_label(first.error[:80])})", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # #656: surface a governance run whose writes overwhelmingly failed as a non-zero
     # exit (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale

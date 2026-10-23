@@ -266,8 +266,9 @@ TOOLS: dict[str, Tool] = {
                                   "--config-dir", "{conf}")),
     "threshold_recommend": Tool((_PY, _T + "ops/threshold_recommend.py", "--config-dir", "{conf}",
                                  "--prometheus", "{prom}", "--dry-run")),
+    # threshold_govern too: a threshold not measured is exit 2 (#3133).
     "threshold_govern": Tool((_PY, _T + "ops/threshold_govern.py", "--config-dir", "{conf}",
-                              "--prometheus", "{prom}")),
+                              "--prometheus", "{prom_up}")),
     "backtest_threshold": Tool((_PY, _T + "ops/backtest_threshold.py", "--config-dir", "{conf}",
                                 "--baseline", "{conf}", "--prometheus", "{prom}",
                                 "--skip-if-unavailable")),

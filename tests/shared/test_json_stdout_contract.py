@@ -306,6 +306,13 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     if path.startswith("/api/v1/query_range"):
         return j(_RICH_MATRIX if rich else _EMPTY_MATRIX)
     if path.startswith("/api/v1/query"):
+        # A bare range-vector selector (`x[7d]`) evaluated at one instant
+        # answers a matrix (threshold-recommend reads it as one, #3133);
+        # every other instant query — `rate(x[5m])` included — a vector.
+        from urllib.parse import parse_qs, urlsplit
+        query = parse_qs(urlsplit(path).query).get("query", [""])[0]
+        if query.rstrip().endswith("]"):
+            return j(_RICH_MATRIX if rich else _EMPTY_MATRIX)
         return j(_RICH_VECTOR if rich else _EMPTY_VECTOR)
     if path.startswith("/api/v1/rules"):
         return j({"status": "success", "data": {"groups": []}})
