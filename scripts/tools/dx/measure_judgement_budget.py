@@ -611,7 +611,8 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--da-guard-binary", default=None,
                    help="da-guard to run (default: $DA_GUARD_BINARY, then PATH)")
     p.add_argument("--work-dir", default=None,
-                   help="scratch directory, kept (default: a new temp dir, removed)")
+                   help="scratch directory to create and keep (must not exist; default: a new "
+                        "temp dir, removed)")
     p.add_argument("--_judge", help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     if a._judge:
@@ -639,8 +640,8 @@ def _measure(a: argparse.Namespace) -> int:
     if len(allowed) < limits["cpus"]:
         raise NotMeasured(f"{limits['cpus']} CPUs needed, {len(allowed)} available")
     cpus = allowed[:limits["cpus"]]
-    if a.work_dir is not None and os.path.exists(a.work_dir) and os.listdir(a.work_dir):
-        raise NotMeasured(f"--work-dir {a.work_dir} is not empty")
+    if a.work_dir is not None and os.path.lexists(a.work_dir):
+        raise NotMeasured(f"--work-dir {a.work_dir} already exists: name a new directory")
     work = a.work_dir or tempfile.mkdtemp(prefix="judgement-budget-")
     os.makedirs(work, exist_ok=True)
     try:
