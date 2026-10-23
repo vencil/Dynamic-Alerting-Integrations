@@ -119,6 +119,58 @@ def test_a_path_no_reader_reads_is_refused(tmp_path, rel, setup):
     assert exc.value.reason == wc.NOT_READ
 
 
+@pytest.mark.parametrize("rel", ["team", "team/", "./team", "a/../team"])
+def test_a_directory_target_is_named_whatever_its_spelling(tmp_path, rel):
+    """#3206: parse-tree holds the entry under the cleaned name, so `team/`,
+    `./team` and `a/../team` get the directory's own reason, not the
+    generic one."""
+    (tmp_path / "team").mkdir()
+    (tmp_path / "team" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    with pytest.raises(wc.WriteRefused) as exc:
+        wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}})
+    assert exc.value.reason == wc.NOT_READ
+    assert "it is a directory (parse-tree role dir)" in exc.value.detail
+
+
+@pytest.mark.parametrize("rel", ["./t.yaml", "sub//t.yaml", "sub/../t.yaml"])
+def test_an_uncleaned_file_target_is_judged_under_its_clean_name(tmp_path, rel):
+    """A spelling Go's `--path` cleans is the same file: it is read, not
+    refused as a path no reader reads."""
+    (tmp_path / "sub").mkdir()
+    wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}})
+    assert wc.original(tmp_path, rel, b"tenants: {}\n") == {"tenants": {}}
+
+
+@pytest.mark.parametrize("rel", ["", ".", "./", "..", "../t.yaml", "a/../../t.yaml",
+                                 "/abs/t.yaml"])
+def test_a_target_naming_no_file_inside_the_root_is_refused_before_da_guard(
+        tmp_path, monkeypatch, rel):
+    """Empty, `.`, absolute or leaving the root: a clean WriteRefused, decided
+    before any da-guard run — never parse-tree's caller error read back as
+    a ParseTreeError ("no usable da-guard")."""
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "nope"))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for call in (lambda: wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}}),
+                 lambda: wc.original(tmp_path, rel, b"tenants: {}\n")):
+        with pytest.raises(wc.WriteRefused) as exc:
+            call()
+        assert exc.value.reason == wc.NOT_READ
+        assert "not a path naming a file inside the conf.d root" in exc.value.detail
+    with pytest.raises(wc.WriteRefused):
+        with wc.confirm_tree(tmp_path / "out", [(rel, "tenants: {}\n", {"tenants": {}})]):
+            pass
+
+
+def test_confirm_tree_stages_nothing_outside_itself_for_an_absolute_target(tmp_path):
+    """An absolute target joined to the staging directory would be written
+    where it names; it is refused before anything is staged."""
+    outside = tmp_path / "outside.yaml"
+    with pytest.raises(wc.WriteRefused):
+        with wc.confirm_tree(tmp_path / "out", [(str(outside), "tenants: {}\n", {"tenants": {}})]):
+            pass
+    assert not outside.exists()
+
+
 def test_a_new_file_is_judged_against_what_the_tool_means(tmp_path):
     assert wc.original(tmp_path, "tenant-a.yaml", None) is None
     doc = {"tenants": {"tenant-a": {"cpu": "70", "on": True, "n": 3, "z": None}}}

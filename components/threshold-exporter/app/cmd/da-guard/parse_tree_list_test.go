@@ -362,11 +362,19 @@ func TestParseTreeList_CallerErrors(t *testing.T) {
 		// A byte that is not UTF-8: refused before decoding, never read as
 		// U+FFFD (json.Unmarshal would) and so never passed as valid.
 		{"[\"bad\xff.yaml\"]", []string{"--names", "-"}},
+		// One entry per name: a name given twice is refused, never written
+		// as two entries a reader refuses whole (#3206).
+		{`["a.yaml","b.yaml","a.yaml"]`, []string{"--names", "-"}},
 		{"", []string{"--config-dir", filepath.Join(root, "missing")}},
 	} {
 		if code, _, _ := runPTList(t, tc.stdin, tc.args...); code != exitCallerErr {
 			t.Errorf("--list-only %v: exit %d, want %d", tc.args, code, exitCallerErr)
 		}
+	}
+	// The name given twice is refused by names mode itself, as the caller's
+	// input — not only by the emission guard (a da-guard defect's message).
+	if _, _, msg := runPTList(t, `["a.yaml","a.yaml"]`, "--names", "-"); !strings.Contains(msg, `"a.yaml" is given twice`) {
+		t.Errorf("a name given twice: %q, want it named as given twice", msg)
 	}
 	var out, errOut bytes.Buffer
 	if code := runParseTree([]string{"--names", "-"}, strings.NewReader(`["a.yaml"]`), &out, &errOut); code != exitCallerErr {
@@ -400,6 +408,69 @@ func TestWalkEntries_RefusesAPathRecordedTwice(t *testing.T) {
 	scan.NotFiles = nil
 	if _, err := parseTreeListOf(scan); err != nil {
 		t.Fatalf("control, one record per path: %v", err)
+	}
+}
+
+// TestWriteParseTree_RefusesAPathHeldTwice: the emission point checks the
+// one-entry-per-path contract for every mode, whatever built the entries
+// (names mode lists them in the order given, unsorted) — nothing is written.
+func TestWriteParseTree_RefusesAPathHeldTwice(t *testing.T) {
+	t.Parallel()
+	entries := []parseTreeEntry{nameEntry("a.yaml"), nameEntry("b.yaml"), nameEntry("a.yaml")}
+	var out bytes.Buffer
+	err := writeParseTree(&out, entries, entries)
+	if err == nil || !strings.Contains(err.Error(), `"a.yaml" twice`) {
+		t.Fatalf("err = %v, want the path named as held twice", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("wrote %q before refusing", out.String())
+	}
+	if err := writeParseTree(&out, entries[:2], entries[:2]); err != nil {
+		t.Fatalf("control, one entry per path: %v", err)
+	}
+}
+
+// TestWalkedDirEntry_IsTreeModesEntry: file mode looks the walk record up
+// directly (not a whole walkEntries index per call); for every record that
+// is no config file it is exactly tree mode's entry, and nil for the rest.
+func TestWalkedDirEntry_IsTreeModesEntry(t *testing.T) {
+	t.Parallel()
+	scan := &config.TreeScan{AbsRoot: t.TempDir(),
+		Keys:  []string{"t.yaml"},
+		Files: map[string]*config.TreeFile{"t.yaml": {}},
+		Unreadable: []config.UnreadableFile{
+			{RelKey: "denied.yaml", Reason: config.UnreadableStatError},
+			{RelKey: "gone.yaml", Reason: config.UnreadableStatError, Missing: true},
+			{RelKey: "queue.yaml", Reason: config.UnreadableSpecialFile},
+			{RelKey: "sub", Reason: config.UnreadableWalkError},
+		},
+		NotFiles: []config.NotFile{
+			{RelKey: "d.yaml", Reason: config.NotFileDirectory},
+			{RelKey: "l.yaml", Reason: config.NotFileDirLink},
+		},
+		Dirs: []string{"team"},
+	}
+	idx := newParseTreeIndex("tree")
+	if err := walkEntries(scan, &idx); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range idx.Entries {
+		got := walkedDirEntry(scan, want.Path)
+		if want.Role == config.RoleConfig {
+			if got != nil {
+				t.Errorf("%s: a config file, got entry %+v", want.Path, *got)
+			}
+			continue
+		}
+		if want.Path == "." {
+			continue // never a --path (cleanRelPath)
+		}
+		if got == nil || !reflect.DeepEqual(*got, want) {
+			t.Errorf("%s:\n got  %+v\n want %+v", want.Path, got, want)
+		}
+	}
+	if got := walkedDirEntry(scan, "absent.yaml"); got != nil {
+		t.Errorf("absent.yaml: got %+v, want nil", *got)
 	}
 }
 
