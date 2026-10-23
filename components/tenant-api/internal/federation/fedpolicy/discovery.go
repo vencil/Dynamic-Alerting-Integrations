@@ -78,8 +78,8 @@ type MetricDiscoverer struct {
 // escapeSelectorValue escapes a value for embedding inside a
 // double-quoted PromQL label-matcher literal. Backslash MUST be escaped
 // first (else the quote-escape's own backslash gets doubled), then the
-// double quote, then newline — mirroring the Python compiler's
-// _escape_value (shape.py), the cross-language injection boundary. A
+// double quote, then newline — mirroring the custom-alert compiler's
+// escapeSelectorValue (threshold-exporter pkg/config), the injection boundary. A
 // value run through this can never terminate the literal early.
 func escapeSelectorValue(v string) string {
 	v = strings.ReplaceAll(v, `\`, `\\`)

@@ -4,7 +4,7 @@ package config
 // the one place the recipe enums, patterns, bands, per-recipe fields,
 // lifecycle and SLO windows/multipliers are written. The exporter reads it here; tenant-api
 // reads it through the exported accessors below; every other copy (schema,
-// portal, shape.py's GENERATED block, rule-packs/recipes/*.yaml) is generated
+// portal, _lib_constants.py's GENERATED block, rule-packs/recipes/*.yaml) is generated
 // from it by scripts/tools/dx/gen_recipe_contract.py, whose --check is the
 // drift gate.
 

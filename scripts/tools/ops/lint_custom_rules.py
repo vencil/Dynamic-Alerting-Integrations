@@ -88,8 +88,9 @@ DEFAULT_POLICY = {
                     "holt_winters",
                     "quantile_over_time",
                 ],
-                # forecast lookback = max(2·horizon, 1h); horizon enum caps
-                # at 48h → 96h (custom_alerts/shape.py ALLOWED_HORIZON).
+                # forecast lookback = max(2·horizon, 1h); the contract's horizon
+                # enum caps at 48h → 96h (pkg/config/recipe_contract.json;
+                # tests/ops/test_lint_custom_rules.py compiles the 48h case).
                 "max_range_duration": "96h",
             },
         },

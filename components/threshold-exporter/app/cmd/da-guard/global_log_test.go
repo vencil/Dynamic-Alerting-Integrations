@@ -29,6 +29,7 @@ func TestRun_LeavesTheGlobalLoggerAlone(t *testing.T) {
 	for _, args := range [][]string{
 		{"--config-dir", confDir, "--required-fields", "cpu"},
 		{servedValuesCmd, "--config-dir", confDir},
+		{compileCustomAlertsCmd, "--config-dir", confDir},
 	} {
 		wantW, wantF := log.Writer(), log.Flags()
 		code, _, stderr := runOnce(t, args...)

@@ -223,7 +223,7 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
     "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB,
-    "dx/custom_alerts/entries.py": _GO, "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
+    "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
     "ops/_observed_map_lib.py": _LIB, "ops/_registry_lib.py": _LIB, "ops/_render_diff.py": _LIB,
@@ -231,6 +231,8 @@ _NOT_PROBED: dict[str, str] = {
                                  "its CLI-parity tests (tests/ops/test_generator_service.py) "
                                  "compare it with generate_alertmanager_routes"),
     "ops/guard_dispatch.py": _GO,
+    "dx/_recipe_preview.py": (_GO + "; reads only a one-tenant conf.d it writes itself from the "
+                              "request (no conf.d argument to probe) — tests/dx/test_recipe_preview.py"),
     "dx/generate_platform_data.py": _GO, "dx/generate_tenant_metadata.py": _GO,
     "dx/sync_schema.py": _NAMES, "lint/check_cli_contract.py": _NAMES,
     "lint/check_cli_default_drift.py": _NAMES, "lint/check_doc_datools_cmds.py": _NAMES,

@@ -1,9 +1,32 @@
 # recipe-preview service — would-fire preview HTTP facade (#657 PR 2).
 #
-# Build context = repo ROOT (the eval core lives under scripts/tools/). The
-# image bundles a SHA-pinned promtool because the firing/inactive verdict is
-# version-bound (§6 #5). Runs as non-root, serves POST /preview on :8082.
+# Build context = repo ROOT (the eval core lives under scripts/tools/, da-guard
+# under components/threshold-exporter/app). The image bundles a SHA-pinned
+# promtool because the firing/inactive verdict is version-bound (§6 #5), and
+# da-guard, which judges the recipe and compiles its rules (#3229) — the same
+# Go the exporter serves with. Runs as non-root, serves POST /preview on :8082.
 #   try-local:  docker compose up recipe-preview
+
+# ── da-guard ─────────────────────────────────────────────────────────────
+# Pinned to the native BUILDPLATFORM and cross-compiled to TARGETARCH
+# (CGO_ENABLED=0: no cross-toolchain, no QEMU), as the exporter's own image.
+# The builder's Go version MUST equal the module's go.mod `go` directive
+# (tests/ops/test_go_toolchain_parity.py): Trivy reads the toolchain the
+# shipped binary was compiled with. This stage is discarded.
+FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS gobuild
+
+WORKDIR /src
+COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum ./
+# go.mod replaces gopkg.in/yaml.v3 with this directory (#2681); `go mod
+# download` reads the replacement's go.mod.
+COPY components/threshold-exporter/app/third_party ./third_party
+RUN go mod download
+COPY components/threshold-exporter/app/ ./
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" \
+    -o /da-guard ./cmd/da-guard
+
+# ── Python + promtool ────────────────────────────────────────────────────
 FROM python:3.13.15-alpine3.23 AS builder
 
 # Alpine 3.23 CVE fixes (mirrors components/da-tools).
@@ -67,6 +90,7 @@ RUN apk --no-cache upgrade \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /usr/local/bin/promtool /usr/local/bin/promtool
+COPY --from=gobuild /da-guard /usr/local/bin/da-guard
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /opt/recipe-preview
@@ -75,7 +99,6 @@ WORKDIR /opt/recipe-preview
 # compile_custom_alerts resolves its lint helpers via <dir>/../lint.
 COPY scripts/tools/dx/_recipe_preview.py        ./core/dx/_recipe_preview.py
 COPY scripts/tools/dx/compile_custom_alerts.py  ./core/dx/compile_custom_alerts.py
-COPY scripts/tools/dx/custom_alerts             ./core/dx/custom_alerts
 COPY scripts/tools/lint/check_rulepack_sync.py  ./core/lint/check_rulepack_sync.py
 # _lib_exitcodes + _lib_compat live at scripts/tools/ (the compiler's OTHER
 # search path, <dir>/.. = ./core), NOT under lint/ — place them at ./core so
@@ -83,22 +106,24 @@ COPY scripts/tools/lint/check_rulepack_sync.py  ./core/lint/check_rulepack_sync.
 # exactly as in the repo.
 COPY scripts/tools/_lib_exitcodes.py            ./core/_lib_exitcodes.py
 COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
-# The compiler's own imports (#2873): compile_custom_alerts → _lib_io →
-# _lib_constants, _lib_yaml_keys. Missing any of them fails app.py at import
-# — and `docker build` still succeeds. _lib_confd was imported by the
-# custom-alert loader, which #3230 removed: no module of this image imports
-# it at load any more; its COPY is kept, not pruned in that change.
-# _lib_parse_cache is NOT imported at load (#2906): `_lib_confd` and `_lib_io`
-# import it only inside the conf.d readers that run da-guard
-# (declared_tenant_ids / tenant_declarations / load_confd_file); the compiler
-# calls none of them — it opens no conf.d file itself (#3042: da-guard
-# served-values in the repo, `entries_from_specs` in this image).
-# tests/ops/test_recipe_preview_image_layout.py imports app.py in this layout.
+# The core's imports (#2873): compile_custom_alerts → _lib_io → _lib_constants,
+# _lib_yaml_keys; the da-guard reader _lib_tenant_values (#3229: the preview
+# judges the recipe through da-guard) → _lib_parse_cache / _lib_parse_tree
+# (the reader's fail-closed exit, #3206), guard_dispatch → _lib_godispatch, and
+# _lib_python → _lib_validation, _lib_prometheus. Missing any of them fails the
+# preview — and `docker build` still succeeds.
+# tests/ops/test_recipe_preview_image_layout.py judges a recipe in this layout.
 COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
-COPY scripts/tools/_lib_confd.py                ./core/_lib_confd.py
-COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
 COPY scripts/tools/_lib_constants.py            ./core/_lib_constants.py
 COPY scripts/tools/_lib_yaml_keys.py            ./core/_lib_yaml_keys.py
+COPY scripts/tools/_lib_tenant_values.py        ./core/_lib_tenant_values.py
+COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
+COPY scripts/tools/_lib_parse_tree.py           ./core/_lib_parse_tree.py
+COPY scripts/tools/_lib_godispatch.py           ./core/_lib_godispatch.py
+COPY scripts/tools/ops/guard_dispatch.py        ./core/ops/guard_dispatch.py
+COPY scripts/tools/_lib_python.py               ./core/_lib_python.py
+COPY scripts/tools/_lib_validation.py           ./core/_lib_validation.py
+COPY scripts/tools/_lib_prometheus.py           ./core/_lib_prometheus.py
 ENV PREVIEW_CORE_DIR=/opt/recipe-preview/core/dx
 
 COPY components/recipe-preview/app.py           ./app.py

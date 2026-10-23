@@ -9,12 +9,12 @@ package config
 //	user_threshold{component="custom", metric=<metric>, severity=<sev>,
 //	               recipe_id=<slug>, name=<name>, mode=<page|silent>} = <value>
 //
-// The compiled rule pack (S1+S2) joins exactly this shape. recipe_id is the
-// SHAPE slug — it must be byte-identical to the Python compiler's
-// scripts/tools/dx/custom_alerts/shape.py::recipe_id (cross-language contract,
-// pinned by tests/dx/fixtures/recipe_id_vectors.json). Any change to the slug
-// algorithm MUST update Go + Python + the golden vector in the same PR, or every
-// on(tenant) group_left join silently matches the empty set (the #731 class).
+// The compiled rule pack (S1+S2, CompileCustomAlertPack) joins exactly this
+// shape. recipe_id is the SHAPE slug, the one function both the served row and
+// the compiled rules take it from (#3229), pinned by
+// tests/dx/fixtures/recipe_id_vectors.json: a change to the slug algorithm
+// renames every deployed rule and series, so it updates the golden vector in
+// the same PR, deliberately.
 
 import (
 	"crypto/sha256"
@@ -135,9 +135,8 @@ func (ts *taggedScalar) UnmarshalYAML(n *yaml.Node) error {
 // error would poison the whole _custom_alerts block instead of dropping just
 // the offending declaration). The accept-set is enforced in sloMinEvents:
 // tag must be !!int (plain `var v int` would let yaml.v3 coerce a float by
-// TRUNCATION, `min_events: 2.5` → 2, silently diverging from Python's
-// isinstance(int) reject), raw must be digit-only, and the parsed value must
-// be in [1, sloMinEventsMax] (mirrors shape.py::_normalize_min_events).
+// TRUNCATION, `min_events: 2.5` → 2, a value the schema rejects), raw must be
+// digit-only, and the parsed value must be in [1, sloMinEventsMax].
 type strictInt struct {
 	raw string
 	tag string
@@ -229,8 +228,7 @@ func customAlertSanitise(s string) string {
 // caHashField length-prefixes one field as "<byte-len>:<utf-8>". Concatenating
 // length-prefixed fields is injective (NIST SP 800-185 TupleHash style): it closes the
 // delimiter-aliasing collision class where a selector key/value straddles the `_`
-// separator (#1008 / F3). Go string len is the UTF-8 byte length, matching Python.
-// MUST stay byte-identical to shape.py::_lp.
+// separator (#1008 / F3). Go string len is the UTF-8 byte length.
 func caHashField(s string) string {
 	return strconv.Itoa(len(s)) + ":" + s
 }
@@ -238,8 +236,7 @@ func caHashField(s string) string {
 // shapeHashSuffix is the #1008/F3 disambiguation suffix for a selector-bearing recipe_id:
 // the first 16 hex (64-bit) of SHA-256 over a length-prefixed canonical of the STRUCTURED
 // shape identity. Fields are emitted in a FIXED order with an explicit "" for a field not
-// applicable to the recipe (no None → matches Python trivially). MUST be byte-identical to
-// shape.py::_shape_hash (golden-vector pinned).
+// applicable to the recipe. Golden-vector pinned (tests/dx/fixtures/recipe_id_vectors.json).
 func shapeHashSuffix(spec CustomAlertSpec, op string, items []selectorItem, gb []string) string {
 	isForecast := spec.Recipe == "forecast"
 	den := spec.DenominatorMetric
@@ -296,7 +293,7 @@ func shapeHashSuffix(spec CustomAlertSpec, op string, items []selectorItem, gb [
 // customAlertGroupBy validates + canonicalises group_by into a sorted, deduped
 // slice. Empty → nil, so a recipe without group_by keeps a byte-identical slug
 // (existing golden vectors unaffected). Bounded to customAlertGroupByValid; sorted
-// for cross-language slug determinism. MUST match shape.py::_normalize_group_by.
+// for slug determinism.
 func customAlertGroupBy(spec CustomAlertSpec) ([]string, error) {
 	if len(spec.GroupBy) == 0 {
 		return nil, nil
@@ -326,8 +323,8 @@ func validateCustomAlertMetric(metric, field string) error {
 }
 
 // rejectTemplateMetachars rejects a selector VALUE that could become Go-template
-// code in the annotation sink (see customAlertTemplateMetachars). Mirrors
-// shape.py::_reject_template_metachars.
+// code in the annotation sink (see customAlertTemplateMetachars;
+// assertTemplateSafe is the emit-time backstop).
 func rejectTemplateMetachars(value, key string) error {
 	for _, mc := range customAlertTemplateMetachars {
 		if strings.Contains(value, mc) {
@@ -341,10 +338,10 @@ func rejectTemplateMetachars(value, key string) error {
 }
 
 // validateQuantile rejects a p99_latency quantile that is not a bare number in
-// (0,1) (interpolated raw into histogram_quantile). Mirrors shape.py::_validate_quantile.
+// (0,1) (interpolated raw into histogram_quantile).
 func validateQuantile(q string) error {
-	// Charset gate FIRST — reject Go hex-floats/underscores that ParseFloat accepts
-	// but CPython float() does not, keeping both sides' accept-set identical.
+	// Charset gate FIRST — reject Go hex-floats/underscores that ParseFloat
+	// accepts but PromQL and the schema's decimal pattern do not.
 	qMin, qMax := contract.Quantile.ExclusiveMinimum, contract.Quantile.ExclusiveMaximum
 	if !customAlertQuantileRe.MatchString(q) {
 		return fmt.Errorf("quantile %q must be a decimal number in the open interval (%v,%v)", q, qMin, qMax)
@@ -363,16 +360,14 @@ func validateQuantile(q string) error {
 // !!bool/!!null has already been resolved by the YAML reader — its text is
 // dialect-dependent (the #1017 quantile class), so it is rejected outright
 // rather than re-canonicalised. Then reuses the quantile decimal-only charset
-// so the Go/Python accept-sets can never diverge (hex-float / underscore
-// poison-commit class). Mirrors shape.py::_validate_objective (isinstance(str)
-// → charset regex → float → range).
+// so a hex-float / underscore spelling is refused (the poison-commit class):
+// string tag → charset regex → float → range.
 func validateSloObjective(o taggedScalar) error {
 	obj := contract.SloBurnRate.Objective
 	lo, hi, disable := obj.ExclusiveMinimum, obj.ExclusiveMaximum, obj.Disable
 	if o.tag != "" && o.tag != "!!str" {
 		return fmt.Errorf("objective must be a quoted YAML string (e.g. \"99.9\"), got a %s "+
-			"scalar — a bare value is YAML-dialect-ambiguous and breaks the Go/Python "+
-			"lockstep (#1017 quantile class)", o.tag)
+			"scalar — a bare value is YAML-dialect-ambiguous (#1017 quantile class)", o.tag)
 	}
 	if o.value == "" {
 		return fmt.Errorf("slo_burn_rate recipe requires objective (SLO target percentage "+
@@ -383,7 +378,7 @@ func validateSloObjective(o taggedScalar) error {
 	}
 	if !customAlertQuantileRe.MatchString(o.value) {
 		return fmt.Errorf("objective %q must be a decimal number in the open interval (%v,%v) "+
-			"or %q (decimal charset only — keeps Go/Python accept-sets in lockstep)", o.value, lo, hi, disable)
+			"or %q (decimal charset only)", o.value, lo, hi, disable)
 	}
 	f, err := strconv.ParseFloat(o.value, 64)
 	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= lo || f >= hi {
@@ -394,7 +389,7 @@ func validateSloObjective(o taggedScalar) error {
 }
 
 // sloPeriod validates + normalizes the slo_burn_rate `slo_period` (budget
-// window). Empty → the contract's default. Mirrors shape.py::_normalize_slo_period.
+// window). Empty → the contract's default.
 func sloPeriod(spec CustomAlertSpec) (string, error) {
 	p := spec.SloPeriod
 	if p == "" {
@@ -424,10 +419,9 @@ var sloMinEventsRe = regexp.MustCompile(`^[0-9]+$`)
 // sloMinEvents validates + normalizes the slo_burn_rate `min_events` (the
 // fast-window bad-event absolute floor, low-traffic false-positive guard).
 // nil (missing) → default 10. Deferred strict-integer contract (see strictInt):
-// tag must be !!int (bool/float/string rejected — mirrors Python's
-// isinstance(int) + bool-subclass reject), raw must be digit-only, and the
+// tag must be !!int (bool/float/string rejected), raw must be digit-only, and the
 // value must be in [1, sloMinEventsMax] (< 1 would disable the guard — the
-// opt-out is objective:"disable"). Mirrors shape.py::_normalize_min_events.
+// opt-out is objective:"disable").
 func sloMinEvents(spec CustomAlertSpec) (int, error) {
 	if spec.MinEvents == nil {
 		return sloMinEventsDefault, nil
@@ -464,8 +458,8 @@ type selectorItem struct {
 }
 
 // selectorItems returns the validated (op,key,value) triples sorted by (key, op)
-// — deterministic, independent of map iteration order (cross-language slug
-// contract). Mirrors shape.py _selector_items.
+// — deterministic, independent of map iteration order (the slug and the
+// selector the compiled rules match on).
 func selectorItems(spec CustomAlertSpec) ([]selectorItem, error) {
 	var items []selectorItem
 	for k, v := range spec.Selectors {
@@ -573,11 +567,39 @@ func checkRecipeFields(spec CustomAlertSpec, op string, withDataPlane bool) erro
 	return nil
 }
 
-// RecipeID computes the deterministic shape slug. MUST stay byte-identical to
-// scripts/tools/dx/custom_alerts/shape.py::recipe_id (golden vector test).
-func RecipeID(spec CustomAlertSpec) (string, error) {
+// customAlertShape is one declaration's rule identity, validated and with the
+// contract's defaults applied: everything the recipe_id slug encodes and the
+// rule compiler (custom_alert_compile.go) emits from. Two declarations with the
+// same recipe_id compile to one vectorised rule, so a recipe_id shared by two
+// unequal shapes is a hash collision (CompileCustomAlertPack refuses it).
+type customAlertShape struct {
+	Recipe, Metric string
+	// Op: the authored op or the contract default; empty for absence.
+	Op string
+	// Window: rate/ratio/p99_latency/threshold/absence only.
+	Window string
+	// Quantile: p99_latency only (contract default applied).
+	Quantile string
+	// Denominator: ratio and slo_burn_rate.
+	Denominator string
+	// Horizon and Capacity: forecast (Capacity set → ratio mode).
+	Horizon, Capacity string
+	For               string
+	// MinEvents: slo_burn_rate only.
+	MinEvents int
+	Items     []selectorItem
+	GroupBy   []string
+	// hash: the #1008/F3 disambiguation suffix ("" without selectors).
+	hash string
+}
+
+// recipeShape validates spec's identity fields and returns its shape. The
+// checks run in the order RecipeID always ran them, so its errors are
+// unchanged.
+func recipeShape(spec CustomAlertSpec) (customAlertShape, error) {
+	var sh customAlertShape
 	if !customAlertRecipes[spec.Recipe] {
-		return "", fmt.Errorf("unknown recipe %q", spec.Recipe)
+		return sh, fmt.Errorf("unknown recipe %q", spec.Recipe)
 	}
 	op := spec.Op
 	if op == "" {
@@ -586,161 +608,179 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 	// The shape slug needs the identity fields only: the data-plane ones
 	// (name, threshold) are checked by the resolve paths.
 	if err := checkRecipeFields(spec, op, false); err != nil {
-		return "", err
+		return sh, err
 	}
 	if err := validateCustomAlertMetric(spec.Metric, "metric"); err != nil {
-		return "", err
+		return sh, err
 	}
 	items, err := selectorItems(spec)
 	if err != nil {
-		return "", err
+		return sh, err
 	}
-
-	parts := []string{spec.Recipe, spec.Metric}
-	for _, it := range items {
-		prefix := "s"
-		if it.op == "=~" {
-			prefix = "sre"
-		}
-		parts = append(parts, prefix+"_"+it.key+"_"+it.value)
-	}
+	sh = customAlertShape{Recipe: spec.Recipe, Metric: spec.Metric, Op: op, Items: items}
 	// `==` is threshold-recipe-only (#810): exact match suits integer status/
 	// error codes on a RAW gauge; other recipes emit computed floats where
 	// equality is fragile. This gate runs BEFORE the absence short-circuit so it
 	// also rejects absence+"==" (op is meaningless for a presence check) — keeping
 	// the imperative gate in lockstep with the JSON-schema if/then editor-guard,
 	// so an API/GitOps-accepted spec can't later fail to render in the Portal.
-	// Mirrors shape.py.
 	if op == "==" && !customAlertEqRecipes[spec.Recipe] {
-		return "", fmt.Errorf("op \"==\" is only allowed for the %s recipe "+
+		return sh, fmt.Errorf("op \"==\" is only allowed for the %s recipe "+
 			"(raw-gauge status-code match); %s does not support it", oneOf(contract.Op.EqRecipes), spec.Recipe)
 	}
 	if spec.Recipe == "absence" {
-		parts = append(parts, "absent")
-	} else {
-		slug, ok := customAlertOpSlug[op]
-		if !ok {
-			return "", fmt.Errorf("unknown op %q", op)
-		}
-		parts = append(parts, slug)
+		// A presence check has no comparison: the op is not in its slug nor
+		// in any rule it emits, so it is not in its shape either — or two
+		// entries on one recipe_id, one with a stray `op:`, would be refused
+		// as a collision (CompileCustomAlertPack compares shapes whole).
+		sh.Op = ""
+	} else if _, ok := customAlertOpSlug[op]; !ok {
+		return sh, fmt.Errorf("unknown op %q", op)
 	}
 	switch spec.Recipe {
 	case "forecast":
 		// forecast: lookback derives from `horizon` (the compiler computes
 		// max(2·horizon,1h)), so the tenant supplies `horizon` (enum), NOT a
-		// window — `h{horizon}` takes the `w{window}` slot. capacity_metric
-		// present → ratio mode → `den_` slot (raw mode omits it). MUST match
-		// shape.py recipe_id's forecast branch.
+		// window. capacity_metric present → ratio mode.
 		h := spec.Horizon // required by the contract (checkRecipeFields)
 		if !customAlertHorizonValid[h] {
-			return "", fmt.Errorf("horizon %q must be one of %s", h, oneOf(contract.Horizon.Enum))
+			return sh, fmt.Errorf("horizon %q must be one of %s", h, oneOf(contract.Horizon.Enum))
 		}
-		parts = append(parts, "h"+h)
+		sh.Horizon = h
 		if spec.CapacityMetric != "" {
 			if err := validateCustomAlertMetric(spec.CapacityMetric, "capacity_metric"); err != nil {
-				return "", err
+				return sh, err
 			}
-			parts = append(parts, "den_"+spec.CapacityMetric)
+			sh.Capacity = spec.CapacityMetric
 		}
 	case "slo_burn_rate":
 		// ADR-031: the burn windows (1h/5m fast, 6h/30m slow) are FIXED recipe
-		// semantics — no `w{window}` slot (a stray authored `window` is ignored,
-		// like forecast). `objective` replaces `threshold` (its VALUE rides the
-		// data plane via user_threshold; resolveSloBurnRate derives the per-
-		// severity burn thresholds from it) — so an authored `threshold` is a
-		// declaration error, and objective/slo_period are validated here (ADR-029
-		// dual-side duty) but NEVER enter the slug. MUST match shape.py.
+		// semantics — no window (a stray authored `window` is ignored, like
+		// forecast). `objective` replaces `threshold`; objective/slo_period are
+		// validated here (ADR-029 dual-side duty) but never enter the slug.
 		if err := validateSloObjective(spec.Objective); err != nil {
-			return "", err
+			return sh, err
 		}
 		if _, err := sloPeriod(spec); err != nil {
-			return "", err
+			return sh, err
 		}
 		if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
-			return "", err
+			return sh, err
 		}
-		parts = append(parts, "den_"+spec.DenominatorMetric)
+		sh.Denominator = spec.DenominatorMetric
 		// min_events IS a shape component (the compiler writes the literal into
-		// the rule text): always emitted, default 10 materialised — the NEW
-		// `minev{N}` slot sits between `den_` and `for` (slug-order contract).
-		minEv, err := sloMinEvents(spec)
-		if err != nil {
-			return "", err
+		// the rule text): default materialised into the slug as minev{N}.
+		if sh.MinEvents, err = sloMinEvents(spec); err != nil {
+			return sh, err
 		}
-		parts = append(parts, "minev"+strconv.Itoa(minEv))
 	default:
-		parts = append(parts, "w"+spec.Window)
+		sh.Window = spec.Window
 		if spec.Recipe == "p99_latency" {
 			q := string(spec.Quantile)
 			if q == "" {
 				q = contract.Quantile.Default
 			}
 			if err := validateQuantile(q); err != nil {
-				return "", err
+				return sh, err
 			}
-			parts = append(parts, "q"+q)
+			sh.Quantile = q
 		}
 		if spec.Recipe == "ratio" {
 			if err := validateCustomAlertMetric(spec.DenominatorMetric, "denominator_metric"); err != nil {
-				return "", err
+				return sh, err
 			}
-			parts = append(parts, "den_"+spec.DenominatorMetric)
+			sh.Denominator = spec.DenominatorMetric
 		}
 	}
-	// `for` enters the slug — it is part of the rule identity (Prometheus `for:`
-	// is a control-plane STATIC rule attribute, unlike data-plane `mode` which
-	// rides group_left). Two tenants sharing every other param but a different
-	// `for` are genuinely different rules; without `for` in the slug the
-	// vectorized rule silently froze to one tenant's `for` (TRK-326 / #751).
-	// Always emitted; default 1m. MUST stay byte-identical to shape.py::recipe_id.
-	forVal := spec.For
-	if forVal == "" {
-		forVal = contract.For.Default
+	// `for` is part of the rule identity (a Prometheus `for:` is a static rule
+	// attribute, unlike data-plane `mode`): two tenants differing only in `for`
+	// are genuinely different rules (TRK-326 / #751).
+	sh.For = spec.For
+	if sh.For == "" {
+		sh.For = contract.For.Default
 	}
-	parts = append(parts, "for"+forVal)
-
 	// group_by dimensions (ADR-024 §Addendum): per-dimension eval (e.g. per PVC).
-	// Only for value-crossing recipes — reject for absence (a per-tenant presence
-	// check) and op "==" (exact code match isn't per-PVC), keeping the eq/absence
-	// cores per-tenant. Appended LAST and only when present → no group_by keeps a
-	// byte-identical slug. MUST stay byte-identical to shape.py::recipe_id.
-	//   SLUG-ORDER CONTRACT: a NEW slug field added later MUST go in the SAME
-	//   position in shape.py::recipe_id (the golden vector enforces parity). Keep
-	//   new fields only-when-present like gb_ (an ALWAYS-appended field — like
-	//   `for` — re-slugs every existing rule, a deliberate breaking migration).
 	//   FORESIGHT: the "==" rejection is safe ONLY because the whitelist is PVC-only
 	//   (error codes aren't per-PVC). If a topology dim (e.g. pod) is whitelisted, a
 	//   tenant may legitimately want group_by:[pod] + op:"==" — then relax this AND
-	//   thread group_by into the eq-core aggregation (recipes.py::_eq_core_record).
-	gb, err := customAlertGroupBy(spec)
+	//   thread group_by into the eq core (custom_alert_compile.go eqCoreRecord).
+	if sh.GroupBy, err = customAlertGroupBy(spec); err != nil {
+		return sh, err
+	}
+	// Which recipes take group_by at all is the contract's (checkRecipeFields).
+	if len(sh.GroupBy) > 0 && op == "==" {
+		return sh, fmt.Errorf("group_by (per-dimension eval) is not supported for op \"==\" — " +
+			"it applies only to value-crossing recipes (ADR-024 Addendum)")
+	}
+	// #1008 / F3: recipe_id must be INJECTIVE over the shape identity, but the
+	// readable slug is not (customAlertSanitise is lossy, the `__` join is
+	// ambiguous). A selector is the only tenant-controlled free-form slug field,
+	// so a selector-bearing recipe carries a suffix over the STRUCTURED identity.
+	if len(spec.Selectors) > 0 || len(spec.SelectorsRe) > 0 {
+		sh.hash = shapeHashSuffix(spec, op, items, sh.GroupBy)
+	}
+	return sh, nil
+}
+
+// ID is the deterministic shape slug (golden vector test).
+//
+//	SLUG-ORDER CONTRACT: a new slug field goes in a fixed position, and only
+//	when present (like gb_) — an always-appended field (like `for`) re-slugs
+//	every existing rule, a deliberate breaking migration.
+func (sh customAlertShape) ID() string {
+	parts := []string{sh.Recipe, sh.Metric}
+	for _, it := range sh.Items {
+		prefix := "s"
+		if it.op == "=~" {
+			prefix = "sre"
+		}
+		parts = append(parts, prefix+"_"+it.key+"_"+it.value)
+	}
+	if sh.Recipe == "absence" {
+		parts = append(parts, "absent")
+	} else {
+		parts = append(parts, customAlertOpSlug[sh.Op])
+	}
+	switch sh.Recipe {
+	case "forecast":
+		parts = append(parts, "h"+sh.Horizon)
+		if sh.Capacity != "" {
+			parts = append(parts, "den_"+sh.Capacity)
+		}
+	case "slo_burn_rate":
+		parts = append(parts, "den_"+sh.Denominator, "minev"+strconv.Itoa(sh.MinEvents))
+	default:
+		parts = append(parts, "w"+sh.Window)
+		if sh.Recipe == "p99_latency" {
+			parts = append(parts, "q"+sh.Quantile)
+		}
+		if sh.Recipe == "ratio" {
+			parts = append(parts, "den_"+sh.Denominator)
+		}
+	}
+	parts = append(parts, "for"+sh.For)
+	for _, g := range sh.GroupBy {
+		parts = append(parts, "gb_"+g)
+	}
+	slug := customAlertSanitise(strings.Join(parts, "__"))
+	if sh.hash != "" {
+		slug += "__x" + sh.hash
+	}
+	return slug
+}
+
+// RecipeID computes the deterministic shape slug (recipeShape + ID).
+func RecipeID(spec CustomAlertSpec) (string, error) {
+	sh, err := recipeShape(spec)
 	if err != nil {
 		return "", err
 	}
-	// Which recipes take group_by at all is the contract's (checkRecipeFields).
-	if len(gb) > 0 && op == "==" {
-		return "", fmt.Errorf("group_by (per-dimension eval) is not supported for op \"==\" — " +
-			"it applies only to value-crossing recipes (ADR-024 Addendum)")
-	}
-	for _, g := range gb {
-		parts = append(parts, "gb_"+g)
-	}
-	// #1008 / F3: recipe_id must be INJECTIVE over the shape identity, but the readable
-	// slug is not — customAlertSanitise is lossy AND the `s_{key}_{value}`/`__`-join is
-	// ambiguous even with no lossy char ({region_x:1} and {region:x_1} both →
-	// `s_region_x_1`). A selector is the only tenant-controlled free-form slug field
-	// (window/quantile/metric/for/group_by are charset/enum-bounded), so a selector-bearing
-	// recipe carries a disambiguation suffix over the STRUCTURED identity; a no-selector
-	// recipe stays byte-identical. MUST stay byte-identical to shape.py::recipe_id.
-	slug := customAlertSanitise(strings.Join(parts, "__"))
-	if len(spec.Selectors) > 0 || len(spec.SelectorsRe) > 0 {
-		slug += "__x" + shapeHashSuffix(spec, op, items, gb)
-	}
-	return slug, nil
+	return sh.ID(), nil
 }
 
 // parseCustomAlertThreshold splits "value[:severity]" → (value, severity).
 // severity defaults to "warning". The grammar is the threshold rows' one
-// (splitThresholdSeverity, #3071); mirrors shape.py parse_threshold.
+// (splitThresholdSeverity, #3071).
 func parseCustomAlertThreshold(threshold string) (value, severity string, err error) {
 	return splitThresholdSeverity(threshold)
 }
@@ -822,7 +862,7 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	}
 	// forecast ratio mode: the threshold is a headroom-fraction floor
 	// (avail/capacity), so it must be in (0, forecastCurrentBand) — a floor >= 1 would
-	// fire permanently; a floor >= the current-state band is silently neutered by the band gate (lockstep w/ shape.py).
+	// fire permanently; a floor >= the current-state band is silently neutered by the band gate (forecastRecords).
 	if lo := contract.Forecast.RatioFloorExclusiveMinimum; spec.Recipe == "forecast" && spec.CapacityMetric != "" && (value <= lo || value >= forecastCurrentBand) {
 		return nil, fmt.Errorf("forecast ratio-mode threshold %v must be in (%v,%v): a floor >= the current-state band is neutered by the band gate", value, lo, forecastCurrentBand)
 	}
@@ -907,9 +947,9 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 	}
 	// `for` must be one of the enum-bounded values (TRK-326) on the slo path
 	// too: RecipeID slugs `for{val}` without an enum check, so skipping this
-	// here would let an out-of-enum `for` mint a bogus shape the Python
-	// compiler (shape.py::_normalize_for inside recipe_id) rejects — a
-	// preflight/compiler drift. Same check + message as the non-slo path.
+	// here would let an out-of-enum `for` mint a bogus shape (a `for:` the
+	// compiled alert carries verbatim). Same check + message as the non-slo
+	// path.
 	forVal := spec.For
 	if forVal == "" {
 		forVal = contract.For.Default
@@ -927,8 +967,8 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 		return nil, fmt.Errorf("no burn multipliers for slo_period %q", period)
 	}
 	// error budget fraction; expression order (M × (1 − obj/100)) MUST match the
-	// Python re-computation in tests/dx/test_compile_custom_alerts.py so the
-	// multiplier fixture pins bit-identical float64 values on both sides.
+	// re-computation in tests/dx/test_compile_custom_alerts.py, which pins the
+	// multiplier fixture to the locked multipliers bit-identically.
 	budget := 1 - objective/100
 	row := func(value float64, severity string) ResolvedThreshold {
 		return ResolvedThreshold{
@@ -1315,8 +1355,8 @@ func CustomAlertRowCount(tenant string, overrides map[string]ScheduledValue) int
 var MaxCustomRecipesDefault = contract.Cap
 
 // ValidateTenantCustomAlerts is the tenant-api shift-left preflight (ADR §S5):
-// the Go-native, in-process equivalent of the Python compiler's per-tenant
-// validation. It validates a tenant's `_custom_alerts` block (as stored in
+// the same per-entry judgment the exporter serves with and the compiler
+// compiles from, in-process. It validates a tenant's `_custom_alerts` block (as stored in
 // `overrides` by the parse.go SequenceNode passthrough) and returns human-readable
 // violation strings (nil if all valid).
 //

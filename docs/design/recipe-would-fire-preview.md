@@ -141,13 +141,13 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 1. **評估時間點必須大於 recipe 的 `for:` 視窗。** 告警在滿足 `for:` 之前處於「待定」（pending，尚未真正觸發），而「斷言不會觸發」**不會**把待定當成違反 → `promtool` 會回成功 → 預覽誤判成「不會觸發」（明明已越過閾值）。所以合成測試的評估時間要**嚴格大於 `for:`**（例如 `for: 30m` → 評估設 35m），序列也要長到跨過 `for:`。
 2. **returncode 非 0 不等於「觸發」。** 記憶體不足被系統終止（OOM）、找不到 `promtool`、合成測試檔語法錯，都會讓 returncode 非 0。若盲目把「非 0」當成觸發，就會把基礎設施錯誤誤報成 `firing`。所以判定觸發**必須同時**看到失敗簽章（`FAILED:` + `got:`），否則一律當 `error` 並噴出真正的錯誤。
 
-為了讓「編譯失敗」永遠不會被誤標成「觸發」，分三層把關：① 編譯器對壞 recipe 直接拋例外 → `error`；② 編出的規則先過 `promtool check rules`（語法）→ 失敗即 `error`；③ 語法過了，才跑上面的反證斷言。
+為了讓「編譯失敗」永遠不會被誤標成「觸發」，分三層把關：① exporter 拒收的 recipe（沒有送出的門檻列）→ `error`，附 exporter 的原因；② 編出的規則先過 `promtool check rules`（語法）→ 失敗即 `error`；③ 語法過了，才跑上面的反證斷言。
 
 > 本機已實測：值 1500 > 閾值 1000 → 失敗、輸出帶完整告警；值 500 → 成功。整套用既有工具即可，不需要另起一個 Prometheus 實例。
 
 ### 5.3 單一 recipe 編譯 + 直接重用編譯器
 
-服務是 Python，所以**直接呼叫編譯器**：把表單那一條 recipe 直接交給編譯器，請它產生規則和它算出的 recipe 識別字。服務 image 不帶 da-guard，所以這條 recipe 由編譯器自己的驗證判定，不經 exporter 的讀法（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。識別字是編譯器自己算的、不是另外用正則或在 Go 重推——這就是「直接重用、零跨語言重寫」在 Python 服務下自然成立的原因。單獨一條 recipe 編出的規則，正是「你宣告這條 recipe 會長這樣」，恰好是預覽要的。
+服務把表單那一條 recipe 寫成一棵只有一個租戶的暫存 conf.d，交給部署時用的同一個 da-guard：`served-values` 給出 exporter 的判定與它會送出的 `user_threshold` 列（標籤、severity、值），`compile-custom-alerts` 給出規則與 recipe 識別字（[#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229)）。服務映像因此帶 da-guard。合成序列的閾值列就是 exporter 送出的那一列，`for:` 取自編好的規則——不另外用正則或在 Python 重推，所以 exporter 拒收的 recipe 不會被預覽成會觸發。單獨一條 recipe 編出的規則，正是「你宣告這條 recipe 會長這樣」，恰好是預覽要的。
 
 ## 6. 生產護欄
 

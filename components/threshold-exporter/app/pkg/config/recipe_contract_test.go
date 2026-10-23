@@ -260,7 +260,7 @@ func TestRecipeID_RequiredFieldsSkipDataPlane(t *testing.T) {
 }
 
 // An empty group_by list means "none": accepted on a recipe that takes no
-// group_by, the same answer the schema and shape.py give.
+// group_by, the same answer the schema gives.
 func TestEmptyGroupByIsNone(t *testing.T) {
 	spec := CustomAlertSpec{Recipe: "absence", Name: "a", Metric: "m", Window: "5m", Threshold: "1", GroupBy: []string{}}
 	if _, err := resolveOneCustomAlert("t", spec); err != nil {

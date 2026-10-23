@@ -1183,13 +1183,13 @@ jobs:
       # step (tests/rulepacks/*_test.yaml) never runs on this generated pack — so a
       # tenant-authored recipe that compiled to syntactically-invalid PromQL (F1 DoS
       # class: a bad `window`/`quantile` breaking the shared rule file on deploy)
-      # would pass CI. The boundary charset validation (shape.py/custom_alert.go) is
+      # would pass CI. The boundary charset validation (custom_alert.go) is
       # the primary guard; this is the structural backstop that fails the build if any
       # invalid PromQL ever reaches the shared pack.
       - name: "Custom-alert generated pack is valid PromQL (SEC-AUDIT #741 F1 backstop)"
         run: promtool check rules rule-packs/rule-pack-custom-alerts.yaml
 
-      # #3229: the schema, portal, shape.py and rule-packs/recipes copies of the
+      # #3229: the schema, portal, _lib_constants.py and rule-packs/recipes copies of the
       # recipe contract are GENERATED from pkg/config/recipe_contract.json (the
       # exporter's go:embed). Edit the contract but forget `make recipe-contract`
       # → fail here.

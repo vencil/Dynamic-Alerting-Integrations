@@ -930,7 +930,7 @@ custom-alerts-compile-check: $(DA_GUARD_PREREQ) ## 驗證 committed rule-pack-cu
 	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
 .PHONY: recipe-contract
-recipe-contract: ## 從 pkg/config/recipe_contract.json 產生 schema、portal、shape.py、rule-packs/recipes 的 recipe 副本（#3229）
+recipe-contract: ## 從 pkg/config/recipe_contract.json 產生 schema、portal、_lib_constants.py、rule-packs/recipes 的 recipe 副本（#3229）
 	@python3 ./scripts/tools/dx/gen_recipe_contract.py --update
 
 .PHONY: recipe-contract-check

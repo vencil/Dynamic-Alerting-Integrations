@@ -17,8 +17,7 @@ the threshold rows and custom alerts share). Held to the same columns here:
   mirrors it replaced, are gone);
 * ``check_threshold_unit_sanity._as_number`` — the number the unit-sanity
   lint judges (None for a value the exporter cannot read);
-* ``custom_alerts/shape.py`` ``parse_threshold`` — the custom-alert compiler;
-* the severity sets the backtest and the compiler compare against;
+* the severity set the backtest compares against;
 * tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
   the suffix only (``ok`` is false only for a refused suffix), through ``re``
   and jsonschema.
@@ -35,14 +34,12 @@ import pytest
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "ops"))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "dx"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "lint"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools"))
 
 import _lib_validation  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
 import check_threshold_unit_sanity as unit_sanity  # noqa: E402
-from custom_alerts import shape  # noqa: E402
 
 _MATRIX = os.path.join(_REPO_ROOT, "tests", "shared", "threshold_value_matrix.json")
 _SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas", "tenant-config.schema.json")
@@ -76,7 +73,6 @@ def test_matrix_is_written_by_go():
 
 def test_severity_sets_are_gos():
     assert tuple(_matrix()["severities"]) == bt._COMPARED_SEVERITIES
-    assert tuple(_matrix()["severities"]) == shape.THRESHOLD_SEVERITIES
     assert tuple(_matrix()["severities"]) == _lib_validation.THRESHOLD_SEVERITIES
 
 
@@ -163,15 +159,6 @@ def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
         assert got == (float(row["value_part"]), row["severity"]), row
     else:
         assert got in ("not read", (80.0, "warning")), (row, got)
-
-
-@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
-def test_custom_alert_compiler_splits_as_the_exporter_does(row):
-    if not row["ok"]:
-        with pytest.raises(shape.RecipeError):
-            shape.parse_threshold(row["value"])
-        return
-    assert shape.parse_threshold(row["value"]) == (row["value_part"], row["severity"]), row
 
 
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))

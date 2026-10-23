@@ -16,8 +16,7 @@
     "row resolvers, custom alerts and the subtree overlay agree). Python half:",
     "tests/shared/test_threshold_value_parity.py (_lib_validation.split_threshold_severity,",
     "parse_threshold_number, backtest --tenant's reading of served-values,",
-    "the unit-sanity lint,",
-    "custom_alerts/shape.py parse_threshold, the severity sets and the schema's",
+    "the unit-sanity lint, the severity sets and the schema's",
     "thresholdScalar pattern agree)."
   ],
   "severities": [

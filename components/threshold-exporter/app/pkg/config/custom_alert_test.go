@@ -44,8 +44,8 @@ func mustRecipeID(t *testing.T, spec CustomAlertSpec) string {
 	return id
 }
 
-// findRecipeIDVectors walks up from cwd to locate the shared cross-language
-// golden vector (lives at repo-root tests/dx/fixtures/, outside this module).
+// findRecipeIDVectors walks up from cwd to locate the golden vector (lives at
+// repo-root tests/dx/fixtures/, outside this module).
 func findRecipeIDVectors(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -63,9 +63,9 @@ func findRecipeIDVectors(t *testing.T) string {
 	return ""
 }
 
-// TestRecipeID_GoldenVectors pins the Go slug to the SAME golden vectors the
-// Python compiler asserts against (scripts/tools/dx/custom_alerts/shape.py).
-// A drift here = every on(tenant) group_left join silently empties in prod.
+// TestRecipeID_GoldenVectors pins the slug to the golden vectors. The served
+// row and the compiled rules take it from one function (#3229), so a change
+// here renames every deployed rule and series: deliberate, never incidental.
 func TestRecipeID_GoldenVectors(t *testing.T) {
 	// JSON is a YAML subset → yaml.Unmarshal reads the file straight into specs
 	// using CustomAlertSpec's yaml tags (no separate json tags needed).
@@ -148,7 +148,7 @@ func TestCustomAlert_ListParseSurvivesAndResolves(t *testing.T) {
 		t.Errorf("unexpected resolved threshold: %+v", rt)
 	}
 	want := map[string]string{
-		// #1008/F3: selectors present → recipe_id carries the __x{hash} suffix (Go/Python byte-identical).
+		// #1008/F3: selectors present → recipe_id carries the __x{hash} suffix (golden-vector pinned).
 		"recipe_id": "rate__http_requests_total__sre_status_5____gt__w5m__for1m__xb0ff6b9ab9a60507",
 		"name":      "http_5xx",
 		"mode":      "silent",
@@ -407,10 +407,9 @@ func findFixture(t *testing.T, name string) string {
 }
 
 // TestValidationContract_GoldenVectors pins the Go preflight/exporter validation
-// decision to the SAME shared contract the Python compiler asserts against
-// (custom_alert_validation_vectors.json). A drift here = a recipe the tenant-api
-// preflight accepts but the CI compiler rejects (or vice versa) → shift-left
-// false feedback. (ADR-024 §S5 — closes the validation-decision drift gap.)
+// decision to the validation vectors (custom_alert_validation_vectors.json):
+// the accept / reject verdict tenant-api's preflight, the exporter and the
+// compiler all take from resolveOneCustomAlert. (ADR-024 §S5.)
 func TestValidationContract_GoldenVectors(t *testing.T) {
 	raw, err := os.ReadFile(findFixture(t, "custom_alert_validation_vectors.json"))
 	if err != nil {
@@ -494,9 +493,9 @@ func TestSloBurnRate_FanOut(t *testing.T) {
 }
 
 // TestSloBurnRate_MultiplierVectors pins resolveSloBurnRate's derived thresholds
-// to the shared lockstep fixture (slo_burn_multiplier_vectors.json) that the
-// Python side re-computes bit-identically — the cross-language guarantee that
-// both implementations turn the same declaration into the same burn thresholds.
+// to the fixture (slo_burn_multiplier_vectors.json) that
+// tests/dx/test_compile_custom_alerts.py re-computes from the locked
+// multipliers bit-identically.
 func TestSloBurnRate_MultiplierVectors(t *testing.T) {
 	raw, err := os.ReadFile(findFixture(t, "slo_burn_multiplier_vectors.json"))
 	if err != nil {
@@ -619,7 +618,7 @@ func TestSloBurnRate_DeferredTypeErrorKeepsSiblings(t *testing.T) {
 // TestSloBurnRate_MinEventsLeadingZeroOctalParity: `min_events: 010` is YAML
 // 1.1 octal — PyYAML resolves the same text to 8, and the Go side's base-0
 // ParseInt does too, so BOTH slug minev8 (never minev10/minev010). Pinning this
-// keeps the digit-only-raw rule from silently diverging the cross-language slug.
+// keeps the digit-only-raw rule from silently diverging from the schema's reading.
 func TestSloBurnRate_MinEventsLeadingZeroOctalParity(t *testing.T) {
 	cfg := customAlertsConfig(t, "t1",
 		"      - {recipe: slo_burn_rate, name: oct, metric: err_total, denominator_metric: req_total, objective: \"99.9\", min_events: 010}\n")

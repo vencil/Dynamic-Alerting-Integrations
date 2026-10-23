@@ -47,7 +47,7 @@ def compiled_pack(tmp_path_factory, da_guard_binary):
         mp.setenv("DA_GUARD_BINARY", da_guard_binary)
         pack = cc.build_pack(_EXAMPLES)
     (workdir / "rule-pack-custom-alerts.yaml").write_text(
-        cc._render(pack["groups"]), encoding="utf-8"
+        cc._render(pack.groups), encoding="utf-8"
     )
     return workdir
 
@@ -73,7 +73,7 @@ def test_goldens_present():
 
 def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack, da_guard_env):
     """ADR §S5: a spec-valid selector VALUE containing a double-quote is escaped
-    by the compiler (_escape_value) into a well-formed quoted literal — promtool
+    by the compiler (Go escapeSelectorValue) into a well-formed quoted literal — promtool
     accepts it. Proves the Go preflight accepting any key-valid value is safe:
     the value can never break out of the quoted matcher / inject (CI backstop)."""
     confd = tmp_path / "conf.d"
@@ -84,7 +84,7 @@ def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_
         'selectors: {path: \'a"b\'}, op: ">", window: 5m, threshold: "1:warning"}\n',
         encoding="utf-8")
     pack = cc.build_pack(confd)
-    rendered = cc._render(pack["groups"])
+    rendered = cc._render(pack.groups)
     assert 'path="a\\"b"' in rendered          # the " is escaped, stays inside the literal
     out = tmp_path / "rule-pack-custom-alerts.yaml"
     out.write_text(rendered, encoding="utf-8")
@@ -116,7 +116,7 @@ def test_one_tenants_two_alerts_of_one_shape_leave_the_shared_rule_working(tmp_p
         f"tenants:\n  tb:\n    _custom_alerts:\n      - {{{thr}, name: c, threshold: '5:warning'}}\n",
         encoding="utf-8")
     pack = cc.build_pack(confd)
-    (tmp_path / "pack.yaml").write_text(cc._render(pack["groups"]), encoding="utf-8")
+    (tmp_path / "pack.yaml").write_text(cc._render(pack.groups), encoding="utf-8")
 
     def label_set(labels: dict) -> str:
         return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"

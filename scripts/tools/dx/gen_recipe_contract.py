@@ -16,10 +16,9 @@ every other copy is GENERATED from it:
              property is hand-written and kept
   - Portal : tools/portal/src/interactive/tools/_common/data/recipe-enums.json
              and recipe-status.json (imported by recipe-builder)
-  - Python : the blocks between the GENERATED markers in
-             scripts/tools/dx/custom_alerts/shape.py (the compiler's enums
-             and patterns) and scripts/tools/_lib_constants.py (the
-             per-tenant custom-alert cap validate-config judges)
+  - Python : the block between the GENERATED markers in
+             scripts/tools/_lib_constants.py (the per-tenant custom-alert
+             cap validate-config judges)
   - Recipes: the `status:` line and each param's `required:` / `enum:` /
              `default:` in rule-packs/recipes/*.yaml, whose params must be
              exactly the recipe's (the rest is hand-written and kept)
@@ -61,7 +60,6 @@ SEVERITY_REL = "tests/shared/threshold_value_matrix.json"
 SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
 PORTAL_ENUMS_REL = "tools/portal/src/interactive/tools/_common/data/recipe-enums.json"
 PORTAL_STATUS_REL = "tools/portal/src/interactive/tools/_common/data/recipe-status.json"
-SHAPE_REL = "scripts/tools/dx/custom_alerts/shape.py"
 CONSTANTS_REL = "scripts/tools/_lib_constants.py"
 RECIPES_DIR_REL = "rule-packs/recipes"
 #: The targets written whole: a missing one is generated, not an error.
@@ -146,7 +144,7 @@ def schema_members(c):
 
 
 # "No group_by" means none listed: an empty list is accepted, as Go
-# (len(spec.GroupBy) > 0) and shape.py accept it.
+# (len(spec.GroupBy) > 0) accepts it.
 _NO_GROUP_BY = {"maxItems": 0}
 
 
@@ -263,79 +261,6 @@ def render_portal_status(c):
 
 # ---------------------------------------------------------------- Python
 
-def _py(v):
-    return json.dumps(v, ensure_ascii=False)
-
-
-def _py_re(pattern):
-    if '"' in pattern or pattern.endswith("\\"):
-        raise ContractError(f"pattern {pattern!r} cannot be written as a raw string")
-    return f're.compile(r"{pattern}")'
-
-
-def _py_tuple(items):
-    body = ", ".join(_py(x) for x in items)
-    return f"({body},)" if len(items) == 1 else f"({body})"
-
-
-def _py_fset(items):
-    return "frozenset({" + ", ".join(_py(x) for x in items) + "})"
-
-
-def render_python(c):
-    p = c["patterns"]
-    slo = c["slo_burn_rate"]
-    statuses = "".join(f"    {_py(r['name'])}: {_py(r['status'])},\n" for r in c["recipes"])
-    slugs = ", ".join(f"{_py(k)}: {_py(v)}" for k, v in c["op"]["slug"].items())
-    rules = "".join(
-        f"    {_py(r['name'])}: ({_py_tuple(r['required'])}, "
-        f"{{{', '.join(f'{_py(k)}: {_py(v)}' for k, v in sorted((r.get('forbidden') or {}).items()))}}}, "
-        f"{_py(r['fixed_op']) if r.get('fixed_op') else 'None'}, {r['group_by']}),\n"
-        for r in c["recipes"])
-    windows = "".join(f"    {_py(t['severity'])}: ({_py(t['long'])}, {_py(t['short'])}, "
-                      f"{t['min_events_factor']}),\n" for t in slo["tiers"])
-    lines = [
-        f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
-        f"# block from {CONTRACT_REL}. DO NOT EDIT.",
-        f"RECIPES = {_py_tuple([r['name'] for r in c['recipes']])}",
-        f"RECIPE_LIFECYCLE = {_py_fset(c['lifecycle'])}",
-        "RECIPE_STATUS = {\n" + statuses + "}",
-        f"_METRIC_RE = {_py_re(p['metric'])}",
-        f"_LABEL_RE = {_py_re(p['label'])}",
-        f"_WINDOW_RE = {_py_re(p['window'])}",
-        f"_QUANTILE_RE = {_py_re(p['decimal'])}",
-        f"_TEMPLATE_METACHARS = {_py_tuple(c['template_metachars'])}",
-        "RESERVED_LABELS = frozenset({\n"
-        + "".join(f"    {_py(x)},\n" for x in c["reserved_labels"]) + "})",
-        f"OP_SLUG = {{{slugs}}}",
-        f"DEFAULT_OP = {_py(c['op']['default'])}",
-        f"_EQ_RECIPES = {_py_fset(c['op']['eq_recipes'])}",
-        f"ALLOWED_FOR = {_py_fset(c['for']['enum'])}",
-        f"DEFAULT_FOR = {_py(c['for']['default'])}",
-        f"ALLOWED_HORIZON = {_py_fset(c['horizon']['enum'])}",
-        f"ALLOWED_GROUP_BY = {_py_fset(c['group_by']['enum'])}",
-        f"DEFAULT_QUANTILE = {_py(c['quantile']['default'])}",
-        f"QUANTILE_RANGE = ({c['quantile']['exclusive_minimum']}, {c['quantile']['exclusive_maximum']})",
-        f"OBJECTIVE_RANGE = ({slo['objective']['exclusive_minimum']}, {slo['objective']['exclusive_maximum']})",
-        f"OBJECTIVE_DISABLE = {_py(slo['objective']['disable'])}",
-        f"ALLOWED_SLO_PERIOD = {_py_fset(slo['slo_period']['enum'])}",
-        f"DEFAULT_SLO_PERIOD = {_py(slo['slo_period']['default'])}",
-        f"SLO_MIN_EVENTS_DEFAULT = {slo['min_events']['default']}",
-        f"SLO_MIN_EVENTS_MIN = {slo['min_events']['minimum']}",
-        f"SLO_MIN_EVENTS_MAX = {slo['min_events']['maximum']}",
-        "# severity -> (long window, short window, bad-event floor multiplier)",
-        "SLO_BURN_WINDOWS = {\n" + windows + "}",
-        f"_FORECAST_CURRENT_BAND = {c['forecast']['current_band']}",
-        f"_FORECAST_RATIO_FLOOR_MIN = {c['forecast']['ratio_floor_exclusive_minimum']}",
-        f"BASE_REQUIRED = {_py_tuple(c['base_required'])}",
-        f"DATA_PLANE_FIELDS = {_py_fset([f['name'] for f in c['fields'] if f.get('data_plane')])}",
-        "# recipe -> (required, forbidden field -> hint, fixed op or None, takes group_by)",
-        "RECIPE_RULES = {\n" + rules + "}",
-        PY_END,
-    ]
-    return "\n".join(lines) + "\n"
-
-
 def render_constants(c):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
@@ -345,7 +270,7 @@ def render_constants(c):
     ]) + "\n"
 
 
-def splice_python(text, block, rel=SHAPE_REL):
+def splice_python(text, block, rel=CONSTANTS_REL):
     """*text* with the GENERATED block replaced by *block*."""
     if text.count(PY_BEGIN) != 1 or text.count(PY_END) != 1:
         raise ContractError(f"{rel}: expected one {PY_BEGIN!r} and one {PY_END!r} line")
@@ -439,7 +364,6 @@ def targets(root, c, severities):
         (SCHEMA_REL, lambda t: render_schema(t, c)),
         (PORTAL_ENUMS_REL, lambda _t: render_portal_enums(c, severities)),
         (PORTAL_STATUS_REL, lambda _t: render_portal_status(c)),
-        (SHAPE_REL, lambda t: splice_python(t, render_python(c))),
         (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c), CONSTANTS_REL)),
     ]
     yamls = sorted((Path(root) / RECIPES_DIR_REL).glob("*.yaml"))
