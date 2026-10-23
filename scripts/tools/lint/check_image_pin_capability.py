@@ -110,9 +110,11 @@ At that point generalise the resolver (image repo -> tag prefix -> capability
 extractor) rather than bolting on a second special case.
 
 Known non-covered surfaces (accepted, not oversights):
-  * `.github/workflows/**` — `config-diff.yaml` runs a da-tools image too.
-    Workflow pins fail LOUDLY (a red CI job), which is the opposite of the
-    silent-failure property this gate exists for.
+  * `.github/workflows/**` — no workflow runs a pinned da-tools image since
+    `config-diff.yaml` was retired (#3258); the release job runs the candidate
+    digest it just built (`scripts/ops/smoke_da_tools_image.sh`). A workflow
+    pin that came back would fail LOUDLY (a red CI job), which is the
+    opposite of the silent-failure property this gate exists for.
   * digest-pinned images (`image.digest` set) — a digest cannot be mapped
     back to a `tools/v*` tag; this is reported as an error, not skipped.
   * charts that mix a da-tools pin with other images — see
