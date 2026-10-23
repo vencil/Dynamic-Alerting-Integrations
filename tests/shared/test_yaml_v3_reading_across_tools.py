@@ -231,6 +231,8 @@ _NOT_PROBED: dict[str, str] = {
                                  "its CLI-parity tests (tests/ops/test_generator_service.py) "
                                  "compare it with generate_alertmanager_routes"),
     "ops/guard_dispatch.py": _GO,
+    "dx/_recipe_preview.py": (_GO + "; reads only a one-tenant conf.d it writes itself from the "
+                              "request (no conf.d argument to probe) — tests/dx/test_recipe_preview.py"),
     "dx/generate_platform_data.py": _GO, "dx/generate_tenant_metadata.py": _GO,
     "dx/sync_schema.py": _NAMES, "lint/check_cli_contract.py": _NAMES,
     "lint/check_cli_default_drift.py": _NAMES, "lint/check_doc_datools_cmds.py": _NAMES,
