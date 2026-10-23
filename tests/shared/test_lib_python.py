@@ -33,6 +33,7 @@ _skipif_unix_modes = pytest.mark.skipif(
 )
 
 import _lib_python as lib
+import _lib_prometheus  # noqa: E402  (#3133: the tuple readers are not re-exported)
 from factories import mock_http_response
 
 
@@ -428,7 +429,7 @@ class TestHttpGetJson:
     def test_success(self, mock_urlopen):
         """成功回傳 JSON dict。"""
         mock_urlopen.return_value = mock_http_response({"status": "ok"})
-        data, err = lib.http_get_json("http://localhost:9090/api/v1/query")
+        data, err = _lib_prometheus.http_get_json("http://localhost:9090/api/v1/query")
         assert data == {"status": "ok"}
         assert err is None
 
@@ -436,7 +437,7 @@ class TestHttpGetJson:
     def test_empty_body(self, mock_urlopen):
         """空 body 回傳空 dict。"""
         mock_urlopen.return_value = mock_http_response(body=b"")
-        data, err = lib.http_get_json("http://localhost/api")
+        data, err = _lib_prometheus.http_get_json("http://localhost/api")
         assert data == {}
         assert err is None
 
@@ -444,7 +445,7 @@ class TestHttpGetJson:
     def test_network_error(self, mock_urlopen):
         """連線錯誤回傳 (None, error_msg)。"""
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
-        data, err = lib.http_get_json("http://unreachable:9090/")
+        data, err = _lib_prometheus.http_get_json("http://unreachable:9090/")
         assert data is None
         assert "Connection refused" in err
 
@@ -453,7 +454,7 @@ class TestHttpGetJson:
         """HTTP 錯誤回傳 (None, error_msg)。"""
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "http://test/", 500, "Internal Server Error", {}, None)
-        data, err = lib.http_get_json("http://test/")
+        data, err = _lib_prometheus.http_get_json("http://test/")
         assert data is None
         assert "500" in err
 
@@ -461,14 +462,14 @@ class TestHttpGetJson:
     def test_custom_headers(self, mock_urlopen):
         """自訂 headers 正確傳遞。"""
         mock_urlopen.return_value = mock_http_response({"ok": True})
-        lib.http_get_json("http://test/", headers={"Authorization": "Bearer token"})
+        _lib_prometheus.http_get_json("http://test/", headers={"Authorization": "Bearer token"})
         call_args = mock_urlopen.call_args
         req = call_args[0][0]
         assert req.get_header("Authorization") == "Bearer token"
 
     def test_ssrf_blocked(self):
         """非 http/https scheme 被 SSRF 防護攔截。"""
-        data, err = lib.http_get_json("file:///etc/passwd")
+        data, err = _lib_prometheus.http_get_json("file:///etc/passwd")
         assert data is None
         assert "Unsupported URL scheme" in err
 

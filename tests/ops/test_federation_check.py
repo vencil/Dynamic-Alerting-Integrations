@@ -13,6 +13,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import federation_check as fc  # noqa: E402
+import _lib_prometheus  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -21,7 +22,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 # ---------------------------------------------------------------------------
 def _mock_http_get_json(mapping):
     """Return a mock for http_get_json that returns based on URL patterns."""
-    def _get(url):
+    def _get(url, **_kw):
         for pattern, val in mapping.items():
             if pattern in url:
                 return val
@@ -109,7 +110,7 @@ class TestCheckEdge:
             return mock_resp
 
         http_mapping = {
-            "config": ({"data": {"yaml": "global:\n  external_labels:\n    cluster: edge-1"}}, None),
+            "config": ({"status": "success", "data": {"yaml": "global:\n  external_labels:\n    cluster: edge-1"}}, None),
         }
         prom_mapping = {
             "tenant": (
@@ -119,7 +120,7 @@ class TestCheckEdge:
         }
 
         with patch("urllib.request.urlopen", side_effect=mock_urlopen):
-            with patch.object(fc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
                 with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = fc.check_edge("http://edge:9090")
 
@@ -133,14 +134,14 @@ class TestCheckEdge:
         mock_resp = _mock_urlopen_ok()
 
         http_mapping = {
-            "config": ({"data": {"yaml": "global:\n  scrape_interval: 15s"}}, None),
+            "config": ({"status": "success", "data": {"yaml": "global:\n  scrape_interval: 15s"}}, None),
         }
         prom_mapping = {
             "tenant": ({"status": "success", "data": {"result": []}}, None),
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(fc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
                 with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = fc.check_edge("http://edge:9090")
 
@@ -151,14 +152,14 @@ class TestCheckEdge:
         mock_resp = _mock_urlopen_ok()
 
         http_mapping = {
-            "config": ({"data": {"yaml": "global:\n  external_labels:\n    env: prod"}}, None),
+            "config": ({"status": "success", "data": {"yaml": "global:\n  external_labels:\n    env: prod"}}, None),
         }
         prom_mapping = {
             "tenant": ({"status": "success", "data": {"result": []}}, None),
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(fc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
                 with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = fc.check_edge("http://edge:9090")
 
@@ -195,7 +196,7 @@ class TestCheckCentral:
         }
         http_mapping = {
             "rules": (
-                {"data": {"groups": [
+                {"status": "success", "data": {"groups": [
                     {"name": "test-alerts", "rules": [
                         {"name": "TestAlert", "alerts": [{"labels": {}}]},
                     ]},
@@ -203,7 +204,7 @@ class TestCheckCentral:
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(fc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
                 with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
                     checks = fc.check_central("http://central:9090")
 
@@ -226,11 +227,11 @@ class TestCheckCentral:
             return None, "no match"
 
         http_mapping = {
-            "rules": ({"data": {"groups": []}}, None),
+            "rules": ({"status": "success", "data": {"groups": []}}, None),
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with patch.object(fc, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
                 with patch.object(fc, "query_prometheus", side_effect=mock_query):
                     checks = fc.check_central("http://central:9090")
 
@@ -245,7 +246,7 @@ class TestCheckCentral:
 class TestCheckE2E:
     def test_combines_edge_and_central(self):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
-            with patch.object(fc, "http_get_json", return_value=(None, "refused")):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "refused")):
                 with patch.object(fc, "query_prometheus", return_value=(None, "refused")):
                     checks = fc.check_e2e("http://central:9090", ["http://edge-1:9090"])
 
@@ -257,7 +258,7 @@ class TestCheckE2E:
 
     def test_skips_empty_urls(self):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
-            with patch.object(fc, "http_get_json", return_value=(None, "refused")):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "refused")):
                 with patch.object(fc, "query_prometheus", return_value=(None, "refused")):
                     checks = fc.check_e2e("http://central:9090", ["", "  "])
 
@@ -317,7 +318,7 @@ class TestMain:
 
     def test_e2e_with_urls(self, capsys):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
-            with patch.object(fc, "http_get_json", return_value=(None, "refused")):
+            with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "refused")):
                 with patch("sys.argv", [
                     "federation_check.py", "e2e",
                     "--edge-urls", "http://e1:9090,http://e2:9090",
@@ -402,7 +403,7 @@ def _central(answer_for):
         return answer_for(up.parse_qs(up.urlsplit(url).query).get("query", [""])[0])
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()))
-        stack.enter_context(patch.object(fc, "http_get_json", side_effect=_get))
+        stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=_get))
         stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=_get))
         return {c["check"]: c for c in fc.check_central("http://prom:9090")}
 
@@ -481,3 +482,77 @@ def test_the_cross_cluster_count_refuses_a_non_finite_count(value):
                          return_value=([{"metric": {}, "value": [1, value]}], None)):
         checks = fc.check_e2e("http://prom:9090", ["http://edge:9090"])
     assert (checks[0]["status"], checks[0].get("caller_error")) == ("fail", True)
+
+
+# ---------------------------------------------------------------------------
+# #3133 batch 4: status/config and the alert rules are read by the lib
+# ---------------------------------------------------------------------------
+class TestBatch4AnswersReadByTheLib:
+    @staticmethod
+    def _checks(fn, http_mapping, federate=b"m{} 1\n"):
+        ok = _mock_urlopen_ok()
+        fed = _mock_urlopen_ok()
+        fed.read.return_value = federate
+
+        def urlopen(req, **_kw):
+            return fed if "federate" in getattr(req, "full_url", str(req)) else ok
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with patch.object(_lib_prometheus, "http_get_json",
+                              side_effect=_mock_http_get_json(http_mapping)):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus({})):
+                    return {c["check"]: c for c in fn("http://p:9090")}
+
+    @pytest.mark.parametrize("answer", [
+        {"status": "error", "error": "bad_data"},
+        {"status": "success", "data": None},
+        {"status": "success", "data": {"yaml": 5}},
+        [],
+    ], ids=["status-error", "data-null", "yaml-int", "list-body"])
+    def test_status_config_not_read_is_a_caller_error(self, answer):
+        """An error status used to read as "no external_labels" (exit 1); the
+        malformed answers crashed (internal error)."""
+        by = self._checks(fc.check_edge, {"status/config": (answer, None)})
+        c = by["edge_external_labels"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+
+    @pytest.mark.parametrize("answer", [
+        {"status": "error", "error": "bad_data"},
+        {"status": "success", "data": {}},
+        {"status": "success", "data": {"groups": ["x"]}},
+        [],
+    ], ids=["status-error", "no-groups", "group-not-object", "list-body"])
+    def test_alert_rules_not_read_are_a_caller_error(self, answer):
+        """An error status or no groups used to read as "0 alert rules"
+        (warn, exit 0); the malformed answers crashed."""
+        by = self._checks(fc.check_central, {"rules": (answer, None)})
+        c = by["central_alert_rules"]
+        assert (c["status"], c.get("caller_error")) == ("fail", True), c
+
+    def test_alert_rules_are_asked_for_by_type(self):
+        seen = []
+
+        def get(url, **_kw):
+            seen.append(url)
+            return {"status": "success", "data": {"groups": []}}, None
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=get):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus({})):
+                    fc.check_central("http://p:9090")
+        assert "http://p:9090/api/v1/rules?type=alert" in seen
+
+    def test_federate_probe_failure_stays_a_warn(self):
+        """A probe: not reaching /federate is the finding (warn), not a
+        caller error — unchanged by batch 4."""
+        ok = _mock_urlopen_ok()
+
+        def urlopen(req, **_kw):
+            if "federate" in getattr(req, "full_url", str(req)):
+                raise OSError("refused")
+            return ok
+        good = {"status/config": ({"status": "success", "data": {"yaml": "external_labels: {cluster: c}"}}, None)}
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(good)):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus({})):
+                    by = {c["check"]: c for c in fc.check_edge("http://p:9090")}
+        c = by["edge_federate_endpoint"]
+        assert c["status"] == "warn" and "caller_error" not in c, c

@@ -30,12 +30,11 @@ def _args(**kwargs):
 
 
 def _patch_http(get):
-    """Patch the HTTP fetch byo_check reads through — its own import and the
-    lib's, which the Alertmanager readers use (#3133)."""
+    """Patch the HTTP fetch byo_check reads through: the lib's, which every
+    reader uses (#3133)."""
     import contextlib
     import _lib_prometheus
     stack = contextlib.ExitStack()
-    stack.enter_context(patch.object(bc, "http_get_json", side_effect=get))
     stack.enter_context(patch.object(_lib_prometheus, "http_get_json", side_effect=get))
     return stack
 
@@ -140,7 +139,7 @@ class TestCheckPrometheus:
         }
         http_mapping = {
             "rules": (
-                {"data": {"groups": [
+                {"status": "success", "data": {"groups": [
                     {"name": "mariadb-alerts", "rules": [
                         {"name": "test", "lastError": ""},
                     ]},
@@ -173,7 +172,7 @@ class TestCheckPrometheus:
         }
         http_mapping = {
             "rules": (
-                {"data": {"groups": []}}, None),
+                {"status": "success", "data": {"groups": []}}, None),
         }
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
@@ -340,7 +339,7 @@ class TestStep4DiskRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"status": "success", "data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=query_fn):
                     return bc.check_prometheus(_args())
 
@@ -415,7 +414,7 @@ class TestStep4DiskRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"status": "success", "data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=_rec):
                     bc.check_prometheus(_args())
         declaring = next(q for q in seen if "user_threshold" in q and "kubelet_volume_stats" in q)
@@ -457,7 +456,7 @@ class TestStep5DiskIopsRecipePrereq:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            with _patch_http(_mock_http_get_json({"rules": ({"data": {"groups": []}}, None)})):
+            with _patch_http(_mock_http_get_json({"rules": ({"status": "success", "data": {"groups": []}}, None)})):
                 with patch.object(bc, "query_prometheus", side_effect=query_fn):
                     return bc.check_prometheus(_args())
 
@@ -659,6 +658,28 @@ class TestJudgeStep2UserThresholdMetrics:
 
 
 class TestJudgeStep3RulePacksLoaded:
+    @pytest.mark.parametrize("answer", [
+        {"status": "error", "error": "bad_data"},
+        {"status": "success", "data": {}},
+        {"status": "success", "data": None},
+        {"status": "success", "data": {"groups": [{"name": "mariadb-alerts", "rules": None}]}},
+        [],
+    ], ids=["status-error", "no-groups", "data-null", "rules-null", "list-body"])
+    def test_rules_not_read_are_a_caller_error(self, answer):
+        """#3133 batch 4: check_prometheus reads the rules through
+        prometheus_rules. An error status or no groups used to read as "No
+        Dynamic Alerting rule groups found" (exit 1); the rest crashed."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with _patch_http(_mock_http_get_json({"/api/v1/rules": (answer, None)})):
+                with patch.object(bc, "query_prometheus", side_effect=_mock_query_prometheus({})):
+                    checks = bc.check_prometheus(_args())
+        step3 = next(c for c in checks if c["check"] == "step3_rule_packs_loaded")
+        assert (step3["status"], step3.get("caller_error")) == ("fail", True), step3
+
     def test_err_caller_error(self):
         c = bc._judge_step3_rule_packs_loaded(None, "rules boom")
         assert c["status"] == "fail"
@@ -666,19 +687,19 @@ class TestJudgeStep3RulePacksLoaded:
         assert c["detail"] == "Rules API failed: rules boom"
 
     def test_da_groups_pass(self):
-        data = {"data": {"groups": [
+        data = {"status": "success", "data": {"groups": [
             {"name": "mariadb-alerts", "rules": [{"name": "r1", "lastError": ""},
                                                  {"name": "r2", "lastError": ""}]},
         ]}}
-        c = bc._judge_step3_rule_packs_loaded(data, None)
+        c = bc._judge_step3_rule_packs_loaded(data["data"]["groups"], None)
         assert c["status"] == "pass"
         assert c["detail"] == "1 rule groups, 2 rules"
 
     def test_eval_errors_warn(self):
-        data = {"data": {"groups": [
+        data = {"status": "success", "data": {"groups": [
             {"name": "redis-alerts", "rules": [{"name": "r1", "lastError": "kaboom"}]},
         ]}}
-        c = bc._judge_step3_rule_packs_loaded(data, None)
+        c = bc._judge_step3_rule_packs_loaded(data["data"]["groups"], None)
         assert c["status"] == "warn"
         assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
 
@@ -688,17 +709,17 @@ class TestJudgeStep3RulePacksLoaded:
         The per-rule messages are collected internally with lastError[:40]
         truncation but only COUNTED in the emitted detail — lock that
         boundary so a refactor doesn't start dumping raw errors."""
-        data = {"data": {"groups": [
+        data = {"status": "success", "data": {"groups": [
             {"name": "redis-alerts", "rules": [{"name": "r1", "lastError": "E" * 200}]},
         ]}}
-        c = bc._judge_step3_rule_packs_loaded(data, None)
+        c = bc._judge_step3_rule_packs_loaded(data["data"]["groups"], None)
         assert c["status"] == "warn"
         assert c["detail"] == "1 rule groups, 1 rules, 1 evaluation error(s)"
         assert "E" * 41 not in c["detail"]
 
     def test_no_da_groups_fail(self):
-        data = {"data": {"groups": [{"name": "unrelated", "rules": []}]}}
-        c = bc._judge_step3_rule_packs_loaded(data, None)
+        data = {"status": "success", "data": {"groups": [{"name": "unrelated", "rules": []}]}}
+        c = bc._judge_step3_rule_packs_loaded(data["data"]["groups"], None)
         assert c["status"] == "fail"
         assert "caller_error" not in c
         assert c["detail"] == "No Dynamic Alerting rule groups found"
@@ -1123,23 +1144,28 @@ class TestCheckAlertmanagerInhibitSemantics:
         assert sem is not None and sem["status"] == "warn"
         assert "parse" in sem["detail"].lower()
 
-    def test_malformed_status_payload_does_not_crash(self):
-        # A status API returning config.original as a non-string (or config null)
-        # must not raise — the check degrades, it does not crash.
+    def test_malformed_status_payload_is_a_caller_error(self):
+        """#3133 batch 4: a status answer that is not read (config null or not
+        an object, original not a string, a non-object body) is a failed
+        check — it used to degrade to "No tenant routing found" (warn, exit 0)."""
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"OK"
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
-        for bad_config in ({"original": {"not": "a string"}}, None, "just a string"):
+        for body in ({"config": {"original": {"not": "a string"}}}, {"config": None},
+                     {"config": "just a string"}, []):
             mapping = {
-                "status": ({"config": bad_config}, None),
+                "status": (body, None),
                 "alerts": ([], None),
                 "silences": ([], None),
             }
             with patch("urllib.request.urlopen", return_value=mock_resp):
                 with _patch_http(_mock_http_get_json(mapping)):
-                    checks = bc.check_alertmanager(_args())   # must not raise
-            assert any(c["check"] == "alertmanager_ready" for c in checks)
+                    checks = bc.check_alertmanager(_args())
+            by = {c["check"]: c for c in checks}
+            assert by["alertmanager_config"]["status"] == "fail", body
+            assert by["alertmanager_config"]["caller_error"] is True, body
+            assert "alertmanager_tenant_routes" not in by, body
 
 
 # ---------------------------------------------------------------------------

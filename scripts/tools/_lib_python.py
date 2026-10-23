@@ -6,7 +6,7 @@ Direct imports from sub-modules are preferred for new code:
   from _lib_constants import GUARDRAILS
   from _lib_io import write_text_secure
   from _lib_validation import parse_duration_seconds
-  from _lib_prometheus import query_prometheus_instant
+  from _lib_prometheus import prometheus_instant
 """
 from __future__ import annotations
 
@@ -77,14 +77,15 @@ from _lib_validation import (  # noqa: F401
     FIELD_NOT_STRING,
 )
 
+# #3133 batch 4: the (result, error) tuple readers — http_get_json,
+# query_prometheus_instant, query_prometheus_range — are not re-exported: a
+# tool imports them from _lib_prometheus, where the shrink-only gate in
+# tests/shared/test_query_error.py names who may.
 from _lib_prometheus import (  # noqa: F401
     _validate_url_scheme,
-    http_get_json,
     http_post_json,
     http_request_with_retry,
     probe_health,
-    query_prometheus_instant,
-    query_prometheus_range,
     QueryError,
     prometheus_range,
     alertmanager_alerts,
