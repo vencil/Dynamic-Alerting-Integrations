@@ -658,7 +658,9 @@ def outcome(run: dict) -> "tuple[str, str | None]":
         if "MemoryError" in run["stderr_tail"]:
             return ended, "judgement process: MemoryError"
         return "incomplete", f"judgement process exited {run['exit']}: {run['stderr_tail'][-800:]}"
-    signalled = [c for c in rep["children"] if c["exit"] < 0]
+    # Only a program whose own figures came back: a launcher killed with no
+    # side file (its timeout) says nothing about the limit.
+    signalled = [c for c in rep["children"] if c["launched"] and c["exit"] < 0]
     if rep["memory_error"] or signalled:
         why = rep["memory_error"] or ""
         if signalled:

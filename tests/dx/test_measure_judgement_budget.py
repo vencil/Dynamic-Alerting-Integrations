@@ -90,6 +90,17 @@ def test_the_same_signal_with_no_limit_is_not_a_memory_result():
     assert _run(limit=None, children=children)["outcome"] == "failed"
 
 
+def test_a_launcher_killed_without_figures_is_incomplete_not_memory():
+    # No side file: the launcher itself was ended (e.g. its timeout), not the
+    # program under the limit.
+    amtool = _child("amtool check-config", -signal.SIGKILL)
+    amtool["launched"] = False
+    children = [_child("da-guard parse-tree (tree)"), amtool, _child("da-guard served-values")]
+    r = _run(children=children)
+    assert r["outcome"] == "incomplete", r
+    assert "amtool check-config" in r["why"]
+
+
 def test_a_go_child_out_of_memory_read_as_exit_2_is_no_verdict_not_a_pass():
     # amtool (or any Go program) without GOTRACEBACK=crash exits 2 on OOM; the
     # generator then exits 2. That is no verdict: never complete.
