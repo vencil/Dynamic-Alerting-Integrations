@@ -848,7 +848,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|-------------|
 | `0` | All checks passed |
 | `1` | One or more checks failed (a `--mapping` that does not exist counts too: it is listed as FAIL, not as a caller error) |
-| `2` | Caller error: Prometheus unreachable, a query failed, answered in the wrong shape, or answered a count that is not a finite number in `preflight` or `runtime` (each including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. A failed maintenance / silent mode query in `runtime` used to produce no check, so the result was `Overall: PASS` and exit code 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). An unreachable Alertmanager is still a skip |
+| `2` | Caller error: Prometheus unreachable, a query failed, answered in the wrong shape, or answered a count that is not a finite number in `preflight` or `runtime` (each including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. A failed maintenance / silent mode query in `runtime` used to produce no check, so the result was `Overall: PASS` and exit code 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). An `--alertmanager` given and not read (unreachable, errored or answered in the wrong shape) is 2 as well; not given, the default is read and not answering stays a skip |
 
 ---
 
@@ -1802,7 +1802,7 @@ da-tools operator-check [options]
 | `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise. Given and its targets not read (unreachable, errored or answered in the wrong shape), that check FAILs and the exit code is 2 — it used to be a warn ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | (none) |
 | `--kubeconfig <FILE>` | kubeconfig path | (none) |
-| `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable is always 2) | false |
+| `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable, or `--prometheus` given and its targets not read, is always 2 — the latter [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | false |
 
 **Checks Performed**
 
