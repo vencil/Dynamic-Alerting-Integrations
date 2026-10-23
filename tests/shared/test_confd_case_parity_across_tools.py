@@ -1520,8 +1520,21 @@ def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
         f"UPPER: {counts['UPPER']}")
 
 
+def _kubectl_only(result):
+    """A `subprocess.run` answering every `kubectl` call with *result* and
+    running everything else for real: `discover_tenants` classes the keys
+    through `da-guard parse-tree --names` (#3206), a subprocess too."""
+    real = subprocess.run
+
+    def run(cmd, *args, **kwargs):
+        if cmd and os.path.basename(str(cmd[0])) == "kubectl":
+            return result
+        return real(cmd, *args, **kwargs)
+    return run
+
+
 def test_batch_diagnose_discovers_tenants_from_either_casing(
-        monkeypatch) -> None:
+        monkeypatch, da_guard_env) -> None:
     """The carrier is a ConfigMap KEY, and the keys ARE the conf.d
     filenames — so the exporter's filename->tenant rule applies to them.
     Measured before the fix: `db-a.yaml` -> ['db-a'], `DB-A.YAML` -> [],
@@ -1558,8 +1571,7 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
             stdout = payload
             stderr = ""
 
-        monkeypatch.setattr(mod.subprocess, "run",
-                            lambda *a, **k: _Result())
+        monkeypatch.setattr(mod.subprocess, "run", _kubectl_only(_Result()))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             found[arm] = mod.discover_tenants()
@@ -1789,10 +1801,10 @@ def test_config_dir_recipe_scan_sees_either_casing(
 
 
 def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
-        monkeypatch) -> None:
+        monkeypatch, da_guard_env) -> None:
     """⛔ The branch that DROPS a key must be walked by a test.
 
-    `discover_tenants` skips a key whose `config_stem` is empty and says so
+    `discover_tenants` skips a key Go classes `hidden` and says so
     on stderr. Nothing exercised that branch: the parity test above hands it
     only legitimate keys and asserts stderr stays CLEAN, so the `if not
     tenant:` arm was an `if` with no test walking it — the repo's own
@@ -1815,7 +1827,7 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
         stdout = payload
         stderr = ""
 
-    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Result())
+    monkeypatch.setattr(mod.subprocess, "run", _kubectl_only(_Result()))
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         found = mod.discover_tenants()

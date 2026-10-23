@@ -75,16 +75,18 @@ graph TD
 #### 1.1.2 初始化租戶配置框架
 
 ```bash
-# 使用 scaffold_tenant.py 的互動模式
-python3 scripts/tools/ops/scaffold_tenant.py
+# 使用 scaffold 的互動模式
+da-tools scaffold
 
 # 或指定參數（非互動）
-python3 scripts/tools/ops/scaffold_tenant.py \
+da-tools scaffold \
   --tenant db-product-01 \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
   --non-interactive \
   --output-dir scaffold_output
+# 指向已存在的目錄時，寫入前該目錄須先通過 da-guard 的整樹檢查：
+# 有任何路徑被 da-guard 點名，就結束碼 2、點名每一條、一個檔都不寫
 # 只搬租戶檔：scaffold 每次都會重新產生 _defaults.yaml，
 # 直接指到 conf.d 會把平台既有的預設值蓋掉
 cp scaffold_output/db-product-01.yaml conf.d/
@@ -132,7 +134,7 @@ da-tools diagnose db-product-01
 
 ```bash
 # 使用 diagnose 工具進行全面健康檢查
-python3 scripts/tools/ops/diagnose.py db-product-01 \
+da-tools diagnose db-product-01 \
   --prometheus http://localhost:9090
 
 # 預期輸出：
@@ -150,7 +152,7 @@ python3 scripts/tools/ops/diagnose.py db-product-01 \
 # 持續 3 天監控，確保無誤報和漏報
 
 # 每日檢查
-python3 scripts/tools/ops/diagnose.py db-product-01
+da-tools diagnose db-product-01
 
 # 查看實時告警
 curl -s http://prometheus:9090/api/v1/alerts | \
@@ -182,8 +184,8 @@ curl -s http://prometheus:9090/api/v1/alerts | \
 
 ```bash
 # 每日早上執行
-python3 scripts/tools/ops/diagnose.py db-product-01
-python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
+da-tools diagnose db-product-01
+da-tools check-alert MariaDBHighConnections db-product-01
 
 # 檢查清單
 □ operational_mode: normal / silent / maintenance
@@ -196,7 +198,7 @@ python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
 
 ```bash
 # 每週生成多租戶健康報告
-python3 scripts/tools/ops/batch_diagnose.py \
+da-tools batch-diagnose \
   --output weekly-report.json
 
 # 報告包含：
@@ -286,7 +288,7 @@ groups:
 EOF
 
 # 2. 驗證自訂規則
-python3 scripts/tools/ops/lint_custom_rules.py custom-rules.yaml
+da-tools lint custom-rules.yaml
 
 # 3. 部署
 kubectl apply -f custom-rules.yaml

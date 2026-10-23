@@ -387,7 +387,32 @@ def confirm_all(root: "str | os.PathLike[str]",
                 binary: Optional[str] = None,
                 timeout: float = DEFAULT_TIMEOUT) -> None:
     """:func:`confirm` every ``(rel, text, expected)`` of one run, all before
-    the caller writes any; raises at the first refusal."""
+    the caller writes any; raises at the first refusal.
+
+    ⛔ THE writers' fail-closed exit (#3206): when *root* is a directory that
+    already exists, the run writes INTO a tree it did not build, so before
+    any text is judged that tree must pass the shared refusal
+    (`_lib_parse_cache.require_servable`, tree mode once per tree and
+    process): any entry Go gives a `verdict` ends the process with exit 2,
+    every such path named (`--json`: reason `conf_d_not_servable`,
+    `refused_paths`), nothing written. Every conf.d writer that names an
+    output root confirms through here (`scaffold_tenant`, `onboard_platform`,
+    `migrate_rule`, `init_project`, `deprecate_rule`; `confirm_tree` on a
+    non-empty root), so none carries its own copy.
+
+    * *root* missing: a fresh tree; nothing to refuse.
+    * *root* an existing directory that holds no conf.d (an empty one, or
+      only files no reader reads): Go serves it (no entry has a verdict), so
+      the run goes on — the directory becomes a conf.d root by this write,
+      and Go is the judge of whether it can be one, not a Python "looks
+      like a conf.d" test.
+    * no item: the run writes no conf.d file, so there is no tree to judge.
+
+    Raises ParseTreeError for no usable da-guard."""
+    items = list(items)
+    if items and Path(root).is_dir():
+        import _lib_parse_cache  # lazy: it is a reader library, not needed to judge a text
+        _lib_parse_cache.require_servable(root, binary=binary, timeout=timeout)
     for rel, text, expected in items:
         confirm(root, rel, text, expected, binary=binary, timeout=timeout)
 

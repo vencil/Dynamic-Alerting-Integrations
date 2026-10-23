@@ -154,6 +154,42 @@ def test_confirm_all_stops_at_the_first_refusal(tmp_path):
     assert exc.value.rel == "b.yaml"
 
 
+# ── 寫進既有的樹：先過共用的 conf.d 拒絕（#3206）──────────────────────
+
+_NEW = ("t.yaml", "tenants:\n  tenant-n: {}\n", {"tenants": {"tenant-n": {}}})
+
+
+def test_confirm_all_into_an_existing_tree_go_flags_exits_2_naming_every_path(
+        tmp_path, capsys):
+    """既有目錄裡有 Go 點名的路徑：結束碼 2、每一條都點名——在判任何一段
+    文字之前（呼叫端因此一個檔都還沒寫）。"""
+    (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+    (tmp_path / "x.yaml").mkdir()
+    with pytest.raises(SystemExit) as exc:
+        wc.confirm_all(tmp_path, [_NEW])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "broken.yaml" in err and "x.yaml" in err
+    assert not (tmp_path / "t.yaml").exists()
+
+
+@pytest.mark.parametrize("make", ["missing", "empty", "not_a_confd"])
+def test_confirm_all_into_a_fresh_or_servable_directory_goes_on(tmp_path, make):
+    """不存在的目錄是新樹；空目錄、只有非設定檔的目錄 Go 判為可服務——不拒絕。"""
+    root = tmp_path / "out"
+    if make != "missing":
+        root.mkdir()
+    if make == "not_a_confd":
+        (root / "README.md").write_text("# notes\n", encoding="utf-8")
+    wc.confirm_all(root, [_NEW])
+
+
+def test_confirm_all_with_no_item_judges_no_tree(tmp_path):
+    """這一輪不寫任何 conf.d 檔：沒有樹要判。"""
+    (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+    wc.confirm_all(tmp_path, [])
+
+
 @pytest.mark.parametrize("value", [80.0, 70.5, -0.25, 1e20, 1e-7, float("inf")])
 def test_a_float_is_expected_as_pyyaml_writes_it_and_yaml_v3_reads_it(tmp_path, value):
     doc = {"tenants": {"tenant-a": {"cpu": value}}}

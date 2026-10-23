@@ -187,6 +187,15 @@ def _instance_mapping(cell: pathlib.Path) -> None:
         encoding="utf-8")
 
 
+def _alert_rules(cell: pathlib.Path) -> None:
+    """One plain threshold alert, outside the tree: the input the two
+    rule-reading writers turn into conf.d files."""
+    (cell / "rules.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: HighConnections\n"
+        "    expr: mysql_global_status_threads_connected > 100\n"
+        "    labels: {severity: warning}\n", encoding="utf-8")
+
+
 def _what_if(cell: pathlib.Path) -> None:
     (cell / "what-if.yaml").write_text("tenants:\n  a:\n    mysql_connections: \"90\"\n",
                                        encoding="utf-8")
@@ -257,6 +266,16 @@ TOOLS: dict[str, Tool] = {
                                "--dry-run")),
     "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}", "--ci")),
     "guard_dispatch": Tool((_PY, _T + "ops/guard_dispatch.py", "defaults-impact", "--config-dir", "{conf}")),
+    # The three writers below write conf.d files into an output directory;
+    # here that directory is the tree under test (an EXISTING conf.d), which
+    # the write must first pass the shared refusal over
+    # (`_lib_write_check.confirm_all`).
+    "scaffold_tenant": Tool((_PY, _T + "ops/scaffold_tenant.py", "--non-interactive",
+                             "--tenant", "newt", "--db", "mariadb", "-o", "{conf}")),
+    "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",
+                              "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
+    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml", "-o", "{conf}"),
+                         prep=_alert_rules),
     # The four below query a Prometheus as well; {prom} refuses at once, and
     # each reads the tree whatever the query answered.
     "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom}",
@@ -284,15 +303,6 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/da_assembler.py": "its --config-dir is an OUTPUT (a CRD controller writing conf.d files)",
     "tools/ops/generator_service.py": "tenant-api's long-running judge over a stdin protocol, "
                                       "not a CLI over a tree",
-    "tools/ops/migrate_rule.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
-    "tools/ops/onboard_platform.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
-    "tools/ops/scaffold_tenant.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     "tools/dx/generate_platform_data.py": "reads the repo's own conf.d at a fixed path; takes no operand",

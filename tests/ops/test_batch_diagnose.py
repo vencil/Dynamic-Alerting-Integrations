@@ -21,10 +21,34 @@ import pytest
 import batch_diagnose as bd  # noqa: E402
 
 
+_REAL_RUN = subprocess.run
+
+
+def _kubectl_only(fake):
+    """A `subprocess.run` that hands every `kubectl` call to *fake* and runs
+    everything else for real: `discover_tenants` classes the ConfigMap keys
+    through `da-guard parse-tree --names` (#3206), a subprocess too, and a
+    fake that answered it as well would be the ConfigMap's JSON read as
+    da-guard's document."""
+    def run(cmd, *args, **kwargs):
+        if cmd and os.path.basename(str(cmd[0])) == "kubectl":
+            return fake(cmd, *args, **kwargs)
+        return _REAL_RUN(cmd, *args, **kwargs)
+    return run
+
+
+@pytest.fixture
+def mock_run(monkeypatch, da_guard_env):
+    """The `kubectl` that `discover_tenants` runs (a MagicMock: set its
+    `return_value` / `side_effect`); da-guard is the real one."""
+    fake = MagicMock()
+    monkeypatch.setattr(bd.subprocess, "run", _kubectl_only(fake))
+    return fake
+
+
 class TestDiscoverTenants:
     """discover_tenants() 測試。"""
 
-    @patch("batch_diagnose.subprocess.run")
     def test_normal_discovery(self, mock_run):
         """正常 ConfigMap 應返回排序的 tenant 列表。"""
         cm_data = {
@@ -40,7 +64,6 @@ class TestDiscoverTenants:
         result = bd.discover_tenants()
         assert result == ["db-a", "db-b"]
 
-    @patch("batch_diagnose.subprocess.run")
     def test_skip_underscore_keys(self, mock_run):
         """_ 前綴的 key 應被忽略。"""
         cm_data = {
@@ -56,14 +79,12 @@ class TestDiscoverTenants:
         result = bd.discover_tenants()
         assert result == ["db-a"]
 
-    @patch("batch_diagnose.subprocess.run")
     def test_kubectl_failure(self, mock_run):
         """kubectl 失敗應返回空列表。"""
         mock_run.return_value = MagicMock(returncode=1, stderr="error")
         result = bd.discover_tenants()
         assert result == []
 
-    @patch("batch_diagnose.subprocess.run")
     def test_kubectl_timeout(self, mock_run):
         """kubectl timeout 應返回空列表。"""
         import subprocess
@@ -71,7 +92,6 @@ class TestDiscoverTenants:
         result = bd.discover_tenants()
         assert result == []
 
-    @patch("batch_diagnose.subprocess.run")
     def test_empty_configmap(self, mock_run):
         """空 ConfigMap 應返回空列表。"""
         cm_data = {"data": {}}
@@ -307,14 +327,12 @@ class TestRunDiagnoseForTenant:
 class TestDiscoverTenantsEdge:
     """discover_tenants() 邊際案例。"""
 
-    @patch("batch_diagnose.subprocess.run")
     def test_invalid_json(self, mock_run):
         """無效 JSON 回傳空清單。"""
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
         result = bd.discover_tenants()
         assert result == []
 
-    @patch("batch_diagnose.subprocess.run")
     def test_non_yaml_keys_ignored(self, mock_run):
         """非 .yaml 結尾的 key 被忽略。"""
         cm_data = {"data": {"readme.txt": "info", "db-a.yaml": "tenants: {}"}}
@@ -516,27 +534,28 @@ class TestMainCLI:
         assert captured["url"] == "http://localhost:9090"
 
 
+@pytest.mark.usefixtures("da_guard_env")
 class TestDiscoverTenantsSpellingMatchesTheProducer:
     """#1603 — the ConfigMap keys ARE conf.d filenames, so match the producer.
 
     `scripts/ops/configmap_assemble.py` (what `make configmap-assemble` runs)
-    turns a conf.d into those keys with `_lib_confd.has_yaml_extension`, the
-    exporter's own case-insensitive predicate, so both spellings ship; a
-    narrower set here would report a smaller tenant set than what is
-    deployed. Bounded on both sides below.
+    turns a conf.d into those keys by the exporter's own case-insensitive
+    rule, so both spellings ship; a narrower set here would report a smaller
+    tenant set than what is deployed. Bounded on both sides below.
 
-    ⚠️ The coupling is to that PREDICATE, not to how the producer is wired:
-    this docstring said "globs `conf.d/` straight into `--from-file`" long
-    after the glob was gone (#1792/#1796 moved selection into the script),
-    which is a reader of this file being told the wrong thing about why the
-    two sides have to agree.
+    ⚠️ The coupling is to that RULE, not to how either side is wired: both
+    now take it from Go (`pkg/confdname`; here `da-guard parse-tree --names`,
+    #3206). This docstring once said "globs `conf.d/` straight into
+    `--from-file`" long after the glob was gone (#1792/#1796), which is a
+    reader of this file being told the wrong thing about why the two sides
+    have to agree.
     """
 
     def _discover(self, monkeypatch, keys):
         cm = {"data": {k: "tenants: {}" for k in keys}}
         monkeypatch.setattr(
             bd.subprocess, "run",
-            lambda *a, **k: MagicMock(returncode=0, stdout=json.dumps(cm)))
+            _kubectl_only(lambda *a, **k: MagicMock(returncode=0, stdout=json.dumps(cm))))
         return bd.discover_tenants()
 
     def test_yml_key_is_a_tenant(self, monkeypatch):
@@ -569,6 +588,19 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
             monkeypatch,
             ["_defaults.yaml", "_profiles.yml", "db-a.yaml", "db-b.yml"])
         assert got == ["db-a", "db-b"]
+
+    def test_upper_case_key_keeps_its_case_as_go_names_it(self, monkeypatch):
+        """The tenant id is Go's `tenant_named` (case kept), not a fold."""
+        got = self._discover(monkeypatch, ["_defaults.yaml", "Tenant-Q.YAML"])
+        assert got == ["Tenant-Q"]
+
+    def test_no_da_guard_finds_no_tenant_and_says_why(self, monkeypatch, tmp_path, capsys):
+        """No usable da-guard: the keys are not classed, so no tenant is
+        reported (main: `No tenants found`, exit 2) — never a Python guess."""
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        got = self._discover(monkeypatch, ["_defaults.yaml", "db-a.yaml"])
+        assert got == []
+        assert "da-guard parse-tree" in capsys.readouterr().err
 
 
 # ── unchecked 不算健康（issue 1513，本輪決策 N2 的後續）─────────────
