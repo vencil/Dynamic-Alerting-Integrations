@@ -180,5 +180,29 @@ def test_a_failure_after_a_write_names_the_files_written(tmp_path, monkeypatch):
             ("b.yaml", [ce.unset_op(["tenants", "t-b", "cpu"])]),
         ])
     assert (exc.value.written, exc.value.failed) == (["a.yaml"], "b.yaml")
+    assert exc.value.maybe_written == []  # da-guard answered: b.yaml not written
     assert "already written: a.yaml" in str(exc.value)
     assert (root / "b.yaml").read_text(encoding="utf-8") == "tenants:\n  t-b:\n    cpu: '6'\n"
+
+
+def test_no_answer_after_a_write_may_have_landed_is_named_apart(tmp_path, monkeypatch):
+    # da-guard killed or timed out in phase 2 (no document): its rename may
+    # have happened, so the file is named as one that MAY have been written.
+    root = _tree(tmp_path / "conf.d", {
+        "a.yaml": "tenants:\n  t-a:\n    cpu: '5'\n",
+        "b.yaml": "tenants:\n  t-b:\n    cpu: '6'\n",
+    })
+    real = ce.edit
+
+    def edit(r, rel, ops, *, dry_run=False, **kw):
+        if rel == "b.yaml" and not dry_run:
+            raise _lib_parse_tree.ParseTreeError("da-guard edit did not finish within 1s")
+        return real(r, rel, ops, dry_run=dry_run, **kw)
+    monkeypatch.setattr(ce, "edit", edit)
+    with pytest.raises(ce.PartialWrite) as exc:
+        ce.edit_all(root, [
+            ("a.yaml", [ce.unset_op(["tenants", "t-a", "cpu"])]),
+            ("b.yaml", [ce.unset_op(["tenants", "t-b", "cpu"])]),
+        ])
+    assert (exc.value.written, exc.value.maybe_written) == (["a.yaml"], ["b.yaml"])
+    assert "may have been written: b.yaml" in str(exc.value)

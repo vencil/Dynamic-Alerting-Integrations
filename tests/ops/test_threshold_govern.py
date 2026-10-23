@@ -134,7 +134,7 @@ def _edit(raw, tenant, values, **kw):
 
 
 def test_edit_changes_only_target_value_and_preserves_comments():
-    new = _edit(FIXTURE, "db-a", {"mysql_connections": '"45"'})
+    new = _edit(FIXTURE, "db-a", {"mysql_connections": "45"})
     # target line changed, its trailing comment kept (da-guard writes one
     # space before it: a layout change, not a content one)
     assert '    mysql_connections: "45" # warning threshold\n' in new
@@ -151,28 +151,28 @@ def test_edit_changes_only_target_value_and_preserves_comments():
 
 
 def test_edit_multiple_keys_one_tenant():
-    new = _edit(FIXTURE, "db-a", {"mysql_connections": '"45"', "mysql_threads_running": '"90"'})
+    new = _edit(FIXTURE, "db-a", {"mysql_connections": "45", "mysql_threads_running": "90"})
     assert '    mysql_connections: "45" # warning threshold\n' in new
     assert '    mysql_threads_running: "90"\n' in new
     assert '    redis_mem: "512"\n' in new
 
 
 def test_edit_does_not_touch_other_tenant():
-    new = _edit(FIXTURE, "db-b", {"redis_mem": '"1024"'})
+    new = _edit(FIXTURE, "db-b", {"redis_mem": "1024"})
     assert '    redis_mem: "1024"\n' in new
     assert '    mysql_connections: "50" # warning threshold\n' in new
     assert '    mysql_threads_running: "75"\n' in new
 
 
 def test_edit_refuses_a_missing_key():
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"nonexistent_key": '"1"'})
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"nonexistent_key": "1"})
     assert new is None and err == "keys not found in live config: ['nonexistent_key']"
 
 
 def test_edit_does_not_match_nested_metadata_key():
     # a key that only exists nested under _metadata is not a direct child
     # (it isn't a threshold): refused, never added to the tenant block
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"owner": '"hacked"'})
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"owner": "hacked"})
     assert new is None and err == "keys not found in live config: ['owner']"
 
 
@@ -183,20 +183,15 @@ def test_edit_preserves_crlf_line_endings():
         '    mysql_connections: "50"\r\n'
         '    mysql_threads_running: "75"  # cpu\r\n'
     )
-    new = _edit(crlf, "db-a", {"mysql_connections": '"45"'})
+    new = _edit(crlf, "db-a", {"mysql_connections": "45"})
     assert '    mysql_connections: "45"\r\n' in new
     assert "\n" not in new.replace("\r\n", "")  # every LF is part of a CRLF pair
 
 
 def test_edit_writes_the_value_as_a_string():
     old = "tenants:\n  db-a:\n    k1: 10\n    k2: \"20\"\n"
-    new = _edit(old, "db-a", {"k1": '"15"'})
+    new = _edit(old, "db-a", {"k1": "15"})
     assert new == 'tenants:\n  db-a:\n    k1: "15"\n    k2: "20"\n', new
-
-
-def test_edit_refuses_a_literal_that_is_not_a_quoted_string():
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"})
-    assert new is None and "not a double-quoted string" in err
 
 
 def test_edit_leaves_the_config_dir_as_it_was(tmp_path):
@@ -204,18 +199,33 @@ def test_edit_leaves_the_config_dir_as_it_was(tmp_path):
     conf.mkdir()
     (conf / "db-a.yaml").write_text("tenants:\n  db-a:\n    k1: \"1\"\n", encoding="utf-8")
     before = (conf / "db-a.yaml").read_bytes()
-    new = _edit('tenants:\n  db-a:\n    k1: "10"\n', "db-a", {"k1": '"15"'},
+    new = _edit('tenants:\n  db-a:\n    k1: "10"\n', "db-a", {"k1": "15"},
                 config_dir=str(conf), rel="db-a.yaml")
     assert new == 'tenants:\n  db-a:\n    k1: "15"\n'
     assert sorted(p.name for p in conf.iterdir()) == ["db-a.yaml"]
     assert (conf / "db-a.yaml").read_bytes() == before
 
 
+@pytest.mark.parametrize("rel", ["../db-a.yaml", "sub/db-a.yaml", "/abs/db-a.yaml", "..", "."])
+def test_edit_a_rel_that_is_not_one_file_name_is_refused_before_the_stage(rel, monkeypatch):
+    monkeypatch.setattr(tg, "_stage", lambda config_dir: pytest.fail("staged"))
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"}, rel=rel)
+    assert new is None and "is not one file name" in err, err
+
+
+def test_edit_a_directory_named_as_the_tenant_file_is_that_tenants_error(tmp_path):
+    conf = tmp_path / "conf.d"
+    (conf / "db-a.yaml").mkdir(parents=True)
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"},
+                                 config_dir=str(conf), rel="db-a.yaml")
+    assert new is None and "could not lay out the live text as db-a.yaml" in err, err
+
+
 def test_edit_a_config_dir_that_cannot_be_copied_is_that_tenants_error(monkeypatch):
     def boom(config_dir):
         raise OSError("Permission denied")
     monkeypatch.setattr(tg, "_stage", boom)
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": '"45"'},
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"},
                                  config_dir="conf.d")
     assert new is None and "could not copy conf.d" in err and "Permission denied" in err
 
@@ -227,7 +237,7 @@ _DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
 
 
 def test_edit_refuses_a_duplicate_key_elsewhere_in_the_tenant():
-    new, err = tg.edit_live_yaml(_DUP_OTHER_KEY, "tenant-a", {"k1": '"15"'})
+    new, err = tg.edit_live_yaml(_DUP_OTHER_KEY, "tenant-a", {"k1": "15"})
     assert new is None
     assert "original_unreadable" in err and "duplicate_key" in err, err
 

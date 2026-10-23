@@ -623,7 +623,9 @@ def _edit_files(config_dir, items):
 def _partial_write_exit(exc):
     """`PartialWrite`：rc 2（#1641：既有的 conf.d 檔寫不了），具名已寫入的檔。"""
     done = "、".join(exc.written) or "（無）"
-    print(f"ERROR: {exc.failed}：寫入失敗（{exc.cause}）；本輪已寫入：{done}——"
+    maybe = (f"；可能已寫入（da-guard 沒有回答）：{'、'.join(exc.maybe_written)}"
+             if exc.maybe_written else "")
+    print(f"ERROR: {exc.failed}：寫入失敗（{exc.cause}）；本輪已寫入：{done}{maybe}——"
           f"已寫入的檔不會還原，請檢查後重跑", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
 

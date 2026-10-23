@@ -974,11 +974,11 @@ def test_threshold_govern_finds_the_tenant_as_written(variant):
     for an edit that changed only the expected key."""
     import threshold_govern as tg
     old = _T2216.format(id=_ID_SPELLINGS[variant])
-    new, err = tg.edit_live_yaml(old, "010", {"mysql_connections": '"45"'})
+    new, err = tg.edit_live_yaml(old, "010", {"mysql_connections": "45"})
     assert err is None, err
     assert 'mysql_connections: "45"' in new and "'70'" not in new, new
     # Control: a key the tenant does not have is refused, not added.
-    assert tg.edit_live_yaml(old, "010", {"no_such_key": '"45"'}) == (
+    assert tg.edit_live_yaml(old, "010", {"no_such_key": "45"}) == (
         None, "keys not found in live config: ['no_such_key']")
 
 

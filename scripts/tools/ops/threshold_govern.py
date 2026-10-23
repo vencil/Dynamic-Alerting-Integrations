@@ -511,15 +511,6 @@ def _stage(config_dir: Optional[str]) -> Path:
     return Path(_STAGES[key]) / "conf.d"
 
 
-def _string_of(literal: str) -> Optional[str]:
-    """The string a plan's ``new_value`` (a double-quoted conf.d literal,
-    `_quoted_value`) writes; None for anything else."""
-    text = literal.strip()
-    if len(text) >= 2 and text[0] == text[-1] == '"':
-        return text[1:-1]
-    return None
-
-
 def edit_live_yaml(
     raw_yaml: str, tenant: str, new_values: dict[str, str],
     *, config_dir: Optional[str] = None, rel: str = "",
@@ -528,8 +519,9 @@ def edit_live_yaml(
     writes it (ADR-036 §2, #3206): ``(text, None)``, or ``(None, why)``
     when the edit is refused.
 
-    ``new_values`` maps key → conf.d literal (``'"45"'``, a double-quoted
-    string): each key must already be a scalar DIRECT child of ``tenant``'s
+    ``new_values`` maps key → the string to write (``"45"``; the plan's
+    recommendation as `_quoted_value` formats it): each key must already be a
+    scalar DIRECT child of ``tenant``'s
     block in the live text (as ``da-guard parse-tree`` reads it) — a key
     missing there is refused, never added. The live text is laid out as the
     file at *rel* (``<tenant>.yaml`` when unknown) of a private copy of
@@ -538,35 +530,38 @@ def edit_live_yaml(
     tree — every other node, comment and spelling kept, the file only
     re-laid out (2-space indentation, one space before a trailing comment,
     blank lines may go; CRLF and a BOM kept) — and refuses an original it
-    cannot read or that validation names, a path no reader reads, or a
-    result that does not read back as the original with these edits. The
-    value is written as a string (``"45"``), as the plan quotes it. No usable
-    da-guard, or one that fails, raises ``_lib_parse_tree.ParseTreeError``.
+    cannot read, a path no reader reads, or a result that validation would
+    name or that does not read back as the original with these edits. The
+    value is written as a string (``"45"``). *rel* must be one file name
+    (the tool skips a tenant file in a sub-directory before this); a name
+    that is not, or a stage file that cannot be laid out (a directory of
+    that name, …), is that tenant's error. No usable da-guard, or one that
+    fails, raises ``_lib_parse_tree.ParseTreeError``.
     """
     import _lib_confedit  # lazy: keeps `--dry-run` import-light
     import _lib_parse_tree
 
     rel = rel or f"{tenant}.yaml"
-    ops = []
-    for key, literal in sorted(new_values.items()):
-        text = _string_of(literal)
-        if text is None:
-            return None, f"{key}: the literal {literal!r} is not a double-quoted string"
-        ops.append(_lib_confedit.set_op(["tenants", tenant, key],
-                                        _lib_confedit.str_value(text)))
+    if (not rel or rel in (".", "..") or "/" in rel or "\\" in rel
+            or os.path.isabs(rel) or "\0" in rel):
+        return None, f"the tenant file path {rel!r} is not one file name in --config-dir"
+    ops = [_lib_confedit.set_op(["tenants", tenant, key], _lib_confedit.str_value(text))
+           for key, text in sorted(new_values.items())]
     try:
         root = _stage(config_dir)
     except OSError as exc:  # shutil.Error included: a file it could not copy
         return None, f"could not copy {config_dir} to edit the live text in: {exc}"
     target = root / rel
-    saved = target.read_bytes() if target.is_file() and not target.is_symlink() else None
-    link = os.readlink(target) if target.is_symlink() else None
     data = raw_yaml.encode("utf-8")
     try:
+        saved = target.read_bytes() if target.is_file() and not target.is_symlink() else None
+        link = os.readlink(target) if target.is_symlink() else None
         if target.is_symlink() or target.exists():
             target.unlink()
-        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+    except OSError as exc:  # e.g. a directory of that name in --config-dir
+        return None, f"could not lay out the live text as {rel} to edit it: {exc}"
+    try:
         try:
             node = _lib_parse_tree.load_file(root, rel, data).node(rel)
         except (_lib_parse_tree.FileUnreadable, KeyError):
@@ -586,11 +581,16 @@ def edit_live_yaml(
         except _lib_confedit.EditError as exc:
             return None, f"da-guard edit {exc.status} ({exc.reason}): {exc.message}"
     finally:
-        target.unlink(missing_ok=True)
-        if link is not None:
-            os.symlink(link, target)
-        elif saved is not None:
-            target.write_bytes(saved)
+        # The stage back as it was copied, for the next tenant: best effort
+        # (a stage that cannot be restored shows in that tenant's own read).
+        try:
+            target.unlink(missing_ok=True)
+            if link is not None:
+                os.symlink(link, target)
+            elif saved is not None:
+                target.write_bytes(saved)
+        except OSError:
+            pass
     return (raw_yaml if doc["status"] == _lib_confedit.UNCHANGED else doc["content"]), None
 
 
@@ -849,7 +849,8 @@ def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
             plan.tenant, "error", keys, message="GET returned no raw_yaml"
         )
 
-    new_values = {c.key: c.new_value for c in plan.changes}
+    new_values = {c.key: recommend._format_threshold_value(c.recommended)
+                  for c in plan.changes}
     import _lib_parse_tree  # lazy, as in edit_live_yaml
     try:
         merged, verify_err = edit_live_yaml(raw_yaml, plan.tenant, new_values,

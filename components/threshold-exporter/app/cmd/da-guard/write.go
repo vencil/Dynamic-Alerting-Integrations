@@ -14,7 +14,10 @@ package main
 //     reads without a problem. A verdict on the original does NOT refuse by
 //     itself: an edit may repair a file the exporter cannot serve, never
 //     worsen one — what is judged is the text to be written (below), so
-//     "unservable after" stays impossible;
+//     "unservable after" stays impossible. The same holds for an edit that
+//     changes nothing: `unchanged` is answered only when the file left in
+//     place carries no verdict. A file holding only comments is edited as an
+//     empty one, its comments written back first;
 //   - every op applies, on the node tree and on the parse result;
 //   - the re-encode keeps every node outside the edit as it was written
 //     (confedit.Verify, ADR-036 §4);
@@ -559,7 +562,20 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	// read-back of the text to be written must have none (readBack).
 	w.res.Entry = nil
 
-	doc, err := confedit.ParseDoc(confedit.WithoutCRLF(original))
+	// A file holding only comments is edited as an empty one (as a blank
+	// file is): the ops apply to an empty mapping and the comments are
+	// written back, verbatim, ahead of it — they become the head comment of
+	// its first key.
+	src := confedit.WithoutCRLF(original)
+	var lead []byte
+	if docs, perr := confedit.ParseAll(src); perr == nil && len(docs) == 0 && len(bytes.TrimSpace(src)) > 0 {
+		lead = bytes.TrimPrefix(src, []byte("\uFEFF"))
+		if !bytes.HasSuffix(lead, []byte("\n")) {
+			lead = append(append([]byte{}, lead...), '\n')
+		}
+		src = nil
+	}
+	doc, err := confedit.ParseDoc(src)
 	if err != nil {
 		return w.refuse(writeReasonEditNotApplicable, err.Error())
 	}
@@ -607,23 +623,40 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	if err != nil {
 		return w.refuse(writeReasonEditNotApplicable, "re-encode: "+err.Error())
 	}
+	if lead != nil {
+		encoded = append(lead, encoded...)
+	}
 	// The original's line ending and BOM; every check below reads these
 	// very bytes.
 	out := confedit.KeepFraming(original, encoded)
-	if _, _, _, same := confedit.ContentDifference(base, want); same && confedit.SameTree(original, out) {
+	if _, _, _, same := confedit.ContentDifference(base, want); same && (lead != nil || confedit.SameTree(original, out)) {
 		// Nothing changes, in the file's nodes nor in what the ops mean: a
 		// layout-only re-encode is not worth a write (and a commit). Both
 		// must hold — an unset of a key a `<<` merge supplies leaves the
 		// nodes as they were while the change means the key is gone, which
 		// the read-back below refuses.
+		//
+		// ⛔ The text in place after the call must read back clean whether
+		// or not it changed: an unchanged file validation names is refused
+		// as the read-back would refuse it, never answered `unchanged`.
+		if e.Verdict != "" {
+			w.res.Entry = &e
+			return w.refuse(writeReasonReadBackMismatch,
+				fmt.Sprintf("the edit leaves the file as it is, and validation names it under verdict %s", e.Verdict))
+		}
 		fmt.Fprintf(w.errOut, "%s %s: %s: unchanged; nothing written\n", programName, w.cmd, rel)
 		w.res.Status = writeStatusUnchanged
 		return w.finish(exitOK)
 	}
-	if d := confedit.Verify(original, out, doc.Edits()); d != nil {
-		w.res.Difference = &writeDifference{Path: nonNilPath(d.Path)}
-		return w.refuse(writeReasonNotRoundTrippable,
-			"the re-encode would also change what the edit does not: "+d.String())
+	// A comments-only original has nothing to keep but its comments, written
+	// above verbatim (Verify would count its zero documents); the read-back
+	// judges the rest.
+	if lead == nil {
+		if d := confedit.Verify(original, out, doc.Edits()); d != nil {
+			w.res.Difference = &writeDifference{Path: nonNilPath(d.Path)}
+			return w.refuse(writeReasonNotRoundTrippable,
+				"the re-encode would also change what the edit does not: "+d.String())
+		}
 	}
 	if code, ok := w.readBack(scan, rel, out, want); !ok {
 		return code

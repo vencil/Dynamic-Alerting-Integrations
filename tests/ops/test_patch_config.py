@@ -939,6 +939,33 @@ class TestReaderBounds:
             pc.detect_mode(cm)
 
 
+class TestNoOpIsDaGuardsToSay:
+    """#3206 review：「有沒有變」是 da-guard edit 判的，本工具不抄捷徑。"""
+
+    def test_typing_the_written_string_keeps_its_type(self):
+        """`cpu: '50'`（字串）、打 `50`：不是型別變更，是 no-op；檔不動。"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '50'\n")
+        assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "50") is None
+        assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "50")["changed"] is False
+        # 對照組：真的換值時照樣寫，且寫成數字
+        text = pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "60")["data"]["tenant-x.yaml"]
+        assert "cpu: 60\n" in text, text
+
+    def test_a_no_op_on_a_key_validation_names_is_refused(self):
+        """改完（沒變）的 key exporter 仍讀不進去：拒寫（read_back_mismatch），
+        不是 no-op；`default` 刪一個不存在的 key 也一樣。"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: 5\n    mem:\n      default: [1]\n")
+        for value in ("5", "default"):
+            metric = "cpu" if value == "5" else "nope"
+            with pytest.raises(pc.ConfigMapShapeError, match="read_back_mismatch.*verdict"):
+                pc.build_patch(cm, "multi-file", "tenant-x", metric, value)
+
+    def test_a_legacy_config_yaml_of_comments_only_is_patched(self):
+        """只有註解的 `config.yaml` 當成空檔改（da-guard edit），註解留在最前面。"""
+        patch = pc.patch_legacy(_cm(**{"config.yaml": "# c\n"}), "tb", "m", "1")
+        assert patch["data"]["config.yaml"] == "# c\ntenants:\n  tb:\n    m: 1\n", patch
+
+
 class TestSameValueAndUnrelatedCarriers:
 
     def test_setting_the_current_value_is_not_a_change(self):

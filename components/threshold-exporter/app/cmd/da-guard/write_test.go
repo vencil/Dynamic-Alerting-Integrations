@@ -194,8 +194,12 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 		{"set under a scalar", map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"}, editCmd, "t1.yaml",
 			`{"ops":[{"op":"set","path":["tenants","t1","a","b"],"value":{"str":"2"}}]}`, writeReasonEditNotApplicable},
 		{"set under a missing mapping", map[string]string{"t1.yaml": "tenants: {}\n"}, editCmd, "t1.yaml", setA, writeReasonEditNotApplicable},
-		{"a file of comments only", map[string]string{"t1.yaml": "# nothing yet\n"}, editCmd, "t1.yaml",
-			`{"ops":[{"op":"set","path":["x"],"value":{"str":"1"}}]}`, writeReasonEditNotApplicable},
+		// The text in place after the call must read back clean, changed or
+		// not: a no-op edit on a file validation names is no `unchanged`.
+		{"a no-op edit leaves a verdict in place", map[string]string{"_defaults.yaml": "defaults:\n  cpu: \"abc\"\n  mem: 5\n"},
+			editCmd, "_defaults.yaml", `{"ops":[{"op":"set","path":["defaults","mem"],"value":{"int":"5"}}]}`, writeReasonReadBackMismatch},
+		{"a no-op unset leaves a verdict in place", map[string]string{"t1.yaml": "tenants:\n  t1:\n    cpu: 5\n    mem:\n      default: [1]\n"},
+			editCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","nope"]}]}`, writeReasonReadBackMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,6 +246,41 @@ func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitFindings || reasonOf(res) != writeReasonReadBackMismatch {
 		t.Fatalf("worsening edit: exit %d %+v", code, res)
+	}
+	sameTree(t, before, snapshot(t, root))
+}
+
+// TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne: a file holding only
+// comments has no document, as a blank file has none: the ops apply to an
+// empty mapping and the comments are written back verbatim ahead of it.
+func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
+	for _, tc := range []struct{ name, text, want string }{
+		{"LF", "# nothing yet\n# second line\n", "# nothing yet\n# second line\ntenants:\n  t1:\n    a: \"1\"\n"},
+		{"no final newline", "# c", "# c\ntenants:\n  t1:\n    a: \"1\"\n"},
+		{"CRLF", "# c\r\n", "# c\r\ntenants:\r\n  t1:\r\n    a: \"1\"\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeTree(t, map[string]string{"t1.yaml": tc.text})
+			code, res := runW(t, editCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1"]},`+
+				`{"op":"set","path":["tenants","t1","a"],"value":{"str":"1"}}]}`, "--config-dir", root, "--path", "t1.yaml")
+			if code != exitOK || res.Status != writeStatusWritten {
+				t.Fatalf("exit %d %+v", code, res)
+			}
+			got, err := os.ReadFile(filepath.Join(root, "t1.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("written %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// An edit that means nothing on it is `unchanged`, the file untouched.
+	root := writeTree(t, map[string]string{"t1.yaml": "# only\n"})
+	before := snapshot(t, root)
+	code, res := runW(t, editCmd, `{"ops":[{"op":"unset","path":["tenants"]}]}`, "--config-dir", root, "--path", "t1.yaml")
+	if code != exitOK || res.Status != writeStatusUnchanged {
+		t.Fatalf("exit %d %+v", code, res)
 	}
 	sameTree(t, before, snapshot(t, root))
 }

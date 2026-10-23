@@ -393,7 +393,7 @@ def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
 def test_threshold_govern_passes_an_edit_that_reads_back(tmp_path):
     import threshold_govern as tg
     old = 'tenants:\n  tenant-a:\n    k1: "10"\n    k2: 0o17\n'
-    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": '"15"'}, config_dir=str(tmp_path))
+    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
     assert (new, err) == ('tenants:\n  tenant-a:\n    k1: "15"\n    k2: 0o17\n', None)
 
 
@@ -401,17 +401,17 @@ def test_threshold_govern_writes_the_value_as_the_string_the_plan_means(tmp_path
     # `k1: 10` is an int; the plan writes the string "15", never the int 15.
     import threshold_govern as tg
     old = 'tenants:\n  tenant-a:\n    k1: 10\n'
-    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": '"15"'}, config_dir=str(tmp_path))
+    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
     assert err is None and 'k1: "15"\n' in new, (new, err)
 
 
 def test_threshold_govern_refuses_an_unreadable_original_and_an_unread_path(tmp_path):
     import threshold_govern as tg
     dup = 'tenants:\n  tenant-a:\n    k1: "10"\n    k1: "11"\n'
-    new, err = tg.edit_live_yaml(dup, "tenant-a", {"k1": '"15"'}, config_dir=str(tmp_path))
+    new, err = tg.edit_live_yaml(dup, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
     assert new is None and err and "original_unreadable" in err, err
     ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
-    new, err = tg.edit_live_yaml(ok, "tenant-a", {"k1": '"15"'},
+    new, err = tg.edit_live_yaml(ok, "tenant-a", {"k1": "15"},
                                  config_dir=str(tmp_path), rel=".tenant-a.yaml")
     assert new is None and err and "(not_read)" in err, err
 
@@ -421,7 +421,7 @@ def test_threshold_govern_without_da_guard_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
     with pytest.raises(_lib_parse_tree.ParseTreeError):
-        tg.edit_live_yaml(ok, "tenant-a", {"k1": '"10"'}, config_dir=str(tmp_path))
+        tg.edit_live_yaml(ok, "tenant-a", {"k1": "10"}, config_dir=str(tmp_path))
 
 
 # ── migrate_conf_d ────────────────────────────────────────────────────────

@@ -54,7 +54,13 @@ between) or for a file another writer changed between phase 1 and its
 write that the edit can no longer be applied to (da-guard's own
 `changed_during_write` comparison covers a change during the write itself).
 That failure is `PartialWrite`, which names the files already written, and
-the tool must say which ones they are: they are NOT rolled back.
+the tool must say which ones they are: they are NOT rolled back. When
+da-guard gave no answer for the file it failed on (it was killed, timed out,
+or wrote no document), that file is named apart, as one that MAY have been
+written: its rename may have happened before the answer was lost.
+⚠️ An interrupt of this process (Ctrl-C, SIGTERM) during phase 2 reports
+nothing: KeyboardInterrupt / SystemExit propagate as they are, and the files
+written by then stay written.
 """
 from __future__ import annotations
 
@@ -117,14 +123,21 @@ class EditsRefused(Exception):
 class PartialWrite(Exception):
     """`edit_all` phase 2 failed on `.failed` (a path) after `.written`
     (paths, in order) were written; `.cause` is the error. The written
-    files stay written."""
+    files stay written. `.maybe_written` holds `.failed` when da-guard gave
+    no answer for it (`ParseTreeError`: killed, timed out, no document) —
+    its write may have landed — and is empty when da-guard answered that
+    it did not write it."""
 
-    def __init__(self, written: "Sequence[str]", failed: str, cause: BaseException) -> None:
+    def __init__(self, written: "Sequence[str]", failed: str, cause: BaseException,
+                 maybe_written: "Sequence[str]" = ()) -> None:
         self.written = list(written)
         self.failed = failed
         self.cause = cause
+        self.maybe_written = list(maybe_written)
         done = ", ".join(self.written) or "(none)"
-        super().__init__(f"{failed}: {cause} — already written: {done}")
+        maybe = (f"; may have been written: {', '.join(self.maybe_written)}"
+                 if self.maybe_written else "")
+        super().__init__(f"{failed}: {cause} — already written: {done}{maybe}")
 
 
 # ── operations and values ───────────────────────────────────────────
@@ -270,8 +283,10 @@ def edit_all(root: "Path | str", edits: "Sequence[tuple[str, Sequence[dict]]]", 
             continue
         try:
             doc = edit(root, rel, ops, binary=binary, timeout=timeout)
-        except (EditError, _lib_parse_tree.ParseTreeError) as exc:
+        except EditError as exc:  # da-guard answered: it did not write rel
             raise PartialWrite(written, rel, exc) from exc
+        except _lib_parse_tree.ParseTreeError as exc:  # no answer: it may have
+            raise PartialWrite(written, rel, exc, maybe_written=[rel]) from exc
         if doc["status"] == WRITTEN:
             written.append(rel)
         done.append(doc)

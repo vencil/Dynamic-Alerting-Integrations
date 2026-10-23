@@ -451,11 +451,16 @@ def _is_default(value):
 
 def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
                    shared_key=None):
-    """Patch the key declaring `tenant`. None = no-op: `default` with no value
-    to remove. An emptied block is kept: it still declares the tenant. A key
-    declaring more than one tenant is refused, except `shared_key`."""
-    key, block = tenant_block(cm_data, tenant)
-    if _is_default(value) and metric_key not in block:
+    """Patch the key declaring `tenant`. None = no-op: `default` for a tenant
+    no key declares, or a change `da-guard edit` finds leaves the key as it
+    is. An emptied block is kept: it still declares the tenant. A key
+    declaring more than one tenant is refused, except `shared_key`.
+
+    ⛔ Whether anything changes is da-guard's to say, never a shortcut here:
+    the key in place after the call must read back clean whether or not it
+    changed, so a no-op on a key validation names is refused, not `None`."""
+    key, _block = tenant_block(cm_data, tenant)
+    if _is_default(value) and key is None:
         return None
     if key is None:
         key = create_key
@@ -522,8 +527,16 @@ def _edit_ops(old_tenants, tenant, metric_key, value, value_node):
     block = _entries(old_tenants).get(tenant)
     if block is not None and _is_null(block):
         return [_lib_confedit.set_op(["tenants", tenant], m([(metric_key, value_node)]))]
-    return [_lib_confedit.ensure_map_op(["tenants", tenant]),
-            _lib_confedit.set_op(path, value_node)]
+    ops = [_lib_confedit.ensure_map_op(["tenants", tenant])]
+    current = _entries(block).get(metric_key)
+    if _lib_parse_tree.is_scalar(current) and current["text"] == str(value):
+        # The value typed is the one written (`cpu: '50'`, typed `50`): the
+        # node is left as it is — its type (a string stays a string) and its
+        # spelling (`'50'`, `050`) — so the edit is a no-op, not a change of
+        # type; da-guard still judges the key in place (`unchanged`, or a
+        # refusal when validation names it).
+        return ops
+    return ops + [_lib_confedit.set_op(path, value_node)]
 
 
 def patch_legacy(cm_data, tenant, metric_key, value):
@@ -617,11 +630,8 @@ def print_diff(diff):
 
 
 def build_patch(cm_data, mode, tenant, metric_key, value):
-    """The merge patch apply sends, or None for a no-op."""
-    own = tenant_block(cm_data, tenant)[1]
-    if (metric_key in own and _text(own[metric_key]) == str(value)
-            and not _is_default(value)):
-        return None
+    """The merge patch apply sends, or None for a no-op (`da-guard edit`'s
+    `unchanged`, `_patch_carrier`)."""
     patch = patch_legacy if mode == "legacy" else patch_multifile
     return patch(cm_data, tenant, metric_key, value)
 
