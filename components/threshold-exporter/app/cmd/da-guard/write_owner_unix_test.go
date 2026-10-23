@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -27,10 +28,13 @@ func TestCommit_ReportsTheOwnerItCannotSet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := writeTree(t, map[string]string{"t1.yaml": "tenants: {}\n"})
 			p := filepath.Join(root, "t1.yaml")
-			orig, err := os.Stat(p)
+			fi, err := os.Stat(p)
 			if err != nil {
 				t.Fatal(err)
 			}
+			// An original another user owns (this process owns the
+			// temporary file), so the owner differs and is tried.
+			orig := otherOwner{fi, &syscall.Stat_t{Uid: 4321, Gid: 4322}}
 			var out, errOut bytes.Buffer
 			w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
 				res: writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml", Warnings: []string{}},
@@ -53,3 +57,11 @@ func TestCommit_ReportsTheOwnerItCannotSet(t *testing.T) {
 		})
 	}
 }
+
+// otherOwner is a FileInfo whose owner is st's.
+type otherOwner struct {
+	os.FileInfo
+	st *syscall.Stat_t
+}
+
+func (o otherOwner) Sys() any { return o.st }

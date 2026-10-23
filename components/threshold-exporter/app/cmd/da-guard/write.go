@@ -251,6 +251,9 @@ type writer struct {
 	// chown sets the temporary file's owner and group (its File.Chown when
 	// nil); a test swaps it to have the kernel refuse.
 	chown func(uid, gid int) error
+	// read reads edit's original (readRegular when nil); a test swaps it to
+	// see the path change between the open and the judge.
+	read func(abs string) ([]byte, os.FileInfo, bool, error)
 }
 
 // ownerWarning gives the written file the original's owner and group with
@@ -258,7 +261,21 @@ type writer struct {
 // nothing): a process that is not uid 0 cannot give a file away, but may
 // still set the group when it is a member — so the group is tried alone
 // (uid -1) after the pair fails, and only what still fails is reported.
-func ownerWarning(chown func(uid, gid int) error, uid, gid int) string {
+//
+// cur and curGID are the temporary file's own owner and group: what already
+// matches is not set, and a refusal names only what differs — an
+// original this process owns, refused its group, says "group", never
+// "owner and group".
+func ownerWarning(chown func(uid, gid int) error, uid, gid, cur, curGID int) string {
+	switch {
+	case uid == cur && gid == curGID:
+		return ""
+	case uid == cur:
+		if err := chown(-1, gid); err != nil {
+			return fmt.Sprintf("the written file could not be given the original's group (gid %d): %v", gid, err)
+		}
+		return ""
+	}
 	err := chown(uid, gid)
 	if err == nil {
 		return ""
@@ -503,10 +520,18 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	case err == nil && !fi.Mode().IsRegular():
 		return w.refuseNotAFile(scan, rel)
 	}
-	// A path swapped for a FIFO, a device, … since the Lstat is not read
-	// (readRegular: regular false, original nil); the judge below then gives
-	// it the walk's own not_a_file entry, refused not_read.
-	original, ofi, _, rerr := readRegular(abs)
+	read := w.read
+	if read == nil {
+		read = readRegular
+	}
+	original, ofi, regular, rerr := read(abs)
+	if rerr == nil && !regular {
+		// Swapped for a FIFO, a device, … since the Lstat: nothing was read.
+		// Refused here, whatever the path is by the time it is judged — a
+		// second swap back to a regular file must not carry a nil original
+		// on to the edit and the write.
+		return w.refuseNotAFile(scan, rel)
+	}
 	e, asOnDisk, base, err := judgeAt(scan, rel, original)
 	if err != nil {
 		return w.callerError("bad_path", "%v", err)
@@ -741,7 +766,15 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode, orig
 			if chown == nil {
 				chown = tmp.Chown
 			}
-			if msg := ownerWarning(chown, uid, gid); msg != "" {
+			// The temporary file's owner and group; unknown (-2, no id)
+			// when it cannot be statted, so both are set.
+			cur, curGID := -2, -2
+			if fi, err := tmp.Stat(); err == nil {
+				if u, g, ok := ownerOf(fi); ok {
+					cur, curGID = u, g
+				}
+			}
+			if msg := ownerWarning(chown, uid, gid, cur, curGID); msg != "" {
 				w.warn("%s", msg)
 			}
 		}

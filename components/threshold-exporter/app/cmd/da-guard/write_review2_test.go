@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // TestEdit_UnchangedNeedsTheMeaningUnchangedToo: an unset of a key only a
@@ -71,4 +75,26 @@ func TestEmit_NeverRemovesADirectoryItDidNotMake(t *testing.T) {
 	if !strings.Contains(errOut.String(), "refused") {
 		t.Fatalf("stderr %q", errOut.String())
 	}
+}
+
+// TestEdit_RefusesWhatWasNotARegularFileAtOpen: the path was no regular
+// file when opened (nothing read) and is a regular file again when judged —
+// refused not_read all the same, never carried on to the edit and the
+// write with nothing read.
+func TestEdit_RefusesWhatWasNotARegularFileAtOpen(t *testing.T) {
+	root := writeTree(t, map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"})
+	before := snapshot(t, root)
+	var out, errOut bytes.Buffer
+	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+		res:  writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml", Warnings: []string{}},
+		read: func(string) ([]byte, os.FileInfo, bool, error) { return nil, nil, false, nil }}
+	scan, err := config.ScanDirTreeFiles(root, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := []editOp{{Op: opUnset, Path: []string{"tenants", "t1", "a"}}}
+	if code := w.edit(scan, "t1.yaml", filepath.Join(root, "t1.yaml"), ops, false); code != exitFindings || reasonOf(w.res) != writeReasonNotRead {
+		t.Fatalf("exit %d %+v %v", code, w.res, w.res.Message)
+	}
+	sameTree(t, before, snapshot(t, root))
 }
