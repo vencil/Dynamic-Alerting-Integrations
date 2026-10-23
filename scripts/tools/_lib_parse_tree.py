@@ -1122,9 +1122,12 @@ def _run_names(names: "list[str]", binary: Optional[str],
                              "names it was given, in order; nothing of it is used")
     carriers = doc["defaults_carriers"]
     chosen = carriers.get(".")
+    defaults = {e.path for e in entries if e.cls == "defaults"}
     losers = {e.path for e in entries if e.not_read is not None}
-    if set(carriers) - {"."} or (chosen is not None and chosen not in names) or \
-            losers != {e.path for e in entries if e.cls == "defaults" and e.path != chosen}:
+    # The chosen carrier is one of the defaults entries, and there is one
+    # exactly when there are any; the losers are the others.
+    if set(carriers) - {"."} or (chosen is None) != (not defaults) or \
+            (chosen is not None and chosen not in defaults) or losers != defaults - {chosen}:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: defaults_carriers "
                              f"{dict(carriers)!r} does not match the entries' not_read; nothing "
                              "of it is used")

@@ -228,6 +228,29 @@ def test_names_mode_not_read_is_only_the_unselected_carrier() -> None:
                               check=lpt._check_list("names"))
 
 
+@pytest.mark.parametrize("names, entries, carriers", [
+    # A tenant file named as the carrier.
+    (["a.yaml"], [("a.yaml", "tenant", None)], {".": "a.yaml"}),
+    # Defaults entries, but no carrier selected: every one marked a loser.
+    (["_defaults.yaml", "_defaults.yml"],
+     [("_defaults.yaml", "defaults", "unselected_defaults_carrier"),
+      ("_defaults.yml", "defaults", "unselected_defaults_carrier")],
+     {}),
+])
+def test_names_mode_carrier_is_a_defaults_entry(monkeypatch, names, entries, carriers) -> None:
+    """The carrier a names-mode run reports is one of its defaults entries,
+    and there is one whenever there are any: a document saying otherwise is
+    from a da-guard this reader does not understand, and none of it is used."""
+    doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "names",
+           "defaults_carriers": carriers, "entries": [{
+        "path": p, "depth": 0, "class": cls, "tenant_named": "a" if cls == "tenant" else None,
+        "defaults_document": cls == "defaults", "config_extension": True, "readers": None,
+        "not_read": nr, "role": None, "problem": None, "verdict": None} for p, cls, nr in entries]}
+    monkeypatch.setattr(lpt, "_run", lambda *a, **k: doc)
+    with pytest.raises(lpt.ParseTreeError, match="defaults_carriers"):
+        lpt._run_names(names, None, None)
+
+
 def test_a_list_document_is_no_tree_document() -> None:
     """The reader of each mode takes its own mode only: a tree reader handed a
     list document (no content) refuses it whole, and the other way round."""
