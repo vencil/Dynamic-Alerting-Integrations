@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-10-21
+updated_at: 2026-10-23
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -29,7 +29,7 @@ updated_at: 2026-10-21
 
 📝 **修訂（2026-10-17）**：自訂告警編譯器改照 exporter 送出的編譯（見 §3「宣告位置」）；每租戶上限改由 tenant-api 寫入檢查、da-guard 與 validate-config 擋（見 §4）。
 
-📝 **修訂（2026-10-21）**：自訂告警的逐條判定、recipe_id 與規則產生只有一份 Go 實作，recipe 的列舉、格式與數值界限寫在一份契約檔，其他各處由它產生（見 §3、§5、§9）；`describe_tenant` 只顯示 exporter 送出的清單，「這次變更影響什麼」只由 config-diff 回答（見「後果」）。實作依 [#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229) 分步進行。完成前編譯器仍是 Python 實作（`scripts/tools/dx/custom_alerts/`），已知與 Go 判定不一致之處列在該票；這段期間由兩道檢查補位：exporter 送出的條目，編譯器若算出不同的 recipe_id 或不收它，編譯就拒絕（exit 2）；在 repo 內執行 `da-tools validate-config` 時，`custom_alert_sources` 一列會列出這種條目，只警告。
+📝 **修訂（2026-10-21）**：自訂告警的逐條判定、recipe_id 與規則產生只有一份 Go 實作，recipe 的列舉、格式與數值界限寫在一份契約檔，其他各處由它產生（見 §3、§5、§9）；`describe_tenant` 只顯示 exporter 送出的清單，「這次變更影響什麼」只由 config-diff 回答（見「後果」）。實作依 [#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229) 分步進行；編譯器與 recipe-preview 已改用 Go（2026-10-23），`describe_tenant` 的改動還沒做。
 
 📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
@@ -220,7 +220,7 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 一條自訂告警從寫入到產生規則，會經過 tenant-api 的寫入檢查、exporter 送出門檻、CI 編譯規則與 recipe-preview 的預覽。這幾處判斷「這條合不合法、算哪個 shape、產生什麼 PromQL」改用**同一份 Go 程式**（`components/threshold-exporter/app/pkg/config/`）：
 
 - tenant-api 與 exporter 直接呼叫它；
-- CI 編譯呼叫 `da-guard compile-custom-alerts --format json`，Python 端 `compile_custom_alerts.py` 只負責讀寫檔案、限制 `--out` 寫在指定目錄內、`--check` 比對與輸出序列化；
+- CI 編譯呼叫 `da-guard compile-custom-alerts`（輸出 JSON），Python 端 `compile_custom_alerts.py` 只負責讀寫檔案（寫入一定要指定 `--out`，結果為空時不覆蓋有規則的規則包，除非加 `--allow-empty`）、`--check` 比對與輸出序列化；
 - recipe-preview（以近期資料試算一條 recipe 會不會觸發的服務）的映像帶 da-guard，預覽與部署用同一份判定，不會預覽一條 exporter 會拒收的 recipe。
 
 portal 的 recipe 表單在瀏覽器裡執行，不跑 Go：它只做即時提示，界限讀下面的產生物，合不合法以 tenant-api 的寫入檢查為準。

@@ -619,6 +619,51 @@ def test_load_key_refs_from_a_da_guard_without_the_subcommand_is_stale(tmp_path)
     assert ei.value.stderr_lines == ["unexpected argument"]
 
 
+# ── load_custom_alert_pack（#3229）──────────────────────────────────────────
+
+def test_load_custom_alert_pack_reads_the_pack_and_what_it_does_not_compile(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "t.yaml": "tenants:\n  t:\n    _custom_alerts:\n"
+                  "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: '1'}\n"
+                  "      - {recipe: threshold, name: b, metric: 'no-dash', op: '>', window: 5m, threshold: '1'}\n",
+    })
+    pack = tv.load_custom_alert_pack(conf_d, binary=da_guard)
+    assert pack.shapes == 1 and [g["name"] for g in pack.groups][-1] == "custom-alerts"
+    assert [(e.tenant, e.index, e.name, e.status) for e in pack.not_compiled] == [("t", 1, "b", "rejected")]
+    assert pack.block_errors == {} and pack.lifecycle == [] and pack.parse_failed == []
+
+
+def _fake_pack_binary(tmp_path, doc: dict):
+    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
+    out = tmp_path / "doc.json"
+    out.write_text(json.dumps(doc), encoding="utf-8")
+    fake = tmp_path / "fake-da-guard"
+    fake.write_text(f"#!/bin/sh\ncat '{out}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    return str(fake)
+
+
+_PACK_DOC = {"schema": tv.CUSTOM_ALERT_PACK_SCHEMA, "groups": [], "shapes": 0, "not_compiled": [],
+             "block_errors": {}, "lifecycle": [], "parse_failed": [], "skipped": [], "unreadable": []}
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("block_errors", ["t"]),                                              # not a mapping
+    ("lifecycle", [{"recipe": "rate", "status": "eol", "tenants": "ab"}]),  # a string, not a list
+    ("shapes", "1"),
+    ("not_compiled", [{"tenant": "t", "index": 0, "name": "a", "status": "served", "reason": ""}]),
+])
+def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, field, bad):
+    """A field not of its shape is output that is not da-guard's (`broken`),
+    never a traceback, nor a string split into tenant names."""
+    binary = _fake_pack_binary(tmp_path, dict(_PACK_DOC, **{field: bad}))
+    with pytest.raises(tv.CustomAlertPackError) as ei:
+        tv.load_custom_alert_pack(tmp_path, binary=binary)
+    assert ei.value.broken, ei.value
+    # control: the same document with the field of its shape is read.
+    assert tv.load_custom_alert_pack(tmp_path, binary=_fake_pack_binary(tmp_path, _PACK_DOC)).shapes == 0
+
+
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
 _SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '

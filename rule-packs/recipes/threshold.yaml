@@ -1,7 +1,7 @@
 # Recipe: threshold — platform-authored (ADR-024 Capability B, #741).
 # Human governance contract for the `threshold` recipe. The executable form is
-# scripts/tools/dx/custom_alerts/recipes.py (kept in sync; drift-guarded by
-# tests/dx/test_compile_custom_alerts.py).
+# components/threshold-exporter/app/pkg/config/custom_alert_compile.go (kept in sync;
+# drift-guarded by tests/dx/test_compile_custom_alerts.py).
 recipe: threshold
 status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: A gauge metric crosses a threshold value.

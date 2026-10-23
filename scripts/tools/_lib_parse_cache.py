@@ -490,6 +490,15 @@ def refuses() -> bool:
 _SERVABLE: "set[str]" = set()
 
 
+def forget(root: "str | os.PathLike[str]") -> None:
+    """Drop *root* from this process's index of servable trees — for a
+    long-lived caller that deletes the tree it read (recipe-preview's
+    temporary conf.d, #3229): a later tree at a recycled path is read
+    again, never taken as already read, and the index does not grow with
+    every tree the process ever read."""
+    _SERVABLE.discard(os.path.realpath(root))
+
+
 def require_servable(root: "str | os.PathLike[str]", *, binary: Optional[str] = None,
                      timeout: Optional[float] = None) -> None:
     """For a read of *root* that is not through a reader (the served-values

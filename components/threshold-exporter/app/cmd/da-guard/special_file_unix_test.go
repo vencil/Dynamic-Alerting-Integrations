@@ -46,11 +46,12 @@ func TestSubcommands_SpecialFileDoesNotBlock(t *testing.T) {
 		args []string
 		exit int
 	}{
-		"guard":         {nil, exitParseFailed},
-		"served-values": {[]string{servedValuesCmd}, exitParseFailed},
-		"effective":     {[]string{effectiveCmd}, exitParseFailed},
-		"key-refs":      {[]string{keyRefsCmd, "--metric", "mysql_connections"}, exitParseFailed},
-		"parse-tree":    {[]string{parseTreeCmd}, exitOK},
+		"guard":                 {nil, exitParseFailed},
+		"served-values":         {[]string{servedValuesCmd}, exitParseFailed},
+		"effective":             {[]string{effectiveCmd}, exitParseFailed},
+		"key-refs":              {[]string{keyRefsCmd, "--metric", "mysql_connections"}, exitParseFailed},
+		"compile-custom-alerts": {[]string{compileCustomAlertsCmd}, exitParseFailed},
+		"parse-tree":            {[]string{parseTreeCmd}, exitOK},
 	}
 	for shape, build := range shapes {
 		for name, c := range cmds {

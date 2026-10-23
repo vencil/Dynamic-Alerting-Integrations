@@ -543,6 +543,7 @@ func TestUnreadable_UnlistableConfigDir_ExitsThree(t *testing.T) {
 		{"--config-dir", missing},
 		{effectiveCmd, "--config-dir", missing},
 		{servedValuesCmd, "--config-dir", missing},
+		{compileCustomAlertsCmd, "--config-dir", missing},
 	} {
 		code, _, stderr := runOnce(t, args...)
 		if code != exitCallerErr || !strings.Contains(stderr, "no such file or directory") {
@@ -560,6 +561,7 @@ func TestUnreadable_UnlistableConfigDir_ExitsThree(t *testing.T) {
 		{"--config-dir", dir, "--format", "json"},
 		{effectiveCmd, "--config-dir", dir},
 		{servedValuesCmd, "--config-dir", dir},
+		{compileCustomAlertsCmd, "--config-dir", dir},
 	} {
 		code, stdout, stderr := runOnce(t, args...)
 		if code != exitParseFailed {
@@ -621,6 +623,7 @@ func TestUnreadable_ConfigDirStatDenied_ExitsThree(t *testing.T) {
 		{"--config-dir", dir, "--format", "json"},
 		{effectiveCmd, "--config-dir", dir},
 		{servedValuesCmd, "--config-dir", dir},
+		{compileCustomAlertsCmd, "--config-dir", dir},
 	} {
 		code, stdout, stderr := runOnce(t, args...)
 		if code != exitParseFailed {

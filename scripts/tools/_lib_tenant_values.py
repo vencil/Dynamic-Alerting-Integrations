@@ -185,6 +185,17 @@ reads (`parse_failed` / `unreadable`), not a reason to stop. It raises
 `DaGuardNotFoundError` and `KeyRefsError` (a `DaGuardError`) as the loaders
 raise theirs.
 
+`load_custom_alert_pack(conf_d, binary=None)` returns a `CustomAlertPack`
+(#3229): the custom-alert rule pack (ADR-024) `da-guard
+compile-custom-alerts` compiles from the entries the exporter serves or has
+switched off — `groups` as the pack's `groups:` list, `shapes`, the entries
+it does not serve (`not_compiled`, each a `NotCompiledEntry`), the tenants
+whose `_custom_alerts` does not decode (`block_errors`), the non-active
+recipes in use (`lifecycle`), and the load's `skipped`, `parse_failed`,
+`unreadable` and `stderr_lines`. Like `load_key_refs` a file the load drops
+is an answer, not `ParseFailedError`. A tree whose /metrics cannot be
+gathered is `CustomAlertPackError` (exit 2), as a tree the load rejects.
+
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
 
@@ -272,6 +283,10 @@ __all__ = [
     "KeyRef",
     "KeyRefsError",
     "KeyRefsTree",
+    "CustomAlertPack",
+    "CustomAlertPackError",
+    "LifecycleUse",
+    "NotCompiledEntry",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "VALUE_NOT_SERVED_REASONS",
@@ -281,6 +296,7 @@ __all__ = [
     "is_tenant_reserved_key",
     "load_effective",
     "load_effective_tree",
+    "load_custom_alert_pack",
     "load_key_refs",
     "load_served_tree",
     "load_served_values",
@@ -299,6 +315,9 @@ EFFECTIVE_SCHEMA = "da-guard.effective/v1"
 KEY_REFS_SUBCOMMAND = "key-refs"
 # The `schema` value load_key_refs reads; any other is refused.
 KEY_REFS_SCHEMA = "da-guard.key-refs/v1"
+CUSTOM_ALERT_PACK_SUBCOMMAND = "compile-custom-alerts"
+# The `schema` value load_custom_alert_pack reads; any other is refused.
+CUSTOM_ALERT_PACK_SCHEMA = "da-guard.compile-custom-alerts/v1"
 _KEY_REF_SECTIONS = frozenset({"defaults", "optional_overrides", "tenants", "profiles"})
 _KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 # Seconds: generous for a large tree, and a hang still ends.
@@ -558,6 +577,35 @@ class KeyRefsTree(NamedTuple):
     stderr_lines: list[str]            # every non-empty line of da-guard's stderr, as written
 
 
+class NotCompiledEntry(NamedTuple):
+    """An entry the exporter does not serve, so no rule (#3229)."""
+    tenant: str
+    index: int
+    name: str
+    status: str  # "rejected" | "duplicate"
+    reason: str
+
+
+class LifecycleUse(NamedTuple):
+    """A recipe whose contract status is not active, and the tenants a
+    compiled entry declares it for (ADR-024 #6)."""
+    recipe: str
+    status: str  # "deprecated" | "eol"
+    tenants: tuple[str, ...]
+
+
+class CustomAlertPack(NamedTuple):
+    groups: list[dict[str, Any]]           # the pack's `groups:` list, in pack order
+    shapes: int
+    not_compiled: list[NotCompiledEntry]
+    block_errors: dict[str, str]           # tenant -> why its `_custom_alerts` does not decode
+    lifecycle: list[LifecycleUse]
+    skipped: list[SkippedFile]
+    parse_failed: list[str]
+    unreadable: list[UnreadableFile]
+    stderr_lines: list[str]
+
+
 class DaGuardNotFoundError(FileNotFoundError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
@@ -604,6 +652,10 @@ class EffectiveError(DaGuardError):
 
 class KeyRefsError(DaGuardError):
     """da-guard key-refs failed."""
+
+
+class CustomAlertPackError(DaGuardError):
+    """da-guard compile-custom-alerts failed."""
 
 
 def _stderr_text(b: bytes | str | None) -> str:
@@ -1098,7 +1150,7 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
     return KeySchedule(segments, None if expires is None else str(expires), expired)
 
 
-def print_load_warnings(tree: ServedTree, stream: TextIO | None = None) -> None:
+def print_load_warnings(tree: "ServedTree | CustomAlertPack", stream: TextIO | None = None) -> None:
     """Every non-empty line da-guard wrote to stderr, each behind
     `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the
     load serves no tenant from, in the load's order (#2115 R3). Every line is
@@ -1319,6 +1371,49 @@ def load_key_refs(
         KEY_REFS_SUBCOMMAND, extra, conf_d, binary, timeout, KeyRefsError, schema=KEY_REFS_SCHEMA,
         read=read, reads_unreadable=True, dropped_ok=True)
     return tree._replace(stderr_lines=_nonempty_lines(stderr))
+
+
+def load_custom_alert_pack(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> CustomAlertPack:
+    """`da-guard compile-custom-alerts` over the tree at `conf_d` (#3229).
+    See the module docstring for the contract and the exceptions."""
+
+    def read(doc: dict[str, Any]) -> CustomAlertPack:
+        groups = doc["groups"]
+        shapes = doc["shapes"]
+        if not isinstance(groups, list) or not all(isinstance(g, dict) for g in groups):
+            raise TypeError(f"groups is not a list of groups: {type(groups).__name__}")
+        if type(shapes) is not int or shapes < 0:
+            raise TypeError(f"shapes is {shapes!r}")
+        not_compiled = []
+        for e in doc["not_compiled"]:
+            nc = NotCompiledEntry(e["tenant"], e["index"], e["name"], e["status"], e["reason"])
+            if (type(nc.index) is not int or not all(isinstance(v, str) for v in (nc.tenant, nc.name, nc.reason))
+                    or nc.status not in ("rejected", "duplicate")):
+                raise ValueError(f"not_compiled entry {e!r} is not of its shape")
+            not_compiled.append(nc)
+        block_errors, lifecycle = doc["block_errors"], doc["lifecycle"]
+        if not isinstance(block_errors, dict) or not isinstance(lifecycle, list):
+            raise TypeError("block_errors / lifecycle is not of its shape")
+        uses = []
+        for u in lifecycle:
+            if not isinstance(u["tenants"], list):
+                raise TypeError(f"lifecycle entry {u!r} is not of its shape")
+            uses.append(LifecycleUse(str(u["recipe"]), str(u["status"]), tuple(str(t) for t in u["tenants"])))
+        block_errors = {str(k): str(v) for k, v in block_errors.items()}
+        return CustomAlertPack(
+            groups, shapes, not_compiled, block_errors, uses,
+            [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+            [str(f) for f in doc["parse_failed"]],
+            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]], [])
+
+    pack, _returncode, stderr = _run_da_guard(
+        CUSTOM_ALERT_PACK_SUBCOMMAND, [], conf_d, binary, timeout, CustomAlertPackError,
+        schema=CUSTOM_ALERT_PACK_SCHEMA, read=read, reads_unreadable=True, dropped_ok=True)
+    return pack._replace(stderr_lines=_nonempty_lines(stderr))
 
 
 def is_tenant_reserved_key(key: str) -> bool:

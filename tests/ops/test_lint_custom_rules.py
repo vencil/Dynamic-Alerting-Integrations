@@ -541,7 +541,7 @@ def _compiled_forecast_pack_text():
         with open(os.path.join(confdir, "a.yaml"), "w", encoding="utf-8") as f:
             f.write(conf)
         pack = cc.build_pack(confdir)
-    return cc._render(pack["groups"])
+    return cc._render(pack.groups)
 
 
 @pytest.fixture

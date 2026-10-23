@@ -2,22 +2,22 @@
 
 `status: [active|deprecated|eol]` is platform-authored recipe versioning (distinct
 from capability-A APP versioning). It is written once, in the exporter's recipe
-contract (pkg/config/recipe_contract.json); shape.py::RECIPE_STATUS and the
-`status:` field of rule-packs/recipes/*.yaml are generated from it
-(gen_recipe_contract.py).
+contract (pkg/config/recipe_contract.json); the `status:` field of
+rule-packs/recipes/*.yaml is generated from it (gen_recipe_contract.py), and
+da-guard compile-custom-alerts names the non-active recipes in use
+(`lifecycle`; Go's TestCompileCustomAlerts_LifecycleNamesNonActiveRecipesInUse
+pins which tenants are named).
 
 Pinned here:
 1. SSOT completeness — every shipped recipe has a status; every value is valid.
-2. Drift guard — each governance yaml's `status:` equals the code SSOT (so a
-   hand-edit to one without the other fails CI, mirroring the existing
-   recipe-contract drift discipline).
-3. Accessor — recipe_status() never raises and defaults unknown → "active".
-4. Compiler notices — an all-active tree is silent; a deprecated recipe in use
-   yields a non-fatal notice naming the affected tenant(s), and the recipe still
-   compiles (no silent alert loss; the eol *write* rejection is tenant-api-side).
+2. Drift guard — each governance yaml's `status:` equals the contract's.
+3. Compiler notices — an all-active tree is silent; a deprecated / eol recipe in
+   use yields a non-fatal notice naming the affected tenant(s) (no silent alert
+   loss; the eol *write* rejection is tenant-api-side).
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -29,118 +29,82 @@ _DX = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "d
 sys.path.insert(0, _DX)
 
 import compile_custom_alerts as cc  # noqa: E402
-from custom_alerts import entries as ent  # noqa: E402
-from custom_alerts import shape as shp  # noqa: E402
-
-# #3042: the notices are of the entries the exporter serves (da-guard served-values).
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+import _lib_tenant_values as tv  # noqa: E402
 
 _REPO = Path(__file__).resolve().parents[2]
 _EXAMPLES = _REPO / "rule-packs" / "recipes" / "examples" / "conf.d"
 _RECIPE_YAMLS = sorted((_REPO / "rule-packs" / "recipes").glob("*.yaml"))
+_CONTRACT = json.loads((_REPO / "components" / "threshold-exporter" / "app" / "pkg" / "config"
+                        / "recipe_contract.json").read_text(encoding="utf-8"))
+_STATUS = {r["name"]: r["status"] for r in _CONTRACT["recipes"]}
 
 
 # --- 1. SSOT completeness ---------------------------------------------------
 
-def test_status_ssot_covers_every_recipe():
-    assert set(shp.RECIPE_STATUS) == set(shp.RECIPES)
-
-
 def test_status_ssot_values_are_valid():
-    assert shp.RECIPE_LIFECYCLE == {"active", "deprecated", "eol"}
-    for recipe, status in shp.RECIPE_STATUS.items():
-        assert status in shp.RECIPE_LIFECYCLE, f"{recipe} has invalid status {status!r}"
+    assert set(_CONTRACT["lifecycle"]) == {"active", "deprecated", "eol"}
+    for recipe, status in _STATUS.items():
+        assert status in _CONTRACT["lifecycle"], f"{recipe} has invalid status {status!r}"
 
 
 def test_all_shipped_recipes_currently_active():
     # Baseline guard: nothing is deprecated/eol yet. Flipping a status is a
     # deliberate governance act that must also update the matching yaml (drift
     # test below) — this assertion documents the current baseline.
-    assert all(s == "active" for s in shp.RECIPE_STATUS.values())
+    assert all(s == "active" for s in _STATUS.values())
 
 
-# --- 2. Drift guard: governance yaml <-> code SSOT --------------------------
+# --- 2. Drift guard: governance yaml <-> contract ----------------------------
 
 def test_governance_yaml_status_matches_code_ssot():
     assert _RECIPE_YAMLS, "no governance recipe yamls found"
     for path in _RECIPE_YAMLS:
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         recipe = doc.get("recipe")
-        assert recipe in shp.RECIPES, f"{path.name}: unknown recipe {recipe!r}"
+        assert recipe in _STATUS, f"{path.name}: unknown recipe {recipe!r}"
         assert "status" in doc, f"{path.name}: missing `status:` field"
-        assert doc["status"] == shp.recipe_status(recipe), (
-            f"{path.name}: status {doc['status']!r} drifted from code SSOT "
-            f"{shp.recipe_status(recipe)!r} (edit recipe_contract.json, then `make recipe-contract`)"
+        assert doc["status"] == _STATUS[recipe], (
+            f"{path.name}: status {doc['status']!r} drifted from the contract "
+            f"{_STATUS[recipe]!r} (edit recipe_contract.json, then `make recipe-contract`)"
         )
 
 
-# --- 3. Accessor ------------------------------------------------------------
+# --- 3. Compiler lifecycle notices ------------------------------------------
 
-def test_recipe_status_accessor_known_and_unknown():
-    assert shp.recipe_status("threshold") == "active"
-    # never raises; unknown recipe reports active (recipe_id() is the rejecter)
-    assert shp.recipe_status("does_not_exist") == "active"
-
-
-# --- 4. Compiler lifecycle notices ------------------------------------------
-
-def _example_entries() -> list:
-    """The example tree's entries as the exporter serves them (#3042)."""
-    return ent.entries_from_tree(_EXAMPLES).entries
-
-
-def _a_used_recipe() -> str:
-    used = {e.spec["recipe"] for e in _example_entries()} & set(shp.RECIPES)
-    assert used, "example conf.d declares no known recipes — fixture changed?"
-    return sorted(used)[0]
-
-
-def test_notices_empty_when_all_active():
-    assert ent.lifecycle_notices(_example_entries()) == []
-
-
-def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
-    target = _a_used_recipe()
-
-    monkeypatch.setitem(shp.RECIPE_STATUS, target, "deprecated")
-    notices = ent.lifecycle_notices(_example_entries())
-    assert notices, "a deprecated recipe in use must yield a notice"
-    joined = "\n".join(notices)
-    assert target in joined and "deprecated" in joined
-    # migration-style wording, not the eol rejection wording
-    assert "migrate away" in joined
-
-
-def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
-    target = _a_used_recipe()
-    monkeypatch.setitem(shp.RECIPE_STATUS, target, "deprecated")
-    # build_pack must NOT raise — deprecated keeps compiling (no silent loss)
+@pytest.mark.usefixtures("da_guard_env")
+def test_an_all_active_tree_names_no_lifecycle():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["groups"], "deprecated recipe still produces rule groups"
+    assert pack.groups, "the example tree compiled nothing — the check is vacuous"
+    assert pack.lifecycle == []
+    assert cc.lifecycle_notices(pack.lifecycle) == []
 
 
-def test_eol_notice_uses_rejection_wording(monkeypatch):
-    target = _a_used_recipe()
-    monkeypatch.setitem(shp.RECIPE_STATUS, target, "eol")
-    joined = "\n".join(ent.lifecycle_notices(_example_entries()))
-    assert target in joined and "eol" in joined
+def test_notices_flag_deprecated_recipe_in_use():
+    notices = cc.lifecycle_notices([tv.LifecycleUse("rate", "deprecated", ("ta", "tb"))])
+    assert notices == [
+        "recipe 'rate' is deprecated: 2 tenant(s) (ta, tb); migrate away — it still compiles."]
+
+
+def test_eol_notice_uses_rejection_wording():
+    joined = "\n".join(cc.lifecycle_notices([tv.LifecycleUse("rate", "eol", ("ta",))]))
+    assert "'rate' is eol" in joined
     assert "rejected until SRE clears" in joined
 
 
-# --- 5. Notice truncation (a deprecated SHARED recipe may have many tenants) --
+# --- 4. Notice truncation (a deprecated SHARED recipe may have many tenants) --
 
 def test_notice_truncates_large_tenant_list():
     # A deprecated/eol recipe shared by many tenants must not emit an unbounded
     # multi-kilobyte single-line warning (some log collectors truncate mid-line).
     # Lead with the count + a bounded sample of names.
-    summary = ent._summarize_tenants({f"t{i:02d}" for i in range(25)})
+    summary = cc._summarize_tenants({f"t{i:02d}" for i in range(25)})
     assert summary.startswith("25 tenant(s) (")
     assert "t00" in summary                          # first names shown
-    assert f"and {25 - ent._NOTICE_TENANT_SAMPLE} more" in summary
+    assert f"and {25 - cc._NOTICE_TENANT_SAMPLE} more" in summary
     assert "t24" not in summary                       # beyond the sample → counted only
-    assert summary.count(",") <= ent._NOTICE_TENANT_SAMPLE   # never the full 25-name join
+    assert summary.count(",") <= cc._NOTICE_TENANT_SAMPLE   # never the full 25-name join
 
 
 def test_notice_small_list_not_truncated():
-    assert ent._summarize_tenants({"beta", "alpha"}) == "2 tenant(s) (alpha, beta)"
-    assert "more" not in ent._summarize_tenants({"alpha", "beta"})
+    assert cc._summarize_tenants({"beta", "alpha"}) == "2 tenant(s) (alpha, beta)"
+    assert "more" not in cc._summarize_tenants({"alpha", "beta"})

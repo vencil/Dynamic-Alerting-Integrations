@@ -1,28 +1,27 @@
 """Tests for the Custom Alerts vectorized compiler (ADR-024 Capability B, #741 S2).
 
+The rules are da-guard compile-custom-alerts' (#3229); this file pins what the
+pack built through `compile_custom_alerts.py` holds and the script's own I/O
+guards. The recipe rules themselves (recipe_id, validation, selector escaping,
+the emit-time template gate) are Go's and tested there
+(components/threshold-exporter/app/pkg/config/custom_alert*_test.go).
+
 Pinned contracts
 ----------------
-1. **recipe_id is a cross-language slug contract** — matches the shared golden
-   vectors (tests/dx/fixtures/recipe_id_vectors.json) that the Go exporter (S3)
-   will also assert against. A drift silently breaks every join.
-2. **Shape dedup = O(M)** — N tenants on the SAME shape compile to ONE rule;
+1. **Shape dedup = O(M)** — N tenants on the SAME shape compile to ONE rule;
    same `name` on DIFFERENT shapes compile to TWO rules (no false merge).
-3. **Severity union** — a shape emits per-severity branches for exactly the
+2. **Severity union** — a shape emits per-severity branches for exactly the
    severities its covered tenants declared (no forced critical mirror).
-4. **Injection defence** — a non-bare metric name / reserved selector label is
-   rejected at compile time (HTTP-400-able later via the shared module).
-5. **The exporter judges, the compiler compiles (#3042)** — which entries a
+3. **The exporter judges, the pack follows (#3042)** — which entries a
    tenant has, whether one is valid, and whether it repeats an earlier entry's
-   shape+severity are the exporter's answers (da-guard served-values'
-   `custom_alerts`). Served and disabled entries compile; rejected / duplicate
-   ones do not. The compiler's recipe_id must equal the exporter's, or the
-   compile is refused (`CustomAlertParityError`). Name uniqueness (tenant-api)
-   and the per-tenant cap (da-guard / validate-config / tenant-api) are not
-   judged here at all.
-6. **Which list a tenant has** — its own, else its root platform file's
+   shape+severity are the exporter's answers. Served and disabled entries
+   compile; rejected / duplicate ones do not, and are named. Name uniqueness
+   (tenant-api) and the per-tenant cap (da-guard / validate-config /
+   tenant-api) are not judged here at all.
+4. **Which list a tenant has** — its own, else its root platform file's
    `tenants:` entry, else its profile's — replaced, never unioned. A
    `_defaults.yaml` top-level `_custom_alerts` is not served, so not compiled.
-7. **--check** — a stale committed pack is flagged; a fresh one passes.
+5. **--check** — a stale committed pack is flagged; a fresh one passes.
 """
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import sys
 from pathlib import Path
 
@@ -46,9 +44,6 @@ sys.path.insert(0, _TOOLS)
 
 import compile_custom_alerts as cc  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
-from custom_alerts import shape as shp  # noqa: E402
-from custom_alerts import entries as ent  # noqa: E402
-from custom_alerts.entries import CustomAlertConfigError, CustomAlertParityError  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 
@@ -56,7 +51,6 @@ import _lib_tenant_values as tv  # noqa: E402
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _REPO = Path(__file__).resolve().parents[2]
-_VECTORS = _REPO / "tests" / "dx" / "fixtures" / "recipe_id_vectors.json"
 _EXAMPLES = _REPO / "rule-packs" / "recipes" / "examples" / "conf.d"
 
 
@@ -69,9 +63,30 @@ def _write_tree(root: Path, files: dict) -> None:
 
 
 def _shapes(tree: Path):
-    """(shapes, not compiled) for a tree, read as the exporter serves it —
-    the compiler's own path minus the emit (#3042)."""
-    return ent.shapes_from_entries(ent.entries_from_tree(tree).entries)
+    """(shapes, not compiled) of the tree's pack: each shape read back from its
+    rules as {recipe_id, recipe, metric, severities, for}, in recipe_id order."""
+    pack = cc.build_pack(tree)
+    rules = [r for g in pack.groups for r in g.get("rules", [])]
+    shapes = []
+    for info in (r for r in rules if r.get("record") == "custom_recipe_info"):
+        rid = info["labels"]["recipe_id"]
+        alerts = [r for r in rules if r.get("alert") == f"Custom_{rid}"]
+        declared = next(r for r in rules if r.get("record") == f"custom:threshold:{rid}")
+        shapes.append({
+            "recipe_id": rid,
+            "recipe": info["labels"]["recipe"],
+            "metric": re.search(r'metric="([^"]+)"', declared["expr"]).group(1),
+            "severities": sorted(a["labels"]["severity"] for a in alerts),
+            "for": alerts[0].get("for", "0s"),
+        })
+    return shapes, pack.not_compiled
+
+
+def _served_entries(tree: Path) -> list:
+    """(tenant, entry) for every `_custom_alerts` entry of the tree, as the
+    exporter judges it (da-guard served-values)."""
+    served = tv.load_served_tree(tree, partial=True)
+    return [(t, e) for t in sorted(served.tenants) for e in served.tenants[t].custom_alerts]
 
 
 # The words main() prints for what the exporter does not serve. Named here so a
@@ -80,28 +95,13 @@ _REJECTED = "rejected by the exporter, not compiled"
 _NOT_SERVED = "listed above as not served by the exporter"
 
 
-def _alert_names(pack: dict) -> list:
+def _alert_names(pack) -> list:
     out = []
-    for g in pack["groups"]:
+    for g in pack.groups:
         for r in g.get("rules", []):
             if "alert" in r:
                 out.append(r["alert"])
     return out
-
-
-# --- 1. recipe_id cross-language vector contract ---------------------------
-def test_recipe_id_matches_golden_vectors():
-    data = json.loads(_VECTORS.read_text(encoding="utf-8"))
-    for case in data["vectors"]:
-        assert shp.recipe_id(case["input"]) == case["recipe_id"], case["input"]
-
-
-def test_recipe_id_selector_order_independent():
-    a = {"recipe": "threshold", "metric": "m", "op": ">", "window": "1m",
-         "selectors": {"alpha": "2", "zeta": "1"}}
-    b = {"recipe": "threshold", "metric": "m", "op": ">", "window": "1m",
-         "selectors": {"zeta": "1", "alpha": "2"}}
-    assert shp.recipe_id(a) == shp.recipe_id(b)
 
 
 # --- 2. shape dedup (O(M)) -------------------------------------------------
@@ -112,7 +112,7 @@ def test_same_shape_multi_tenant_one_rule(tmp_path):
         "b.yaml": f"tenants:\n  tb:\n    _custom_alerts:\n      - {inst}\n",
     })
     pack = cc.build_pack(tmp_path)
-    assert pack["_meta"]["shapes"] == 1                 # ONE rule covers both tenants
+    assert pack.shapes == 1                 # ONE rule covers both tenants
     names = _alert_names(pack)
     shape_alerts = [n for n in names if n.startswith("Custom_")]
     assert len(shape_alerts) == 1                       # ONE shape rule covers both tenants (O(M))
@@ -120,8 +120,8 @@ def test_same_shape_multi_tenant_one_rule(tmp_path):
 
 
 # --- 2b. S7/S8 routing: component label + silent sentinel ------------------
-def _alert_rules(pack: dict) -> list:
-    return [r for g in pack["groups"] for r in g.get("rules", []) if "alert" in r]
+def _alert_rules(pack) -> list:
+    return [r for g in pack.groups for r in g.get("rules", []) if "alert" in r]
 
 
 def test_s7s8_component_label_and_silent_sentinel(tmp_path):
@@ -166,7 +166,7 @@ def test_same_name_different_metric_two_rules(tmp_path):
                   '      - {recipe: threshold, name: high, metric: container_cpu, op: ">", window: 5m, threshold: "80:warning"}\n',
     })
     pack = cc.build_pack(tmp_path)
-    assert pack["_meta"]["shapes"] == 2                 # different metric → distinct rules
+    assert pack.shapes == 2                 # different metric → distinct rules
 
 
 # --- 3. severity union (no forced mirror) ----------------------------------
@@ -183,11 +183,11 @@ def test_severity_union_emits_declared_branches_only(tmp_path):
     assert shapes[0]["severities"] == ["critical", "warning"]
 
 
-def test_meta_entries_partition_into_compiled_and_not_compiled(tmp_path):
-    """#3042: `_meta["entries"]` is every entry the exporter judged, and
-    `not_compiled` is exactly the ones it does not serve (here: a duplicate of
-    an earlier entry's shape+severity). A `disable` threshold / objective is a
-    `disabled` entry WITH a recipe_id — it compiles."""
+def test_not_compiled_is_exactly_what_the_exporter_does_not_serve(tmp_path):
+    """#3042: `not_compiled` is exactly the entries the exporter does not serve
+    (here: a duplicate of an earlier entry's shape+severity). A `disable`
+    threshold / objective is a `disabled` entry WITH a recipe_id — it
+    compiles."""
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: first, metric: m_own, op: ">", window: 5m, threshold: "10:warning"}\n'
@@ -196,16 +196,15 @@ def test_meta_entries_partition_into_compiled_and_not_compiled(tmp_path):
                   '      - {recipe: slo_burn_rate, name: slo, metric: m_err, denominator_metric: m_tot, objective: "disable"}\n'
                   '      - {recipe: slo_burn_rate, name: slo2, metric: m_e2, denominator_metric: m_t2, objective: "99.9"}\n',
     })
-    meta = cc.build_pack(tmp_path)["_meta"]
-    got = {(e.tenant, e.spec["name"], e.status) for e in meta["entries"]}
+    got = {(t, e.spec["name"], e.status) for t, e in _served_entries(tmp_path)}
     assert got == {("ta", "first", "served"), ("ta", "again", "duplicate"),
                    ("ta", "turned_off", "disabled"), ("ta", "slo", "disabled"),
                    ("ta", "slo2", "served")}
-    assert [e.spec["name"] for e in meta["not_compiled"]] == ["again"]
-    compiled = [e for e in meta["entries"] if e.status in ent.COMPILED_STATUSES]
-    assert all(e.recipe_id for e in compiled)
+    pack = cc.build_pack(tmp_path)
+    assert [(e.tenant, e.index, e.name, e.status) for e in pack.not_compiled] == [
+        ("ta", 1, "again", "duplicate")]
     # m_own + m_off + the two slo shapes: the duplicate adds none.
-    assert meta["shapes"] == 4
+    assert pack.shapes == 4
 
 
 def test_single_severity_no_critical_mirror(tmp_path):
@@ -215,46 +214,6 @@ def test_single_severity_no_critical_mirror(tmp_path):
     })
     shapes, _ = _shapes(tmp_path)
     assert shapes[0]["severities"] == ["warning"]       # NOT [critical, warning]
-
-
-# --- 4. injection defence --------------------------------------------------
-@pytest.mark.parametrize("bad", [
-    "node_cpu} or vector(1)",        # break out of the matcher
-    "tenant:alert_threshold:x",      # recording-rule reference (colon)
-    "foo{bar=1}",                    # inline selector
-    "a b",                           # whitespace
-])
-def test_metric_injection_rejected(bad):
-    with pytest.raises(shp.RecipeError):
-        shp.recipe_id({"recipe": "threshold", "metric": bad, "op": ">", "window": "5m"})
-
-
-@pytest.mark.parametrize("label", ["tenant", "version", "severity", "__name__", "recipe_id", "name"])
-def test_reserved_selector_label_rejected(label):
-    with pytest.raises(shp.RecipeError):
-        shp.assemble_selector({"recipe": "rate", "metric": "m", "selectors": {label: "x"}})
-
-
-@pytest.mark.parametrize("bad_for", ["2m", "90s", "1.5h", "5min"])
-def test_recipe_id_rejects_non_enum_for(bad_for):
-    # TRK-326: `for` enters the recipe_id slug + shape_signature → a non-enum
-    # value must fail loud at compile time (not silently mint a bogus shape).
-    with pytest.raises(shp.RecipeError, match="for"):
-        shp.recipe_id({"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "for": bad_for})
-
-
-@pytest.mark.parametrize("falsy", [None, ""])
-def test_recipe_id_for_falsy_defaults_to_1m(falsy):
-    # falsy `for` (missing / null / empty) → "1m", matching custom_alert.go's
-    # `if forVal == "" { forVal = "1m" }` so Go/Python never diverge on this case.
-    rid = shp.recipe_id({"recipe": "threshold", "metric": "m", "op": ">", "window": "5m", "for": falsy})
-    assert rid.endswith("__for1m")
-
-
-def test_selector_value_is_escaped():
-    sel = shp.assemble_selector({"recipe": "rate", "metric": "m",
-                                 "selectors": {"path": 'a"b\\c'}})
-    assert sel == '{path="a\\"b\\\\c"}'                   # quote + backslash escaped
 
 
 # --- 5. uniqueness: the exporter's duplicate drop, not this compiler's -------
@@ -282,7 +241,7 @@ def test_two_same_severity_same_shape_is_the_exporters_duplicate(tmp_path):
     })
     shapes, not_compiled = _shapes(tmp_path)
     assert len(shapes) == 1
-    assert [(e.spec["name"], e.status) for e in not_compiled] == [("w2", "duplicate")]
+    assert [(e.name, e.status) for e in not_compiled] == [("w2", "duplicate")]
 
 
 def test_warning_and_critical_on_one_shape_are_not_duplicates(tmp_path):
@@ -387,7 +346,7 @@ def test_ratio_missing_denominator_is_rejected_and_the_rest_compiles(tmp_path):
     })
     shapes, not_compiled = _shapes(tmp_path)
     assert [s["metric"] for s in shapes] == ["m2"]          # the valid `ok` recipe compiled
-    assert [(e.spec["name"], e.status) for e in not_compiled] == [("bad", "rejected")]
+    assert [(e.name, e.status) for e in not_compiled] == [("bad", "rejected")]
 
 
 def test_a_non_mapping_entry_makes_the_whole_list_unserved(tmp_path):
@@ -400,10 +359,10 @@ def test_a_non_mapping_entry_makes_the_whole_list_unserved(tmp_path):
             '      - just_a_bare_string\n'
             '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    meta = cc.build_pack(tmp_path)["_meta"]
-    assert meta["shapes"] == 0 and meta["entries"] == []
-    assert list(meta["block_errors"]) == ["ta"]
-    assert "cannot parse _custom_alerts" in meta["block_errors"]["ta"]
+    pack = cc.build_pack(tmp_path)
+    assert pack.shapes == 0 and pack.groups == [] and pack.not_compiled == []
+    assert list(pack.block_errors) == ["ta"]
+    assert "cannot parse _custom_alerts" in pack.block_errors["ta"]
 
 
 _BAD_FILE_TREE = {
@@ -451,43 +410,8 @@ def test_disabled_entries_compile_rejected_and_duplicate_do_not(tmp_path):
     shapes, not_compiled = _shapes(tmp_path)
     assert {s["metric"]: s["severities"] for s in shapes} == {
         "m_off": ["critical"], "m": ["warning"]}
-    assert [(e.spec["name"], e.status) for e in not_compiled] == [
+    assert [(e.name, e.status) for e in not_compiled] == [
         ("w2", "duplicate"), ("typo", "rejected")]
-
-
-# --- 5d. parity: this compiler's recipe_id must be the exporter's (#3042) ----
-_PARITY_SPEC = {"recipe": "threshold", "name": "cpu_hot", "metric": "node_cpu", "op": ">",
-                "window": "5m", "threshold": "80:warning"}
-
-
-def test_parity_a_recipe_id_other_than_the_exporters_is_refused():
-    # A rule built on THIS side's recipe_id joins only series carrying it; if the
-    # exporter serves another, the alert can never fire. Never fail-soft.
-    rid = shp.recipe_id(_PARITY_SPEC)
-    ok = ent.Entry("ta", 0, dict(_PARITY_SPEC), "served", rid, ("warning",))
-    assert len(ent.shapes_from_entries([ok])[0]) == 1          # control: agreeing ids compile
-    with pytest.raises(CustomAlertParityError, match="exporter's recipe_id"):
-        ent.shapes_from_entries([ok._replace(recipe_id=rid + "__drift")])
-    # The other half of parity: a spec the exporter serves and this side rejects.
-    bad = dict(_PARITY_SPEC, window="5x")
-    with pytest.raises(CustomAlertParityError, match="rejects it"):
-        ent.shapes_from_entries([ok._replace(spec=bad)])
-
-
-def test_parity_the_cli_check_exits_2_naming_the_disagreement(tmp_path, monkeypatch, capsys):
-    # End to end on a real tree: the exporter's id comes from Go; this side's is made
-    # to drift, as a Go-only change to the slug would make it.
-    _write_tree(tmp_path / "src", _ONE_RECIPE_SOURCE)
-    real = shp.recipe_id
-    monkeypatch.setattr(shp, "recipe_id", lambda inst: real(inst) + "__drift")
-    with pytest.raises(CustomAlertParityError):
-        cc.build_pack(tmp_path / "src")
-    monkeypatch.setattr(sys, "argv", ["compile", "--check", "--config-dir", str(tmp_path / "src"),
-                                      "--out", str(tmp_path / "pack.yaml")])
-    assert cc.main() == cc.EXIT_CALLER_ERROR == 2
-    err = capsys.readouterr().err
-    assert "read a custom alert differently" in err, err
-    assert "__drift" in err, "the message must name the two ids that disagree"
 
 
 def test_safe_log_strips_control_chars():
@@ -525,11 +449,11 @@ def test_a_tenants_list_is_the_one_the_exporter_serves_replaced_not_unioned(tmp_
         "fin/f.yaml": "tenants:\n  t-fin: {}\n",
     })
     pack = cc.build_pack(tmp_path)
-    got = {(e.tenant, e.spec["metric"]) for e in pack["_meta"]["entries"]}
+    got = {(t, e.spec["metric"]) for t, e in _served_entries(tmp_path)}
     assert got == {("t-root", "rm"), ("t-prof", "prm"), ("t-own", "om")}
     # …and the rules are exactly those three shapes: nothing from a top-level
     # `_defaults.yaml` (root or subtree), nothing from a replaced list.
-    rids = {r["labels"]["recipe_id"] for g in pack["groups"] for r in g["rules"]
+    rids = {r["labels"]["recipe_id"] for g in pack.groups for r in g["rules"]
             if r.get("record") == "custom_recipe_info"}
     assert rids == {f"threshold__{m}__gt__w5m__for1m" for m in ("rm", "prm", "om")}
 
@@ -542,15 +466,15 @@ def test_example_fixture_compiles_to_twelve_shapes():
     # pay-a: the `finance` profile's ratio (#3042 — a recipe shared by a group
     # of tenants lives in a profile, ADR-024 §3); pay-b binds the profile too
     # but its own threshold replaces the profile's list. All served.
-    assert pack["_meta"]["shapes"] == 12
+    assert pack.shapes == 12
     per_tenant: dict = {}
-    for e in pack["_meta"]["entries"]:
-        per_tenant.setdefault(e.tenant, set()).add(e.spec["name"])
+    for t, e in _served_entries(_EXAMPLES):
+        per_tenant.setdefault(t, set()).add(e.spec["name"])
     assert sorted(per_tenant) == ["pay-a", "pay-b", "shop-a"]
     assert per_tenant["pay-a"] == {"payment_failure_ratio"}
     assert per_tenant["pay-b"] == {"pending_settlements_high"}
     assert len(per_tenant["shop-a"]) == 10
-    assert pack["_meta"]["not_compiled"] == []
+    assert pack.not_compiled == []
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):
@@ -576,7 +500,7 @@ def test_write_out_outside_repo_does_not_crash(tmp_path, monkeypatch):
 
 
 # --- 7b. what is compiled joins what is served (#3042) ----------------------
-def _compiled_joins(pack: dict) -> set:
+def _compiled_joins(pack) -> set:
     """(recipe_id, severity) of every shape alert in the pack, read from the rule
     itself: the `custom:<rid>:<severity>:core` record it alerts on, whose
     severity must be the alert's own label."""
@@ -612,27 +536,6 @@ def test_every_rule_compiled_from_the_example_tree_joins_a_served_row():
     assert joins <= compiled, f"served rows with no rule: {sorted(joins - compiled)}"
 
 
-# --- 7c. the recipe-preview path: no da-guard (#3042) -----------------------
-def test_the_preview_path_compiles_without_da_guard(tmp_path, monkeypatch):
-    # The recipe-preview image ships no Go binary: `entries_from_specs` judges the
-    # recipes by this compiler's own rules, and build_pack(entries) must not reach
-    # for da-guard. Both places it could be found are taken away.
-    monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert shutil.which("da-guard") is None, "precondition: no da-guard reachable"
-
-    entries = ent.entries_from_specs({"ta": [dict(_PARITY_SPEC)]})
-    assert [(e.status, e.recipe_id) for e in entries] == [
-        ("served", shp.recipe_id(_PARITY_SPEC))]
-    assert cc.build_pack(entries)["_meta"]["shapes"] == 1
-
-    # An invalid recipe is refused HERE, by this side's validation, naming the entry
-    # — not passed on to fail later as a parity error with no exporter in the room.
-    with pytest.raises(CustomAlertConfigError, match=r"tenant=ta: _custom_alerts\[0\]") as ei:
-        ent.entries_from_specs({"ta": [dict(_PARITY_SPEC, window="5x")]})
-    assert not isinstance(ei.value, CustomAlertParityError), ei.value
-
-
 # --- 8. forecast recipe (ADR-024 §Forecast Recipe, #741) -------------------
 def test_forecast_ratio_mode_slug_and_records(tmp_path):
     # ratio mode: capacity_metric set → headroom ratio avail/capacity; horizon
@@ -642,7 +545,7 @@ def test_forecast_ratio_mode_slug_and_records(tmp_path):
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: disk, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "0.15:warning"}\n',
     })
-    txt = cc._render(cc.build_pack(tmp_path)["groups"])
+    txt = cc._render(cc.build_pack(tmp_path).groups)
     rid = "forecast__avail__lt__h4h__den_cap__for1m"
     assert rid in txt
     assert "sum by(tenant) (avail)" in txt and "sum by(tenant) (cap) > 0" in txt
@@ -661,7 +564,7 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: q, metric: queue_depth, op: ">", horizon: 12h, threshold: "10000:warning"}\n',
     })
-    txt = cc._render(cc.build_pack(tmp_path)["groups"])
+    txt = cc._render(cc.build_pack(tmp_path).groups)
     assert "forecast__queue_depth__gt__h12h__for1m" in txt
     assert "den_" not in txt
     assert "max by(tenant, version) (queue_depth)" in txt
@@ -683,12 +586,6 @@ def test_forecast_requires_horizon_rejected_by_the_exporter(tmp_path):
     assert shapes == []
     assert [e.status for e in not_compiled] == ["rejected"]
     assert "horizon" in not_compiled[0].reason
-
-
-@pytest.mark.parametrize("bad", ["3h", "90m", "5h", "8h"])
-def test_forecast_horizon_enum_rejected(bad):
-    with pytest.raises(shp.RecipeError, match="horizon"):
-        shp.recipe_id({"recipe": "forecast", "metric": "m", "op": "<", "horizon": bad})
 
 
 def test_forecast_ratio_threshold_at_or_above_band_rejected(tmp_path):
@@ -736,39 +633,6 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
 # save, and refusing to compile a served entry would silence a live alert.
 
 
-# --- 10. cross-language validation contract (S5, ADR-024 §S5) ---------------
-_VALIDATION_VECTORS = _REPO / "tests" / "dx" / "fixtures" / "custom_alert_validation_vectors.json"
-
-
-def _py_validate_spec(spec: dict) -> bool:
-    """Python's per-recipe accept/reject decision (the shared-contract subset:
-    recipe/metric/op/horizon/selector-reserved/for via recipe_id + severity via
-    parse_threshold). Mirrors the Go side's resolveOneCustomAlert for these rules.
-    slo_burn_rate (ADR-031) has NO threshold to parse — severity is fixed by the
-    recipe; objective/slo_period/min_events (and the threshold-present rejection)
-    are all validated inside recipe_id itself."""
-    try:
-        shp.recipe_id(spec)
-        if spec.get("recipe") != "slo_burn_rate":
-            shp.parse_threshold(spec["threshold"])
-        return True
-    except shp.RecipeError:
-        return False
-
-
-def test_validation_contract_matches_go():
-    # Same fixture the Go test (TestValidationContract_GoldenVectors) asserts on:
-    # Python and Go MUST agree on accept/reject, closing the validation-decision
-    # drift the slug golden vectors didn't cover.
-    cases = json.loads(_VALIDATION_VECTORS.read_text(encoding="utf-8"))["cases"]
-    assert len(cases) >= 8, "validation contract fixture undershot"
-    for c in cases:
-        accepted = _py_validate_spec(c["spec"])
-        assert accepted == c["valid"], (
-            f"validation drift [{c['_note']}]: Python accepted={accepted}, contract valid={c['valid']}"
-        )
-
-
 # --- 10b. slo_burn_rate recipe (ADR-031, #1092 Phase 0) ----------------------
 _SLO_DECL = ('{recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
              'denominator_metric: co_requests_total, objective: "99.9"}')
@@ -784,7 +648,7 @@ def test_slo_one_declaration_fans_out_both_severities(tmp_path):
     assert not_compiled == []
     assert len(shapes) == 1
     assert shapes[0]["severities"] == ["critical", "warning"]
-    assert shapes[0]["min_events"] == 10                    # default materialised
+    assert shapes[0]["recipe_id"].endswith("__minev10__for1m")   # default materialised
     # (the "counts 2 toward the cap" half of ADR-031 §guardrail 1 is da-guard's
     # and tenant-api's since #3042 — see section 9.)
 
@@ -800,84 +664,7 @@ def test_slo_duplicate_same_shape_is_the_exporters_duplicate(tmp_path):
     })
     shapes, not_compiled = _shapes(tmp_path)
     assert len(shapes) == 1
-    assert [(e.spec["name"], e.status) for e in not_compiled] == [("co_avail2", "duplicate")]
-
-
-@pytest.mark.parametrize("bad_obj", ["100", "0", "0.0", "100.0", "abc", "1e3", "-5", ""])
-def test_slo_objective_rejected(bad_obj):
-    # OPEN interval (0,100): =100 → budget 0 → always fires; =0 never fires;
-    # non-decimal charset rejected (Go ParseFloat lockstep).
-    with pytest.raises(shp.RecipeError, match="objective"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": bad_obj})
-
-
-@pytest.mark.parametrize("good_obj", ["99.9", "99", "0.5", "99.999", "disable"])
-def test_slo_objective_accepted(good_obj):
-    rid = shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e",
-                         "denominator_metric": "t", "objective": good_obj})
-    # objective NEVER enters the slug — every accepted value yields the same rid
-    assert rid == "slo_burn_rate__e__gt__den_t__minev10__for1m"
-
-
-@pytest.mark.parametrize("bad_period", ["7d", "1w", "31d", "30"])
-def test_slo_period_rejected(bad_period):
-    with pytest.raises(shp.RecipeError, match="slo_period"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": "99.9", "slo_period": bad_period})
-
-
-def test_slo_period_not_a_shape_component():
-    # 28d vs 30d (and a different objective) → BYTE-IDENTICAL rid + equal
-    # shape_signature: switching the budget period never re-slugs (ADR-031).
-    a = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-         "objective": "99.9", "slo_period": "30d"}
-    b = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-         "objective": "95", "slo_period": "28d"}
-    assert shp.recipe_id(a) == shp.recipe_id(b)
-    assert shp.shape_signature(a) == shp.shape_signature(b)
-
-
-@pytest.mark.parametrize("bad_me", [0, -1, "10", 1.5, True, False])
-def test_slo_min_events_rejected(bad_me):
-    # positive YAML INTEGER only (bool is an int subclass — rejected explicitly;
-    # a quoted string must not slug differently between Go and Python).
-    with pytest.raises(shp.RecipeError, match="min_events"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": "99.9", "min_events": bad_me})
-
-
-def test_slo_min_events_is_a_shape_component():
-    base = {"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-            "objective": "99.9"}
-    assert shp.recipe_id(base).endswith("__minev10__for1m")          # default materialised
-    other = dict(base, min_events=25)
-    assert shp.recipe_id(other).endswith("__minev25__for1m")
-    assert shp.shape_signature(base) != shp.shape_signature(other)   # forks the shape
-
-
-def test_slo_threshold_rejected():
-    with pytest.raises(shp.RecipeError, match="objective"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": "99.9", "threshold": "0.01:critical"})
-
-
-def test_slo_missing_denominator_rejected():
-    with pytest.raises(shp.RecipeError, match="denominator_metric"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "objective": "99.9"})
-
-
-@pytest.mark.parametrize("bad_op", ["<", "<=", ">=", "=="])
-def test_slo_explicit_op_rejected(bad_op):
-    with pytest.raises(shp.RecipeError):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": "99.9", "op": bad_op})
-
-
-def test_slo_group_by_rejected():
-    with pytest.raises(shp.RecipeError, match="group_by"):
-        shp.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                       "objective": "99.9", "group_by": ["persistentvolumeclaim"]})
+    assert [(e.name, e.status) for e in not_compiled] == [("co_avail2", "duplicate")]
 
 
 def test_slo_rule_count_ledger(tmp_path):
@@ -889,7 +676,7 @@ def test_slo_rule_count_ledger(tmp_path):
         "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
     })
     pack = cc.build_pack(tmp_path)
-    rules = [r for g in pack["groups"] for r in g.get("rules", [])]
+    rules = [r for g in pack.groups for r in g.get("rules", [])]
     recording = [r for r in rules if "record" in r and r["record"] != "custom_recipe_info"]
     info = [r for r in rules if r.get("record") == "custom_recipe_info"]
     alerts = [r for r in rules if r.get("alert", "").startswith("Custom_")]
@@ -938,7 +725,7 @@ def test_slo_core_structure_and_measurement_never_suppressed(tmp_path):
     })
     pack = cc.build_pack(tmp_path)
     rid = "slo_burn_rate__co_errors_total__gt__den_co_requests_total__minev10__for1m"
-    rules = {r["record"]: r["expr"] for g in pack["groups"]
+    rules = {r["record"]: r["expr"] for g in pack.groups
              for r in g.get("rules", []) if "record" in r}
     fast = rules[f"custom:{rid}:critical:core"]
     slow = rules[f"custom:{rid}:warning:core"]
@@ -966,7 +753,7 @@ def test_slo_alert_labels_metric_group_and_slo_burn(tmp_path):
         "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
     })
     pack = cc.build_pack(tmp_path)
-    alerts = [r for g in pack["groups"] for r in g.get("rules", [])
+    alerts = [r for g in pack.groups for r in g.get("rules", [])
               if r.get("alert", "").startswith("Custom_")]
     assert len(alerts) == 2
     assert {a["labels"]["severity"] for a in alerts} == {"critical", "warning"}
@@ -986,7 +773,7 @@ def test_slo_selectors_apply_to_both_sides(tmp_path):
                    'selectors: {service: checkout}}\n'),
     })
     pack = cc.build_pack(tmp_path)
-    ratio_exprs = [r["expr"] for g in pack["groups"] for r in g.get("rules", [])
+    ratio_exprs = [r["expr"] for g in pack.groups for r in g.get("rules", [])
                    if r.get("record", "").startswith("custom:metric:")]
     assert len(ratio_exprs) == 4
     for expr in ratio_exprs:
@@ -1003,43 +790,10 @@ def test_slo_objective_disable_still_compiles(tmp_path):
                    '      - {recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
                    'denominator_metric: co_requests_total, objective: "disable"}\n'),
     })
-    tree = ent.entries_from_tree(tmp_path)
-    assert [e.status for e in tree.entries] == ["disabled"]
-    shapes, not_compiled = ent.shapes_from_entries(tree.entries)
+    assert [e.status for _, e in _served_entries(tmp_path)] == ["disabled"]
+    shapes, not_compiled = _shapes(tmp_path)
     assert not_compiled == []
     assert len(shapes) == 1 and shapes[0]["severities"] == ["critical", "warning"]
-
-
-# --- 11. A+ emit-time invariant gate (F2 annotation-injection backstop) -------
-def test_emit_invariant_gate_allows_platform_actions():
-    """The emit-time invariant gate passes platform-authored template actions
-    ({{ $value | printf }} / {{ $labels.X }}) — it must NOT false-positive."""
-    cc._assert_annotations_template_safe([
-        {"rules": [{
-            "alert": "Custom_x",
-            "labels": {"tenant": "{{ $labels.tenant }}", "severity": "warning",
-                       "mode": "{{ $labels.mode }}", "recipe": "rate"},
-            "annotations": {
-                "summary": "Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}",
-                "description": 'rate on m{k="v"}: value {{ $value | printf "%.2f" }} crossed',
-                "description_zh": '值 {{ $value | printf "%.0f" }} 等於設定代碼',
-                "runbook_url": "{{ $labels.runbook_url }}"},
-        }]},
-    ])  # must not raise
-
-
-@pytest.mark.parametrize("bad", [
-    'absence on m{probe="{{ query `sum(x)` | first | value }}"}: v',   # F2 query() action
-    'v {{ printf "x" }} done',                                          # non-allowlisted action
-    "has a raw ` backtick",                                             # Go raw-string delimiter
-])
-def test_emit_invariant_gate_rejects_injection(bad):
-    """Mutation-prove: a non-platform template action or backtick in ANY annotation
-    fails the compile — the F2 backstop, whatever field carried it."""
-    with pytest.raises(CustomAlertConfigError, match="invariant"):
-        cc._assert_annotations_template_safe([
-            {"rules": [{"alert": "Custom_x", "annotations": {"description": bad}}]},
-        ])
 
 
 # --- D. disk-recipe prerequisite notice (#692 P0③ W3) ----------------------
@@ -1936,7 +1690,7 @@ def test_a_hidden_path_is_not_a_recipe_source(tmp_path):
     shapes, not_compiled = _shapes(hid)
     assert [s["metric"] for s in shapes] == ["node_cpu"], shapes
     assert not_compiled == [], not_compiled
-    assert cc.build_pack(hid)["_meta"]["shapes"] == 1
+    assert cc.build_pack(hid).shapes == 1
     assert _described_alert_names(hid, "acme") == ["a1"]
 
 
@@ -1965,10 +1719,9 @@ def test_a_configmap_mount_reads_each_tenant_once(tmp_path):
     with pytest.raises(tv.DaGuardError, match="duplicate tenant"):
         cc.build_pack(vis)
 
-    meta = cc.build_pack(cm)["_meta"]
-    assert [(e.tenant, e.spec["name"], e.status) for e in meta["entries"]] == [
+    assert [(t, e.spec["name"], e.status) for t, e in _served_entries(cm)] == [
         ("acme", "a1", "served")]
-    assert meta["shapes"] == 1
+    assert cc.build_pack(cm).shapes == 1
     assert _described_alert_names(cm, "acme") == ["a1"]
 
 

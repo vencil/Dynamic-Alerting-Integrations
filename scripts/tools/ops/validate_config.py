@@ -2571,93 +2571,6 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
 
 
-# #3042: what each line of the custom_alert_sources row means to the reader.
-_CUSTOM_ALERT_SOURCES_HINT = (
-    "The exporter serves this custom alert (or will, once it is switched back "
-    "on), but the custom-alert compiler cannot build its rule: the two read the "
-    "entry differently (#3042), so the threshold the exporter serves is read by "
-    "no rule and never alerts — and compiling the rule pack is refused until "
-    "they agree. Report the line (it names both readings). Reported only, not "
-    "blocking.")
-_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
-    "Nothing was compared; the line above names why. The exporter's side "
-    "needs da-guard (in the repo `make da-guard-build`, or set "
-    "`DA_GUARD_BINARY`) and a tree it can read — the yaml_syntax, json_schema "
-    "and values_not_served rows name a file it cannot. Fix it and run again. "
-    "Reported only, not blocking.")
-
-
-def _custom_alert_compiler():
-    """The custom-alert compiler's entry reader (`custom_alerts.entries`), or
-    None where it is not installed (the da-tools image ships no compiler: the
-    row is then not run)."""
-    dx = os.path.join(str(_THIS_DIR.parent), "dx")
-    if os.path.isdir(dx) and dx not in sys.path:
-        sys.path.insert(0, dx)
-    try:
-        from custom_alerts import entries
-    except ImportError:
-        return None
-    return entries
-
-
-def check_custom_alert_sources(config_dir: str, entries_mod=None) -> dict[str, object]:
-    """#3042: every custom alert the exporter serves — or serves once switched
-    back on — has a rule. The compiler builds its rules from the exporter's
-    own reading of each tenant's `_custom_alerts` (da-guard served-values'
-    `custom_alerts`), so the one way such an entry gets no rule is the
-    compiler reading it differently: another recipe_id, or a spec it rejects
-    (`entries.shapes_from_entries` raises `CustomAlertParityError`). That
-    threshold is then read by no rule — it never alerts — and the compile is
-    refused. Entries the exporter does not serve (rejected, duplicate) are
-    not this row's: da-guard and tenant-api's write check report them.
-
-    The entries are listed before the per-tenant metric limit truncates the
-    rows, so a truncated row is not mistaken for one with no rule. Report
-    only: WARN, never FAIL; da-guard unavailable or failing, or a da-guard
-    older than the field, is a WARN saying nothing was compared.
-    """
-    try:
-        # The shared effective run first: when it fails, the row stops here
-        # and runs no da-guard of its own (as unread_keys).
-        sources = _effective_tree(config_dir).tenants
-        served = load_served_tree(config_dir).tenants
-        mod = entries_mod or _custom_alert_compiler()
-        for t, v in served.items():
-            if v.custom_alerts is None:
-                raise ValueError(f"da-guard served-values has no `custom_alerts` (tenant {t!r}) — this "
-                                 "da-guard is older than this tool: upgrade or rebuild it")
-    except Exception as exc:  # noqa: BLE001 — any failure is "not compared", never a refusal
-        return _make_result("custom_alert_sources", WARN, [
-            f"comparison incomplete: the exporter's custom alerts were not read "
-            f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
-            hint=_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT)
-
-    def _where(t: str) -> str:
-        src = sources.get(t).key_sources.get("_custom_alerts") if t in sources else None
-        return src.file if src is not None else "?"
-
-    details, checked = [], 0
-    for t in sorted(served):
-        for e in served[t].custom_alerts:
-            if e.status not in mod.COMPILED_STATUSES:
-                continue
-            checked += 1
-            entry = mod.Entry(t, e.index, e.spec, e.status, e.recipe_id, e.severities, e.reason)
-            try:
-                mod.shapes_from_entries([entry])
-            except mod.CustomAlertParityError as exc:
-                how = "is served" if e.status == "served" else "is switched off (served once back on)"
-                details.append(f"{_where(t)}: tenant {t} `_custom_alerts[{e.index}]` "
-                               f"(`{e.spec.get('name')}`, {e.recipe_id}) {how}, but no rule can be "
-                               f"compiled for it — it never alerts: {' '.join(str(exc).split())}")
-    if details:
-        return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
-    return _make_result("custom_alert_sources", PASS, [
-        f"{checked} custom alert(s) the exporter serves or has switched off, each with a rule "
-        "the compiler builds"])
-
-
 def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
     """How the exporter decodes the root carrier's `defaults:` into
     `map[string]float64`, read off the file's parse-tree nodes (yaml.v3's
@@ -3061,11 +2974,6 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     # #3042: each line names the tenant, its file, the rows it serves and the cap.
     "custom_alert_cap": (
         _CUSTOM_ALERT_CAP_HINT.format(cap=MAX_CUSTOM_RECIPES),
-        "docs/cli-reference.md#validate-config",
-    ),
-    # #3042: each line names the file, the alert, its recipe_id and the tenants.
-    "custom_alert_sources": (
-        _CUSTOM_ALERT_SOURCES_HINT,
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.
@@ -3724,16 +3632,6 @@ def _main() -> None:
     # 15. The per-tenant cap on a tenant's own custom alerts (#3042) — a FAIL.
     results.append(_run_check("custom_alert_cap", check_custom_alert_cap,
                               args.config_dir, _config_dir=args.config_dir))
-
-    # 16. Custom alerts the exporter serves that the compiler builds no rule
-    # for (#3042) — report only; run where the compiler is installed (the
-    # repo, not the da-tools image, which ships none): an absent row is "not
-    # compared".
-    custom_alert_compiler = _custom_alert_compiler()
-    if custom_alert_compiler is not None:
-        results.append(_run_check("custom_alert_sources", check_custom_alert_sources,
-                                  args.config_dir, entries_mod=custom_alert_compiler,
-                                  _config_dir=args.config_dir))
     _effective_runs = None
 
     # Report

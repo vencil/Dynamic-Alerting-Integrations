@@ -2,7 +2,7 @@
 
 The recipe contract is written once, in the exporter's
 pkg/config/recipe_contract.json; the schema members, the portal's two JSON
-files, shape.py's GENERATED block and rule-packs/recipes/*.yaml are generated
+files, _lib_constants.py's GENERATED block and rule-packs/recipes/*.yaml are generated
 from it. These pin that the committed copies are in sync, that a contract edit
 reaches every copy, that a hand edit to a copy is caught, and that a malformed
 contract or target is a caller error (rc 2), not a silent pass.
@@ -32,7 +32,7 @@ _SCRIPT = _REPO / "scripts" / "tools" / "dx" / "gen_recipe_contract.py"
 def _tree(tmp_path: Path) -> Path:
     """A minimal copy of every file the generator reads or writes."""
     for rel in (gen.CONTRACT_REL, gen.SEVERITY_REL, gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL,
-                gen.PORTAL_STATUS_REL, gen.SHAPE_REL, gen.CONSTANTS_REL):
+                gen.PORTAL_STATUS_REL, gen.CONSTANTS_REL):
         dst = tmp_path / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(_REPO / rel, dst)
@@ -75,8 +75,7 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     _edit_contract(root, add)
     r = _cli(root, "--check")
     assert r.returncode == 1, r.stdout + r.stderr
-    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL, gen.SHAPE_REL,
-                gen.CONSTANTS_REL,
+    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL, gen.CONSTANTS_REL,
                 f"{gen.RECIPES_DIR_REL}/forecast.yaml", f"{gen.RECIPES_DIR_REL}/rate.yaml"):
         assert f"STALE: {rel}" in r.stdout
     assert _cli(root, "--update").returncode == 0
@@ -87,7 +86,6 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     assert "72h" in props["horizon"]["enum"]
     assert "72h" in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["horizon"]
     assert json.loads((root / gen.PORTAL_STATUS_REL).read_text(encoding="utf-8"))["statuses"]["rate"] == "deprecated"
-    assert '"72h"' in (root / gen.SHAPE_REL).read_text(encoding="utf-8")
     assert "MAX_CUSTOM_RECIPES: Final[int] = 25" in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
     forecast = yaml.safe_load((root / gen.RECIPES_DIR_REL / "forecast.yaml").read_text(encoding="utf-8"))
     assert "72h" in forecast["params"]["horizon"]["enum"]
@@ -147,16 +145,6 @@ def test_malformed_inputs_are_caller_errors(tmp_path, case):
     r = _cli(root, "--check")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "ERROR:" in r.stderr
-
-
-def test_shape_py_reads_the_generated_values():
-    sys.path.insert(0, _DX)
-    from custom_alerts import shape  # noqa: E402
-
-    c = json.loads((_REPO / gen.CONTRACT_REL).read_text(encoding="utf-8"))
-    assert shape.RECIPES == tuple(r["name"] for r in c["recipes"])
-    assert shape.RESERVED_LABELS == frozenset(c["reserved_labels"])
-    assert "mode" in shape.RESERVED_LABELS   # the label Go reserved and Python did not
 
 
 def test_the_precommit_hook_sees_every_input_and_target():
@@ -229,12 +217,10 @@ def test_the_schema_refuses_what_the_go_rules_refuse():
         assert list(v.iter_errors(bad)), bad
 
 
-def test_empty_group_by_is_none_on_every_side():
-    # schema, shape.py and Go (pkg/config TestEmptyGroupByIsNone) all read
-    # `group_by: []` as "none"; a non-empty list on absence is refused by all.
+def test_empty_group_by_is_none_in_the_schema():
+    # The schema and Go (pkg/config TestEmptyGroupByIsNone) both read
+    # `group_by: []` as "none"; a non-empty list on absence is refused by both.
     import jsonschema
-    sys.path.insert(0, _DX)
-    from custom_alerts import shape  # noqa: E402
 
     schema = json.loads((_REPO / gen.SCHEMA_REL).read_text(encoding="utf-8"))
     inst = dict(schema["definitions"]["customAlertInstance"])
@@ -242,64 +228,7 @@ def test_empty_group_by_is_none_on_every_side():
     v = jsonschema.Draft7Validator(inst)
     base = {"recipe": "absence", "name": "a", "metric": "m", "window": "5m", "threshold": "1"}
     assert not list(v.iter_errors({**base, "group_by": []}))
-    shape.recipe_id({**base, "group_by": []})
     eq = {**base, "recipe": "threshold", "op": "==", "group_by": []}
     assert not list(v.iter_errors(eq))
-    shape.recipe_id(eq)
     pvc = {**base, "group_by": ["persistentvolumeclaim"]}
     assert list(v.iter_errors(pvc))
-    with pytest.raises(shape.RecipeError):
-        shape.recipe_id(pvc)
-
-
-def test_shape_rules_come_from_the_contract(tmp_path):
-    # Editing a per-recipe rule in the contract reaches shape.py's table, and
-    # shape.py's checks read that table (no hand-written per-recipe ifs).
-    root = _tree(tmp_path)
-
-    def loosen(d):
-        next(r for r in d["recipes"] if r["name"] == "absence")["group_by"] = True
-        del next(r for r in d["recipes"] if r["name"] == "slo_burn_rate")["fixed_op"]
-
-    _edit_contract(root, loosen)
-    r = _cli(root, "--check")
-    assert f"STALE: {gen.SHAPE_REL}" in r.stdout
-    assert _cli(root, "--update").returncode == 0
-    text = (root / gen.SHAPE_REL).read_text(encoding="utf-8")
-    assert '"absence": (("window", "threshold"), {}, None, True)' in text
-    assert '"slo_burn_rate": (("denominator_metric", "objective"), {"threshold"' in text
-    assert '}, None, False)' in text
-
-
-def test_shape_recipe_id_applies_the_rules():
-    sys.path.insert(0, _DX)
-    from custom_alerts import shape  # noqa: E402
-
-    with pytest.raises(shape.RecipeError, match="missing required field denominator_metric"):
-        shape.recipe_id({"recipe": "ratio", "metric": "m", "window": "5m"})   # was a KeyError
-    with pytest.raises(shape.RecipeError, match="not settable"):
-        shape.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                         "objective": "99.9", "op": "<"})
-    with pytest.raises(shape.RecipeError, match="does not take threshold"):
-        shape.recipe_id({"recipe": "slo_burn_rate", "metric": "e", "denominator_metric": "t",
-                         "objective": "99.9", "threshold": "1"})
-    # data-plane fields are not the slug's business: same id with or without them
-    base = {"recipe": "rate", "metric": "m", "window": "5m"}
-    assert shape.recipe_id(base) == shape.recipe_id({**base, "name": "a", "threshold": "1"})
-
-
-@pytest.mark.parametrize("inst, missing", [
-    ({"recipe": "rate", "name": "a", "metric": "m", "threshold": "1"}, "window"),
-    ({"recipe": "forecast", "name": "a", "metric": "m", "threshold": "1"}, "horizon"),
-    ({"recipe": "ratio", "name": "a", "metric": "m", "window": "5m", "threshold": "1"}, "denominator_metric"),
-    ({"recipe": "slo_burn_rate", "name": "a", "metric": "m", "denominator_metric": "d"}, "objective"),
-])
-def test_python_entry_requires_the_contract_fields(inst, missing):
-    # entries.python_entry reads the required fields from the generated
-    # RECIPE_RULES, so a field the contract requires is named up front.
-    sys.path.insert(0, _DX)
-    from custom_alerts import entries  # noqa: E402
-
-    with pytest.raises(entries.CustomAlertConfigError,
-                       match=rf"missing required field\(s\) \['{missing}'\]"):
-        entries.python_entry("t", 0, inst)
