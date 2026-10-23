@@ -482,6 +482,11 @@ type ScanOptions struct {
 	// Overlay, when non-nil, is one file's bytes read at one path of the
 	// tree in place of the disk (`da-guard effective --overlay`, #2906).
 	Overlay *FileOverlay
+	// Tenants, when non-nil, is the only tenants EffectiveTreeWith resolves
+	// (`da-guard effective --tenant`, ADR-038 §5): the walk, the platform
+	// files and every file's verdict are the whole tree's as always; a
+	// tenant outside it is not resolved. The scan ignores it.
+	Tenants map[string]bool
 }
 
 // FileOverlay is "these bytes at this tree path": Rel is root-relative

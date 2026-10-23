@@ -93,6 +93,10 @@ type servedValuesDoc struct {
 	// them (and names them in its not_served). Not a failure: the exit code
 	// is unchanged. Always present ([] when none).
 	UnreadKeys []unreadKey `json:"unread_keys"`
+	// tenants_requested / tenants_absent, with --tenant only
+	// (tenant_subset.go): Tenants then holds those of the requested
+	// tenants the tree has, judged over them alone.
+	tenantSubset
 }
 
 // unreadKey is one entry of servedValuesDoc.UnreadKeys.
@@ -410,6 +414,7 @@ type servedValuesFlags struct {
 	at             string
 	schedules      bool
 	disableEffects bool
+	tenants        tenantList
 }
 
 func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags, error) {
@@ -427,8 +432,12 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
 			"what /metrics serves (effective / partial / noop), by resolving the tree again without it.\n"+
 			"Costs (most switched-off keys of one tenant) x (parts of the day) resolves.")
+	fs.Var(&f.tenants, "tenant",
+		"Compute only this tenant (repeatable): the whole tree is still loaded, every platform file read;\n"+
+			"the document then carries tenants_requested and tenants_absent (requested, not in the tree),\n"+
+			"and whether /metrics can be gathered is judged over the requested tenants only.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules] [--disable-effects]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
@@ -491,10 +500,12 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 	tenants := map[string]servedTenantValues{}
+	requested := f.tenants.requested()
 	if !allUnreadable {
-		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules, written)
+		sub := subsetConfig(cfg, requested)
+		tenants, err = servedValues(sub, at, rep.Undeliverable, f.schedules, written)
 		if err == nil && f.disableEffects {
-			err = addDisableEffects(cfg, at, tenants, written)
+			err = addDisableEffects(sub, at, tenants, written)
 		}
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
@@ -524,6 +535,10 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Tenants:     tenants,
 		Aliases:     config.DeprecatedKeyAliases(),
 		UnreadKeys:  unreadKeys,
+		tenantSubset: subset(requested, func(t string) bool {
+			_, ok := tenants[t]
+			return ok
+		}),
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
@@ -621,8 +636,10 @@ func checkUTF8(cfg *config.ThresholdConfig) error {
 // string itself shown with %q). It follows the value structure, so a plain
 // field added later is walked without being listed. ⚠️ Not walked: what JSON
 // encodes through a custom MarshalJSON, a TextMarshaler used as a map key,
-// unexported embedded structs, json.RawMessage, and fields tagged `json:"-"`
-// (a skipped field is walked anyway). None of today's output types use them.
+// json.RawMessage, and fields tagged `json:"-"` (a skipped field is walked
+// anyway). None of today's output types use them. An embedded struct,
+// exported or not, is walked as JSON promotes it: its fields at the
+// embedding struct's path (tenantSubset is one).
 func checkOutputUTF8(path string, v reflect.Value) error {
 	switch v.Kind() {
 	case reflect.Interface, reflect.Pointer:
@@ -637,6 +654,12 @@ func checkOutputUTF8(path string, v reflect.Value) error {
 	case reflect.Struct:
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
+			if f := t.Field(i); f.Anonymous && f.Type.Kind() == reflect.Struct {
+				if err := checkOutputUTF8(path, v.Field(i)); err != nil {
+					return err
+				}
+				continue
+			}
 			if !t.Field(i).IsExported() {
 				continue
 			}
