@@ -1602,18 +1602,15 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert set(out) == set(go["tenants"])
-        dropped = bool(go["parse_failed"] or go["unreadable"])
+        # Past the refusal Go drops no file (#3206), so every merged_hash is given.
+        assert not (go["parse_failed"] or go["unreadable"]), go
         for tid, info in out.items():
             want = go["tenants"][tid]
             for field in self.FIELDS:
                 assert info[field] == want[field], (tid, field)
             for field in ("platform_overlay", "profile_overlay"):
                 assert info.get(field) == want.get(field), (tid, field)
-            assert info["merged_hash"] == (None if dropped else want["merged_hash"])
-            if dropped:
-                assert info["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE
-        if dropped:
-            assert "skips or cannot read file(s) of this tree" in res.stderr, res.stderr
+            assert info["merged_hash"] == want["merged_hash"]
 
     @pytest.mark.parametrize("case", sorted(DEFAULTS_DOCUMENTS))
     def test_merged_hash_is_the_exporters(self, tmp_path, case):

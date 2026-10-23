@@ -48,7 +48,6 @@ from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#17
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
 import _lib_write_check  # noqa: E402
-from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 
 class MoveRefused(Exception):
@@ -308,14 +307,13 @@ def main() -> None:
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # A file the walk cannot read is a path da-guard validation names: the
+    # reader's first read is the shared conf.d refusal (#3206), so the plan
+    # is made from readable files only.
     reader = _lib_parse_cache.ConfdReader(conf_d)
     try:
         actions = plan_migration(conf_d, reader)
         confirm_moves(conf_d, actions, reader)
-    except FileUnreadable as exc:
-        print(f"❌ {exc.file}: da-guard parse-tree cannot read it ({exc.kind}: "
-              f"{exc.message}); nothing is planned or moved", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
     except MoveRefused as exc:
         print(f"❌ refusing to move: {exc}; nothing is moved", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

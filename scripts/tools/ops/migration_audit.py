@@ -536,8 +536,6 @@ def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
     # config-named directory is in it by its problem, as today's reader
     # refuses it too; a plain directory (readers []) is not.
     after_selected = set(tree.selected)
-    after_unreadable = {f: {"kind": e.problem[0], "message": e.problem[1]}
-                        for f, e in entries.items() if e.problem is not None}
     today_selected = set(today_read) | set(today_refused)
 
     for f in sorted(after_selected - today_selected):
@@ -548,15 +546,11 @@ def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
         report["selection"].append({"file": f, "read_by": "pyyaml",
                                     "detail": "today's reader reads it; parse-tree does not"})
 
+    # `becomes_unreadable` / `still_unreadable` stay empty (keys kept: the
+    # schema shipped in tools/v2.9.0): a file parse-tree cannot read is a path
+    # da-guard validation names, and the shared conf.d refusal (#3206) ended
+    # the run when the tree was read.
     for f in sorted(after_selected & today_selected):
-        bad = after_unreadable.get(f)
-        if bad is not None:
-            entry = {"file": f, "kind": bad["kind"], "message": bad["message"]}
-            if f in today_refused:
-                report["still_unreadable"].append({**entry, "pyyaml_error": today_refused[f]})
-            else:
-                report["becomes_unreadable"].append(entry)
-            continue
         if f in today_refused:
             report["becomes_readable"].append({"file": f, "pyyaml_error": today_refused[f],
                                                "yaml_v3": tree.node(f)})
@@ -679,10 +673,6 @@ def render_text(report: dict) -> str:
                 side = "today's reader" if e["only_in"] == "pyyaml" else "yaml.v3"
                 lines.append(f"  {s(_where(e))}  {s(_path_text(e['path']))}: key "
                              f"{s(json.dumps(e['key'], ensure_ascii=False))} only in {side}")
-            elif key in ("becomes_unreadable", "still_unreadable"):
-                lines.append(f"  {s(e['file'])}: {e['kind']} — {s(e['message'])}")
-                if key == "still_unreadable":
-                    lines.append(f"    today: {s(e['pyyaml_error'])}")
             else:
                 lines.append(f"  {s(e['file'])}: today: {s(e['pyyaml_error'])}")
                 lines.append("    yaml.v3 reads:" + (" {}" if not e["yaml_v3"] else ""))
