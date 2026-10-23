@@ -149,9 +149,6 @@ ALLOWED = {
     "tools/ops/assemble_config_dir.py:list_visible_config_entries:is_hidden_name": PR_BETA2,
     "tools/ops/assemble_config_dir.py:main:is_defaults_name": PR_BETA2,
     "tools/ops/assemble_config_dir.py:main:select_defaults_carrier": PR_BETA2,
-    "tools/ops/batch_diagnose.py:discover_tenants:config_stem": CONFIGMAP,
-    "tools/ops/batch_diagnose.py:discover_tenants:has_yaml_extension": CONFIGMAP,
-    "tools/ops/batch_diagnose.py:discover_tenants:is_reserved_name": CONFIGMAP,
     "tools/ops/deprecate_rule.py:_deprecate:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:_nested_ignored:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:section_owner:is_defaults_name": PR_BETA2,
@@ -162,12 +159,6 @@ ALLOWED = {
     "tools/ops/offboard_tenant.py:_legacy_refs:LEGACY_STATE_FILES": PR_BETA2,
     "tools/ops/offboard_tenant.py:find_config_file:config_stem": PR_BETA2,
     "tools/ops/offboard_tenant.py:load_all_configs:LEGACY_STATE_FILES": PR_BETA2,
-    "tools/ops/patch_config.py:exporter_reads:has_yaml_extension": CONFIGMAP,
-    "tools/ops/patch_config.py:exporter_reads:is_hidden_name": CONFIGMAP,
-    "tools/ops/patch_config.py:find_defaults_key:is_defaults_name": CONFIGMAP,
-    "tools/ops/patch_config.py:is_carrier_candidate:has_yaml_extension": CONFIGMAP,
-    "tools/ops/patch_config.py:is_carrier_candidate:is_hidden_name": CONFIGMAP,
-    "tools/ops/patch_config.py:is_carrier_candidate:is_reserved_name": CONFIGMAP,
     "tools/ops/validate_config.py:check_tenant_file_name:config_stem": PR_BETA2,
 }
 

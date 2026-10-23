@@ -54,11 +54,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
     arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_confd import (  # noqa: E402
-    config_stem,
-    has_yaml_extension,
-    is_reserved_name,
-)
+import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9, #3206: Go classes the keys)
 
 
 # #2954: per-tenant deadline. diagnose.check() makes up to four Prometheus
@@ -110,28 +106,33 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     # reproduces the original defect one hop downstream: a tenant set
     # smaller than what is deployed.
     #
-    # ⛔ That producer selects with `_lib_confd.has_yaml_extension`, the
-    # exporter's own case-INSENSITIVE predicate (#1792), which is why the
-    # same predicate is used below — the coupling is to the PREDICATE, not
-    # to a mechanism. The recipe used to do the selecting itself with a
-    # shell glob; describing it that way here is how this comment went stale
-    # while the code stayed right, so it names the module, not the layer.
-    data_keys = list(cm_data.get("data", {}).keys())
+    # ⛔ What each key IS is Go's answer, not a Python name predicate
+    # (ADR-036 §7 step 9, #3206): `da-guard parse-tree --list-only --names`
+    # classes each key by its name alone, by the exporter's own rule
+    # (`confdname`, case-insensitive suffix — the producer's selection,
+    # #1792). A key of class `tenant` carries the tenant id Go names
+    # (`tenant_named`, case kept); `_`-prefixed keys (defaults / platform)
+    # and names that are not config files are not tenants.
+    data_keys = [k for k in cm_data.get("data", {}) if isinstance(k, str)]
+    try:
+        named = _lib_parse_tree.classify_names(data_keys) if data_keys else {}
+    except _lib_parse_tree.ParseTreeError as exc:
+        print(f"ERROR: cannot class the ConfigMap keys through `da-guard parse-tree "
+              f"--names` (ADR-036): {' '.join(str(exc).split())}", file=sys.stderr)
+        return []
     tenants = []
     for key in data_keys:
-        if not has_yaml_extension(key) or is_reserved_name(key):
-            continue
-        tenant = config_stem(key)
-        if not tenant:
-            # `config_stem` also declines `.`-prefixed names, which the old
-            # `startswith("_")` test let through as a tenant called
-            # `.hidden`. The exporter's scanner skips hidden entries too, so
-            # agreeing with it is right — but a dropped key must not be
-            # silent, because the symptom of the bug above was exactly a
-            # tenant quietly missing from the report.
+        entry = named[key]
+        if entry.cls == "hidden":
+            # The exporter's walk skips a hidden name, so agreeing with it is
+            # right — but a dropped key must not be silent: the symptom of
+            # the bug above was a tenant quietly missing from the report.
             print(f"WARNING: ConfigMap key {key!r} carries no tenant id — "
                   f"skipped", file=sys.stderr)
             continue
+        if entry.cls != "tenant":
+            continue
+        tenant = entry.tenant_named
         if tenant in tenants:
             # Only reachable since this site started accepting both spellings:
             # `db-a.yaml` + `db-a.yml` are two keys, one stem.

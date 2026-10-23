@@ -77,12 +77,6 @@ import _lib_parse_tree  # noqa: E402
 import _lib_write_check  # noqa: E402
 from _lib_yaml_keys import dump_for_rewrite  # noqa: E402  (#2220)
 from _threshold_alerts import alerts_for_key  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    has_yaml_extension,
-    is_defaults_name,
-    is_hidden_name,
-    is_reserved_name,
-)
 
 LEGACY_KEY = "config.yaml"
 
@@ -235,6 +229,34 @@ def run_cmd(cmd):
     return result.stdout.strip()
 
 
+#: Go's classes of a name the exporter's walk reads as a config file
+#: (`da-guard parse-tree --list-only --names`; the others a name alone can
+#: be are `hidden` and `not_config_name`, which the walk skips).
+_SCANNED_CLASSES = frozenset({"tenant", "defaults", "platform"})
+
+
+def _mountable(key):
+    """Whether *key* can be a file of the mounted ConfigMap at all (a
+    ConfigMap key never holds a `/` or a NUL and is not `.` / `..`); any
+    other entry of malformed data is no file of the mount."""
+    return (isinstance(key, str) and key not in ("", ".", "..")
+            and "/" not in key and "\0" not in key)
+
+
+def key_classes(keys):
+    """{key: Go's class of that name} for every mountable one of *keys*: what
+    the exporter's walk makes of a file of that name — `tenant`, `defaults`,
+    `platform`, `hidden`, `not_config_name` — as `da-guard parse-tree
+    --list-only --names` answers it (`_lib_parse_tree.classify_names`,
+    memoised per name for the process). ⛔ ADR-036 §7 step 9 (#3206): this
+    tool never classes a key with name predicates of its own. Raises
+    ParseTreeError for no usable da-guard."""
+    names = [k for k in keys if _mountable(k)]
+    if not names:
+        return {}
+    return {k: e.cls for k, e in _lib_parse_tree.classify_names(names).items()}
+
+
 def _cm_keys(cm_data):
     data = cm_data.get("data") if isinstance(cm_data, dict) else cm_data
     if not isinstance(data, (dict, type(None))):
@@ -276,8 +298,7 @@ class _ConfdView:
         self._tmp = tempfile.TemporaryDirectory(prefix="patch-config-")
         self.root = self._tmp.name
         for key, text in data.items():
-            if not isinstance(key, str) or "/" in key or key in (".", "..") \
-                    or "\0" in key:
+            if not _mountable(key):
                 continue  # not a ConfigMap key; the mount has no such file
             path = os.path.join(self.root, key)
             with open(path, "wb") as fh:
@@ -341,9 +362,9 @@ def _text(node):
 
 
 def find_defaults_key(data):
-    """The `_defaults` key in any casing / either spelling (`is_defaults_name`),
-    or None; two such keys → refused."""
-    hits = sorted(k for k in data if is_defaults_name(k))
+    """The `_defaults` key in any casing / either spelling (Go's class
+    `defaults`, `key_classes`), or None; two such keys → refused."""
+    hits = sorted(k for k, cls in key_classes(data).items() if cls == "defaults")
     if len(hits) > 1:
         raise ConfigMapShapeError(
             f"threshold-config has {len(hits)} keys that are all the platform "
@@ -366,8 +387,9 @@ def detect_mode(cm_data):
 
 
 def is_carrier_candidate(key):
-    return (has_yaml_extension(key) and not is_hidden_name(key)
-            and not is_reserved_name(key))
+    """Whether *key* is a name this tool may create as a tenant key: Go's
+    class `tenant` (a config file name, not dot-hidden, not `_`-prefixed)."""
+    return key_classes([key]).get(key) == "tenant"
 
 
 def tenant_declarations(cm_data, skipped=None):
@@ -680,10 +702,10 @@ def _same_install(a, b):
 
 def exporter_reads(key):
     """Whether the exporter's conf.d walker reads a file named `key`
-    (pkg/confdname IsScanned): not dot-hidden and a
-    .yaml / .yml extension in any case. A ConfigMap key has no `/`, so no
-    directory on the way can be hidden."""
-    return has_yaml_extension(key) and not is_hidden_name(key)
+    (pkg/confdname IsScanned) — Go's class of the name (`key_classes`) is a
+    config file's. A ConfigMap key has no `/`, so no directory on the way
+    can be hidden."""
+    return key_classes([key]).get(key) in _SCANNED_CLASSES
 
 
 def configmap_files(cm):
@@ -712,7 +734,8 @@ def config_hash(files, mode="directory"):
         data = files.get(LEGACY_KEY)
         return None if data is None else hashlib.sha256(data).hexdigest()
     outer = hashlib.sha256()
-    for key in sorted(k for k in files if exporter_reads(k)):
+    classes = key_classes(files)
+    for key in sorted(k for k in files if classes.get(k) in _SCANNED_CLASSES):
         outer.update(hashlib.sha256(files[key]).hexdigest().encode("ascii"))
     return outer.hexdigest()
 
@@ -1189,6 +1212,12 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     write.key, write.old, write.new = key, old, new
     write.exporter, write.before, write.seen = exporter, before, seen
 
+    # The verification after the write classes the written ConfigMap's keys
+    # (`config_hash` → `key_classes`, through da-guard): class them now, so a
+    # da-guard that fails ends the run BEFORE the write, never between the
+    # write and its verification (the written keys are these: the patch is
+    # conditional on the version read).
+    key_classes([*configmap_files(cm_data), key])
     _say(f"Patching ConfigMap ({mode}) for {tenant}: {metric_key} = {value}...",
          out=True)
     SIGNALS.install()

@@ -28,6 +28,21 @@ Prerequisites:
     dump writes plain that yaml.v3 reads as a number, a `defaults` value
     that is not a number) or a path no reader reads is not written —
     `--render-cr` exits 2, the controller sets the CR's status to Error.
+    And an existing --config-dir is a tree this writes INTO (#3206): it
+    must first pass the shared conf.d refusal — any path da-guard
+    validation names. `--render-cr` then exits 2 naming every such path,
+    nothing written; the controller judges the tree afresh once per
+    reconcile cycle (one `--once` pass, one watch event), logs every such
+    path as ERROR, skips that cycle's writes and deletes (each CR's status
+    is Error) and keeps running; `--once` then exits 2. The output
+    directory is judged AS the tree: a --config-dir inside a larger conf.d
+    is judged as its own tree (pass the conf.d root to have it all judged).
+    ⚠️ Known gaps, left to #3318 (the controller redesign): a watch event
+    skipped during a refused cycle (a write, or a DELETED's removal) is not
+    replayed — it waits for the CR's next event or a restart's initial
+    sync, and a deleted CR's file stays until removed by hand; and a watch
+    that ends with 410 Gone is not re-listed (it reconnects from the same
+    resourceVersion, as before this change).
 """
 
 import argparse
@@ -369,6 +384,39 @@ def update_cr_status(
 
 # ── Reconcile loop ───────────────────────────────────────────────────
 
+def controller_refusal(config_dir: Path) -> list[str]:
+    """The controller's shared conf.d refusal (#3206): the tree under
+    *config_dir*, judged by Go AFRESH once per reconcile cycle — one per
+    `run_once`, one per watch event — and shared by every CR of that cycle
+    (`_lib_parse_cache.refusal_now`: one tree-mode run, never the
+    once-per-process memo — the tree changes under a long-running
+    controller). [] when the directory does not exist yet or Go serves it;
+    else every refused path is logged as ERROR and the lines are returned —
+    the caller skips the cycle's writes and deletes, and the next cycle
+    judges again. No usable da-guard is a refusal too (one ERROR line):
+    nothing can be judged, so nothing is written. The process never exits
+    on it."""
+    if not config_dir.is_dir():
+        return []
+    import _lib_parse_cache  # noqa: PLC0415
+    import _lib_parse_tree  # noqa: PLC0415
+    try:
+        lines = _lib_parse_cache.refusal_now(config_dir)
+    except _lib_parse_tree.ParseTreeError as e:
+        line = f"cannot judge the conf.d at {safe_label(str(config_dir))} " \
+               f"through `da-guard parse-tree`: {e}; nothing is written this time"
+        log.error("%s", line)
+        return [f"ERROR: {line}"]
+    for line in lines[:-1]:
+        log.error("%s", line.removeprefix("ERROR: "))
+    if lines:
+        log.error("the conf.d at %s holds %d path(s) da-guard validation names; "
+                  "nothing is written this time (fix or remove them; the next "
+                  "reconcile judges the tree again)", safe_label(str(config_dir)),
+                  len(lines) - 1)
+    return lines
+
+
 def reconcile_one(
     cr: dict,
     config_dir: Path,
@@ -376,8 +424,13 @@ def reconcile_one(
     dry_run: bool = False,
     api: Any = None,
     cli: bool = False,
+    refusal: "list[str] | None" = None,
 ) -> None:
     """Reconcile a single ThresholdConfig CR.
+
+    *refusal* is the cycle's `controller_refusal` (the controller judges the
+    tree once per cycle and hands it to every CR of it); None judges here
+    (a caller that reconciles one CR on its own).
 
     *cli* says which of the two callers this is: ``render_cr_file``
     (``--render-cr``, one CR, the rc is the operator's answer) or the
@@ -401,6 +454,17 @@ def reconcile_one(
         # file it replaces is not read: it is not the base of a change. A
         # destination that exists and is not a file (a directory) is the
         # write's own failure (#1789's one line), not a parse-tree verdict.
+        # #3206: the tree this writes INTO passes the shared refusal first.
+        # `--render-cr` (one shot): exit 2, every path named, nothing
+        # written. The controller: judged afresh on every reconcile; refused
+        # ⇒ every path logged, this write skipped, the loop goes on.
+        if cli:
+            _lib_write_check.require_output_tree(config_dir)
+        elif (controller_refusal(config_dir) if refusal is None else refusal):
+            if api and not dry_run:
+                update_cr_status(api, cr, "Error", message=(
+                    "conf.d holds paths da-guard validation names; not written")[:200])
+            return
         dest = config_dir / filename
         if dest.exists() and not dest.is_file():
             write_rendered(config_dir, filename, content, dry_run=dry_run)
@@ -445,14 +509,17 @@ def reconcile_one(
             update_cr_status(api, cr, "Error", message=str(e)[:200])
 
 
-def run_once(
+def _sync(
     api: Any,
     config_dir: Path,
     *,
     dry_run: bool = False,
     namespace: str = "",
-) -> int:
-    """One-shot: list all ThresholdConfig CRs and render them."""
+) -> "tuple[int, bool]":
+    """One reconcile cycle over the listed CRs: ``(rc, refused)``. rc is
+    EXIT_CALLER_ERROR when the list failed. The tree is judged once
+    (`controller_refusal`) for every CR of the cycle; refused, nothing is
+    written."""
     try:
         if namespace:
             result = api.list_namespaced_custom_object(
@@ -462,16 +529,30 @@ def run_once(
                 CRD_GROUP, CRD_VERSION, CRD_PLURAL)
     except Exception as e:
         log.error("Failed to list ThresholdConfig resources: %s", e)
-        return EXIT_CALLER_ERROR
+        return EXIT_CALLER_ERROR, False
 
     items = result.get("items", [])
     log.info("Found %d ThresholdConfig resource(s)", len(items))
 
+    refusal = controller_refusal(config_dir) if items else []  # once per cycle
     for cr in items:
         reconcile_one(cr, config_dir, dry_run=dry_run,
-                      api=None if dry_run else api)
+                      api=None if dry_run else api, refusal=refusal)
+    return EXIT_OK, bool(refusal)
 
-    return EXIT_OK
+
+def run_once(
+    api: Any,
+    config_dir: Path,
+    *,
+    dry_run: bool = False,
+    namespace: str = "",
+) -> int:
+    """One-shot (`--once`): list all ThresholdConfig CRs and render them. A
+    refused tree is exit 2 (EXIT_CALLER_ERROR, the shared refusal's code)
+    after its ERROR lines."""
+    rc, refused = _sync(api, config_dir, dry_run=dry_run, namespace=namespace)
+    return EXIT_CALLER_ERROR if refused else rc
 
 
 def run_watch(
@@ -516,11 +597,16 @@ def run_watch(
                 name = cr.get("metadata", {}).get("name", "?")
                 ns = cr.get("metadata", {}).get("namespace", "?")
 
+                if event_type not in ("ADDED", "MODIFIED", "DELETED"):
+                    continue
+                refusal = controller_refusal(config_dir)  # once per event
                 if event_type in ("ADDED", "MODIFIED"):
                     reconcile_one(cr, config_dir, dry_run=dry_run,
-                                  api=None if dry_run else api)
+                                  api=None if dry_run else api, refusal=refusal)
                 elif event_type == "DELETED":
                     filename = _output_filename(cr)
+                    if refusal:
+                        continue  # #3206: no write (a delete too) this event
                     removed = remove_rendered(config_dir, filename,
                                               dry_run=dry_run)
                     if removed:
@@ -1357,9 +1443,10 @@ def _controller_main(args: argparse.Namespace, config_dir: Path) -> int:
                         namespace=args.namespace)
 
     # Default: watch mode
-    # Do initial sync first
-    rc = run_once(api, config_dir, dry_run=args.dry_run,
-                  namespace=args.namespace)
+    # Do initial sync first. A refused tree does not stop the controller
+    # (the next cycle judges again, #3206); a failed list does.
+    rc, _refused = _sync(api, config_dir, dry_run=args.dry_run,
+                         namespace=args.namespace)
     if rc != 0:
         return rc
 

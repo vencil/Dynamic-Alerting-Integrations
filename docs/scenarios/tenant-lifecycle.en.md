@@ -75,15 +75,18 @@ For tenants being set up from scratch (no legacy rule conversion needed).
 
 ```bash
 # Use interactive mode
-python3 scripts/tools/ops/scaffold_tenant.py
+da-tools scaffold
 
 # Or non-interactive with parameters
-python3 scripts/tools/ops/scaffold_tenant.py \
+da-tools scaffold \
   --tenant db-product-01 \
   --db postgresql \
   --namespaces ns-prod,ns-staging \
   --non-interactive \
   --output-dir scaffold_output
+# When --output-dir already exists, that tree must pass da-guard's whole-tree
+# check before anything is written: any path da-guard names ends the run with
+# exit 2, every such path named, nothing written
 # Copy only the tenant file: scaffold regenerates _defaults.yaml on every run,
 # so pointing it at conf.d would overwrite the platform's existing defaults
 cp scaffold_output/db-product-01.yaml conf.d/
@@ -131,7 +134,7 @@ Verification includes: threshold-exporter loaded, Prometheus metrics present, Ru
 
 ```bash
 # Comprehensive health check
-python3 scripts/tools/ops/diagnose.py db-product-01 \
+da-tools diagnose db-product-01 \
   --prometheus http://localhost:9090
 
 # Expected output:
@@ -149,7 +152,7 @@ python3 scripts/tools/ops/diagnose.py db-product-01 \
 # Monitor for 3 days to ensure no false positives or missed alerts
 
 # Daily check
-python3 scripts/tools/ops/diagnose.py db-product-01
+da-tools diagnose db-product-01
 
 # View live alerts
 curl -s http://prometheus:9090/api/v1/alerts | \
@@ -181,8 +184,8 @@ For tenants already running on other platforms needing migration to Dynamic Aler
 
 ```bash
 # Run every morning
-python3 scripts/tools/ops/diagnose.py db-product-01
-python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
+da-tools diagnose db-product-01
+da-tools check-alert MariaDBHighConnections db-product-01
 
 # Checklist
 □ operational_mode: normal / silent / maintenance
@@ -195,7 +198,7 @@ python3 scripts/tools/ops/check_alert.py MariaDBHighConnections db-product-01
 
 ```bash
 # Generate multi-tenant health report weekly
-python3 scripts/tools/ops/batch_diagnose.py \
+da-tools batch-diagnose \
   --output weekly-report.json
 
 # Report includes:
@@ -285,7 +288,7 @@ groups:
 EOF
 
 # 2. Validate custom rules
-python3 scripts/tools/ops/lint_custom_rules.py custom-rules.yaml
+da-tools lint custom-rules.yaml
 
 # 3. Deploy
 kubectl apply -f custom-rules.yaml

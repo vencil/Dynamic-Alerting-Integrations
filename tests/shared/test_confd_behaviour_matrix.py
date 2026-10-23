@@ -188,6 +188,46 @@ def _instance_mapping(cell: pathlib.Path) -> None:
         encoding="utf-8")
 
 
+def _alert_rules(cell: pathlib.Path) -> None:
+    """One plain threshold alert, outside the tree: the input the two
+    rule-reading writers turn into conf.d files."""
+    (cell / "rules.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: HighConnections\n"
+        "    expr: mysql_global_status_threads_connected > 100\n"
+        "    labels: {severity: warning}\n", encoding="utf-8")
+
+
+def _scrape_config(cell: pathlib.Path) -> None:
+    """A scrape config with one job: `onboard_platform`'s Phase 3 alone,
+    which writes relabel suggestions and no conf.d file at all."""
+    (cell / "scrape.yaml").write_text(
+        "scrape_configs:\n- job_name: mysql\n  static_configs:\n"
+        "  - targets: [\"db:9104\"]\n", encoding="utf-8")
+
+
+def _am_config(cell: pathlib.Path) -> None:
+    """An Alertmanager config with no tenant route: Phase 1 writes only its
+    routing summary (CSV), no tenant file."""
+    (cell / "am.yaml").write_text(
+        "route:\n  receiver: default\nreceivers:\n- name: default\n", encoding="utf-8")
+
+
+def _onboard_hints(cell: pathlib.Path) -> None:
+    """The hints `onboard_platform` leaves for `scaffold_tenant --from-onboard`:
+    one tenant and its DB type."""
+    (cell / "onboard-hints.json").write_text(
+        json.dumps({"tenants": ["newt"], "db_types": {"newt": ["mariadb"]}}),
+        encoding="utf-8")
+
+
+def _threshold_cr(cell: pathlib.Path) -> None:
+    """One ThresholdConfig CR for `da_assembler --render-cr`."""
+    (cell / "cr.yaml").write_text(
+        "apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
+        "metadata:\n  name: newt\n  namespace: ns\nspec:\n  tenants:\n"
+        "    newt: {}\n", encoding="utf-8")
+
+
 def _what_if(cell: pathlib.Path) -> None:
     (cell / "what-if.yaml").write_text("tenants:\n  a:\n    mysql_connections: \"90\"\n",
                                        encoding="utf-8")
@@ -261,6 +301,37 @@ TOOLS: dict[str, Tool] = {
                                "--dry-run")),
     "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}", "--ci")),
     "guard_dispatch": Tool((_PY, _T + "ops/guard_dispatch.py", "defaults-impact", "--config-dir", "{conf}")),
+    # The three writers below write conf.d files into an output directory;
+    # here that directory is the tree under test (an EXISTING conf.d), which
+    # the write must first pass the shared refusal over
+    # (`_lib_write_check.confirm_all`).
+    "scaffold_tenant": Tool((_PY, _T + "ops/scaffold_tenant.py", "--non-interactive",
+                             "--tenant", "newt", "--db", "mariadb", "-o", "{conf}")),
+    "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",
+                              "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
+    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml", "-o", "{conf}"),
+                         prep=_alert_rules),
+    # Every other write mode of those writers: each writes into the tree
+    # without a conf.d file to confirm, or a different one.
+    "migrate_rule --triage": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
+                                   "--triage", "-o", "{conf}"), prep=_alert_rules),
+    "onboard_platform --scrape-config": Tool((_PY, _T + "ops/onboard_platform.py",
+                                              "--scrape-config", "{cell}/scrape.yaml",
+                                              "-o", "{conf}"), prep=_scrape_config),
+    "onboard_platform --alertmanager-config": Tool((_PY, _T + "ops/onboard_platform.py",
+                                                    "--alertmanager-config", "{cell}/am.yaml",
+                                                    "-o", "{conf}"), prep=_am_config),
+    "scaffold_tenant --generate-profile": Tool((_PY, _T + "ops/scaffold_tenant.py",
+                                                "--generate-profile", "newp", "--db", "mariadb",
+                                                "-o", "{conf}")),
+    "scaffold_tenant --from-onboard": Tool((_PY, _T + "ops/scaffold_tenant.py", "--from-onboard",
+                                            "{cell}/onboard-hints.json", "-o", "{conf}"),
+                                           prep=_onboard_hints),
+    # The CRD controller's one-shot render (da-crdecode is in the box's bin/);
+    # the controller loop's fresh judgement is tests/ops/test_da_assembler.py's.
+    "da_assembler --render-cr": Tool((_PY, _T + "ops/da_assembler.py", "--render-cr",
+                                      "{cell}/cr.yaml", "--config-dir", "{conf}"),
+                                     prep=_threshold_cr),
     # The four below query a Prometheus as well; {prom} refuses at once, and
     # each reads the tree whatever the query answered. blind_spot_discovery
     # fails closed on a Prometheus that does not answer (#3133), so it gets
@@ -288,18 +359,8 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/cutover_tenant.py": "drives a cluster (kubectl); takes no conf.d operand",
     "tools/ops/byo_check.py": "queries a live Prometheus / Alertmanager; takes no conf.d operand",
     "tools/ops/baseline_discovery.py": "queries a live Prometheus and writes suggestions; reads no conf.d",
-    "tools/ops/da_assembler.py": "its --config-dir is an OUTPUT (a CRD controller writing conf.d files)",
     "tools/ops/generator_service.py": "tenant-api's long-running judge over a stdin protocol, "
                                       "not a CLI over a tree",
-    "tools/ops/migrate_rule.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
-    "tools/ops/onboard_platform.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
-    "tools/ops/scaffold_tenant.py": ("writes conf.d files under -o/--output-dir, which may be an "
-        "EXISTING conf.d it does not read first — not judged here yet; moves to the shared "
-        "refusal in β2 (#3206)"),
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     "tools/dx/generate_platform_data.py": "reads the repo's own conf.d at a fixed path; takes no operand",
@@ -378,8 +439,11 @@ def matrix_box():
 
 
 @pytest.fixture(scope="module")
-def box():
+def box(da_crdecode_binary):
     with matrix_box() as b:
+        crdecode = b[0] / "bin" / "da-crdecode"
+        shutil.copyfile(da_crdecode_binary, crdecode)
+        crdecode.chmod(0o755)
         yield b
 
 

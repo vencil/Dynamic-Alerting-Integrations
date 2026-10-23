@@ -2519,10 +2519,22 @@ class TestRunOnce:
         crs = [_make_cr(name="first"), _make_cr(name="second")]
         mock_api.list_cluster_custom_object.return_value = {"items": crs}
 
+        # ⚠️ Since #3206 a DIRECTORY at `first.yaml` (this test's old fixture)
+        # is a path Go names, so the shared refusal skips the cycle before
+        # any write; the unusable target is the write failing instead.
+        real_write = da_assembler.write_rendered
+
+        def failing_first(config_dir, filename, *args, **kwargs):
+            if filename == "first.yaml":
+                raise OutputWriteError(
+                    Path(config_dir) / filename, OSError(21, "Is a directory"),
+                    flag="--config-dir")
+            return real_write(config_dir, filename, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "first.yaml").mkdir()   # the wrapped idempotence read
             with mock.patch("da_assembler.reconcile_one",
-                            wraps=reconcile_one) as spy:
+                            wraps=reconcile_one) as spy, \
+                    mock.patch("da_assembler.write_rendered", failing_first):
                 rc = run_once(mock_api, Path(d), dry_run=True)
             assert rc == 0
             assert [c.args[0]["metadata"]["name"] for c in spy.call_args_list] \
@@ -2589,3 +2601,199 @@ class TestMain:
             ]):
                 rc = da_assembler.main()
             assert rc == EXIT_CALLER_ERROR
+
+
+class TestControllerSharedRefusal:
+    """#3206：controller 寫進的 conf.d 先過共用拒絕——每次 reconcile 都重新
+    判（不是整個行程只判一次）；被拒時 ERROR 逐條點名、這次不寫、行程不結束。"""
+
+    def test_each_reconcile_judges_the_tree_afresh(self, tmp_path, caplog):
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="ctl-one"), tmp_path, api=api)
+        assert (tmp_path / "ctl-one.yaml").is_file()  # served: written
+
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        api.reset_mock()
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            reconcile_one(_make_cr(name="ctl-two"), tmp_path, api=api)
+        assert not (tmp_path / "ctl-two.yaml").exists()
+        assert "broken.yaml" in caplog.text
+        phase = api.patch_namespaced_custom_object_status.call_args.kwargs[
+            "body"]["status"]["phase"]
+        assert phase == "Error"
+
+        (tmp_path / "broken.yaml").unlink()  # fixed: the next reconcile writes
+        reconcile_one(_make_cr(name="ctl-two"), tmp_path, api=api)
+        assert (tmp_path / "ctl-two.yaml").is_file()
+
+    def test_a_tree_judged_servable_once_is_judged_again(self, tmp_path):
+        """No process-lifetime memo: a servable verdict does not carry over."""
+        assert da_assembler.controller_refusal(tmp_path) == []
+        (tmp_path / "x.yaml").mkdir()
+        lines = da_assembler.controller_refusal(tmp_path)
+        assert any("x.yaml" in ln for ln in lines)
+
+    def test_a_missing_config_dir_is_a_fresh_tree(self, tmp_path):
+        assert da_assembler.controller_refusal(tmp_path / "absent") == []
+
+    def test_render_cr_into_a_refused_tree_exits_2_and_writes_nothing(self, tmp_path, capsys):
+        conf = tmp_path / "conf.d"
+        conf.mkdir()
+        (conf / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        cr = tmp_path / "cr.yaml"
+        cr.write_text("apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
+                      "metadata:\n  name: ctl-cli\n  namespace: ns\nspec:\n  tenants:\n"
+                      "    ctl-cli: {}\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            da_assembler.render_cr_file(cr, conf)
+        assert exc.value.code == 2
+        assert "broken.yaml" in capsys.readouterr().err
+        assert not (conf / "ctl-cli.yaml").exists()
+
+
+class TestControllerJudgesOncePerCycle:
+    """#3206：controller 每個 reconcile cycle 只判一次樹（一次 `run_once`、
+    一個 watch 事件各一次 tree mode），該 cycle 的每個 CR 共用；跨 cycle 不記憶。"""
+
+    @staticmethod
+    def _count_tree_runs(monkeypatch):
+        import _lib_parse_tree
+        real, calls = _lib_parse_tree.load, []
+
+        def counting(root, *args, **kwargs):
+            calls.append(str(root))
+            return real(root, *args, **kwargs)
+        monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        return calls
+
+    def test_run_once_judges_the_tree_once_for_all_its_crs(self, tmp_path, monkeypatch):
+        calls = self._count_tree_runs(monkeypatch)
+        api = mock.MagicMock()
+        api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name=f"cyc-{i}") for i in range(3)]}
+        assert da_assembler.run_once(api, tmp_path) == 0
+        assert calls == [str(tmp_path)]
+        assert all((tmp_path / f"cyc-{i}.yaml").is_file() for i in range(3))
+        # The next cycle judges again: no process-lifetime memo.
+        assert da_assembler.run_once(api, tmp_path) == 0
+        assert calls == [str(tmp_path)] * 2
+
+    def test_run_once_on_a_refused_tree_writes_no_cr(self, tmp_path, monkeypatch, caplog):
+        calls = self._count_tree_runs(monkeypatch)
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        api = mock.MagicMock()
+        api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name=f"cyc-{i}") for i in range(3)]}
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            # `--once` on a refused tree: the shared refusal's code, after
+            # the ERROR lines (F6).
+            assert da_assembler.run_once(api, tmp_path) == EXIT_CALLER_ERROR
+        assert calls == [str(tmp_path)]
+        assert not any((tmp_path / f"cyc-{i}.yaml").exists() for i in range(3))
+        assert caplog.text.count("broken.yaml") == 1  # named once per cycle
+        phases = [c.kwargs["body"]["status"]["phase"]
+                  for c in api.patch_namespaced_custom_object_status.call_args_list]
+        assert phases == ["Error"] * 3
+
+    def test_each_watch_event_judges_the_tree_once(self, tmp_path, monkeypatch):
+        calls = self._count_tree_runs(monkeypatch)
+        _watch_once(monkeypatch, [{"type": "ADDED", "object": _make_cr(name="ev-1")},
+                                  {"type": "MODIFIED", "object": _make_cr(name="ev-2")}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert calls == [str(tmp_path)] * 2
+        assert (tmp_path / "ev-1.yaml").is_file() and (tmp_path / "ev-2.yaml").is_file()
+
+
+def _watch_once(monkeypatch, events):
+    """`run_watch` over one stream of *events*; the loop stops after it."""
+    class _Watch:
+        def stream(self, *args, **kwargs):
+            yield from events
+            monkeypatch.setattr(da_assembler, "_shutdown", True)
+    monkeypatch.setattr(da_assembler, "_shutdown", False)
+    monkeypatch.setattr(da_assembler, "watch",
+                        mock.MagicMock(Watch=_Watch), raising=False)
+
+
+class TestWatchDeleteOnARefusedTree:
+    def test_a_delete_event_on_a_refused_tree_keeps_the_file(self, tmp_path, monkeypatch,
+                                                             caplog):
+        cr = _make_cr(name="gone")
+        reconcile_one(cr, tmp_path)
+        assert (tmp_path / "gone.yaml").is_file()
+        (tmp_path / "x.yaml").mkdir()  # a path Go names (validation exit 4)
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert (tmp_path / "gone.yaml").is_file(), "deleted from a refused tree"
+        assert "x.yaml" in caplog.text
+
+    def test_a_delete_event_on_a_served_tree_removes_the_file(self, tmp_path, monkeypatch):
+        cr = _make_cr(name="gone")
+        reconcile_one(cr, tmp_path)
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert not (tmp_path / "gone.yaml").exists()
+
+
+def _listing_api(crs):
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.return_value = {"items": list(crs)}
+    return api
+
+
+class TestControllerStartUp:
+    """#3206：初始週期遇到被拒的樹時 controller 不結束（下一個週期再判）；
+    list 失敗才結束。"""
+
+    @staticmethod
+    def _main(monkeypatch, tmp_path, api):
+        import argparse
+        monkeypatch.setattr(da_assembler, "HAS_K8S", True)
+        monkeypatch.setattr(da_assembler, "config", mock.MagicMock(), raising=False)
+        monkeypatch.setattr(da_assembler, "client",
+                            mock.MagicMock(CustomObjectsApi=lambda: api), raising=False)
+        args = argparse.Namespace(kubeconfig="", once=False, dry_run=False, namespace="")
+        return da_assembler._controller_main(args, tmp_path)
+
+    def test_a_refused_start_up_keeps_the_controller_running(self, tmp_path, monkeypatch):
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        watched = []
+        _watch_once(monkeypatch, [])
+        real_watch = da_assembler.run_watch
+        monkeypatch.setattr(da_assembler, "run_watch",
+                            lambda *a, **k: watched.append(1) or real_watch(*a, **k))
+        assert self._main(monkeypatch, tmp_path, _listing_api([_make_cr(name="su-r")])) == 0
+        assert watched == [1], "the watch did not start after a refused initial cycle"
+        assert not (tmp_path / "su-r.yaml").exists()
+
+    def test_a_failed_list_ends_the_controller(self, tmp_path, monkeypatch):
+        api = mock.MagicMock()
+        api.list_cluster_custom_object.side_effect = RuntimeError("apiserver down")
+        assert self._main(monkeypatch, tmp_path, api) == EXIT_CALLER_ERROR
+
+
+class TestDryRunControllerNeverDeletes:
+    def test_a_delete_event_under_dry_run_keeps_the_file(self, tmp_path, monkeypatch):
+        cr = _make_cr(name="dr-gone")
+        reconcile_one(cr, tmp_path)
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path, dry_run=True)
+        assert (tmp_path / "dr-gone.yaml").is_file()
+
+class TestControllerFailsClosed:
+    """#3206 F7：沒有可用的 da-guard 時 controller 拒絕（fail-closed），
+    不是照寫。"""
+
+    def test_no_da_guard_writes_nothing(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        conf = tmp_path / "conf.d"
+        conf.mkdir()
+        api = _listing_api([_make_cr(name="fc-1")])
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            assert da_assembler.run_once(api, conf) == EXIT_CALLER_ERROR
+        assert not (conf / "fc-1.yaml").exists()
+        assert "cannot judge the conf.d" in caplog.text
+        phase = api.patch_namespaced_custom_object_status.call_args.kwargs[
+            "body"]["status"]["phase"]
+        assert phase == "Error"
