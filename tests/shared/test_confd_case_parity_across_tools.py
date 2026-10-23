@@ -82,6 +82,7 @@ import time
 
 import pytest
 from _platform_fs import require_shebang_scripts, symlink_or_skip  # noqa: E402
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
 # ⛔ ONE implementation of "which flag is the conf.d flag" (#1761). The
 # argparse walk used to live here while `test_confd_enumeration_contract`
@@ -122,6 +123,11 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "diagnose.py": ["alpha", "--show-inheritance"],
     "describe_tenant.py": ["--all"],
 }
+
+# Tools that query Prometheus while they read the conf.d. #3133: one that
+# gets no answer fails closed (rc 2), so they get the suite's stub, which
+# answers empty and well-formed — the conf.d stays the only variable.
+UPSTREAM_TOOLS = {"blind_spot_discovery.py", "threshold_govern.py"}
 
 # Tools whose DEFAULT output path is anchored to the repo via `__file__`
 # rather than to the cwd, so a tmp cwd is not enough to contain the write.
@@ -337,6 +343,8 @@ def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
          sandbox: pathlib.Path) -> tuple[str, str, int] | None:
     args = [sys.executable, "-X", "utf8", str(tool), flag, str(config_dir)]
     args += EXTRA_ARGS.get(tool.name, [])
+    if tool.name in UPSTREAM_TOOLS:
+        args += ["--prometheus", _stub_upstream.url()]
     if tool.name in REPO_ANCHORED_OUTPUT:
         args += [REPO_ANCHORED_OUTPUT[tool.name], str(sandbox / "out.yaml")]
     sandbox.mkdir(parents=True, exist_ok=True)
@@ -656,11 +664,11 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # that row: rc 0, and the report shrinks to "No analyzable tenant metric
     # keys found." with the tenant files removed. It is measured now.
     #
-    # `blind_spot_discovery` warns that Prometheus is unreachable, carries on
-    # with zero targets and reads the conf.d through da-guard. What stopped it
-    # was the missing da-guard; the sweep supplies one now (`sweep_base`) and
-    # it is measured: rc 0, "1 DB type(s) covered" on both casings and "0 DB
-    # type(s) covered" with the tenants removed.
+    # `blind_spot_discovery` reads the conf.d through da-guard and the targets
+    # from Prometheus (`UPSTREAM_TOOLS`: the stub, zero targets). What stopped
+    # it was the missing da-guard; the sweep supplies one now (`sweep_base`)
+    # and it is measured: rc 0, "1 DB type(s) covered" on both casings and
+    # "0 DB type(s) covered" with the tenants removed.
     #
     # Requires arguments this file deliberately does not fabricate,
     # because inventing them would exercise a different code path than
@@ -1679,7 +1687,7 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
                            ("_defaults.yaml", "defaults:\n  cpu_usage: 80\n")):
             (confd / name).write_text(body, encoding="utf-8")
             others[name] = body
-        fired[arm] = (mod.trigger_reload(confd),
+        fired[arm] = (mod.trigger_reload(mod.reload_carriers(confd)),
                       "# soak-toggle" in carrier.read_text(encoding="utf-8"))
         untouched = {n: (confd / n).read_text(encoding="utf-8") == b
                      for n, b in others.items()}

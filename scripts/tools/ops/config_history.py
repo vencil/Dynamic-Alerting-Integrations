@@ -31,7 +31,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
@@ -61,58 +62,14 @@ def _scan_config_dir(config_dir):
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #1911: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_path, tool="config_history")
-    # #1603: `glob("*.yaml")` here meant a `db-b.yml` carrier the exporter is
-    # serving never entered a snapshot — so it could be added, edited or
-    # deleted between two `config-history` runs and the diff stayed empty.
-    # `has_yaml_extension` (`CONFIG_SUFFIXES`, the exporter's own set) decides
-    # the SPELLING and, being case-insensitive, the CASE. The listing is
-    # `iterdir()` on purpose: a `glob("*.y*")` pre-filter is case-SENSITIVE
-    # on POSIX, so `DB-C.YAML` would never reach the predicate — measured on
-    # byte-identical bodies: `alpha.yaml` / `alpha.yml` / `Alpha.YAML` all
-    # enter the snapshot, a tree with no tenant does not
-    # (tests/ops/test_config_history.py). `iterdir` is in
-    # `test_confd_enumeration_contract._FLAT_CALLS`, so this stays in the
-    # gate's flat class and the `warn_nested` above stays a subject of its
-    # assertions; `glob("*")` would NOT (the classifier reads the literal
-    # pattern and only treats `*.y…` as flat). Hidden entries are skipped by
-    # the shared `is_hidden_name`, the exporter's own rule.
-    #
-    # What was measured, and on what: the SELECTION EXPRESSION on its own
-    # (`glob(...)` plus the predicate), old form vs new, on the dev container
-    # (Linux / Python 3.13.13, the CI interpreter), over one directory holding
-    # db-a.yaml, db-b.yml, DB-C.YAML, _defaults.yaml, .hidden.yaml, x.yang,
-    # plain.y, notes.txt and a DIRECTORY named dirnamed.yaml. Delta: exactly
-    # `+db-b.yml`, nothing removed.
-    # ⛔ NOT this function end to end, and the distinction is load bearing:
-    # `read_text` on `dirnamed.yaml` raises `IsADirectoryError` — before this
-    # change AND after it — so on that fixture the function has no output to
-    # diff. The `is_file` axis (#1607 / #1469) is untouched here in the sense
-    # that both versions fail identically, not in the sense that both return.
-    # See the disclosure below.
-    # ⚠️ DISCLOSURE — this widening extends an EXISTING crash to a second
-    # spelling. Measured, same probe on `5a03cb8f` and here:
-    #
-    #   entry in the conf.d          before        after
-    #   `dirnamed.yaml/` (a dir)     RAISED        RAISED     <- unchanged
-    #   `dirnamed.yml/`  (a dir)     ok, ignored   RAISED     <- reach grew
-    #   `broken.yaml` (dead link)    RAISED        RAISED     <- unchanged
-    #   `broken.yml`  (dead link)    ok, ignored   RAISED     <- reach grew
-    #   `bad.yaml` (invalid UTF-8)   RAISED        RAISED     <- unchanged
-    #   `bad.yml`  (invalid UTF-8)   ok, ignored   RAISED     <- reach grew
-    #
-    # The CLASS is pre-existing and filed (#1469 for the directory-shaped
-    # entry, #1654 for the undecodable content); what grew is which spellings
-    # reach it, and that follows from the entry being a real carrier now.
-    # ⛔ Deliberately NOT "fixed" here by swallowing the error: #1469 says in
-    # so many words that turning this into a quiet pass is the wrong repair —
-    # the right one names the entry (`_lib_confd.unusable_config_paths`),
-    # which is a separate change with its own blast radius.
-    for f in sorted(config_path.iterdir()):
-        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
-            continue
+    # Flat by design (the snapshot keys files by name); `warn_nested` names
+    # what that leaves out. #3206: which files there are is da-guard's
+    # listing, the run's one index of the tree — a tree Go names paths on
+    # ends the run there, every such path named, exit 2.
+    reader = _lib_parse_cache.ConfdReader(config_path)
+    listing = reader.listing()
+    warn_nested(config_path, tool="config_history", listing=listing)
+    for f in [config_path / e.path for e in listing.config_files() if e.depth == 0]:
         content = f.read_text(encoding='utf-8')
         h = _sha256(content)
         files.append({
@@ -364,6 +321,7 @@ def cmd_diff(config_dir, id_a, id_b):
 
 
 @exit_on_output_write_error
+@_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

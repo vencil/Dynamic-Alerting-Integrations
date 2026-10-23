@@ -39,7 +39,8 @@ from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: 
 from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
+from _lib_confd import warn_nested  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -137,10 +138,8 @@ def _file_sha256(path: Path) -> str:
 
 
 def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
-    """Build a SHA-256 manifest for all YAML files in a directory.
-
-    Skips hidden (dot-prefixed) entries, as the exporter's walker does.
-    """
+    """Build a SHA-256 manifest for the top-level config files of a
+    directory, as da-guard lists them (the exporter's walk)."""
     p = Path(dir_path)
     manifest = FileManifest(
         label=label or p.name,
@@ -149,64 +148,13 @@ def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     if not p.is_dir():
         return manifest
 
-    warn_nested(p, tool="drift_detect")
-    # #1603: `glob("*.yaml")` here meant a `db-b.yml` carrier never entered
-    # either manifest, so two clusters that genuinely disagree about it
-    # compared equal — this tool's whole job is to answer "do these trees
-    # differ", and that carrier was outside the question.
-    # `has_yaml_extension` (`CONFIG_SUFFIXES`, the set `config_hierarchy.go`
-    # accepts) decides the SPELLING and, being case-insensitive, the CASE:
-    # the listing is `iterdir()` rather than a `glob("*.y*")` pre-filter,
-    # because `Path.glob` is case-SENSITIVE on POSIX and `DB-C.YAML` would
-    # never reach the predicate — measured on byte-identical bodies:
-    # `alpha.yaml` / `alpha.yml` / `Alpha.YAML` all enter the manifest,
-    # a tree with no tenant does not (tests/ops/test_drift_detect.py).
-    # `iterdir` is in `test_confd_enumeration_contract._FLAT_CALLS`, so this
-    # stays in the gate's flat class and the `warn_nested` above stays a
-    # subject of its assertions; `glob("*")` would NOT (the classifier reads
-    # the literal pattern and only treats `*.y…` as flat).
-    #
-    # What was measured: the SELECTION EXPRESSION alone, old vs new, on the CI
-    # interpreter — delta exactly `+db-b.yml`, nothing removed. ⛔ Not this
-    # function end to end: `_file_sha256` calls `read_bytes()`, which raises
-    # on a DIRECTORY named `x.yaml` (before this change and after it).
-    #
-    # ⚠️ DISCLOSURE — the widening extends an EXISTING crash to a second
-    # spelling. Measured on `5a03cb8f` vs here:
-    #
-    #   `dirnamed.yaml/` / `broken.yaml` (dead link)   RAISED  -> RAISED
-    #   `dirnamed.yml/`  / `broken.yml`  (dead link)   ok      -> RAISED
-    #   invalid UTF-8 content, either spelling         ok      -> ok
-    #     (this reader takes bytes, so #1654 does not reach it)
-    #
-    # Class is pre-existing and filed (#1469); what grew is which spellings
-    # reach it. ⛔ Not repaired by swallowing the error — #1469 rejects that
-    # shape; naming the entry is a separate change.
-    #
-    # ⚠️ This is a FLAT scan of a config dir, and on a hierarchical conf.d
-    # (ADR-016) it silently hashes only the top level: two trees differing
-    # ONLY below the root compare equal and this tool answers "no drift" —
-    # the silent-zero `_lib_confd` exists against, in the one tool whose
-    # entire job is to answer that question. `warn_nested` is the gate's own
-    # option (b): stay flat, say so. It does not change WHAT is hashed.
-    # ⚠️ Known cost, measured: `--dirs` is documented for arbitrary
-    # directories too (`--dirs dir-a,dir-b`), and on a tree that has nothing
-    # to do with a conf.d the shared wording still cites threshold-exporter
-    # and ADR-016/017. It reaches stderr only — `--json` and the exit code
-    # are unaffected (measured) — but on such a tree the sentence is generic
-    # boilerplate rather than a fact about that tree.
-    #
-    # Membership in `test_confd_enumeration_contract` used to hang on a
-    # substring net (`config_dir` / `conf-d` / `conf_d`) this module never
-    # matched — it names its knob `--dirs` / `dir_path`, scored 0 on all
-    # three at `5a03cb8f`, and was never a subject. Since #1761 the gate
-    # derives its population from three independent keys (the `_lib_confd`
-    # import binding above is one of them) and pins every flat enumerator
-    # it cannot see, so this module is a subject by construction, not by
-    # the accident of a comment naming another tool's function.
-    for f in sorted(p.iterdir()):
-        if is_hidden_name(f.name) or not has_yaml_extension(f.name):
-            continue
+    # Flat: top-level files only; `warn_nested` names the files below the
+    # root this manifest leaves out. #3206: which files there are is
+    # da-guard's listing, one reader per directory — a tree Go names paths
+    # on ends the run there, every such path named, exit 2.
+    listing = _lib_parse_cache.reader_for(p).listing()
+    warn_nested(p, tool="drift_detect", listing=listing)
+    for f in [p / e.path for e in listing.config_files() if e.depth == 0]:
         manifest.files[f.name] = _file_sha256(f)
 
     return manifest
@@ -599,6 +547,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@_lib_parse_cache.session()  # one reader per directory for the run
+@_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
 def main():
     """CLI entry point for drift detection."""
     parser = build_parser()

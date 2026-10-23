@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
+from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
@@ -199,20 +200,19 @@ class OperatorChecker:
         if not self.args.prometheus:
             return CheckResult(i18n("check_targets", self.lang), "skip", i18n("targets_skip", self.lang))
 
-        data, err = http_get_json(f"{self.args.prometheus}/api/v1/targets?state=active", timeout=10)
-        if err:
-            return CheckResult(i18n("check_targets", self.lang), "warn", f"{i18n('error_api', self.lang)}: {err[:60]}")
-
+        # #3133 (owner 2026-10-23): --prometheus is given, so targets that
+        # cannot be read are a caller error (exit 2), not a warn; the lib
+        # checks the answer's shape (a body that is not a target list used to
+        # read as "no targets found").
         try:
-            targets = data.get("data", {}).get("activeTargets", [])
-            exporter_targets = [t for t in targets if any(
-                kw in t.get("labels", {}).get("job", "").lower() for kw in ["threshold", "exporter"]
-            )]
-        except (KeyError, TypeError, AttributeError):
-            # AttributeError: data is None or a string (e.g. when
-            # http_get_json returns a non-dict body). Surfaced during
-            # the audit-list coverage sweep — see PR #291 description.
-            exporter_targets = []
+            targets = prometheus_targets(self.args.prometheus, timeout=10)
+        except QueryError as exc:
+            return CheckResult(i18n("check_targets", self.lang), "fail",
+                               f"{i18n('error_api', self.lang)}: {str(exc)[:60]}",
+                               caller_error=True)
+        exporter_targets = [t for t in targets if any(
+            kw in t.get("labels", {}).get("job", "").lower() for kw in ["threshold", "exporter"]
+        )]
 
         if not exporter_targets:
             return CheckResult(i18n("check_targets", self.lang), "warn", "no targets found")

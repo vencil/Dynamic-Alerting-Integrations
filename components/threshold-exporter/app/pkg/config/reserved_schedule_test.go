@@ -314,8 +314,9 @@ func rsTree(t *testing.T, files map[string]string) string {
 }
 
 // The subtree defaults overlay hands a reserved key down as its default
-// alone; what it applies does not change — `_silent_mode` /
-// `_severity_dedup` are applied, a windowed `_state_` key is still refused.
+// alone, and judges it by that default alone (#3295): `_silent_mode` /
+// `_severity_dedup` / a windowed `_state_` key whose default is `disable`
+// are all applied, as the scalar `disable` would be.
 func TestLoadDir_SubtreeScheduledReservedKeepsDefaultOnly(t *testing.T) {
 	t.Parallel()
 	dir := rsTree(t, map[string]string{
@@ -336,8 +337,11 @@ func TestLoadDir_SubtreeScheduledReservedKeepsDefaultOnly(t *testing.T) {
 		!reflect.DeepEqual(got["_severity_dedup"], ScheduledValue{Default: "disable"}) {
 		t.Errorf("t1 = %+v, want _silent_mode / _severity_dedup as their defaults alone", got)
 	}
-	if _, in := got["_state_crashloop"]; in {
-		t.Errorf("t1 = %+v: a windowed _state_ key is refused by the overlay (#1569), as before", got)
+	if !reflect.DeepEqual(got["_state_crashloop"], ScheduledValue{Default: "disable"}) {
+		t.Errorf("t1 = %+v: a windowed _state_ key is applied as its default alone (#3295)", got)
+	}
+	if fs := cfg.resolveStateFiltersAt(rsInWindow, nil); len(fs) != 0 {
+		t.Errorf("state filters = %+v, want crashloop off for t1 (its default, disable)", fs)
 	}
 	if cuts := cfg.ScheduleCuts(); !reflect.DeepEqual(cuts, []int{0}) {
 		t.Errorf("ScheduleCuts = %v, want [0]", cuts)

@@ -16,10 +16,10 @@ parent: architecture-and-design.md
 >
 > **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。recipe 是租戶在 portal 自助定義的告警規則；本文設計的是「填完當場確認它會不會觸發」的預覽。
 >
-> 本文是**設計就緒**產出（設計與契約定案、尚未實作），聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
+> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart，da-portal 以 `portal.recipePreviewUrl` 接上。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
 > - **已定案**：後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
 > - **首版範圍**：threshold 類 recipe（`>` `>=` `<` `<=` `==`）+ absence（缺口偵測——合成序列「不發該指標」即缺口）。
-> - **延後**：正式環境部署、其餘時間相依型 recipe（rate / ratio / forecast / p99）、歷史回測（各項觸發條件見第 9 節）。
+> - **延後**：正式環境部署、其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。
 
 ## 1. 要解決的問題
 
@@ -47,7 +47,7 @@ parent: architecture-and-design.md
 
 ## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。（定案的是「形態與契約」，服務本身在實作階段才寫。）
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。
 
 為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
@@ -120,7 +120,7 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 - **threshold 類**：**平的常數序列**（值固定不動）。這正是 threshold 類預覽便宜的原因：一個固定值就夠，不需要斜率或趨勢。
 - **absence**：缺口型——合成序列**不發該指標**即「缺口」（規則 `count_over_time(metric[window])` 抓不到樣本 → `unless` 觸發），故與 threshold 同樣可便宜預覽 → **已支援**（eval 跨過 window + `for:`）。
-- **rate / ratio / forecast / p99**：需要型別專屬的形狀（rate 要斜率、ratio 要分子分母、forecast 要趨勢）→ 延後。
+- **rate / ratio / forecast / p99_latency / slo_burn_rate**：需要型別專屬的形狀（rate 要斜率、ratio 要分子分母、forecast 要趨勢）→ 延後。
 
 > 預覽回答的是「在這個值／場景下會不會觸發」，不是重新驗證規則本身的正確性（後者由既有 CI 測試保證）。所以單一測試值對 threshold 類已足夠；多副本、趨勢等多序列場景留待未來。
 
@@ -161,27 +161,27 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 ## 7. 誠實標示尚未支援的型別
 
-首版支援 threshold 與 absence 類。其餘型別（rate / ratio / forecast / p99）**不可靜默**——portal 對未支援型別要明確顯示「此型別的預覽即將推出」，而不是裝作能算或留白。
+首版支援 threshold 與 absence 類。其餘型別**不可靜默**——portal 對未支援型別要明確顯示「此型別的預覽即將推出」，而不是裝作能算或留白。
 
 理由：若使用者**存得進**一條 ratio recipe 卻**看不到**預覽，他會以為「存了就對」——這是錯誤的信心。所以「閉環」是**逐型別宣告**的，不會因為支援了 threshold 就宣稱全部完成。
 
-機制：服務硬編支援清單（目前 `{threshold, absence}`）；不在清單內就直接回 `supported: false` + 說明、**不嘗試編譯**——所以未支援型別永遠不會被誤標成 `firing` 或 `error`。
+機制：服務硬編支援清單（`scripts/tools/dx/_recipe_preview.py` 的 `SUPPORTED_RECIPES_MVP`）；不在清單內就直接回 `supported: false` + 說明、**不嘗試編譯**——所以未支援型別永遠不會被誤標成 `firing` 或 `error`。
 
 ## 8. 分階段交付
 
 | 階段 | 範圍 | 狀態 |
 |---|---|---|
-| **設計（本文）** | 後端形態 + 契約定案 + 護欄 + 合成輸入設計；扁平工具補 recipe 提示 | 本 PR |
-| **首版實作** | threshold 類：獨立 Python 服務（try-local）+ 合成序列產生器 + portal 表單渲染 + 逐型別放行 | 下一步 |
-| **absence 型** | 缺口型：合成序列不發指標即缺口（與 threshold 同樣便宜） | ✅ 本次（PR-B） |
-| **其餘時間相依型** | rate／ratio／forecast／p99：型別專屬序列產生器 + 場景模型 + 逐型別開放 | 延後（見第 9 節） |
+| **設計（本文）** | 後端形態 + 契約定案 + 護欄 + 合成輸入設計；扁平工具補 recipe 提示 | ✅ |
+| **首版實作** | threshold 類：獨立 Python 服務（try-local）+ 合成序列產生器 + portal 表單渲染 + 逐型別放行 | ✅ |
+| **absence 型** | 缺口型：合成序列不發指標即缺口（與 threshold 同樣便宜） | ✅ |
+| **其餘型別** | `SUPPORTED_RECIPES_MVP` 以外的 recipe：型別專屬序列產生器 + 場景模型 + 逐型別開放 | 延後（見第 9 節） |
 
 ## 9. 延後項目（每項都有觸發條件，不是模糊的 TODO）
 
 | 延後項 | 觸發條件 |
 |---|---|
 | 正式環境部署預覽服務 | 真正的正式客戶在 portal 寫 recipe 且需要預覽（本機試用不夠時）。屆時重評部署形態 |
-| 其餘時間相依型（rate／ratio／forecast／p99） | 領域專家／租戶實際需要這些型別的預覽 |
+| 其餘 recipe 型別 | 領域專家／租戶實際需要這些型別的預覽 |
 | 歷史回測（「過去 24h 我的真實資料觸發過幾次」） | recipe 的 recording rule 落地、`for:` 語意就緒 |
 | rule-pack 影響矩陣 CI（改 rule-pack 前評估對全租戶的影響） | rule-pack 變更造成預期外的全租戶告警漂移，或需要合併前的影響評估。注意：預覽用合成輸入，**不需要**這條的快照資料 |
 | 「誰會被通知」歸因 | 有消費者真的需要（屬通知路由元件） |

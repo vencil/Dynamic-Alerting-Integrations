@@ -314,8 +314,9 @@ def test_warn_nested_prints_once_per_directory(capsys, hierarchical):
     function is the gate-never-fires shape this module exists against.
     """
     reset_warned_for_test()
-    assert warn_nested(hierarchical) is True
-    assert warn_nested(hierarchical) is False, "second call must stay quiet"
+    listing = config_listing(hierarchical)
+    assert warn_nested(hierarchical, listing=listing) is True
+    assert warn_nested(hierarchical, listing=listing) is False, "second call must stay quiet"
     err = capsys.readouterr().err
     assert err.count("live in subdirectories") == 1
 
@@ -323,7 +324,7 @@ def test_warn_nested_prints_once_per_directory(capsys, hierarchical):
 def test_warn_nested_writes_only_to_stderr(capsys, hierarchical):
     """stdout must stay parseable — several tools emit JSON on it."""
     reset_warned_for_test()
-    warn_nested(hierarchical)
+    warn_nested(hierarchical, listing=config_listing(hierarchical))
     cap = capsys.readouterr()
     assert cap.out == ""
     assert "WARN:" in cap.err
@@ -331,7 +332,23 @@ def test_warn_nested_writes_only_to_stderr(capsys, hierarchical):
 
 def test_warn_nested_is_silent_on_a_flat_dir(capsys, flat):
     reset_warned_for_test()
-    assert warn_nested(flat) is False
+    assert warn_nested(flat, listing=config_listing(flat)) is False
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_nested_requires_the_callers_snapshot(hierarchical):
+    """No second walk (#3206): the nested files are the caller's listing,
+    so a call with neither `listing=` nor `reader=` is refused."""
+    with pytest.raises(TypeError, match="listing= or reader="):
+        warn_nested(hierarchical)
+
+
+def test_warn_nested_takes_the_snapshot_of_a_missing_dir(capsys, tmp_path):
+    """`config_listing` answers None for a path that is not a directory; that
+    is the caller's snapshot ("nothing nested"), not a missing one."""
+    reset_warned_for_test()
+    missing = tmp_path / "conf.d"
+    assert warn_nested(missing, listing=config_listing(missing)) is False
     assert capsys.readouterr().err == ""
 
 
@@ -343,9 +360,10 @@ def test_reset_is_idempotent_not_save_restore(capsys, hierarchical):
     """
     reset_warned_for_test()
     reset_warned_for_test()  # calling twice must be harmless
-    assert warn_nested(hierarchical) is True
+    listing = config_listing(hierarchical)
+    assert warn_nested(hierarchical, listing=listing) is True
     reset_warned_for_test()
-    assert warn_nested(hierarchical) is True, "after reset it may warn again"
+    assert warn_nested(hierarchical, listing=listing) is True, "after reset it may warn again"
 
 
 # ── #1469: the half that keeps the signal ──────────────────────────────

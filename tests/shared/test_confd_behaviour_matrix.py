@@ -97,6 +97,7 @@ for _p in (HERE, TESTS):
         sys.path.insert(0, str(_p))
 
 from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
 CATALOG_PATH = HERE / "confd_fixture_catalog.json"
 CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
@@ -150,8 +151,8 @@ class Tool:
     """One row of the table. *argv* is formatted with {py} (the
     interpreter), {scripts} (the sandbox's scripts/), {box}, {cell} (this
     cell's directory, the tree's parent), {conf} (the tree), {out} (a
-    directory the tool may write) and {prom} (a Prometheus URL that refuses
-    at once). *prep* readies operands before the oracle runs. *script* is
+    directory the tool may write), {prom} (a Prometheus URL that refuses
+    at once) and {prom_up} (one that answers, empty: `_stub_upstream`). *prep* readies operands before the oracle runs. *script* is
     the file under `scripts/` the row runs, when argv does not name it."""
     argv: tuple[str, ...]
     prep: Callable[[pathlib.Path], None] | None = None
@@ -269,12 +270,15 @@ TOOLS: dict[str, Tool] = {
                                           "--config-dir", "{conf}", "--validate")),
     "config_history": Tool((_PY, _T + "ops/config_history.py", "--config-dir", "{conf}", "snapshot")),
     "drift_detect": Tool((_PY, _T + "ops/drift_detect.py", "--dirs", "{conf},{conf}")),
-    # The soak's only conf.d selection runs inside a loop of whole minutes
-    # against a live exporter; the cell calls that selection itself.
+    # The soak runs whole minutes against a live exporter; the cell takes
+    # its one index of the tree (behind `main`'s own no-da-guard exit) and
+    # perturbs a file from it, as a pass does.
     "run_chaos_soak": Tool((_PY, "-c",
                             ("import sys; sys.path[:0] = [sys.argv[1], sys.argv[1] + '/dx'];"
                              " from pathlib import Path; import run_chaos_soak as m;"
-                             " sys.exit(0 if m.trigger_reload(Path(sys.argv[2])) else 1)"),
+                             " import _lib_parse_cache as c;"
+                             " carriers = c.exit_on_parse_tree_error(m.reload_carriers)(Path(sys.argv[2]));"
+                             " sys.exit(0 if m.trigger_reload(carriers) else 1)"),
                             "{scripts}/tools", "{conf}"), script="tools/dx/run_chaos_soak.py"),
     "describe_tenant": Tool((_PY, _T + "dx/describe_tenant.py", "--conf-d", "{conf}", "--all")),
     "describe_tenant --replaces": Tool((_PY, _T + "dx/describe_tenant.py", "a", "--conf-d", "{conf}",
@@ -329,13 +333,16 @@ TOOLS: dict[str, Tool] = {
                                       "{cell}/cr.yaml", "--config-dir", "{conf}"),
                                      prep=_threshold_cr),
     # The four below query a Prometheus as well; {prom} refuses at once, and
-    # each reads the tree whatever the query answered.
-    "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom}",
+    # each reads the tree whatever the query answered. blind_spot_discovery
+    # fails closed on a Prometheus that does not answer (#3133), so it gets
+    # {prom_up}, one that answers with no target.
+    "blind_spot_discovery": Tool((_PY, _T + "ops/blind_spot_discovery.py", "--prometheus", "{prom_up}",
                                   "--config-dir", "{conf}")),
     "threshold_recommend": Tool((_PY, _T + "ops/threshold_recommend.py", "--config-dir", "{conf}",
                                  "--prometheus", "{prom}", "--dry-run")),
+    # threshold_govern too: a threshold not measured is exit 2 (#3133).
     "threshold_govern": Tool((_PY, _T + "ops/threshold_govern.py", "--config-dir", "{conf}",
-                              "--prometheus", "{prom}")),
+                              "--prometheus", "{prom_up}")),
     "backtest_threshold": Tool((_PY, _T + "ops/backtest_threshold.py", "--config-dir", "{conf}",
                                 "--baseline", "{conf}", "--prometheus", "{prom}",
                                 "--skip-if-unavailable")),
@@ -362,7 +369,6 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/lint/check_cli_contract.py": "checks documented commands against argparse; reads no conf.d",
     "tools/lint/check_cli_default_drift.py": "checks documented defaults against argparse; reads no conf.d",
     "tools/lint/check_doc_datools_cmds.py": "checks documented commands; reads no conf.d",
-    "tools/lint/check_frontmatter_versions.py": "scans docs front matter; reads no conf.d",
     "tools/lint/check_md_yaml_drift.py": "checks YAML examples in docs against the schema; "
                                          "reads no conf.d tree",
     "tools/lint/check_structure.py": "checks the repo layout; reads no conf.d",
@@ -380,33 +386,13 @@ NOT_IN_MATRIX: dict[str, str] = {
 #: Table rows outside the population's root (`scripts/tools`).
 OUTSIDE_POPULATION = {"ops/configmap_assemble.py"}
 
-_B2 = "β2: migrates to da-guard"
-
-
 def _cells(tool: str, reason: str, *rows: str) -> dict[tuple[str, str], str]:
     return {(tool, r): reason for r in rows}
 
 
 #: Cells that break the invariant today, measured against this contract.
 #: Each is strict: a fixed cell XPASSes and goes red until it is deleted.
-XFAIL: dict[tuple[str, str], str] = {
-    **_cells("config_history", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("drift_detect", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("run_chaos_soak", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    # A file the exporter cannot decode (validation's parse_failed).
-    **{(t, r): _B2
-       for r in ("yaml_syntax_error", "multi_document_file")
-       for t in ("run_chaos_soak", "drift_detect", "config_history")},
-}
+XFAIL: dict[tuple[str, str], str] = {}
 
 # ── running one cell ────────────────────────────────────────────────────
 
@@ -535,7 +521,8 @@ def run_cell(box: pathlib.Path, run, tool: str, row: str) -> Cell:
             if oracle.returncode in (0, 1, 3, 4):
                 named = go_named(json.loads(oracle.stdout))
         fmt = {"py": sys.executable, "scripts": str(box / "scripts"), "box": str(box),
-               "cell": str(cell), "conf": str(conf), "out": str(out), "prom": _PROM}
+               "cell": str(cell), "conf": str(conf), "out": str(out), "prom": _PROM,
+               "prom_up": _stub_upstream.url()}
         argv = [a.format(**fmt) for a in spec.argv]
         env_path = f"PATH={box / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
         r = run([*_TIMEOUT, shutil.which("env") or "/usr/bin/env", env_path, *argv])

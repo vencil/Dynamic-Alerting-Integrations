@@ -286,8 +286,10 @@ def _denied_function_rules_dir(tmp: Path) -> str:
 def _drifting_dir_pair(tmp: Path) -> tuple[str, str]:
     """Two conf.d dirs whose tenant file differs => unexpected drift."""
     a, b = tmp / "cluster-a", tmp / "cluster-b"
-    _write(a / "_defaults.yaml", "defaults:\n  max_connections: '100'\n")
-    _write(b / "_defaults.yaml", "defaults:\n  max_connections: '100'\n")
+    # A number: the exporter drops a `_defaults.yaml` whose `defaults:`
+    # carries a string (#1414), and drift_detect refuses such a tree (#3206).
+    _write(a / "_defaults.yaml", "defaults:\n  max_connections: 100\n")
+    _write(b / "_defaults.yaml", "defaults:\n  max_connections: 100\n")
     _write(a / "tenant-one.yaml", "tenants:\n  tenant-one:\n    max_connections: '120'\n")
     _write(b / "tenant-one.yaml", "tenants:\n  tenant-one:\n    max_connections: '80'\n")
     return str(a), str(b)

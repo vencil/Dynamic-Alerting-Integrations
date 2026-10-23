@@ -443,7 +443,7 @@ tenants:
 - **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
-- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
+- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫這種形式，等同在同一層只寫它的 `default`（[#3295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3295)）：exporter 先剝掉時段與 `expires:`，再用純量的同一套規則判斷能不能往下傳給租戶——`{default: disable, overrides: …}` 照 `disable` 套用，`{default: warning, overrides: [{value: 90}]}` 照 `warning` 不套用，`default` 為 null 時等同這一層沒寫這個鍵（與純量 null 相同），時段裡的值不影響判斷。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
 
 ### 2.7 三態運營模式 (Operational Modes)
 
@@ -878,7 +878,7 @@ tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，�
 
 **Portal 優雅降級：**
 
-da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動 fallback 到靜態 JSON 唯讀模式。降級對使用者透明，無需手動切換。
+da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料，不需手動切換。⚠️ 這兩種都不是即時資料，頁面也不標示目前用的是哪一種；`platform-data.json` 的租戶欄位不完整時，清單裡還會混入示範租戶（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
 
 > 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.md)。
 
@@ -886,7 +886,7 @@ da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 A
 
 平台與租戶可用平台 authored 的**參數化 recipe**自訂告警，**永不寫 PromQL**（守住宣告式地基）。在 `_custom_alerts` 區塊填表即可，可以寫在三處：租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、profile。exporter 為每個租戶依這個順序取第一處，**不合併**；一組租戶共用的告警寫在 profile、讓它們綁定。`_defaults.yaml`（任何一層的頂層或 `defaults:`）裡的 `_custom_alerts` 不會送出，不做子樹繼承。編譯器編的就是 exporter 的這份讀法（`da-guard served-values`），所以 exporter 送出的 recipe 都有規則，不論寫在三處的哪一處（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）——規則與範例見 [ADR-024 §3「宣告位置」](../adr/024-version-aware-threshold-via-dimensional-label.md)。
 
-五個核心 recipe：`threshold`（gauge 越界）/ `rate`（counter 增率）/ `ratio`（兩 counter 比值，除零安全）/ `absence`（指標缺席，自我圈定）/ `p99_latency`（histogram 分位數）。label 過濾用安全的 `selectors`（`=`）/ `selectors_re`（`=~`）map，由編譯器組裝（key 過濾 + value 跳脫），杜絕 PromQL 注入。
+有哪些 recipe、各自的用途與參數，見 [recipe 庫 README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/README.md)。label 過濾用安全的 `selectors`（`=`）/ `selectors_re`（`=~`）map，由編譯器組裝（key 過濾 + value 跳脫），杜絕 PromQL 注入。
 
 **向量化編譯（守 O(M)）**：編譯器把所有宣告依 shape signature `(recipe, metric, op, window, quantile, denominator, selectors)` 分組，**每個 shape 產出一條** `app_metric > on(tenant) group_left(...) user_threshold{...}` 規則——規則數 = shape 數，**非**租戶數（同 [benchmarks.md §2](../benchmarks.md) 的 rule-pack O(M) 保證）。alertname 是靜態 shape slug、跨租戶共用一條規則。severity 由租戶決定，每個 shape 只生宣告過的 severity 分支。`mode`（page/silent）是 per-tenant 路由類別、**不入 shape signature**（不分叉規則、守 O(M)），改搭資料平面經 `group_left(name, mode)` 帶成 alert label——同 shape 不同 mode 的兩租戶共用一條規則仍能各自路由（silent→null / page→pager）。version graceful-join 全程沿用既有 version-aware 機制（label 缺時落 `default`）。
 

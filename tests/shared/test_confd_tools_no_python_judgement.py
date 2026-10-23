@@ -131,18 +131,12 @@ ROUTE_GENERATOR = ("route generator: `_` / carrier test of a path the reader lis
                    "class answers the same — threading Entry through its helpers is PR-β2")
 CONFIGMAP = ("ConfigMaps (their keys, or dump files of them), not a conf.d walk; names mode "
              "(classify_names) answers a name — PR-β2")
-OWN_RULE = ("the conf.d predicate used on a path that is no conf.d (docs); takes a rule "
-            "of its own before 9b-3 deletes it — PR-β2")
 AUDIT = ("migration_audit's \"today\" side IS the old Python selection, by design; it "
          "retires with the tool (ADR-036 §7)")
-REASONS = frozenset({PR_BETA2, ROUTE_GENERATOR, CONFIGMAP, OWN_RULE, AUDIT})
+REASONS = frozenset({PR_BETA2, ROUTE_GENERATOR, CONFIGMAP, AUDIT})
 
 ALLOWED = {
-    "tools/dx/run_chaos_soak.py:trigger_reload:has_yaml_extension": PR_BETA2,
-    "tools/dx/run_chaos_soak.py:trigger_reload:is_hidden_name": PR_BETA2,
-    "tools/dx/run_chaos_soak.py:trigger_reload:is_reserved_name": PR_BETA2,
     "tools/dx/generate_tenant_metadata.py:_load_custom_groups:legacy_state_files": PR_BETA2,
-    "tools/lint/check_frontmatter_versions.py:scan_docs:is_hidden_name": OWN_RULE,
     "tools/ops/_grar_parse.py:_apply_tenant_entries:is_reserved_name": ROUTE_GENERATOR,
     "tools/ops/_grar_parse.py:_parse_config_files:is_defaults_name": ROUTE_GENERATOR,
     "tools/ops/_grar_parse.py:_parse_config_files:is_reserved_name": ROUTE_GENERATOR,
@@ -155,16 +149,11 @@ ALLOWED = {
     "tools/ops/assemble_config_dir.py:list_visible_config_entries:is_hidden_name": PR_BETA2,
     "tools/ops/assemble_config_dir.py:main:is_defaults_name": PR_BETA2,
     "tools/ops/assemble_config_dir.py:main:select_defaults_carrier": PR_BETA2,
-    "tools/ops/config_history.py:_scan_config_dir:has_yaml_extension": PR_BETA2,
-    "tools/ops/config_history.py:_scan_config_dir:is_hidden_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:_deprecate:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:_nested_ignored:is_defaults_name": PR_BETA2,
     "tools/ops/deprecate_rule.py:section_owner:is_defaults_name": PR_BETA2,
-    "tools/ops/drift_detect.py:compute_dir_manifest:has_yaml_extension": PR_BETA2,
-    "tools/ops/drift_detect.py:compute_dir_manifest:is_hidden_name": PR_BETA2,
     "tools/ops/init_project.py:_ConfdTree.root_defaults:is_defaults_name": PR_BETA2,
     "tools/ops/init_project.py:_kustomize_carrier_files:is_defaults_name": PR_BETA2,
-    "tools/ops/migrate_to_operator.py:parse_configmap_rules:has_yaml_extension": CONFIGMAP,
     "tools/ops/migration_audit.py:read_tree_today:is_defaults_name": AUDIT,
     "tools/ops/migration_audit.py:read_tree_today:select_defaults_carrier": AUDIT,
     "tools/ops/offboard_tenant.py:_legacy_refs:LEGACY_STATE_FILES": PR_BETA2,
@@ -215,7 +204,8 @@ def test_the_adr_names_every_module_still_on_the_name_rules(adr) -> None:
     see, which hold no entry here.)"""
     text = (REPO / "docs" / "adr" / adr).read_text(encoding="utf-8")
     line = next(ln for ln in text.splitlines()
-                if "test_confd_tools_no_python_judgement.py" in ln and "`config_history`" in ln)
+                if "test_confd_tools_no_python_judgement.py" in ln
+                and "test_confd_behaviour_matrix.py" in ln)
     want = {pathlib.PurePosixPath(k.split(":")[0]).stem for k in ALLOWED}
     named = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
     missing = sorted(want - named)

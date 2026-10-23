@@ -481,3 +481,57 @@ class TestCLI:
         ac.main()
         out = capsys.readouterr().out
         assert "# Alert Correlation Report" in out
+
+
+# ── #3133: the loader reads through the lib ──────────────────────────────
+def _route(am, prom):
+    """http_get_json fake: Alertmanager's /api/v2/alerts gets *am*,
+    Prometheus's /api/v1/alerts gets *prom* (each an (data, err) pair)."""
+    def get(url, **_kw):
+        return am if "/api/v2/alerts" in url else prom
+    return get
+
+
+_PROM_OK = ({"status": "success", "data": {"alerts": [
+    {"labels": {"alertname": "A", "tenant": "t"}, "startsAt": "2026-10-23T00:00:00Z"}]}}, None)
+
+
+class TestLoaderReadsThroughTheLib:
+    def test_alertmanager_answers(self, monkeypatch, capsys):
+        import _lib_prometheus as lp
+        monkeypatch.setattr(lp, "http_get_json", _route(([{"labels": {"alertname": "B"}}], None),
+                                                         (None, "unused")))
+        alerts = ac.load_alerts_from_alertmanager("http://prom:9090")
+        assert [a.alertname for a in alerts] == ["B"]
+        assert "NOTICE" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize("am", [(None, "refused"), ({"alerts": []}, None)],
+                             ids=["unreachable", "not-a-list"])
+    def test_a_derived_alertmanager_that_does_not_answer_falls_back_with_a_notice(
+            self, monkeypatch, capsys, am):
+        """Optional source (owner 2026-10-23): its URL is derived, not given."""
+        import _lib_prometheus as lp
+        monkeypatch.setattr(lp, "http_get_json", _route(am, _PROM_OK))
+        alerts = ac.load_alerts_from_alertmanager("http://prom:9090")
+        assert [a.alertname for a in alerts] == ["A"]
+        err = capsys.readouterr().err
+        assert "NOTICE: Alertmanager at http://prom:9093 (derived from --prometheus)" in err
+
+    @pytest.mark.parametrize("prom", [
+        (None, "refused"),
+        ({"status": "error", "error": "bad"}, None),
+        ({"status": "success", "data": {}}, None),
+    ], ids=["unreachable", "error-status", "no-alerts-key"])
+    def test_prometheus_not_answering_raises(self, monkeypatch, prom):
+        """It used to WARN and return [] — an empty analysis at rc 0."""
+        import _lib_prometheus as lp
+        monkeypatch.setattr(lp, "http_get_json", _route((None, "refused"), prom))
+        with pytest.raises(lp.QueryError):
+            ac.load_alerts_from_alertmanager("http://prom:9090")
+
+    def test_prometheus_not_answering_is_rc2(self, monkeypatch):
+        import _lib_prometheus as lp
+        monkeypatch.setattr(lp, "http_get_json", _route((None, "refused"), (None, "refused")))
+        monkeypatch.setattr(sys, "argv", ["alert_correlate", "--prometheus", "http://prom:9090"])
+        with pytest.raises(lp.QueryError):
+            ac.main()  # uncaught here; run() turns it into rc 2 (test_query_error pins that)

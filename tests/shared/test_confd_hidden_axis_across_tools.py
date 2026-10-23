@@ -357,7 +357,6 @@ NOT_A_CELL: dict[str, str] = {
     "lint/check_cli_contract.py": "walks docs/, not a conf.d",
     "lint/check_cli_default_drift.py": "walks scripts/, not a conf.d",
     "lint/check_doc_datools_cmds.py": "walks docs/, not a conf.d",
-    "lint/check_frontmatter_versions.py": "walks docs/, not a conf.d",
     "lint/check_md_yaml_drift.py": "walks docs/, not a conf.d",
     "lint/check_scrape_reachability.py": "walks k8s manifests, not a conf.d",
     "lint/check_threshold_reachability.py":

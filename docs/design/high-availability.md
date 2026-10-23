@@ -53,7 +53,7 @@ spec:
       app: threshold-exporter
 ```
 
-**保證：** 即使在主動維護期間，也始終有 1 個副本服務於 Prometheus 抓取
+**效果：** drain 節點這類自願中斷時，至少留 1 個被選中的 Pod 可用（PDB 不保證 Prometheus 抓得到它）。PDB 只在 `replicaCount` 大於 1 時建立（`helm/threshold-exporter/templates/pdb.yaml`），也擋不了節點故障這類非自願中斷。
 
 ### 4.3 臨界：`max by(tenant)` vs `sum`
 

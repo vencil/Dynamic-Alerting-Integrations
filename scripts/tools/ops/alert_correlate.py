@@ -28,9 +28,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
     format_json_report,
-    http_get_json,
     parse_duration_seconds,
 )
+# #3133: alerts are read by the lib; a Prometheus that does not answer raises
+# QueryError (rc 2) — never "no alerts".
+from _lib_prometheus import QueryError, alertmanager_alerts, prometheus_alerts  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
@@ -183,23 +185,19 @@ def load_alerts_from_alertmanager(prom_url: str,
 
     Falls back to Prometheus /api/v1/alerts if Alertmanager is not separate.
     """
-    # Try Alertmanager API first (common port 9093)
+    # Try Alertmanager first (common port 9093). Its URL is derived from
+    # --prometheus, not given, so it is an optional source (#3133, owner
+    # 2026-10-23): when it does not answer, say so and read Prometheus.
     am_url = prom_url.replace(":9090", ":9093")
-    data, err = http_get_json(f"{am_url}/api/v2/alerts")
-    if not err and isinstance(data, list):
-        return [AlertEvent.from_alertmanager(a) for a in data]
+    try:
+        return [AlertEvent.from_alertmanager(a) for a in alertmanager_alerts(am_url)]
+    except QueryError as exc:
+        print(f"NOTICE: Alertmanager at {am_url} (derived from --prometheus) did not "
+              f"answer ({exc}); reading Prometheus alerts instead", file=sys.stderr)
 
-    # Fallback to Prometheus alerts API
-    data, err = http_get_json(f"{prom_url}/api/v1/alerts")
-    if err:
-        print(f"WARN: Cannot fetch alerts: {err}", file=sys.stderr)
-        return []
-
-    if data.get("status") != "success":
-        return []
-
-    alerts_raw = data.get("data", {}).get("alerts", [])
-    return [AlertEvent.from_alertmanager(a) for a in alerts_raw]
+    # Prometheus is the source asked for: not answering is rc 2 (#3133), it
+    # used to be a WARN and an empty analysis at rc 0.
+    return [AlertEvent.from_alertmanager(a) for a in prometheus_alerts(prom_url)]
 
 
 def time_window_cluster(alerts: List[AlertEvent],

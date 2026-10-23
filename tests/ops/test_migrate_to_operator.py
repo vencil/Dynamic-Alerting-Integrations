@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 # Import the module to test
 import migrate_to_operator as mto  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1077,9 +1078,10 @@ class TestAnalyzeMigrationScansOnce:
         assert analysis["tenants"] == 1, "only `db-a` is a valid tenant here"
 
     def test_a_run_reads_one_parse_tree_snapshot(self, tmp_path, monkeypatch, capsys):
-        """Analysis and generation both ask for the tenant set; `main` runs
-        them in one `_lib_parse_cache.session`, so da-guard parse-tree runs
-        once and both answer from the same snapshot of the tree."""
+        """Analysis and generation both ask for the tenant set and the
+        source files; da-guard parse-tree reads the conf.d once (one
+        `_lib_parse_cache.session`) and lists --source-dir once, and both
+        answer from the same snapshot of each."""
         import _lib_parse_tree
 
         confd = tmp_path / "conf.d"
@@ -1087,19 +1089,56 @@ class TestAnalyzeMigrationScansOnce:
         (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
-        loads = []
-        real = _lib_parse_tree.load
+        loads, lists = [], []
+        real, real_list = _lib_parse_tree.load, _lib_parse_tree.list_tree
 
         def counting(*a, **kw):
             loads.append(a[0])
             return real(*a, **kw)
 
+        def counting_list(*a, **kw):
+            lists.append(a[0])
+            return real_list(*a, **kw)
+
         monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        monkeypatch.setattr(_lib_parse_tree, "list_tree", counting_list)
         monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src),
                                           "--config-dir", str(confd), "--dry-run"])
         mto.main()
         assert len(loads) == 1, loads
+        assert [os.path.realpath(d) for d in lists] == [os.path.realpath(src)], lists
         assert "1 tenants" in capsys.readouterr().err
+
+
+class TestSourceDirNamesWhatItDoesNotRead:
+    """--source-dir is Go's list-only walk (#3206): a top-level entry the
+    walk leaves out or cannot read is named on stderr, never dropped
+    silently (`kubectl get cm -o yaml > .rules.yaml` is a real way to get
+    one)."""
+
+    _RULES = "groups:\n  - name: g\n    rules: []\n"
+
+    def test_hidden_and_unreadable_entries_are_named(self, tmp_path, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / ".hidden-rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "notes.txt").write_text("not a rule file\n", encoding="utf-8")
+        symlink_or_skip("nowhere", src / "dangling.yaml")
+        rules = mto.parse_configmap_rules(src)
+        assert [r["file"] for r in rules] == ["rules.yaml"]
+        err = capsys.readouterr().err
+        line = next((ln for ln in err.splitlines() if "not read" in ln), "")
+        assert ".hidden-rules.yaml (hidden)" in line, err
+        assert "dangling.yaml (" in line, err
+        assert "notes.txt" not in line, "a name that is no config file was never read"
+
+    def test_nothing_is_named_when_everything_is_read(self, tmp_path, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        mto.parse_configmap_rules(src)
+        assert "not read" not in capsys.readouterr().err
 
 
 class TestConfigMapScanAcceptsBothSpellings:

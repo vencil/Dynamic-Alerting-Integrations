@@ -93,9 +93,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError, exit_on_output_write_error, output_write, safe_label,
 )
-from _lib_confd import (  # noqa: E402
-    has_yaml_extension, is_hidden_name, is_reserved_name,
-)
+import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
 # Metrics we extract from /metrics (Prometheus text format).
 # Adding new ones here automatically extends the timeseries CSV.
@@ -178,12 +176,23 @@ def fetch_metrics(target_url: str, timeout_sec: float = 5.0) -> dict[str, float]
         return None
 
 
-def trigger_reload(config_dir: Path) -> bool:
-    """Bump mtime of every config carrier under config_dir to fire SHA-256 diff.
+def reload_carriers(config_dir: Path) -> list[Path]:
+    """The files `trigger_reload` may perturb: every tenant file the
+    exporter reads (da-guard's listing; no `_`-prefixed platform file, so
+    platform invariants stay stable), in walk order.
 
-    "Config carrier" is `_lib_confd.CONFIG_SUFFIXES` — `.yaml` AND `.yml`,
-    the set the exporter's own scanner accepts (#1603). This docstring said
-    `.yaml` while the code passed `(".yaml",)`; both are now the shared set.
+    #3206: taken ONCE, at the start of the run — the soak rewrites these
+    files, so a listing per pass would index a tree the soak itself is
+    changing. A tree Go names paths on ends the run here, every such path
+    named, exit 2."""
+    listing = _lib_parse_cache.ConfdReader(config_dir).listing()
+    return [config_dir / e.path for e in listing.config_files()
+            if not e.reserved and "exporter" in (e.readers or ())]
+
+
+def trigger_reload(carriers: list[Path]) -> bool:
+    """Rewrite the first writable of *carriers* (`reload_carriers`) to fire
+    the exporter's SHA-256 diff.
 
     threshold-exporter's hot-reload watches mtime + content hash. Touching
     mtime alone won't fire if content unchanged; we append a no-op comment
@@ -191,59 +200,7 @@ def trigger_reload(config_dir: Path) -> bool:
 
     Returns True only if a carrier the exporter WOULD reload was written.
     """
-    if not config_dir.exists():
-        return False
-    # #1588: `rglob("*.yaml")` is case-SENSITIVE, so a soak run against a
-    # tree whose carriers are `.YAML` found nothing to perturb and
-    # `trigger_reload` returned False on every pass — measured True (lower)
-    # vs False (UPPER) on the identical body. A soak that never fires a
-    # reload still produces a full run report, so the whole exercise reads
-    # as "hot-reload survived N hours" having never reloaded once.
-    #
-    # ⚠️ #1603: the extension argument is gone, so this takes
-    # `CONFIG_SUFFIXES` — both spellings, matching `config_hierarchy.go`.
-    # Before that, a conf.d whose carriers are `.yml` produced an EMPTY
-    # `yaml_files`, `perturb_config` returned False on every pass, and the
-    # soak still emitted a full run report: "hot-reload survived N hours"
-    # having never reloaded once. Same shape as the `.YAML` row below, one
-    # axis over. The
-    # relative order of `rglob("*")` matches what `rglob("*.yaml")` yielded
-    # — MEASURED on a nested tree whose entries were created in shuffled
-    # order, not assumed — so "the first non-`_` file" still picks the same
-    # carrier and the soak keeps perturbing what it used to perturb.
-    # ⛔ `is_hidden_name` is part of the SAME widening, not a second axis
-    # riding along. This function's claim is "perturb something the exporter
-    # is watching", and `config_hierarchy.go` SKIPS `.`-prefixed entries — so
-    # a set that includes them is not the exporter's set, it is a superset,
-    # and the difference is the whole point of the claim. Before #1603 the
-    # narrow `(".yaml",)` masked half of it; measured on one tree holding
-    # `db-a.yaml` + `.hidden.yml`:
-    #
-    #   narrow  (pre-#1603)          perturbed db-a.yaml    <- the right file
-    #   widened, no hidden filter    perturbed .hidden.yml  <- exporter never reads it
-    #   widened, this filter         perturbed db-a.yaml
-    #
-    # i.e. widening the spelling alone would have made this tool MORE likely
-    # to report "reload fired" for an edit the exporter cannot see. The
-    # hidden axis at large is #1630 (it also covers `check_threshold_unit_sanity`);
-    # this closes the half this commit would otherwise have made worse.
-    #
-    # ⛔ EVERY path segment, not just the basename: the exporter answers
-    # `fs.SkipDir` for a `.`-prefixed DIRECTORY, so `.draft/db.yaml` is not a
-    # carrier either — and `rglob("*")` walks into it. Filtering only the
-    # basename would leave this comment's claim ("this is the exporter's
-    # set") false in one direction, which is the shape this whole ticket
-    # family is about.
-    yaml_files = [p for p in config_dir.rglob("*")
-                  if has_yaml_extension(p.name)
-                  and not any(is_hidden_name(part)
-                              for part in p.relative_to(config_dir).parts)]
-    if not yaml_files:
-        return False
-    # Pick the first non-_defaults file to perturb (keeps platform invariants stable)
-    for yf in yaml_files:
-        if is_reserved_name(yf.name):
-            continue
+    for yf in carriers:
         try:
             content = yf.read_text(encoding="utf-8")
             marker = "# soak-toggle: A\n"
@@ -293,6 +250,7 @@ def _report_deferred_write_error(
 
 
 @exit_on_output_write_error
+@_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
@@ -323,6 +281,7 @@ def main() -> int:
     if not config_dir.exists():
         print(f"[error] config-dir not found: {config_dir}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    carriers = reload_carriers(config_dir)
 
     out = Path(args.output_dir)
     with output_write(out, flag="--output-dir", action="create directory"):
@@ -403,7 +362,7 @@ def main() -> int:
 
             # Trigger reload
             if now >= next_reload_at:
-                if trigger_reload(config_dir):
+                if trigger_reload(carriers):
                     cfg.reload_count += 1
                 else:
                     print(f"[warn] reload trigger failed at t={now - started_wall:.0f}s",

@@ -210,9 +210,9 @@ class TestScanConfigDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'z.yaml').write_text('z')
-            (config_dir / 'a.yaml').write_text('a')
-            (config_dir / 'm.yaml').write_text('m')
+            (config_dir / 'z.yaml').write_text('z: 1\n')
+            (config_dir / 'a.yaml').write_text('a: 1\n')
+            (config_dir / 'm.yaml').write_text('m: 1\n')
 
             result = ch._scan_config_dir(str(config_dir))
 
@@ -224,8 +224,8 @@ class TestScanConfigDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'db-a.yaml').write_text('config')
-            (config_dir / '.hidden.yaml').write_text('hidden')
+            (config_dir / 'db-a.yaml').write_text('config: 1\n')
+            (config_dir / '.hidden.yaml').write_text('hidden: 1\n')
 
             result = ch._scan_config_dir(str(config_dir))
 
@@ -295,9 +295,9 @@ class TestScanConfigDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'config.yaml').write_text('yaml')
-            (config_dir / 'readme.txt').write_text('text')
-            (config_dir / 'script.py').write_text('python')
+            (config_dir / 'config.yaml').write_text('yaml: 1\n')
+            (config_dir / 'readme.txt').write_text('text: 1\n')
+            (config_dir / 'script.py').write_text('python: 1\n')
 
             result = ch._scan_config_dir(str(config_dir))
 
@@ -458,7 +458,7 @@ class TestCmdSnapshotInitial:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'db-a.yaml').write_text('config')
+            (config_dir / 'db-a.yaml').write_text('config: 1\n')
 
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
@@ -477,7 +477,7 @@ class TestCmdSnapshotInitial:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'db-a.yaml').write_text('config')
+            (config_dir / 'db-a.yaml').write_text('config: 1\n')
 
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
@@ -490,7 +490,7 @@ class TestCmdSnapshotInitial:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'db-a.yaml').write_text('config')
+            (config_dir / 'db-a.yaml').write_text('config: 1\n')
 
             with patch('sys.stdout', new=StringIO()) as fake_stdout:
                 ch.cmd_snapshot(str(config_dir))
@@ -554,8 +554,8 @@ class TestCmdSnapshotChanges:
             config_dir.mkdir()
 
             # Snapshot 1：兩個檔案
-            (config_dir / 'db-a.yaml').write_text('a')
-            (config_dir / 'db-b.yaml').write_text('b')
+            (config_dir / 'db-a.yaml').write_text('a: 1\n')
+            (config_dir / 'db-b.yaml').write_text('b: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -577,16 +577,16 @@ class TestCmdSnapshotChanges:
             config_dir.mkdir()
 
             # Snapshot 1
-            (config_dir / 'a.yaml').write_text('content')
-            (config_dir / 'b.yaml').write_text('content')
-            (config_dir / 'c.yaml').write_text('content')
+            (config_dir / 'a.yaml').write_text('content: 1\n')
+            (config_dir / 'b.yaml').write_text('content: 1\n')
+            (config_dir / 'c.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
             # Snapshot 2：a 修改、b 移除、d 新增
-            (config_dir / 'a.yaml').write_text('modified')
+            (config_dir / 'a.yaml').write_text('modified: 1\n')
             (config_dir / 'b.yaml').unlink()
-            (config_dir / 'd.yaml').write_text('new')
+            (config_dir / 'd.yaml').write_text('new: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -627,7 +627,7 @@ class TestCmdSnapshotNoChange:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
-            (config_dir / 'db-a.yaml').write_text('content')
+            (config_dir / 'db-a.yaml').write_text('content: 1\n')
 
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
@@ -666,11 +666,11 @@ class TestCmdLogEntries:
             config_dir.mkdir()
 
             # Create 2 snapshots
-            (config_dir / 'test.yaml').write_text('v1')
+            (config_dir / 'test.yaml').write_text('v1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('v2')
+            (config_dir / 'test.yaml').write_text('v2: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -686,11 +686,11 @@ class TestCmdLogEntries:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('v1')
+            (config_dir / 'test.yaml').write_text('v1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('v2')
+            (config_dir / 'test.yaml').write_text('v2: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -708,7 +708,7 @@ class TestCmdLogEntries:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -723,8 +723,8 @@ class TestCmdLogEntries:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'a.yaml').write_text('a')
-            (config_dir / 'b.yaml').write_text('b')
+            (config_dir / 'a.yaml').write_text('a: 1\n')
+            (config_dir / 'b.yaml').write_text('b: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -739,7 +739,7 @@ class TestCmdLogEntries:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -756,12 +756,12 @@ class TestCmdLogEntries:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'a.yaml').write_text('content')
+            (config_dir / 'a.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'b.yaml').write_text('new')
-            (config_dir / 'a.yaml').write_text('modified')
+            (config_dir / 'b.yaml').write_text('new: 1\n')
+            (config_dir / 'a.yaml').write_text('modified: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -785,7 +785,7 @@ class TestCmdLogLimit:
 
             # Create 3 snapshots
             for i in range(3):
-                (config_dir / 'test.yaml').write_text(f'v{i}')
+                (config_dir / 'test.yaml').write_text(f'v: {i}\n')
                 with patch('sys.stdout', new=StringIO()):
                     ch.cmd_snapshot(str(config_dir))
 
@@ -806,7 +806,7 @@ class TestCmdLogLimit:
             config_dir.mkdir()
 
             for i in range(3):
-                (config_dir / 'test.yaml').write_text(f'v{i}')
+                (config_dir / 'test.yaml').write_text(f'v: {i}\n')
                 with patch('sys.stdout', new=StringIO()):
                     ch.cmd_snapshot(str(config_dir))
 
@@ -830,7 +830,7 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'db-a.yaml').write_text('content1')
+            (config_dir / 'db-a.yaml').write_text('content1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir), message='Test snapshot')
 
@@ -845,7 +845,7 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -860,7 +860,7 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -875,7 +875,7 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'db-a.yaml').write_text('content')
+            (config_dir / 'db-a.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -890,7 +890,7 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir), message='Important change')
 
@@ -905,11 +905,11 @@ class TestCmdShowValid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'a.yaml').write_text('a')
+            (config_dir / 'a.yaml').write_text('a: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'b.yaml').write_text('b')
+            (config_dir / 'b.yaml').write_text('b: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -930,7 +930,7 @@ class TestCmdShowInvalid:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -962,11 +962,11 @@ class TestCmdDiff:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'a.yaml').write_text('a')
+            (config_dir / 'a.yaml').write_text('a: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'b.yaml').write_text('b')
+            (config_dir / 'b.yaml').write_text('b: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -981,8 +981,8 @@ class TestCmdDiff:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'a.yaml').write_text('a')
-            (config_dir / 'b.yaml').write_text('b')
+            (config_dir / 'a.yaml').write_text('a: 1\n')
+            (config_dir / 'b.yaml').write_text('b: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1001,11 +1001,11 @@ class TestCmdDiff:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('v1')
+            (config_dir / 'test.yaml').write_text('v1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('v2')
+            (config_dir / 'test.yaml').write_text('v2: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1026,11 +1026,11 @@ class TestCmdDiffLines:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('line1\nline2\nline3\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\nline2: 1\nline3: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('line1\nmodified\nline3\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\nmodified: 1\nline3: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1046,11 +1046,11 @@ class TestCmdDiffLines:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('line1\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('line1\nline2\nline3\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\nline2: 1\nline3: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1066,11 +1066,11 @@ class TestCmdDiffLines:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('line1\nline2\nline3\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\nline2: 1\nline3: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
-            (config_dir / 'test.yaml').write_text('line1\n')
+            (config_dir / 'test.yaml').write_text('line1: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1091,7 +1091,7 @@ class TestCmdDiffMissing:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1105,7 +1105,7 @@ class TestCmdDiffMissing:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1137,7 +1137,7 @@ class TestCmdDiffNoDiff:
             config_dir = Path(tmpdir) / 'conf.d'
             config_dir.mkdir()
 
-            (config_dir / 'test.yaml').write_text('content')
+            (config_dir / 'test.yaml').write_text('content: 1\n')
             with patch('sys.stdout', new=StringIO()):
                 ch.cmd_snapshot(str(config_dir))
 
@@ -1230,7 +1230,7 @@ class TestEndToEnd:
 
             # Create 5 snapshots
             for i in range(5):
-                (config_dir / 'test.yaml').write_text(f'v{i}')
+                (config_dir / 'test.yaml').write_text(f'v: {i}\n')
                 with patch('sys.stdout', new=StringIO()):
                     ch.cmd_snapshot(str(config_dir))
 

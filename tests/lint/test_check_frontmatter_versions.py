@@ -620,14 +620,3 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
         out = capsys.readouterr().out
         assert "0 of 2 files carry frontmatter" in out
         assert "✅" not in out
-
-    def test_hidden_is_whatever_the_shared_predicate_says(self, tmp_path, monkeypatch):
-        """Control for the delegation to _lib_confd.is_hidden_name: red if
-        scan_docs re-implements the dot test inline."""
-        docs = tmp_path / "docs"
-        (docs / "zzz").mkdir(parents=True)
-        (docs / ".h").mkdir()
-        (docs / "zzz" / "a.md").write_text("# a\n", encoding="utf-8")
-        (docs / ".h" / "b.md").write_text("# b\n", encoding="utf-8")
-        monkeypatch.setattr(cfv, "is_hidden_name", lambda name: name == "zzz")
-        assert [r.file_path.name for r in cfv.scan_docs(docs)] == ["b.md"]

@@ -176,9 +176,11 @@ const reservedOnlySubtree = "defaults:\n  _metadata: 5\n" +
 const plainRoot = "defaults:\n  mysql_connections: 80\n"
 
 // scheduleThenScalarStateFiles: `_state_maintenance` as a schedule at
-// finance/ (refused) and a scalar `disable` at finance/us/ (delivered). The
-// shallow refusal stays in FlatBuild.Unreachable although the key is
-// delivered.
+// finance/ and a scalar `disable` at finance/us/ (delivered). Before #3295
+// the shallow schedule was refused as unreachable and stayed in
+// FlatBuild.Unreachable although the key is delivered; it is now judged by
+// its `default` alone — `enable`, not threshold-shaped, refused as the
+// scalar would be — so it is in no unreachable set at all.
 func scheduleThenScalarStateFiles() map[string]string {
 	return map[string]string{
 		"_defaults.yaml": plainRoot +
@@ -226,8 +228,10 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 		wantReported []string // tenant-a's reported keys; nil = tenant absent
 	}{
 		{
-			// `_metadata` and `_state_maintenance` are in optional_overrides,
-			// which the build counts as declared.
+			// `_metadata` is in optional_overrides, which the build counts
+			// as declared; the windowed `_state_maintenance` is judged by its
+			// `default: enable` alone (#3295), refused as not threshold-
+			// shaped before any reachability question.
 			name:        "reserved-declared",
 			files:       subtreeTree(reservedOnlyRoot, reservedOnlySubtree),
 			wantUnreach: []string{"_profile", "_silent_bogus"},
@@ -247,9 +251,8 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			wantUnreach: []string{"_silent_bogus"},
 		},
 		{
-			name:        "schedule-then-scalar-state",
-			files:       scheduleThenScalarStateFiles(),
-			wantUnreach: []string{"_state_maintenance"},
+			name:  "schedule-then-scalar-state",
+			files: scheduleThenScalarStateFiles(),
 		},
 		{
 			// Only disabledEverywhere leaves `redis_evicted_keys` out. A

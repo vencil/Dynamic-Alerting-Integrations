@@ -1394,7 +1394,8 @@ class TestPrometheusEnvFallback:
         def fake_run(args):
             captured["url"] = args.prometheus
             return SimpleNamespace(plans=[], outcomes=[], ungoverned=[],
-                                   not_applicable=[], force_manual=[], inherited=[])
+                                   not_applicable=[], force_manual=[], inherited=[],
+                                   not_measured=[])
 
         monkeypatch.setattr(tg, "run", fake_run)
         monkeypatch.setattr(tg, "format_text_report", lambda *a, **k: "")
@@ -1587,3 +1588,90 @@ def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, va
         tg.main()
     assert exc.value.code == tg.EXIT_CALLER_ERROR
     assert "--min-samples" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# #3133: a threshold not measured makes the run partial (exit 2)
+# ---------------------------------------------------------------------------
+def _not_measured(key="mysql_connections", err="connection refused"):
+    return recommend.KeyRecommendation(key=key, current_value=100,
+                                       reason=f"query error: {err}", query_error=err)
+
+
+class TestNotMeasured:
+    def _reports(self):
+        return [_report("db-a", [_not_measured(),
+                                 _kr("redis_memory", 1000, 1400, 40.0)]),
+                _report("db-b", [_not_measured("pg_conn", "HTTP 503")])]
+
+    def test_collected_sorted(self):
+        got = tg.collect_not_measured(self._reports())
+        assert [(u.tenant, u.key, u.error) for u in got] == [
+            ("db-a", "mysql_connections", "connection refused"), ("db-b", "pg_conn", "HTTP 503")]
+
+    def test_json_is_partial_and_lists_them(self):
+        nm = tg.collect_not_measured(self._reports())
+        out = json.loads(tg.format_json_report([], [], False, not_measured=nm))
+        assert (out["status"], out["reason"]) == ("partial", "prometheus_query_error")
+        assert out["summary"]["not_measured"] == 2
+        assert out["not_measured"][0] == {"tenant": "db-a", "key": "mysql_connections",
+                                          "error": "connection refused"}
+
+    def test_json_without_them_has_no_status(self):
+        out = json.loads(tg.format_json_report([], [], False))
+        assert "status" not in out and out["summary"]["not_measured"] == 0
+
+    def test_text_never_says_all_within_margin(self):
+        """It used to: "No thresholds need governance (all within margin …)"."""
+        nm = tg.collect_not_measured(self._reports())
+        text = tg.format_text_report([], [], False, not_measured=nm)
+        assert "all within margin" not in text
+        assert "2 threshold(s) not measured" in text
+        assert "db-a/mysql_connections: connection refused" in text
+
+    @pytest.mark.parametrize("json_output", [False, True], ids=["text", "json"])
+    def test_main_exits_2_with_one_error_line(self, monkeypatch, tmp_path, capsys, json_output):
+        import sys
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: self._reports())
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+                                          *(["--json"] if json_output else [])])
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        assert exc.value.code == tg.EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        err = captured.err.strip().splitlines()
+        assert err[-1].startswith("ERROR: Prometheus query failed for 2 threshold(s); "
+                                  "the report is partial (first: db-a/mysql_connections:")
+        if json_output:
+            assert json.loads(captured.out)["status"] == "partial"
+
+    def test_apply_still_writes_the_measured_and_partial_outranks_systemic(
+            self, monkeypatch, tmp_path, capsys):
+        """--apply opens the PRs of the thresholds that were measured, and the
+        partial verdict (2) wins over a write plane that failed outright (1)."""
+        import sys
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: self._reports())
+        written = []
+
+        def fail_write(plan, args):
+            written.append((plan.tenant, [c.key for c in plan.changes]))
+            return tg.TenantOutcome(plan.tenant, "error", [c.key for c in plan.changes],
+                                    message="HTTP 500")
+        monkeypatch.setattr(tg, "open_governance_pr", fail_write)
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), "--apply",
+            "--tenant-api-url", "http://tenant-api", "--identity-groups", "g", "--json"])
+        assert tg._is_systemic_failure(
+            [tg.TenantOutcome("db-a", "error", ["redis_memory"])], True)
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        assert written == [("db-a", ["redis_memory"])]
+        assert exc.value.code == tg.EXIT_CALLER_ERROR
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "partial"
+        assert out["summary"]["not_measured"] == 2
+
+    def test_measured_keys_are_still_planned(self):
+        plans = tg.build_governance_plan(self._reports(), 10.0)
+        assert [(p.tenant, [c.key for c in p.changes]) for p in plans] == [
+            ("db-a", ["redis_memory"])]
