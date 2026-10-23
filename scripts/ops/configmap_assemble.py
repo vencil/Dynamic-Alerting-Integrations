@@ -25,8 +25,8 @@
 
 三個新軸：
 
-- **#1792 大小寫**：列舉改用 exporter 自己的述詞 `has_yaml_extension`
-  （大小寫不敏感），所以 `DB-A.YAML` 這種載體現在**會**進 ConfigMap。原本
+- **#1792 大小寫**：列舉改用 exporter 自己的判定（#3206 起是 da-guard 的列檔，
+  Go 的 `role`；大小寫不敏感），所以 `DB-A.YAML` 這種載體現在**會**進 ConfigMap。原本
   shell glob 的 `*.yaml` / `*.yml` 是 shell 用大小寫敏感的 fnmatch 比對
   readdir 的結果，與檔案系統折不折大小寫無關 ⇒ 那是**固定的丟棄**，每個平台
   都漏。既然兩份列舉合一，原本回報差集的那則 WARN 沒有對象了，一併刪除。

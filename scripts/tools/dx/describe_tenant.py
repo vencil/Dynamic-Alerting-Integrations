@@ -175,7 +175,7 @@ class ConfDScanner:
 
         ⚠️ The verdict is CONDITIONAL on purpose. A carrier here is a file
         whose `tenants:` key names the tenant (the #1942 rule, see
-        `_lib_confd.declared_tenant_ids`); a file the exporter's full decode
+        `_lib_confd.tenant_declarations`); a file the exporter's full decode
         rejects declares nothing there, so Go can resolve this tenant from
         the other file. Refusing is still right — it matches validate_config
         and beats picking a value."""

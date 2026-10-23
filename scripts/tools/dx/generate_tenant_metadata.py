@@ -389,7 +389,7 @@ def _load_custom_groups(state: Any, config_dir: Path) -> dict:
     `_groups.yaml` still in conf.d is named and not read — tenant-api has
     kept groups in its state store since #2856, so that copy is stale.
     """
-    for name in legacy_state_files(config_dir):
+    for name in legacy_state_files(config_dir):  # Go's `role` (#3206)
         if name == "_groups.yaml":
             print(f"WARN: {safe_label(str(Path(config_dir) / name))} is not read here: "
                   "tenant-api imports it at startup only while its state store has no "

@@ -29,7 +29,6 @@ import _lib_tenant_uniqueness as tu  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 from assemble_config_dir import (
-    PLATFORM_FILES,
     _file_sha256,
     assemble,
     build_manifest,
@@ -644,7 +643,7 @@ class TestPlatformFileSpelling:
     @pytest.mark.parametrize("name", [
         "db-a.yaml", "db-a.yml",
         # ⛔ EXACT, not a prefix: the exporter merges neither of these into a
-        # chain, and `_lib_confd.is_defaults_name` says so for the same reason.
+        # chain, and Go's class (`defaults` only for the two literals) says so.
         "_defaults-multidb.yaml", "_profiles-extra.yaml",
         # Other `_`-prefixed control files keep the tenant-path policy
         # (refuse on divergence) deliberately: first-source-wins would drop a
@@ -655,29 +654,21 @@ class TestPlatformFileSpelling:
     def test_other_names_are_not_platform_files(self, name):
         assert not is_platform_file(name)
 
-    def test_the_defaults_half_agrees_with_the_shared_oracle(self):
-        """⛔ Two predicates, one fact — pin them together instead of hoping.
-
-        `_lib_confd.is_defaults_name` answers to `config_hierarchy.go`. Every
-        name it calls a defaults carrier has to be a platform file here too,
-        or this module has quietly grown a second opinion about which file
-        the exporter merges into a chain. Widening
-        `_lib_confd.is_defaults_name` to a prefix match fails this and nothing
-        else in the file. ⚠️ Dropping
-        `_defaults` from `PLATFORM_FILES` also fails it, but takes the
-        parametrized cases above down with it, so that mutation does not
-        isolate this pin.
-        """
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]
-                               / "scripts" / "tools"))
-        from _lib_confd import is_defaults_name
+    def test_the_defaults_half_is_gos_class(self):
+        """⛔ One fact, one owner (#3206): every name Go classes `defaults`
+        (names mode) is a platform file here, and the class this module is
+        handed decides — not the spelling. A name rule of this module's own
+        that disagreed with Go's class would fail the second half."""
+        import _lib_parse_tree
 
         names = ["_defaults.yaml", "_defaults.yml", "_DEFAULTS.YAML",
                  "_defaults-multidb.yaml", "db-a.yaml", "_profiles.yaml"]
-        shared = {n for n in names if is_defaults_name(n)}
-        assert shared, "fixture is vacuous — the oracle matched nothing"
+        classes = _lib_parse_tree.classify_names(names)
+        shared = {n for n in names if classes[n].cls == "defaults"}
+        assert shared, "fixture is vacuous — Go classed nothing a carrier"
         assert shared <= {n for n in names if is_platform_file(n)}
-        assert PLATFORM_FILES, "the derived name set must not be empty"
+        assert is_platform_file("db-a.yaml", "defaults")
+        assert not is_platform_file("_defaults.yaml", "tenant")
 
     def test_a_yml_defaults_pair_takes_the_platform_policy(self, config_dir,
                                                            cli_argv, capsys):
@@ -1357,7 +1348,7 @@ class TestTheArtifactTotalUsesOnePredicate:
     `iter_config_files` rather than summed as `count + len(residue)` — the
     sum once added two different predicates and claimed 3 where the exporter
     reads 2. Since #1827 `discover_yamls` applies the same `.`-prefix skip
-    (`is_hidden_name`), so `file_count` (what was copied), `residue` and
+    (Go's walk, which does not list a hidden entry), so `file_count` (what was copied), `residue` and
     `artifact_file_count` all leave the hidden carrier out, and the artifact
     itself does not contain it. The re-derivation stays: a carrier already in
     `--output` is still counted by the walk, not by this run's copy.
@@ -1395,7 +1386,7 @@ class TestHiddenCarriersAreNotAssembled:
     reads 1; tenant `db-c` had no alerts at rc 0 with nothing printed.
 
     The production change that reddens every arm below: removing the
-    `is_hidden_name` filter (and its WARN line) from `discover_yamls`.
+    hidden-entry WARN (`_hidden_config_named`) from `discover_yamls`.
     """
 
     def _sources(self, config_dir, carrier_name):

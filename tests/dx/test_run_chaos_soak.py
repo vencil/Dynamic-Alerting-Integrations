@@ -396,7 +396,7 @@ class TestTriggerReloadAcceptsBothSpellings:
 
     @pytest.mark.parametrize("name", ["notes.txt", "db-c.json", "db-d.yang", "plain.y"])
     def test_non_config_extensions_are_not_perturbed(self, tmp_path, name):
-        """UPPER — widened to CONFIG_SUFFIXES, not to 'any file'."""
+        """UPPER — widened to both config extensions, not to 'any file'."""
         d = tmp_path / "conf.d"
         d.mkdir()
         victim = d / name

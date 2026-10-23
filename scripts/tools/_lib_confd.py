@@ -56,34 +56,25 @@ import contextlib
 import contextvars
 import os
 import re
-from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
+from typing import Any, Callable, Collection, Iterable, Iterator, Mapping, NamedTuple
 import sys
 from pathlib import Path
 
 
 __all__ = [
-    "CONFIG_SUFFIXES",
     "LEGACY_STATE_FILES",
     "legacy_state_files",
-    "config_stem",
     "configmap_key_problem",
-    "declared_tenant_ids",
     "duplicate_declarations",
     "overlay_platform_tenants",
-    "has_yaml_extension",
-    "is_defaults_name",
-    "is_hidden_name",
-    "is_reserved_name",
+    "tenant_set_unknown_note",
     "iter_config_files",
     "ConfigTreeListing",
     "list_config_tree",
-    "readable_carriers",
-    "is_dir_symlink",
     "config_listing",
     "not_config_files",
     "unusable_entry",
     "unusable_text",
-    "select_defaults_carrier",
     "FlatRead",
     "resolve_defaults_file",
     "nested_yaml_files",
@@ -100,262 +91,18 @@ __all__ = [
     "warn_nested",
 ]
 
-CONFIG_SUFFIXES = (".yaml", ".yml")
-
-
-def _is_hidden(name: str) -> bool:
-    """Mirror of the exporter's skip rule — DERIVED, not an allowlist.
-
-    `pkg/config/hierarchy.go` skips any entry whose name starts with `.`
-    (`SkipDir` for directories, plain skip for files). Listing specific
-    names here instead (`.git`, `__pycache__`, ...) would make this
-    module's answer differ from the oracle it exists to mirror — which is
-    the very divergence #1911 is about.
-    """
-    return name.startswith(".")
-
-
-def _is_config(name: str) -> bool:
-    """Mirror of the exporter's extension rule — DERIVED, not an allowlist.
-
-    CASE-INSENSITIVE, and that is the whole content of this docstring's
-    existence. The oracle is the exporter's scanner: `config_hierarchy.go`
-    (production hot-reload), `flat_scanner.go`, `pkg/config/hierarchy.go`
-    and `pkg/config/scope.go` all lowercase the entry name before testing
-    the `.yaml` / `.yml` suffix, so the exporter READS `upper.YAML` and
-    merges it into the effective config it serves.
-
-    Testing the suffix exactly — as this did until #1537 — made such a file
-    invisible to every Python reader: measured, `iter_config_files` did not
-    yield `upper.YAML` AND `unusable_config_paths` did not name it either,
-    so nothing in the report so much as mentioned a file the exporter was
-    acting on. That is #1911's shape with the *extension* as the divergence
-    axis instead of directory depth, and it is the one parity claim in this
-    module that was, until now, written down nowhere.
-
-    Note this predicate answers TWO of the three name properties: extension
-    (here) and hidden (`_is_hidden`). It deliberately does NOT filter the
-    `_` prefix — reserved control files ARE part of "what is in a conf.d
-    directory"; callers that want tenant carriers only (tenant-api, or a
-    tool composing `is_reserved_name`) apply that third property themselves.
-
-    ⛔ Nothing here greps the Go source. This repo measured (#1448 blind
-    review) that a Python guard asserting things about Go source text goes
-    red on legitimate Go refactors and states the opposite of the truth
-    when it does. What keeps this honest instead is the shared name
-    classification matrix under `tests/shared/` — the exporter's scanner,
-    tenant-api's filename→id mapping, `iter_config_files` and this
-    predicate each assert THAT table, so their agreement is transitive
-    rather than claimed, and a rule change turns the owning side red first.
-    """
-    return name.lower().endswith(CONFIG_SUFFIXES) and not _is_hidden(name)
-
-
-# ── public name predicates ────────────────────────────────────────────
-#
-# ⛔ These are PREDICATES, not enumerators, and that distinction is the
-# whole reason they exist (#1588).
-#
-# Nine tools were measured reading a conf.d and disagreeing with the
-# exporter about `upper.YAML`, each having hand-written its own
-# `endswith(".yaml")`. The obvious remedy — "call `iter_config_files`
-# instead" — is NOT a case fix: those tools are flat or `rglob`, so
-# switching enumerators silently changes their RECURSION behaviour too,
-# and every one of them then needs its own blast-radius argument. That is
-# a different change, and bundling it here would hide a behaviour change
-# inside a bug fix.
-#
-# So the extension axis gets shared while the recursion axis stays where
-# each caller put it. A tool keeps its own `for f in os.listdir(...)` and
-# asks these functions the name questions.
-#
-# The four booleans are ORTHOGONAL and deliberately mirror the columns of
-# `tests/shared/confd_name_classification_matrix.json`
-# (`yaml_extension` / `reserved_prefix` / `hidden` / `defaults_file`, plus
-# `stem`). Because the exporter's production scanner, tenant-api's
-# filename→id mapping and `iter_config_files` all assert that same
-# table, a caller composing these predicates agrees with the exporter
-# TRANSITIVELY — nothing here claims agreement, and no guard greps anyone
-# else's source (#1448).
-
-
-def has_yaml_extension(
-    name: str, suffixes: tuple[str, ...] = CONFIG_SUFFIXES
-) -> bool:
-    """Does this basename carry a YAML extension? CASE-INSENSITIVE.
-
-    The extension axis ALONE — it says nothing about hidden files or the
-    `_` prefix. Composing is the caller's job precisely because the four
-    live enumerators want four different combinations (see the projection
-    table in PR #1590), so a single "is this a config file" answer would
-    be wrong for three of them.
-
-    ⚠️ `suffixes` exists so a case fix does not smuggle in a SECOND
-    behaviour change. Measured on the tree at PR #1590, four readers
-    (`operator_generate`, `generate_tenant_metadata`,
-    `check_path_metadata_consistency`, `custom_alerts/loader`) globbed
-    `*.yaml` and therefore did not see `db-b.yml` AT ALL, while the
-    exporter reads both spellings. That is a real divergence on the
-    extension-SPELLING axis and it is filed separately (#1603) — but
-    widening them here would land it inside a commit whose stated subject
-    is case folding, where no reviewer is looking for it. Callers pass
-    the set they already accept; the default is both.
-
-    ⚠️ That list is a SNAPSHOT, not an invariant. #1603 has since widened
-    `custom_alerts/loader` (since removed, #3230), `generate_tenant_metadata` and
-    `check_path_metadata_consistency` and `operator_generate`, and the
-    axis reaches call sites
-    that list never had (it was drawn from one spelling of the narrowing —
-    a keyword `suffixes=` — and missed the positional ones).
-    ⛔ Do not quote a number or a name list from here — census the call
-    sites by the VALUE passed, at any argument position, to any callee.
-
-    ⛔ Do not "simplify" this by dropping the parameter and folding every
-    caller to `CONFIG_SUFFIXES`. That is the behaviour change, spelled as
-    a cleanup.
-    """
-    lowered = name.lower()
-    return any(lowered.endswith(s) for s in suffixes)
-
-
-def is_hidden_name(name: str) -> bool:
-    """Dot-prefixed, i.e. skipped by the exporter's walker."""
-    return _is_hidden(name)
-
-
-def is_reserved_name(name: str) -> bool:
-    """`_`-prefixed control file — reserved, never a tenant carrier.
-
-    ⚠️ ASCII `_` only, and that is not laziness: the reserved prefix is a
-    single ASCII byte with no case, so unlike the extension there is
-    nothing here to fold. Go's `confdname.IsReserved` makes the same
-    call and the shared matrix pins both.
-    """
-    return name.startswith("_")
-
-
-def is_defaults_name(name: str) -> bool:
-    """The defaults CHAIN CARRIER — exactly `_defaults.yaml`/`.yml`, any casing.
-
-    ⛔ EXACT, not a prefix, and the difference is load-bearing. The
-    oracle is `scanDirHierarchical` (`config_hierarchy.go`), which compares
-    the lowercased name
-    against the two literals; this table's own contract says the same in
-    words ("name lowercased is exactly ..."). And
-    `conf.d/examples/_defaults-multidb.yaml` existed in this repo (until
-    #3014), while the exporter never merged it into any tenant's chain.
-
-    ⚠️ A prefix version shipped briefly during #1588 and blind review
-    measured what it did: `describe_tenant` went from reproducing the
-    exporter's `merged_hash` on 5/5 shipped tenants to 3/5 WRONG, and
-    `deprecate_rule --execute` wrote "disable" into `_defaults-multidb.yaml`
-    while printing 下架完成 — leaving the tenant's own override deleted and
-    its threshold silently RELAXED back to the platform value. Fixing a
-    divergence by inventing a worse one is the exact failure this line of
-    work exists to stop.
-
-    ⛔ Do NOT reuse this for "is this a platform-defaults DOCUMENT to
-    schema-validate". That is a prefix question and has its own predicate,
-    `is_defaults_document_name` below. Two questions that share a word are
-    not one predicate.
-    """
-    return name.lower() in ("_defaults.yaml", "_defaults.yml")
-
-
-def is_defaults_document_name(name: str) -> bool:
-    """A platform-defaults DOCUMENT — judged by platform-defaults.schema.json.
-
-    PREFIX, any casing (`_defaults.yaml`, `_defaults-multidb.yaml`,
-    `_DEFAULTS.YML` …): the answer to "which schema is this file held to",
-    not to "does the exporter merge it" (that is `is_defaults_name`). Moved
-    here from `check_confd_schema._is_defaults_file` (#2164) so the shipped
-    `validate-config` selects the same files that lint does without a second
-    copy of the rule; see that function for why it is not the exact match.
-    """
-    return has_yaml_extension(name) and name.lower().startswith("_defaults")
-
-
-def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
-    """The ONE carrier a directory's defaults chain reads (#1674, B8).
-
-    `carriers` are the `is_defaults_name` entries of ONE directory, in any
-    order. Every plane answers this the same way — the exporter's chain
-    (`pkg/config` `SelectDefaultsCarriers`), `/effective`, the flat root
-    `Defaults` served on `/metrics`, and `describe_tenant` — so a directory
-    holding two spellings is ONE file on every plane, never a merge:
-
-      * a spelling that lowercases to `_defaults.yaml` beats any spelling
-        that lowercases to `_defaults.yml`;
-      * among `.yaml` case variants the LAST in name order wins, among
-        `.yml` variants the FIRST.
-
-    ⚠️ The asymmetry in the second bullet is not a typo. It is the rule
-    `/effective` had before #1674 (its walk overwrote on `.yaml` and kept
-    the first `.yml`), and the owner ruling keeps it rather than "fixing"
-    it. Order is the name's code-point order, which for UTF-8 names is
-    Go's byte order — the one `filepath.WalkDir` visits a directory in.
-
-    ⛔ Two carriers in one directory is a misconfiguration: it is WARNed
-    (the exporter's `DefaultsCarriers.AmbiguityWarnings`; a conf.d reader
-    here names the carrier parse-tree marks `not_read`) instead of being
-    chosen silently.
-    """
-    ordered = sorted(carriers, key=lambda p: Path(p).name)
-    yaml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yaml"]
-    if yaml_spelling:
-        return yaml_spelling[-1]
-    yml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yml"]
-    return yml_spelling[0] if yml_spelling else None
-
-
-def readable_carriers(carriers: "Iterable[Path]"
-                      ) -> "tuple[list[Path], list[tuple[Path, OSError]]]":
-    """Split carriers into (readable, [(unreadable, error)]).
-
-    ⛔ Selection runs over the carriers the exporter's walker KEEPS, and the
-    walker logs-and-drops an entry whose read fails (a dangling symlink, a
-    permission error) from every map — so such an entry is never a
-    candidate there. Selecting among raw directory names instead let a
-    dangling `_defaults.yaml` win over a readable `_defaults.yml` and read
-    as "no carrier" (blind review of #1674). Callers report the unreadable
-    ones, as they did before selection existed.
-    """
-    readable: list[Path] = []
-    unreadable: list[tuple[Path, OSError]] = []
-    for p in carriers:
-        try:
-            with open(p, "rb") as fh:
-                fh.read()
-        except OSError as exc:
-            unreadable.append((Path(p), exc))
-            continue
-        readable.append(Path(p))
-    return readable, unreadable
-
-
-def config_stem(name: str) -> str:
-    """Tenant id carried by a filename, or `""` if it carries none.
-
-    ⛔ The stem keeps the ORIGINAL case: `Upper.YAML` -> `Upper`, never
-    `upper`. Returning the folded stem would rename a tenant on the write
-    plane only — `GET /tenants`, federation account backfill and both
-    orphan scans key on it, while the exporter's tenant id comes from the
-    `tenants:` mapping inside the file and never from the name. That is
-    the first divergence's own shape, rebuilt worse.
-
-    Reserved and hidden names carry no tenant id and return `""`.
-    """
-    if is_reserved_name(name) or is_hidden_name(name):
-        return ""
-    lowered = name.lower()
-    for suffix in CONFIG_SUFFIXES:
-        if lowered.endswith(suffix):
-            # Slice by the CONSTANT's length, never `len(lowered)`:
-            # `str.lower()` can shrink byte length (`İ` is 2 -> 1), so an
-            # offset taken from the folded copy can cut the original in
-            # the wrong place.
-            return name[: len(name) - len(suffix)]
-    return ""
+# ⛔ NO NAME RULE HERE (#3206, ADR-036 §7 step 9). Which names are config
+# files, hidden, reserved (`_`), the defaults carrier, a platform-defaults
+# document, which carrier a directory selects and the tenant id a file name
+# carries are Go's answers (`pkg/confdname`, `da-guard parse-tree`): an
+# entry's `role` / `class` / `tenant_named` / `defaults_document` /
+# `not_read` and a listing's `defaults_carriers` for a path of a tree, and
+# `_lib_parse_tree.classify_names` for a name that is not on a disk (a
+# ConfigMap's keys). The Python copy of those rules (`has_yaml_extension`,
+# `is_reserved_name`, `is_defaults_name`, `config_stem`,
+# `select_defaults_carrier`, …) and its parity tests were deleted; Go's own
+# test pins the shared table (`tests/shared/confd_name_classification_matrix.json`,
+# pkg/confdname's matrix test).
 
 
 # ── the walk: da-guard's per-path index (ADR-036 §7 step 9, #3206) ─────
@@ -552,19 +299,6 @@ def list_config_tree(config_dir: str | os.PathLike[str], *, listing: Any = None,
         [root / e.path for e in bad],
         [root / e.path for e in bad if e.unlistable_dir],
         held)
-
-
-def is_dir_symlink(p: Path) -> bool:
-    """A symlink whose target is a directory; False instead of raising.
-
-    For the WORDING of an entry the listing already put in `unusable`
-    (#1972: what is lost is a whole subtree) — never to decide whether an
-    entry is a config file: that is the entry's role.
-    """
-    try:
-        return p.is_symlink() and p.is_dir()
-    except OSError:
-        return False
 
 
 def unusable_entry(p: "str | os.PathLike[str]", listing: Any) -> Any:
@@ -928,7 +662,7 @@ def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
       of `d` (the same set it prints), on every call — including a flat
       tree (nothing skipped) and repeats its print memo silences.
     * `resolve_defaults_file(d)`: recorded with only the nested DEFAULTS
-      carriers (`is_defaults_name`), because locating the root carrier is
+      carriers (class `defaults`), because locating the root carrier is
       all it does; a nested tenant is not something it was going to read.
 
     What is NOT observed, and why that is not closed by construction:
@@ -1123,51 +857,20 @@ def _reader_of(config_dir: "str | os.PathLike[str]", reader: Any) -> Any:
     return reader_for(config_dir)
 
 
-def declared_tenant_ids(config_dir: "str | os.PathLike[str]", reader: Any = None) -> set:
-    """Tenant ids some TENANT file declares anywhere in the tree: the keys of
-    the `tenants:` mapping of every non-`_` config file `da-guard parse-tree`
-    can read.
-
-    The ENUMERATION is the exporter walker's (`pkg/config/tree_scan.go`):
-    recurse, skip dot-prefixed entries, never read a `_`-prefixed file for
-    tenants — the reader's listing (Go's `role`, class `defaults` /
-    `platform` left out), the snapshot it reads the content from. So a flat reader can
-    ask "does this tenant exist" with the tree the exporter sees: a tenant
-    declared only in `team-a/tx.yaml` exists even for a reader that routes
-    only the root.
-
-    The CONTENT is parse-tree's (ADR-036 step 4, #2906; *reader* is a
-    `_lib_parse_cache.ConfdReader` of *config_dir*, the session's when None):
-    the ids are the keys' source TEXT, as yaml.v3 keys the exporter's
-    ``map[string]`` — ``010:`` is ``"010"``, ``yes:`` is ``"yes"``, and
-    ``123:`` / ``"123":`` are one id, which parse-tree refuses as a duplicate.
-    A file parse-tree cannot read (``unreadable``: several documents, a
-    duplicate key, a syntax error, …) declares nothing here; naming it is the
-    calling reader's own job. A file the exporter's full decode rejects but
-    parse-tree reads (a tenant body that is not a mapping, a `defaults:` of
-    the wrong shape) still declares its tenants here — mirroring the Go
-    decoder would be an unbounded differential (#1942).
-
-    Raises `_lib_parse_tree.ParseTreeError` (no da-guard, a failing one) —
-    never an empty set for a tree that was not read.
-    """
-    from _lib_parse_tree import FileUnreadable
-    reader = _reader_of(config_dir, reader)
-    ids: set[str] = set()
-    listing = config_listing(config_dir, reader=reader)
-    for e in ([] if listing is None else listing.config_files()):
-        if e.reserved:
-            continue
-        path = listing.root / e.path
-        try:
-            data = reader.read(path)
-        except FileUnreadable:
-            continue  # declares nothing; see docstring
-        if isinstance(data.get("tenants"), dict):
-            # Keys are the source text; the overlay readers key their
-            # tenants the same way, so membership compares text to text.
-            ids.update(data["tenants"])
-    return ids
+def tenant_set_unknown_note(unknown: "Iterable[Any]") -> str:
+    """The clause a "no tenant file declares X" message adds when the tree's
+    tenant set is not fully known (#3206): *unknown* is the open half of Go's
+    `TenantScope` (`_lib_parse_cache.declared_tenants`' second element —
+    `FileUnreadable`s), each a path that is or may hide a tenant file, so a
+    tenant it declares cannot be told apart from one nobody declares. ""
+    when the set is known."""
+    unknown = list(unknown)
+    if not unknown:
+        return ""
+    shown = ", ".join(printable_name(u.file) for u in unknown[:WARN_LIMIT])
+    more = f" (+{len(unknown) - WARN_LIMIT} more)" if len(unknown) > WARN_LIMIT else ""
+    return (f" that da-guard parse-tree can read (it may be declared in one of the "
+            f"{len(unknown)} path(s) it cannot: {shown}{more})")
 
 
 def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
@@ -1182,8 +885,9 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     Selection is the exporter's walker: the reader's listing (recursive,
     case-insensitive, both spellings; Go's `role`) and its class (a ``_`` file
     is never read for tenants). A declaration is a key of a mapping-shaped
-    ``tenants:`` in a file `da-guard parse-tree` reads (*reader*, as for
-    ``declared_tenant_ids``), keyed by its source text. A label is the
+    ``tenants:`` in a file `da-guard parse-tree` reads (*reader*, a
+    `_lib_parse_cache.ConfdReader` of *config_dir*, the session's when None),
+    keyed by its source text. A label is the
     root-relative POSIX path (the file name when it is not under the root).
     *unreadable* lists, as one list (#3206: both halves of
     `_lib_parse_tree.TenantScope`), the labels of the paths that are or may
@@ -1191,7 +895,8 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     follow, …), then of the tenant files parse-tree could not read, in walk
     order — a limit on the answer, which the caller must name — but a file
     whose top level is not a mapping, which declares nothing.
-    Raises `_lib_parse_tree.ParseTreeError` as ``declared_tenant_ids`` does.
+    Raises `_lib_parse_tree.ParseTreeError` (no da-guard, a failing one) —
+    never an empty answer for a tree that was not read.
     """
     from _lib_parse_tree import FileUnreadable
     from _lib_parse_cache import tenant_scope
@@ -1235,7 +940,7 @@ def duplicate_declarations(declared: "Mapping[Any, Iterable[str]]"
 
     ⚠️ They can disagree with the walker. A carrier here is a file whose
     first document has a ``tenants:`` key naming the tenant — the repo's
-    decided Python notion of "declares" (see ``declared_tenant_ids``: the
+    decided Python notion of "declares" (see ``tenant_declarations``: the
     Go full decode is deliberately NOT mirrored, #1942). A file the
     exporter's full decode REJECTS (e.g. another tenant's body is a scalar)
     declares nothing on the Go side, so Go may resolve a tenant this
@@ -1263,12 +968,16 @@ def overlay_platform_tenants(
     entries: "Iterable[tuple[str, str, dict]]",
     exists: "Callable[[], set[str]]",
     merge: "Callable[[dict, dict], None] | None" = None,
+    *,
+    platform: "Collection[str]",
 ) -> "tuple[dict[str, dict], list[tuple[str, str]]]":
     """Merge per-tenant blocks read from ROOT files: platform first, tenant wins.
 
     *entries* is ``(fname, tenant, overrides)`` for every tenant entry a
-    reader took from a root file's ``tenants:`` block, in read order. A
-    `_`-prefixed *fname* is a PLATFORM file: its block is the platform's
+    reader took from a root file's ``tenants:`` block, in read order. An
+    *fname* in *platform* — the files Go classes platform (`_`) files, the
+    caller's entries' class (#3206: no name rule here) — is a PLATFORM file:
+    its block is the platform's
     per-tenant DEFAULT, applied first; every tenant-file entry is applied
     after it, key by key — so the tenant wins whatever either file is called
     (the exporter's `sortFlatMergeOrder`). A key the tenant file does not
@@ -1291,15 +1000,15 @@ def overlay_platform_tenants(
     does on /metrics.
     """
     apply = merge if merge is not None else dict.update
-    platform: list[tuple[str, str, dict]] = []
+    platform_entries: list[tuple[str, str, dict]] = []
     owned: list[tuple[str, str, dict]] = []
     for fname, tenant, overrides in entries:
-        (platform if is_reserved_name(os.path.basename(fname)) else owned
+        (platform_entries if fname in platform else owned
          ).append((fname, tenant, overrides))
     orphans: list[tuple[str, str]] = []
     merged: dict[str, dict] = {}
     known: "set[str] | None" = None
-    for fname, tenant, overrides in platform:
+    for fname, tenant, overrides in platform_entries:
         if known is None:
             known = exists()
         if tenant not in known:
@@ -1319,7 +1028,15 @@ LEGACY_STATE_FILES = ("_groups.yaml", "_views.yaml", "_federation_policy.yaml",
                       "_account_registry.yaml")
 
 
-def legacy_state_files(config_dir: "str | os.PathLike[str]") -> list[str]:
-    """The pre-#2856 state record files still sitting in *config_dir*."""
-    base = Path(config_dir)
-    return [n for n in LEGACY_STATE_FILES if (base / n).is_file()]
+def legacy_state_files(config_dir: "str | os.PathLike[str]", *, listing: Any = None,
+                       reader: Any = None) -> list[str]:
+    """The pre-#2856 state record files still sitting at the top of
+    *config_dir*: the config files (Go's `role`, #3206 — never `is_file()`)
+    tenant-api wrote under those names. Raises `_lib_parse_tree.ParseTreeError`."""
+    held = _listing(config_dir, listing, reader)
+    if held is None:
+        return []
+    # A lookup of each name at the root, not a scan: these files only ever
+    # lived there (tenant-api reads the root).
+    return [n for n in LEGACY_STATE_FILES
+            if (e := held.entry(n)) is not None and e.config_file]

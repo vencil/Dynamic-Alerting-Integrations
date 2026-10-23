@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "dx"))
 from _grar_parse import load_tenant_tree  # noqa: E402
 from describe_tenant import ConfDScanner  # noqa: E402
-from _lib_confd import declared_tenant_ids, overlay_platform_tenants  # noqa: E402
+from _lib_confd import overlay_platform_tenants  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
@@ -216,12 +216,14 @@ def test_existence_is_not_consulted_when_no_platform_file_names_a_tenant() -> No
     def boom() -> set:
         raise AssertionError("existence read although no platform entry exists")
     merged, orphans = overlay_platform_tenants(
-        [("tx.yaml", "tx", {"a": 1})], boom)
+        [("tx.yaml", "tx", {"a": 1})], boom, platform=())
     assert merged == {"tx": {"a": 1}} and orphans == []
 
 
 def test_a_file_that_cannot_be_read_or_parsed_declares_nothing(tmp_path: Path) -> None:
-    """`declared_tenant_ids` skips a tenant file it cannot use rather than
+    """The existence set (`_lib_parse_cache.declared_tenants`, Go's
+    `TenantScope` — #3206) takes a tenant file it cannot use as declaring
+    nothing AND as leaving the set open (its `unknown` half), rather than
     raising: a first document that does not parse, and bytes that are not
     UTF-8 (the read itself fails). Neither declares its tenant — the Go
     walker rejects both too (the parse-failure row of the matrix pins the
@@ -239,6 +241,9 @@ def test_a_file_that_cannot_be_read_or_parsed_declares_nothing(tmp_path: Path) -
     (tmp_path / "latin1.yaml").write_bytes(b"tenants:\n  tl: {}\n# caf\xe9\n")
     (tmp_path / "ok.yaml").write_text("tenants:\n  tok: {}\n", encoding="utf-8")
     with _lib_parse_cache.judging():
-        assert declared_tenant_ids(tmp_path) == {"tok"}
+        declared, unknown = _lib_parse_cache.declared_tenants(
+            _lib_parse_cache.reader_for(tmp_path))
+        assert set(declared) == {"tok"}
+        assert sorted(u.file for u in unknown) == ["broken.yaml", "latin1.yaml"]
     with refuses("broken.yaml", "latin1.yaml"):
-        declared_tenant_ids(tmp_path)
+        _lib_parse_cache.declared_tenants(_lib_parse_cache.reader_for(tmp_path))

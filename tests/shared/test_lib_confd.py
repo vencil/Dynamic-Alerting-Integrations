@@ -796,3 +796,35 @@ def test_entries_returns_posix_path_order_not_basename_order(tmp_path):
         f"expected POSIX path order; basename order would give "
         f"['b/aaa.yaml', 'a/zzz.yaml'] and no sort would echo the input. "
         f"got {got}")
+
+
+# ── the shared name table, end to end (#1537, #3206) ─────────────────
+
+#: Go owns this table (pkg/confdname's matrix test asserts every cell and the
+#: coverage floor); the Python readers keep no copy of the rule it states.
+NAME_MATRIX = REPO / "tests" / "shared" / "confd_name_classification_matrix.json"
+
+
+def test_iter_config_files_reads_what_the_name_table_says(tmp_path: pathlib.Path) -> None:
+    """`iter_config_files` projects Go's `role`, so on a flat tree holding one
+    file per row of the shared table it yields exactly the rows that carry a
+    YAML extension and are not hidden — the table's own columns, composed by
+    no Python rule. CONTENT is held constant, so only the NAME varies."""
+    import json
+
+    rows = json.loads(NAME_MATRIX.read_text(encoding="utf-8"))["rows"]
+    probe = tmp_path / "_case_probe_lower"
+    probe.write_text("x", encoding="utf-8")
+    if (tmp_path / "_CASE_PROBE_LOWER").exists():
+        pytest.skip("case-insensitive filesystem: rows differing only by case "
+                    "cannot coexist, so the enumerator CANNOT BE MEASURED here")
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    for i, row in enumerate(rows):
+        (root / row["name"]).write_text(f"tenants:\n  t{i}: {{}}\n", encoding="utf-8")
+    assert {p.name for p in root.iterdir()} == {r["name"] for r in rows}
+    got = {p.name for p in iter_config_files(root)}
+    want = {r["name"] for r in rows if r["yaml_extension"] and not r["hidden"]}
+    assert got == want, (
+        f"missing (table says read): {sorted(want - got)}; "
+        f"extra (table says skip): {sorted(got - want)}")

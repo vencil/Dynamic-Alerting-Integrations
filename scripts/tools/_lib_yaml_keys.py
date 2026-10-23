@@ -51,7 +51,7 @@ names the file (#2114 review: before, these leaked ``TypeError`` /
   kind + raw text), and every reader that was strict on main reads through
   that — there the two spellings raise ``DuplicateKeyError``. The residual
   is the readers that were NOT strict on main and use this loader directly:
-  ``_lib_confd.declared_tenant_ids``, ``diagnose``, and
+  the conf.d tenant-set readers (since #3206 ``_lib_parse_cache.declared_tenants``), ``diagnose``, and
   ``analyze_rule_pack_gaps --tenant-config`` fold the two spellings into
   one tenant (``safe_load`` made them two, 123 and "123"). Whether they
   become strict is #2123's decision per reader. Both halves are pinned in
@@ -82,7 +82,8 @@ parser refuses) and deliberately NOT used: the two parsers disagree exactly
 on malformed files, and switching only the tenant-key readers made one run
 give two answers — ``validate_config``'s ``yaml_syntax`` called a file
 unreadable while ``tenant_uniqueness`` read it, and the routing reader
-dropped a tenant file that ``declared_tenant_ids`` still counted, so a
+dropped a tenant file that the existence set (then ``declared_tenant_ids``)
+still counted, so a
 platform block created the tenant silently. Which parser the tool family
 uses on malformed files is decided in #2123, for all readers at once.
 """
