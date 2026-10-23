@@ -343,6 +343,15 @@ def test_warn_nested_requires_the_callers_snapshot(hierarchical):
         warn_nested(hierarchical)
 
 
+def test_warn_nested_takes_the_snapshot_of_a_missing_dir(capsys, tmp_path):
+    """`config_listing` answers None for a path that is not a directory; that
+    is the caller's snapshot ("nothing nested"), not a missing one."""
+    reset_warned_for_test()
+    missing = tmp_path / "conf.d"
+    assert warn_nested(missing, listing=config_listing(missing)) is False
+    assert capsys.readouterr().err == ""
+
+
 def test_reset_is_idempotent_not_save_restore(capsys, hierarchical):
     """Repo rule (CLAUDE.md): process-global state gets an idempotent CLEAR.
 

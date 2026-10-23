@@ -953,8 +953,11 @@ def observe_flat_reads(sink: list[FlatRead]) -> Iterator[list[FlatRead]]:
         _FLAT_READ_SINKS.reset(token)
 
 
+_NO_SNAPSHOT: Any = object()
+
+
 def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
-                listing: Any = None, reader: Any = None) -> bool:
+                listing: Any = _NO_SNAPSHOT, reader: Any = None) -> bool:
     """Print the nested-config warning to stderr, at most once per directory.
 
     Returns whether anything was printed.
@@ -973,11 +976,13 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None,
     The nested files are the caller's snapshot, one of which is required:
     *listing* (a listing it holds) or *reader* (its `ConfdReader`, whose
     tree-mode document it reads the content from) — no second walk (#3206).
-    Raises TypeError with neither.
+    `listing=None` is a snapshot too: the one `config_listing` gives for a
+    path that is not a directory (nothing nested). Raises TypeError with
+    neither.
     """
-    if listing is None and reader is None:
-        raise TypeError("warn_nested: pass the caller's snapshot (listing= or reader=)")
-    if listing is None:
+    if listing is _NO_SNAPSHOT:
+        if reader is None:
+            raise TypeError("warn_nested: pass the caller's snapshot (listing= or reader=)")
         listing = config_listing(config_dir, reader=reader)  # None: not a directory
     missed = [] if listing is None else _nested_files(listing)
     # Recorded BEFORE the flat-tree early return and the memo: an observer
