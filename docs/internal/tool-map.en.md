@@ -112,7 +112,7 @@ lang: en
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
 | `list_subprocess_only_modules.py` | 每個模組被哪一種進入點執行到（以 coverage 實測為準）。 |
-| `measure_judgement_budget.py` | Measure one complete judgement of the generator container against its |
+| `measure_judgement_budget.py` | Measure one generator-container judgement against ADR-036 §3's budget (#3206). |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
 | `migrate_ssot_language.py` | SSOT 語言切換遷移工具 (DORMANT, S#101 policy lock) |
 | `pair_bench_ratio.py` | Turn one night's PAIRED benchmark run into per-benchmark ratios (ADR-032). |
