@@ -22,7 +22,7 @@ The four root causes of alert fatigue and their corresponding solutions:
 | Root Cause | Solution | Mechanism | Config Source |
 |------|------|------|----------|
 | False positive storms during backup/maintenance | **Silent Mode** | Sentinel alert → inhibit_rules block notifications (TSDB preserves records) | `_silent_mode` |
-| Scheduled maintenance forgotten to disable | **Maintenance Mode** | Complete alert suppression at PromQL layer (supports `expires` auto-expiry) | `_state_maintenance` |
+| Scheduled maintenance forgotten to disable | **Maintenance Mode** | Alerts carrying the maintenance condition do not fire at the PromQL layer — not all alerts ([scope](../design/config-driven.en.md#27-three-state-operational-modes); supports `expires` auto-expiry) | `_state_maintenance` |
 | Warning + Critical duplicate alerts | **Severity Dedup** | Per-tenant inhibit_rules (`metric_group` pairing) | `_severity_dedup` |
 | Notification destination hardcoded centrally | **Alert Routing** | Per-tenant route + receiver (6 types) | `_routing` |
 
