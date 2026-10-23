@@ -339,9 +339,16 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         return {"outcome": "git_read"}
     try:
         irregular = materialise(tree_dir, tree)
-    except (GitReadError, OSError, _lib_parse_tree.ParseTreeError) as exc:
+    except (GitReadError, OSError) as exc:
         print(f"generator-service: base tree not written: {exc}", file=sys.stderr)
         return {"outcome": "git_read"}
+    except _lib_parse_tree.ParseTreeError as exc:
+        # Not a git read: da-guard could not say which path components are
+        # hidden (names mode). Its own outcome, so the reply does not blame git.
+        msg = " ".join(str(exc).split())
+        print(f"generator-service: da-guard could not classify the base tree's "
+              f"path names: {msg}", file=sys.stderr)
+        return {"outcome": "da_guard", "message": msg}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
     # cache's own key (SHA-256 of the path below conf.d and the content,

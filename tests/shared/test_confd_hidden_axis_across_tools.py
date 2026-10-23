@@ -122,6 +122,14 @@ def _tree_tenants(root):
     return got.tenants + got.invalid
 
 
+def _declared_tenants(root):
+    # Both halves of Go's `TenantScope` (#3206): the ids, and the paths that
+    # leave the set open — a hidden path must be in neither.
+    import _lib_parse_cache
+    declared, unknown = _lib_parse_cache.declared_tenants(_lib_parse_cache.reader_for(root))
+    return sorted(declared) + sorted(u.file for u in unknown)
+
+
 def _iter_config_files(root):
     from _lib_confd import iter_config_files
     return _names(iter_config_files(root), root)
@@ -279,6 +287,7 @@ def _migration_audit(root):
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tree_tenants": ("_lib_confd.py", _tree_tenants),
+    "declared_tenants": ("_lib_parse_cache.py", _declared_tenants),
     "iter_config_files": ("_lib_confd.py", _iter_config_files),
     "list_config_tree": ("_lib_confd.py", _list_config_tree),
     "operator_generate": ("ops/operator_generate.py", _operator_generate),

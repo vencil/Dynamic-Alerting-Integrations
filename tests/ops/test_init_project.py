@@ -1779,6 +1779,42 @@ def _top_level_config_names(conf_dir):
 
 class TestKustomizeBaseEnumeratesConfd:
 
+    def test_a_failing_names_run_writes_nothing(self, tmp_path):
+        """#3206: every da-guard question the kustomize base asks is asked
+        by the plan, before the first write. A da-guard that fails on
+        `--names` (and on nothing else) ends the run at rc 2 with NOTHING
+        written — not conf.d/ and the workflow written, then a traceback."""
+        import stat
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        real = os.environ.get('DA_GUARD_BINARY')
+        if not real:
+            pytest.skip('needs $DA_GUARD_BINARY (the session build sets it)')
+        wrapper = tmp_path / 'da-guard-no-names'
+        wrapper.write_text(
+            '#!/bin/sh\n'
+            'for a in "$@"; do [ "$a" = "--names" ] && { echo "names: boom" >&2; exit 1; }; done\n'
+            f'exec "{real}" "$@"\n', encoding='utf-8')
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        out = tmp_path / 'out'
+        (out / 'conf.d').mkdir(parents=True)
+        (out / 'conf.d' / 'db-old.yaml').write_text('tenants:\n  db-old: {}\n', encoding='utf-8')
+        before = sorted(p.relative_to(out).as_posix() for p in out.rglob('*'))
+        tool = str(Path(ip.__file__).resolve())
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1', 'DA_GUARD_BINARY': str(wrapper)}
+        r = subprocess.run(
+            [sys.executable, tool, '-o', str(out), '--non-interactive', '--tenants', 'db-a',
+             '--rule-packs', 'mariadb', '--deploy', 'kustomize', '--ci', 'github'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            env=env, timeout=180)
+        assert r.returncode == 2, (r.returncode, r.stderr[-600:])
+        assert 'Traceback' not in r.stderr, r.stderr[-600:]
+        after = sorted(p.relative_to(out).as_posix() for p in out.rglob('*'))
+        assert after == before, f"written although the run was refused: {set(after) - set(before)}"
+
     def test_yml_carrier_present_before_rerun_is_a_configmap_key(self):
         """A `.yml` tenant already in conf.d is in `files:` AND linked."""
         with tempfile.TemporaryDirectory() as tmp:

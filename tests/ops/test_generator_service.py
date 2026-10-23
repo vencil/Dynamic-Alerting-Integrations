@@ -438,6 +438,45 @@ def test_git_read_is_retried_once(tmp_path, world, mode, want):
             assert "git read attempt 2 failed" in doc["stderr_tail"]
 
 
+def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
+    """#3206: which component of a not-regular git entry is hidden is asked
+    of da-guard's names mode. When that run fails, the reply says so — an
+    incomplete judgement naming da-guard — not "reading the base commit from
+    git failed" (the git read succeeded)."""
+    import stat
+    real = provide_da_guard_path()
+    wrapper = tmp_path / "da-guard-no-names"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do [ "$a" = "--names" ] && { echo "names: boom" >&2; exit 1; }; done\n'
+        f'exec "{real}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    repo = h.init_repo(tmp_path / "r")
+    d = repo / "conf.d"
+    d.mkdir(parents=True)
+    (d / "alpha.yaml").write_text(cases._tenant("alpha"), encoding="utf-8")
+    symlink_or_skip("alpha.yaml", d / "link.yml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
+    with h.Service(tmp_path / "s", repo, bin_dir=bin_dir,
+                   env={"DA_GUARD_BINARY": str(wrapper)}) as svc:
+        status, doc = svc.validate(commit)
+    assert status == 200 and doc["result"] == "rejected", doc
+    assert doc["reason"] == "incomplete", doc
+    assert "da-guard parse-tree could not classify" in doc["message"], doc
+    assert "git" not in doc["message"].split("da-guard")[0], doc
+
+
+def provide_da_guard_path() -> str:
+    real = os.environ.get("DA_GUARD_BINARY")
+    if not real:
+        pytest.skip("needs $DA_GUARD_BINARY (the session build sets it)")
+    return real
+
+
 def test_tree_entries_are_written_by_mode(tmp_path):
     """100644 / 100755 files are written; a 120000 symlink and a 160000
     gitlink are not — they come back as not regular files (#2981), except a
