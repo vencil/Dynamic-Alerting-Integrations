@@ -199,26 +199,50 @@ def _readers(tree: "_lib_parse_tree.Tree", rel: str) -> "tuple[str, ...]":
     return tuple(tree.selected.get(rel, ()))
 
 
-def _clean_target(rel: "str | os.PathLike[str]") -> str:
+#: Why `_clean_target` refuses a write target: Go's `cleanRelPath`
+#: (cmd/da-guard/parse_tree.go) refusals, one for one, plus the NUL byte no
+#: argv can carry to it. A test runs each spelling through both and pins
+#: that they refuse the same set.
+TARGET_NOT_RELATIVE = "must be a path relative to the conf.d root"
+TARGET_NOT_INSIDE = "must name a file inside the conf.d root"
+TARGET_NOT_UTF8 = "is not valid UTF-8; JSON cannot carry it"
+TARGET_NUL = "holds a NUL byte, which no file name can"
+
+
+def _clean_target(rel: "str | bytes | os.PathLike[str]") -> str:
     """The write target *rel* as parse-tree names it: root-relative, '/',
     lexically cleaned (`team/`, `./team` and `a/../team` are `team`), as Go's
     `cleanRelPath` cleans `--path` — so the document's entry, readers and
     `not_read` are looked up under the name they are held by.
 
-    ⛔ A target that names no file inside the root — empty, `.`, absolute
-    (a drive too), or one that leaves the root (`..`, `../x`) — raises
-    :class:`WriteRefused` (:data:`NOT_READ`: a write there reaches no
-    reader), here and before any da-guard run: never parse-tree's caller
-    error read back as "no usable da-guard" (ParseTreeError), and never a
-    path a staging directory would join outside itself."""
+    ⛔ The same refusals as `cleanRelPath`, each a :class:`WriteRefused`
+    (:data:`NOT_READ`: a write there reaches no reader), here and before any
+    da-guard run — never parse-tree's caller error read back as "no usable
+    da-guard" (ParseTreeError), never a bare ValueError, and never a path a
+    staging directory would join outside itself: empty or absolute (a drive
+    too) — :data:`TARGET_NOT_RELATIVE`; `.`, `..` or leaving the root —
+    :data:`TARGET_NOT_INSIDE`; not valid UTF-8 (`os.fsdecode`'s lone
+    surrogates) — :data:`TARGET_NOT_UTF8`; and a NUL byte, which no argv
+    can carry to Go — :data:`TARGET_NUL`."""
     given = os.fspath(rel)
+    if isinstance(given, bytes):
+        given = os.fsdecode(given)
+
+    def refuse(why: str) -> "WriteRefused":
+        return WriteRefused(given, NOT_READ, f"the write target {given!r} {why}")
+
+    if "\x00" in given:
+        raise refuse(TARGET_NUL)
     s = given.replace(os.sep, "/") if os.sep != "/" else given
-    norm = posixpath.normpath(s) if s else ""
-    if (not s or s.startswith("/") or os.path.isabs(given) or os.path.splitdrive(given)[0]
-            or norm in (".", "..") or norm.startswith("../")):
-        raise WriteRefused(given, NOT_READ,
-                           "the write target is not a path naming a file inside the conf.d "
-                           "root (it is empty, '.', absolute, or leaves the root)")
+    if not s or s.startswith("/") or os.path.isabs(given) or os.path.splitdrive(given)[0]:
+        raise refuse(TARGET_NOT_RELATIVE)
+    norm = posixpath.normpath(s)
+    if norm in (".", "..") or norm.startswith("../"):
+        raise refuse(TARGET_NOT_INSIDE)
+    try:
+        norm.encode("utf-8")
+    except UnicodeEncodeError:
+        raise refuse(TARGET_NOT_UTF8) from None
     return norm
 
 
@@ -468,7 +492,9 @@ class StagedTree:
     def place(self, rel: str, dest: "str | os.PathLike[str]") -> None:
         """Move the staged *rel* to *dest* (its parent must exist): a rename on
         the same file system, otherwise a copy. Raises OSError."""
-        src = self.dir / rel
+        # The staged name is the cleaned one (`confirm_tree`), whatever
+        # spelling the caller places it by.
+        src = self.dir / _clean_target(rel)
         try:
             os.replace(src, dest)
         except OSError as exc:
@@ -508,9 +534,19 @@ def confirm_tree(root: "str | os.PathLike[str]",
     write-error handling). The staging directory is removed on exit, whatever
     happened. Raises WriteRefused and ParseTreeError (no usable da-guard)."""
     root = Path(root)
+    given_rels = [os.fsdecode(os.fspath(rel)) for rel, _t, _e in items]
     # Each target checked and cleaned before anything is staged: an absolute
     # or `..` target would be joined outside the staging directory.
     items = [(_clean_target(rel), text, expected) for rel, text, expected in items]
+    # Two spellings of one path would be staged one over the other, and only
+    # the last text judged and placed: refused, naming both.
+    first: "dict[str, str]" = {}
+    for (rel, _t, _e), given in zip(items, given_rels):
+        if rel in first:
+            raise WriteRefused(rel, NOT_READ,
+                               f"two items of this run name the same file: {first[rel]!r} "
+                               f"and {given!r} are both {rel!r}")
+        first[rel] = given
     rels = tuple(rel for rel, _t, _e in items)
     parent = _staging_parent(root)
     try:
