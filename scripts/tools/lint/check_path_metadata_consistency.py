@@ -52,8 +52,7 @@ from _lib_compat import require_project_root  # noqa: E402  (#2852)
 # `da-guard parse-tree`'s — the exporter's walk, yaml.v3's reading (tenant
 # ids as source text, #2216).
 import _lib_parse_cache  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # Conservative allowlist of strings that carry environment semantics when
 # they appear as a directory segment. Keep narrow to avoid false positives
@@ -93,12 +92,12 @@ def iter_tenant_files(config_dir: Path) -> Iterable[Path]:
     """Tenant files under `config_dir`: the ones `da-guard parse-tree`
     selects (the exporter's walk: both spellings in any case, #1603;
     `.`-prefixed entries pruned, #2081; a ConfigMap mount's payload read
-    once), minus `_`-prefixed platform files — readable or not (`main`
-    names an unreadable one). Raises ParseTreeError."""
+    once), minus `_`-prefixed platform files. Taking the index is the
+    shared conf.d refusal (#3206), so every one is readable. Raises
+    ParseTreeError."""
     tree = _lib_parse_cache.reader_for(config_dir).tree()
     for rel in _lib_parse_cache.tenant_files(tree):
-        if rel not in tree.unreadable:
-            yield config_dir / rel
+        yield config_dir / rel
 
 
 def _path_inferences(
@@ -169,10 +168,10 @@ def scan_file(
         return []
     try:
         data = _lib_parse_cache.reader_for(config_dir).read(filepath)
-    except (FileUnreadable, _lib_parse_cache.NotSelected):
-        # Unreadable: named as NOT checked by `main` (parse-tree's
-        # `unreadable`). Not selected (outside the tree, a hidden name): no
-        # reader reads it, so there is nothing to check.
+    except _lib_parse_cache.NotSelected:
+        # Not selected (outside the tree, a hidden name): no reader reads it,
+        # so there is nothing to check. (An unreadable one is the shared
+        # conf.d refusal, #3206, before any file is read.)
         return []
 
     inferences = _path_inferences(filepath, config_dir)
@@ -287,32 +286,16 @@ def _main() -> int:
         )
         return EXIT_OK
 
-    # #1607: an entry the walk could not read (a config-named directory, a
-    # broken symlink, a directory link, a file that does not parse) is one
-    # this lint did NOT check, so it is named, once — or the "N tenant
-    # file(s)" tail below would read as coverage it does not have. ONE
-    # parse-tree document answers the warnings, the findings and the tail
-    # (#2906: parse-tree's `unreadable`, not a second Python walk).
+    # #1607 / #3206: an entry the walk could not read (a config-named
+    # directory, a broken symlink, a directory link, a file that does not
+    # parse) is a path da-guard validation names: taking the run's index
+    # (`iter_tenant_files`) ends the run through the shared conf.d refusal,
+    # naming every one, so the "N tenant file(s)" tail below is coverage.
     try:
-        tree = _lib_parse_cache.reader_for(config_dir).tree()
         tenant_files = list(iter_tenant_files(config_dir))
     except ParseTreeError as exc:
         print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
         return EXIT_CALLER_ERROR
-    for rel, (kind, message) in sorted(tree.unreadable.items()):
-        # The `_` name filter is for FILES only. A subtree the walk could not
-        # descend is named whatever it is called: the exporter descends
-        # `_`-prefixed directories, so a directory it could not list (a
-        # `read_failure` on a directory: a locked `_arch/`, #2081) or a
-        # directory link (`_shared`, #1972) hides tenants too. A directory
-        # with a config file name (`_defaults.yaml/`, `not_regular_file`)
-        # is a file slot, not a subtree: not named.
-        entry = config_dir / rel
-        if (not rel.rsplit("/", 1)[-1].startswith("_")
-                or (entry.is_dir() and (entry.is_symlink() or kind == "read_failure"))):
-            print(f"{safe_label(str(entry))}:0: warning: not checked — "
-                  f"{safe_label(message)} ({kind})",
-                  file=sys.stderr)
 
     mismatches: list[Mismatch] = []
     for filepath in tenant_files:

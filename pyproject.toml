@@ -17,6 +17,7 @@ markers = [
     "benchmark: 效能基線測試（需 pytest-benchmark）",
     "regression: 已知 bug 回歸測試",
     "snapshot: 輸出格式穩定性快照測試",
+    "real_crash_exit_code: 本測試釘的是真正的 crash 結束碼，期間移除 DA_TEST_CRASH_EXIT_CODE（#3092；tests/conftest.py）",
 ]
 
 # ── coverage ──────────────────────────────────────────────────

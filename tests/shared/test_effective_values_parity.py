@@ -20,6 +20,11 @@ from pathlib import Path
 
 import pytest
 
+#: The loaders' mechanics on trees Go names paths on, and with fake binaries
+#: that answer only `effective`: as the judges call them (`judging_run`,
+#: #3206). A tool run refuses such a tree first (the behaviour matrix).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError

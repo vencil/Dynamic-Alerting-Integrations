@@ -211,3 +211,90 @@ func TestValidateTenant_PRModeDoesNotJudgeValues(t *testing.T) {
 		t.Errorf("status %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// #3269: a reserved key written with a schedule — refused on a new write,
+// a notice when the file already holds it (GET, PUT and a batch op that
+// leave it alone), a refusal when the write changes the schedule.
+const (
+	smSched       = "_silent_mode writes `overrides:`"
+	smSchedValue  = "{default: disable, overrides: [{window: \"03:00-04:00\", value: all}]}"
+	smSchedTenant = "tenants:\n  t-a:\n    _silent_mode: " + smSchedValue + "\n"
+)
+
+func TestScheduledReserved_WriteAndRead(t *testing.T) {
+	t.Parallel()
+	t.Run("PUT new is refused", func(t *testing.T) {
+		t.Parallel()
+		f := newSilentModeFixture(t, smSchedTenant)
+		if w := putTenantIn(t, f, "t-b", "tenants:\n  t-b:\n    _silent_mode: "+smSchedValue+"\n"); w.Code != http.StatusBadRequest ||
+			!strings.Contains(w.Body.String(), smSched) {
+			t.Errorf("%d %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("PUT leaving it alone is a notice", func(t *testing.T) {
+		t.Parallel()
+		f := newSilentModeFixture(t, smSchedTenant)
+		if w := putTenantIn(t, f, "t-a", smSchedTenant+"    mysql_connections: \"71\"\n"); w.Code != http.StatusOK ||
+			!strings.Contains(w.Body.String(), "NOTICE: tenant=t-a: "+smSched) {
+			t.Errorf("%d %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("PUT moving the window is refused", func(t *testing.T) {
+		t.Parallel()
+		f := newSilentModeFixture(t, smSchedTenant)
+		moved := strings.Replace(smSchedTenant, "03:00-04:00", "05:00-06:00", 1)
+		if w := putTenantIn(t, f, "t-a", moved); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), smSched) {
+			t.Errorf("%d %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("batch op on another key passes with the notice", func(t *testing.T) {
+		t.Parallel()
+		f := newSilentModeFixture(t, smSchedTenant)
+		code, results, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"mysql_connections":"71"}}]}`, false)
+		if code != http.StatusOK || statuses(results) != "ok" ||
+			!strings.Contains(strings.Join(results[0].Warnings, "\n"), "NOTICE: tenant=t-a: "+smSched) {
+			t.Errorf("status %d results %+v: %s", code, results, f.lastBody)
+		}
+	})
+	t.Run("GET is a notice", func(t *testing.T) {
+		t.Parallel()
+		configDir := setupConfigDir(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+			"t-a.yaml":       smSchedTenant,
+		})
+		detail := getTenantDetail(t, &Deps{ConfigDir: configDir}, "t-a")
+		if strings.Contains(strings.Join(detail.Warnings, "\n"), smSched) ||
+			!strings.Contains(strings.Join(detail.Notices, "\n"), smSched) {
+			t.Errorf("warnings %q notices %q", detail.Warnings, detail.Notices)
+		}
+	})
+}
+
+// The ratchet compares the expiry field by field: on a file holding
+// `{default, expires, reason}`, a PUT that changes only `expires:` or only
+// `reason:` is a change (400); the same value is a notice.
+func TestScheduledReserved_ExpiryChangeIsRefused(t *testing.T) {
+	t.Parallel()
+	doc := func(expires, reason string) string {
+		return "tenants:\n  t-a:\n    _silent_mode: {default: disable, expires: \"" + expires + "\", reason: \"" + reason + "\"}\n"
+	}
+	const sched = "_silent_mode writes `expires:` and `reason:`"
+	onDisk := doc("2099-01-01T00:00:00Z", "r1")
+	for _, c := range []struct {
+		name, body string
+		code       int
+	}{
+		{"unchanged", onDisk, http.StatusOK},
+		{"expires only", doc("2099-02-01T00:00:00Z", "r1"), http.StatusBadRequest},
+		{"reason only", doc("2099-01-01T00:00:00Z", "r2"), http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSilentModeFixture(t, onDisk)
+			w := putTenantIn(t, f, "t-a", c.body)
+			if w.Code != c.code || !strings.Contains(w.Body.String(), sched) {
+				t.Errorf("%d %s, want %d naming %q", w.Code, w.Body.String(), c.code, sched)
+			}
+		})
+	}
+}

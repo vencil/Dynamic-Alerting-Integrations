@@ -70,10 +70,10 @@ try:
 except ImportError:
     yaml = None
 
-# #1549: `merged_hash_error`, when there is no merged_hash. Fixed words that
-# name no file: the cause, with da-guard's own lines, is on stderr.
-MERGED_HASH_UNREADABLE_TREE = ("the exporter's load skips or cannot read a file of this tree, "
-                               "so da-guard effective gives no merged_hash (see stderr)")
+# #1549: the reason a tenant of a refused tree has no merged_hash. Fixed
+# words that name no file: the cause, with da-guard's own lines, is on stderr.
+# (A tree whose load skips or cannot read a file is the shared conf.d refusal
+# since #3206, before anything is described.)
 MERGED_HASH_TREE_REFUSED = ("the exporter rejects this whole tree (a tenant is declared in more "
                             "than one file), so da-guard effective gives no merged_hash (see stderr)")
 
@@ -115,9 +115,9 @@ class ConfDScanner:
     `da-guard parse-tree`), each with its sorted carrier labels; `refused` is
     set — and `tenants` empty — when the exporter rejects the whole tree
     because of such a duplicate; `declared` every tenant id some file
-    declares. `parse_failed` / `unreadable` are the files the exporter's load
-    skips or cannot read (`da-guard effective` exit 3): every tenant it still
-    resolved is described, without a merged_hash.
+    declares. (A file the exporter's load skips or cannot read is a path
+    da-guard validation names: the shared conf.d refusal, #3206, ended the
+    run before the scan.)
 
     Raises DescribeError when da-guard is missing, fails, or refuses the tree
     for any other reason."""
@@ -128,13 +128,7 @@ class ConfDScanner:
         self.duplicates: dict = {}
         self.declared: "list[str]" = []
         self.refused: "str | None" = None
-        self.parse_failed: "list[str]" = []
-        self.unreadable: list = []
         self.stderr_lines: "list[str]" = []
-        # #1607: every entry no reader takes whole — what the exporter's load
-        # skips (`parse_failed` / `unreadable`) and what parse-tree cannot read
-        # (a directory with a config name among them) — root-relative → why.
-        self.skipped_entries: "dict[str, str]" = {}
         # #1674: every file no plane reads (a defaults carrier its
         # directory's chain does not select), root-relative → parse-tree's
         # `not_read` reason. Named by `main`, not here: tenant_verify scans too.
@@ -152,19 +146,9 @@ class ConfDScanner:
             try:
                 declared, _unread = tenant_declarations(self.conf_d)
                 pt_tree = _lib_parse_cache.reader_for(self.conf_d).tree()
-                pt_unreadable = pt_tree.unreadable
                 self.not_read = dict(sorted(pt_tree.not_read.items()))
             except ParseTreeError as exc:
                 raise DescribeError([f"da-guard parse-tree failed: {exc}"]) from exc
-            for rel, (kind, message) in sorted(pt_unreadable.items()):
-                self.skipped_entries[rel] = f"{message} ({kind})"
-            if run is not None:
-                # A file the exporter's full decode rejects declares nothing
-                # there (#2115, #1942): it is no carrier of a duplicate.
-                dropped = set(run.parse_failed)
-                declared = {t: {f for f in files if f not in dropped}
-                            for t, files in declared.items()}
-                declared = {t: files for t, files in declared.items() if files}
             self.duplicates = duplicate_declarations(declared)
             self.declared = sorted(declared)
             if run is None:
@@ -177,18 +161,7 @@ class ConfDScanner:
                 self.stderr_lines = dup_error.stderr_lines
                 return
             self.tenants = dict(run.tenants)
-            self.parse_failed = list(run.parse_failed)
-            self.unreadable = list(run.unreadable)
-            for rel in self.parse_failed:
-                self.skipped_entries.setdefault(rel, "the exporter's load does not decode it")
-            for u in self.unreadable:
-                self.skipped_entries.setdefault(u.file, f"the exporter's load cannot read it ({u.reason})")
             self.stderr_lines = list(run.stderr_lines)
-
-    @property
-    def dropped(self) -> bool:
-        """Whether the exporter's load skips or cannot read a file of the tree."""
-        return bool(self.parse_failed or self.unreadable)
 
     def tenant_ids(self) -> "list[str]":
         """Every tenant this tree names: resolved, duplicated, or — when the
@@ -223,14 +196,9 @@ class ConfDScanner:
             raise KeyError(f"Tenant '{tenant_id}' not found in {self.conf_d}")
         return copy.deepcopy(self.tenants[tenant_id].effective_config)
 
-    def merged_hash(self, tenant_id: str) -> "tuple[str | None, str | None]":
-        """`(merged_hash, None)` — da-guard effective's — or `(None, reason)`
-        when the exporter's load skips or cannot read a file of this tree
-        (#1549): a value such a file would have given is missing, so the hash
-        is not reported."""
-        if self.dropped:
-            return None, MERGED_HASH_UNREADABLE_TREE
-        return self.tenants[tenant_id].merged_hash, None
+    def merged_hash(self, tenant_id: str) -> str:
+        """The tenant's merged_hash — da-guard effective's (#1549)."""
+        return self.tenants[tenant_id].merged_hash
 
     def platform_overlay(self, tenant_id: str) -> list:
         """`[{file, keys}]` — Go's `platform_overlay` (#2019)."""
@@ -241,22 +209,16 @@ class ConfDScanner:
         return list(self.tenants[tenant_id].profile_overlay)
 
     def source_info(self, tenant_id: str) -> dict:
-        """Source traceability for a tenant — every field da-guard effective's.
-
-        `merged_hash` is None when there is none (`merged_hash()`), and
-        `merged_hash_error` then says why."""
+        """Source traceability for a tenant — every field da-guard effective's."""
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found")
         te = self.tenants[tenant_id]
-        merged_h, merged_h_error = self.merged_hash(tenant_id)
         info = {
             "tenant_id": tenant_id,
             "source_file": te.source_file,
             "source_hash": te.source_hash,
-            "merged_hash": merged_h,
+            "merged_hash": self.merged_hash(tenant_id),
         }
-        if merged_h_error is not None:
-            info["merged_hash_error"] = merged_h_error
         info["defaults_chain"] = list(te.defaults_chain)
         # Omitted when empty, as Go's `platform_overlay,omitempty`.
         if te.platform_overlay:
@@ -456,8 +418,10 @@ def what_if_result(scanner: ConfDScanner, tid: str, draft: Path,
         raise WhatIfError("\n".join(
             [f"da-guard effective refuses the tree with the --what-if file {draft} at "
              f"{flag} {rel}: {lines[0] if lines else exc}"] + lines[1:])) from exc
-    new_parse_failed = sorted(set(run.parse_failed) - set(scanner.parse_failed))
-    new_unreadable = sorted({u.file for u in run.unreadable} - {u.file for u in scanner.unreadable})
+    # The tree on disk passed the shared refusal (#3206): every file the
+    # overlaid run drops is the draft's doing.
+    new_parse_failed = sorted(run.parse_failed)
+    new_unreadable = sorted(u.file for u in run.unreadable)
     if new_parse_failed or new_unreadable:
         what = ", ".join(new_parse_failed + new_unreadable)
         raise WhatIfError("\n".join(
@@ -660,17 +624,7 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
     print(f"📂 Scanned {conf_d}: {len(scanner.tenants)} tenants (da-guard effective)",
           file=sys.stderr)
-    # #1607: each entry no reader takes whole is named once, in this tool's
-    # own words (da-guard's lines follow behind its prefix).
-    for rel, why in scanner.skipped_entries.items():
-        print(f"WARNING: skipped {safe_label(rel)} — {safe_label(why)}", file=sys.stderr)
     warn_not_read(scanner)
-    if scanner.dropped:
-        print("WARN: the exporter's load skips or cannot read file(s) of this tree (named "
-              "above): their tenants and values are absent, and merged_hash is not "
-              "reported (null, with merged_hash_error).", file=sys.stderr)
-        for line in scanner.stderr_lines:
-            print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
 
     def _output(data: Any) -> str:
         import json
@@ -703,12 +657,8 @@ def main() -> None:
     def _require(t: str) -> None:
         _refuse_duplicate(t)
         if t not in scanner.tenants:
-            why = ""
-            if scanner.dropped:
-                why = (" — the exporter's load skips or cannot read file(s) of this tree "
-                       "(named above); a tenant in one of them is not resolved")
             avail = ", ".join(sorted(scanner.tenants)[:10])
-            print(f"❌ Tenant '{t}' not found{why}. Available: {avail}...", file=sys.stderr)
+            print(f"❌ Tenant '{t}' not found. Available: {avail}...", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
     # --all mode
@@ -732,10 +682,6 @@ def main() -> None:
                     result[tid].update(fields)
         if scanner.refused is not None:
             print(f"❌ no other tenant is described: {scanner.refused}.", file=sys.stderr)
-        elif not result and scanner.dropped:
-            print("❌ no tenant resolved: the exporter's load skips or cannot read file(s) "
-                  "of this tree (named above).", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
         out = _output(result)
         if args.output:
             with output_write(args.output, flag="-o/--output"):

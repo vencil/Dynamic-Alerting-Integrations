@@ -93,15 +93,101 @@ definitions:
     properties:
       action:
         type: string
+      admission:
+        description: 'The federation admission results that refused the whitelist
+          change (metric, state, reason, pii_labels). Codes that carry it: INVALID_BODY.'
+        items:
+          additionalProperties: true
+          type: object
+        type: array
       code:
         $ref: '#/definitions/ErrorCode'
+      commit:
+        description: 'The commit the batch was written as. Codes that carry it: BATCH_COMMITTED.'
+        type: string
+      committed:
+        description: 'Whether the batch was committed: true on BATCH_COMMITTED (do
+          not resend it), false on a direct-mode batch''s CONFLICT. Codes that carry
+          it: BATCH_COMMITTED, CONFLICT.'
+        type: boolean
+      config_error:
+        description: 'Why the tenant''s conf.d file cannot be loaded (the value GET
+          /api/v1/tenants shows for it). Codes that carry it: TENANT_CONFIG_NOT_LOADABLE.'
+        type: string
+      current_source_hash:
+        description: 'The source hash of the tenant file now, to resend with after
+          a refresh. Only for an API-managed tenant file. Codes that carry it: CONFLICT.'
+        type: string
       error:
         type: string
+      existing_pr_url:
+        description: 'The open PR/MR''s URL; empty when the caller may not see it
+          or it is still being created. Codes that carry it: PENDING_PR_EXISTS.'
+        type: string
+      findings:
+        description: 'The route generator''s findings the caller may see, the ones
+          about this write first. Codes that carry it: GENERATOR_FINDINGS.'
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_generator.Finding'
+        type: array
+      findings_compared_with_base:
+        description: 'Whether the configuration before the write was judged too; when
+          true every finding carries pre_existing. Codes that carry it: GENERATOR_FINDINGS.'
+        type: boolean
+      git_managed_reason:
+        description: 'Why the tenant''s conf.d file is git-managed (a fixed reason
+          naming no other tenant). Codes that carry it: TENANT_GIT_MANAGED.'
+        type: string
       help:
+        type: string
+      hint:
+        description: 'Why the task may be missing (pod_may_have_restarted). Codes
+          that carry it: TASK_NOT_FOUND.'
+        type: string
+      message:
+        description: 'Advice for the caller, beside the error text. Codes that carry
+          it: CONFLICT, PENDING_PR_EXISTS.'
+        type: string
+      operation:
+        description: 'The index of the batch operation the refusal is about. Codes
+          that carry it: FORBIDDEN.'
+        type: integer
+      parse_tree_kind:
+        description: 'The kind of YAML parse-tree refusal, when that is why the file
+          cannot be loaded. Codes that carry it: TENANT_CONFIG_NOT_LOADABLE.'
+        type: string
+      pr_number:
+        description: 'The open PR/MR''s number; 0 when the caller may not see it or
+          it is still being created. Codes that carry it: PENDING_PR_EXISTS.'
+        type: integer
+      reason:
+        description: 'Why the route generator gave no verdict (unknown for a reason
+          tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED,
+          POLICY_UNAVAILABLE, VALIDATOR_UNAVAILABLE.'
         type: string
       request_id:
         type: string
       retry_after_s:
+        type: integer
+      tenant_id:
+        description: 'The tenant the refusal is about. Codes that carry it: FORBIDDEN,
+          TENANT_CONFIG_NOT_LOADABLE, TENANT_GIT_MANAGED.'
+        type: string
+      unreadable:
+        description: 'The unreadable conf.d entries ({path, reason}); only for a caller
+          with write permission on all tenants. Codes that carry it: TENANT_STORE_FAULT,
+          TENANT_TREE_UNREADABLE.'
+        items:
+          additionalProperties: true
+          type: object
+        type: array
+      unreadable_count:
+        description: 'How many conf.d entries cannot be read. Codes that carry it:
+          TENANT_STORE_FAULT, TENANT_TREE_UNREADABLE.'
+        type: integer
+      unrelated_findings_withheld:
+        description: 'How many findings unrelated to this write are withheld from
+          the caller; absent when none are. Codes that carry it: GENERATOR_FINDINGS.'
         type: integer
       violations:
         items:
@@ -174,6 +260,65 @@ definitions:
         format: float64
         type: number
     type: object
+  github_com_vencil_tenant-api_internal_async.Task:
+    properties:
+      created_at:
+        type: string
+      error:
+        type: string
+      id:
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/github_com_vencil_tenant-api_internal_async.TaskResult'
+        type: array
+      status:
+        $ref: '#/definitions/github_com_vencil_tenant-api_internal_async.TaskStatus'
+      summary:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  github_com_vencil_tenant-api_internal_async.TaskResult:
+    properties:
+      code:
+        allOf:
+        - $ref: '#/definitions/ErrorCode'
+        description: |-
+          Code mirrors handler.BatchResult.Code (#2078): the machine-readable
+          failure code (e.g. TENANT_DECLARED_ELSEWHERE) of an "error" result
+          (always set since #3226), empty for a result that is not one.
+      message:
+        type: string
+      status:
+        description: |-
+          "ok" | "error" | "skipped" (a group member that does not exist, #2882) |
+          "not_applied" (not refused itself, but its batch was rejected, #2900)
+        type: string
+      tenant_id:
+        type: string
+      warnings:
+        description: |-
+          Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking
+          deprecation advisories for an op that succeeded, so the async polling
+          path (?async=true → GET /tasks/{id}) carries the same author-facing
+          signal as the sync response instead of silently dropping it.
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_vencil_tenant-api_internal_async.TaskStatus:
+    enum:
+    - pending
+    - running
+    - completed
+    - failed
+    type: string
+    x-enum-varnames:
+    - TaskPending
+    - TaskRunning
+    - TaskCompleted
+    - TaskFailed
   github_com_vencil_tenant-api_internal_federation_fedpolicy.Config:
     properties:
       whitelist:
@@ -1463,6 +1608,10 @@ definitions:
         type: string
       label:
         type: string
+    required:
+    - filters
+    - id
+    - label
     type: object
   internal_handler_federation.BackfillAccountsResponse:
     properties:
@@ -2216,6 +2365,31 @@ paths:
       summary: List pending PRs/MRs
       tags:
       - prs
+  /api/v1/tasks/{id}:
+    get:
+      description: |-
+        Returns a task a batch submitted with ?async=true created, to the caller who submitted it: its status, and its results filtered to the tenants the caller can read now (summary is recounted over them).
+        Any other caller, and an id that is unknown or expired (tasks live in memory: a restart loses them), gets the same 404 TASK_NOT_FOUND.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_vencil_tenant-api_internal_async.Task'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Poll an async batch task
+      tags:
+      - tasks
   /api/v1/tenants:
     get:
       description: |-

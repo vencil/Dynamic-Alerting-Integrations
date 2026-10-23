@@ -31,7 +31,9 @@ from test_served_values_readers_matrix import _tree
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+# validate-config's rows, called in process: a judge's reads (`judging_run`,
+# #3206) — the attribution under test is of served-values / effective.
+pytestmark = pytest.mark.usefixtures("da_guard_env", "judging_run")
 
 _CLEAN = {
     "_defaults.yaml": "defaults:\n  mysql_connections: 100\n",

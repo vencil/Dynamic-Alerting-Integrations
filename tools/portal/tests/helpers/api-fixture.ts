@@ -21,6 +21,14 @@
  * Swagger 2.0 vs ajv's draft-07: the only non-JSON-Schema keyword that changes
  * validation is `x-nullable`, translated below; `format` is not asserted (as in
  * tenant-schema.ts); other `x-*` keys are ignored under strict:false.
+ *
+ * ErrorResponse (#3272): the spec lists every field any error code may add
+ * beside `error` and `code` (Swagger 2.0 has no oneOf, so it is the union),
+ * and the error contract (tenant-api-errors.json, generated from the same
+ * declarations in tenant-api's internal/errcode) says which code carries
+ * which. An ErrorResponse fixture is held to both: the spec for names and
+ * types, the contract for "this code sends this field" — a CONFLICT body with
+ * `tenant_id` is refused although some other code sends it.
  */
 import Ajv from 'ajv';
 import { readFileSync } from 'node:fs';
@@ -34,6 +42,16 @@ const SWAGGER = JSON.parse(
 export const API_DEFINITIONS: Record<string, any> = SWAGGER.definitions;
 
 const SCHEMA_ID = 'tenant-api-swagger';
+
+const CONTRACT = JSON.parse(
+  readFileSync(resolve(here, '../../src/interactive/tools/_common/data/tenant-api-errors.json'), 'utf8'),
+);
+/** Per error code, the fields beside the fixed ones its answers may carry. */
+const EXTRA_BY_CODE: Map<string, Set<string>> = new Map(
+  CONTRACT.codes.map((c: any) => [c.code, new Set(c.extra.map((f: any) => f.name))]),
+);
+const ALL_EXTRA: Set<string> = new Set([...EXTRA_BY_CODE.values()].flatMap(s => [...s]));
+const ERROR_RESPONSE = 'ErrorResponse';
 
 /** Deep-copies one schema node, closing open objects and translating x-nullable. */
 function strictify(node: any): any {
@@ -101,12 +119,35 @@ function validatorFor(name: string) {
 
 export type ApiFixtureError = { instancePath: string; keyword: string; message?: string; params: any };
 
+/**
+ * The fields of an ErrorResponse body its code does not carry (per the error
+ * contract), though another code does — the spec alone admits those.
+ */
+function envelopeExtraErrors(body: any, at: string): ApiFixtureError[] {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return [];
+  const carried = EXTRA_BY_CODE.get(body.code) ?? new Set<string>();
+  return Object.keys(body)
+    .filter(k => ALL_EXTRA.has(k) && !carried.has(k))
+    .map(k => ({
+      instancePath: at,
+      keyword: 'carriedByCode',
+      message: `code ${body.code} does not carry "${k}" (tenant-api-errors.json)`,
+      params: { additionalProperty: k },
+    }));
+}
+
 /** Returns the reasons `data` is not a `name` body; [] when it is. */
 export function apiFixtureErrors(name: string, data: unknown): ApiFixtureError[] {
   const { validate } = validatorFor(name);
-  return validate(data) ? [] : (validate.errors as ApiFixtureError[]).map(
+  const errors = validate(data) ? [] : (validate.errors as ApiFixtureError[]).map(
     ({ instancePath, keyword, message, params }) => ({ instancePath, keyword, message, params }),
   );
+  const isArray = name.endsWith('[]');
+  if (resolveDefinition(isArray ? name.slice(0, -2) : name) === ERROR_RESPONSE) {
+    const bodies = isArray && Array.isArray(data) ? data : [data];
+    bodies.forEach((b, i) => errors.push(...envelopeExtraErrors(b, isArray ? `/${i}` : '')));
+  }
+  return errors;
 }
 
 /**

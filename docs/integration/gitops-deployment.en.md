@@ -182,7 +182,7 @@ python3 scripts/ops/configmap_assemble.py \
 # rc 1 = config violation (duplicate tenant / file name / artifact does
 #        not match the tree / over 1 MiB / no carrier)
 # rc 2 = caller or tooling error (--config-dir missing, kubectl absent or
-#        timed out)
+#        timed out, a path on the tree da-guard validation names)
 ```
 
 ⚠️ More things this page did not previously state:
@@ -195,10 +195,16 @@ python3 scripts/ops/configmap_assemble.py \
   of the `schema` row in `validate_config --json` (see
   [cli-reference](../cli-reference.en.md#hierarchical-confd)). The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
-- **A carrier nothing can be read from is named, not blocked**: a dangling
-  symlink or a directory carrying a config name (`db-x.yaml/`) at the top
-  level cannot enter the ConfigMap, and each one gets its own `WARN` on
-  stderr. ⛔ That is not noise — that tenant has no alerting in-cluster.
+- **A tree with a path nothing can be read from is refused whole**: every
+  path `da-guard` validation names — a **dangling symlink**, a **directory
+  carrying a config name** (`db-x.yaml/`), a symlink to a directory, a FIFO,
+  a subdirectory that cannot be listed, a file the exporter cannot decode (a
+  YAML syntax error, several documents) — gets its own `ERROR:` line on
+  stderr (**all of them, none elided**), then **rc 2** and nothing is
+  written. ⛔ Such a carrier used to get a `WARN` while the ConfigMap was
+  assembled one tenant short, and that tenant had no alerting in-cluster;
+  now it has to be fixed or removed first. Every other conf.d tool behaves
+  the same way (#3206).
 - **Extension casing now matches the exporter**: carriers such as
   `DB-A.YAML` or `db-b.YML` **do** enter the ConfigMap. ⚠️ Knock-on effect: if
   you hold both `db-a.yaml` and `DB-A.YAML` and they declare the same tenant,

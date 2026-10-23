@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -275,14 +274,23 @@ func DisabledAt(sv ScheduledValue, now time.Time) bool {
 	return isDisabled(strings.ToLower(strings.TrimSpace(sv.resolveValue(now, nil))))
 }
 
-// disabledWords are the (lower-cased) values that switch a key off — a
-// threshold key, a custom alert, or _silent_mode.
-var disabledWords = []string{"disable", "disabled", "off", "false"}
-
-// isDisabled checks if a value string means "disabled".
+// isDisabled reports whether a lower-cased value switches its key off — a
+// threshold key, a custom alert, or _silent_mode. Its case list is the one
+// definition of that vocabulary: tests read the words from this switch
+// (disabledWords in disabled_words_test.go) rather than keep a copy. It is a
+// switch over constants, not a scan of a word slice, because every resolve
+// on every scrape asks it of every value (#3262).
 func isDisabled(lower string) bool {
-	return slices.Contains(disabledWords, lower)
+	switch lower {
+	case disabledSpelling, "disabled", "off", "false":
+		return true
+	}
+	return false
 }
+
+// disabledSpelling is the documented way to write "off"; the other words
+// isDisabled accepts are aliases.
+const disabledSpelling = "disable"
 
 // ParseMetricKey splits a metric key into component and metric (exported for testing).
 func ParseMetricKey(key string) (string, string) { return parseMetricKey(key) }

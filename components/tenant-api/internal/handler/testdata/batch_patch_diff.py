@@ -32,7 +32,7 @@ ROOT = sys.argv[1]
 sys.path.insert(0, os.path.join(ROOT, "scripts", "tools"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "tools", "ops"))
 from _grar_parse import ROUTING_READ  # noqa: E402
-from _lib_parse_cache import ConfdReader  # noqa: E402
+from _lib_parse_cache import ConfdReader, judging  # noqa: E402
 from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 
@@ -42,7 +42,10 @@ def read(text: str, where: str) -> tuple[bool, object, str]:
         f.write(text)
     try:
         # A new reader per file: the tree holds only t.yaml, rewritten each time.
-        data = ConfdReader(where).read(path, ROUTING_READ)
+        # As the route generator reads it — a judge (#3206): a file it cannot
+        # read is its finding (FileUnreadable), not the shared conf.d refusal.
+        with judging():
+            data = ConfdReader(where).read(path, ROUTING_READ)
     except FileUnreadable as e:  # the generator cannot read it (no da-guard: raises)
         return False, None, f"{e.kind}: {' '.join(e.message.split())}"
     return True, data, ""

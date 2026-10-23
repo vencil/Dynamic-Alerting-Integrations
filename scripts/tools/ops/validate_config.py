@@ -217,6 +217,8 @@ from _lib_tenant_values import (  # noqa: E402
 )
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
+# #3142: the deployment --policy's remedy, shared with the tools that take it.
+from _grar_validate import POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY  # noqa: E402
 
 # ============================================================
 # Check results
@@ -249,9 +251,10 @@ POLICY_ONLY_SCHEMA_HINT = (
     "matcher value that is not a string, or a bad group_by entry), not "
     "tenant key problems: no unknown key was reported in this "
     "run. \u26d4 Ignore the generic advice about removing keys: fix what "
-    "each error names (the domain policy file, quote the matcher value in "
-    "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
-    "re-run.")
+    "each error names (fix the domain policy file, or move a misplaced "
+    "domain_policies block into _domain_policy.yaml; quote the matcher "
+    "value in YAML, e.g. team: \"yes\", or quote / remove the group_by "
+    "entry), then re-run.")
 # #2490: the non-strict twin — the same findings as WARNs (non-blocking).
 POLICY_ONLY_SCHEMA_WARN_HINT = (
     "The findings above are ADR-007 domain-policy warnings, not tenant key "
@@ -263,6 +266,16 @@ SKIPPED_ENTRY_SCHEMA_HINT = (
     "not merely flagged. Fix the value it names — e.g. "
     "`_routing_enforced.enabled` must be the YAML boolean true or false — "
     "then re-run.")
+# #3284: a row whose findings are all `ERROR (field type):` lines (#2906 —
+# a group_by that is not a list, a quoted boolean, an unknown
+# _severity_dedup word) is neither "a line ending in 'skipping'" nor a
+# receiver problem; the generator refused the WHOLE tree in every mode.
+FIELD_TYPE_HINT = (
+    "Each 'ERROR (field type)' line above is a value of the wrong type or "
+    "one the generator does not know, and the route generator refuses the "
+    "whole tree in every mode until it is fixed. Fix the value as the ERROR "
+    "line says (e.g. write group_by as a YAML list: group_by: [alertname]; "
+    "a boolean as unquoted true / false), then re-run.")
 # #2279: the generic routes advice ("check _routing … for invalid receiver
 # types") points at a receiver that is fine; what is wrong is its NAME.
 RECEIVER_COLLISION_ROUTES_HINT = (
@@ -613,8 +626,8 @@ def _find_schema(name: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
-    """(file, label, schema name) for every file `yaml_quoting` reads.
+def _quoting_scope(config_dir: str) -> list[tuple[Path, str, tuple[str, ...]]]:
+    """(file, label, schema names) for every file `yaml_quoting` reads.
 
     #2695: `json_schema` leaves the misread scalars of exactly these files
     to `yaml_quoting` — so the set is computed in ONE place. Were the two
@@ -629,20 +642,30 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
     # #3206: the files are the entries of the run's tree-mode document (Go's
     # `role`; the list `check_confd_schema.validate_dir` iterates too), and
     # the schema a name selects is da-guard's (`defaults_document`, class).
+    #
+    # #2743 (#2509 review F3 before it): a ROOT platform file's `tenants:`
+    # block — any root `_` file the exporter reads, Go's verdict
+    # (`root_platform_file`) — is held to the tenant schema too, whose only
+    # top-level key is `tenants`; another `_` file has no schema of its own
+    # here and is read for that block alone. A nested one is not (no plane
+    # reads its block, #1576).
     reader = _lib_parse_cache.reader_for(config_dir)
-    out: list[tuple[Path, str, str]] = []
+    out: list[tuple[Path, str, tuple[str, ...]]] = []
     for e in reader.listing().config_files():
         if e.not_read is not None:
             continue
         if e.defaults_document:
-            schema_name = _PLATFORM_SCHEMA
+            names: tuple[str, ...] = (_PLATFORM_SCHEMA,)
         elif e.name in _PROFILES_NAMES:
-            schema_name = _PROFILES_SCHEMA
+            names = (_PROFILES_SCHEMA,)
         elif e.reserved:
-            continue
+            names = ()
         else:
-            schema_name = _TENANT_SCHEMA
-        out.append((Path(config_dir) / e.path, e.path, schema_name))
+            names = (_TENANT_SCHEMA,)
+        if e.root_platform_file:
+            names += (_TENANT_SCHEMA,)
+        if names:
+            out.append((Path(config_dir) / e.path, e.path, names))
     return out
 
 
@@ -653,7 +676,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     to tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
     and `_routing_profiles.y(a)ml` to routing-profiles.schema.json (#2245;
     the same selection `check_confd_schema` makes); other `_*` files have
-    no schema and are not read. Which values are not strings is yaml.v3's
+    no schema and are read only for a root one's `tenants:` block (below).
+    Which values are not strings is yaml.v3's
     verdict (parse-tree's tag) and which fields are strings is the schema's —
     see `_lib_io.find_misread_scalars`; nothing is listed here. `channel: yes`
     is the string "yes" to yaml.v3 and is no finding.
@@ -667,7 +691,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     `!!bool yes` makes the whole file unreadable to parse-tree
     (`decode_error`), which `yaml_syntax` reports. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
-    nested one is not (the exporter does not read it).
+    nested one is not (the exporter does not read it); so is that of every
+    other root platform file the exporter reads (#2743, `_quoting_scope`).
     """
     from _lib_io import find_misread_scalars, find_yaml11_bool_words
     schemas: dict[str, object] = {}
@@ -684,17 +709,12 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
     checked = 0
-    for fpath, label, schema_name in _quoting_scope(config_dir):
+    for fpath, label, names in _quoting_scope(config_dir):
         try:
             root = reader.node(fpath)
         except FileUnreadable:
             continue
         checked += 1
-        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
-        # is held to the tenant schema too (same rule as check_confd_schema).
-        names = [schema_name]
-        if schema_name == _PLATFORM_SCHEMA and "/" not in label:
-            names.append(_TENANT_SCHEMA)
         for name_ in names:
             for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
                 errors.append(f"{label}: {hit.message()}")
@@ -793,8 +813,9 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
               for v in violations]
     if errors:
         return _make_result("json_schema", FAIL, errors)
-    note = (f"; {len(skipped)} other `_` file(s) have their own shape and "
-            f"are not read here" if skipped else "")
+    # #2743: a root one's `tenants:` block is checked; its own shape is not.
+    note = (f"; {len(skipped)} other `_` file(s) have their own shape, "
+            f"not checked here" if skipped else "")
     # #2906 review: a file no reader reads (parse-tree's `not_read`) is not
     # checked; said here, the `schema` row names why.
     note += (f"; not checked, no reader reads: {', '.join(not_read)}" if not_read else "")
@@ -853,6 +874,16 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     # advice this hint exists to replace, on the path where the customer is
     # most likely to be in a hurry.
     hint = _no_declared_defaults_hint(config_dir)
+    # #3284: only field-type lines (and not only an unusable domain policy,
+    # which POLICY_ONLY_SCHEMA_HINT below names more precisely): neither the
+    # "skipping" advice nor the key advice applies.
+    from _grar_validate import is_field_type_error
+    field_type = [w for w in schema_warnings if is_field_type_error(w)]
+    if (field_type and len(field_type) == len(schema_warnings)
+            and any(getattr(w, "kind", None) != "domain_policy_unusable"
+                    for w in field_type)):
+        return _make_result("schema", FAIL, schema_warnings,
+                            hint=FIELD_TYPE_HINT)
     if policy_errors:
         # ⛔ This row is a multiplexer: its details carry unknown-key WARNs
         # AND ADR-007 policy ERRORs, while the advice line is keyed on the
@@ -892,6 +923,14 @@ def check_routes(
     import generate_alertmanager_routes as gen
 
     tree = gen.load_tenant_tree(config_dir)
+    # #3284: `--validate` refuses the whole tree on a field-type finding (a
+    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
+    # has `--validate` semantics, does not report routes such a run never
+    # generates as WARN / PASS. The schema row lists the same lines.
+    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
+    if refusal:
+        return _make_result("routes", FAIL, [line.strip() for line in refusal],
+                            hint=FIELD_TYPE_HINT)
     routing = tree.routing_configs
     dedup = tree.dedup_configs
     enforced_routing = tree.enforced_routing
@@ -900,15 +939,19 @@ def check_routes(
     # error, not "no policy" — see check_policy)
     allowed_domains = None
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
+        # #3142: the generator's own resolver — the min_generator_version
+        # gate (ADR-036 §6) included, as generate-routes applies it.
         try:
-            allowed_domains = gen.load_policy(policy_file)
+            allowed_domains = gen.resolve_policy(policy_file).allowed_domains
         except gen.PolicyInputError as exc:
             # ⛔ hint= is not decoration here. Without it this row inherits the
             # generic routes advice ("check _routing for invalid receiver
             # types…"), which sends the operator to look at tenant YAML for a
             # problem that is entirely in their own argv.
             return _argv_error_row("routes", str(exc),
-                                   _POLICY_ROUTES_ROW_HINT)
+                                   POLICY_VERSION_REMEDY
+                                   if isinstance(exc, gen.PolicyVersionError)
+                                   else _POLICY_ROUTES_ROW_HINT)
 
     # Capture stderr for warnings
     import io
@@ -1027,9 +1070,12 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     import generate_alertmanager_routes as gen
 
     try:
-        allowed_domains = gen.load_policy(policy_file)
+        allowed_domains = gen.resolve_policy(policy_file).allowed_domains
     except gen.PolicyInputError as exc:
-        return _argv_error_row("policy", str(exc), _POLICY_ROW_HINT)
+        return _argv_error_row("policy", str(exc),
+                               POLICY_VERSION_REMEDY
+                               if isinstance(exc, gen.PolicyVersionError)
+                               else _POLICY_ROW_HINT)
     if not allowed_domains:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
@@ -1055,7 +1101,16 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
                      "not in allowed_domains" in w]
 
     if domain_issues:
-        return _make_result("policy", FAIL, domain_issues)
+        # #3208: the allowlist advice only when the allowlist is what refused
+        # (the finding's kind); the substring filter above also picks up
+        # routing lines that merely mention "domain" — those carry the
+        # routes advice, which is what they are about.
+        if any(gen.is_policy_refusal(w) for w in domain_issues):
+            return _make_result("policy", FAIL, domain_issues)
+        row = _make_result("policy", FAIL, domain_issues,
+                           hint=_CHECK_HINTS["routes"][0])
+        row["hint_docs"] = _CHECK_HINTS["routes"][1]
+        return row
     return _make_result("policy", PASS,
                         [f"All webhook URLs comply with "
                          f"{len(allowed_domains)} allowed domain(s)"])
@@ -2910,10 +2965,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Run: da-tools explain-route --config-dir <dir> --tenant <id>",
         "docs/scenarios/alert-routing-split.md",
     ),
+    # #3208: this row judges the --policy file's allowed_domains, not the
+    # conf.d `_domain_policy.yaml`; the advice is the resolver's own (#3142).
     "policy": (
-        "Review _domain_policy.yaml constraints (allowed/forbidden receiver types, "
-        "timing guardrails). Contact a domain admin to update if needed.",
-        "docs/internal/test-coverage-matrix.md",
+        POLICY_REFUSAL_REMEDY,
+        "docs/cli-reference.md#validate-config",
     ),
     "custom_rules": (
         "Validate rule pack YAML syntax and ensure referenced profiles exist. "
@@ -3497,8 +3553,9 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
 # ============================================================
 def main() -> None:
     """CLI entry point: One-stop configuration validation. Every row reads
-    one `da-guard parse-tree` document of the tree (ADR-036 step 4)."""
-    with _lib_parse_cache.session():
+    one `da-guard parse-tree` document of the tree (ADR-036 step 4). A
+    judge (`judging`, #3206): a path Go names is its finding, exit 1."""
+    with _lib_parse_cache.session(), _lib_parse_cache.judging():
         _main()
 
 

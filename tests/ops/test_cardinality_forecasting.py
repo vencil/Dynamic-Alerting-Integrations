@@ -424,32 +424,7 @@ class TestQueryPrometheus:
         with pytest.raises(cf.QueryError, match="bad query"):
             cf.query_cardinality_range("http://prom:9090")
 
-    @patch("_lib_prometheus.http_get_json")
-    def test_query_scrape_series(self, mock_get):
-        """scrape_series_added 查詢。"""
-        mock_get.return_value = ({
-            "status": "success",
-            "data": {
-                "resultType": "vector",
-                "result": [
-                    {"metric": {"tenant": "db-a"}, "value": [1000, "42"]},
-                ]
-            },
-        }, None)
-        result = cf.query_scrape_series_added("http://prom:9090")
-        assert result["db-a"] == 42.0
 
-    @patch("_lib_prometheus.http_get_json")
-    def test_query_scrape_series_empty(self, mock_get):
-        """scrape_series_added 查詢失敗往上拋（#3065）。"""
-        mock_get.return_value = (None, "connection error")
-        with pytest.raises(cf.QueryError, match="connection error"):
-            cf.query_scrape_series_added("http://prom:9090")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TestCLI
-# ═══════════════════════════════════════════════════════════════════
 
 class TestCLI:
     """CLI 整合測試。"""
@@ -589,7 +564,8 @@ class TestCLI:
         assert doc["warn_days"] == 14
         assert doc["lookback_days"] == 30
         # 設計上歸零的欄位確實是 0 / []
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                                  "non_finite_samples_dropped": 0}
         assert doc["tenants"] == []
         assert doc["generated_at"]
 
@@ -614,7 +590,8 @@ class TestCLI:
         assert doc["status"] == "caller_error"
         assert doc["reason"] == "prometheus_query_error"
         assert doc["error"] == "connection error"
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                                  "non_finite_samples_dropped": 0}
         assert doc["tenants"] == []
         happy_keys = set(cf.generate_json_report(
             cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))

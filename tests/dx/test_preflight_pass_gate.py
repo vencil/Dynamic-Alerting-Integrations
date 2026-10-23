@@ -58,6 +58,13 @@ ZERO_SHA = "0" * 40
 # ---------------------------------------------------------------------------
 
 
+
+def _signals_to_default() -> None:
+    """preexec_fn: the child starts with SIGINT and SIGTERM at their
+    defaults, whatever this process inherited or was left with (#3249)."""
+    for s in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s, signal.SIG_DFL)
+
 def _init_git(repo: Path) -> str:
     env = {
         **os.environ,
@@ -819,11 +826,13 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     line = lines[0].replace(_PY3_CMD, f": > {shlex.quote(str(started))}; sleep 30")
 
     # A session of its own, so the signal reaches the whole group like a
-    # terminal's Ctrl-C does. SIGINT back to default: a shell that starts with
-    # it ignored (pytest run as a background job) cannot trap it, and this cell
-    # would time out for a reason that says nothing about the line.
+    # terminal's Ctrl-C does. SIGINT and SIGTERM back to default: a shell that
+    # starts with one ignored cannot trap it, and this cell would time out for
+    # a reason that says nothing about the line — SIGINT is ignored when
+    # pytest runs as a background job, SIGTERM when an earlier in-process
+    # caller in the same worker left SIG_IGN behind (#3249).
     proc = subprocess.Popen([_BASH, "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
-                            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+                            preexec_fn=_signals_to_default,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     try:
         deadline = time.monotonic() + 20

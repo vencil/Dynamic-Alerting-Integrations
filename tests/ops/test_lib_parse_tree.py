@@ -136,12 +136,14 @@ def test_is_scalar(node, scalar) -> None:
 def test_migration_audit_reads_through_the_shared_reader(tmp_path, monkeypatch) -> None:
     calls = []
 
+    sentinel = lpt.Tree(selected={}, unreadable={}, not_read={}, rendered_by={}, _files={})
+
     def fake(root, binary, timeout):
         calls.append((root, binary, timeout))
-        return {"sentinel": True}
+        return sentinel
 
-    monkeypatch.setattr(lpt, "run", fake)
-    assert ma.run_parse_tree(tmp_path, "bin", 5) == {"sentinel": True}
+    monkeypatch.setattr(lpt, "load", fake)
+    assert ma.run_parse_tree(tmp_path, "bin", 5) is sentinel
     assert calls == [(tmp_path, "bin", 5)]
     assert ma._is_v3_scalar is lpt.is_scalar
     assert (ma.PARSE_TREE_SUBCOMMAND, ma.PARSE_TREE_SCHEMA) == (lpt.SUBCOMMAND, lpt.SCHEMA)
@@ -156,7 +158,7 @@ def test_migration_audit_turns_the_shared_errors_into_its_own(tmp_path, monkeypa
     def fail(*_a):
         raise err
 
-    monkeypatch.setattr(lpt, "run", fail)
+    monkeypatch.setattr(lpt, "load", fail)
     with pytest.raises(ma.AuditError) as e:
         ma.run_parse_tree(tmp_path, None, 5)
     assert str(e.value).startswith(str(err))
@@ -280,11 +282,12 @@ def test_scalar_text() -> None:
 
 
 def _entry(path, readers=("exporter", "generator"), *, cls="tenant", tenant="t", not_read=None,
-           role="config", problem=None, document=False) -> dict:
+           role="config", problem=None, document=False, verdict=None) -> dict:
     return {"path": path, "depth": path.count("/"), "class": cls,
             "tenant_named": tenant if cls == "tenant" else None, "defaults_document": document,
             "readers": list(readers), "not_read": not_read, "role": role,
-            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]}}
+            "problem": None if problem is None else {"kind": problem[0], "message": problem[1]},
+            "verdict": verdict}
 
 
 def _doc(**over) -> dict:

@@ -589,32 +589,6 @@ def _a_shipped_alertname() -> str:
     return m.group(1)
 
 
-def _assembly(tmp: Path, malformed: bool) -> list[str]:
-    """assemble_config_dir argv over one or two sources; the second carries
-    a carrier whose top level is a list, which validates as an ERROR. Each
-    call gets its own --output, so no run sees another's artifact."""
-    name = "with-list" if malformed else "clean"
-    a, b = tmp / f"asm-{name}-a", tmp / f"asm-{name}-b"
-    _write(a / "tenant-one.yaml",
-           'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
-    sources = [a]
-    if malformed:
-        _write(b / "tenant-two.yaml", "- just\n- a list\n")
-        sources.append(b)
-    # Claimed by mkdir, not by counting: every call (one per run) gets an
-    # output directory no earlier call has.
-    n = 0
-    while True:
-        out = tmp / f"asm-out-{name}-{n}"
-        try:
-            out.mkdir(parents=True)
-            break
-        except FileExistsError:
-            n += 1
-    return ["--sources", ",".join(str(x) for x in sources),
-            "--output", str(out), "--json"]
-
-
 def _risk_and_rc(proc: subprocess.CompletedProcess) -> object:
     try:
         return (json.loads(proc.stdout)["tenants"][0]["risk_level"], proc.returncode)
@@ -769,18 +743,9 @@ RECIPES: list[Recipe] = [
       without=EXIT_VIOLATION, with_=EXIT_OK,
       note="3 matching rounds: window 5 (default) and 4 never converge, 2 does"),
 
-    # #1828's tool. A carrier whose top level is a list assembles fine and
-    # is caught only by --validate, whose documented exit for it is 2 — so
-    # the verdict is read from the --json status, not the exit code.
-    R("assemble_config_dir", "--validate",
-      lambda t, s: _assembly(t, malformed=True),
-      flip=("--validate",), boundary=("--validate",),
-      boundary_base=lambda t, s: _assembly(t, malformed=False),
-      without=("ok", EXIT_OK), with_=("validation_error", EXIT_CALLER_ERROR),
-      observe=_json_status_and_rc,
-      note="list-shaped carrier: (ok, 0) -> (validation_error, 2) — exit 2 is "
-           "the documented validation-error code (#1831, owner decision); "
-           "a clean assembly stays (ok, 0)"),
+    # #1828's tool: its --validate was removed in #3206 (every file it called
+    # an ERROR is refused before assembly; tests/ops/test_assemble_config_dir.py
+    # test_the_validate_flag_was_removed).
 
     # Render mode replaces an unreadable group_wait with the default and
     # exits 0; --validate counts that replacement as blocking.

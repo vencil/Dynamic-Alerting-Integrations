@@ -139,3 +139,106 @@ func TestSpecs_IsACopy(t *testing.T) {
 		t.Fatal("Lookup found a code nobody declared")
 	}
 }
+
+// TestExtra_Declarations (#3272): every envelope field is declared once with
+// a known type (Items exactly for an array, Ref only for an object or an
+// array of objects) and a Doc; extraFields is sorted by name; every code in
+// codeExtra is a code, lists only declared fields, none twice; and every
+// declared field is carried by some code. Whether a declared name collides
+// with a fixed envelope field is the handler's to say (it owns
+// ErrorResponse): TestErrorResponse_ExtraNotAFixedField and the contract
+// generator.
+func TestExtra_Declarations(t *testing.T) {
+	t.Parallel()
+	types := map[ExtraType]bool{}
+	for _, ty := range ExtraTypes() {
+		types[ty] = true
+	}
+	if got := constantsOf(t, "ExtraType"); len(got) != len(types) {
+		t.Errorf("ExtraTypes() lists %d types, %d are declared", len(types), len(got))
+	}
+	name := regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
+	seen := map[string]bool{}
+	var names []string
+	for _, f := range extraFields {
+		if seen[f.Name] {
+			t.Errorf("extra field %q is declared twice", f.Name)
+		}
+		seen[f.Name] = true
+		names = append(names, f.Name)
+		if !name.MatchString(f.Name) {
+			t.Errorf("extra field %q is not snake_case", f.Name)
+		}
+		if !types[f.Type] {
+			t.Errorf("extra field %q: type %q is not one of ExtraTypes()", f.Name, f.Type)
+		}
+		if (f.Type == ExtraArray) != (f.Items != "") || (f.Items != "" && !types[f.Items]) {
+			t.Errorf("extra field %q: type %q items %q — an array needs a known Items, nothing else has one", f.Name, f.Type, f.Items)
+		}
+		if f.Ref != "" && f.Type != ExtraObject && f.Items != ExtraObject {
+			t.Errorf("extra field %q: Ref %q on a %s", f.Name, f.Ref, f.Type)
+		}
+		// The doc lands in the OpenAPI description and in swag's docs.go,
+		// a Go raw string rendered as a text/template.
+		if strings.TrimSpace(f.Doc) == "" || strings.ContainsAny(f.Doc, "`\n") || strings.Contains(f.Doc, "{{") {
+			t.Errorf("extra field %q: Doc %q must be one non-empty line without a backtick or {{", f.Name, f.Doc)
+		}
+	}
+	if !slices.IsSorted(names) {
+		t.Errorf("extraFields is not sorted by name: %v", names)
+	}
+	carried := map[string]bool{}
+	for c, fields := range codeExtra {
+		if _, ok := Lookup(c); !ok {
+			t.Errorf("codeExtra lists %q, which is not a code", c)
+		}
+		dup := map[string]bool{}
+		for _, f := range fields {
+			if !seen[f] {
+				t.Errorf("code %s carries %q, which extraFields does not declare", c, f)
+			}
+			if dup[f] {
+				t.Errorf("code %s lists %q twice", c, f)
+			}
+			dup[f] = true
+			carried[f] = true
+		}
+	}
+	for _, f := range names {
+		if !carried[f] {
+			t.Errorf("extra field %q is declared but no code carries it", f)
+		}
+	}
+	if len(codeExtra[Internal]) != 0 {
+		t.Errorf("INTERNAL_ERROR carries %v: its answer withholds everything but the request_id (#1700)", codeExtra[Internal])
+	}
+}
+
+// TestCarries: what a code declares is carried, nothing else is, and an
+// empty or unknown code carries nothing.
+func TestCarries(t *testing.T) {
+	t.Parallel()
+	if !Carries(PendingPR, "pr_number") || Carries(PendingPR, "tenant_id") {
+		t.Error("Carries disagrees with codeExtra for PENDING_PR_EXISTS")
+	}
+	for _, c := range []Code{"", "NO_SUCH_CODE", Internal} {
+		if Carries(c, "message") || Carries(c, "error") {
+			t.Errorf("code %q carries a field", c)
+		}
+	}
+	specs := Specs()
+	for i := range specs {
+		if specs[i].Code == PendingPR {
+			specs[i].Extra[0] = "mutated"
+		}
+	}
+	if !Carries(PendingPR, "existing_pr_url") {
+		t.Fatal("Specs returned codeExtra's own slice")
+	}
+	if _, ok := LookupExtraField("pr_number"); !ok {
+		t.Error("LookupExtraField misses pr_number")
+	}
+	if _, ok := LookupExtraField("error"); ok {
+		t.Error("LookupExtraField found a fixed field")
+	}
+}

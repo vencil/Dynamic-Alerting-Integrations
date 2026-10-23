@@ -146,19 +146,9 @@ def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[
     try:
         info = scanner.source_info(tenant_id)
     except KeyError:
-        if scanner.dropped:
-            # The exporter's load skips or cannot read a file of the tree:
-            # the tenant may be in it. Not a mismatch (exit 2) — no hash.
-            return ({"tenant_id": tenant_id, "error": "merged_hash_unavailable",
-                     "detail": _describe_mod(scanner).MERGED_HASH_UNREADABLE_TREE}, EXIT_USAGE_ERROR)
+        # (A tree the exporter's load skips a file of is the shared conf.d
+        # refusal since #3206: it never reaches here.)
         return ({"tenant_id": tenant_id, "error": "not_found"}, EXIT_VERIFY_FAILED)
-
-    if info["merged_hash"] is None:
-        return ({
-            "tenant_id": info["tenant_id"],
-            "error": "merged_hash_unavailable",
-            "detail": info.get("merged_hash_error", "no merged_hash"),
-        }, EXIT_USAGE_ERROR)
 
     out = {
         "tenant_id": info["tenant_id"],
@@ -285,21 +275,14 @@ def main() -> int:
             print(line, file=sys.stderr)
         return EXIT_USAGE_ERROR
     describe_mod.warn_not_read(scanner)
-    if scanner.refused is not None or scanner.dropped:
-        # The exporter rejects the whole tree, or skips / cannot read a file
-        # of it: no merged_hash anywhere. da-guard's own reason, once.
-        what = scanner.refused or ("the exporter's load skips or cannot read file(s) of this tree: "
-                                   + ", ".join(list(scanner.parse_failed)
-                                               + [f"{u.file} ({u.reason})" for u in scanner.unreadable]))
-        print(f"error: {what}", file=sys.stderr)
+    if scanner.refused is not None:
+        # The exporter rejects the whole tree: no merged_hash anywhere.
+        # da-guard's own reason, once.
+        print(f"error: {scanner.refused}", file=sys.stderr)
         for line in scanner.stderr_lines:
             print(f"{describe_mod.DA_GUARD_PREFIX}{line}", file=sys.stderr)
 
     if args.all:
-        if scanner.dropped and not scanner.tenants:
-            print(f"error: no tenant resolved, so none is verified (see above): {conf_d}",
-                  file=sys.stderr)
-            return EXIT_USAGE_ERROR
         results = verify_all(scanner)
         dups = _duplicated(results)
         unavailable = [r for r in results if r.get("error") == "merged_hash_unavailable"]

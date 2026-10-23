@@ -6,6 +6,7 @@ Import via _lib_python.py facade for backward compatibility.
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -350,16 +351,40 @@ def _malformed(source: str, defect: str) -> QueryError:
     return QueryError(f"malformed {source} response: {defect}", source=source)
 
 
-def _matrix_rows(body: Any) -> list[dict[str, Any]]:
-    """The rows of a ``query_range`` answer, or ``QueryError``.
+def sample_value(raw: Any) -> float:
+    """The float a Prometheus sample holds — ``+Inf`` / ``-Inf`` / ``NaN``
+    included. The API writes every sample value as a JSON string; a JSON
+    number is read too, as the tools read it before (refusing it would
+    change their exit code, which is not decided). Anything ``float()``
+    cannot read — and a boolean — raises ``ValueError``, which
+    ``_matrix_rows`` turns into a ``QueryError`` naming the sample. The one
+    reading of a sample (#3213): tools do not call ``float()`` / ``int()`` on
+    one themselves."""
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raise ValueError(f"{raw!r:.40} is not a sample value")
+    return float(raw)
 
-    A ``success`` body must hold ``data`` (an object) with ``resultType:
-    matrix`` and ``result`` a list whose every row is an object with a
-    ``values`` and/or ``histograms`` list of ``[timestamp, sample]`` pairs
-    (and, when present, a ``metric`` object). One row that is not counts for the whole answer:
-    a tool reading the rows that are fine would report the others as
-    absent (#3074).
-    """
+
+def row_samples(row: dict[str, Any]) -> list[tuple[float, float]]:
+    """``(timestamp, value)`` of every float sample of a ``_matrix_rows``
+    row, parsed once here (non-finite values kept: whether ``+Inf`` is a
+    sample or a gap is the tool's question). A histogram-only row has none."""
+    return [(float(ts), sample_value(val)) for ts, val in row.get("values", [])]
+
+
+def finite_row_samples(row: dict[str, Any]) -> tuple[list[tuple[float, float]], int]:
+    """``row_samples`` without the non-finite ones, and how many were
+    dropped — for a tool that needs a count or a regression (#3213), which
+    reports the number dropped rather than crashing or hiding them."""
+    samples = row_samples(row)
+    kept = [(ts, v) for ts, v in samples if math.isfinite(v)]
+    return kept, len(samples) - len(kept)
+
+
+def _success_result(body: Any, result_type: str) -> Any:
+    """``data.result`` of a ``success`` body whose ``resultType`` is
+    *result_type*, or ``QueryError`` — the part every Prometheus answer
+    shares (the error text as Prometheus wrote it, or the defect named)."""
     if not isinstance(body, dict):
         raise _malformed("Prometheus", "body is not a JSON object")
     if body.get("status") != "success":
@@ -367,10 +392,63 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
     data = body.get("data")
     if not isinstance(data, dict):
         raise _malformed("Prometheus", "'data' is missing or not an object")
-    if data.get("resultType") != "matrix":
+    if data.get("resultType") != result_type:
         raise _malformed("Prometheus",
-                         f"resultType is {data.get('resultType')!r}, expected 'matrix'")
-    rows = data.get("result")
+                         f"resultType is {data.get('resultType')!r}, expected {result_type!r}")
+    return data.get("result")
+
+
+def _vector_rows(body: Any) -> list[dict[str, Any]]:
+    """The rows of an instant ``query`` answer, or ``QueryError``.
+
+    ``resultType: vector`` and ``result`` a list whose every row is an
+    object with ``value`` (a ``[timestamp, sample]`` pair ``sample_value``
+    reads) and/or ``histogram`` (a native-histogram sample, not read as a
+    float), and, when present, a ``metric`` object (#3133). One row that is
+    not counts for the whole answer, as in ``_matrix_rows``.
+    """
+    rows = _success_result(body, "vector")
+    if not isinstance(rows, list):
+        raise _malformed("Prometheus", "'data.result' is missing or not a list")
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise _malformed("Prometheus", f"result[{i}] is not an object")
+        if not isinstance(row.get("metric", {}), dict):
+            raise _malformed("Prometheus", f"result[{i}].metric is not an object")
+        if "value" not in row and "histogram" not in row:
+            raise _malformed("Prometheus",
+                             f"result[{i}] has neither 'value' nor 'histogram'")
+        if "value" in row:
+            sample = row["value"]
+            try:
+                if not (isinstance(sample, list) and len(sample) == 2):
+                    raise ValueError
+                sample_value(sample[1])  # the value only, as _matrix_rows
+            except (TypeError, ValueError):
+                raise _malformed("Prometheus",
+                                 f"result[{i}].value is {sample!r:.40}, "
+                                 "expected [timestamp, number]") from None
+    return rows
+
+
+def vector_sample(row: dict[str, Any]) -> Optional[float]:
+    """The float sample of a ``_vector_rows`` row (non-finite kept), or
+    None for a histogram-only row."""
+    return sample_value(row["value"][1]) if "value" in row else None
+
+
+def _matrix_rows(body: Any) -> list[dict[str, Any]]:
+    """The rows of a ``query_range`` answer, or ``QueryError``.
+
+    A ``success`` body must hold ``data`` (an object) with ``resultType:
+    matrix`` and ``result`` a list whose every row is an object with a
+    ``values`` and/or ``histograms`` list of ``[timestamp, sample]`` pairs
+    (and, when present, a ``metric`` object); every float sample (``values``)
+    is a number ``sample_value`` reads (#3213). One row that is not counts for the whole answer:
+    a tool reading the rows that are fine would report the others as
+    absent (#3074).
+    """
+    rows = _success_result(body, "matrix")
     if not isinstance(rows, list):
         raise _malformed("Prometheus", "'data.result' is missing or not a list")
     for i, row in enumerate(rows):
@@ -390,12 +468,58 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
             samples = row[key]
             if not isinstance(samples, list):
                 raise _malformed("Prometheus", f"result[{i}].{key} is not a list")
-            for sample in samples:
+            for j, sample in enumerate(samples):
                 if not (isinstance(sample, list) and len(sample) == 2):
                     raise _malformed("Prometheus",
                                      f"result[{i}].{key} holds {sample!r:.40}, "
                                      "expected [timestamp, sample]")
+                if key != "values":
+                    continue
+                # Only the value: an unreadable timestamp is not refused here
+                # (backtest never reads it; refusing would change its rc).
+                try:
+                    sample_value(sample[1])
+                except (TypeError, ValueError):
+                    raise _malformed("Prometheus",
+                                     f"result[{i}].values[{j}] is {sample!r:.40}, "
+                                     "expected [timestamp, number]") from None
     return rows
+
+
+def prometheus_instant(
+    prom_url: str,
+    promql: str,
+    *,
+    timeout: int = 10,
+    result_type: str = "vector",
+) -> list[dict[str, Any]]:
+    """Execute a Prometheus instant query; return its rows or raise.
+
+    Same request as :func:`query_prometheus_instant` (percent-encoded once
+    here), but a query that was not answered is never a value (#3133).
+    *result_type* is the answer the PromQL asks for: ``vector``, or
+    ``matrix`` for a range-vector selector (``x[7d]``) evaluated at one
+    instant — then the rows are checked as :func:`_matrix_rows` checks them.
+
+    Returns:
+        The vector rows (``metric``, ``value``; read the sample with
+        :func:`vector_sample`), or the matrix rows (read with
+        :func:`row_samples`). ``[]`` only when Prometheus answered with an
+        empty result.
+
+    Raises:
+        QueryError: no connection, an HTTP error, ``status`` other than
+            ``success``, or a ``success`` body that is not a vector of
+            readable samples (see :func:`_vector_rows`).
+    """
+    readers = {"vector": _vector_rows, "matrix": _matrix_rows}
+    if result_type not in readers:
+        raise ValueError(f"result_type {result_type!r}: expected one of {sorted(readers)}")
+    url = f"{prom_url}/api/v1/query?" + urllib.parse.urlencode({"query": promql})
+    data, err = http_get_json(url, timeout=timeout)
+    if err:
+        raise QueryError(err)
+    return readers[result_type](data)
 
 
 def prometheus_range(
@@ -467,6 +591,13 @@ def alertmanager_alerts(
     for i, alert in enumerate(data):
         if not isinstance(alert, dict):
             raise _malformed("Alertmanager", f"alert[{i}] is not an object")
-        if not isinstance(alert.get("labels", {}), dict):
+        labels = alert.get("labels", {})
+        if not isinstance(labels, dict):
             raise _malformed("Alertmanager", f"alert[{i}].labels is not an object")
+        # A label value is a string in Alertmanager's API; anything else is
+        # not an answer a tool can match on (#3133, review of #3196).
+        bad = next((k for k, v in labels.items() if not isinstance(v, str)), None)
+        if bad is not None:
+            raise _malformed("Alertmanager",
+                             f"alert[{i}].labels.{bad} is not a string")
     return data

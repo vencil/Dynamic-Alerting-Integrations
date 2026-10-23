@@ -39,6 +39,8 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -195,7 +197,8 @@ type ErrorResponse struct {
 	// Extra carries per-error custom fields (existing_pr_url,
 	// pr_number, hint, etc.). Inlined at the top level via the
 	// custom MarshalJSON below — clients see them as siblings of
-	// `error`, not nested.
+	// `error`, not nested. Only the fields Code declares in
+	// internal/errcode (extra.go) are sent (#3272).
 	Extra map[string]any `json:"-"`
 } //@name ErrorResponse
 // The swag @name above pins ONE canonical OpenAPI definition. Without it,
@@ -208,6 +211,16 @@ type ErrorResponse struct {
 // MarshalJSON inlines Extra at the top level so clients reading
 // e.g. `existing_pr_url` find it next to `error`, matching the
 // pre-PR-9 inline shape.
+//
+// #3272: only the Extra fields e.Code declares (errcode.Carries) are sent;
+// any other is dropped and logged (logDroppedExtra). The declarations never
+// name a fixed field (EnvelopeFieldNames; the contract generator and
+// TestErrorResponse_ExtraNotAFixedField refuse one), so Extra cannot replace
+// `code` or `error`; INTERNAL_ERROR declares none, so none of an internal
+// error's Extra reaches the client (its text is withheld by
+// WriteErrorEnvelope, #1700); an envelope with no code sends no Extra. That
+// every field a handler sets is declared is checked before it ships
+// (cmd/gen-error-contract): a drop here is a bug, not a policy.
 func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{"error": e.Error}
 	if e.Code != "" {
@@ -229,9 +242,42 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 		out["action"] = e.Action
 	}
 	for k, v := range e.Extra {
+		if !errcode.Carries(e.Code, k) {
+			logDroppedExtra(e.Code, k, e.RequestID)
+			continue
+		}
 		out[k] = v
 	}
 	return json.Marshal(out)
+}
+
+// logDroppedExtra logs an Extra field MarshalJSON did not send: its code does
+// not declare it (#3272).
+func logDroppedExtra(code errcode.Code, field, requestID string) {
+	slog.Error("error envelope: dropped a field its code does not declare in internal/errcode",
+		"code", code, "field", field, "request_id", requestID)
+}
+
+// EnvelopeFieldNames is the JSON names of ErrorResponse's fixed fields —
+// read from its json tags, so a field added to the struct is in it. No Extra
+// field may be declared under one of these names (#3272).
+func EnvelopeFieldNames() []string {
+	t := reflect.TypeFor[ErrorResponse]()
+	var out []string
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" || !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = f.Name
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // writeJSON writes v as a JSON response with the given status code, centralizing

@@ -58,6 +58,7 @@ judgement process still has to know that the reason was the memory limit
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import hashlib
 import io
 import os
@@ -223,9 +224,23 @@ class ConfdReader:
         self._carriers_by_dir: "Optional[dict[str, list[str]]]" = None
 
     def tree(self) -> Tree:
-        """The tree-mode document (run on first use). Raises ParseTreeError."""
+        """The tree-mode document (run on first use). Raises ParseTreeError.
+
+        ⛔ THE fail-closed exit of a tool run (#3206): with no cache
+        installed and outside `judging()`, a document with any entry Go
+        gives a `verdict` ends the process here — every such path named,
+        exit 2 (`_lib_parse_tree.refuse_unservable`). Every accessor of the
+        run's index (`listing`, `entry`, `read`, `node`, `not_read`,
+        `carrier`, `require`, `tenant_scope`, `declared_tenants`,
+        `_lib_confd.config_listing`, the served-values loaders) goes through
+        here, so a tool cannot take a file list or a tenant set from a tree
+        it may not serve. A tool that writes calls `require()` before its
+        first write."""
         if self._tree is None:
             self._tree = _lib_parse_tree.load(self.root, self.binary, self.timeout)
+        if refuses():
+            _lib_parse_tree.refuse_unservable(self._tree.entries, self.root)
+            _SERVABLE.add(os.path.realpath(self.root))
         return self._tree
 
     def listing(self) -> "_lib_parse_tree.Listing":
@@ -441,6 +456,76 @@ class ConfdReader:
             raise
         cache.store(key, value)
         return value
+
+
+# ── who may read a tree Go names paths on (#3206) ───────────────────────
+
+_JUDGING: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_lib_parse_cache._JUDGING", default=False)
+
+
+@contextlib.contextmanager
+def judging() -> Iterator[None]:
+    """For the length of the block, `ConfdReader.tree` does not refuse a
+    tree Go names paths on: the block's verdict on the tree IS the run's
+    output (`validate_config`, the route generator: each names every such
+    path as its own finding and fails). ⛔ Nothing else enters it; a test
+    pins who does (`test_confd_tools_no_python_judgement`). Under a cache
+    (the generator container) the reader never refuses."""
+    token = _JUDGING.set(True)
+    try:
+        yield
+    finally:
+        _JUDGING.reset(token)
+
+
+def refuses() -> bool:
+    """Whether a reader of this run refuses a tree Go names paths on: no
+    cache installed (the CLI) and outside `judging()`."""
+    return _ACTIVE is None and not _JUDGING.get()
+
+
+#: The roots (realpath) a refusing reader of this process has read whole
+#: and found servable: the run's index of that tree, already taken.
+_SERVABLE: "set[str]" = set()
+
+
+def require_servable(root: "str | os.PathLike[str]", *, binary: Optional[str] = None,
+                     timeout: Optional[float] = None) -> None:
+    """For a read of *root* that is not through a reader (the served-values
+    family): the run's fail-closed exit (`ConfdReader.tree`), once per tree
+    and process — a tree a reader of this run already read is not read
+    again; else the run's reader of it (`reader_for`) reads it now, with
+    *binary* / *timeout*. A no-op where readers do not refuse
+    (`refuses`). Raises ParseTreeError."""
+    if not refuses() or os.path.realpath(root) in _SERVABLE:
+        return
+    with _lib_parse_tree.use_da_guard(binary, timeout):
+        reader_for(root).require()
+
+
+def subtree_reader(subtree: "str | os.PathLike[str]", root: "str | os.PathLike[str]", *,
+                   fresh: bool = False) -> ConfdReader:
+    """The reader of *subtree*, a directory the walk enters below conf.d root
+    *root*, built from the ROOT's tree-mode document (#3206): the run's
+    fail-closed exit is taken on the whole tree (`ConfdReader.tree` of
+    *root*), and the subtree's paths keep Go's verdicts as they are where
+    they really are (`_lib_parse_tree.subtree_of`) — never a parse-tree run
+    on the subtree, which would judge it as a root. *fresh*: new readers
+    (a re-read after writes) instead of the session's. Raises ValueError when
+    *subtree* is not a directory the walk enters under *root*, and
+    ParseTreeError as `tree` does."""
+    root_reader = ConfdReader(root) if fresh else reader_for(root)
+    tree = root_reader.tree()
+    rel = Path(os.path.relpath(os.path.realpath(subtree), os.path.realpath(root))).as_posix()
+    entry = next((e for e in tree.entries if e.path == rel), None)
+    if rel == "." or rel.startswith("../") or entry is None or not entry.is_dir:
+        raise ValueError(f"{subtree} is not a directory the exporter's walk enters under {root}")
+    reader = ConfdReader(subtree) if fresh else reader_for(subtree)
+    if reader._tree is None:
+        reader._tree = _lib_parse_tree.subtree_of(tree, rel)
+    _SERVABLE.add(os.path.realpath(subtree))
+    return reader
 
 
 # ── one reader per tree for the length of a run ─────────────────────────

@@ -28,6 +28,7 @@ import generate_alertmanager_routes as gar  # noqa: E402
 import notification_tester as nt  # noqa: E402
 from _grar_merge import SkippedEntryWarning  # noqa: E402
 from factories import make_tenant_yaml, write_yaml  # noqa: E402
+from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 _TESTER = os.path.join(_TOOLS_DIR, "ops", "notification_tester.py")
 _GENERATOR = os.path.join(_TOOLS_DIR, "ops", "generate_alertmanager_routes.py")
@@ -313,6 +314,13 @@ def test_tested_set_equals_generator_receivers_across_parity_matrix(tmp_path):
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             write_yaml(str(path.parent), path.name, body)
+        # #3206: a tree da-guard validation names a path on is the shared
+        # conf.d refusal for the tester (the generator, a judge, reads it).
+        named = go_refused(root)
+        if named:
+            with refuses(*named):
+                nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
+            continue
         try:
             reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
         except nt.RoutingTreeRefused:
@@ -386,7 +394,9 @@ def _slot_ref(label: str, tenant: str) -> str:
 
 
 # explain-route --json crashes on these trees on main already (a YAML date
-# value in `final` is not JSON serializable; rc 2) — tracked in #3144.
+# value in `final` is not JSON serializable) — tracked in #3144. Recognised by
+# the crash line, not by rc 2: under the test suite a crash ends at
+# DA_TEST_CRASH_EXIT_CODE (#3092).
 _EXPLAIN_JSON_CRASHES = {"routing-values-yaml11"}
 
 
@@ -403,13 +413,22 @@ def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             write_yaml(str(path.parent), path.name, body)
+        # #3206: a tree da-guard validation names a path on is the shared
+        # conf.d refusal for the tester (the generator, a judge, reads it).
+        named = go_refused(root)
+        if named:
+            with refuses(*named):
+                nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
+            continue
         try:
             reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
         except nt.RoutingTreeRefused:
             continue
         proc = _run_explain(root, "--json")
         if tree["name"] in _EXPLAIN_JSON_CRASHES:
-            assert proc.returncode == 2 and "not JSON serializable" in proc.stderr, \
+            assert proc.returncode not in (0, 1) and \
+                "unexpected internal error (TypeError)" in proc.stderr and \
+                "not JSON serializable" in proc.stderr, \
                 "fixed? drop it from _EXPLAIN_JSON_CRASHES"
             continue
         assert proc.returncode == 0, (tree["name"], proc.stderr)

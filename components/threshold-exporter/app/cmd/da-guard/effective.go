@@ -121,7 +121,8 @@ func parseEffectiveFlags(args []string, errOut io.Writer) (effectiveFlags, error
 			"with the profile each tenant is bound to and, per key, the layer and file its value came from.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error (a refused --overlay included), or a tree the resolver rejects (e.g. a tenant declared twice,\n"+
-			"     no .yaml file at all), or any output string that is not valid UTF-8\n"+
+			"     no .yaml file at all), a conf.d path that is not valid UTF-8, or any output string\n"+
+			"     that is not valid UTF-8\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n")
 	}
@@ -186,6 +187,9 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	// The load logs on errOut, as served-values' LoadDir does (#2115): a
 	// file in parse_failed is named with the exporter's reason, not only
 	// listed (`cannot unmarshal !!str ...`).
+	if refuseNonUTF8Tree(configDir, programName+" "+effectiveCmd, errOut) {
+		return exitCallerErr // utf8_names.go (#3206)
+	}
 	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), config.ScanOptions{Overlay: overlay})
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).

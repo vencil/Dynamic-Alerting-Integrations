@@ -134,8 +134,8 @@ class TestQueryPrometheusDeadline:
 
         def fake(url, promql, **kw):
             seen.append(kw)
-            return [], None
-        monkeypatch.setattr(diagnose, "query_prometheus_instant", fake)
+            return []
+        monkeypatch.setattr(diagnose, "prometheus_instant", fake)
         return seen
 
     def test_no_deadline_keeps_its_own_default(self, monkeypatch):

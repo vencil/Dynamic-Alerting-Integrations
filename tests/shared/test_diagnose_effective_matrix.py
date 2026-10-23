@@ -35,6 +35,8 @@ from pathlib import Path
 import pytest
 
 import _lib_tenant_values as tv
+import _lib_parse_cache
+from _go_refusal import assert_refused, refuses  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIAGNOSE = REPO_ROOT / "scripts" / "tools" / "ops" / "diagnose.py"
@@ -178,16 +180,23 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
 @pytest.mark.parametrize("name,files,dropped", REFUSED, ids=[n for n, _, _ in REFUSED])
 def test_a_file_parse_tree_refuses_is_not_described(tmp_path: Path, name: str,
                                                     files: dict[str, str], dropped: str) -> None:
+    """#3206: a judge reading the served values still gets the loader's
+    ParseFailedError naming the file; any other caller — and the diagnose
+    CLI — ends through the shared refusal, the file named with its kind."""
     conf_d = _tree(tmp_path, files)
-    with pytest.raises(tv.ParseFailedError) as exc:
-        tv.load_served_tree(conf_d)
+    with _lib_parse_cache.judging():
+        with pytest.raises(tv.ParseFailedError) as exc:
+            tv.load_served_tree(conf_d)
     assert dropped in str(exc.value), name
+    with refuses(dropped):
+        tv.load_served_tree(conf_d)
     p = subprocess.run([sys.executable, str(DIAGNOSE), "tx", "--config-dir", str(conf_d),
                         "--show-inheritance"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    assert p.returncode == 2 and "served_values_unavailable" in p.stdout, (name, p.stdout, p.stderr)
-    assert "parse-tree refuses the file (kind " in p.stderr, p.stderr
+    assert_refused(p.returncode, p.stderr, [dropped])
+    kind = "null_key" if name == "defaults-key-null" else "tag_not_allowed"
+    assert f"ERROR: {dropped}: " in p.stderr and f"({kind}: " in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("name,files", SHAPES, ids=[n for n, _ in SHAPES])

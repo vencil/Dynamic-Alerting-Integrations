@@ -376,9 +376,13 @@ def config_stem(name: str) -> str:
 # * a caller that holds a `_lib_parse_cache.ConfdReader` passes `reader=` (or
 #   the `reader.listing()` itself): the entries of the tree-mode document it
 #   reads the content from — one snapshot, never a second walk;
-# * otherwise `config_listing(dir)` runs `parse-tree --list-only`, a fresh
-#   walk on every call: a caller that asks several questions keeps the
-#   `Listing` and passes it down (`listing=`).
+# * otherwise `config_listing(dir)` takes the listing of the run's reader of
+#   that tree (`_lib_parse_cache.reader_for`: in a `session()` one per root,
+#   else a new one per call — a caller that asks several questions keeps the
+#   `Listing` and passes it down, `listing=`). ⛔ Tree mode, never
+#   `--list-only` (#3206): only tree mode carries the whole of Go's
+#   `verdict`, and the reader's tree read is the run's fail-closed exit
+#   (`ConfdReader.tree`), so no file list comes from a tree Go names paths on.
 #
 # ⛔ `_lib_parse_tree` is imported INSIDE the functions, never at module
 # level: it imports `guard_dispatch`, which the recipe-preview image does not
@@ -394,15 +398,17 @@ def config_stem(name: str) -> str:
 def config_listing(config_dir: "str | os.PathLike[str]", *, reader: Any = None) -> Any:
     """The `_lib_parse_tree.Listing` every function below answers from, or
     None when *config_dir* is not a directory: *reader*'s (`ConfdReader.
-    listing`, the snapshot it reads the content from) when given, else a
-    fresh `parse-tree --list-only` run. Raises `_lib_parse_tree.ParseTreeError`."""
+    listing`, the snapshot it reads the content from) when given, else the
+    run's reader of the tree (`_lib_parse_cache.reader_for`; see the section
+    comment). Raises `_lib_parse_tree.ParseTreeError`; ends the run on a tree
+    Go names paths on (`ConfdReader.tree`)."""
     root = Path(config_dir)
     if not root.is_dir():
         return None
-    if reader is not None:
-        return reader.listing()
-    from _lib_parse_tree import list_tree  # lazy: see the section comment
-    return list_tree(root)
+    if reader is None:
+        from _lib_parse_cache import reader_for  # lazy: see the section comment
+        reader = reader_for(root)
+    return reader.listing()
 
 
 def _listing(config_dir: "str | os.PathLike[str]", listing: Any, reader: Any) -> Any:
