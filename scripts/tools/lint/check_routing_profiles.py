@@ -34,9 +34,9 @@ from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    declared_tenant_ids,
     list_config_tree,
     overlay_platform_tenants,
+    tenant_set_unknown_note,
     unusable_reason,
 )
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'ops'))
@@ -166,8 +166,16 @@ def _collect_data(config_dir: str) -> dict:
     for fname, tenant, _o in entries:
         if fname not in reserved:
             tenant_dirs.setdefault(tenant, Path(fname).parent.as_posix())
+    # Who exists is Go's `TenantScope`, both halves (#3206): what may hide a
+    # tenant file is carried into the orphan wording, never read as "none".
+    unknown: list = []
+
+    def declared() -> set:
+        ids, open_ = _lib_parse_cache.declared_tenants(reader)
+        unknown.extend(open_)
+        return set(ids)
     merged, platform_orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(config_dir, reader))
+        entries, declared, platform=reserved)
     for tenant, overrides in merged.items():
         tenant_ids.add(tenant)
         ref, ref_error = routing_profile_ref(tenant, overrides.get("_routing_profile"))
@@ -180,6 +188,8 @@ def _collect_data(config_dir: str) -> dict:
         "profiles": profiles,
         "policies": policies,
         "platform_orphans": platform_orphans,
+        # The clause the orphan WARN adds when the tenant set is not fully known.
+        "orphan_note": tenant_set_unknown_note(unknown),
         "tenant_ids": tenant_ids,
         "profile_refs": profile_refs,
         "profile_ref_errors": sorted(profile_ref_errors),
@@ -248,8 +258,8 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     for fname, tenant in data.get("platform_orphans", []):
         messages.append(
             f"WARN: {fname}: tenants.{tenant} ignored — no tenant file "
-            f"declares tenant '{tenant}'; a platform file can only provide "
-            f"defaults for a tenant that already exists")
+            f"declares tenant '{tenant}'{data.get('orphan_note', '')}; a platform "
+            f"file can only provide defaults for a tenant that already exists")
 
     # Check 1: Profile references point to existing profiles
     # (needs the profile set — skipped when _routing_profiles.yaml is unreadable)

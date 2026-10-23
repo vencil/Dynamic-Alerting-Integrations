@@ -52,11 +52,13 @@ day it is fixed the cell XPASSes and goes red until the entry is deleted.
 Nothing skips (`unprivileged_sandbox` FAILS instead of skipping under
 `VIBE_REQUIRE_UNPRIVILEGED_FS`, which CI sets).
 
-`deprecate_rule._reserved` reads Go's class (`Entry.reserved`). Replaced by
-a name test (`rel[:1] == "_"`), every one of its cells came out the same
-(measured): Go's rule is that very test on the base name
-(`confdname.IsReserved`), and the tool asks it only of paths in Go's
-listing — same as Go, unobservable here; step 9b-3 deletes the copy.
+`deprecate_rule` reads Go's class (`Entry.reserved` / `Entry.cls`) of the
+paths in Go's listing directly. Replaced by a name test (`rel[:1] == "_"`),
+every one of its cells came out the same (measured, before step 9b-3 deleted
+its `_reserved` helper): Go's rule is that very test on the base name
+(`confdname.IsReserved`) — so a regression to a name test is unobservable
+here, and the no-name-rule gate (`test_confd_tools_no_python_judgement.py`)
+is what keeps the Python copy deleted.
 
 WHERE THE TREES COME FROM
 -------------------------

@@ -1822,8 +1822,8 @@ class TestKustomizeBaseEnumeratesConfd:
             assert len(files) == len(set(files))
             assert set(files) == on_disk
             assert _readme_link_targets(tmp) == files
-            from _lib_confd import is_defaults_name
-            assert is_defaults_name(files[0])
+            import _lib_parse_tree  # Go's class of the name (#3206)
+            assert _lib_parse_tree.classify_names([files[0]])[files[0]].cls == "defaults"
             assert files[1:] == sorted(files[1:])
 
     def test_dedup_is_by_filename_not_by_tenant_stem(self):

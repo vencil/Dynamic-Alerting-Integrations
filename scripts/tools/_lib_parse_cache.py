@@ -298,10 +298,10 @@ class ConfdReader:
         parse-tree does not list it at all.
 
         ⛔ THE answer to "skip or read" for a tool that walks the tree itself
-        (`_lib_confd.iter_config_files` / `list_config_tree`): never
-        `_lib_confd`'s own carrier selection (`select_defaults_carrier`,
-        `readable_carriers`; `unselected_carriers` is gone for this). Those are a second
-        implementation of the exporter's rule; a file they read and
+        (`_lib_confd.iter_config_files` / `list_config_tree`): never a
+        carrier selection of its own (`_lib_confd`'s `select_defaults_carrier`
+        and `readable_carriers` were deleted for this, #3206). Such a second
+        implementation of the exporter's rule — a file it reads and
         parse-tree lists here makes `read` raise `NotSelected` — rc 2 for a
         valid tree (#2906 review, twice). A file listed here is skipped and
         named; a file in neither list is a walk that disagrees with the
@@ -342,8 +342,8 @@ class ConfdReader:
     def carrier(self, directory: "str | os.PathLike[str]") -> Optional[Path]:
         """The defaults carrier parse-tree says *directory*'s chain selects
         (its `defaults_carriers`), as a path under the root, or None when the
-        directory has none — not `_lib_confd.select_defaults_carrier`'s
-        answer (see `not_read`). Under a cache: the file-mode document of a
+        directory has none — never a Python selection's answer (see
+        `not_read`). Under a cache: the file-mode document of a
         defaults-named file in the directory. Raises ParseTreeError."""
         d = self.rel(directory)
         if _ACTIVE is None:

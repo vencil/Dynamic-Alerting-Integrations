@@ -504,20 +504,18 @@ class TestExtensionSpellingAxis:
 
         The tests above hard-code `.yaml` and `.yml`, so they stop covering
         the floor the day the exporter grows a third spelling and
-        `_lib_confd.CONFIG_SUFFIXES` follows it. This reads the set instead
+        the shared name table follows it. This reads the set instead
         of restating it.
 
-        It does NOT re-implement `has_yaml_extension`; it uses the shared
-        CONSTANT, whose agreement with the exporter is pinned by
-        `tests/shared/confd_name_classification_matrix.json` (asserted from
-        the Go side by `confd_name_classification_parity_test.go` and from
-        the Python side by
-        `tests/shared/test_confd_name_classification_parity.py`).
+        It reads the set from the shared name table
+        (`_confd_name_table.config_suffixes`), which Go owns — pkg/confdname's
+        matrix test asserts every cell; no Python rule restates it (#3206).
 
         Floor only: a too-WIDE reader satisfies it, which is what the
         counterexample test above is for.
         """
-        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+        from _confd_name_table import config_suffixes  # noqa: PLC0415
+        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         # Anti-vacuity: an empty set makes the assertion `set() == set()`.
         # Guarding the set is not this test's job, so name who does.
@@ -923,11 +921,12 @@ class TestHookSelectsEverythingTheScriptScans:
             self, tmp_path):
         """Derived on both sides, so neither can drift alone.
 
-        The candidate names come from `_lib_confd.CONFIG_SUFFIXES`, and
+        The candidate names come from the shared name table (`config_suffixes`), and
         "would the script scan it" is answered by running `iter_tenant_files`
         on a real tree rather than by re-implementing the predicate.
         """
-        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+        from _confd_name_table import config_suffixes  # noqa: PLC0415
+        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         prefix = "components/threshold-exporter/config/conf.d/"
         pattern = self._hook_files_regex()

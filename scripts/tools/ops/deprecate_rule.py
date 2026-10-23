@@ -97,10 +97,7 @@ from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer
     DaGuardNotFoundError,
     load_key_refs,
 )
-from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    is_defaults_name,
-    warn_nested,
-)
+from _lib_confd import warn_nested  # noqa: E402
 
 
 def _reader(config_dir):
@@ -336,30 +333,23 @@ OWNER_MANUAL = "manual"      # 本工具射程外，殘留要人去改（兩種�
 OWNER_EXPORTER = "exporter"  # exporter 自己會丟棄／不讀，不算殘留，只警告
 
 
-def _base_of(name):
-    return name.rsplit("/", 1)[-1]
-
-
 def _in_subtree(name, plane):
     """子樹裡的檔: 子目錄裡的（`name` 含 `/`），或 `--plane subtree` 的這一層。"""
     return "/" in name or plane == "subtree"
 
 
-def _reserved(reader, rel):
-    """*rel* 是不是平台（`_` 前綴）檔：Go 的 class（`Entry.reserved`），取自
-    *reader* 那一份索引；索引裡沒有的路徑不是（#3206：不以名稱自己判）。"""
-    e = reader.entry(rel)
-    return e is not None and e.reserved
+#: Go 的 class 裡 `_` 前綴的兩種（`_lib_parse_tree.RESERVED_CLASSES`）。
+CLS_DEFAULTS = "defaults"    # defaults 載體（`_defaults.yaml`／`.yml`，任何大小寫）
+CLS_PLATFORM = "platform"    # 其他 `_` 前綴設定檔
 
 
-def _nested_ignored(name, plane="root", *, reserved):
+def _nested_ignored(name, plane="root", *, cls):
     """子樹裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。
-    *reserved*：這個檔是不是平台檔（Go 的 class，`_reserved`）。"""
-    return (_in_subtree(name, plane) and reserved
-            and not is_defaults_name(_base_of(name)))
+    *cls*：這個檔的 Go class（`Entry.cls`，#3206：不以名稱自己判）。"""
+    return _in_subtree(name, plane) and cls == CLS_PLATFORM
 
 
-def section_owner(name, section, plane="root", *, reserved):
+def section_owner(name, section, plane="root", *, cls):
     """掃描結果的 `[section]` 在檔 `name` 裡由誰清: 本工具／手動／exporter 丟棄。
 
     root 層的規則來自 exporter 的 `applyBoundaryRules`（`flat_scanner.go`）:
@@ -368,15 +358,16 @@ def section_owner(name, section, plane="root", *, reserved):
     讀；本工具只寫載體的平台區塊與非 `_` 檔的 `tenants:`。子樹裡 exporter 只讀
     `_defaults.yaml` 的 `defaults:`（`parseDefaultsBytes`），其他 `_` 檔不讀；
     本工具不遞迴寫入，所以本工具會寫的那兩類在子目錄裡是「手動」（對該子樹跑）。
-    *reserved*：`name` 是不是平台（`_` 前綴）檔，Go 的 class（`_reserved`）。
+    *cls*：`name` 的 Go class（`Entry.cls`：`defaults` 是載體、`platform` 是
+    其他 `_` 前綴檔）。
     """
-    if _nested_ignored(name, plane, reserved=reserved):
+    if _nested_ignored(name, plane, cls=cls):
         return OWNER_EXPORTER
     nested = "/" in name
-    base = _base_of(name)
+    reserved = cls in (CLS_DEFAULTS, CLS_PLATFORM)
     block = section.split(".", 1)[0]
     if block in ("defaults", "optional_overrides"):
-        if is_defaults_name(base):
+        if cls == CLS_DEFAULTS:
             return OWNER_MANUAL if nested else OWNER_TOOL
         # #1676: 非載體（`_` 前綴或租戶檔）的這兩個區塊 exporter 都剝除。
         return OWNER_EXPORTER
@@ -387,9 +378,10 @@ def section_owner(name, section, plane="root", *, reserved):
     return OWNER_MANUAL if nested else OWNER_TOOL
 
 
-def exporter_drop_reason(name, section, plane="root", *, reserved):
-    """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。*reserved* 同 `section_owner`。"""
-    if _nested_ignored(name, plane, reserved=reserved):
+def exporter_drop_reason(name, section, plane="root", *, cls):
+    """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。*cls* 同 `section_owner`。"""
+    reserved = cls in (CLS_DEFAULTS, CLS_PLATFORM)
+    if _nested_ignored(name, plane, cls=cls):
         return ("exporter 不讀子目錄裡 `_defaults` 以外的 `_` 前綴檔"
                 "（isNestedPlatformFile），本工具不寫入")
     block = section.split(".", 1)[0]
@@ -431,7 +423,7 @@ def unclearable_occurrences(metric_key, findings, *, predict, plane="root",
     for f in findings:
         name = f["filename"]
         for section, key, val in f["occurrences"]:
-            owner = section_owner(name, section, plane, reserved=f["reserved"])
+            owner = section_owner(name, section, plane, cls=f["cls"])
             if owner == OWNER_EXPORTER:
                 continue
             if owner == OWNER_TOOL and name in skip:
@@ -499,11 +491,13 @@ def scan_for_metric(metric_key, config_dir, spellings=(), *, reader=None):
     for filename in _top_files(config_dir, reader):
         occurrences = _occurrences_in(_tree_read(reader, filename), metric_key, spellings)
         if occurrences:
+            e = reader.entry(filename)  # Go's class (#3206)
             findings.append({
                 "filename": filename,
                 "path": str(config_base / filename),
                 "occurrences": occurrences,
-                "reserved": _reserved(reader, filename),
+                "reserved": e.reserved,
+                "cls": e.cls,
             })
     return findings
 
@@ -519,12 +513,13 @@ def nested_residue(metric_key, config_dir, spellings=(), *, reader=None):
     out = []
     selected = reader.tree().selected
     # #3206：同一份索引，是不是設定檔看 Go 的 `role`。
-    for rel in sorted(e.path for e in reader.listing().config_files()
-                      if e.depth > 0 and e.path in selected):
+    for e in sorted((e for e in reader.listing().config_files()
+                     if e.depth > 0 and e.path in selected), key=lambda e: e.path):
+        rel = e.path
         occurrences = _occurrences_in(_tree_read(reader, rel), metric_key, spellings)
         if occurrences:
             out.append({"filename": rel, "path": str(base / rel),
-                        "occurrences": occurrences, "reserved": _reserved(reader, rel)})
+                        "occurrences": occurrences, "reserved": e.reserved, "cls": e.cls})
     return out
 
 
@@ -785,7 +780,7 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
     warn_nested(config_base, tool="deprecate_rule", reader=reader)
     writes = []
     for filename in _top_files(config_dir, reader):
-        if _reserved(reader, filename) or filename in skip:
+        if reader.entry(filename).reserved or filename in skip:
             continue
         node = reader.node(filename)  # #3206: past the shared refusal, readable
         hits = _tenant_plan(node, lambda k: tenant_key_belongs_to_metric(
@@ -822,7 +817,7 @@ def plan_rewrites(config_dir, metrics, spellings, *, skip=frozenset()):
     def belongs(k):
         return any(tenant_key_belongs_to_metric(k, m, spellings[m]) for m in metrics)
     for filename in _top_files(config_dir, reader):
-        if _reserved(reader, filename) or filename in skip:
+        if reader.entry(filename).reserved or filename in skip:
             continue
         node = reader.node(filename)
         hits = _tenant_plan(node, belongs)
@@ -1057,19 +1052,19 @@ def _deprecate(args):
     # #3206: only the `_` files are checked here — a tenant file the exporter
     # drops is a path da-guard validation names, refused before this point.
     for e in (base / n for n in _top_files(base, reader)):
-        if not _reserved(reader, e.name):
+        if not reader.entry(e.name).reserved:  # Go's class (#3206)
             continue
         items = carrier_health_at(e)
         name = safe_label(e.name)
         if args.plane != "root":
             # 子樹載體的字串值合法；本工具自己讀不了／讀不到的仍要擋寫入。
-            if is_defaults_name(e.name):
+            if reader.entry(e.name).cls == CLS_DEFAULTS:
                 items = [i for i in items if i[2] in (UNREADABLE, UNPARSED_BY_TOOL)]
                 if items:
                     health[e.name] = items
                     blocked.add(e.name)
             continue
-        if is_defaults_name(e.name):
+        if reader.entry(e.name).cls == CLS_DEFAULTS:
             items = [i for i in items if i[0] not in planned]
         for key, _raw, kind in items:
             if kind == NULL_NOT_DECLARED:
@@ -1106,7 +1101,8 @@ def _deprecate(args):
                 dropped += [(n, "現況在 parse_failed；寫入後的體檢問不到")
                             for n in oracle.parse_failed]
         for name, why in dropped:
-            if ("/" in name or name == "." or not _reserved(reader, name)
+            entry = reader.entry(name)
+            if ("/" in name or name == "." or entry is None or not entry.reserved
                     or name in blocked):
                 continue
             if args.plane != "root":
@@ -1176,14 +1172,14 @@ def _deprecate(args):
         for f in findings + nested:
             for section, _key, _val in f["occurrences"]:
                 if section_owner(f["filename"], section, args.plane,
-                                 reserved=f["reserved"]) != OWNER_EXPORTER:
+                                 cls=f["cls"]) != OWNER_EXPORTER:
                     continue
                 block = section.split(".", 1)[0]
                 if (f["filename"], block) in warned:
                     continue
                 warned.add((f["filename"], block))
                 print(f"  ⚠️  {safe_label(f['filename'])} "
-                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane, reserved=f['reserved']))}")
+                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane, cls=f['cls']))}")
 
         # Step 1 (as printed): 從每個 defaults 載體移除相關 key
         if args.plane != "root" and not carriers_here:

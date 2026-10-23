@@ -122,11 +122,6 @@ def _tree_tenants(root):
     return got.tenants + got.invalid
 
 
-def _declared_tenant_ids(root):
-    from _lib_confd import declared_tenant_ids
-    return sorted(declared_tenant_ids(root))
-
-
 def _iter_config_files(root):
     from _lib_confd import iter_config_files
     return _names(iter_config_files(root), root)
@@ -284,7 +279,6 @@ def _migration_audit(root):
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tree_tenants": ("_lib_confd.py", _tree_tenants),
-    "declared_tenant_ids": ("_lib_confd.py", _declared_tenant_ids),
     "iter_config_files": ("_lib_confd.py", _iter_config_files),
     "list_config_tree": ("_lib_confd.py", _list_config_tree),
     "operator_generate": ("ops/operator_generate.py", _operator_generate),

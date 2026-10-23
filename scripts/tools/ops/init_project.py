@@ -52,7 +52,6 @@ import _lib_parse_tree  # noqa: E402
 import _lib_write_check  # noqa: E402
 from _lib_confd import (  # noqa: E402
     configmap_key_problem,
-    is_defaults_name,
     printable_name,
     warn_nested,
 )
@@ -3031,7 +3030,11 @@ def _kustomize_carrier_files(
               f"it to match [-._a-zA-Z0-9]+ and list it in files:.",
               file=sys.stderr)
     names -= {n for n, _ in illegal}
-    return sorted(names, key=lambda n: (not is_defaults_name(n), n))
+    # The defaults carrier first: Go's class of each name (names mode — some
+    # are written by this run and not on disk yet; #3206, no name rule here).
+    classes = _lib_parse_tree.classify_names(sorted(names), None, _PARSE_TREE_TIMEOUT_S) \
+        if names else {}
+    return sorted(names, key=lambda n: (classes[n].cls != "defaults", n))
 
 
 def _gen_kustomize_base(
@@ -3589,11 +3592,12 @@ class _ConfdTree:
 
     def root_defaults(self) -> list[str]:
         """The root's defaults carriers in every spelling parse-tree saw —
-        the one it selects and any it does not (`not_read`)."""
+        the one it selects and any it does not (`not_read`): the root's
+        config files Go classes `defaults` (#3206)."""
         if self.tree is None:
             return []
-        names = {*self.tree.selected, *self.tree.not_read}
-        return sorted(n for n in names if "/" not in n and is_defaults_name(n))
+        return sorted(e.path for e in self.tree.entries
+                      if "/" not in e.path and e.config_file and e.cls == "defaults")
 
     def declared(self, rel: str) -> "set[str]":
         """The tenants rel's `tenants:` mapping declares. Every file of the

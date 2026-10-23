@@ -30,13 +30,11 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).
 import _lib_parse_cache  # noqa: E402
-from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError, classify_names  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    declared_tenant_ids,
     duplicate_declarations,
-    is_defaults_name,
-    is_reserved_name,
     list_config_tree,
+    tenant_set_unknown_note,
     overlay_platform_tenants,
     tenant_declarations,
     unusable_reason,
@@ -295,7 +293,15 @@ def _drop_unreadable_file(fname: str, reason: str, remedy: str, result: dict,
     _drop_unusable_policy(fname, reason, remedy, result, warning=warning)
 
 
-def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
+def _name_class(fname: str) -> str:
+    """Go's class of *fname*'s base name (names mode, `classify_names`): for
+    a caller that holds a name and no entry of a tree (#3206)."""
+    base = os.path.basename(fname)
+    return classify_names([base])[base].cls
+
+
+def _parse_platform_config(data: dict, fname: str, result: dict, *,
+                           cls: "str | None" = None) -> None:
     """Extract platform-level config from a _ prefixed YAML file.
 
     Handles: defaults keys, _routing_defaults, _routing_enforced,
@@ -309,13 +315,16 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     key universe validate_tenant_keys checks against, while the exporter
     serves those keys only from the carrier — so a root `_profiles.yaml`
     carrying `defaults:` passed here and was stripped there.
-    The carrier test is the name predicate; which of SEVERAL carriers is
-    read is the caller's job — `_parse_config_files` never hands this
-    function an unselected spelling (#1674).
+    Both are Go's class of the file (#3206): *cls* is the entry's (the read
+    loop passes it), else the name's in names mode (`classify_names`) — no
+    name rule here. Which of SEVERAL carriers is read is the caller's job —
+    `_parse_config_files` never hands this function an unselected spelling
+    (#1674).
     """
-    base = os.path.basename(fname)
-    is_defaults_file = base.startswith("_")   # platform file (routing keys)
-    is_carrier = is_defaults_name(base)
+    if cls is None:
+        cls = _name_class(fname)
+    is_defaults_file = cls in ("defaults", "platform")   # platform file (routing keys)
+    is_carrier = cls == "defaults"
     # #1538: display-only alias. `fname` itself stays raw — it is used for
     # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
     _f = safe_label(fname)
@@ -760,7 +769,8 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
 
 
 def _parse_nested_config(data: dict, fname: str, level: str,
-                         is_level_carrier: bool, result: dict) -> None:
+                         is_level_carrier: bool, result: dict, *,
+                         reserved: "bool | None" = None) -> None:
     """The routing-plane keys of one file BELOW the conf.d root (#2326).
 
     ADR-017 Decision 9:
@@ -775,9 +785,14 @@ def _parse_nested_config(data: dict, fname: str, level: str,
       `_parse_profiles_and_policies`.
     * the carrier's `defaults:` widens the key universe of the tenants below
       it (validate_tenant_keys), as the root carrier's does for every tenant.
+
+    *reserved*: whether the file is a platform (`_`) file — the entry's Go
+    class (the read loop passes it), else the name's (`classify_names`).
     """
     _f = safe_label(fname)
-    if is_reserved_name(os.path.basename(fname)):
+    if reserved is None:
+        reserved = _name_class(fname) in ("defaults", "platform")
+    if reserved:
         _record_unknown_routing_keys(result, data, layer="platform", where="top level", file=fname)
 
     if "_routing_enforced" in data:
@@ -785,7 +800,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
 
     if "_routing_defaults" in data:
         rd = data["_routing_defaults"]
-        if not is_level_carrier and is_reserved_name(os.path.basename(fname)):
+        if not is_level_carrier and reserved:
             # #2326 review F3: at the root this very file WOULD be read (any
             # root `_` file carries `_routing_defaults`), so moving it into a
             # subdirectory silently drops it — the #2291 "routing where
@@ -1252,6 +1267,8 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     # #1982: every tenant entry of every file, in read order, applied AFTER
     # the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
+    # The files of `tenant_entries` Go classes platform (`_`) files (#3206).
+    platform_files: set[str] = set()
     listed = listing.files
     try:
         _read, not_read = reader.split_not_read(listed)
@@ -1283,7 +1300,10 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             continue
         # Not in `not_read`: a defaults-named file here is its directory's
         # selected carrier (or one the read below drops as unreadable).
-        is_carrier = is_defaults_name(path_p.name)
+        # Which file is a carrier or a platform file is Go's class (#3206).
+        entry = listing.listing.entry(fname)
+        is_carrier = entry.cls == "defaults"
+        is_reserved = entry.reserved
         # ADR-036 step 4 (#2906): the content is parse-tree's. A file it
         # cannot read (`unreadable`: a syntax error, a repeated key — the
         # exporter's yaml.v3 rejects that file —, a null key, several
@@ -1313,13 +1333,14 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         _unread_routing(
             data, fname,
             is_carrier=is_carrier,
-            is_root_platform=level == ROOT_LEVEL and is_reserved_name(path_p.name),
+            is_root_platform=level == ROOT_LEVEL and is_reserved,
             result=result)
 
         if level == ROOT_LEVEL:
-            _parse_platform_config(data, fname, result)
+            _parse_platform_config(data, fname, result, cls=entry.cls)
         else:
-            _parse_nested_config(data, fname, level, is_carrier, result)
+            _parse_nested_config(data, fname, level, is_carrier, result,
+                                 reserved=is_reserved)
 
         if "tenants" not in data:
             continue
@@ -1327,7 +1348,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         # #2326 (f): the `tenants:` block of a platform file BELOW the root is
         # read by no plane (ADR-017 Decision 5); threshold-exporter WARNs about
         # it, and so does this reader now that it opens the file.
-        if level != ROOT_LEVEL and is_reserved_name(path_p.name):
+        if level != ROOT_LEVEL and is_reserved:
             if data.get("tenants"):
                 print(f"  WARN: {safe_label(fname)}: 'tenants:' block ignored "
                       f"— a platform file below the conf.d root supplies no "
@@ -1393,7 +1414,9 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             # the shape check below, which only decides what gets LOADED, so
             # `a/ta.yaml: {tenants: {ta: ~}}` beside `b/ta.yaml` is still the
             # duplicate the exporter refuses.
-            if not is_reserved_name(path_p.name):
+            if is_reserved:
+                platform_files.add(fname)
+            else:
                 result.setdefault("tenant_declarations", []).append(
                     (fname, tenant))
             if not isinstance(overrides, dict):
@@ -1418,22 +1441,31 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             tenant_declarations(config_dir, reader)[0])
     except ParseTreeError as e:
         parse_tree_failure_exit(e, config_dir)
-    _apply_tenant_entries(config_dir, tenant_entries, result, reader)
+    _apply_tenant_entries(config_dir, tenant_entries, result, reader,
+                          platform=platform_files)
     return result
 
 
-def _declared_ids(config_dir: str, reader: "_lib_parse_cache.ConfdReader | None") -> set:
-    """`declared_tenant_ids` through this run's reader; no usable parse-tree
-    exits 2 (`parse_tree_failure_exit`)."""
+def _declared_ids(config_dir: str, reader: "_lib_parse_cache.ConfdReader | None",
+                  unknown: list) -> set:
+    """The ids the tree's tenant files declare (`_lib_parse_cache.
+    declared_tenants`, both halves of Go's `TenantScope`) through this run's
+    reader; what leaves the set open is appended to *unknown*. No usable
+    parse-tree exits 2 (`parse_tree_failure_exit`)."""
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
     try:
-        return declared_tenant_ids(config_dir, reader)
+        declared, open_ = _lib_parse_cache.declared_tenants(reader)
     except ParseTreeError as e:
         parse_tree_failure_exit(e, config_dir)
         raise  # unreachable: parse_tree_failure_exit exits
+    unknown.extend(open_)
+    return set(declared)
 
 
 def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
-                          reader: "_lib_parse_cache.ConfdReader | None" = None) -> None:
+                          reader: "_lib_parse_cache.ConfdReader | None" = None, *,
+                          platform: "set[str]") -> None:
     """Hand each tenant ONE merged block: platform file first, tenant file wins.
 
     ⛔ THIS USED TO RUN PER FILE, AND THE FILENAME DECIDED WHO WON. A root
@@ -1449,16 +1481,19 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     (`sortFlatMergeOrder`), so the two planes agree whatever the file is called.
 
     A platform entry for a tenant no tenant file declares (anywhere in the
-    tree — the walker's rule, `declared_tenant_ids`) is dropped and named: a
-    platform file cannot create a tenant.
+    tree — Go's `TenantScope`, both halves) is dropped and named: a platform
+    file cannot create a tenant. *platform*: the files of *entries* Go
+    classes platform (`_`) files (the read loop's entries' class).
     """
+    unknown: list = []
     merged, orphans = overlay_platform_tenants(
-        entries, lambda: _declared_ids(config_dir, reader))
+        entries, lambda: _declared_ids(config_dir, reader, unknown), platform=platform)
     for fname, tenant in orphans:
         print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(tenant))} "
               f"ignored — no tenant file declares tenant "
-              f"'{safe_label(str(tenant))}'; a platform file can only provide "
-              f"defaults for a tenant that already exists", file=sys.stderr)
+              f"'{safe_label(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
+              f"file can only provide defaults for a tenant that already exists",
+              file=sys.stderr)
     # #2326: where each tenant lives (its tenant file's directory, relative to
     # the root) decides which routing layers and domain policies reach it —
     # and one tenant id declared by two tenant files is blocking (e): the
@@ -1472,8 +1507,7 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     if "tenant_declarations" in result:
         decls = result["tenant_declarations"]
     else:
-        decls = [(f, t) for f, t, _o in entries
-                 if not is_reserved_name(os.path.basename(f))]
+        decls = [(f, t) for f, t, _o in entries if f not in platform]
     for fname, tenant in decls:
         declared.setdefault(tenant, []).append(fname)
     dirs = result.setdefault("tenant_dirs", {})

@@ -359,8 +359,8 @@ _routing_defaults:
 #                under that directory.
 #   subtree      `sub2/_DEFAULTS.YML`: describe_tenant put it in the chain,
 #                the exporter's chain (exact lower-case names) did not.
-# Both sides now select with one rule (`_lib_confd.select_defaults_carrier`,
-# Go `SelectDefaultsCarriers`): a `.yaml` spelling beats `.yml`, case-folded.
+# Both sides now select with one rule (Go `SelectDefaultsCarriers`; the
+# Python side reads it from da-guard parse-tree, #3206): a `.yaml` spelling beats `.yml`, case-folded.
 # The Go end (config_golden_parity_test.go ScannerChainOrder / MergedHash)
 # reads the same golden.json rows, so a chain or hash drift on either side
 # is red. Tenant bodies are empty: every effective key is inherited, so the

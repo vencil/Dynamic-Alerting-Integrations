@@ -12,7 +12,8 @@
   也不論哪一種拼法，產生器都把該檔列為讀不了、帶 `null_key`，並拒收整棵樹
   （`--validate --strict` 回 1）；route 不會變寬，因為根本不渲染。
 * 加了引號的 `"~":` 是普通的鍵，照讀。
-* `_lib_confd.declared_tenant_ids` 也讀 parse-tree：這種檔不宣告任何租戶。
+* 租戶集合（`_lib_parse_cache.declared_tenants`，Go 的 `TenantScope`）也讀 parse-tree：
+  這種檔不宣告任何租戶，並列為讓集合不確定的那一半。
 
 Fixture 的 tenant 名一律是 demo 名（tenant-agnostic）。
 """
@@ -29,7 +30,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("judging_run")
 
 from generate_alertmanager_routes import load_tenant_tree
-from _lib_confd import declared_tenant_ids
+import _lib_parse_cache
 
 REPO = Path(__file__).resolve().parents[2]
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
@@ -128,4 +129,6 @@ def test_a_file_with_a_null_key_declares_no_tenant(tmp_path):
         f"{_T}.yaml": f"tenants:\n  {_T}:\n    ~: x\n",
         "demo-emea.yaml": "tenants:\n  demo-emea: {}\n",
     })
-    assert declared_tenant_ids(str(d)) == {"demo-emea"}
+    declared, unknown = _lib_parse_cache.declared_tenants(_lib_parse_cache.reader_for(d))
+    assert set(declared) == {"demo-emea"}
+    assert [u.file for u in unknown] == [f"{_T}.yaml"]

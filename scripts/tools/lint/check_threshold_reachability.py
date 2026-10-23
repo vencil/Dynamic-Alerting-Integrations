@@ -1142,7 +1142,7 @@ def _is_loader_readable_defaults(name: str) -> bool:
     being read.
 
     ⚠️ #1674: in a directory holding two carrier spellings the exporter reads
-    ONE (`_lib_confd.select_defaults_carrier`: `.yaml` over `.yml`) and WARNs
+    ONE (Go's selection, parse-tree's `defaults_carriers`: `.yaml` over `.yml`) and WARNs
     about the other. This predicate sees one name at a time, so it still
     counts the unselected spelling as loader-readable — an over-count, and
     only on a tree the exporter itself flags as misconfigured. (The walker

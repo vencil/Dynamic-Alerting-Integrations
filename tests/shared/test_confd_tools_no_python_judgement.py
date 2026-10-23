@@ -1,50 +1,40 @@
-"""Nothing outside `_lib_confd` uses its name predicates — an AST gate (#3206).
+"""`_lib_confd` has no name rules left, and nothing uses one — an AST gate (#3206).
 
 ADR-036 §7 step 9 makes "which paths a conf.d holds and what each one is"
-Go's answer: the entries of `da-guard parse-tree` (role, class, problem),
-read through `_lib_parse_tree` (`Entry.role`, `.reserved`, `.dir_link`,
-`tenant_scope`, …). `_lib_confd`'s Python name rules — the second copy of
-Go's that step 9b-3 deletes together with the parity matrix — must therefore
-have no caller left by then. This gate counts down to that: outside
-`_lib_confd.py`, no file under `scripts/` may import, call or hand on
-(`key=has_yaml_extension`) one of `NAME_RULES`, except at an `ALLOWED`
-site, keyed `<file>:<function>:<name>` (file relative to `scripts/`,
-function the dotted enclosing `def` / `class` path, `<module>` at top
-level) and tagged with why it is not migrated yet. An import is allowed
-only in a file that has an allowed use of that name. The gate is exact both
-ways: a new use is red, and so is an entry that matches nothing (delete it
-— that site was migrated).
+Go's answer: the entries of `da-guard parse-tree` (role, class, problem,
+`tenant_named`, `defaults_carriers`), read through `_lib_parse_tree`
+(`Entry.role`, `.reserved`, `.cls`, `tenant_scope`, …), and
+`_lib_parse_tree.classify_names` for a name that is not on a disk. Step 9b-3
+deleted `_lib_confd`'s Python copy of Go's name rules (`DELETED`) together
+with its parity tests; this gate keeps them deleted: `_lib_confd` defines
+none of them, and no file under `scripts/` imports, calls or hands one on
+(`key=has_yaml_extension`) — there is no allowlist any more.
 
 ⛔ What the gate is NOT: a check that a tool does not judge conf.d paths in
 Python some other way (a `stat`, a `startswith("_")`, an `is_file()`). A
 textual check of those is a heuristic that a bypass always beats; whether a
 tool's verdict agrees with Go's is a behaviour question, answered by the
-behaviour matrix (#3206, the PR after this one) — run as nobody against a
-tree built for every (role, problem kind) Go can write. Until then the
-known places are named in ADR-036 §7 step 9's progress line.
+behaviour matrix (`tests/shared/test_confd_behaviour_matrix.py`) — run as
+nobody against a tree built for every (role, problem kind) Go can write.
 
 ⚠️ WHAT THE GATE CANNOT CATCH (it reads import statements and names, not
 intent): `from _lib_confd import *`; the module bound another way —
 `from tools import _lib_confd`, `from . import _lib_confd`, or
-`import tools._lib_confd` without `as` (used as `tools._lib_confd.x`); the
-function stored in a variable first (`f = _lib_confd.is_reserved_name` in
-an allowed place, `f(n)` elsewhere is caught only as the first use); a name
-fetched with `getattr(_lib_confd, "…")`; the private helpers
-(`_is_hidden`, `_is_config`, …), which are not in `NAME_RULES`; a name
-re-exported through another module, including an allowed one; and a second
-call of the same name inside a function already allowed one (entries are
-per function and name, not per call). Those are review's, and the behaviour
-matrix's, to catch.
+`import tools._lib_confd` without `as`; a name fetched with
+`getattr(_lib_confd, "…")`; and a rule re-written under a new name. With the
+names undefined, the first two raise at import time anyway; the last is
+review's, and the behaviour matrix's, to catch.
 
-`configmap_key_problem` is not in `NAME_RULES` on purpose: it is
-Kubernetes' rule for a ConfigMap key (no `..` prefix, a key's character
-set), not the walk's name rule, and 9b-3 does not delete it.
+`configmap_key_problem` is not in `DELETED` on purpose: it is Kubernetes'
+rule for a ConfigMap key (no `..` prefix, a key's character set), not the
+walk's name rule. `LEGACY_STATE_FILES` is not either: it names the files
+tenant-api used to write (domain data), and `legacy_state_files` answers
+from Go's `role`.
 """
 from __future__ import annotations
 
 import ast
 import pathlib
-import re
 import sys
 
 import pytest
@@ -59,13 +49,15 @@ SCRIPTS = REPO / "scripts"
 ROOTS = (SCRIPTS / "tools", SCRIPTS / "ops")
 LIB = SCRIPTS / "tools" / "_lib_confd.py"
 
-#: `_lib_confd`'s name rules: the Python copy of Go's file-name rules
-#: (`pkg/confdname`), which step 9b-3 deletes.
-NAME_RULES = frozenset({
+#: `_lib_confd`'s name rules — the Python copy of Go's file-name rules
+#: (`pkg/confdname`) that step 9b-3 deleted.
+DELETED = frozenset({
     "is_reserved_name", "is_hidden_name", "has_yaml_extension", "is_defaults_name",
-    "is_defaults_document_name", "select_defaults_carrier", "config_stem",
-    "is_dir_symlink", "CONFIG_SUFFIXES", "LEGACY_STATE_FILES", "legacy_state_files",
+    "is_defaults_document_name", "select_defaults_carrier", "readable_carriers",
+    "config_stem", "is_dir_symlink", "CONFIG_SUFFIXES", "declared_tenant_ids",
+    "_is_hidden", "_is_config",
 })
+NAME_RULES = DELETED
 
 
 def uses(tree: ast.AST) -> "tuple[set[str], set[str]]":
@@ -124,92 +116,49 @@ def _actual() -> "tuple[set[str], set[str]]":
     return found, imports
 
 
-# ── why a site is not migrated yet ───────────────────────────────────
-
-PR_BETA2 = "a conf.d reader not migrated in PR-β1: reads Go's entries in PR-β2 (#3206 step 9)"
-ROUTE_GENERATOR = ("route generator: `_` / carrier test of a path the reader listed; Go's "
-                   "class answers the same — threading Entry through its helpers is PR-β2")
-CONFIGMAP = ("ConfigMaps (their keys, or dump files of them), not a conf.d walk; names mode "
-             "(classify_names) answers a name — PR-β2")
-AUDIT = ("migration_audit's \"today\" side IS the old Python selection, by design; it "
-         "retires with the tool (ADR-036 §7)")
-REASONS = frozenset({PR_BETA2, ROUTE_GENERATOR, CONFIGMAP, AUDIT})
-
-ALLOWED = {
-    "tools/dx/generate_tenant_metadata.py:_load_custom_groups:legacy_state_files": PR_BETA2,
-    "tools/ops/_grar_parse.py:_apply_tenant_entries:is_reserved_name": ROUTE_GENERATOR,
-    "tools/ops/_grar_parse.py:_parse_config_files:is_defaults_name": ROUTE_GENERATOR,
-    "tools/ops/_grar_parse.py:_parse_config_files:is_reserved_name": ROUTE_GENERATOR,
-    "tools/ops/_grar_parse.py:_parse_nested_config:is_reserved_name": ROUTE_GENERATOR,
-    "tools/ops/_grar_parse.py:_parse_platform_config:is_defaults_name": ROUTE_GENERATOR,
-    "tools/ops/assemble_config_dir.py:<module>:CONFIG_SUFFIXES": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:detect_conflicts:is_defaults_name": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:detect_conflicts:select_defaults_carrier": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:list_visible_config_entries:has_yaml_extension": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:list_visible_config_entries:is_hidden_name": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:main:is_defaults_name": PR_BETA2,
-    "tools/ops/assemble_config_dir.py:main:select_defaults_carrier": PR_BETA2,
-    "tools/ops/deprecate_rule.py:_deprecate:is_defaults_name": PR_BETA2,
-    "tools/ops/deprecate_rule.py:_nested_ignored:is_defaults_name": PR_BETA2,
-    "tools/ops/deprecate_rule.py:section_owner:is_defaults_name": PR_BETA2,
-    "tools/ops/init_project.py:_ConfdTree.root_defaults:is_defaults_name": PR_BETA2,
-    "tools/ops/init_project.py:_kustomize_carrier_files:is_defaults_name": PR_BETA2,
-    "tools/ops/migration_audit.py:read_tree_today:is_defaults_name": AUDIT,
-    "tools/ops/migration_audit.py:read_tree_today:select_defaults_carrier": AUDIT,
-    "tools/ops/offboard_tenant.py:_legacy_refs:LEGACY_STATE_FILES": PR_BETA2,
-    "tools/ops/offboard_tenant.py:find_config_file:config_stem": PR_BETA2,
-    "tools/ops/offboard_tenant.py:load_all_configs:LEGACY_STATE_FILES": PR_BETA2,
-    "tools/ops/validate_config.py:check_tenant_file_name:config_stem": PR_BETA2,
-}
-
-
 # ── the gate ─────────────────────────────────────────────────────────
 
 def test_the_files_are_read() -> None:
     """Tripwire: the gate is only as wide as the files it walks."""
     names = {p.relative_to(SCRIPTS).as_posix() for p in _files()}
     for must in ("tools/ops/validate_config.py", "tools/ops/deprecate_rule.py",
-                 "tools/ops/init_project.py", "ops/configmap_assemble.py"):
+                 "tools/ops/init_project.py", "ops/configmap_assemble.py",
+                 "tools/ops/_gsvc_child.py"):
         assert must in names, must
     assert "tools/_lib_confd.py" not in names
 
 
-def test_no_name_rule_is_used_outside_the_allowlist() -> None:
+def test_lib_confd_defines_no_name_rule() -> None:
+    """None of `DELETED` is defined (or assigned) at `_lib_confd`'s top level,
+    nor named in its `__all__`."""
+    tree = parse(LIB)
+    assert tree is not None
+    defined = set()
+    exported: "set[str]" = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    defined.add(t.id)
+                    if t.id == "__all__" and isinstance(node.value, (ast.List, ast.Tuple)):
+                        exported |= {e.value for e in node.value.elts
+                                     if isinstance(e, ast.Constant)}
+    assert exported, "`__all__` not found — the gate cannot read it"
+    back = sorted((defined | exported) & DELETED)
+    assert not back, f"`_lib_confd` defines a deleted name rule again: {back}"
+
+
+def test_no_name_rule_is_used() -> None:
     found, imports = _actual()
-    new = sorted(found - set(ALLOWED))
-    stale = sorted(set(ALLOWED) - found)
-    allowed_names = {(k.split(":")[0], k.split(":")[2]) for k in ALLOWED}
-    bare = sorted(i for i in imports if (i.split(":")[0], i.split(":")[2]) not in allowed_names)
-    assert not new and not stale and not bare, (
-        "`_lib_confd`'s name rules are used where the gate does not allow it.\n"
-        + "".join(f"  NEW    {k}\n" for k in new)
-        + "".join(f"  STALE  {k} — that site no longer uses it: delete the entry\n" for k in stale)
-        + "".join(f"  IMPORT {k} — imported with no allowed use\n" for k in bare)
+    assert not found and not imports, (
+        "a deleted `_lib_confd` name rule is used:\n"
+        + "".join(f"  USE    {k}\n" for k in sorted(found))
+        + "".join(f"  IMPORT {k}\n" for k in sorted(imports))
         + "Read Go's entry instead (`_lib_parse_tree.Entry`: `.role`, `.cls`, `.reserved`, "
-          "`.dir_link`; `tenant_scope`; `classify_names` for names not on a disk).")
-
-
-def test_every_entry_gives_one_of_the_reasons() -> None:
-    assert all(v in REASONS for v in ALLOWED.values()), ALLOWED
-    assert all(k.split(":")[2] in NAME_RULES for k in ALLOWED), ALLOWED
-    assert all("\n" not in r and r.strip() for r in REASONS)
-
-
-@pytest.mark.parametrize("adr", ["036-single-parser-effective-config.md",
-                                 "036-single-parser-effective-config.en.md"])
-def test_the_adr_names_every_module_still_on_the_name_rules(adr) -> None:
-    """ADR-036 §7's progress line for step 9 names every module this
-    allowlist holds: one it does not name is a caller nobody was told about.
-    (One direction only: the line also names judgements this gate cannot
-    see, which hold no entry here.)"""
-    text = (REPO / "docs" / "adr" / adr).read_text(encoding="utf-8")
-    line = next(ln for ln in text.splitlines()
-                if "test_confd_tools_no_python_judgement.py" in ln
-                and "test_confd_behaviour_matrix.py" in ln)
-    want = {pathlib.PurePosixPath(k.split(":")[0]).stem for k in ALLOWED}
-    named = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", line))
-    missing = sorted(want - named)
-    assert not missing, f"{adr}: modules on the name rules the ADR does not name: {missing}"
+          "`.tenant_named`, `.not_read`; `tenant_scope`; `classify_names` for names not on a disk).")
 
 
 # ── the detector (synthetic, no repo file) ───────────────────────────

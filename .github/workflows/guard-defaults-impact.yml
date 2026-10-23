@@ -77,9 +77,8 @@ on:
     paths:
       # Every `_`-prefixed YAML, any casing (#2192). This covers every file
       # that feeds da-guard as configuration rather than as a tenant: the
-      # defaults CHAIN carriers (`_lib_confd.is_defaults_name` / Go
-      # `confdname.IsDefaults` — `_defaults.yaml` / `.yml` in any casing since
-      # #1674), `_profiles.yaml` (#2117), AND every other root `_` platform
+      # defaults CHAIN carriers (Go `confdname.IsDefaults` — `_defaults.yaml`
+      # / `.yml` in any casing since #1674), `_profiles.yaml` (#2117), AND every other root `_` platform
       # file — `LoadRootPlatformProfiles` reads `profiles:` and
       # `platform_overlay.go` reads a `tenants:` overlay from ANY of them, so
       # a PR editing only `conf.d/_platform.yaml` changes what the guard sees.

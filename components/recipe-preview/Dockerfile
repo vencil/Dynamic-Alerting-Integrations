@@ -90,7 +90,7 @@ COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
 # it at load any more; its COPY is kept, not pruned in that change.
 # _lib_parse_cache is NOT imported at load (#2906): `_lib_confd` and `_lib_io`
 # import it only inside the conf.d readers that run da-guard
-# (declared_tenant_ids / tenant_declarations / load_confd_file); the compiler
+# (tenant_declarations / load_confd_file); the compiler
 # calls none of them — it opens no conf.d file itself (#3042: da-guard
 # served-values in the repo, `entries_from_specs` in this image).
 # tests/ops/test_recipe_preview_image_layout.py imports app.py in this layout.

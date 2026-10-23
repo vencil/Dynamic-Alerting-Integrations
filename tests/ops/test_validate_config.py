@@ -2786,7 +2786,7 @@ class TestRootDefaultsRouting:
         assert "skipped_nested_files" not in r, r
 
     def test_carrier_is_found_in_any_casing(self, tmp_path):
-        """The exporter selects `_DEFAULTS.yml` too (`is_defaults_name`)."""
+        """The exporter selects `_DEFAULTS.yml` too (Go's class `defaults`)."""
         d = self._tree(tmp_path, "defaults:\n" + self._ROUTING,
                        name="_Defaults.yml")
         r = vc.check_root_defaults(str(d))

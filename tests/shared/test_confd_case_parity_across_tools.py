@@ -58,9 +58,10 @@ downgrade.
   spelling parity with it into its OWN suite rather than into this file. So
   do not read a membership list here: this paragraph would be stale the next
   time one lands, and it has already been rewritten twice. Census the call
-  sites instead — by the VALUE passed to `has_yaml_extension` /
-  `unusable_config_entries`, at any argument position, to any callee — and
-  ask `_lib_confd` for the accepted set.
+  sites instead — by the VALUE passed to `unusable_config_entries`, at
+  any argument position, to any callee — and ask Go (`da-guard parse-tree`'s
+  entries, or `_lib_parse_tree.classify_names`) for the accepted set; the
+  Python name predicates were deleted (#3206).
 * Only tools reachable through a conf.d CLI flag, plus the two
   library-shaped readers covered by direct calls at the bottom of this
   file.
@@ -496,9 +497,10 @@ def test_tool_reads_upper_case_names_the_same(
         f"(#1537), so whatever this tool just reported about the "
         f"upper-case tree is a claim about a config nobody runs.\n"
         f"  lower rc={outcome.lower[1]}  upper rc={outcome.upper[1]}\n"
-        f"Fix by asking `_lib_confd`'s shared name predicates "
-        f"(`has_yaml_extension` / `is_defaults_name` / `config_stem`) "
-        f"instead of comparing the extension in this tool. ⛔ Keep the "
+        f"Fix by reading Go's answer (`da-guard parse-tree`'s entries: "
+        f"`role` / `class` / `tenant_named`; `_lib_parse_tree.classify_names` "
+        f"for a name not on a disk) instead of comparing the extension in "
+        f"this tool (#3206). ⛔ Keep the "
         f"tool's own recursion and its own suffix set — changing those "
         f"is a separate behaviour change. See issue #1588."
     )

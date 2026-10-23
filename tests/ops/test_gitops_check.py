@@ -819,20 +819,18 @@ class TestCheckLocalExtensionSpelling:
 
         The two tests above hard-code `.yaml` and `.yml`, so they stop
         covering the floor the day the exporter grows a third spelling and
-        `_lib_confd.CONFIG_SUFFIXES` follows it. This one reads the set
+        the shared name table follows it. This one reads the set
         instead of restating it, so it widens on its own.
 
-        ⛔ It does NOT re-implement `has_yaml_extension` — that would be the
-        predicate checking itself. It uses the shared CONSTANT, whose
-        agreement with the exporter's scanner is pinned elsewhere
-        (`tests/shared/confd_name_classification_matrix.json`, asserted from
-        the Go side by `confd_name_classification_parity_test.go` and from
-        the Python side by `tests/shared/test_confd_name_classification_parity.py`).
+        It reads the set from the shared name table
+        (`_confd_name_table.config_suffixes`), which Go owns — pkg/confdname's
+        matrix test asserts every cell; no Python rule restates it (#3206).
 
         ⚠️ Floor only: satisfied by a reader that is too WIDE, which is what
         the counterexample test above is for.
         """
-        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+        from _confd_name_table import config_suffixes  # noqa: PLC0415
+        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         # ⛔ Anti-vacuity: an empty `CONFIG_SUFFIXES` would make the assertion
         # below `0 == 0`. The set is not this test's to guard, so say who

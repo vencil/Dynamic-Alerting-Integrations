@@ -1270,7 +1270,7 @@ class TestScanAcceptsBothSpellings:
         assert got == {"db-a.yaml", "db-b.yml"}
 
     def test_non_config_extensions_stay_out(self, tmp_path):
-        """UPPER — `*.y*` 只是預過濾，判定仍是 has_yaml_extension。"""
+        """UPPER — `*.y*` 只是預過濾，判定是 Go 的 `role`（#3206）。"""
         got = self._scan(tmp_path,
                          ["db-a.yaml", "db-c.json", "db-d.yang",
                           "plain.y", "notes.txt"])

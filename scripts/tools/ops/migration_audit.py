@@ -72,10 +72,7 @@ for _p in (_TOOLS, _HERE):
         sys.path.insert(0, _p)
 
 from _lib_confd import (  # noqa: E402
-    is_defaults_name,
     list_config_tree,
-    readable_carriers,
-    select_defaults_carrier,
     unusable_reason,
 )
 from _lib_exitcodes import (  # noqa: E402
@@ -90,6 +87,8 @@ SCHEMA = "da-tools.migration-audit/v1"
 PARSE_TREE_SUBCOMMAND = _lib_parse_tree.SUBCOMMAND
 PARSE_TREE_SCHEMA = _lib_parse_tree.SCHEMA
 DEFAULT_TIMEOUT = 600
+#: parse-tree's `not_read` for the `_defaults` spelling a directory does not select.
+UNSELECTED_CARRIER = "unselected_defaults_carrier"
 
 # The lists whose entries are differences (exit 1); `still_unreadable` is not.
 DIFFERENCE_LISTS = ("selection", "values", "keys", "becomes_unreadable",
@@ -135,9 +134,11 @@ def read_tree_today(root: Path, listing: Any = None) -> tuple[dict[str, Any], di
     """({rel: data} read, {rel: reason} refused) — the files the route
     generator reads, by its selection (`_grar_parse._parse_config_files`):
     the shared walk (`list_config_tree`), one defaults carrier per directory
-    (`select_defaults_carrier` over the readable ones), every unusable entry
-    booked as refused. *listing*: the snapshot the caller holds (#3206: the
-    audit's own parse-tree document — no second walk)."""
+    (Go's selection: the spelling an entry's `not_read` names
+    `unselected_defaults_carrier` is not read — #3206, no Python copy of the
+    rule), every unusable entry booked as refused. *listing*: the snapshot
+    the caller holds (#3206: the audit's own parse-tree document — no second
+    walk)."""
     listing = list_config_tree(root, listing=listing)
     if any(p == root for p in listing.unusable):
         raise AuditError(f"config directory could not be read: {root} — "
@@ -146,21 +147,9 @@ def read_tree_today(root: Path, listing: Any = None) -> tuple[dict[str, Any], di
     refused: dict[str, str] = {}
     for bad in listing.unusable:
         refused[bad.relative_to(root).as_posix()] = unusable_reason(bad, listing.listing)
-    carriers: dict[Path, list[Path]] = {}
-    for p in listing.files:
-        if is_defaults_name(p.name):
-            carriers.setdefault(p.parent, []).append(p)
-    selected: dict[Path, Optional[Path]] = {}
-    readable_set: set[Path] = set()
-    for d, cs in carriers.items():
-        readable, _ = readable_carriers(cs)
-        readable_set.update(readable)
-        selected[d] = select_defaults_carrier(readable)
     for p in listing.files:
         rel = p.relative_to(root).as_posix()
-        chosen = selected.get(p.parent)
-        if (is_defaults_name(p.name) and p in readable_set
-                and (chosen is None or p.name != chosen.name)):
+        if listing.listing.entry(rel).not_read == UNSELECTED_CARRIER:
             continue  # the unselected spelling: not read
         data, reason = _read_today(p)
         if reason is None:

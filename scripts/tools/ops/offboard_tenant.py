@@ -49,10 +49,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    config_stem,
-    warn_nested,
-)
+from _lib_confd import warn_nested  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
@@ -86,11 +83,12 @@ def _top_level(config_dir):
 def find_config_file(tenant, config_dir):
     """tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
 
-    #1588: the carrier is found by comparing STEMS, never by pasting an
-    extension onto the id (`alpha.YAML` is alpha's), and exactly — not
-    case-folded (`Alpha` is another tenant). ADR-036 §2: which files there
-    are is parse-tree's answer (a directory named `<tenant>.yaml/` refuses
-    the run, #3206)."""
+    #1588: the carrier is found by comparing the id its NAME carries, never
+    by pasting an extension onto the id (`alpha.YAML` is alpha's), and
+    exactly — not case-folded (`Alpha` is another tenant). ADR-036 §2: which
+    files there are, and the id each name carries (`tenant_named`), are
+    parse-tree's answer (a directory named `<tenant>.yaml/` refuses the run,
+    #3206)."""
     base = Path(config_dir)
     if not base.is_dir():
         return None
@@ -101,7 +99,7 @@ def find_config_file(tenant, config_dir):
     for rel, e in _top_level(config_dir):
         # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
         # refuses the run before this line is reached.
-        if config_stem(rel) == tenant and e.config_file:
+        if e.tenant_named == tenant and e.config_file:
             return str(base / rel)
     return None
 
