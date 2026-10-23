@@ -6,9 +6,12 @@ Go's answer: the entries of `da-guard parse-tree` (role, class, problem,
 (`Entry.role`, `.reserved`, `.cls`, `tenant_scope`, …), and
 `_lib_parse_tree.classify_names` for a name that is not on a disk. Step 9b-3
 deleted `_lib_confd`'s Python copy of Go's name rules (`DELETED`) together
-with its parity tests; this gate keeps them deleted: `_lib_confd` defines
-none of them, and no file under `scripts/` imports, calls or hands one on
-(`key=has_yaml_extension`) — there is no allowlist any more.
+with its parity tests. This gate checks two things, by name: `_lib_confd`
+defines (or lists in `__all__`) none of them at top level, and no file under
+`scripts/tools/` or `scripts/ops/` imports one from `_lib_confd` or uses one
+through it (a call, or a reference handed on: `key=has_yaml_extension`) —
+there is no allowlist any more. It is a narrow leftover check; the defence
+against a Python copy of the rules is the behaviour matrix.
 
 ⛔ What the gate is NOT: a check that a tool does not judge conf.d paths in
 Python some other way (a `stat`, a `startswith("_")`, an `is_file()`). A
@@ -21,9 +24,11 @@ nobody against a tree built for every (role, problem kind) Go can write.
 intent): `from _lib_confd import *`; the module bound another way —
 `from tools import _lib_confd`, `from . import _lib_confd`, or
 `import tools._lib_confd` without `as`; a name fetched with
-`getattr(_lib_confd, "…")`; and a rule re-written under a new name. With the
-names undefined, the first two raise at import time anyway; the last is
-review's, and the behaviour matrix's, to catch.
+`getattr(_lib_confd, "…")`; a name rule defined in some other module; and a
+rule re-written under a new name. The first three can only reach a name
+`_lib_confd` defines, which `test_lib_confd_defines_no_name_rule` keeps out
+(so they fail when run, not here); the rest are review's, and the behaviour
+matrix's, to catch.
 
 `configmap_key_problem` is not in `DELETED` on purpose: it is Kubernetes'
 rule for a ConfigMap key (no `..` prefix, a key's character set), not the

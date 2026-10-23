@@ -30,7 +30,8 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).
 import _lib_parse_cache  # noqa: E402
-from _lib_parse_tree import FileUnreadable, ParseTreeError, classify_names  # noqa: E402
+from _lib_parse_tree import (  # noqa: E402
+    RESERVED_CLASSES, FileUnreadable, ParseTreeError, classify_names)
 from _lib_confd import (  # noqa: E402
     duplicate_declarations,
     list_config_tree,
@@ -323,7 +324,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
     """
     if cls is None:
         cls = _name_class(fname)
-    is_defaults_file = cls in ("defaults", "platform")   # platform file (routing keys)
+    is_defaults_file = cls in RESERVED_CLASSES   # platform file (routing keys)
     is_carrier = cls == "defaults"
     # #1538: display-only alias. `fname` itself stays raw — it is used for
     # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
@@ -791,7 +792,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     """
     _f = safe_label(fname)
     if reserved is None:
-        reserved = _name_class(fname) in ("defaults", "platform")
+        reserved = _name_class(fname) in RESERVED_CLASSES
     if reserved:
         _record_unknown_routing_keys(result, data, layer="platform", where="top level", file=fname)
 
@@ -1261,7 +1262,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     # plane reads. Any other carrier spelling is ignored WHOLE, as the
     # exporter ignores it — never opened — and named once, as its own
     # finding (#2906). ⛔ Which file that is, is parse-tree's verdict
-    # (`ConfdReader.not_read` / `carrier`), never `select_defaults_carrier`:
+    # (`ConfdReader.not_read` / `carrier`), never a Python selection:
     # a second implementation of the rule that read a file parse-tree lists
     # in `not_read` would die rc 2 on `NotSelected` (#2906 review).
     # #1982: every tenant entry of every file, in read order, applied AFTER

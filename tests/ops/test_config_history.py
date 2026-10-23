@@ -286,7 +286,7 @@ class TestScanConfigDir:
         assert sorted(seen["other"].values()) == sorted(seen["yaml"].values())
 
     def test_skip_non_yaml_files(self):
-        """只掃描設定載體（`CONFIG_SUFFIXES`），`.txt` / `.py` 不算。
+        """只掃描設定載體（`.yaml` / `.yml`，Go 的 `role`），`.txt` / `.py` 不算。
 
         ⚠️ 這行 docstring 原本寫「只掃描 *.yaml 檔案」——#1603 之後那句是假的
         （`.yml` 也是載體）。這支測試本身沒變，它餵的兩個鄰居本來就不是任何

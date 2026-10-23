@@ -2301,7 +2301,7 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
 
     One carrier per directory, the one parse-tree says the chain selects:
     a carrier it lists in ``not_read`` is not read, and the row says so
-    (never ``select_defaults_carrier`` here — a second implementation of the
+    (never a Python carrier selection here — a second implementation of the
     rule; reading a file parse-tree does not select is rc 2, #2906 review).
     A file that does not load as a mapping is left to ``yaml_syntax`` /
     ``root_defaults``. Measured on a subtree: top-level
@@ -2831,7 +2831,7 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     which would turn this row WARN on every ADR-017 tree for files it is
     deliberately not about. The carrier is the one parse-tree says the root's
     chain selects (``ConfdReader.carrier``, its ``defaults_carriers``), the
-    rule every plane shares (#1674) — not ``select_defaults_carrier``, a
+    rule every plane shares (#1674) — not a Python selection, a
     second implementation of it that could hand the read a file parse-tree
     does not select (rc 2, #2906 review).
     """

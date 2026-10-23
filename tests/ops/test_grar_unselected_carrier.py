@@ -1,6 +1,6 @@
 """#2906：一個目錄有兩個 defaults carrier 拼法時，沒被選中的那份。
 
-`select_defaults_carrier` 只選一份；其餘可讀的那份**沒有任何平面讀**
+Go 的選擇（`SelectDefaultsCarriers`）只選一份；其餘可讀的那份**沒有任何平面讀**
 （da-guard parse-tree 的 `not_read` reason `unselected_defaults_carrier`）。
 產生器把它當成一筆 WARN finding（同名 kind），`--validate`（含 `--strict`）
 擋、render 照常產出 rc 0——比照 `routing_key_ignored`「寫了但不生效」那一類。

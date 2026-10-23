@@ -82,7 +82,8 @@ parser refuses) and deliberately NOT used: the two parsers disagree exactly
 on malformed files, and switching only the tenant-key readers made one run
 give two answers — ``validate_config``'s ``yaml_syntax`` called a file
 unreadable while ``tenant_uniqueness`` read it, and the routing reader
-dropped a tenant file that ``declared_tenant_ids`` still counted, so a
+dropped a tenant file that the existence set (then ``declared_tenant_ids``)
+still counted, so a
 platform block created the tenant silently. Which parser the tool family
 uses on malformed files is decided in #2123, for all readers at once.
 """

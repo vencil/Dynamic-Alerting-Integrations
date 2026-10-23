@@ -697,12 +697,13 @@ class TestDiscoverTenantConfigsExtensionSpelling:
 
           * `db-json.json` — over-widening a call site to
             `(".yaml", ".yml", ".json")` is a single token, and
-            `has_yaml_extension`'s own docstring says this argument gets
+            the docstring of the (since deleted, #3206)
+            `has_yaml_extension` says this argument gets
             touched. Measured on this change's base: with that widening
             applied and this class absent, the CI-exact suite is green.
           * `_profiles.yaml` — reserved. ⛔ The stderr half is what makes
             this half of the name provable: a `_`-prefixed stem fails RFC
-            1123 anyway, so dropping the `is_reserved_name` filter does not
+            1123 anyway, so dropping the reserved (`_`) filter does not
             change the RETURNED list at all. Blind review measured exactly
             that — before the silence assertion, this carrier could not
             testify under any single-point mutation.
@@ -744,7 +745,7 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         assert "_profiles" not in err, (
             f"a reserved carrier was mentioned on stderr; the exporter "
             f"drops these silently and so must this reader — this is the "
-            f"only observable signal the `is_reserved_name` filter has. "
+            f"only observable signal the reserved (`_`) filter has. "
             f"stderr was {err!r}"
         )
         assert ".hidden" not in err, (
@@ -754,7 +755,7 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         )
 
     def test_every_spelling_the_shared_set_names_is_discovered(self, tmp_path):
-        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+        """FLOOR, derived: one carrier per member of `SUFFIXES`.
 
         The tests above hard-code `.yaml` and `.yml`, so they stop covering
         the floor the day the exporter grows a third spelling and
@@ -767,12 +768,12 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         ⚠️ Floor only — a too-WIDE reader satisfies it, which is what the counterexample test is for.
         """
         from _confd_name_table import config_suffixes  # noqa: PLC0415
-        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
+        SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         # ⛔ Anti-vacuity: an empty set makes the assertion `[] == []`.
         # Guarding that set is not this test's job, so name who does.
-        assert len(CONFIG_SUFFIXES) >= 2, (
-            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+        assert len(SUFFIXES) >= 2, (
+            f"SUFFIXES collapsed to {SUFFIXES!r}; the shared "
             f"classification matrix should have gone red first"
         )
 
@@ -780,17 +781,17 @@ class TestDiscoverTenantConfigsExtensionSpelling:
         root.mkdir()
         (root / "_defaults.yaml").write_text(
             "defaults:\n  pg_connections: 80\n", encoding="utf-8")
-        for i, suffix in enumerate(CONFIG_SUFFIXES):
+        for i, suffix in enumerate(SUFFIXES):
             (root / f"t{i}{suffix}").write_text(
                 f"tenants:\n  t{i}:\n    pg_connections: 90\n",
                 encoding="utf-8")
 
         tenants = og.discover_tenant_configs(root)
-        expected = sorted(f"t{i}" for i in range(len(CONFIG_SUFFIXES)))
+        expected = sorted(f"t{i}" for i in range(len(SUFFIXES)))
 
         assert tenants == expected, (
-            f"one carrier was written per member of CONFIG_SUFFIXES "
-            f"({CONFIG_SUFFIXES!r}) and discovery returned {tenants}, "
+            f"one carrier was written per member of SUFFIXES "
+            f"({SUFFIXES!r}) and discovery returned {tenants}, "
             f"expected {expected}"
         )
 

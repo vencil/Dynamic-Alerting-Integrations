@@ -98,6 +98,7 @@ from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer
     load_key_refs,
 )
 from _lib_confd import warn_nested  # noqa: E402
+from _lib_parse_tree import RESERVED_CLASSES  # noqa: E402  (Go's `_` classes)
 
 
 def _reader(config_dir):
@@ -338,15 +339,15 @@ def _in_subtree(name, plane):
     return "/" in name or plane == "subtree"
 
 
-#: Go 的 class 裡 `_` 前綴的兩種（`_lib_parse_tree.RESERVED_CLASSES`）。
-CLS_DEFAULTS = "defaults"    # defaults 載體（`_defaults.yaml`／`.yml`，任何大小寫）
-CLS_PLATFORM = "platform"    # 其他 `_` 前綴設定檔
+#: Go 的 class：defaults 載體（`_defaults.yaml`／`.yml`，任何大小寫）；
+#: `_` 前綴的類別全體是 `_lib_parse_tree.RESERVED_CLASSES`（另一種是其他 `_` 前綴檔）。
+CLS_DEFAULTS = "defaults"
 
 
 def _nested_ignored(name, plane="root", *, cls):
     """子樹裡 `_defaults` 以外的 `_` 前綴檔: exporter 完全不讀（`isNestedPlatformFile`）。
     *cls*：這個檔的 Go class（`Entry.cls`，#3206：不以名稱自己判）。"""
-    return _in_subtree(name, plane) and cls == CLS_PLATFORM
+    return _in_subtree(name, plane) and cls in RESERVED_CLASSES and cls != CLS_DEFAULTS
 
 
 def section_owner(name, section, plane="root", *, cls):
@@ -364,7 +365,7 @@ def section_owner(name, section, plane="root", *, cls):
     if _nested_ignored(name, plane, cls=cls):
         return OWNER_EXPORTER
     nested = "/" in name
-    reserved = cls in (CLS_DEFAULTS, CLS_PLATFORM)
+    reserved = cls in RESERVED_CLASSES
     block = section.split(".", 1)[0]
     if block in ("defaults", "optional_overrides"):
         if cls == CLS_DEFAULTS:
@@ -380,7 +381,7 @@ def section_owner(name, section, plane="root", *, cls):
 
 def exporter_drop_reason(name, section, plane="root", *, cls):
     """`OWNER_EXPORTER` 的那一句警告（接在檔名後面）。*cls* 同 `section_owner`。"""
-    reserved = cls in (CLS_DEFAULTS, CLS_PLATFORM)
+    reserved = cls in RESERVED_CLASSES
     if _nested_ignored(name, plane, cls=cls):
         return ("exporter 不讀子目錄裡 `_defaults` 以外的 `_` 前綴檔"
                 "（isNestedPlatformFile），本工具不寫入")

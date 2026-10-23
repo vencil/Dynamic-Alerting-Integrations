@@ -474,7 +474,8 @@ class TestExtensionSpellingAxis:
         You cannot enumerate the complement of an accept-set, so this pins
         counterexamples and the name says which ones. Over-widening a call
         site to `(".yaml", ".yml", ".json")` is a single token, and
-        `has_yaml_extension`'s own docstring says this argument gets
+        the docstring of the (since deleted, #3206)
+        `has_yaml_extension` says this argument gets
         touched. Measured on this change's base (`eed193a7`): with that
         widening applied and this class absent, the CI-exact suite is
         15909 passed / 185 skipped / rc=0.
@@ -500,7 +501,7 @@ class TestExtensionSpellingAxis:
         )
 
     def test_every_spelling_the_shared_set_names_is_scanned(self, tmp_path):
-        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+        """FLOOR, derived: one carrier per member of `SUFFIXES`.
 
         The tests above hard-code `.yaml` and `.yml`, so they stop covering
         the floor the day the exporter grows a third spelling and
@@ -515,26 +516,26 @@ class TestExtensionSpellingAxis:
         counterexample test above is for.
         """
         from _confd_name_table import config_suffixes  # noqa: PLC0415
-        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
+        SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         # Anti-vacuity: an empty set makes the assertion `set() == set()`.
         # Guarding the set is not this test's job, so name who does.
-        assert len(CONFIG_SUFFIXES) >= 2, (
-            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+        assert len(SUFFIXES) >= 2, (
+            f"SUFFIXES collapsed to {SUFFIXES!r}; the shared "
             f"classification matrix should have gone red first"
         )
 
         config_dir = tmp_path / "conf.d"
         _write(config_dir / "_defaults.yaml", "defaults:\n  cpu: 100\n")
-        for i, suffix in enumerate(CONFIG_SUFFIXES):
+        for i, suffix in enumerate(SUFFIXES):
             _write(config_dir / "payments" / "staging" / f"t{i}{suffix}",
                    _tenant_yaml(f"t{i}", environment="prod"))
 
         tenants = {m.tenant for m in cpmc.scan(config_dir)}
-        expected = {f"t{i}" for i in range(len(CONFIG_SUFFIXES))}
+        expected = {f"t{i}" for i in range(len(SUFFIXES))}
         assert tenants == expected, (
-            f"one carrier was written per member of CONFIG_SUFFIXES "
-            f"({CONFIG_SUFFIXES!r}) and the lint scanned {tenants}, "
+            f"one carrier was written per member of SUFFIXES "
+            f"({SUFFIXES!r}) and the lint scanned {tenants}, "
             f"expected {expected}"
         )
 
@@ -926,22 +927,22 @@ class TestHookSelectsEverythingTheScriptScans:
         on a real tree rather than by re-implementing the predicate.
         """
         from _confd_name_table import config_suffixes  # noqa: PLC0415
-        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
+        SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         prefix = "components/threshold-exporter/config/conf.d/"
         pattern = self._hook_files_regex()
 
         config_dir = tmp_path / "conf.d"
-        for i, suffix in enumerate(CONFIG_SUFFIXES):
+        for i, suffix in enumerate(SUFFIXES):
             _write(config_dir / f"t{i}{suffix}", _tenant_yaml(f"t{i}"))
         scanned = {p.name for p in cpmc.iter_tenant_files(config_dir)}
 
         # ⛔ Vacuity guard: if the script scanned nothing, the loop below is
         # empty and the test passes without asserting anything.
-        assert len(scanned) == len(CONFIG_SUFFIXES), (
+        assert len(scanned) == len(SUFFIXES), (
             f"the script scanned {sorted(scanned)} out of "
-            f"{len(CONFIG_SUFFIXES)} carriers written from CONFIG_SUFFIXES "
-            f"({CONFIG_SUFFIXES!r}) — fix that before trusting this test"
+            f"{len(SUFFIXES)} carriers written from SUFFIXES "
+            f"({SUFFIXES!r}) — fix that before trusting this test"
         )
 
         for name in sorted(scanned):

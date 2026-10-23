@@ -575,9 +575,9 @@ class TestCheckLocal:
         """`_`-prefixed control files are not tenant carriers.
 
         ⛔ Renamed from `test_local_ignores_hidden_files`, which called a
-        `_`-prefixed file "hidden". `_lib_confd` makes `is_reserved_name`
-        (`_` prefix) and `is_hidden_name` (`.` prefix) two DELIBERATELY
-        orthogonal predicates, and this reader treats them differently: it
+        `_`-prefixed file "hidden". Go's name rules make reserved
+        (`_` prefix, class defaults / platform) and hidden (`.` prefix) two
+        DELIBERATELY orthogonal properties, and this reader treats them differently: it
         drops reserved names and COUNTS dot-prefixed ones. Under the old
         name, anyone grepping for coverage of the hidden axis found this
         green test and stopped — see the SCOPE block further down, which
@@ -764,7 +764,8 @@ class TestCheckLocalExtensionSpelling:
 
         ⛔ Blind review of the sibling fix (#1663) measured that over-widening
         a call site to `(".yaml", ".yml", ".json")` — a single-token edit, and
-        `has_yaml_extension`'s own docstring says this argument gets touched —
+        the docstring of the (since deleted, #3206)
+        `has_yaml_extension` says this argument gets touched —
         left the whole suite green while the tool began reading carriers the
         exporter never loads. Re-measured for THIS tool on the base this
         change sits on (`daf747fb`): with the widening applied to
@@ -779,7 +780,7 @@ class TestCheckLocalExtensionSpelling:
 
             accept `.json` too                    -> 3 / 7
             narrow back to `.yaml` only           -> 1 / 1
-            drop the `is_reserved_name(...)` term -> 4 / 12   (`_defaults.yaml`
+            drop the reserved (`_`) term          -> 4 / 12   (`_defaults.yaml`
                                                     is `_`-prefixed too, so it
                                                     joins as well)
             keep it but narrow it to `_defaults`  -> 3 / 11
@@ -815,7 +816,7 @@ class TestCheckLocalExtensionSpelling:
         )
 
     def test_local_counts_every_spelling_the_shared_set_names(self, tmp_path):
-        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+        """FLOOR, derived: one carrier per member of `SUFFIXES`.
 
         The two tests above hard-code `.yaml` and `.yml`, so they stop
         covering the floor the day the exporter grows a third spelling and
@@ -830,13 +831,13 @@ class TestCheckLocalExtensionSpelling:
         the counterexample test above is for.
         """
         from _confd_name_table import config_suffixes  # noqa: PLC0415
-        CONFIG_SUFFIXES = config_suffixes()  # Go's table (#3206)
+        SUFFIXES = config_suffixes()  # Go's table (#3206)
 
-        # ⛔ Anti-vacuity: an empty `CONFIG_SUFFIXES` would make the assertion
+        # ⛔ Anti-vacuity: an empty `SUFFIXES` would make the assertion
         # below `0 == 0`. The set is not this test's to guard, so say who
         # does rather than pretending a floor here would be independent.
-        assert len(CONFIG_SUFFIXES) >= 2, (
-            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+        assert len(SUFFIXES) >= 2, (
+            f"SUFFIXES collapsed to {SUFFIXES!r}; the shared "
             f"classification matrix is the thing that should have gone red "
             f"first, so fix that before touching this line"
         )
@@ -845,23 +846,23 @@ class TestCheckLocalExtensionSpelling:
         root.mkdir()
         Path(root, "_defaults.yaml").write_text(
             "global_threshold: 100\n", encoding="utf-8")
-        for i, suffix in enumerate(CONFIG_SUFFIXES):
+        for i, suffix in enumerate(SUFFIXES):
             Path(root, f"t{i}{suffix}").write_text(
                 "".join(f"k{j}: '{j}'\n" for j in range(i + 1)),
                 encoding="utf-8")
 
         result = gc.check_local(str(root))
-        expected_metrics = sum(range(1, len(CONFIG_SUFFIXES) + 1))
+        expected_metrics = sum(range(1, len(SUFFIXES) + 1))
 
         assert result.status == "pass"
         assert (result.details["tenant_files"],
                 result.details["total_metrics"]) == (
-                    len(CONFIG_SUFFIXES), expected_metrics), (
-            f"one carrier was written per member of CONFIG_SUFFIXES "
-            f"({CONFIG_SUFFIXES!r}) and gitops-check counted "
+                    len(SUFFIXES), expected_metrics), (
+            f"one carrier was written per member of SUFFIXES "
+            f"({SUFFIXES!r}) and gitops-check counted "
             f"tenant_files={result.details['tenant_files']} "
             f"total_metrics={result.details['total_metrics']}, expected "
-            f"{(len(CONFIG_SUFFIXES), expected_metrics)}"
+            f"{(len(SUFFIXES), expected_metrics)}"
         )
 
 

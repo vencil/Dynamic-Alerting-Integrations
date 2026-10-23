@@ -25,7 +25,7 @@
     "A tenant file with a second document declares nothing on either side since ADR-036 step 6",
     "(#3206: parse-tree's multiple_documents; before, the exporter read the first document).",
     "A tenant file whose FIRST document does not parse declares nothing on either",
-    "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
+    "side (Go: walker parse failure; Python: the existence set, _lib_parse_cache.declared_tenants, skips it).",
     "#2326: the routing plane reads the whole tree (ADR-017 Decision 9), so a tenant",
     "declared only in a subdirectory has its dedup there too; a nested platform file still adds none.",
     "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",

@@ -1592,7 +1592,8 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
     assert found["lower"] == ["db-a", "db-c"], (
         f"the lower arm did not find exactly the two carrier keys this "
         f"ConfigMap has; got {found['lower']}")
-    # ⛔ Compare the SHAPE, not the strings: `config_stem` preserves the
+    # ⛔ Compare the SHAPE, not the strings: the id a name carries (Go's
+    # `tenant_named`) preserves the
     # carrier's case on purpose (folding it would rename the tenant on the
     # write plane only), so the two arms legitimately carry different ids.
     assert len(found["UPPER"]) == len(found["lower"]), (
@@ -1602,8 +1603,8 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         f"the tenant id must keep the key's original case; got "
         f"{found['UPPER']}")
     # ⛔ The `_defaults.yaml` neighbour above does NOT pin the reserved
-    # filter through the RETURN VALUE — `config_stem` answers "" for it
-    # either way, so deleting `is_reserved_name` leaves the list identical.
+    # filter through the RETURN VALUE — a reserved name carries no tenant
+    # id either way, so dropping the reserved test leaves the list identical.
     # Blind review measured what it does change: a spurious
     # "carries no tenant id" warning for the platform defaults key, on
     # every run. That is what this assertion pins.

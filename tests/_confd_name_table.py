@@ -2,8 +2,8 @@
 
 `tests/shared/confd_name_classification_matrix.json` is owned by Go
 (`pkg/confdname`'s matrix test asserts every cell and the coverage floor).
-The Python side keeps no copy of the name rule — `_lib_confd.CONFIG_SUFFIXES`
-and its predicates were deleted — so a test that needs "every spelling of a
+The Python side keeps no copy of the name rule — the former extension
+constant and the name predicates of `_lib_confd` were deleted — so a test that needs "every spelling of a
 config file's extension" derives it from the table's rows here instead of
 typing the set out.
 """
