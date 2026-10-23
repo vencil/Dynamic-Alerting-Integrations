@@ -468,6 +468,8 @@ def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
     assert doc["reason"] == "incomplete", doc
     assert "da-guard parse-tree could not classify" in doc["message"], doc
     assert "git" not in doc["message"].split("da-guard")[0], doc
+    # da-guard's own words reach the reply, not only the prefix.
+    assert "boom" in doc["message"], doc
 
 
 def provide_da_guard_path() -> str:
