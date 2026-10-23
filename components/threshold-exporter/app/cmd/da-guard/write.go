@@ -1,7 +1,8 @@
 package main
 
 // write.go — `da-guard edit` and `da-guard emit` (ADR-036 §2 "寫 conf.d：Go 是
-// 唯一的寫者", step 10): the one writer of conf.d. A Python tool decides what
+// 唯一的寫者", step 10): how a Python tool changes conf.d (tenant-api, the
+// other Go writer, shares pkg/confedit). A Python tool decides what
 // to change from the parse result and hands that intent here; da-guard edits
 // the node tree (pkg/confedit), reads the text it would write back with
 // parse-tree's own file mode, and writes the file itself, atomically, or
@@ -17,7 +18,9 @@ package main
 //   - parse-tree file mode on the text to be written, at its target path,
 //     has no problem and no verdict, and its content equals the original's
 //     parse result with the ops applied (emit: the content given);
-//   - for edit, the file still holds the bytes it was read from.
+//   - for edit, the file still holds the bytes it was read from. This is a
+//     comparison, not a lock: what another writer writes between it and the
+//     rename is overwritten.
 //
 // Each refusal is exit 1 and names its reason (writeReason*); with --json the
 // one stdout document says so as well.
