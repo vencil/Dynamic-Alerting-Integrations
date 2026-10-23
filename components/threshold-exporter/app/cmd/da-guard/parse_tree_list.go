@@ -85,8 +85,10 @@ func nameEntry(rel string) parseTreeEntry {
 	if class != classHidden && confdname.HasHiddenSegment(rel) {
 		class, id = classHidden, ""
 	}
+	_, ext := confdname.SplitCarrier(base)
 	return parseTreeEntry{Path: rel, Depth: depthOf(rel), Class: class, TenantNamed: id,
-		DefaultsDocument: class != classHidden && confdname.IsDefaultsDocument(base)}
+		DefaultsDocument: class != classHidden && confdname.IsDefaultsDocument(base),
+		ConfigExtension:  rel != "." && ext}
 }
 
 // withRole sets the entry's role; an entry that is not a config file is a
@@ -218,6 +220,13 @@ func parseTreeListOf(scan *config.TreeScan) (*parseTreeIndex, error) {
 // pkg/confdname alone — for names that are not on a disk this process can
 // walk (e.g. the keys of a ConfigMap built from a conf.d). No role, no
 // readers: there is no disk and no tree.
+//
+// The names are taken as ONE directory's (".") and its defaults carrier is
+// selected as the walk selects one (config.SelectDefaultsCarriers, the rule
+// every plane reads; it looks at names only): defaults_carriers["."] is the
+// carrier, every other carrier among the names has not_read
+// unselected_defaults_carrier. A tree's walk selects among the carriers it
+// could read; names mode has no disk, so among all of them.
 func parseTreeNamesOf(names []string) (*parseTreeIndex, error) {
 	idx := newParseTreeIndex("names")
 	seen := make(map[string]bool, len(names))
@@ -232,6 +241,21 @@ func parseTreeNamesOf(names []string) (*parseTreeIndex, error) {
 		}
 		seen[n] = true
 		idx.Entries = append(idx.Entries, nameEntry(n))
+	}
+	carriers := map[string]bool{}
+	for _, e := range idx.Entries {
+		if e.Class == classDefaults {
+			carriers[e.Path] = true
+		}
+	}
+	if len(carriers) > 0 {
+		chosen := config.SelectDefaultsCarriers(carriers).ByDir["."]
+		idx.DefaultsCarriers["."] = chosen
+		for i := range idx.Entries {
+			if e := &idx.Entries[i]; e.Class == classDefaults && e.Path != chosen {
+				e.NotRead = notReadUnselectedCarrier
+			}
+		}
 	}
 	return &idx, nil
 }

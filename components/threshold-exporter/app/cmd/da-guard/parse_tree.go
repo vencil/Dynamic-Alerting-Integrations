@@ -135,6 +135,13 @@ type parseTreeEntry struct {
 	// FIFO, a dangling link hold no document any schema could validate).
 	// Names mode answers by the name alone.
 	DefaultsDocument bool
+	// ConfigExtension: the base name carries a config file's extension
+	// (`.yaml` / `.yml`, any case — confdname.SplitCarrier), whatever else
+	// the name or the path is: true for a hidden `.x.yaml`, for `.yaml`
+	// itself and for a directory named `x.yaml`; false for the root ".".
+	// Names mode answers it too, so a caller that holds a hidden name can
+	// ask whether it looks like config without composing the rule (#3206).
+	ConfigExtension bool
 	// Readers is who reads it; [] when no reader does (then NotRead says
 	// why — except for role dir and unlistable_dir: a directory is read by
 	// no one and nothing is passed over, so NotRead stays empty). null in
@@ -193,12 +200,13 @@ func (e parseTreeEntry) MarshalJSON() ([]byte, error) {
 		Class            string            `json:"class"`
 		TenantNamed      *string           `json:"tenant_named"`
 		DefaultsDocument bool              `json:"defaults_document"`
+		ConfigExtension  bool              `json:"config_extension"`
 		Readers          []string          `json:"readers"`
 		NotRead          *string           `json:"not_read"`
 		Role             *config.Role      `json:"role"`
 		Problem          *parseTreeProblem `json:"problem"`
 		Verdict          *string           `json:"verdict"`
-	}{e.Path, e.Depth, e.Class, orNull(e.TenantNamed), e.DefaultsDocument, e.Readers,
+	}{e.Path, e.Depth, e.Class, orNull(e.TenantNamed), e.DefaultsDocument, e.ConfigExtension, e.Readers,
 		orNull(e.NotRead), role, e.Problem, orNull(e.Verdict)}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -254,7 +262,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"   \"files\": {<path>: <content>},          tree and file mode only\n"+
 			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  tree and file mode only\n"+
 			"<entry> holds every field, null where it has no value:\n"+
-			"  {\"path\", \"depth\", \"class\", \"tenant_named\", \"defaults_document\", \"readers\",\n"+
+			"  {\"path\", \"depth\", \"class\", \"tenant_named\", \"defaults_document\",\n"+
+			"   \"config_extension\", \"readers\",\n"+
 			"   \"not_read\", \"role\", \"problem\": {\"kind\", \"message\"}, \"verdict\"}\n"+
 			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root.\n"+
 			"\"depth\": directories between the root and the path. \"class\": tenant, defaults,\n"+
@@ -265,10 +274,13 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"`_defaults` (any case) — a platform-defaults document, held to the platform-defaults\n"+
 			"schema; wider than class defaults (`_defaults-multidb.yaml` is platform with this\n"+
 			"true); false whenever \"role\" is not config.\n"+
+			"\"config_extension\": the base name ends in .yaml / .yml (any case), whatever the\n"+
+			"path is — true for a hidden .x.yaml and a directory named x.yaml; false for \".\".\n"+
 			"\"readers\": the exporter reads every tenant file, the root's platform (`_`) files and\n"+
 			"each directory's selected defaults carrier; the route generator reads those and every\n"+
 			"other `_` file below the root (e.g. team/_domain_policy.yaml); [] with \"not_read\" set\n"+
-			"when no reader does: unselected_defaults_carrier (at the root or below it), and in\n"+
+			"when no reader does: unselected_defaults_carrier (at the root or below it; names mode\n"+
+			"too, readers null: the names are one directory's, selected as the walk selects), and in\n"+
 			"file mode also hidden, not_config_name, parent_not_walked. A role dir or\n"+
 			"unlistable_dir entry has readers [] and not_read null: a directory is no file\n"+
 			"anyone reads.\n"+

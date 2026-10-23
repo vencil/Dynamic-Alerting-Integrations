@@ -60,6 +60,7 @@ def _entry(path, *, role="config", cls="tenant", problem=None, depth=None, reade
             "class": cls, "tenant_named": path.rsplit("/", 1)[-1].split(".")[0]
             if cls == "tenant" else None,
             "defaults_document": False,
+            "config_extension": path.rsplit("/", 1)[-1].lower().endswith((".yaml", ".yml")),
             # A directory is read by no reader (role dir: readers []).
             "readers": (([] if role in ("dir", "unlistable_dir") else ["exporter", "generator"])
                         if readers is None else readers),
@@ -447,7 +448,8 @@ def _names_doc(cls: str) -> dict:
             "defaults_carriers": {}, "entries": [{
                 "path": "x.yaml", "depth": 0, "class": cls,
                 "tenant_named": "x" if cls == "tenant" else None,
-                "defaults_document": False, "readers": None, "not_read": None,
+                "defaults_document": False, "config_extension": True,
+                "readers": None, "not_read": None,
                 "role": None, "problem": None, "verdict": None}]}
 
 
@@ -931,7 +933,8 @@ def test_flagged_is_the_role_and_the_problem() -> None:
     bad = ("not_regular_file", "x")
     def e(role, problem):
         return pt.Entry(path="x", depth=0, cls="directory", tenant_named=None,
-                        defaults_document=False, readers=(), not_read=None,
+                        defaults_document=False, config_extension=False, readers=(),
+                        not_read=None,
                         role=role, problem=problem, verdict=None)
     assert [e(r, p).flagged for r, p in (
         ("not_a_file", bad), ("unlistable_dir", ("read_failure", "x")), ("dir", bad),

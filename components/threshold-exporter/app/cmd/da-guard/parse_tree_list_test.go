@@ -23,6 +23,7 @@ type wireEntry struct {
 	Class            string            `json:"class"`
 	TenantNamed      *string           `json:"tenant_named"`
 	DefaultsDocument bool              `json:"defaults_document"`
+	ConfigExtension  bool              `json:"config_extension"`
 	Readers          []string          `json:"readers"`
 	NotRead          *string           `json:"not_read"`
 	Role             *string           `json:"role"`
@@ -70,8 +71,8 @@ func runPTList(t *testing.T, stdin string, args ...string) (int, *wireIndex, str
 		t.Fatal(err)
 	}
 	for _, e := range loose.Entries {
-		if len(e) != 10 {
-			t.Errorf("%v: %d fields, want 10", e["path"], len(e))
+		if len(e) != 11 {
+			t.Errorf("%v: %d fields, want 11", e["path"], len(e))
 		}
 	}
 	return code, &doc, errOut.String()
@@ -326,18 +327,19 @@ func TestParseTree_RoleOfEachWalkRecord(t *testing.T) {
 func TestParseTreeList_Names(t *testing.T) {
 	t.Parallel()
 	_, doc, _ := runPTList(t, `["db-a.yaml","MiXeD.YmL",".h.yaml","_defaults.YML","_x.yml","_defaults-multidb.yaml","n.txt","x.yaml.bak"]`, "--names", "-")
-	if doc.Mode != "names" || len(doc.DefaultsCarriers) != 0 {
+	if doc.Mode != "names" || !reflect.DeepEqual(doc.DefaultsCarriers, map[string]string{".": "_defaults.YML"}) {
 		t.Fatalf("mode %q carriers %v", doc.Mode, doc.DefaultsCarriers)
 	}
 	want := []wireEntry{
-		{Path: "db-a.yaml", Class: classTenant, TenantNamed: str("db-a")},
-		{Path: "MiXeD.YmL", Class: classTenant, TenantNamed: str("MiXeD")},
-		{Path: ".h.yaml", Class: classHidden},
-		{Path: "_defaults.YML", Class: classDefaults, DefaultsDocument: true},
-		{Path: "_x.yml", Class: classPlatform},
+		{Path: "db-a.yaml", Class: classTenant, TenantNamed: str("db-a"), ConfigExtension: true},
+		{Path: "MiXeD.YmL", Class: classTenant, TenantNamed: str("MiXeD"), ConfigExtension: true},
+		// Hidden, and still a config file's extension (#3206).
+		{Path: ".h.yaml", Class: classHidden, ConfigExtension: true},
+		{Path: "_defaults.YML", Class: classDefaults, DefaultsDocument: true, ConfigExtension: true},
+		{Path: "_x.yml", Class: classPlatform, ConfigExtension: true},
 		// A platform-defaults DOCUMENT no chain reads: class platform, held
 		// to the platform-defaults schema (confdname.IsDefaultsDocument).
-		{Path: "_defaults-multidb.yaml", Class: classPlatform, DefaultsDocument: true},
+		{Path: "_defaults-multidb.yaml", Class: classPlatform, DefaultsDocument: true, ConfigExtension: true},
 		{Path: "n.txt", Class: classNotConfigName},
 		{Path: "x.yaml.bak", Class: classNotConfigName},
 	}

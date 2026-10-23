@@ -157,7 +157,7 @@ def test_config_file_is_the_role_and_nothing_else() -> None:
     recomposed the verdict from the problem kind or the class would call one
     of these wrong (a stat refused and a dangling link share their problem)."""
     facts = dict(path="x.yaml", depth=0, cls="tenant", tenant_named="x", defaults_document=False,
-                 readers=("exporter", "generator"), not_read=None,
+                 config_extension=True, readers=("exporter", "generator"), not_read=None,
                  problem=("read_failure", "the path cannot be statted (stat_error)"), verdict=None)
     got = {role: lpt.Entry(**facts, role=role) for role in sorted(lpt.ROLES)}
     assert {r: (e.config_file, e.is_dir, e.not_a_file, e.unlistable_dir)
@@ -197,13 +197,43 @@ def test_list_tree_and_classify_names_read_the_same_reader(tmp_path, da_guard_en
     }
     with pytest.raises(lpt.ParseTreeError, match="not valid UTF-8"):
         lpt.classify_names(["bad\udcff.yaml"])
+    # #3206: names mode answers the extension behind a hidden name, and the
+    # carrier a set of names selects — the walk's answer above, by name.
+    assert [names[n].config_extension for n in names] == [True, True, True, False]
+    assert lpt.names_carrier(["_defaults.yml", "_defaults.yaml", "t1.yaml"]) == "_defaults.yaml"
+    assert lpt.names_carrier(["t1.yaml"]) is None and lpt.names_carrier([]) is None
+    # A per-name answer carries no set-dependent `not_read`.
+    one = lpt.classify_names(["_defaults.yml", "_defaults.yaml"])
+    assert [e.not_read for e in one.values()] == [None, None]
+
+
+def test_names_mode_not_read_is_only_the_unselected_carrier() -> None:
+    """Names mode may mark a carrier the names' directory does not select,
+    and nothing else: any other `not_read` is a document this reader does
+    not understand, refused whole."""
+    import json
+
+    def doc(cls, not_read):
+        return {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "names",
+                "defaults_carriers": {}, "entries": [{
+                    "path": "_defaults.yml", "depth": 0, "class": cls, "tenant_named": None,
+                    "defaults_document": cls == "defaults", "config_extension": True,
+                    "readers": None, "not_read": not_read, "role": None, "problem": None,
+                    "verdict": None}]}
+    lpt.read_document(json.dumps(doc("defaults", "unselected_defaults_carrier")).encode(),
+                      check=lpt._check_list("names"))
+    for cls, not_read in (("platform", "unselected_defaults_carrier"), ("defaults", "hidden")):
+        with pytest.raises(lpt.ParseTreeError, match="not_read"):
+            lpt.read_document(json.dumps(doc(cls, not_read)).encode(),
+                              check=lpt._check_list("names"))
 
 
 def test_a_list_document_is_no_tree_document() -> None:
     """The reader of each mode takes its own mode only: a tree reader handed a
     list document (no content) refuses it whole, and the other way round."""
     entry = {"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t",
-             "defaults_document": False, "readers": ["exporter"], "not_read": None,
+             "defaults_document": False, "config_extension": True,
+             "readers": ["exporter"], "not_read": None,
              "role": "config", "problem": None, "verdict": None}
     listed = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
               "defaults_carriers": {}, "entries": [entry]}
@@ -224,8 +254,8 @@ def test_a_dir_entry_names_no_reader(role, problem) -> None:
     refused whole."""
     import json
     base = {"path": "team", "depth": 0, "class": "directory", "tenant_named": None,
-            "defaults_document": False, "readers": [], "not_read": None,
-            "role": role, "problem": problem,
+            "defaults_document": False, "config_extension": False,
+            "readers": [], "not_read": None, "role": role, "problem": problem,
             "verdict": None if problem is None else "unservable"}
     doc = {"schema": lpt.SCHEMA, "da_guard_version": "t", "mode": "list",
            "defaults_carriers": {}}
@@ -272,7 +302,7 @@ def test_a_write_onto_a_directory_is_refused_not_a_da_guard_failure(unprivileged
 
 def _entry(path: str, verdict, problem=("read_failure", "the path cannot be statted")) -> lpt.Entry:
     return lpt.Entry(path=path, depth=0, cls="tenant", tenant_named=None, defaults_document=False,
-                     readers=("exporter",), not_read=None, role="config",
+                     config_extension=True, readers=("exporter",), not_read=None, role="config",
                      problem=problem if verdict else None, verdict=verdict)
 
 

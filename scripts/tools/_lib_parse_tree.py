@@ -114,7 +114,7 @@ import re
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass, field as _field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
@@ -340,7 +340,10 @@ RESERVED_CLASSES = frozenset({"defaults", "platform"})
 VERDICTS = frozenset({"unservable", "tree_refused"})
 #: Every field an entry carries, in every mode (null where it has no value).
 ENTRY_FIELDS = ("path", "depth", "class", "tenant_named", "defaults_document",
-                "readers", "not_read", "role", "problem", "verdict")
+                "config_extension", "readers", "not_read", "role", "problem", "verdict")
+#: The one `not_read` names mode writes: a carrier among the given names that
+#: the directory they make up does not select (the walk's selection).
+UNSELECTED_CARRIER = "unselected_defaults_carrier"
 MODES = frozenset({"tree", "file", "list", "names"})
 
 
@@ -350,7 +353,12 @@ class Entry:
     ("." for the root itself; in names mode the name as given); *cls* the
     closed-set class; *tenant_named* the id the name carries (class tenant
     only); *defaults_document* whether it is a platform-defaults document;
-    *readers* who reads it (None in names mode); *not_read* why nobody does;
+    *config_extension* whether the base name carries a config file's
+    extension (`.yaml` / `.yml`, any case), hidden or not, a directory or
+    not — Go's `confdname.SplitCarrier`; *readers* who reads it (None in
+    names mode); *not_read* why nobody does (names mode: only
+    `unselected_defaults_carrier`, on a carrier the given names' directory
+    does not select);
     *role* Go's verdict on what the path is (None in names mode); *problem*
     ``(kind, message)`` when a read of it fails; *verdict* what the path makes
     da-guard validation do — `unservable` (exit 3), `tree_refused` (exit 4),
@@ -366,6 +374,7 @@ class Entry:
     cls: str
     tenant_named: Optional[str]
     defaults_document: bool
+    config_extension: bool
     readers: Optional[tuple[str, ...]]
     not_read: Optional[str]
     role: Optional[str]
@@ -463,6 +472,8 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
         raise ValueError(f"{where}: tenant_named does not match class {cls!r}")
     if not isinstance(e["defaults_document"], bool):
         raise ValueError(f"{where}: defaults_document is not a boolean")
+    if not isinstance(e["config_extension"], bool):
+        raise ValueError(f"{where}: config_extension is not a boolean")
     readers, role, not_read, bad = e["readers"], e["role"], e["not_read"], e["problem"]
     verdict = e["verdict"]
     if verdict is not None and verdict not in VERDICTS:
@@ -471,9 +482,11 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
         # Go names a path tree_refused only for its problem.
         raise ValueError(f"{where}: verdict tree_refused with no problem")
     if names:
-        if readers is not None or role is not None or not_read is not None or bad is not None \
-                or verdict is not None:
-            raise ValueError(f"{where}: readers, role, not_read, problem or verdict in names mode")
+        if readers is not None or role is not None or bad is not None or verdict is not None:
+            raise ValueError(f"{where}: readers, role, problem or verdict in names mode")
+        if not_read is not None and not (not_read == UNSELECTED_CARRIER and cls == "defaults"):
+            raise ValueError(f"{where}: not_read {not_read!r} in names mode (only "
+                             f"{UNSELECTED_CARRIER} on a defaults carrier)")
     else:
         if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
             raise ValueError(f"{where}: readers is not a list of reader names")
@@ -502,6 +515,7 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
         problem = (bad["kind"], bad["message"])
     return Entry(path=path, depth=depth, cls=cls, tenant_named=tenant,
                  defaults_document=e["defaults_document"],
+                 config_extension=e["config_extension"],
                  readers=None if readers is None else tuple(readers),
                  not_read=not_read, role=role, problem=problem, verdict=verdict)
 
@@ -1058,19 +1072,39 @@ def classify_names(names: "Iterable[str]", binary: Optional[str] = None,
     → what the name alone makes it, memoised per name and da-guard for the
     process: one `parse-tree --list-only --names -` run for every name not
     yet asked. Raises as `run_list`; a name that is empty, holds a separator
-    or is not valid UTF-8 refuses all."""
+    or is not valid UTF-8 refuses all.
+
+    ⚠️ Each answer is the name's alone, so its `not_read` is None here: which
+    of several carriers a directory selects depends on the set of names, and
+    is `names_carrier`'s question."""
     names = list(dict.fromkeys(names))
     key = _names_key(binary)
     missing = [n for n in names if (n, key) not in _NAMES]
     if missing:
-        for n, e in _run_names(missing, binary, timeout).items():
-            _NAMES[(n, key)] = e
+        entries, _carrier = _run_names(missing, binary, timeout)
+        for n, e in entries.items():
+            _NAMES[(n, key)] = replace(e, not_read=None)
     return {n: _NAMES[(n, key)] for n in names}
 
 
+def names_carrier(names: "Iterable[str]", binary: Optional[str] = None,
+                  timeout: Optional[float] = None) -> Optional[str]:
+    """The defaults carrier a directory holding exactly *names* (base names,
+    not on a disk: e.g. what a writer is about to leave there) would have
+    its chain read, or None when none of them is one: names mode's
+    `defaults_carriers["."]`, Go's selection (`SelectDefaultsCarriers`, the
+    rule every plane reads; by name only). One run per call. Raises as
+    `classify_names`."""
+    names = list(dict.fromkeys(names))
+    if not names:
+        return None
+    return _run_names(names, binary, timeout)[1]
+
+
 def _run_names(names: "list[str]", binary: Optional[str],
-               timeout: Optional[float]) -> "dict[str, Entry]":
-    """One names-mode run over *names* (distinct), checked whole."""
+               timeout: Optional[float]) -> "tuple[dict[str, Entry], Optional[str]]":
+    """One names-mode run over *names* (distinct), checked whole: each name's
+    entry, and the carrier the names' one directory selects."""
     for n in names:
         try:
             n.encode("utf-8")
@@ -1086,4 +1120,12 @@ def _run_names(names: "list[str]", binary: Optional[str],
     if [e.path for e in entries] != names:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names did not answer the "
                              "names it was given, in order; nothing of it is used")
-    return {e.path: e for e in entries}
+    carriers = doc["defaults_carriers"]
+    chosen = carriers.get(".")
+    losers = {e.path for e in entries if e.not_read is not None}
+    if set(carriers) - {"."} or (chosen is not None and chosen not in names) or \
+            losers != {e.path for e in entries if e.cls == "defaults" and e.path != chosen}:
+        raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: defaults_carriers "
+                             f"{dict(carriers)!r} does not match the entries' not_read; nothing "
+                             "of it is used")
+    return {e.path: e for e in entries}, chosen
