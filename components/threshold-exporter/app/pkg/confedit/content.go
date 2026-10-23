@@ -15,6 +15,31 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
+// CloneContent is a deep copy of c (mappings and sequences; a Scalar is a
+// value), so the Content* edits on it leave c as it was.
+func CloneContent(c parsetree.Content) parsetree.Content {
+	out, _ := cloneValue(map[string]any(c)).(map[string]any)
+	return out
+}
+
+func cloneValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(x))
+		for k, e := range x {
+			m[k] = cloneValue(e)
+		}
+		return m
+	case []any:
+		s := make([]any, len(x))
+		for i, e := range x {
+			s[i] = cloneValue(e)
+		}
+		return s
+	}
+	return v
+}
+
 // ContentEnsureMap makes path a mapping in c, creating every missing one.
 func ContentEnsureMap(c parsetree.Content, path []string) error {
 	_, err := contentMapping(c, path, true)

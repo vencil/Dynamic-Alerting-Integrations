@@ -245,6 +245,9 @@ type writer struct {
 	// link puts emit's file in place (os.Link when nil); a test swaps it to
 	// fail after the directories are created.
 	link func(oldname, newname string) error
+	// mkdir makes one directory for emit (os.Mkdir when nil); a test swaps
+	// it to have another process make one first.
+	mkdir func(name string, perm os.FileMode) error
 }
 
 func strp(s string) *string { return &s }
@@ -481,10 +484,10 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	case err == nil && !fi.Mode().IsRegular():
 		return w.refuseNotAFile(scan, rel)
 	}
-	original, ofi, regular, rerr := readRegular(abs)
-	if rerr == nil && !regular { // swapped for a FIFO, a device, … since the Lstat
-		return w.refuseNotAFile(scan, rel)
-	}
+	// A path swapped for a FIFO, a device, … since the Lstat is not read
+	// (readRegular: regular false, original nil); the judge below then gives
+	// it the walk's own not_a_file entry, refused not_read.
+	original, ofi, _, rerr := readRegular(abs)
 	e, asOnDisk, base, err := judgeAt(scan, rel, original)
 	if err != nil {
 		return w.callerError("bad_path", "%v", err)
@@ -513,10 +516,12 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	if err != nil {
 		return w.refuse(writeReasonEditNotApplicable, err.Error())
 	}
-	want := base
-	if want == nil {
-		want = parsetree.Content{}
+	if base == nil {
+		base = parsetree.Content{}
 	}
+	// want is the original's parse result with the ops applied; base stays
+	// the original's (ContentSet and friends edit in place).
+	want := confedit.CloneContent(base)
 	for i, op := range ops {
 		var nerr, cerr error
 		switch op.Op {
@@ -558,9 +563,12 @@ func (w *writer) edit(scan *config.TreeScan, rel, abs string, ops []editOp, dryR
 	// The original's line ending and BOM; every check below reads these
 	// very bytes.
 	out := confedit.KeepFraming(original, encoded)
-	if confedit.SameTree(original, out) {
-		// Nothing the edit means changes: a layout-only re-encode is not
-		// worth a write (and a commit).
+	if _, _, _, same := confedit.ContentDifference(base, want); same && confedit.SameTree(original, out) {
+		// Nothing changes, in the file's nodes nor in what the ops mean: a
+		// layout-only re-encode is not worth a write (and a commit). Both
+		// must hold — an unset of a key a `<<` merge supplies leaves the
+		// nodes as they were while the change means the key is gone, which
+		// the read-back below refuses.
 		fmt.Fprintf(w.errOut, "%s %s: %s: unchanged; nothing written\n", programName, w.cmd, rel)
 		w.res.Status = writeStatusUnchanged
 		return w.finish(exitOK)
@@ -661,24 +669,41 @@ func (w *writer) dryRun(out []byte) int {
 // when the write does not complete.
 func (w *writer) commit(abs string, out, original []byte, perm os.FileMode, orig os.FileInfo) int {
 	dir := filepath.Dir(abs)
-	var created []string // deepest first
+	var created []string // the directories this run made, outermost first
 	done := false
 	defer func() {
 		if !done {
-			for _, d := range created {
-				_ = os.Remove(d) // only ever empty: the temporary file is gone first
+			for i := len(created) - 1; i >= 0; i-- {
+				_ = os.Remove(created[i]) // only ever empty: the temporary file is gone first
 			}
 		}
 	}()
 	if original == nil {
+		var missing []string // innermost first
 		for d := dir; ; d = filepath.Dir(d) {
 			if _, err := os.Lstat(d); err == nil || filepath.Dir(d) == d {
 				break
 			}
-			created = append(created, d)
+			missing = append(missing, d)
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- conf.d directories are world-readable by convention
-			return w.callerError("write_failed", "%v", err)
+		mkdir := w.mkdir
+		if mkdir == nil {
+			mkdir = os.Mkdir
+		}
+		// One level at a time: a level counts as this run's only when its
+		// Mkdir succeeds — one another process made meanwhile (EEXIST) is not
+		// ours, and the cleanup above never removes it.
+		for i := len(missing) - 1; i >= 0; i-- {
+			switch err := mkdir(missing[i], 0o755); { // #nosec G301 -- conf.d directories are world-readable by convention
+			case err == nil:
+				created = append(created, missing[i])
+			case errors.Is(err, fs.ErrExist):
+				if fi, serr := os.Stat(missing[i]); serr != nil || !fi.IsDir() {
+					return w.callerError("write_failed", "%s exists and is no directory", missing[i])
+				}
+			default:
+				return w.callerError("write_failed", "%v", err)
+			}
 		}
 	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(abs)+".da-guard-*")
@@ -692,8 +717,8 @@ func (w *writer) commit(abs string, out, original []byte, perm os.FileMode, orig
 		werr = tmp.Chmod(perm)
 	}
 	if werr == nil && orig != nil {
-		if err := chownLike(tmp, orig); err != nil {
-			w.warn("the written file could not be given the original's owner and group: %v", err)
+		if msg := chownLike(tmp, orig); msg != "" {
+			w.warn("%s", msg)
 		}
 	}
 	if werr == nil {

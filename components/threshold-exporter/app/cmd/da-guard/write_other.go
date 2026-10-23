@@ -11,4 +11,4 @@ func openNoBlock(abs string) (*os.File, error) {
 }
 
 // chownLike: file ownership is not carried on this platform.
-func chownLike(*os.File, os.FileInfo) error { return nil }
+func chownLike(*os.File, os.FileInfo) string { return "" }

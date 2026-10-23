@@ -190,11 +190,16 @@ func hasPrefix(p, prefix []string) bool {
 }
 
 // emptiedByUnset: b and m are the mapping an unset edits, the unset left it
-// empty, and only its style differs — an empty block mapping is written
-// `{}`. That mapping is part of the edit; everything else about it (tag,
-// anchor) is still compared.
+// empty, and only block-or-flow differs — an empty block mapping is written
+// `{}`. That mapping is part of the edit; everything else about it (the
+// tag, written or not, and the anchor) is still compared.
+//
+// No `at == nil` guard: off every edit path (at nil) a mapping that b holds
+// keys in and m none fails the pair count below whatever its style, and an
+// empty b is already `{}`.
 func (c *compare) emptiedByUnset(b, m *yaml.Node, at []string) bool {
-	if at == nil || b.Kind != yaml.MappingNode || m.Kind != yaml.MappingNode || len(m.Content) != 0 ||
+	if b.Kind != yaml.MappingNode || m.Kind != yaml.MappingNode || len(m.Content) != 0 ||
+		b.Style|yaml.FlowStyle != m.Style|yaml.FlowStyle ||
 		b.Tag != m.Tag || b.Value != m.Value || b.Anchor != m.Anchor {
 		return false
 	}
