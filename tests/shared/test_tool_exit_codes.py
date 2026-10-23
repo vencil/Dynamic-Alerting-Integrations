@@ -217,6 +217,7 @@ def _stderr_lines(proc):
     return [line for line in proc.stderr.splitlines() if line.strip()]
 
 
+@pytest.mark.real_crash_exit_code
 def test_direct_run_crash_exits_caller_error(tmp_path):
     """Raise at top level of a script that imported _lib_exitcodes → rc 2,
     traceback kept, then the one ERROR line; atexit still runs and stdout
@@ -247,6 +248,52 @@ def test_interactive_session_keeps_the_default_hook(tmp_path):
     assert "unexpected internal error" not in proc.stderr
 
 
+def test_run_in_an_interactive_session_leaves_the_original_exception(tmp_path):
+    """`python -i tool.py` post-mortem through `run(main)`: the crash is
+    re-raised for the default hook, so `sys.last_value` (what `pdb.pm()`
+    debugs) is the tool's exception, not `SystemExit(2)` (#3237)."""
+    script = tmp_path / "crash_tool.py"
+    script.write_text(_CRASH_PRELUDE.format(tools=str(TOOLS_DIR))
+                      + "def main():\n    raise RuntimeError('boom')\n"
+                      + "_lib_exitcodes.run(main)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-i", "-q", str(script)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=30,
+        input="print('LAST', type(sys.last_value).__name__, sys.last_value)\n")
+    assert proc.returncode == 0, proc.stderr
+    assert "LAST RuntimeError boom" in proc.stdout, (proc.stdout, proc.stderr)
+    assert "unexpected internal error" not in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("interactive, inspect, ps1, tty, expected", [
+    (1, 1, False, False, True),   # python -i, piped stdin: a prompt follows
+    (0, 1, False, True, True),    # PYTHONINSPECT with a terminal: a prompt follows
+    (0, 1, False, False, False),  # PYTHONINSPECT, no terminal: CPython exits
+    (0, 0, True, False, True),    # already at a prompt (REPL)
+    (0, 0, False, True, False),   # a plain run from a terminal
+])
+def test_interactive_is_the_interpreters_own_test(monkeypatch, interactive, inspect,
+                                                  ps1, tty, expected):
+    """#3237: `_interactive()` answers "does a prompt follow the script" the way
+    CPython decides it, PYTHONINSPECT (flags.inspect alone) included."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec
+    real = sys.flags
+
+    class _Flags:  # every other flag as it is: importlib reads them too
+        def __getattr__(self, name):
+            return getattr(real, name)
+    flags = _Flags()
+    flags.interactive, flags.inspect = interactive, inspect
+    monkeypatch.setattr(ec.sys, "flags", flags)
+    if ps1:
+        monkeypatch.setattr(ec.sys, "ps1", ">>> ", raising=False)
+    else:
+        monkeypatch.delattr(ec.sys, "ps1", raising=False)
+    monkeypatch.setattr(ec.os, "isatty", lambda fd: tty and fd == 0)
+    assert ec._interactive() is expected
+
+
 def test_importing_tenant_verify_leaves_the_crash_code_alone(tmp_path):
     """tenant_verify sets its crash code 1 only when it is the program
     (`__main__`): a module that imports it keeps 2 (#3090 review)."""
@@ -258,6 +305,7 @@ def test_importing_tenant_verify_leaves_the_crash_code_alone(tmp_path):
     assert proc.stdout.strip() == "2"
 
 
+@pytest.mark.real_crash_exit_code
 def test_crash_inside_main_function_exits_caller_error(tmp_path):
     """The usual shape: `if __name__ == "__main__": main()` raising deep inside."""
     proc = _run_crash_script(
@@ -288,6 +336,7 @@ def test_keyboard_interrupt_is_not_turned_into_caller_error(tmp_path):
     assert "KeyboardInterrupt" in proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_tool_can_set_its_own_crash_exit_code(tmp_path):
     """set_crash_exit_code(N) is what the hook exits with."""
     proc = _run_crash_script(
@@ -311,6 +360,7 @@ def test_existing_custom_excepthook_is_not_clobbered(tmp_path):
     assert "ERROR: unexpected internal error" not in proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_main_decorator_calls_on_crash_and_exits_with_crash_code(tmp_path):
     """@_lib_exitcodes.main(on_crash=...) — the hook for tools with a --json
     contract to emit their envelope before the process ends."""
@@ -329,6 +379,7 @@ def test_main_decorator_calls_on_crash_and_exits_with_crash_code(tmp_path):
     assert "ATEXIT-RAN" in proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_armed_crash_envelope_is_printed_once_on_stdout(tmp_path):
     """arm_crash_envelope (#3094): a crash in --json mode puts exactly one
     envelope on stdout — the tool's extra keys kept, status/reason/error not
@@ -345,6 +396,7 @@ def test_armed_crash_envelope_is_printed_once_on_stdout(tmp_path):
     assert "ATEXIT-RAN" in proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_armed_crash_envelope_builds_the_tools_zeroed_report_at_crash_time(tmp_path):
     """dev-rules §13: the envelope keeps the tool's own schema keys, zeroed;
     build() runs when the crash happens, not when the envelope is armed."""
@@ -360,6 +412,7 @@ def test_armed_crash_envelope_builds_the_tools_zeroed_report_at_crash_time(tmp_p
         "error": "ERROR: unexpected internal error (ValueError): late"}
 
 
+@pytest.mark.real_crash_exit_code
 def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
     """A build() that raises must not leave stdout empty: rc 2 keeps its envelope."""
     proc = _run_crash_script(
@@ -375,6 +428,7 @@ def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
 
 
 @pytest.mark.parametrize("unbuffered", ["1", None])
+@pytest.mark.real_crash_exit_code
 def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path, unbuffered):
     """`tool --json | head -c1`: stdout is gone, so the envelope is dropped
     quietly — the crash report on stderr is the only one, rc stays 2. Run
@@ -392,6 +446,7 @@ def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path, un
     assert proc.stderr.count("Traceback") == 1, proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_disarmed_crash_envelope_prints_nothing(tmp_path):
     """A tool whose own document is already out disarms: a later crash must
     not add a second document."""
@@ -403,6 +458,7 @@ def test_disarmed_crash_envelope_prints_nothing(tmp_path):
     assert proc.stdout == "{}\n"
 
 
+@pytest.mark.real_crash_exit_code
 def test_main_decorator_on_crash_wins_over_the_armed_envelope(tmp_path):
     """An explicit on_crash is the tool's own envelope: the armed default is
     not printed beside it."""
@@ -416,6 +472,7 @@ def test_main_decorator_on_crash_wins_over_the_armed_envelope(tmp_path):
     assert proc.stdout == "OWN\n"
 
 
+@pytest.mark.real_crash_exit_code
 def test_bare_main_decorator_prints_the_armed_envelope(tmp_path):
     proc = _run_crash_script(
         tmp_path,
@@ -448,6 +505,7 @@ class TestMainDecoratorInProcess:
         out = capfd.readouterr().out
         assert json.loads(out)["error"].endswith("(RuntimeError): a")
 
+    @pytest.mark.real_crash_exit_code
     def test_bare_decorator_exits_crash_code(self, monkeypatch, capsys):
         ec = self._ec(monkeypatch)
 
@@ -463,6 +521,7 @@ class TestMainDecoratorInProcess:
         assert err.rstrip().splitlines()[-1] == \
             "ERROR: unexpected internal error (RuntimeError): boom"
 
+    @pytest.mark.real_crash_exit_code
     def test_on_crash_receives_the_exception(self, monkeypatch, capsys):
         ec = self._ec(monkeypatch)
         seen = []
@@ -476,6 +535,7 @@ class TestMainDecoratorInProcess:
         assert exc_info.value.code == 2
         assert len(seen) == 1 and isinstance(seen[0], ValueError)
 
+    @pytest.mark.real_crash_exit_code
     def test_failing_on_crash_still_exits_crash_code(self, monkeypatch, capsys):
         ec = self._ec(monkeypatch)
 
@@ -493,6 +553,7 @@ class TestMainDecoratorInProcess:
         assert "ERROR: unexpected internal error (ValueError): first" in err
         assert "envelope writer broke" in err
 
+    @pytest.mark.real_crash_exit_code
     def test_decorator_crash_exit_code_overrides_module_setting(self, monkeypatch):
         ec = self._ec(monkeypatch)
 
@@ -504,6 +565,7 @@ class TestMainDecoratorInProcess:
             tool()
         assert exc_info.value.code == 1
 
+    @pytest.mark.real_crash_exit_code
     def test_decorator_uses_set_crash_exit_code(self, monkeypatch):
         ec = self._ec(monkeypatch)
         ec.set_crash_exit_code(1)

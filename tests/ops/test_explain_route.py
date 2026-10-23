@@ -45,7 +45,7 @@ def config_dir():
 def full_config(config_dir):
     """Config dir with defaults, profiles, policies, and tenants."""
     _write(config_dir, "_defaults.yaml", {
-        "defaults": {"cpu_usage": "80"},
+        "defaults": {"cpu_usage": 80},  # a number: a quoted root default drops the file
         "_routing_defaults": {
             "receiver": {"type": "webhook", "url": "https://default.example.com"},
             "group_wait": "30s",
@@ -149,7 +149,7 @@ class TestExplainTenantRouting:
 
     def test_enforced_routing_is_its_own_layer(self, config_dir):
         _write(config_dir, "_defaults.yaml", {
-            "defaults": {"cpu": "80"},
+            "defaults": {"cpu": 80},
             "_routing_defaults": {"group_wait": "30s"},
             "_routing_enforced": {
                 "enabled": True,

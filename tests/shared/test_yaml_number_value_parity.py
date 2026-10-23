@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -78,25 +79,21 @@ def test_describe_tenant_shows_the_exporters_value_and_hash(tmp_path: Path, row:
     go = json.loads(subprocess.run(
         [os.environ["DA_GUARD_BINARY"], "effective", "--config-dir", str(conf_d)],
         capture_output=True, text=True, encoding="utf-8", timeout=60).stdout)
-    dropped = go["parse_failed"]
-    if row["go_json"] is None:
-        # yaml.v3 refuses the file. As a tenant file: no tenant t1 — rc 2,
-        # nothing described. As the `_defaults.yaml`: its level is read as
-        # empty (`chain_parse_failed`) and t1 described without it, as Go does.
-        assert dropped, go
-        if "t1" not in go["tenants"]:
-            assert res.returncode == 2, (res.returncode, res.stderr)
-            assert res.stdout == ""
-            return
-        assert res.returncode == 0, res.stderr
-        out = json.loads(res.stdout)
-        assert out["effective_config"] == go["tenants"]["t1"]["effective_config"]
-        assert out["merged_hash"] is None
+    refused = go_refused(conf_d)
+    if refused:
+        # A file yaml.v3 refuses, or one the exporter drops for a value it
+        # cannot serve (a non-finite root default): Go names it, so the run
+        # is refused, named, nothing described (#3206).
+        assert refused == [{"tenant": "t1.yaml", "defaults": "_defaults.yaml"}[side]], refused
+        assert_refused(res.returncode, res.stderr, refused)
+        assert res.stdout == ""
         return
+    assert row["go_json"] is not None, "yaml.v3 refuses this file, yet Go names no path"
+    assert not go["parse_failed"], go
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out["effective_config"] == _as_sent(json.loads(row["go_json"]))
-    assert out["merged_hash"] == (None if dropped else _hash(row["go_json"])), (out, dropped)
+    assert out["merged_hash"] == _hash(row["go_json"]), out
 
 
 def _as_sent(value):

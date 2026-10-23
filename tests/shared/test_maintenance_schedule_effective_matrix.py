@@ -191,10 +191,14 @@ def test_tenant_declared_twice_exits_2(tmp_path: Path) -> None:
 def test_parse_failure_survives_a_failing_served_values(tmp_path: Path) -> None:
     """effective refuses a file (exit 3, parse_failed); the served-values
     call made only for the parse reason fails on its own. The error reported
-    is effective's (the file named, rc 2), not served-values' failure."""
+    is effective's (the file named, rc 2), not served-values' failure.
+    `parse-tree` is the real da-guard's answer (#3206: the run asks it
+    first; on this tree it names nothing)."""
     fake = tmp_path / "da-guard"
+    real = os.environ["DA_GUARD_BINARY"]
     fake.write_text(
         "#!/bin/sh\n"
+        f"if [ \"$1\" = parse-tree ]; then exec '{real}' \"$@\"; fi\n"
         "if [ \"$1\" = effective ]; then\n"
         "  printf '%s' '{\"schema\": \"da-guard.effective/v1\", \"parse_failed\": [\"tx.yaml\"],"
         " \"unreadable\": [], \"skipped\": [], \"tenants\": {}}'\n"

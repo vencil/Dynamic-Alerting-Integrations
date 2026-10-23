@@ -33,6 +33,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _go_refusal import assert_refused, go_refused  # (#3206)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 GEN = OPS / "generate_alertmanager_routes.py"
@@ -162,9 +164,18 @@ def test_a_tree_the_generator_refuses_is_refused_not_empty(tmp_path, name, files
     gen = _run(GEN, "--config-dir", str(confd), "--dry-run")
     assert gen.returncode != 0, f"{name}: the row no longer exercises a generator refusal"
     p = _run(NT, "--config-dir", str(confd), "--dry-run", "--json")
-    assert p.returncode == 2, (p.returncode, p.stderr[-800:])
-    assert "route generator refuses this tree" in p.stderr, p.stderr[-800:]
     doc = json.loads(p.stdout)
     assert doc["status"] == "caller_error"
-    assert doc["reason"] == "routing_tree_refused"
     assert doc["tenants"] == [] and doc["summary"]["total_receivers"] == 0
+    # #3206: a row whose tree holds a path da-guard validation names ends
+    # through the shared conf.d refusal before the generator's reading; the
+    # rest are the generator's own refusal. Pinned, and checked against Go.
+    named = go_refused(confd)
+    assert named == (["alpha.yaml"] if name == "unreadable_tenant_file" else []), (name, named)
+    if named:
+        assert_refused(p.returncode, p.stderr, named)
+        assert doc["reason"] == "conf_d_not_servable"
+        return
+    assert p.returncode == 2, (p.returncode, p.stderr[-800:])
+    assert "route generator refuses this tree" in p.stderr, p.stderr[-800:]
+    assert doc["reason"] == "routing_tree_refused"

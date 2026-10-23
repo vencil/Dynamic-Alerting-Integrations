@@ -1893,10 +1893,10 @@ class TestKustomizeBaseEnumeratesConfd:
         (('UP.YAML', 'x.Yml', 'readme.txt'), {}, {'UP.YAML', 'x.Yml'}),
         ((), {}, set()),
         # A carrier that is a symlink is in `files:` (iter_config_files
-        # follows links), so the copy must bring it; a broken one is in
-        # neither.
+        # follows links), so the copy must bring it. (A broken one refuses
+        # the run, #3206.)
         (('_defaults.yaml',),
-         {'db-s.yaml': '../shared/db-s.yaml', 'gone.yaml': '../shared/nope.yaml'},
+         {'db-s.yaml': '../shared/db-s.yaml'},
          {'_defaults.yaml', 'db-s.yaml'}),
     ])
     def test_readme_copy_command_copies_every_top_level_carrier(
@@ -2079,8 +2079,10 @@ class TestKustomizeBaseEnumeratesConfd:
             assert "'a=b.yaml' cannot be a ConfigMap key" in run.stderr
             assert 'a=b.yaml' not in _kust_files(tmp)
 
-    def test_unreadable_config_named_entries_are_named_and_left_out(
-            self, capsys):
+    def test_unreadable_config_named_entries_refuse_the_run(self, capsys):
+        """#3206: a config-named entry nothing can be read from is a path
+        da-guard validation names — the run is refused before any write,
+        each one named, exit 2 (it was a WARN and a base without it)."""
         with tempfile.TemporaryDirectory() as tmp:
             conf = os.path.join(tmp, 'conf.d')
             os.makedirs(os.path.join(conf, 't-dir.yaml'))
@@ -2088,14 +2090,14 @@ class TestKustomizeBaseEnumeratesConfd:
             if broken:
                 symlink_or_skip('nowhere.yaml', os.path.join(conf, 't-gone.yaml'))
             capsys.readouterr()
-            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            with pytest.raises(SystemExit) as ei:
+                ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            assert ei.value.code == 2
             err = capsys.readouterr().err
-            files = _kust_files(tmp)
-            assert 't-dir.yaml' not in files
-            assert "'t-dir.yaml'" in err and '(not_regular_file): a directory' in err  # #3206 R7
+            assert not os.path.exists(os.path.join(tmp, 'kustomize'))
+            assert 'ERROR: t-dir.yaml:' in err and '(not_regular_file: a directory' in err
             if broken:
-                assert 't-gone.yaml' not in files
-                assert "'t-gone.yaml'" in err and '(read_failure): the path cannot be statted' in err  # #3206 R7
+                assert 'ERROR: t-gone.yaml:' in err and '(read_failure: the path cannot be statted' in err
 
     def test_a_second_defaults_spelling_is_listed_not_collapsed(self):
         """Two defaults spellings side by side are two keys, never collapsed.
@@ -6574,22 +6576,22 @@ def test_a_path_that_cannot_be_made_relative_never_fails_the_run(
 
 
 @pytest.mark.parametrize("name", ["_arch", "arch"])
-def test_an_unlistable_directory_is_a_possible_declarer_whatever_its_name(
-        name, tmp_path, unlistable_dir):
+def test_an_unlistable_directory_refuses_the_run_whatever_its_name(
+        name, tmp_path, unlistable_dir, capsys):
     """#3206 M-B: a directory Go could not list holds tenant files nobody can
-    see — the exporter descends `_` directories too — so it is named, a (d)
-    mention of every requested tenant, and init does not write a second
-    declaration of a tenant it may already declare. It was skipped by a `_`
-    name rule for `_arch/`, and init wrote `conf.d/db-a.yaml` beside it."""
+    see — the exporter descends `_` directories too. It was skipped by a `_`
+    name rule for `_arch/`, and init wrote `conf.d/db-a.yaml` beside it; then
+    it was a (d) mention of every requested tenant. It is a path da-guard
+    validation names: the plan is refused, the directory named, exit 2."""
     conf = tmp_path / "conf.d"
     (conf / name).mkdir(parents=True)
     (conf / name / "db-a.yaml").write_text("tenants:\n  db-a: {}\n", encoding="utf-8")
     (conf / "db-b.yaml").write_text("tenants:\n  db-b: {}\n", encoding="utf-8")
     unlistable_dir(conf, conf / name)
-    plan = ip._plan_confd(
-        {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
-         "tenants": ["db-a", "db-c"], "namespace": "monitoring",
-         "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
-    assert plan.generate == [], plan
-    assert plan.skipped == {"db-a": [f"conf.d/{name}"], "db-c": [f"conf.d/{name}"]}, plan
-    assert plan.mentions[f"conf.d/{name}"] == ["db-a", "db-c"], plan
+    with pytest.raises(SystemExit) as ei:
+        ip._plan_confd(
+            {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
+             "tenants": ["db-a", "db-c"], "namespace": "monitoring",
+             "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
+    assert ei.value.code == 2
+    assert f"ERROR: {name}:" in capsys.readouterr().err

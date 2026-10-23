@@ -24,6 +24,7 @@ import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 import check_path_metadata_consistency as cpmc  # noqa: E402
+from _go_refusal import assert_refused, refuses  # noqa: E402  (#3206)
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -154,11 +155,14 @@ class TestScanFile:
         _write(f, _tenant_yaml("t", domain="DB", environment="PROD"))
         assert cpmc.scan_file(f, config_dir) == []
 
-    def test_malformed_yaml_is_silent(self, tmp_path):
+    def test_malformed_yaml_is_refused(self, tmp_path):
+        """#3206: a file the exporter cannot read is not a silent skip — the
+        tree is one no conf.d tool reads, so the shared refusal names it."""
         config_dir = tmp_path / "conf.d"
         f = config_dir / "db" / "prod" / "bad.yaml"
         _write(f, "tenants:\n  - not-a-map\n    x: [unclosed")
-        assert cpmc.scan_file(f, config_dir) == []
+        with refuses("db/prod/bad.yaml"):
+            cpmc.scan_file(f, config_dir)
 
     def test_region_field_never_warns_without_path_inference(
         self, tmp_path
@@ -445,7 +449,9 @@ class TestExtensionSpellingAxis:
                 "--config-dir", str(config_dir), "--ci",
             )
 
-            assert code == 0, "this lint is warning-only and must stay exit 0"
+            # Warning-only on a tree it reads; a tree da-guard validation
+            # names a path on is the shared conf.d refusal (#3206): rc 2.
+            assert_refused(code, err, ["db-broken" + ext])
             # Name the REASON, not just the filename. The sibling tool has a
             # SECOND stderr station that prints the same basename (its
             # parse-failure handler), and blind review showed a
@@ -642,7 +648,8 @@ class TestHiddenAxis:
     ):
         """The "not checked" report walks what the selection walks: a broken
         link under a visible name is named, the same link under `.snap/`
-        is not (the exporter never looks there)."""
+        is not (the exporter never looks there). #3206: the naming is the
+        shared conf.d refusal's (rc 2)."""
         (tmp_path / ".git").mkdir()
         conf = self._seed(tmp_path / "conf.d", "file", hidden=False)
         (conf / "staging" / ".snap").mkdir()
@@ -650,13 +657,11 @@ class TestHiddenAxis:
         _symlink_or_skip(conf / "staging" / ".snap" / "brk.yaml",
                          "missing.yaml")
 
-        _, out, err = _run_cli(monkeypatch, capsys, tmp_path,
-                               "--config-dir", str(conf), "--ci")
-        warned = [ln for ln in err.splitlines() if "not checked" in ln]
+        code, out, err = _run_cli(monkeypatch, capsys, tmp_path,
+                                  "--config-dir", str(conf), "--ci")
         # 必響對照: the visible broken link IS named.
-        assert any(ln.startswith(f"{conf / 'staging' / 'brk.yaml'}:0:")
-                   for ln in warned), err
-        assert not any(".snap" in ln for ln in warned), err
+        assert_refused(code, err, ["staging/brk.yaml"])
+        assert ".snap" not in err, err
 
 
 class TestDisplayPath:
@@ -836,7 +841,9 @@ def test_the_session_da_guard_is_executable_by_the_unprivileged_uid():
 def test_unreadable_directories_are_named_even_when_underscored():
     """A directory the walk cannot enumerate hides every tenant under it, so
     it is named — `_locked/` exactly like `locked/`: the `_` filter is for
-    ENTRIES (the exporter descends `_`-prefixed directories)."""
+    ENTRIES (the exporter descends `_`-prefixed directories). Since #3206
+    both are paths da-guard validation names, so the lint ends through the
+    shared conf.d refusal (rc 2), naming both — not a partial scan."""
     # Not `tmp_path`: under root it sits in a 0700 directory `nobody` cannot
     # traverse, which would make conf.d itself the unreadable thing.
     base = Path(tempfile.mkdtemp(prefix="cpmc-2081-"))
@@ -858,10 +865,10 @@ def test_unreadable_directories_are_named_even_when_underscored():
             [sys.executable, str(script), "--config-dir", str(conf), "--ci"],
             cwd=str(base),
         )
-        # 必響對照: the readable part of the tree WAS scanned.
-        assert "1 mismatch(es) across 1 tenant file(s)" in r.stderr, r
-        for d in locked:
-            assert f"{d}:0: warning: not checked" in r.stderr, (d, r.stderr)
+        assert_refused(r.returncode, r.stderr, ["_locked", "locked"])
+        assert "(read_failure: " in r.stderr, r.stderr
+        # Refused before any scan: no finding from the readable part either.
+        assert "mismatch(es)" not in r.stderr + r.stdout, r
     finally:
         for d in locked:
             if d.exists():

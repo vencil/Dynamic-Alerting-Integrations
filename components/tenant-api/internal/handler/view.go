@@ -48,12 +48,17 @@ func requireViewsAccess(w http.ResponseWriter, r *http.Request, d *Deps, want rb
 }
 
 // ViewResponse is the response body for a single saved view.
+//
+// `id`, `label` and `filters` have no omitempty, so every view carries them;
+// binding:"required" (read by swag only — nothing binds a response at run
+// time) declares that in the OpenAPI schema, so a portal fixture without the
+// id it keys apply / delete on fails apiFixture (#3231).
 type ViewResponse struct {
-	ID          string            `json:"id"`
-	Label       string            `json:"label"`
+	ID          string            `json:"id" binding:"required"`
+	Label       string            `json:"label" binding:"required"`
 	Description string            `json:"description,omitempty"`
 	CreatedBy   string            `json:"created_by,omitempty"`
-	Filters     map[string]string `json:"filters"`
+	Filters     map[string]string `json:"filters" binding:"required"`
 }
 
 // ListViews handles GET /api/v1/views

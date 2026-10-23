@@ -27,6 +27,7 @@ import pytest
 from _platform_fs import require_shebang_scripts, symlink_or_skip  # noqa: E402
 
 import deprecate_rule  # noqa: E402
+from _go_refusal import assert_refused, go_refused, refuses  # noqa: E402  (#3206)
 
 TOOL = Path(deprecate_rule.__file__).resolve()
 METRIC = "mysql_threads_running"
@@ -53,6 +54,17 @@ def _run(conf_d: Path, *extra: str, env=None, cwd=None) -> subprocess.CompletedP
         [sys.executable, str(TOOL), METRIC, "--config-dir", str(conf_d), *extra],
         capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=cwd,
         env={**(os.environ if env is None else env), "PYTHONIOENCODING": "utf-8"})
+
+
+def _assert_refused_unchanged(conf_d: Path, paths: list[str], *extra: str) -> subprocess.CompletedProcess:
+    """The shared refusal (#3206): Go names exactly *paths*, the tool names
+    each, exit 2, and no byte of the tree changed."""
+    assert go_refused(conf_d) == sorted(paths), go_refused(conf_d)
+    before = _bytes(conf_d)
+    r = _run(conf_d, *extra)
+    assert_refused(r.returncode, r.stderr, paths)
+    assert _bytes(conf_d) == before, "a refused run wrote to the tree"
+    return r
 
 
 def _alias_tree(tmp_path: Path) -> Path:
@@ -99,29 +111,24 @@ def test_every_spelling_the_exporter_assigns_is_cleared_and_nothing_else(
         "tenants:\n  t1:\n    disk_usage: '70'\n")
 
 
-def test_a_root_carrier_the_exporter_drops_blocks_preview_and_execute(
+def test_a_root_carrier_the_exporter_drops_refuses_preview_and_execute(
         tmp_path, da_guard_env):
-    """Regression 2: on main the preview was rc 0 with ✅ on Step 1."""
+    """Regression 2: on main the preview was rc 0 with ✅ on Step 1. Since
+    #3206 such a carrier is a path da-guard validation names: preview and
+    `--execute` are both refused before any write, the carrier named."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS + "optional_overrides: 5\n",
         "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
     })
-    before = _bytes(conf_d)
-
-    preview = _run(conf_d)
-    assert preview.returncode == 1, preview.stdout + preview.stderr
-    assert "✅ 將從 _defaults.yaml" not in preview.stdout
-    assert "⛔ 將從 _defaults.yaml 移除 1 個 key——但這份載體讀不進去" in preview.stdout
-    tail = preview.stdout.split("下架未完成", 1)[1]
-    assert "_defaults.yaml：exporter 讀不進這份檔（da-guard：本輪寫入後仍在 parse_failed" in tail
-
-    execute = _run(conf_d, "--execute")
-    assert execute.returncode == 1, execute.stdout + execute.stderr
-    assert "本輪降級為預覽" in execute.stdout
-    assert _bytes(conf_d) == before
+    for mode in ((), ("--execute",)):
+        _assert_refused_unchanged(conf_d, ["_defaults.yaml"], *mode)
 
 
-def test_da_guards_stderr_is_passed_on_whole_behind_the_prefix(tmp_path, da_guard_env):
+
+def test_a_tree_key_refs_drops_a_file_of_is_refused_before_key_refs(tmp_path, da_guard_env):
+    """`da-guard key-refs` exits 3 on this tree (the exporter drops the
+    carrier); the run is refused before it asks key-refs (#3206), so none of
+    key-refs' lines is passed on — the refusal names the carrier."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS + "optional_overrides: 5\n",
         "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
@@ -130,31 +137,22 @@ def test_da_guards_stderr_is_passed_on_whole_behind_the_prefix(tmp_path, da_guar
         [da_guard_env, "key-refs", "--config-dir", str(conf_d), "--metric", METRIC],
         capture_output=True, text=True, encoding="utf-8", check=False, timeout=120)
     assert direct.returncode == 3
-    want = [ln.rstrip() for ln in direct.stderr.split("\n") if ln.strip()]
-    assert len(want) >= 3, want  # the ERROR, its continuation line, the summary
-    r = _run(conf_d)
-    got = [ln[len(deprecate_rule.DA_GUARD_PREFIX):] for ln in r.stderr.split("\n")
-           if ln.startswith(deprecate_rule.DA_GUARD_PREFIX)]
-    # The run on the tree as it is comes first, whole; the run on the copy
-    # with this round's writes applied follows, whole too (its paths are the
-    # copy's).
-    assert got[:len(want)] == want, r.stderr
-    assert len(got) == 2 * len(want), r.stderr
-    assert all(("_defaults.yaml" in a) == ("_defaults.yaml" in b)
-               for a, b in zip(want, got[len(want):])), r.stderr
+    r = _assert_refused_unchanged(conf_d, ["_defaults.yaml"])
+    assert deprecate_rule.DA_GUARD_PREFIX not in r.stderr, r.stderr
 
 
-def test_a_carrier_this_round_repairs_is_not_blocked(tmp_path, da_guard_env):
+
+def test_a_carrier_this_round_would_repair_is_refused_first(tmp_path, da_guard_env):
     """The exporter drops the carrier today only because of a key this round
-    deletes: judged after the writes, it is fine (the copy, not the tree)."""
+    deletes (`mysql_threads_running: disable`). It is still a path Go names
+    on the tree as it is: refused, named, unchanged (#3206) — fix it by hand
+    first; the tool no longer repairs a tree the exporter cannot serve."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  disk_usage: 80\n  mysql_threads_running: disable\n",
         "t2.yaml": "tenants:\n  t2:\n    disk_usage: \"70\"\n",
     })
-    r = _run(conf_d, "--execute")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert (conf_d / "_defaults.yaml").read_text(encoding="utf-8") == (
-        "defaults:\n  disk_usage: 80\n")
+    _assert_refused_unchanged(conf_d, ["_defaults.yaml"], "--execute")
+
 
 
 def test_da_guard_exit_2_is_unchecked_not_a_refusal(tmp_path, da_guard_env):
@@ -194,18 +192,14 @@ def test_a_file_name_da_guard_cannot_put_in_json_is_exit_2(tmp_path, da_guard_en
     assert "mysql_threads_running" in (conf_d / "t2.yaml").read_text(encoding="utf-8")
 
 
-def test_a_tenant_file_the_exporter_drops_is_left_alone_and_named(tmp_path, da_guard_env):
+def test_a_tenant_file_the_exporter_drops_refuses_the_run(tmp_path, da_guard_env):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         # t4's body is a list: the exporter's decode refuses the whole file.
         "t3.yaml": "tenants:\n  t3:\n    mysql_threads_running: \"40\"\n  t4: [1]\n",
     })
-    before = (conf_d / "t3.yaml").read_bytes()
-    r = _run(conf_d, "--execute")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "t3.yaml exporter 讀不進去（da-guard：parse_failed）" in r.stdout
-    assert (conf_d / "t3.yaml").read_bytes() == before
-    assert "租戶檔 exporter 讀不進去（da-guard：parse_failed）" in r.stdout.split("下架未完成", 1)[1]
+    _assert_refused_unchanged(conf_d, ["t3.yaml"], "--execute")
+
 
 
 def _key_refs_fails(tmp_path, da_guard):
@@ -255,7 +249,7 @@ _BROKEN_CARRIER = _DEFAULTS + "optional_overrides: 5\n"
 def test_a_relative_symlink_carrier_is_judged_from_outside_conf_d(tmp_path, da_guard_env):
     """The carrier is `_defaults.yaml -> ../store/_defaults.yaml` and the tool
     runs with its CWD outside conf.d: the link resolves from its own
-    directory, so the dropped carrier still blocks."""
+    directory, so the dropped carrier still refuses the run (#3206)."""
     conf_d = _tree(tmp_path, {"t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n"})
     store = tmp_path / "store"
     store.mkdir()
@@ -265,10 +259,11 @@ def test_a_relative_symlink_carrier_is_judged_from_outside_conf_d(tmp_path, da_g
     elsewhere = tmp_path / "x" / "y" / "elsewhere"
     elsewhere.mkdir(parents=True)
     before = (store / "_defaults.yaml").read_bytes()
+    assert go_refused(conf_d) == ["_defaults.yaml"]
     r = _run(conf_d, "--execute", cwd=elsewhere)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "本輪寫入後仍在 parse_failed" in r.stdout
+    assert_refused(r.returncode, r.stderr, ["_defaults.yaml"])
     assert (store / "_defaults.yaml").read_bytes() == before
+
 
 
 def test_a_directory_symlink_is_not_followed(tmp_path, da_guard_env):
@@ -288,8 +283,8 @@ def test_a_directory_symlink_is_not_followed(tmp_path, da_guard_env):
 
 def test_a_fifo_in_a_subdirectory_does_not_let_a_dropped_carrier_through(
         tmp_path, da_guard_env):
-    """Nothing outside the root `_` files is copied, so a FIFO below cannot
-    make the after-write check fail and drop the verdict."""
+    """A FIFO below (not a config name) changes nothing: the dropped carrier
+    refuses the run, named, unchanged (#3206)."""
     if not hasattr(os, "mkfifo"):
         pytest.skip("no FIFOs on this platform")
     conf_d = _tree(tmp_path, {
@@ -298,16 +293,17 @@ def test_a_fifo_in_a_subdirectory_does_not_let_a_dropped_carrier_through(
     })
     os.mkfifo(conf_d / "sub" / "pipe")
     before = (conf_d / "_defaults.yaml").read_bytes()
+    assert go_refused(conf_d) == ["_defaults.yaml"]
     r = _run(conf_d, "--execute")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "本輪寫入後仍在 parse_failed" in r.stdout
+    assert_refused(r.returncode, r.stderr, ["_defaults.yaml"])
     assert (conf_d / "_defaults.yaml").read_bytes() == before
 
 
-def test_when_the_after_write_check_cannot_answer_the_current_verdict_holds(
-        tmp_path, da_guard_env, monkeypatch, capsys):
-    """Fail-closed: the after-write check raising falls back to today's
-    parse_failed, says why, and still blocks."""
+
+def test_a_broken_carrier_is_refused_before_the_after_write_check_runs(
+        tmp_path, da_guard_env, monkeypatch):
+    """Fail-closed, earlier than it was: the carrier the exporter drops
+    refuses the run before the after-write check could fail (#3206)."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _BROKEN_CARRIER,
         "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
@@ -315,17 +311,14 @@ def test_when_the_after_write_check_cannot_answer_the_current_verdict_holds(
     before = (conf_d / "_defaults.yaml").read_bytes()
 
     def boom(*_a, **_k):
-        raise OSError("no space left")
+        raise AssertionError("the after-write check ran on a refused tree")
     monkeypatch.setattr(deprecate_rule.tempfile, "mkdtemp", boom)
     monkeypatch.setattr(sys, "argv", ["deprecate_rule", METRIC, "--config-dir",
                                       str(conf_d), "--execute"])
-    with pytest.raises(SystemExit) as ei:
+    with refuses("_defaults.yaml"):
         deprecate_rule.main()
-    out = capsys.readouterr().out
-    assert ei.value.code == 1, out
-    assert "寫入後的體檢問不到" in out and "no space left" in out
-    assert "現況在 parse_failed" in out
     assert (conf_d / "_defaults.yaml").read_bytes() == before
+
 
 
 # ── F4：子目錄 `_` 檔的 legacy 拼法算殘留 ──────────────────────────────────
@@ -357,23 +350,17 @@ def test_the_alias_reminder_shows_only_when_unchecked(tmp_path, da_guard_env):
     assert reminder in _run(conf_d, env=env).stdout
 
 
-def test_an_unreadable_root_file_does_not_void_the_after_write_check(
-        tmp_path, da_guard_env, monkeypatch, capsys):
-    """r2: a root `_` file this process cannot read is skipped when the root
-    files are staged, not a reason to drop the whole after-write verdict.
-    Before, the PermissionError voided it, the run fell back to today's
-    parse_failed and told the operator to fix `_defaults.yaml` — which this
-    round repairs (`old_metric: disable` is the key it deletes).
-
-    The test runs as root in CI, where `chmod 000` does not stop a read, so
-    `open` in the tool's module is made to refuse `_profiles.yaml` instead;
-    the tool's own read of it is refused too, as for a real unreadable file.
-    """
+def test_a_carrier_with_a_value_the_exporter_drops_is_refused_beside_an_unreadable_file(
+        tmp_path, da_guard_env, monkeypatch):
+    """r2's tree (`old_metric: disable`, the key this round deletes, beside a
+    root `_` file this process cannot open): the carrier is a path Go names,
+    so the run is refused before any file is staged or written (#3206)."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  disk_usage: 80\n  old_metric: disable\n",
         "_profiles.yaml": "profiles:\n  p1:\n    disk_usage: 1\n",
         "t1.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
     })
+    before = _bytes(conf_d)
     real_open = open
 
     def refusing_open(file, *a, **k):
@@ -383,11 +370,6 @@ def test_an_unreadable_root_file_does_not_void_the_after_write_check(
     monkeypatch.setattr(deprecate_rule, "open", refusing_open, raising=False)
     monkeypatch.setattr(sys, "argv", ["deprecate_rule", "old_metric", "--config-dir",
                                       str(conf_d), "--execute"])
-    with pytest.raises(SystemExit) as ei:
+    with refuses("_defaults.yaml"):
         deprecate_rule.main()
-    out = capsys.readouterr().out
-    assert ei.value.code == 1, out
-    tail = out.split("下架未完成", 1)[1]
-    assert "_profiles.yaml" in tail, tail
-    assert "_defaults.yaml" not in tail, tail
-    assert "寫入後的體檢問不到" not in out, out
+    assert _bytes(conf_d) == before

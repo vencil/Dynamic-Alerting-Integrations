@@ -893,6 +893,12 @@ class PolicyInputError(ValueError):
     """
 
 
+class PolicyVersionError(PolicyInputError):
+    """The --policy file is usable, but names a ``min_generator_version``
+    this generator does not meet (ADR-036 §6): a caller error whose fix is
+    the da-tools version, not the file (#3142)."""
+
+
 class PolicyDocument(NamedTuple):
     """What the generator reads from a ``--policy`` file."""
 
@@ -932,6 +938,43 @@ def generator_version_problem(own: str | None, minimum: str | None) -> str | Non
         return None
     return (f"this generator is da-tools {own}, older than the policy's "
             f"min_generator_version {minimum} — {remedy}")
+
+
+# ── What every tool taking the deployment --policy says about it (#3142);
+# the resolver itself is generate_alertmanager_routes.resolve_policy.
+
+POLICY_HELP = {
+    "en": ("Deployment policy YAML (the file generate-routes takes): its "
+           "allowed_domains refuse receivers whose host is outside it, its "
+           "min_generator_version refuses an older generator. Without it the "
+           "allowlist is not applied"),
+    "zh": ("部署端 policy YAML（與 generate-routes 同一份）：host 不在 "
+           "allowed_domains 內的 receiver 被拒收；比 min_generator_version "
+           "舊的產生器拒絕判定。沒帶時不套用 allowlist"),
+}
+
+#: printed (stderr) by test-notification / explain-route run without --policy
+#: (the exit code is unchanged); for the CI tools the CI template says it.
+POLICY_NOT_APPLIED_NOTICE = (
+    "NOTICE: no --policy given: the deployment policy's webhook domain "
+    "allowlist (allowed_domains) is not applied, so a receiver it refuses is "
+    "treated as allowed here. Pass the deployment policy file with --policy.")
+
+#: what to do about a receiver the allowlist refuses.
+POLICY_REFUSAL_REMEDY = (
+    "Add the receiver's host to `allowed_domains` in the --policy file, or "
+    "correct the receiver URL (the tenant's `_routing`, or the platform's "
+    "`_routing_enforced`; see docs/cli-reference.md § validate-config).")
+
+#: what to do about a policy whose min_generator_version this generator
+#: does not meet (PolicyVersionError): the file itself is usable.
+POLICY_VERSION_REMEDY = (
+    "Run a da-tools at least as new as the policy's `min_generator_version` "
+    "(raise the image tag); the --policy file itself is usable, and lowering "
+    "its minimum means judging by rules its author did not mean.")
+
+#: the `kind` of the finding that drops a receiver for the allowlist.
+POLICY_REFUSAL_KIND = "receiver_domain_not_allowed"
 
 
 def load_policy(policy_path: str | None) -> list[str]:
@@ -1517,10 +1560,13 @@ def is_routing_tree_error(line: str) -> bool:
 # `_severity_dedup`, a domain policy's `require_critical_escalation`, a
 # receiver's `send_resolved` / `require_tls` /
 # `http_config.proxy_from_environment`: judged by type and value only
-# (ADR-036 §2) — a string is never read as the boolean it spells. The
+# (ADR-036 §2) — a string is never read as the boolean it spells. #3284:
+# and a `group_by` that is not a list (`routing_block_group_by_type_errors`)
+# — a string is never read as a one-label list. The
 # generator exits EXIT_VIOLATION before anything is rendered
 # (`_refuse_field_type_errors`), and validate-config's schema row FAILs on
-# the line (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX`: it
+# the line (``blocking_generation_errors``), as does its routes row (#3284).
+# Not `POLICY_ERROR_PREFIX`: it
 # does not wait for --strict.
 FIELD_TYPE_ERROR_PREFIX = "ERROR (field type):"
 
@@ -2130,6 +2176,54 @@ def receiver_bool_type_errors(obj: object, *, block: str, where: str,
     return out
 
 
+def routing_block_group_by_type_errors(obj: object, *, block: str, where: str,
+                                       field_prefix: str = "") -> list[tuple[str, str]]:
+    """#3284: ``(field, message)`` of each ``group_by`` of a routing block
+    that is written but is not a list — the places the generator renders a
+    ``group_by`` from, as ``routing_block_receivers`` walks them: the
+    block's own, each ``overrides`` entry's (not in ``routing_enforced``)
+    and each ``routes`` entry's (``routing`` only; ``_routing_defaults.routes``
+    is dropped before any merge).
+
+    ``group_by: alertname`` used to render NO ``group_by`` at all (the route
+    inherited its parent's grouping) at rc 0 in every mode, ``--strict``
+    included: ``routing_group_by_invalid`` judges list elements only. A
+    string is never read as a one-element list (ADR-036 §2: judged by type,
+    not coerced). null stays "not written" (no ``group_by``, the parent's
+    applies) and ``[]`` stays "render none"; elements of a list are
+    ``group_by_problems``' (#2503). Each refuses the whole tree in every
+    mode, like a boolean of the wrong type."""
+    out: list[tuple[str, str]] = []
+    if not isinstance(obj, dict):
+        return out
+
+    def judge(holder: dict, label: str, path: str) -> None:
+        if "group_by" not in holder:
+            return
+        value = holder["group_by"]
+        if value is None or isinstance(value, list):
+            return
+        out.append((f"{path}group_by",
+                    f"{label}.group_by must be a list of label names, got "
+                    f"{value_type_text(value)} — write it as a YAML list, e.g. "
+                    f"group_by: [alertname] (a string is not read as a "
+                    f"one-label list; without this the route had no group_by "
+                    f"and inherited its parent's grouping)"))
+
+    judge(obj, where, field_prefix)
+    overrides = obj.get("overrides")
+    if block != "routing_enforced" and isinstance(overrides, list):
+        for i, entry in enumerate(overrides):
+            if isinstance(entry, dict):
+                judge(entry, f"{where}.overrides[{i}]", f"{field_prefix}overrides[{i}].")
+    routes = obj.get("routes")
+    if block == "routing" and isinstance(routes, list):
+        for i, entry in enumerate(routes):
+            if isinstance(entry, dict):
+                judge(entry, f"{where}.routes[{i}]", f"{field_prefix}routes[{i}].")
+    return out
+
+
 # #3257: the keys of a routing block whose mapping holds label NAMES, not
 # config keys (`routes[i].match`): a label may legitimately be called
 # `log_file`. Their values are still walked with the full rule; nothing under
@@ -2465,7 +2559,8 @@ def routing_group_by_invalid(routing_config: object) -> list[tuple[str, str, obj
     The lists judged are every one the generator renders from a tenant's
     resolved routing: the main route's ``group_by``, then each mapping
     entry's of ``overrides``, then of ``routes`` (list order). A non-list
-    ``group_by`` is not judged (the generator renders none). ``field`` is
+    ``group_by`` is not judged here: it refuses the whole tree in every mode
+    (``routing_block_group_by_type_errors``, #3284). ``field`` is
     the element's path (``group_by[1]``, ``overrides[0].group_by[2]``).
     ``_routing_enforced.group_by`` goes through ``group_by_problems`` at the
     call site.

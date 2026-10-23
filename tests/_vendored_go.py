@@ -11,9 +11,9 @@ from __future__ import annotations
 
 VENDORED_GO_MODULES: dict[str, str] = {
     "components/threshold-exporter/app/third_party/yaml.v3": (
-        "#2681: upstream gopkg.in/yaml.v3 v3.0.1 plus the pinned patches of third_party/README.md, "
-        "swapped in by `replace` in the exporter and tenant-api go.mod; "
-        "tests/ops/test_vendored_yaml_v3.py pins every byte. No `go` directive, "
-        "upstream style and upstream tests: none of it may be edited to suit "
-        "this repo's checks"),
+        "#2681: upstream go.yaml.in/yaml/v3 v3.0.5 plus the pinned patch of third_party/README.md, "
+        "swapped in for gopkg.in/yaml.v3 by `replace` in the exporter and tenant-api go.mod; "
+        "tests/ops/test_vendored_yaml_v3.py pins every byte. Upstream's go.mod "
+        "(module line and `go 1.16` directive), upstream style and upstream tests: "
+        "none of it may be edited to suit this repo's checks"),
 }

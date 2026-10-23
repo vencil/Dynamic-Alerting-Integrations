@@ -96,11 +96,11 @@ describe('CustomAlertsModal', () => {
   it('Reef 6: a 409 is non-destructive — conflict shown, recipes preserved', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
     // #3202: the base_hash race is code CONFLICT with current_source_hash; a
-    // bare 409 no longer reads as one. Not through apiFixture: current_source_hash
-    // is an envelope Extra field the spec does not model yet.
+    // bare 409 no longer reads as one. current_source_hash is a field CONFLICT
+    // declares (#3272), so the body goes through apiFixture.
     const save = vi.fn(() => Promise.resolve({
       ok: false, status: 409,
-      data: { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' },
+      data: apiFixture('ErrorResponse', { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' }),
     }));
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
@@ -110,8 +110,9 @@ describe('CustomAlertsModal', () => {
   });
 
   // #2406: TENANT_CONFIG_NOT_LOADABLE (#2373) is a 409 too, but a broken
-  // tenant file — not a base_hash race. Body shapes below mirror tenant-api's
-  // ErrorResponse envelope (Extra inlined at top level).
+  // tenant file — not a base_hash race. Error bodies below go through
+  // apiFixture('ErrorResponse'), which admits the fields each code declares
+  // (#3272) beside error and code.
   it('#2406: GET with config_error does not open the editor and explains why', async () => {
     // GET on an unloadable file: raw_yaml + source_hash + config_error, and
     // custom_alerts ABSENT (not []).
@@ -133,7 +134,7 @@ describe('CustomAlertsModal', () => {
       + 'so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first';
     const save = vi.fn(() => Promise.resolve({
       ok: false, status: 409,
-      data: { error: serverError, code: 'TENANT_CONFIG_NOT_LOADABLE', tenant_id: 'tenant-x', config_error: 'invalid_config' },
+      data: apiFixture('ErrorResponse', { error: serverError, code: 'TENANT_CONFIG_NOT_LOADABLE', tenant_id: 'tenant-x', config_error: 'invalid_config' }),
     }));
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
@@ -213,7 +214,7 @@ describe('CustomAlertsModal', () => {
     const serverError = 'tenant tenant-x is git-managed (tenant_count): its config file is not one tenant-api writes';
     const save = vi.fn(() => Promise.resolve({
       ok: false, status: 409,
-      data: { error: serverError, code: 'TENANT_GIT_MANAGED', tenant_id: 'tenant-x', git_managed_reason: 'tenant_count' },
+      data: apiFixture('ErrorResponse', { error: serverError, code: 'TENANT_GIT_MANAGED', tenant_id: 'tenant-x', git_managed_reason: 'tenant_count' }),
     }));
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
@@ -243,7 +244,7 @@ describe('CustomAlertsModal', () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
     const save = vi.fn(() => Promise.resolve({
       ok: false, status: 409,
-      data: { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' },
+      data: apiFixture('ErrorResponse', { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' }),
     }));
     render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
     await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());

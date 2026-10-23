@@ -42,7 +42,6 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 
 import diagnose  # noqa: E402
-from _lib_tenant_values import ParseFailedError  # noqa: E402
 import validate_config as vc  # noqa: E402
 from _grar_parse import _parse_config_files  # noqa: E402
 from _lib_confd import iter_config_files  # noqa: E402
@@ -71,6 +70,7 @@ def _grar_population_and_stderr(root: pathlib.Path):
     return err.getvalue()
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_both_readers_see_the_same_files(confd_with_dir_named_yaml):
     """The populations, not just the verdicts, must match."""
     root = confd_with_dir_named_yaml
@@ -81,6 +81,7 @@ def test_both_readers_see_the_same_files(confd_with_dir_named_yaml):
         "a directory named beta.yaml is in one reader's population again")
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_validate_config_names_the_unusable_entry(confd_with_dir_named_yaml):
     """#1469 half two: silence here was the pre-fix state."""
     result = vc.check_yaml_syntax(str(confd_with_dir_named_yaml))
@@ -89,6 +90,7 @@ def test_validate_config_names_the_unusable_entry(confd_with_dir_named_yaml):
     assert any("beta.yaml" in d for d in result["details"])
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_routing_parser_still_names_the_unusable_entry(confd_with_dir_named_yaml):
     """#1469 half two, other reader: it said this BEFORE the fix.
 
@@ -105,6 +107,7 @@ def test_routing_parser_still_names_the_unusable_entry(confd_with_dir_named_yaml
     assert "cannot be read as a config file (not_regular_file): a directory with a config file name" in stderr
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_routing_parser_reads_the_tree(tmp_path: pathlib.Path):
     """#2326: the routing parser reads the WHOLE tree, like the exporter.
 
@@ -130,6 +133,7 @@ def test_routing_parser_reads_the_tree(tmp_path: pathlib.Path):
     assert "FLAT" not in err.getvalue() and "SKIPPED" not in err.getvalue()
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_flat_reader_ordering_is_unchanged(tmp_path: pathlib.Path):
     """`sorted(os.listdir())` → `iter_config_files(recursive=False)`.
 
@@ -174,11 +178,13 @@ def _acme_confd(root: pathlib.Path, **files: str) -> pathlib.Path:
 ], ids=["tenant-unclosed", "tenant-a-list", "profiles-unclosed",
         "profiles-key-a-list", "profiles-doc-a-list"])
 def test_diagnose_fails_closed_on_a_file_the_exporter_drops(
-        tmp_path: pathlib.Path, fname: str, body: str):
+        tmp_path: pathlib.Path, fname: str, body: str, capsys):
+    """#3206: the shared refusal — the file named, exit 2, before any chain."""
     root = _acme_confd(tmp_path / "conf.d", **{fname: body})
-    with pytest.raises(ParseFailedError, match=fname) as exc:
+    with pytest.raises(SystemExit) as exc:
         diagnose.resolve_inheritance_chain("acme", str(root))
-    assert any(fname in ln for ln in exc.value.stderr_lines), exc.value.stderr_lines
+    assert exc.value.code == 2
+    assert f"ERROR: {fname}:" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("files", [
@@ -214,33 +220,33 @@ def test_diagnose_names_a_profile_reference_that_binds_nothing(tmp_path: pathlib
     assert "_profile 'gold' binds no profile" in err.getvalue()
 
 
-def test_diagnose_reads_the_exporters_population(confd_with_dir_named_yaml):
-    """A directory named `beta.yaml` is a sub-directory to the exporter's
-    walk (empty here), not a config file: the chain is answered and
-    diagnose, which no longer selects files itself, says nothing about it."""
+def test_diagnose_refuses_a_config_named_directory(confd_with_dir_named_yaml, capsys):
+    """A directory named `beta.yaml` is one the route generator refuses the
+    tree on (da-guard validation exits 4): diagnose, which selects no files
+    itself, refuses the run with Go's verdict — named, exit 2 (#3206)."""
     root = confd_with_dir_named_yaml
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-    assert chain["resolved"] == {"mysql_threads_running": 90}
-    assert "beta.yaml" not in err.getvalue()
+    with pytest.raises(SystemExit) as exc:
+        diagnose.resolve_inheritance_chain("acme", str(root))
+    assert exc.value.code == 2
+    assert "ERROR: beta.yaml:" in capsys.readouterr().err
 
 
-def test_diagnose_a_defaults_file_that_is_a_directory(tmp_path: pathlib.Path):
-    """The exporter walks into it; diagnose must not open it either (one
-    line with an absolute errno path was the #1469 shape)."""
+def test_diagnose_a_defaults_file_that_is_a_directory(tmp_path: pathlib.Path, capsys):
+    """Diagnose must not open it (one line with an absolute errno path was
+    the #1469 shape): it is a path da-guard validation names, so the run is
+    refused, named in da-guard's words, exit 2 (#3206)."""
     root = tmp_path / "conf.d"
     (root / "_defaults.yaml").mkdir(parents=True)
     (root / "acme.yaml").write_text(
         "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        res = diagnose.resolve_inheritance_chain("acme", str(root))
-    assert res["resolved"] == {"mysql_threads_running": 90}  # no /metrics row: /effective's value
-    assert res["declared"] == []
-    assert err.getvalue() == ""
+    with pytest.raises(SystemExit) as exc:
+        diagnose.resolve_inheritance_chain("acme", str(root))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "ERROR: _defaults.yaml:" in err and "Errno" not in err and str(root) + "/" not in err
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_both_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
     """#1469: `validate-config` and the routing parser phrase a config-named
     directory identically. (`diagnose` was the third reader until #2526; it
@@ -266,6 +272,7 @@ def test_both_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
 # ── the sentence the gate prints has to be true (#1469 follow-up) ────────
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
     tmp_path: pathlib.Path,
 ):
@@ -303,6 +310,7 @@ def test_a_config_named_directory_with_files_in_it_is_not_called_empty(
     assert any(p.name == "inner.yaml" for p in iter_config_files(root))
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_an_untraversable_directory_says_the_report_is_incomplete(
     tmp_path: pathlib.Path, unlistable_dir,
 ):
@@ -322,6 +330,7 @@ def test_an_untraversable_directory_says_the_report_is_incomplete(
     assert "INCOMPLETE" in res["details"][0]
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_routing_parsers_unusable_pass_covers_the_tree(tmp_path: pathlib.Path):
     """The pass covers exactly the population the reader reads.
 
@@ -343,6 +352,7 @@ def test_routing_parsers_unusable_pass_covers_the_tree(tmp_path: pathlib.Path):
     assert [f for f, _ in parsed["tenant_file_errors"]] == ["team-a/beta.yaml"]
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path):
     """This change added a new way for `--strict` to exit 1; pin it as chosen.
 
@@ -371,6 +381,7 @@ def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path)
             "with a config file name") in errs[0]
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
     tmp_path: pathlib.Path, unlistable_dir,
 ):
@@ -421,6 +432,7 @@ def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
         "the message must say why an empty result would be a lie")
 
 
+@pytest.mark.usefixtures("judging_run")  # validate-config / route generator: judges (#3206)
 def test_a_readable_but_empty_conf_d_root_is_still_fine(tmp_path: pathlib.Path):
     """Control group for the guard above — "empty" must stay legal.
 

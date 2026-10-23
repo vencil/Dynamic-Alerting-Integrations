@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-21
+updated_at: 2026-10-22
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -32,6 +32,7 @@ updated_at: 2026-10-21
 - **2026-10-21 修訂**：tenant-api 的寫入與它自己讀的管理設定改經共用判定（§7 步驟 7），§2 改寫為現況，並寫明 RBAC 設定不論放在哪裡都經判定；決策不變。
 - **2026-10-21 再修訂**：刪除 vendored yaml.v3 的「非特定 tag」patch（§7 步驟 8、§11）；§7 說明它排在步驟 8 的段落改寫為現況；決策不變。
 - **2026-10-21 第三次修訂**：`parse-tree` 的每一種模式都輸出同一份逐路徑索引，每個路徑是不是設定檔由 Go 判定，格式改為 `da-guard.parse-tree/v2`（§2）；§7 步驟 9 改寫；§3「快取的去留」寫明量測的是一次完整判定，包含 served-values。
+- **2026-10-22 修訂**：vendored yaml.v3 的基底升級為上游 `go.yaml.in/yaml/v3`（版本見 §11），unhashable merge key 修正改由上游提供（§4 的例子、§7、§11、「已知限制與風險」）；決策不變。
 
 ## 摘要
 
@@ -152,16 +153,17 @@ da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一�
   - `unlistable_dir`：列不出內容的目錄（根目錄為 `.`），它底下的檔都沒看到，所以這份文件不完整。
   - 判定是白名單：只有上面列的情況是 `not_a_file`，其餘任何失敗（權限不足、EIO、名稱過長、之後新增的原因）一律是 `config`。反方向的預設會讓一份 stat 被權限擋下的租戶檔只留一行 WARN 就從清單上消失。
 - `problem`：讀它會失敗的原因，`{kind, message}`（見下方「讀不了的檔」）。
+- `verdict`：da-guard 的驗證（不帶 `--scope`）會怎麼列這個路徑，由 Go 從驗證自己的清單算出：`unservable`（結束碼 3 列出：exporter 載入時丟掉或讀不到，無法服務它）、`tree_refused`（結束碼 4 列為 `unreadable_outside_run`：產生器因它拒收整棵樹）或 `null`。讀取端要在驗證列出的每個路徑上失敗時，讀這一欄，不從 `role` 與 `problem` 自己組合——exporter 解碼拒收的檔可能完全沒有 `problem`（例如 `tenants:` 底下是清單）。只列檔模式不讀內容，只知道走訪那一半：內容被拒收的檔在那裡是 `null`；單檔模式只對 `--path` 本身給完整判定，不載入整棵樹。子目錄裡未被選中、內容壞掉的 `_defaults` 載體會同時是 `unselected_defaults_carrier` 與 `unservable`。`verdict` 只回答單一路徑：每筆都是 `null` 不等於驗證通過（同一租戶兩處宣告、路由內容都不落在路徑上），要整體結論就跑驗證。
 
 範例：一棵樹有 `t1.yaml`、`_defaults.yaml` 與 `_defaults.yml`、語法錯的 `team/t2.yaml`，以及指向不存在檔案的 `gone.yaml`。`da-guard parse-tree --list-only --config-dir conf.d` 輸出（節錄三筆，各佔一行）：
 
 ```json
-{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null}
-{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}}
-{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null}
+{"path": "_defaults.yml", "depth": 0, "class": "defaults", "tenant_named": null, "defaults_document": true, "readers": [], "not_read": "unselected_defaults_carrier", "role": "config", "problem": null, "verdict": null}
+{"path": "gone.yaml", "depth": 0, "class": "tenant", "tenant_named": "gone", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "not_a_file", "problem": {"kind": "read_failure", "message": "the path cannot be statted (stat_error)"}, "verdict": "unservable"}
+{"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null, "verdict": null}
 ```
 
-整棵樹模式對同一棵樹給出同樣的三筆，只有 `team/t2.yaml` 多了 `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`，另外帶 `files` 與 `rendered_by`。`gone.yaml` 與一份權限不足、stat 失敗的檔 `problem` 相同，只有 `role` 分得出前者不是檔。
+整棵樹模式對同一棵樹給出同樣的三筆，只有 `team/t2.yaml` 多了 `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`，`verdict` 為 `"unservable"`，另外帶 `files` 與 `rendered_by`。`gone.yaml` 與一份權限不足、stat 失敗的檔 `problem` 相同，只有 `role` 分得出前者不是檔。
 
 **選了哪些檔**：`readers` 標出每個讀取端實際會讀的檔。
 
@@ -392,7 +394,7 @@ tenant-api pod
 - **批次 patch 的合併**：仍由 Go 讀出檔案、套用 patch、再寫回；合併後的內容一定送驗。做這件事的節點編輯抽成共用套件，da-guard 的 `edit`／`emit` 也用它（§2）。
   - 合併後要符合一條不變式，否則不寫入：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來的樣子都要相同，包括種類、style（flow 或 block、純文字或哪一種引號）、寫出的 tag（顯式 tag 的原文，或沒寫 tag）、純量的原文、anchor 名稱，以及別名所指的節點（比對內容，不只比名稱）。文件數要相同，定義的 anchor 也要相同、順序一致。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。被編輯的鍵另外解碼檢查：設定的鍵是新值、刪掉的鍵不在了，因為 `<<` merge key 仍可能帶進已刪掉的鍵。註解與位置不比。
     - 任何差異都以 `TENANT_CONFIG_NOT_LOADABLE` 拒收（`PUT .../custom-alerts` 回 409；批次是該筆的 code，整批 422），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置；只有在該租戶自己的 block 裡才寫出路徑，其他位置只說「另一處」，因為那可能是呼叫者讀不到的租戶。
-    - 例子：`k: [1:20]` 在別的租戶 block 裡。yaml.v3 重新輸出時會寫成 `['1:20']`，PyYAML 讀原檔是整數 80、讀新檔是字串；節點的 style 從純文字變成單引號，所以拒收。同一條不變式也擋下 block scalar 開頭空行被改、別名共用的租戶 block 連帶被改、同名 anchor 讓別名改指、`<<` 帶進的值在刪掉明寫的鍵後仍在。
+    - 例子：`k: [1:20]` 在別的租戶 block 裡。yaml.v3 重新輸出時會寫成 `['1:20']`，PyYAML 讀原檔是整數 80、讀新檔是字串；節點的 style 從純文字變成單引號，所以拒收。同一條不變式也擋下 folded block scalar 裡縮排較深的行被改寫、別名共用的租戶 block 連帶被改、同名 anchor 讓別名改指、`<<` 帶進的值在刪掉明寫的鍵後仍在。
     - 合併寫出的值一律用雙引號（批次 patch 的值是字串；custom-alerts 由 Go 產生的 `_custom_alerts` 裡每個字串也是），不論內容，避免任何讀取端把它讀成時間、數字或布林；唯一例外是 `_custom_alerts` 裡含換行的字串，寫成 literal block（`|`，對任何讀取端也都是字串），讓 diff 看得到逐行內容——前提是那個 block 讀回來仍是原字串（開頭是換行或 tab 的就不是），否則照樣用雙引號。重新輸出前清掉 yaml.v3 自行補上的隱含 tag，否則 `<<` 會被寫成 `!!merge <<`。
     - 已知限制：只在節點樹以外的地方不同的寫法擋不到。實測的例子是 `k:` 後面緊接 TAB：PyYAML 讀不了原檔，yaml.v3 讀成空值，重新輸出後兩邊都讀得了，等於把讀不了的檔修好了。差分測試把這一例釘住。
     - 解碼失敗時回給呼叫端的文字是固定的，只說哪裡失敗、第幾行；parser 的原文只寫進 server log，因為一份檔可能有多個租戶，原文會引用別的租戶的值。
@@ -438,7 +440,7 @@ tenant-api pod
 
 - tenant-api 的 chart 預設固定一個 da-tools 版本，CI 對這一組版本跑相容性測試。
 - `da-tools init` 產生的設定改成固定版本，不再用 `latest`。
-- policy 檔可以宣告「至少需要哪一版產生器」，容器比它舊就拒收所有會改變檔案內容的寫入；修法是維運者調高 chart 設定的 da-tools 版本。這是新增的鍵，只由產生器讀取；最晚在 tenant-api 改問產生器容器的那一步（§7）加上，否則較舊的產生器不認得它。
+- policy 檔可以宣告「至少需要哪一版產生器」，容器比它舊就拒收所有會改變檔案內容的寫入；修法是維運者調高 chart 設定的 da-tools 版本。這是新增的鍵，只從部署端的 policy 檔（`--policy`）讀，不讀租戶 repo 裡的 policy 檔；讀它的是路由產生器，以及用同一份 `--policy` 判定 receiver 的 CLI（`validate-config`、`test-notification`、`explain-route`，與產生器共用同一個讀取函式），版本比它舊時一律拒絕判定；最晚在 tenant-api 改問產生器容器的那一步（§7）加上，否則較舊的產生器不認得它。
 - tenant-api 以 metric 公開產生器與 da-guard 的版本。
 
 ### 7. 在 main 上依序合併
@@ -468,7 +470,7 @@ tenant-api pod
 - **步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層**，連同它依賴的、模仿 yaml.v3 的 loader（§11）。
 - **步驟 12：conf.d 以外的 YAML 改以消費者為準，加上守住邊界的 lint**（§12），並決定 tenant-api 管理設定的取得機制。§12 的做法（AST lint 列出呼叫點，白名單逐項附理由）已先用在 conf.d 讀取端，但只用在它判得準的地方：步驟 9 以同樣的閘門禁止 `_lib_confd` 以外使用它的名稱述詞（`tests/shared/test_confd_tools_no_python_judgement.py`）；工具是否以其他方式自己判斷 conf.d 路徑，是行為問題，由行為矩陣測試回答，不靠文字比對。
 - **步驟 13：刪除遷移稽核指令**（§8），同一步在漸進遷移 playbook 補上升級前檢查。
-- 可與上列平行：「快取的去留」的量測（§3）；vendored yaml.v3 的基底升級到上游 `go.yaml.in/yaml/v3` v3.0.5（§11）。
+- 可與上列平行：「快取的去留」的量測（§3）。vendored yaml.v3 的基底已升級到上游 `go.yaml.in/yaml/v3` v3.0.5（§11）。
 
 順序的理由：步驟 6、7 要引用共用的套件，所以步驟 5 先做；步驟 6 是使用者看得到的 breaking change，先做讓它單獨發布、單獨把關；「非特定 tag」patch 要等每個 Go 讀取端都經共用的判定之後才刪（步驟 8）；步驟 11 刪除改寫層之前，所有寫 conf.d 的工具都要已經改送意圖（步驟 10）。
 
@@ -541,7 +543,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | tenant-api 自己的 conf.d 寫入形狀判定 | tenant-api 改用共用判定時 | 改用 `parse-tree` 的判定 |
 | vendored yaml.v3 的「非特定 tag」patch（把 YAML 的 `!` 標記保留在引號字串的節點上，讓 `! "<<"` 成為合併鍵） | exporter 與 tenant-api 都改經共用判定之後 | 已刪除（步驟 8）：帶 `!` 的檔到不了它們的解碼，patch 沒有作用（§7、§8） |
 | vendored yaml.v3 的重複鍵檢查修改（大型 mapping 的重複鍵檢查從逐對比較的 O(n²) 改用 hash 表） | — | 保留：它防的是以大量鍵拖垮解碼的阻斷服務攻擊，不是在模仿另一個解析器 |
-| vendored yaml.v3 的 unhashable merge key 修正（合併鍵旁邊有非純量的鍵時，把執行期 panic 改成解碼錯誤） | 與其他各項平行 | 不再自己維護 patch：vendored 的基底升級為上游 `go.yaml.in/yaml/v3` v3.0.5，上游已內建同一修正；重複鍵檢查的修改改疊在新基底上。升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對新舊基底的讀法，有任何差異就維持現有的 vendored 基底，只移植這段修正 |
+| vendored yaml.v3 的 unhashable merge key 修正（合併鍵旁邊有非純量的鍵時，把執行期 panic 改成解碼錯誤） | 與其他各項平行 | 已刪除 patch：vendored 的基底升級為上游 `go.yaml.in/yaml/v3` v3.0.5，上游已內建同一修正；重複鍵檢查的修改疊在新基底上。升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對新舊基底，讀法沒有差異 |
 | Go 端 4 份檔名規則；Python 端的名稱述詞與 Go／Python 名稱規則的對照表 | 檔名規則收斂時 | Go 合併為一份；Python 端刪除，改用只列檔模式 |
 | 寫 conf.d 工具以 PyYAML 讀原檔、產生文字的那一層，連同它依賴的、模仿 yaml.v3 的 loader | 寫 conf.d 的工具都改送「要改什麼」之後 | 刪除（§2） |
 | 遷移稽核指令 | 升級前檢查寫進漸進遷移 playbook 時 | 刪除（§8） |
@@ -601,7 +603,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - **yaml.v3 的輸出格式改變**：寫 conf.d 的工具改由 Go 寫出後，空行、行尾註解對齊與引號樣式會變，客戶的 diff 會出現與這次修改無關的格式差異（§2）。
 - **快取的去留未定**：產生器容器要不要繼續跨請求快取解析結果，要等 `parse-tree` 串流輸出並量測後才決定（§3）。產生器以 PyYAML 讀檔時，每次從頭解析會超過 20 秒的判定期限（「成本」），這是當初採用快取的理由；在決定之前，逐檔快取的冷啟動在大型樹上仍是 O(N²)。
 - **`da-crdecode` 還不支援一個檔多份文件**：§12 的 Kubernetes manifest 常一檔多份，支援之前這類檔沒有權威讀法可問。
-- **升級到上游 v3.0.5 會帶進其他行為改變**：vendored yaml.v3 目前只取上游 v3.0.1 加上幾段修改，正是因為 v3.0.2 之後的上游版本另有改變行為的修改；升級前以固定語料（`parse_tree_corpus.json` 與 yaml.v3 讀法的測試）比對讀法，有差異就維持現有的 vendored 基底、只移植這段修正；重複鍵檢查的修改疊在新基底上（§11）。
+- **升級 yaml.v3 基底帶進的寫法改變**：基底升級到上游 v3.0.5 時，以固定語料比對新舊基底，讀法沒有差異；寫法有一處不同：以換行開頭的字串寫成 literal block（`|`）時，舊基底漏寫開頭的空行，讀回少了那個換行，新基底照實寫出。影響 tenant-api 的兩處：合併 custom alerts 時，這種字串過去寫成雙引號，現在寫成 literal block，兩者讀回是同一個字串；部分更新遇到開頭有空行的 block scalar，過去因重新輸出會改掉它而拒收（`not_round_trippable`），現在重新輸出不變，照常寫入。之後再升級上游版本，同樣先以固定語料比對（§11）。
 - **渲染結果比對無法歸因**：§8 的比對指出結果哪裡變了，不指出是哪一項讀法造成的。
 
 ## 怎麼驗收
@@ -699,12 +701,13 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 6：exporter、da-guard 與 tenant-api 的讀取面載入 conf.d 先經它；exporter 不服務讀不了的檔並加 metric 與 log；`generator_unreadable` 併入 exit 3，本次執行點不到的路徑改列 `unreadable_outside_run`。
 - 已完成，步驟 7：tenant-api 的寫入形狀判定改用它；`_tenant_orgs.yaml`、RBAC 設定、群組、視圖、聯邦白名單與子集合、AccountID 帳本的讀取也改經它。
 - 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
-- 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）、原本就依賴 da-guard 的 Python 工具改讀 `role`（已有整棵樹文件的工具直接讀其 `entries`，不另列一次）；尚未完成：(1) 仍呼叫 `_lib_confd` 名稱述詞（`is_reserved_name`、`is_hidden_name`、`has_yaml_extension`、`is_defaults_name`、`select_defaults_carrier`、`config_stem` 等）的地方，正好是 `tests/shared/test_confd_tools_no_python_judgement.py` 白名單逐一列出、附理由的呼叫點——`config_history`、`drift_detect`、`run_chaos_soak` 列 conf.d 的檔；`batch_diagnose`、`patch_config` 判斷 ConfigMap 的鍵，`migrate_to_operator` 篩 ConfigMap 匯出檔；路由產生器（`_grar_parse`）以 `_` 前綴與載體名稱判平台檔；`assemble_config_dir` 合併來源時依名稱認載體並寫隱藏檔 WARN；`deprecate_rule`、`init_project` 以名稱認 defaults 載體；`offboard_tenant`、`validate_config` 以檔名主幹當租戶 id；`offboard_tenant`、`generate_tenant_metadata` 以名稱認 tenant-api 的舊狀態檔；`check_frontmatter_versions` 把 conf.d 的隱藏檔述詞用在 docs 上；`migration_audit` 的「今天」一側本來就是舊的 Python 選檔，隨工具退場。這個測試只禁止使用這些述詞：新的呼叫點、或已遷移卻還留著的項目都會讓它失敗。(2) 閘門看不到、由行為矩陣測試（緊接本 PR 的下一個 PR：依 Go 能寫出的每一種 role 與 problem 建樹，以 nobody 身分跑每支工具，比對結束碼與點名）守住的：以 stat 或前綴自己判斷 conf.d 路徑的 `describe_tenant` 的 `--replaces`、`check_path_metadata_consistency`、generator service 把 git 樹寫上磁碟時（`_gsvc_child`）的隱藏檔規則，以及 `_lib_confd` 內部的 `_python_nested_files`、`legacy_state_files`、`overlay_platform_tenants`；另外 `declared_tenant_ids`（路由產生器與 routing profile 的 lint 判斷平台檔裡的租戶是否沒人宣告時用）只讀租戶檔，可能藏著租戶檔的項目被當成「沒有宣告」，訊息會把有人宣告的租戶說成 orphan，要改讀 `TenantScope` 的兩半。這些都改經 da-guard（讀 `role`、`class` 等）之後，Python 名稱述詞與名稱規則對照表退場（步驟 9b-3）。
+- 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）、原本就依賴 da-guard 的 Python 工具改讀 `role`（已有整棵樹文件的工具直接讀其 `entries`，不另列一次）；尚未完成：(1) 仍呼叫 `_lib_confd` 名稱述詞（`is_reserved_name`、`is_hidden_name`、`has_yaml_extension`、`is_defaults_name`、`select_defaults_carrier`、`config_stem` 等）的地方，正好是 `tests/shared/test_confd_tools_no_python_judgement.py` 白名單逐一列出、附理由的呼叫點——`config_history`、`drift_detect`、`run_chaos_soak` 列 conf.d 的檔；`batch_diagnose`、`patch_config` 判斷 ConfigMap 的鍵，`migrate_to_operator` 篩 ConfigMap 匯出檔；路由產生器（`_grar_parse`）以 `_` 前綴與載體名稱判平台檔；`assemble_config_dir` 合併來源時依名稱認載體並寫隱藏檔 WARN；`deprecate_rule`、`init_project` 以名稱認 defaults 載體；`offboard_tenant`、`validate_config` 以檔名主幹當租戶 id；`offboard_tenant`、`generate_tenant_metadata` 以名稱認 tenant-api 的舊狀態檔；`check_frontmatter_versions` 把 conf.d 的隱藏檔述詞用在 docs 上；`migration_audit` 的「今天」一側本來就是舊的 Python 選檔，隨工具退場。這個測試只禁止使用這些述詞：新的呼叫點、或已遷移卻還留著的項目都會讓它失敗。(2) 閘門看不到、由行為矩陣測試（`tests/shared/test_confd_behaviour_matrix.py`）守住的。矩陣用的樹來自一份目錄檔，Go 端測試要求 Go 能寫出的每一種 role 與 problem 都有一棵樹；矩陣跑其中列檔層面的樹，加上兩種內容錯誤（YAML 語法錯、一個檔裡有多份文件），其餘內容錯誤只由 Go 端測試驗。每支工具以 nobody 身分執行，判準是同一棵樹上 da-guard 驗證的結束碼：0 時工具必須結束碼 0；3 或 4 時工具必須以非 0 結束、不得 traceback 或卡住，並點名驗證報告列出的每一條路徑；樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束（哪一碼依工具文件化的契約：`tenant_verify` 的 2 代表驗證不一致，所以是 1）、不得 traceback 或卡住，並以跳脫形式點名那個檔名。讀 conf.d 的工具共用一個失敗即停的出口：取得這次執行的整棵樹索引時，只要有一筆 `verdict` 不是 null，就逐條 `ERROR:` 點名那些路徑、在寫入任何東西之前以結束碼 2 結束；判定本身就是輸出的 `validate-config`、路由產生器、`check_routing_profiles`、`check_confd_schema`、`config_diff` 不經這個出口，自己點名並失敗；只讀 conf.d 一個子樹的工具（`deprecate_rule --plane subtree`）同樣經這個出口：它的索引取自 conf.d root 的整棵樹、再切出子樹那一段，因為 `parse-tree` 對子樹單獨執行時會把它當 root 判。還不符的格子逐格列為預期失敗：只剩仍自己列 conf.d 檔的 `config_history`、`drift_detect`、`run_chaos_soak`。矩陣之外也還沒接上這個出口的：`batch_diagnose`、`migrate_to_operator` 以名稱篩 ConfigMap 匯出檔；`scaffold_tenant`、`onboard_platform`、`migrate_rule` 以 `-o` 寫進既有 conf.d 時不先讀那棵樹（矩陣目前把它們當成沒有輸入樹而排除）。這些都在下一步（β2）接上。它守住的是：以 stat 或前綴自己判斷 conf.d 路徑的 `describe_tenant` 的 `--replaces`、`check_path_metadata_consistency`，以及 `_lib_confd` 內部的 `_python_nested_files`、`legacy_state_files`、`overlay_platform_tenants`。generator service 把 git 樹寫上磁碟時（`_gsvc_child`）的隱藏檔規則不在矩陣內（它不是對一棵樹執行的命令列工具），由步驟 9b-3 處理；另外 `declared_tenant_ids`（路由產生器與 routing profile 的 lint 判斷平台檔裡的租戶是否沒人宣告時用）只讀租戶檔，可能藏著租戶檔的項目被當成「沒有宣告」，訊息會把有人宣告的租戶說成 orphan，要改讀 `TenantScope` 的兩半。這些都改經 da-guard（讀 `role`、`class` 等）之後，Python 名稱述詞與名稱規則對照表退場（步驟 9b-3）。
 - 步驟 10：編輯原語與 da-guard `edit`／`emit`；寫 conf.d 的工具分批切換。
 - 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層與它依賴的模仿 loader。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準；`da-crdecode` 通用化並支援多份文件；AST lint 與白名單。
 - 步驟 13：刪除遷移稽核指令；漸進遷移 playbook 補上升級前檢查。
-- 可平行：`parse-tree` 串流輸出與「快取的去留」的量測；vendored yaml.v3 基底升級到上游 v3.0.5。
+- 可平行：`parse-tree` 串流輸出與「快取的去留」的量測。
+- 已完成，可平行的一項：vendored yaml.v3 基底升級到上游 v3.0.5，unhashable merge key 的 patch 刪除。
 
 各步依序合併進 main，每一步合併後 main 都必須可以發布（§7）。
 
@@ -733,7 +736,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`pkg/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已刪除 |
 | Go 端模仿 PyYAML 讀法的程式（已刪除） | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
 | Go 端模仿產生器語意的程式（已刪除） | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`、`IsDisabled`；da-guard 的路由檢查 `internal/guard/routing.go` 與它們的 finding kind |
-| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（已刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（基底升級到上游 v3.0.5 後由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
+| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已刪除）、非特定 tag（已刪除）、大型 mapping 的重複鍵檢查（保留）、unhashable merge key 修正（已刪除：基底是上游 `go.yaml.in/yaml/v3` v3.0.5，由上游提供）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` |
 | 帶 `!` 的檔到不了 exporter 的解碼 | `pkg/config/nonspecific_tag_test.go`；合併鍵的判斷 `pkg/config/config_file.go` 的 `isMergeKey` |
 | Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（已刪除） |
 | tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |

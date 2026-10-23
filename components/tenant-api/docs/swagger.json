@@ -853,6 +853,41 @@
                 }
             }
         },
+        "/api/v1/tasks/{id}": {
+            "get": {
+                "description": "Returns a task a batch submitted with ?async=true created, to the caller who submitted it: its status, and its results filtered to the tenants the caller can read now (summary is recounted over them).\nAny other caller, and an id that is unknown or expired (tasks live in memory: a restart loses them), gets the same 404 TASK_NOT_FOUND.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Poll an async batch task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_vencil_tenant-api_internal_async.Task"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants": {
             "get": {
                 "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only `id` and `config_error`\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`\nvalues and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.\nA row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.\nEach row carries `managed_by` (api | git) and, for git, `git_managed_reason` — the verdict and codes\nGET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file\nthat declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,\nmarked `metadata_incomplete` and with no other field: the declared id is not shown. Any git-managed row\nwhose file does not declare the row's id is marked `metadata_incomplete` the same way; its visibility is\nthat of a degraded row.",
@@ -2074,19 +2109,106 @@
                 "action": {
                     "type": "string"
                 },
+                "admission": {
+                    "description": "The federation admission results that refused the whitelist change (metric, state, reason, pii_labels). Codes that carry it: INVALID_BODY.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
                 "code": {
                     "$ref": "#/definitions/ErrorCode"
+                },
+                "commit": {
+                    "description": "The commit the batch was written as. Codes that carry it: BATCH_COMMITTED.",
+                    "type": "string"
+                },
+                "committed": {
+                    "description": "Whether the batch was committed: true on BATCH_COMMITTED (do not resend it), false on a direct-mode batch's CONFLICT. Codes that carry it: BATCH_COMMITTED, CONFLICT.",
+                    "type": "boolean"
+                },
+                "config_error": {
+                    "description": "Why the tenant's conf.d file cannot be loaded (the value GET /api/v1/tenants shows for it). Codes that carry it: TENANT_CONFIG_NOT_LOADABLE.",
+                    "type": "string"
+                },
+                "current_source_hash": {
+                    "description": "The source hash of the tenant file now, to resend with after a refresh. Only for an API-managed tenant file. Codes that carry it: CONFLICT.",
+                    "type": "string"
                 },
                 "error": {
                     "type": "string"
                 },
+                "existing_pr_url": {
+                    "description": "The open PR/MR's URL; empty when the caller may not see it or it is still being created. Codes that carry it: PENDING_PR_EXISTS.",
+                    "type": "string"
+                },
+                "findings": {
+                    "description": "The route generator's findings the caller may see, the ones about this write first. Codes that carry it: GENERATOR_FINDINGS.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_generator.Finding"
+                    }
+                },
+                "findings_compared_with_base": {
+                    "description": "Whether the configuration before the write was judged too; when true every finding carries pre_existing. Codes that carry it: GENERATOR_FINDINGS.",
+                    "type": "boolean"
+                },
+                "git_managed_reason": {
+                    "description": "Why the tenant's conf.d file is git-managed (a fixed reason naming no other tenant). Codes that carry it: TENANT_GIT_MANAGED.",
+                    "type": "string"
+                },
                 "help": {
+                    "type": "string"
+                },
+                "hint": {
+                    "description": "Why the task may be missing (pod_may_have_restarted). Codes that carry it: TASK_NOT_FOUND.",
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Advice for the caller, beside the error text. Codes that carry it: CONFLICT, PENDING_PR_EXISTS.",
+                    "type": "string"
+                },
+                "operation": {
+                    "description": "The index of the batch operation the refusal is about. Codes that carry it: FORBIDDEN.",
+                    "type": "integer"
+                },
+                "parse_tree_kind": {
+                    "description": "The kind of YAML parse-tree refusal, when that is why the file cannot be loaded. Codes that carry it: TENANT_CONFIG_NOT_LOADABLE.",
+                    "type": "string"
+                },
+                "pr_number": {
+                    "description": "The open PR/MR's number; 0 when the caller may not see it or it is still being created. Codes that carry it: PENDING_PR_EXISTS.",
+                    "type": "integer"
+                },
+                "reason": {
+                    "description": "Why the route generator gave no verdict (unknown for a reason tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED, POLICY_UNAVAILABLE, VALIDATOR_UNAVAILABLE.",
                     "type": "string"
                 },
                 "request_id": {
                     "type": "string"
                 },
                 "retry_after_s": {
+                    "type": "integer"
+                },
+                "tenant_id": {
+                    "description": "The tenant the refusal is about. Codes that carry it: FORBIDDEN, TENANT_CONFIG_NOT_LOADABLE, TENANT_GIT_MANAGED.",
+                    "type": "string"
+                },
+                "unreadable": {
+                    "description": "The unreadable conf.d entries ({path, reason}); only for a caller with write permission on all tenants. Codes that carry it: TENANT_STORE_FAULT, TENANT_TREE_UNREADABLE.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "unreadable_count": {
+                    "description": "How many conf.d entries cannot be read. Codes that carry it: TENANT_STORE_FAULT, TENANT_TREE_UNREADABLE.",
+                    "type": "integer"
+                },
+                "unrelated_findings_withheld": {
+                    "description": "How many findings unrelated to this write are withheld from the caller; absent when none are. Codes that carry it: GENERATOR_FINDINGS.",
                     "type": "integer"
                 },
                 "violations": {
@@ -2186,6 +2308,80 @@
                     "format": "float64"
                 }
             }
+        },
+        "github_com_vencil_tenant-api_internal_async.Task": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_async.TaskResult"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_async.TaskStatus"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_async.TaskResult": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "description": "Code mirrors handler.BatchResult.Code (#2078): the machine-readable\nfailure code (e.g. TENANT_DECLARED_ELSEWHERE) of an \"error\" result\n(always set since #3226), empty for a result that is not one.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/ErrorCode"
+                        }
+                    ]
+                },
+                "message": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"ok\" | \"error\" | \"skipped\" (a group member that does not exist, #2882) |\n\"not_applied\" (not refused itself, but its batch was rejected, #2900)",
+                    "type": "string"
+                },
+                "tenant_id": {
+                    "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings mirrors handler.BatchResult.Warnings (#1231 1b): non-blocking\ndeprecation advisories for an op that succeeded, so the async polling\npath (?async=true → GET /tasks/{id}) carries the same author-facing\nsignal as the sync response instead of silently dropping it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_vencil_tenant-api_internal_async.TaskStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "running",
+                "completed",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "TaskPending",
+                "TaskRunning",
+                "TaskCompleted",
+                "TaskFailed"
+            ]
         },
         "github_com_vencil_tenant-api_internal_federation_fedpolicy.Config": {
             "type": "object",
@@ -3603,6 +3799,11 @@
         },
         "internal_handler.ViewResponse": {
             "type": "object",
+            "required": [
+                "filters",
+                "id",
+                "label"
+            ],
             "properties": {
                 "created_by": {
                     "type": "string"

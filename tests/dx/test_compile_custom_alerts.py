@@ -45,6 +45,7 @@ sys.path.insert(0, _LINT)
 sys.path.insert(0, _TOOLS)
 
 import compile_custom_alerts as cc  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206)
 from custom_alerts import shape as shp  # noqa: E402
 from custom_alerts import entries as ent  # noqa: E402
 from custom_alerts.entries import CustomAlertConfigError, CustomAlertParityError  # noqa: E402
@@ -412,30 +413,26 @@ _BAD_FILE_TREE = {
 }
 
 
-def test_a_file_the_exporter_cannot_decode_leaves_the_rest_compiling(tmp_path):
-    # #1008 Part B, now the exporter's: a conf.d FILE that does not decode is skipped
-    # by the exporter's load (`parse_failed`) — the rest of the tree is served, so
-    # it compiles — and the file is in `_meta`, never silently absent.
+def test_a_file_the_exporter_cannot_decode_stops_the_compile(tmp_path):
+    # #1008 Part B, now the exporter's: a conf.d FILE that does not decode is never
+    # silently absent. #3206: it is a path da-guard validation names, so the
+    # compiler compiles nothing from the tree and names it (the shared refusal) —
+    # not a pack of "the rest".
     _write_tree(tmp_path, _BAD_FILE_TREE)
-    meta = cc.build_pack(tmp_path)["_meta"]
-    assert meta["shapes"] == 1                               # good.yaml compiled
-    assert meta["parse_failed"] == ["bad.yaml"]
+    with refuses("bad.yaml") as err:
+        cc.build_pack(tmp_path)
+    assert "(syntax_error: " in err.getvalue(), err.getvalue()
 
 
 def test_the_cli_names_a_file_the_exporter_cannot_decode(tmp_path, monkeypatch, capsys):
     # The library half above records the file; this is the half a reader sees. A
     # compile that drops a file's tenants without a word is the #1008 incident shape.
+    # #3206: the shared refusal — rc 2, the file named, no pack written.
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
     _write_tree(src, _BAD_FILE_TREE)
-    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
-    cap = capsys.readouterr()
-    assert "✅ Compiled 1 shape(s)" in cap.out               # the rest compiled
-    # ⛔ The compiler's own line, not da-guard's passed-through `da-guard| WARN: skip
-    # unparseable file …` — that one names the file too, and would keep this green
-    # with the compiler saying nothing about what it did not compile.
-    ours = [ln for ln in cap.err.splitlines() if "bad.yaml" in ln and "da-guard|" not in ln]
-    assert ours, f"the compiler must name the file the exporter skips:\n{cap.err}"
-    assert "not compiled" in ours[0], ours[0]
+    with refuses("bad.yaml"):
+        _compile_into(src, out, monkeypatch)
+    assert not out.exists(), "a refused compile must not write --out"
 
 
 # --- 5c. served and disabled compile; rejected and duplicate do not (#3042) --

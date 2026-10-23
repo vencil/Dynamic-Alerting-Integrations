@@ -10,6 +10,10 @@ import sys
 
 import pytest
 
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools", "ops"))
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
@@ -40,12 +44,12 @@ def _empty_result() -> dict:
         "routing_profiles": {},
         "domain_policies": {},
         "tenant_profile_refs": {},
-        # These two were missing while the docstring above claimed parity —
+        # This was missing while the docstring above claimed parity —
         # _parse_platform_config only survived it because the domain-policy
         # branch uses setdefault. Buckets read with plain [] (defaults_keys,
         # optional_override_keys) would KeyError instead, so the helper has to
-        # actually match.
-        "policy_misplacements": [],
+        # actually match. (#3126: `policy_misplacements` is gone — a
+        # misplaced block is a `field_type_errors` record now.)
         "policy_file_errors": [],
     }
 
@@ -230,12 +234,15 @@ class TestParsePlatformConfig:
         _parse_platform_config(data, "_domain_policy.yaml", result)
         assert "finance" in result["domain_policies"]
 
-    def test_domain_policies_from_wrong_file_warns(self, capsys):
+    def test_domain_policies_from_wrong_file_is_a_field_type_error(self):
+        # #3126: not a stderr WARN any more — a `domain_policy_unusable`
+        # field-type error, which refuses the whole tree in every mode.
         result = _empty_result()
         data = {"domain_policies": {"finance": {}}}
         _parse_platform_config(data, "db-a.yaml", result)
         assert result["domain_policies"] == {}
-        assert "WARN" in capsys.readouterr().err
+        assert [(e.kind, e.file, e.field) for e in result["field_type_errors"]] == [
+            ("domain_policy_unusable", "db-a.yaml", "domain_policies")]
 
     def test_domain_policies_non_dict_warns(self, capsys):
         result = _empty_result()

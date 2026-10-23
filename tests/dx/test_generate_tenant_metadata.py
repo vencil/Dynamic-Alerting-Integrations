@@ -138,19 +138,21 @@ class TestExtensionSpellingAxis:
     def test_a_directory_named_like_a_carrier_is_what_the_exporter_makes_of_it(
             self, tmp_path, capsys):
         """A directory named `db-broken.yaml`: the exporter's walk descends
-        into it (a sub-directory, here empty) and serves no tenant from it.
-        Before #2115 0-B/B4 this tool named it on stderr from its own scan;
-        now the walk is da-guard's, so the answer is pinned against it, for
-        both spellings."""
-        import _lib_tenant_values as tv  # noqa: PLC0415
+        into it (a sub-directory, here empty) and serves no tenant from it,
+        but the route generator refuses the whole tree on it (da-guard
+        validation exits 4). Before #2115 0-B/B4 this tool named it on stderr
+        from its own scan; since #3206 the shared conf.d refusal names it, as
+        Go's validation does, for both spellings."""
+        from _go_refusal import go_refused, refuses  # noqa: PLC0415
 
         for ext in (".yaml", ".yml"):
             root = _seed(tmp_path / ext.lstrip("."), ext)
             (root / f"db-broken{ext}").mkdir()
 
-            meta = gtm.build_tenant_metadata(root)
-            assert sorted(meta["tenant_metadata"]) == sorted(tv.load_served_values(root)) == [
-                "db-a", "db-b"], meta["tenant_metadata"]
+            assert go_refused(root) == [f"db-broken{ext}"]
+            with refuses(f"db-broken{ext}") as err:
+                gtm.build_tenant_metadata(root)
+            assert "(not_regular_file: " in err.getvalue(), err.getvalue()
 
     def test_a_json_carrier_is_not_a_tenant(self, tmp_path):
         """CEILING, by counterexample — that is all a ceiling can be.
@@ -306,15 +308,15 @@ class TestHiddenEntriesAxis:
         )
 
     def test_hidden_broken_entries_raise_no_warning(self, tmp_path, capsys):
-        """A broken file the exporter reads fails the run (rc 2 at the CLI);
-        the same bytes under a hidden name are never read: no error, no
-        warning, the tenants as before."""
-        import _lib_tenant_values as tv  # noqa: PLC0415
+        """A broken file the exporter reads fails the run (the shared conf.d
+        refusal, rc 2, #3206); the same bytes under a hidden name are never
+        read: no error, no warning, the tenants as before."""
+        from _go_refusal import refuses  # noqa: PLC0415
         bad_yaml = "tenants: [unclosed\n"
 
         control = _seed(tmp_path / "control", ".yaml")
         (control / "broken.yaml").write_text(bad_yaml, encoding="utf-8")
-        with pytest.raises(tv.ParseFailedError, match="broken.yaml"):
+        with refuses("broken.yaml"):
             gtm.build_tenant_metadata(control)
         capsys.readouterr()
 

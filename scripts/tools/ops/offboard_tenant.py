@@ -51,7 +51,6 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
-    unusable_reason,
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -81,7 +80,7 @@ def _top_level(config_dir):
     warn_nested(Path(config_dir), reader=reader)  # deduplicated per directory
     selected = reader.tree().selected
     return sorted((e.path, e) for e in reader.listing().entries
-                  if e.depth == 0 and e.path in selected)
+                  if e.depth == 0 and e.config_file and e.path in selected)
 
 
 def find_config_file(tenant, config_dir):
@@ -90,8 +89,8 @@ def find_config_file(tenant, config_dir):
     #1588: the carrier is found by comparing STEMS, never by pasting an
     extension onto the id (`alpha.YAML` is alpha's), and exactly — not
     case-folded (`Alpha` is another tenant). ADR-036 §2: which files there
-    are is parse-tree's answer (a directory named `<tenant>.yaml/` is in its
-    `unreadable`, named by `load_all_configs`)."""
+    are is parse-tree's answer (a directory named `<tenant>.yaml/` refuses
+    the run, #3206)."""
     base = Path(config_dir)
     if not base.is_dir():
         return None
@@ -100,10 +99,8 @@ def find_config_file(tenant, config_dir):
     # "no config found" must not read as "safe to remove".
     warn_nested(base, reader=_reader(config_dir))
     for rel, e in _top_level(config_dir):
-        # A file parse-tree cannot read is still the tenant's file (named
-        # unreadable by `load_all_configs`, which blocks --execute) — and so
-        # is one whose stat a permission refuses (#3206: Go's `role`, not
-        # `is_file()`, which said False for it).
+        # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
+        # refuses the run before this line is reached.
         if config_stem(rel) == tenant and e.config_file:
             return str(base / rel)
     return None
@@ -120,33 +117,26 @@ def declared_by(path, config_dir):
     return sorted(tenants) if isinstance(tenants, dict) else []
 
 
-def load_all_configs(config_dir, unreadable=None):
+def load_all_configs(config_dir):
     """載入 conf.d 頂層的所有設定檔（parse-tree 選到的檔，ADR-036 §2）。
 
-    unreadable: optional list; the name of every file parse-tree cannot read
-    (a YAML error incl. a duplicate key, not a regular file, …) is appended
-    to it, so the caller can count it instead of only seeing the ⚠️ line
-    (#2179). Each entry is {"path", "data" (yaml.v3's values), "nodes"
-    (parse-tree's nodes: every key and scalar as its source text)}.
+    Each entry is {"path", "data" (yaml.v3's values), "nodes" (parse-tree's
+    nodes: every key and scalar as its source text)}.
+
+    ⛔ #3206: the reader's tree read is the run's fail-closed exit
+    (`_lib_parse_cache.ConfdReader.tree`): a tree with a path Go names — a
+    directory the walk could not list, a FIFO, a dangling link, a file the
+    exporter cannot decode — ends the run there, every such path named,
+    exit 2, before the pre-check reports and before `--execute` deletes
+    anything. Every file selected here is therefore one parse-tree read.
     """
     configs = {}
     base = Path(config_dir)
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     reader = _reader(config_dir)
-    tree = reader.tree()
-    listing = reader.listing()  # #3206: one snapshot for the warning, the skip, the reasons
+    listing = reader.listing()  # #3206: one snapshot for the warning and the skip
     warn_nested(base, tool="offboard_tenant", listing=listing)
-    # #3206: a directory the walk could not list — any depth, any name — hides
-    # what is under it (a reference to this tenant could be there): named and
-    # counted unreadable, which blocks --execute; never a clean pre-check.
-    for e in listing.entries:
-        if e.unlistable_dir:
-            kind, message = e.problem
-            print(f"  ⚠️  無法讀取 {safe_label(e.path)}: da-guard parse-tree: "
-                  f"{safe_label(kind)}: {safe_label(message)}")
-            if unreadable is not None:
-                unreadable.append(e.path)
     for filename, entry in _top_level(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
@@ -155,27 +145,7 @@ def load_all_configs(config_dir, unreadable=None):
             print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
                   "於開機匯入它（引用改由 --state 判定）")
             continue
-        if entry.unlistable_dir:
-            continue  # named and counted above
-        if not entry.config_file:
-            # #1607: an entry with a config name that Go says is no config
-            # file (a directory, a directory symlink, a FIFO, a dangling
-            # link); named in the shared wording from that same listing, and
-            # skipped as before (warn-and-continue). Anything else it cannot
-            # read — a file it may not stat or open — is read below and
-            # counted unreadable (#3206).
-            print(f"  ⚠️  略過 {safe_label(filename)}: "
-                  f"{unusable_reason(base / filename, listing)}")
-            continue
-        try:
-            nodes = reader.node(filename)
-        except _lib_parse_tree.FileUnreadable:
-            kind, message = tree.unreadable[filename]
-            print(f"  ⚠️  無法讀取 {safe_label(filename)}: da-guard parse-tree: "
-                  f"{safe_label(kind)}: {safe_label(message)}")
-            if unreadable is not None:
-                unreadable.append(filename)
-            continue
+        nodes = reader.node(filename)
         configs[filename] = {"path": str(base / filename),
                              "data": _lib_parse_tree.to_python(nodes),
                              "nodes": nodes}
@@ -248,12 +218,6 @@ def _legacy_refs(tenant, state, config_dir):
     for name in LEGACY_STATE_FILES:
         path = base / name
         if name == "_account_registry.yaml" or name in state.records or not config_file(name):
-            continue
-        if name in tree.unreadable:
-            kind, message = tree.unreadable[name]
-            refs.append((f"conf.d 的 {safe_label(name)} 讀不了（da-guard parse-tree: "
-                         f"{safe_label(kind)}），無法判定其中的引用",
-                         f"修好或刪除 {safe_label(str(path))} 後重跑"))
             continue
         if name not in tree.selected:
             continue
@@ -337,19 +301,11 @@ def run_precheck(tenant, config_dir, state=None):
         issues.append("設定檔案不存在")
 
     # 2. 載入所有 configs
-    unreadable = []
-    configs = load_all_configs(config_dir, unreadable)
+    # #2179 / #3206: a file that cannot be read never gets here — the
+    # reader's tree read refused the run (exit 2) before this report.
+    configs = load_all_configs(config_dir)
     report.append(f"\n📂 掃描目錄: {safe_label(config_dir)} "
                   f"({len(configs)} 個檔案)\n")
-    # #2179: a file that cannot be read is a blocker, not a footnote. The
-    # cross-reference check and the verdict below cannot see into it, so
-    # without this line it read as "✅ 無跨檔案引用" + "✅ Pre-check 通過" and
-    # --execute deleted the tenant file.
-    if unreadable:
-        report.append("❌ 無法讀取的設定檔 (修好後重跑 Pre-check):")
-        for name in unreadable:
-            report.append(f"   → {safe_label(name)}")
-        issues.append(f"無法讀取的設定檔: {safe_label(', '.join(unreadable))}")
 
     # 3. Cross-reference check
     refs = check_cross_references(tenant, configs)

@@ -71,8 +71,10 @@ def _apply_group_by(route: dict, group_by: object, ctx: str, *,
 
     #2503: the ONE place each of the generator's group_by outputs goes
     through (tenant main route, ``overrides[i]``, ``routes[i]``, both
-    ``_routing_enforced`` shapes). A non-list or empty value renders
-    nothing, as before. A list is repaired by
+    ``_routing_enforced`` shapes). null or ``[]`` renders nothing; a value
+    that is not a list never gets here from ``load_tenant_tree`` (#3284: it
+    refuses the whole tree in every mode), and renders nothing for a caller
+    that builds routing by hand. A list is repaired by
     ``_grar_validate.group_by_problems`` — non-string / empty elements, later
     repeats and a ``...`` mixed with labels are dropped, one ``WARN …
     skipping`` line each (blocking under ``--validate``, like every dropped

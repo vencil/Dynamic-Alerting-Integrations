@@ -17,8 +17,10 @@ the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
   - **DETECT = recommender 的 delta%**：current vs P95 偏離幅度就是腐敗訊號。
   - **閘門**：只納 |delta| ≥ ``--min-delta-pct`` 且 confidence ∈ {HIGH, MEDIUM}
     （樣本不足不開 PR，防破窗 / 防噪音治理）。
-  - **dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，
-    所以重跑不會洗出重複 PR。
+  - **dedup**：tenant-api 的錯誤答覆依其錯誤碼在錯誤契約（``tenant-api-errors.json``，
+    #3202）裡的 remedy 判讀（#3271）：``existing``（該租戶已有待審 PR）→ 視為已在處理、
+    跳過，所以重跑不會洗出重複 PR；``refresh_retry``（base 動了）→ 重新 GET／合併／驗證後
+    再 PUT 一次；其他 remedy、未知 remedy、契約沒列的碼 → error。
   - **通道隔離**：對 tenant-api 帶 ``X-DA-Write-Source: threshold-governance``
     header（PR-mode PUT 端消費）→ PR 走獨立 label / 標題 / 來源，不冒充
     tenant-manager UI、不污染告警平面。
@@ -33,7 +35,7 @@ threshold 值行（保留註解 / 縮排 / 其餘行 byte-identical）→ 以 ``
 才 PUT。不通過的租戶記為 ``error``、不送 PUT；沒有可用的 da-guard 結束碼 2。產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
 自 #3064 起 tenant-api 只寫「API 管理」的租戶：租戶檔只宣告它自己，body 整檔逐位元組
 寫入。共用檔等其他形狀的租戶由 git 管理：GET 不給 ``raw_yaml``（本工具記為 error、
-不寫入），PUT 回 409 ``TENANT_GIT_MANAGED``（不是 pending-PR 的 409，不當成 dedup）。
+不寫入），PUT 回 409 ``TENANT_GIT_MANAGED``（remedy ``fix_in_repo``，不當成 dedup）。
 
 只治理租戶檔自己寫的 key（#2116）：歸屬取自 ``da-guard effective`` 的逐 key 來源；
 繼承自 defaults／平台／profile 的 key 只列參考（``inherited``），不進計畫、不查
@@ -75,6 +77,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,6 +93,7 @@ from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     positive_seconds,
 )
+from _lib_compat import find_project_root  # noqa: E402
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §2, #2906)
 # Aliased: the local format_json_report() below (domain report builder,
@@ -669,9 +673,9 @@ def _http_put_yaml(
     The tenant-api PUT commits the body verbatim over the tenant's own file; it
     writes only an API-managed tenant (#3064: a git-managed one, e.g. in a file
     shared with other tenants, is a 409 TENANT_GIT_MANAGED). The body is sent as
-    ``application/yaml`` (NOT JSON-wrapped). The status code is surfaced
-    so the caller can treat 409 (a pending PR already exists) as a dedup-skip
-    rather than an error.
+    ``application/yaml`` (NOT JSON-wrapped). The status code and parsed body are
+    surfaced so the caller can classify a refusal by its code's remedy
+    (``classify_error_answer``).
     """
     scheme_err = _validate_url_scheme(url)
     if scheme_err:
@@ -703,41 +707,154 @@ def _http_put_yaml(
         return 0, None, str(exc)
 
 
-# The tenant-api PR-mode "a PR for this tenant is already open" 409 carries this
-# code (errcode.PendingPR in tenant-api's internal/errcode). A 409 WITHOUT it is
-# some other refusal — CONFLICT (the base moved: refresh and retry), or one a
-# retry cannot pass (TENANT_GIT_MANAGED, TENANT_FILE_AMBIGUOUS, ...) — and is
-# reported as an error, NOT a dedup signal, so it is never silently skipped as
-# "already pending". This tool does not tell those apart; the code's remedy in
-# tenant-api's error contract (tenant-api-errors.json, #3202) would.
-_PENDING_PR_CODE = "PENDING_PR_EXISTS"
+# ---------------------------------------------------------------------------
+# tenant-api error contract (#3202 / #3271)
+# ---------------------------------------------------------------------------
+# What a non-200 answer means is NOT decided here. tenant-api gives every error
+# a code, and every code ONE remedy, in its internal/errcode; cmd/gen-error-contract
+# writes that table to tenant-api-errors.json (drift-gated by `make
+# error-contract-check`). This tool reads the code off the answer, the remedy off
+# the contract, and acts on the remedy through _REMEDY_ACTIONS below — so a code
+# tenant-api adds under an existing remedy is handled without touching this file.
+_ERROR_CONTRACT_BASENAME = "tenant-api-errors.json"
+# Where the generator writes it in a checkout (gen-error-contract's contractRel).
+_ERROR_CONTRACT_REPO_DIR = ("tools", "portal", "src", "interactive", "tools",
+                            "_common", "data")
+
+# Remedy → what this tool does with a PUT answering it. ⛔ Every remedy the
+# contract can carry is listed, deliberately, error ones included: the test
+# test_every_contract_remedy_has_an_explicit_action compares this table with the
+# contract's remedies, so a remedy tenant-api adds turns CI red until someone
+# decides here what it means for a governance write. At run time a remedy missing
+# from the table (or a code missing from the contract) is an error — fail-closed,
+# never a silent dedup skip.
+#   dedup — something already there stands in the way (an open PR/MR for this
+#           tenant): a prior run's change is in flight → already_pending.
+#   retry — what the PUT was prepared on changed: GET, re-merge, re-verify and PUT
+#           once more; a second refusal is reported as an error.
+#   error — recorded as this tenant's error (the next scheduled run tries again).
+_REMEDY_ACTIONS: dict[str, str] = {
+    "existing": "dedup",
+    "refresh_retry": "retry",
+    "retry_after": "error",
+    "fix_request": "error",
+    "fix_in_repo": "error",
+    "choose_other": "error",
+    "permission": "error",
+    "operator": "error",
+    "not_found": "error",
+    "refresh": "error",
+}
+
+# Attempts per tenant for a refresh_retry answer: the first PUT plus one retry.
+_MAX_PUT_ATTEMPTS = 2
 
 
-def _is_pending_pr(body: Any) -> bool:
-    """True iff a 409 body is the PR-mode pending-PR signal (vs a git conflict)."""
-    if not isinstance(body, dict):
-        return False
-    return body.get("code") == _PENDING_PR_CODE or body.get("error") == "pending_pr_exists"
+class ErrorContractError(RuntimeError):
+    """tenant-api-errors.json is missing or not the generator's shape."""
 
 
-def open_governance_pr(
-    plan: TenantPlan, args: argparse.Namespace
-) -> TenantOutcome:
-    """GET → surgical merge → verify → PUT a per-tenant governance PR.
+_ERROR_REMEDIES: Optional[dict[str, str]] = None
 
-    Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
-    200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
-    to its fresh base — nothing to propose, and no PR to open); 409 →
-    ``already_pending`` (the dedup path — a prior run's PR is still open, leave
-    it); anything else → ``error`` (recorded, not raised, so one bad tenant
-    doesn't sink the run).
+
+def _find_error_contract() -> Optional[Path]:
+    """Locate tenant-api-errors.json in either shipping layout.
+
+    Flat first: the da-tools image copies it beside this module (build.sh
+    ``REPO_DATA_FILES``, paired by ``REQUIRED_DATA_FILES`` in
+    check_build_completeness.py) and has no repo tree. Otherwise the
+    generator's output path under THIS tree's root (``find_project_root``).
     """
-    keys = [c.key for c in plan.changes]
-    base = args.tenant_api_url.rstrip("/")
-    enc = urllib.parse.quote(plan.tenant, safe="")
-    get_url = f"{base}/api/v1/tenants/{enc}"
-    headers = _auth_headers(args)
+    here = Path(__file__).resolve().parent
+    flat = here / _ERROR_CONTRACT_BASENAME
+    if flat.is_file():
+        return flat
+    root = find_project_root(here)
+    if root is not None:
+        candidate = root.joinpath(*_ERROR_CONTRACT_REPO_DIR, _ERROR_CONTRACT_BASENAME)
+        if candidate.is_file():
+            return candidate
+    return None
 
+
+def load_error_remedies(path: Optional[Path] = None) -> dict[str, str]:
+    """``{code: remedy}`` from tenant-api's error contract. Fails closed.
+
+    Raises ErrorContractError when the file is absent or is not
+    ``{"codes": [{"code": str, "remedy": str, ...}, ...]}``.
+    """
+    if path is None:
+        path = _find_error_contract()
+    if path is None:
+        raise ErrorContractError(
+            f"{_ERROR_CONTRACT_BASENAME} not found beside this tool nor under this "
+            f"tree's {'/'.join(_ERROR_CONTRACT_REPO_DIR)}/ — tenant-api answers "
+            "cannot be classified")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ErrorContractError(f"cannot read {path}: {exc}") from exc
+    codes = doc.get("codes") if isinstance(doc, dict) else None
+    if not isinstance(codes, list) or not codes:
+        raise ErrorContractError(f"{path}: no 'codes' list")
+    remedies: dict[str, str] = {}
+    for row in codes:
+        code = row.get("code") if isinstance(row, dict) else None
+        remedy = row.get("remedy") if isinstance(row, dict) else None
+        if not isinstance(code, str) or not code or not isinstance(remedy, str) or not remedy:
+            raise ErrorContractError(f"{path}: malformed row {row!r}")
+        remedies[code] = remedy
+    return remedies
+
+
+def _error_remedies() -> dict[str, str]:
+    """The contract's ``{code: remedy}``, loaded once per process."""
+    global _ERROR_REMEDIES
+    if _ERROR_REMEDIES is None:
+        _ERROR_REMEDIES = load_error_remedies()
+    return _ERROR_REMEDIES
+
+
+def classify_error_answer(body: Any) -> tuple[str, str, str]:
+    """``(action, code, remedy)`` for a non-200 tenant-api answer.
+
+    *action* is one of ``_REMEDY_ACTIONS``' values. An answer with no code, a
+    code the contract does not list, or a remedy the table does not handle is
+    ``error`` — fail-closed.
+    """
+    code = body.get("code") if isinstance(body, dict) else None
+    if not isinstance(code, str) or not code:
+        return "error", "", ""
+    remedy = _error_remedies().get(code, "")
+    return _REMEDY_ACTIONS.get(remedy, "error"), code, remedy
+
+
+def _error_answer_message(status: int, body: Any, code: str, remedy: str,
+                          attempts: int) -> str:
+    detail = ""
+    if isinstance(body, dict):
+        detail = body.get("error") or body.get("message") or json.dumps(body)[:200]
+    head = f"HTTP {status}" + (f" {code}" if code else "")
+    if code and not remedy:
+        note = " (code not in tenant-api's error contract)"
+    elif remedy and remedy not in _REMEDY_ACTIONS:
+        note = f" (remedy {remedy!r} not handled by this tool)"
+    elif remedy:
+        note = f" (remedy {remedy})"
+    else:
+        note = ""
+    if attempts > 1:
+        note += f" after {attempts} attempts"
+    return f"{head}: {detail}{note}"
+
+
+def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
+                      headers: dict, keys: list[str]) -> "str | TenantOutcome":
+    """GET the live tenant YAML, merge the changes, verify; the body to PUT.
+
+    Returns a TenantOutcome (``error``) instead when any step refuses.
+    """
     detail, err = http_get_json(get_url, timeout=args.timeout, headers=headers)
     if err:
         return TenantOutcome(plan.tenant, "error", keys, message=f"GET failed: {err}")
@@ -774,57 +891,94 @@ def open_governance_pr(
             plan.tenant, "error", keys,
             message=f"refused to PUT (verify failed): {verify_err}",
         )
+    return merged
 
-    status, body, put_err = _http_put_yaml(get_url, merged, headers, args.timeout)
-    if put_err:
-        return TenantOutcome(plan.tenant, "error", keys, message=f"PUT failed: {put_err}")
-    if status == 200:
-        body = body or {}
-        # The PR IS the human gate (#656). Only PR write-mode returns
-        # status=pending_review + a pr_url; a tenant-api in the DEFAULT "direct"
-        # write-mode returns status=ok having committed straight to the base
-        # branch — which would silently bypass review AND kill the 409 dedup.
-        # Refuse to claim a PR we didn't get, so a non-PR-mode target fails loud
-        # on the first run instead of direct-committing tenant config for weeks.
-        # A PR-mode API answers `no_changes` when the body it was handed is
-        # already byte-identical to the branch base it just cut. That is a
-        # healthy no-op, not a misconfigured deployment: this run planned the
-        # change off the pod's on-disk copy, which the write path deliberately
-        # does NOT treat as the base (the fresh origin base is re-resolved per
-        # write), so the two can legitimately disagree once the change has
-        # landed upstream. Recording it as an error would (a) tell the operator
-        # to set a write-mode that is already set, and (b) feed the systemic-
-        # failure ratio, failing a Job that in fact had nothing left to do.
-        if body.get("status") == "no_changes":
+
+def _classify_200(plan: TenantPlan, keys: list[str], body: Any) -> TenantOutcome:
+    """Outcome of a 200 PUT answer: ``pr_opened``, ``no_changes`` or ``error``."""
+    body = body or {}
+    # The PR IS the human gate (#656). Only PR write-mode returns
+    # status=pending_review + a pr_url; a tenant-api in the DEFAULT "direct"
+    # write-mode returns status=ok having committed straight to the base
+    # branch — which would silently bypass review AND kill the 409 dedup.
+    # Refuse to claim a PR we didn't get, so a non-PR-mode target fails loud
+    # on the first run instead of direct-committing tenant config for weeks.
+    # A PR-mode API answers `no_changes` when the body it was handed is
+    # already byte-identical to the branch base it just cut. That is a
+    # healthy no-op, not a misconfigured deployment: this run planned the
+    # change off the pod's on-disk copy, which the write path deliberately
+    # does NOT treat as the base (the fresh origin base is re-resolved per
+    # write), so the two can legitimately disagree once the change has
+    # landed upstream. Recording it as an error would (a) tell the operator
+    # to set a write-mode that is already set, and (b) feed the systemic-
+    # failure ratio, failing a Job that in fact had nothing left to do.
+    if body.get("status") == "no_changes":
+        return TenantOutcome(
+            plan.tenant, "no_changes", keys,
+            message="tenant-api reports the proposed content already matches "
+                    "its base — nothing to propose",
+        )
+    if body.get("status") != "pending_review" or not body.get("pr_url"):
+        return TenantOutcome(
+            plan.tenant, "error", keys,
+            message=(f"tenant-api is not in PR write-mode (status="
+                     f"{body.get('status')!r}) — refusing to direct-commit; "
+                     "set --write-mode pr-github/pr-gitlab on the API"),
+        )
+    return TenantOutcome(
+        plan.tenant, "pr_opened", keys,
+        pr_url=body["pr_url"], pr_number=body.get("pr_number", 0),
+        message=body.get("message", ""),
+    )
+
+
+def open_governance_pr(
+    plan: TenantPlan, args: argparse.Namespace
+) -> TenantOutcome:
+    """GET → surgical merge → verify → PUT a per-tenant governance PR.
+
+    Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
+    200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
+    to its fresh base — nothing to propose, and no PR to open). Any other answer
+    is classified by its code's remedy in tenant-api's error contract
+    (``classify_error_answer``): remedy ``existing`` → ``already_pending`` (the
+    dedup path — a prior run's PR is still open, leave it); ``refresh_retry`` →
+    GET, merge, verify and PUT once more; anything else, and a second
+    ``refresh_retry`` → ``error`` (recorded, not raised, so one bad tenant
+    doesn't sink the run).
+    """
+    keys = [c.key for c in plan.changes]
+    base = args.tenant_api_url.rstrip("/")
+    enc = urllib.parse.quote(plan.tenant, safe="")
+    get_url = f"{base}/api/v1/tenants/{enc}"
+    headers = _auth_headers(args)
+
+    attempt = 0
+    while True:
+        attempt += 1
+        merged = _prepare_put_body(plan, args, get_url, headers, keys)
+        if isinstance(merged, TenantOutcome):
+            return merged
+        status, body, put_err = _http_put_yaml(get_url, merged, headers, args.timeout)
+        if put_err:
+            return TenantOutcome(plan.tenant, "error", keys,
+                                 message=f"PUT failed: {put_err}")
+        if status == 200:
+            return _classify_200(plan, keys, body)
+        action, code, remedy = classify_error_answer(body)
+        if action == "retry" and attempt < _MAX_PUT_ATTEMPTS:
+            continue
+        if action == "dedup":
             return TenantOutcome(
-                plan.tenant, "no_changes", keys,
-                message="tenant-api reports the proposed content already matches "
-                        "its base — nothing to propose",
-            )
-        if body.get("status") != "pending_review" or not body.get("pr_url"):
-            return TenantOutcome(
-                plan.tenant, "error", keys,
-                message=(f"tenant-api is not in PR write-mode (status="
-                         f"{body.get('status')!r}) — refusing to direct-commit; "
-                         "set --write-mode pr-github/pr-gitlab on the API"),
+                plan.tenant, "already_pending", keys,
+                pr_url=str(body.get("existing_pr_url") or ""),
+                message=(f"tenant-api answered {code} (remedy {remedy}): an "
+                         "existing PR/MR for this tenant is in the way — skipped"),
             )
         return TenantOutcome(
-            plan.tenant, "pr_opened", keys,
-            pr_url=body["pr_url"], pr_number=body.get("pr_number", 0),
-            message=body.get("message", ""),
+            plan.tenant, "error", keys,
+            message=_error_answer_message(status, body, code, remedy, attempt),
         )
-    if status == 409 and _is_pending_pr(body):
-        body = body or {}
-        extra = body.get("extra") if isinstance(body.get("extra"), dict) else {}
-        return TenantOutcome(
-            plan.tenant, "already_pending", keys,
-            pr_url=(extra.get("existing_pr_url") or body.get("existing_pr_url") or ""),
-            message="a governance PR for this tenant is already open — skipped",
-        )
-    msg = ""
-    if isinstance(body, dict):
-        msg = body.get("error") or body.get("message") or json.dumps(body)[:200]
-    return TenantOutcome(plan.tenant, "error", keys, message=f"HTTP {status}: {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -1321,6 +1475,17 @@ def main() -> None:
                    if _LANG == "zh" else
                    "--apply requires --identity-groups (direct) or "
                    "--auth-token/--auth-token-file (oauth2-proxy)")
+            print(msg, file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        # #3271: tenant-api's answers are classified by its error contract.
+        # Without it no 409 can be told apart, so refuse before any write.
+        try:
+            _error_remedies()
+        except ErrorContractError as exc:
+            msg = (f"--apply 需要 tenant-api 錯誤契約才能判讀被拒的寫入: {exc}"
+                   if _LANG == "zh" else
+                   f"--apply needs tenant-api's error contract to classify a "
+                   f"refused write: {exc}")
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
