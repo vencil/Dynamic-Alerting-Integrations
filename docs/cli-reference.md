@@ -819,7 +819,7 @@ da-tools shadow-verify <phase> [options]
 | `--report-csv <FILE>` | validation-report.csv 路徑（runtime/convergence 用） | （無） |
 | `--readiness-json <FILE>` | cutover-readiness.json 路徑（convergence 用） | （無） |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。回應格式不對包含缺 `config` 或 `config.original`（AM v2 API 必填）：這種回答先前被當成空設定、報 warn「No migration_status matcher found」、結束碼 0 | `http://localhost:9093` |
 | `--json` | JSON 結構化輸出（CI 用） | false |
 
 **三階段檢查內容**
@@ -896,7 +896,7 @@ da-tools byo-check all --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數。每一步的查詢都算：Step 3b、E2E 的查詢失敗先前不產生檢查項；Step 4／5 的後續查詢失敗先前是 warn；Alertmanager 的 alerts／silences 讀不到先前是 warn，alerts 回應不是陣列時還判 pass；Step 3 的 rules 回 `status: error` 或缺 `groups` 先前被報成「沒有 rule group」、結束碼 1；Alertmanager 的 status 回 `config` 為 null 或不是物件、`original` 不是字串、body 不是物件時先前被報成「沒有 tenant 路由」（warn、結束碼 0）（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
+| `2` | 呼叫端錯誤：Prometheus 或 Alertmanager 連不上、query／rules／status API 呼叫失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數。每一步的查詢都算：Step 3b、E2E 的查詢失敗先前不產生檢查項；Step 4／5 的後續查詢失敗先前是 warn；Alertmanager 的 alerts／silences 讀不到先前是 warn，alerts 回應不是陣列時還判 pass；Step 3 的 rules 回 `status: error` 或缺 `groups` 先前被報成「沒有 rule group」、結束碼 1；Alertmanager 的 status 缺 `config` 或 `config.original`（AM v2 API 必填）、`config` 為 null 或不是物件、`original` 不是字串、body 不是物件時先前被報成「沒有 tenant 路由」（warn、結束碼 0）（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 

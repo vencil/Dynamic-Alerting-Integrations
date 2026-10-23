@@ -182,7 +182,7 @@ def check_preflight(args):
                 "detail": f"Alertmanager not reachable: {str(exc)[:60]}",
             })
     else:
-        config_str = am_status.get("config", {}).get("original", "")
+        config_str = am_status["config"]["original"]
         has_shadow_route = "migration_status" in config_str
         checks.append({
             "check": "alertmanager_shadow_route",

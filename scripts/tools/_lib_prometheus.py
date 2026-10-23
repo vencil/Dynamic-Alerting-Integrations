@@ -744,8 +744,10 @@ def alertmanager_status(am_url: str, *, timeout: int = 10) -> dict[str, Any]:
     """Alertmanager's ``/api/v2/status``; return it or raise.
 
     Returns:
-        The status object; its ``config``, when present, is an object whose
-        ``original`` (the loaded config's YAML), when present, is a string.
+        The status object; its ``config`` is an object whose ``original``
+        (the loaded config's YAML) is a string — both required by the AM v2
+        API (``alertmanagerStatus`` / ``alertmanagerConfig``). A body without
+        them used to read as an empty config: "no tenant routing" (#3133).
 
     Raises:
         QueryError: (``source="Alertmanager"``) no connection, an HTTP error,
@@ -756,11 +758,11 @@ def alertmanager_status(am_url: str, *, timeout: int = 10) -> dict[str, Any]:
         raise QueryError(err, source="Alertmanager")
     if not isinstance(data, dict):
         raise _malformed("Alertmanager", "body is not a JSON object")
-    config = data.get("config", {})
+    config = data.get("config")
     if not isinstance(config, dict):
-        raise _malformed("Alertmanager", "'config' is not an object")
-    if not isinstance(config.get("original", ""), str):
-        raise _malformed("Alertmanager", "'config.original' is not a string")
+        raise _malformed("Alertmanager", "'config' is missing or not an object")
+    if not isinstance(config.get("original"), str):
+        raise _malformed("Alertmanager", "'config.original' is missing or not a string")
     return data
 
 

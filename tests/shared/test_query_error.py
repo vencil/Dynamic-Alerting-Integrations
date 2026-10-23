@@ -355,9 +355,11 @@ def test_prometheus_alerts_and_targets_return_the_rows(monkeypatch):
 @pytest.mark.parametrize("answer,defect", [
     ((None, "refused"), "refused"),
     (([], None), "malformed Alertmanager response: body is not a JSON object"),
-    (({"config": "x"}, None), "'config' is not an object"),
-    (({"config": {"original": 5}}, None), "'config.original' is not a string"),
-], ids=["refused", "list", "config-string", "original-int"])
+    (({"config": "x"}, None), "'config' is missing or not an object"),
+    (({"config": {"original": 5}}, None), "'config.original' is missing or not a string"),
+    (({}, None), "'config' is missing or not an object"),
+    (({"config": {}}, None), "'config.original' is missing or not a string"),
+], ids=["refused", "list", "config-string", "original-int", "no-config", "no-original"])
 def test_alertmanager_status_raises(monkeypatch, answer, defect):
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: answer)
     with pytest.raises(lp.QueryError) as exc:

@@ -1156,7 +1156,7 @@ class TestCheckAlertmanagerInhibitSemantics:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         for body in ({"config": {"original": {"not": "a string"}}}, {"config": None},
-                     {"config": "just a string"}, []):
+                     {"config": "just a string"}, [], {}, {"config": {}}):
             mapping = {
                 "status": (body, None),
                 "alerts": ([], None),

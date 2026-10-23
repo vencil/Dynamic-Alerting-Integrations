@@ -735,7 +735,7 @@ def check_alertmanager(args):
             "detail": f"Status API failed: {str(exc)[:60]}",
         })
     else:
-        config_str = status.get("config", {}).get("original", "")
+        config_str = status["config"]["original"]
         has_tenant_routes = "tenant" in config_str
         has_inhibit = "inhibit_rules" in config_str
         checks.append({
