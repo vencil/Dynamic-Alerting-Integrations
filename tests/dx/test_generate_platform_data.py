@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _go_refusal import assert_refused  # (#3206)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DX_DIR = _REPO_ROOT / "scripts" / "tools" / "dx"
 
@@ -116,10 +118,11 @@ class TestDaGuardFailureIsFatal:
         monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--dry-run"])
         with pytest.raises(SystemExit) as excinfo:
             mod.main()
-        assert excinfo.value.code == 2
         captured = capsys.readouterr()
         assert captured.out == "", "nothing may be printed as the platform data"
-        assert "db-a.yaml" in captured.err and "  da-guard| " in captured.err, captured.err
+        # #3206: the shared conf.d refusal, the file named with Go's reason.
+        assert_refused(excinfo.value.code, captured.err, ["db-a.yaml"])
+        assert "(duplicate_key: " in captured.err, captured.err
 
 
 class TestIntentionalAbsenceStillFallsBack:

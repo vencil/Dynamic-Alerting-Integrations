@@ -14,6 +14,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+#: Library mechanics on trees Go names paths on, as the judges use them
+#: (`judging_run`, #3206); a tool run refuses such a tree instead.
+pytestmark = pytest.mark.usefixtures("judging_run")
 from _platform_fs import require_file_name, require_shebang_scripts, symlink_or_skip  # noqa: E402
 
 import _lib_tenant_values as tv

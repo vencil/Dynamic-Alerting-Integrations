@@ -944,16 +944,19 @@ def test_error_messages_name_the_carrier_they_resolved(
     # (1) invalid defaults: the message used to say `_defaults.yaml is
     #     invalid` while the parser error it embeds quoted the path of
     #     `_DEFAULTS.YAML` — one line naming two different files.
+    #     #3206: such a carrier refuses the run (the shared refusal names it
+    #     as the tree spells it, exit 2).
     bad = tmp_path / "bad"
     _upper_only_tree(bad, defaults_body="defaults: [unclosed\n")
-    res = gitops_check.check_local(str(bad))
-    assert res.status == "fail" and "_DEFAULTS.YAML" in res.message, (
-        f"gitops_check must name the carrier it parsed; got {res.message!r}"
-    )
-    assert "_defaults.yaml is invalid" not in res.message, (
-        "the message still names the canonical spelling for a file that is "
-        "not in this tree"
-    )
+    import contextlib, io  # noqa: E401, PLC0415
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as ei:
+        gitops_check.check_local(str(bad))
+    assert ei.value.code == 2
+    assert "ERROR: _DEFAULTS.YAML:" in err.getvalue(), (
+        f"the refusal must name the carrier as the tree spells it; got {err.getvalue()!r}")
+    assert "_defaults.yaml" not in err.getvalue().replace(str(bad), ""), (
+        "the message names the canonical spelling for a file that is not in this tree")
 
     # (2) missing defaults: with NOTHING to resolve, falling back to the
     #     canonical name is correct — the operator needs a name they can
@@ -1092,22 +1095,13 @@ _WARNING_CONTRACT = {
 @pytest.mark.parametrize("tool_rel", sorted(_WARNING_CONTRACT))
 def test_reader_names_the_entries_it_could_not_read(
         tool_rel: str, tmp_path: pathlib.Path) -> None:
-    """Every reader that filters on `is_file()` says what it filtered — on
-    the right stream, with rc unchanged, and having still done its job.
-
-    ⚠️ Asserts the NAME appears, not the exact sentence: the wording comes
-    from the shared `unusable_reason`, and pinning it here would make this
-    test a second copy of that function rather than a check on the reader.
-
-    ⛔ The rc and landmark assertions exist because blind review broke
-    `deprecate_rule` into warn-and-ABORT (rc=1, not one metric processed)
-    and 9148 tests stayed green: the first version asserted only that the
-    name was printed, which promoted a diagnostic into the whole contract
-    and left "warn, then carry on serving" unguarded. The stream assertion
-    exists because the same review moved a warning to stdout and made the
-    `--json` output unparseable with every test still green.
-    """
-    stream, landmark = _WARNING_CONTRACT[tool_rel]
+    """Every reader names what it cannot read — and, since #3206, refuses
+    the run on it: each entry da-guard validation names is an `ERROR:` line
+    on stderr (never on the stream that carries machine-readable output),
+    exit 2, before the tool's real work (#1607's warn-and-continue is gone:
+    a tenant missing behind a green light is the failure it was meant to
+    make audible, and the matrix now holds every tool to the refusal)."""
+    _stream, landmark = _WARNING_CONTRACT[tool_rel]
     tree = _unusable_tree(tmp_path / "conf.d")
     out = tmp_path / "out"
     tool = TOOLS_DIR / tool_rel
@@ -1118,32 +1112,15 @@ def test_reader_names_the_entries_it_could_not_read(
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     stdout = r.stdout.decode("utf-8", "replace")
     stderr = r.stderr.decode("utf-8", "replace")
-    both = stdout + stderr
-    named, forbidden = (stderr, stdout) if stream == "stderr" else (stdout,
-                                                                   stderr)
-
-    missing = [n for n in _UNUSABLE_NAMES if n not in both]
+    missing = [n for n in _UNUSABLE_NAMES if f"ERROR: {n}:" not in stderr]
     assert not missing, (
-        f"{tool_rel} silently dropped {missing} — an entry the operator "
-        f"named like configuration disappeared with nothing said (#1607).\n"
-        f"rc={r.returncode}\n{both[:800]}"
-    )
-    off_stream = [n for n in _UNUSABLE_NAMES if n not in named]
-    assert not off_stream, (
-        f"{tool_rel} must warn on {stream}; {off_stream} went to the other "
-        f"stream.\nstdout={stdout[:400]}\nstderr={stderr[:400]}")
-    leaked = [n for n in _UNUSABLE_NAMES if n in forbidden]
-    assert not leaked, (
-        f"{tool_rel} leaked {leaked} onto the stream that carries its "
-        f"machine-readable output.\nstdout={stdout[:400]}")
-    assert r.returncode == 0, (
-        f"{tool_rel} changed its exit code to {r.returncode}. The contract "
-        f"is warn-and-continue: an unusable entry is a diagnostic, not a "
-        f"reason to refuse service.\n{both[:800]}")
-    assert landmark in both, (
-        f"{tool_rel} warned but did not finish its real work "
-        f"({landmark!r} missing) — warn-and-abort, not warn-and-continue.\n"
-        f"{both[:800]}")
+        f"{tool_rel} did not name {missing} in the refusal.\n"
+        f"rc={r.returncode}\n{(stdout + stderr)[:800]}")
+    leaked = [n for n in _UNUSABLE_NAMES if n in stdout]
+    assert not leaked, f"{tool_rel} put {leaked} on stdout.\nstdout={stdout[:400]}"
+    assert r.returncode == 2, (r.returncode, stderr[:800])
+    assert landmark not in stdout + stderr or tool_rel.endswith("describe_tenant.py"), (
+        f"{tool_rel} did its work on a tree it refused ({landmark!r} printed)")
 
 
 def test_the_unusable_tree_is_not_vacuous(tmp_path: pathlib.Path) -> None:
@@ -1185,8 +1162,9 @@ def test_operator_readers_refuse_unusable_entries(
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     stderr = r.stderr.decode("utf-8", "replace")
     assert r.returncode == 2, (r.returncode, stderr[:600])
-    assert "notes.yaml (not_regular_file" in stderr, stderr[:600]
-    assert "broken.yaml (read_failure" in stderr, stderr[:600]
+    # #3206: the shared refusal's words.
+    assert "ERROR: notes.yaml:" in stderr and "(not_regular_file:" in stderr, stderr[:600]
+    assert "ERROR: broken.yaml:" in stderr and "(read_failure:" in stderr, stderr[:600]
     produced = sorted(p.name for p in out.rglob("*.yaml")) if out.exists() else []
     assert produced == [], f"a refused run wrote CRDs: {produced}"
 
@@ -1269,17 +1247,12 @@ def _reserved_unusable_tree(root: pathlib.Path) -> pathlib.Path:
     "ops/operator_generate.py",
     "lint/check_path_metadata_consistency.py",
 ])
-def test_reader_does_not_name_a_reserved_entry_it_never_reads(
+def test_reader_names_a_reserved_entry_go_names(
         tool_rel: str, tmp_path: pathlib.Path) -> None:
-    """⛔ The mirror image of the `suffixes` rule, on the reserved-name axis.
-
-    These three drop every `_`-prefixed entry BEFORE looking at its shape, so
-    a warning about a directory-shaped `_defaults.yaml/` tells the operator
-    about a loss that did not happen in this tool. `check_path_metadata_
-    consistency` is the sharpest case: it prints a machine-parseable
-    `path:0: warning:` line, which a CI annotation consumer would surface as
-    a finding about a file the lint never checks.
-    """
+    """A directory-shaped `_defaults.yaml/` is one da-guard validation names
+    (the route generator refuses the tree on it), whether or not this tool
+    reads `_` files: #3206 makes the whole verdict Go's, so the refusal names
+    it with the others — no tool keeps a `_` rule of its own here."""
     tree = _reserved_unusable_tree(tmp_path / "conf.d")
     out = tmp_path / "out"
     r = subprocess.run(
@@ -1287,18 +1260,10 @@ def test_reader_does_not_name_a_reserved_entry_it_never_reads(
          *_argv_for(tool_rel, tree, out)],
         capture_output=True, timeout=180, cwd=str(tmp_path),
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-    text = (r.stdout.decode("utf-8", "replace")
-            + r.stderr.decode("utf-8", "replace"))
-    assert "_defaults.yaml" not in text, (
-        f"{tool_rel} reported `_defaults.yaml`, which it never reads whatever "
-        f"its shape — a finding the operator cannot act on from this tool.\n"
-        f"{text[:800]}")
-    # ⛔ Vacuity guard: the run must still name the NON-reserved unusable
-    # entries, or this assertion would pass on a tool that reports nothing.
-    for name in _UNUSABLE_NAMES:
-        assert name in text, (
-            f"{tool_rel} stopped naming {name}; the assertion above would be "
-            f"vacuous.\n{text[:800]}")
+    err = r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 2, (r.returncode, err[:800])
+    for name in ("_defaults.yaml", *_UNUSABLE_NAMES):
+        assert f"ERROR: {name}:" in err, (tool_rel, name, err[:800])
 
 
 def test_describe_tenant_does_name_an_unusable_defaults_carrier(
@@ -1357,7 +1322,9 @@ def test_path_metadata_lists_the_tree_once_through_parse_tree(
     monkeypatch.setattr(os, "walk", no_walk)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["x", "--config-dir", str(tree)])
-    assert mod.main() == 0
+    with pytest.raises(SystemExit) as ei:  # #3206: the tree is refused, once read
+        mod.main()
+    assert ei.value.code == 2
     assert len(loads) == 1, loads
 
 
@@ -1411,7 +1378,8 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
     sys.path.insert(0, str(TOOLS_DIR / "dx"))
     import importlib  # noqa: PLC0415
     mod = importlib.import_module("describe_tenant")
-    mod.ConfDScanner(tree)
+    with pytest.raises(SystemExit):  # #3206: the tree is refused, once read
+        mod.ConfDScanner(tree)
 
     whole_tree = [p for p in calls if p == "*"]
     assert len(whole_tree) == 1, (
@@ -1441,12 +1409,13 @@ def test_offboard_precheck_explains_a_tenant_whose_config_is_unusable(
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     text = (r.stdout.decode("utf-8", "replace")
             + r.stderr.decode("utf-8", "replace"))
-    assert "(not_regular_file): a directory with a config file name" in text, (  # #3206 R7
-        f"the pre-check said the config was not found without saying WHY; an "
-        f"operator reads that as 'nothing to remove'.\n{text[:800]}")
-    assert "找不到設定檔案" in text, (
-        f"fixture did not reach the not-found branch, so the assertion above "
-        f"would be vacuous.\n{text[:800]}")
+    # #3206: refused before the pre-check can say "not found" — the WHY is
+    # the refusal itself, in da-guard's words.
+    assert r.returncode == 2, text[:800]
+    assert "ERROR: notes.yaml:" in text and "(not_regular_file: a directory with a config file name" in text, (
+        f"the run did not say WHY; an operator reads 'not found' as 'nothing to "
+        f"remove'.\n{text[:800]}")
+    assert "找不到設定檔案" not in text, text[:800]
 
 
 # ── the readers the population walk could never reach ─────────────────

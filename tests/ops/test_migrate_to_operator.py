@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 # Import the module to test
 import migrate_to_operator as mto  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1015,15 +1016,16 @@ class TestDiscoveryParityWithOperatorGenerate:
 
     def test_both_readers_refuse_a_directory_named_like_a_carrier(self, tmp_path):
         """`notes.yaml/` (a directory) is parse-tree's `not_regular_file`:
-        both refuse the tree alike, naming it — neither invents `notes`."""
+        both refuse the tree alike (the shared refusal, #3206), naming it —
+        neither invents `notes`."""
         import operator_generate as og
-        from _lib_confd import TenantSetUnknown
 
         root = self._tree(tmp_path / "conf.d")
         (root / "notes.yaml").mkdir()
         for discover in (mto.discover_tenant_configs, og.discover_tenant_configs):
-            with pytest.raises(TenantSetUnknown, match=r"notes\.yaml \(not_regular_file"):
+            with refuses("notes.yaml") as err:
                 discover(root)
+            assert "(not_regular_file: " in err.getvalue(), err.getvalue()
 
     def test_a_narrow_reader_would_be_caught(self, tmp_path, monkeypatch):
         """Counterfactual: restore the pre-#2906 stem scan and this class reddens.
@@ -1141,11 +1143,9 @@ class TestAnalyzeMigrationReportsWhatItSkipped:
         """#2906: `notes.yaml/` 是 parse-tree 的 `not_regular_file`——租戶集合答不出來。
 
         先前它只是 `issues` 裡的一行、旁邊照樣給出部分租戶；現在 fail-closed：
-        `analyze_migration` 拋 `TenantSetUnknown`（`main` 以 rc 2 結束），並指名
-        該項目與 kind，呼叫端不會拿到一份看起來完整的遷移計畫。
+        `analyze_migration` 走共用拒絕（#3206，rc 2），並指名該項目與 kind，
+        呼叫端不會拿到一份看起來完整的遷移計畫。
         """
-        from _lib_confd import TenantSetUnknown
-
         confd = tmp_path / "conf.d"
         confd.mkdir()
         (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
@@ -1155,8 +1155,9 @@ class TestAnalyzeMigrationReportsWhatItSkipped:
         src = tmp_path / "src"
         src.mkdir()
 
-        with pytest.raises(TenantSetUnknown, match=r"notes\.yaml \(not_regular_file"):
+        with refuses("notes.yaml") as err:
             mto.analyze_migration(src, confd)
+        assert "(not_regular_file: " in err.getvalue(), err.getvalue()
 
     def test_a_clean_tree_produces_no_skip_issue(self, tmp_path):
         """必響對照組：這則 issue 不能是無條件產生的。"""

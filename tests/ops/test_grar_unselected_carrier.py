@@ -20,6 +20,10 @@ from pathlib import Path
 
 import pytest
 
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 REPO = Path(__file__).resolve().parents[2]
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 

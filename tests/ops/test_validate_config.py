@@ -23,7 +23,9 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+#: The validator / route generator read trees Go names paths on as their own
+#: findings: their functions run as judges (`judging_run`, #3206).
+pytestmark = [pytest.mark.usefixtures("da_guard_env"), pytest.mark.usefixtures("judging_run")]
 
 
 class TestYAMLSyntax:

@@ -37,6 +37,7 @@ import _lib_tenant_values as tv
 import _lib_validation
 import validate_config as vc
 import _lib_io
+import _lib_parse_cache
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LINT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_confd_schema.py"
@@ -293,7 +294,8 @@ def test_nested_defaults_tenants_block_is_not_held_to_the_tenant_schema(tmp_path
                                    "!!int x"])
 def test_a_tag_yaml_v3_cannot_apply_makes_the_file_unreadable(tmp_path, value):
     """#2906：parse-tree 的 `decode_error`。lint 結束碼 2、帶 kind、沒有 traceback；
-    validate-config 的 `yaml_syntax` 列報出這份檔，`yaml_quoting` 跳過它。"""
+    validate-config 的 `yaml_syntax` 列報出這份檔，`yaml_quoting` 跳過它。兩者
+    都是 judge（#3206），validate-config 的列函式在 process 內以 judge 身分執行。"""
     conf_d = tmp_path / "conf.d"
     (conf_d / "sub").mkdir(parents=True)
     (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
@@ -304,10 +306,12 @@ def test_a_tag_yaml_v3_cannot_apply_makes_the_file_unreadable(tmp_path, value):
     assert "Traceback" not in p.stderr, p.stderr
     assert "ERROR: sub/t1.yaml: cannot read/parse YAML (decode_error): " in p.stderr, p.stderr
     assert _warn_lines(p) == [], p.stderr
-    syntax = vc.check_yaml_syntax(str(conf_d))
+    with _lib_parse_cache.judging():
+        syntax = vc.check_yaml_syntax(str(conf_d))
+        quoting = vc.check_yaml_quoting(str(conf_d))
     assert syntax["status"] == vc.FAIL and any(
         "sub/t1.yaml" in d and "decode_error" in d for d in syntax["details"]), syntax
-    assert vc.check_yaml_quoting(str(conf_d))["status"] == vc.PASS
+    assert quoting["status"] == vc.PASS
 
 
 @pytest.mark.parametrize("word", sorted(_YAML12_BOOLS))

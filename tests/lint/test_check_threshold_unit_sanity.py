@@ -153,11 +153,13 @@ def test_unbounded_dimensions_are_not_second_guessed(tmp_path):
 
 
 def test_nested_scheduled_form_is_reached(tmp_path):
-    """#1217 blind spot: a line-oriented scan misses a value nested under the key."""
-    _conf_d(tmp_path, {"defaults": {
-        "pct": {"type": "scheduled",
-                "default": {"during_business_hours": "300", "after_hours": "50"},
-                "range": ["09:00", "18:00"]}}})
+    """#1217 blind spot: a line-oriented scan misses a value nested under the key.
+
+    The scheduled form the exporter serves (#3206: a shape it cannot serve is
+    a tree no conf.d tool reads): a tenant's `default` plus `overrides`."""
+    _conf_d(tmp_path, {"defaults": {"pct": 10}, "tenants": {"t": {
+        "pct": {"default": "50",
+                "overrides": [{"window": "09:00-18:00", "value": "300"}]}}}})
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("300" in e for e in errs), errs
     assert not any("= 50 " in e for e in errs), errs

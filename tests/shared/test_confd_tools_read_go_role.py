@@ -27,6 +27,11 @@ import textwrap
 
 import pytest
 
+#: The readers' mechanics on trees Go names paths on, in process, as the
+#: judges use them (`judging_run`, #3206). A tool run as a process refuses
+#: such a tree instead (the subprocess cases below, and the behaviour matrix).
+pytestmark = pytest.mark.usefixtures("judging_run")
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 for _d in (TOOLS, TOOLS / "ops", TOOLS / "dx", TOOLS / "lint", REPO / "scripts" / "ops"):
@@ -80,6 +85,23 @@ def _list_doc(entries, carriers=None, mode="list"):
             "defaults_carriers": carriers or {}, "entries": entries}
 
 
+def _tree_doc(entries, carriers=None):
+    """A tree-mode document of *entries*: every config file a reader reads
+    and without a problem has content (an empty mapping)."""
+    doc = _list_doc(entries, carriers, mode="tree")
+    doc["files"] = {e["path"]: {} for e in entries
+                    if e["role"] == "config" and e["readers"] and e["problem"] is None}
+    doc["rendered_by"] = {}
+    return doc
+
+
+def _refusing(fn, *args):
+    """*fn(*args)* in a fresh context — outside this module's `judging_run`,
+    as a tool run reads (#3206)."""
+    import contextvars
+    return contextvars.Context().run(fn, *args)
+
+
 # ── the role, and only the role ─────────────────────────────────────────
 
 def test_the_listing_functions_follow_the_role_only(tmp_path, monkeypatch) -> None:
@@ -88,7 +110,7 @@ def test_the_listing_functions_follow_the_role_only(tmp_path, monkeypatch) -> No
     theirs) or from a stat of its own would call one of each pair wrong."""
     root = _write(tmp_path / "conf.d", {"a.yaml": "x: 1\n"})
     stat_refused = ("read_failure", "the path cannot be statted (stat_error)")
-    doc = _list_doc([
+    doc = _tree_doc([
         _entry("dangling.yaml", role="not_a_file", problem=stat_refused),
         _entry("locked.yaml", role="config", problem=stat_refused),
         _entry("sub", role="unlistable_dir", cls="directory",
@@ -249,19 +271,19 @@ def test_stat_refused_entries_stay_config_files_as_nobody() -> None:
                 "files": [p.relative_to(r).as_posix() for p in c.iter_config_files(r)],
                 "unusable": [p.relative_to(r).as_posix() for p in c.unusable_config_paths(r)]}))
             """)
+        # #3206: both are paths da-guard validation names (unservable), so a
+        # listing taken in a tool run is the shared refusal — never a list
+        # without them, and never a WARN that leaves a tenant out.
         r = run([sys.executable, "-c", probe, str(box / "scripts" / "tools"), str(conf)])
-        assert r.returncode == 0, r.stderr
-        got = json.loads(r.stdout)
-        assert {"db-b.yaml", "sub/t.yaml"} <= set(got["files"]), got
-        assert not {"db-b.yaml", "sub/t.yaml"} & set(got["unusable"]), got
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "ERROR: db-b.yaml:" in r.stderr and "ERROR: sub/t.yaml:" in r.stderr, r.stderr
         cm = run([sys.executable, str(box / "scripts" / "ops" / "configmap_assemble.py"),
                   "--config-dir", str(conf), "--output", str(box / "out.yaml")])
         assert cm.returncode == 2, cm.stdout + cm.stderr
         assert "absent from the ConfigMap" not in cm.stderr, cm.stderr
-        # The refusal is the uniqueness check that cannot read db-b.yaml —
-        # not a missing kubectl, which would also be rc 2.
-        assert "db-b.yaml" in cm.stderr and "could not measure" in cm.stderr, cm.stderr
-        assert "kubectl" not in cm.stderr.splitlines()[-1], cm.stderr
+        # The refusal names db-b.yaml — not a missing kubectl, also rc 2.
+        assert "ERROR: db-b.yaml:" in cm.stderr, cm.stderr
+        assert "kubectl" not in cm.stderr, cm.stderr
 
 
 @pytest.mark.parametrize("tool", ["validate_config", "deprecate_rule", "migrate_conf_d"])
@@ -297,9 +319,8 @@ def test_a_denied_entry_is_named_without_a_traceback_as_nobody(tool) -> None:
         assert "zero.yaml" in out or "db-b.yaml" in out, out[-3000:]
         # The verdict, not only the absence of a traceback (#3206 N5): a tree
         # it cannot read whole is never a clean run — a tree finding for the
-        # validator and the deprecation (rc 1), nothing planned for the
-        # migration (rc 2).
-        assert r.returncode == {"validate_config": 1, "deprecate_rule": 1,
+        # validator (rc 1), the shared refusal for the others (rc 2).
+        assert r.returncode == {"validate_config": 1, "deprecate_rule": 2,
                                 "migrate_conf_d": 2}[tool], (r.returncode, out[-3000:])
 
 
@@ -407,7 +428,7 @@ def test_the_selection_reaches_a_listing_taken_on_the_tool_s_behalf(tmp_path,
     """A library listing that names no binary (`_lib_confd.config_listing`)
     runs the tool's selected da-guard, not `$DA_GUARD_BINARY`."""
     root = _write(tmp_path / "conf.d", {"a.yaml": "x: 1\n"})
-    good = _emit(tmp_path, _list_doc([_entry("a.yaml")]), "good")
+    good = _emit(tmp_path, _tree_doc([_entry("a.yaml")]), "good")
     decoy = tmp_path / "decoy"
     decoy.write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")
     decoy.chmod(0o755)
@@ -691,19 +712,20 @@ def test_config_diff_fails_when_a_side_has_no_document(tmp_path, da_guard_binary
 # ── round 2: the index is complete; nothing is judged by name or stat ────
 
 def test_migrate_conf_d_plans_only_what_the_walk_enters(tmp_path, da_guard_env) -> None:
-    """A directory the walk enters (role `dir`, a config-named one too) is
-    already nested; a link to a directory is NOT — the exporter does not
-    follow it, nothing under it is loaded — so the plan is refused, rc 2,
-    naming it, whatever the link is called."""
-    base = {"a.yaml": "tenants:\n  a: {}\n", "team/t.yaml": "tenants:\n  t: {}\n",
-            "x.yaml/i.yaml": "tenants:\n  i: {}\n"}
+    """A directory the walk enters (role `dir`) is already nested; a link to
+    a directory is NOT — the exporter does not follow it, nothing under it is
+    loaded — and a directory with a config file's name (`x.yaml/`) is one the
+    route generator refuses the tree on: for either the plan is refused,
+    rc 2, naming it, whatever it is called (#3206)."""
+    base = {"a.yaml": "tenants:\n  a: {}\n", "team/t.yaml": "tenants:\n  t: {}\n"}
     conf = _write(tmp_path / "ok.d", base)
     r = _run_tool(TOOLS / "dx" / "migrate_conf_d.py", "--conf-d", str(conf), "--dry-run")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "Skip (nested):      2" in r.stdout, r.stdout
-    # m2: the config-named one is named with Go's problem; the plain one not.
-    assert "x.yaml/: the exporter enters it, but its name looks like a file's" in r.stdout
-    assert "team/:" not in r.stdout, r.stdout
+    assert "Skip (nested):      1" in r.stdout, r.stdout
+    conf = _write(tmp_path / "named.d", {**base, "x.yaml/i.yaml": "tenants:\n  i: {}\n"})
+    r = _run_tool(TOOLS / "dx" / "migrate_conf_d.py", "--conf-d", str(conf), "--dry-run")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "ERROR: x.yaml:" in r.stderr and "Traceback" not in r.stderr, r.stderr
     outside = tmp_path / "outside"
     outside.mkdir()
     for link in ("link.yaml", "team-link"):
@@ -715,14 +737,15 @@ def test_migrate_conf_d_plans_only_what_the_walk_enters(tmp_path, da_guard_env) 
 
 
 def test_migrate_conf_d_refuses_an_unlistable_directory_at_any_depth(
-        tmp_path, da_guard_env, unlistable_dir) -> None:
+        tmp_path, da_guard_env, unlistable_dir, capsys) -> None:
     import migrate_conf_d
     conf = _write(tmp_path / "conf.d", {"a.yaml": "tenants:\n  a: {}\n",
                                         "team/deep/t.yaml": "tenants:\n  t: {}\n"})
     unlistable_dir(conf, conf / "team" / "deep")
-    with pytest.raises(pt.FileUnreadable) as exc:
-        migrate_conf_d.plan_migration(conf, _lib_parse_cache.ConfdReader(conf))
-    assert exc.value.file == "team/deep"
+    with pytest.raises(SystemExit) as exc:
+        _refusing(migrate_conf_d.plan_migration, conf, _lib_parse_cache.ConfdReader(conf))
+    assert exc.value.code == 2
+    assert "ERROR: team/deep:" in capsys.readouterr().err
 
 
 def test_tenant_files_are_go_s_class_and_role(tmp_path, da_guard_binary) -> None:

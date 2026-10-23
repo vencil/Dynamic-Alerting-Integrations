@@ -33,6 +33,8 @@ import pytest
 
 import _lib_tenant_values as tv
 import config_diff
+import _lib_parse_cache
+from _go_refusal import assert_refused, refuses  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -210,14 +212,17 @@ def test_the_comparison_can_ring(tmp_path):
 @pytest.mark.parametrize("profile", ["{default: ['010']}", "{default: {a: 1}}"])
 def test_a_non_scalar_default_is_refused_as_go_refuses_it(tmp_path, profile):
     """exporter 拒收整份檔（rc 3）。這原是已知分歧（describe 不鏡像整檔拒收）；#2906 起
-    describe 讀 da-guard effective，所以 t1 一樣不描述：rc 2、點名該檔。"""
+    describe 讀 da-guard effective，所以 t1 一樣不描述：rc 2、點名該檔。#3206 起是共用的
+    conf.d 拒絕：在讀任何值之前就點名 t1.yaml 結束。"""
     conf_d = _tree(tmp_path, profile, "tenant-file")
-    with pytest.raises(tv.ParseFailedError):
+    with _lib_parse_cache.judging():   # 前提：Go 丟掉這個檔
+        with pytest.raises(tv.ParseFailedError):
+            tv.load_effective(conf_d)
+    with refuses("t1.yaml"):
         tv.load_effective(conf_d)
     p = subprocess.run([sys.executable, str(DESCRIBE), "-c", str(conf_d), "t1", "--format", "json"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
-    assert p.returncode == 2, p.stderr
-    assert "WARNING: skipped t1.yaml — " in p.stderr and "Tenant 't1' not found" in p.stderr, p.stderr
+    assert_refused(p.returncode, p.stderr, ["t1.yaml"])
 
 
 @pytest.mark.parametrize("where", WHERE)

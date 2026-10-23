@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
+from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -28,6 +29,13 @@ EXIT_VIOLATION = 1  # _lib_exitcodes.EXIT_VIOLATION: describe_tenant's "duplicat
 EXIT_CALLER_ERROR = 2  # _lib_exitcodes.EXIT_CALLER_ERROR: describe_tenant's "not found"
 MATRIX = json.loads((Path(__file__).parent / "defaults_symlink_parity_matrix.json")
                     .read_text(encoding="utf-8"))
+
+# #3206: the rows whose conf.d holds a path da-guard validation names. Go's
+# half still pins their /metrics answer; describe_tenant refuses the tree,
+# naming the path. Pinned here AND checked against Go's own answer.
+_REFUSED_ROWS = {
+    "cm-nested-dir-link-is-not-walked": ["team-a"],
+}
 
 
 # ⛔ #1967 blind review: a misspelt optional key (`confd` for `conf_d`) was
@@ -126,7 +134,17 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path, da_g
                    for link in tree["symlinks"]), (
             f"{tree['name']}: declares conf_d but no symlink target resolves "
             "outside it — the row no longer tests a target outside conf.d")
+    named = go_refused(conf_d)
+    assert named == _REFUSED_ROWS.get(tree["name"], []), (tree["name"], named)
     for tenant, want in tree["expect"].items():
+        if named:
+            r = subprocess.run(
+                [sys.executable, str(DESCRIBE), tenant, "--conf-d", str(conf_d),
+                 "--show-sources", "--format", "json"],
+                capture_output=True, text=True, encoding="utf-8", timeout=120)
+            assert_refused(r.returncode, r.stderr, named)
+            assert r.stdout == "", (tenant, r.stdout)
+            continue
         r = subprocess.run(
             [sys.executable, str(DESCRIBE), tenant, "--conf-d", str(conf_d),
              "--show-sources", "--format", "json"],

@@ -30,6 +30,10 @@ import sys
 from pathlib import Path
 
 import pytest
+
+#: The route generator's reader: a judge's (`judging_run`, #3206) — it reads
+#: trees Go names paths on and refuses them as its own finding.
+pytestmark = pytest.mark.usefixtures("judging_run")
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

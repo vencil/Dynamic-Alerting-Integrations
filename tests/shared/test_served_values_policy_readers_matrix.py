@@ -29,6 +29,8 @@ import policy_engine as pe
 import policy_opa_bridge as pob
 import validate_config as vc
 from test_served_values_readers_matrix import POSITIONS, _tree
+import _lib_parse_cache
+from _go_refusal import assert_refused  # noqa: E402  (#3206)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -328,12 +330,13 @@ def test_file_the_exporter_drops_fails_closed(tmp_path):
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    custom_mysql_slow: 7\n",
         "_platform.yaml": "tenants:\n  tenant-b: 3\n",
     })
+    # #3206: the two CLIs end through the shared refusal, naming the file;
+    # validate-config (a judge) still reads the tree and fails its row.
     for script, extra in _clis(tmp_path):
         p = _cli(script, conf_d, *extra)
-        assert p.returncode == 2, (script, p.returncode, p.stderr)
-        assert "_platform.yaml" in p.stderr and "cannot unmarshal" in p.stderr, p.stderr
-        assert "Traceback" not in p.stderr, p.stderr
-    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+        assert_refused(p.returncode, p.stderr, ["_platform.yaml"])
+    with _lib_parse_cache.judging():
+        row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and any("_platform.yaml" in d for d in row["details"]), row
 
 
@@ -488,7 +491,8 @@ def test_unreadable_tree_hint_matches_the_cause(tmp_path):
         "_defaults.yaml": "defaults:\n  custom_mysql_slow: 1\n",
         "_platform.yaml": "tenants:\n  tenant-b: 3\n",
     })
-    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+    with _lib_parse_cache.judging():   # validate-config's row: a judge's (#3206)
+        row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
     assert "DSL syntax" not in row["hint"]
 
@@ -601,7 +605,8 @@ def test_dangling_symlink_hint_is_tree_unreadable(tmp_path):
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
     symlink_or_skip("/nonexistent/x.yaml", conf_d / "t.yaml")
-    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+    with _lib_parse_cache.judging():   # validate-config's row: a judge's (#3206)
+        row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
     assert any("t.yaml (stat_error)" in d for d in row["details"]), row
 

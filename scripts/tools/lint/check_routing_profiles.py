@@ -370,7 +370,8 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    with _lib_parse_cache.session():
+    # A judge (#3206): the route generator's refusal of a tree is its finding.
+    with _lib_parse_cache.session(), _lib_parse_cache.judging():
         try:
             _lib_parse_cache.reader_for(args.config_dir).require()
             data = _collect_data(args.config_dir)

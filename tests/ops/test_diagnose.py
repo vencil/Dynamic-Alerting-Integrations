@@ -7,11 +7,12 @@ import sys
 from unittest import mock
 
 import pytest
+from _go_refusal import refuses  # noqa: E402  (#3206: the shared refusal)
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
 import diagnose  # noqa: E402
-from _lib_tenant_values import ParseFailedError, ServedValuesError  # noqa: E402
+from _lib_tenant_values import ServedValuesError  # noqa: E402
 import subprocess  # noqa: E402
 
 # #2526: the chain is `da-guard effective`'s answer.
@@ -135,7 +136,7 @@ class TestLookupTenantProfile:
         """#2526: no answer from a partial read — the exporter drops the
         file, so the lookup raises (the CLI exits 2) instead of skipping it."""
         d = self._tree(tmp_path, **{"bad.yaml": body})
-        with pytest.raises(ParseFailedError, match="bad.yaml"):
+        with refuses("bad.yaml"):
             diagnose.lookup_tenant_profile("bad", d)
 
     def test_tenant_not_found(self, tmp_path):
@@ -147,9 +148,12 @@ class TestLookupTenantProfile:
         assert diagnose.lookup_tenant_profile("db-a", d) is None
 
     def test_skips_directories(self, tmp_path):
+        """A directory with a config file's name is one the route generator
+        refuses the tree on: the lookup refuses the run, naming it (#3206)."""
         (tmp_path / "subdir.yaml").mkdir()
         d = self._tree(tmp_path, **{"a.yaml": "tenants:\n  db-a:\n    cpu: 1\n"})
-        assert diagnose.lookup_tenant_profile("subdir", d) is None
+        with refuses("subdir.yaml"):
+            diagnose.lookup_tenant_profile("subdir", d)
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +233,7 @@ class TestResolveInheritanceChain:
         (tmp_path / "_defaults.yaml").write_text(": : bad", encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a:\n    cpu: 50\n",
                                             encoding="utf-8")
-        with pytest.raises(ParseFailedError, match="_defaults.yaml"):
+        with refuses("_defaults.yaml"):
             diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
 
     def test_no_profiles_file(self, tmp_path):
@@ -636,9 +640,9 @@ class TestProfileLookupSharesTheChainRead:
 
     def test_another_tenants_broken_file_fails_closed(self, tmp_path):
         d = self._confd(tmp_path, broken=True)
-        with pytest.raises(ParseFailedError, match="broken.yaml"):
+        with refuses("broken.yaml"):
             diagnose.lookup_tenant_profile("tx", d)
-        with pytest.raises(ParseFailedError, match="broken.yaml"):
+        with refuses("broken.yaml"):
             self._check(d)
 
     def test_answer_is_the_chains_profile_name(self, tmp_path):
@@ -768,7 +772,7 @@ class TestProfileLookupSharesTheChainRead:
         files[fname] = body
         for name, text in files.items():
             (tmp_path / name).write_text(text, encoding="utf-8")
-        with pytest.raises(ParseFailedError, match=fname):
+        with refuses(fname):
             diagnose.lookup_tenant_profile("tx", str(tmp_path))
 
     @pytest.mark.parametrize("case", sorted(_NULL_IS_FINE))
@@ -810,9 +814,9 @@ class TestProfileLookupSharesTheChainRead:
         for name, text in files.items():
             (tmp_path / name).write_text(text, encoding="utf-8")
         d = str(tmp_path)
-        with pytest.raises(ParseFailedError, match=fname):
+        with refuses(fname):
             diagnose.lookup_tenant_profile("tx", d)
-        with pytest.raises(ParseFailedError, match=fname):
+        with refuses(fname):
             self._check(d)
 
     def test_a_platform_file_dropped_for_its_type_fails_closed(self, tmp_path):
@@ -824,7 +828,7 @@ class TestProfileLookupSharesTheChainRead:
             encoding="utf-8")
         (tmp_path / "tx.yaml").write_text(
             "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
-        with pytest.raises(ParseFailedError, match="_platform.yaml"):
+        with refuses("_platform.yaml"):
             diagnose.lookup_tenant_profile("tx", str(tmp_path))
 
 
@@ -909,14 +913,14 @@ class TestSetTagReadAsTheExporterReadsIt:
         overrides, _profile, _served = self._CASES[case]
         d = self._tree(tmp_path, overrides, "!!set ")
         fname = next(n for n, t in overrides.items() if t is not None and "{TAG}" in t)
-        with pytest.raises(ParseFailedError, match=fname):
+        with refuses(fname):
             diagnose.resolve_inheritance_chain("tx", d)
 
     def test_a_tenants_set_fails_closed(self, tmp_path):
         """`tenants: !!set {tx}` was `tenants: {tx: ~}` on /metrics; since
         ADR-036 step 6 (#3206) the exporter drops the file."""
         d = self._tree(tmp_path, {"tx.yaml": "tenants: !!set {tx}\n"}, "")
-        with pytest.raises(ParseFailedError, match="tx.yaml"):
+        with refuses("tx.yaml"):
             diagnose.resolve_inheritance_chain("tx", d)
 
     def test_a_repeated_key_in_a_set_fails_closed(self, tmp_path):
@@ -924,7 +928,7 @@ class TestSetTagReadAsTheExporterReadsIt:
             "_profiles.yaml":
                 "profiles:\n  gold: !!set {mysql_slow_queries: 55, "
                 "mysql_slow_queries: 56}\n"}, "")
-        with pytest.raises(ParseFailedError, match="_profiles.yaml"):
+        with refuses("_profiles.yaml"):
             diagnose.resolve_inheritance_chain("tx", d)
 
     @pytest.mark.parametrize("body", [
