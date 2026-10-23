@@ -246,7 +246,7 @@ func TestMerge_MissingTenantErrors(t *testing.T) {
 // #1017: the write plane must never emit a bare-number quantile into conf.d —
 // QuantileStringViolations rejects non-string JSON, and a STRING quantile must
 // round-trip QUOTED (yaml.v3 auto-quotes a number-looking !!str scalar), so
-// the Go exporter and the Python compiler read the same text (recipe_id parity).
+// every reader of the file reads the authored text (recipe_id parity).
 func TestQuantileStringViolations(t *testing.T) {
 	cases := []struct {
 		note    string

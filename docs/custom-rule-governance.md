@@ -239,7 +239,7 @@ file_overrides:
     require_generated_marker: true   # 檔頭須帶 GENERATED 標記，否則照常全檢
     policy:
       denied_functions: [holt_winters, quantile_over_time]  # predict_linear 豁免
-      max_range_duration: 96h        # forecast lookback = max(2·horizon, 1h)，horizon ≤ 48h
+      max_range_duration: 96h        # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)，由 recipe 契約產生
 ```
 
 > **豁免不是跳過（四層護欄）**：(1) `path` 錨在掃描樹頂層（精確路徑、非

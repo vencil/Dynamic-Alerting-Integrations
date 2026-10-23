@@ -121,9 +121,10 @@ func withoutFailed(files []string, failed map[string]bool) []string {
 // `defaults:` mapping is reported — nothing reads it there. pkg/config's
 // chain view (subtreeReservedKeys) cannot tell the top level from
 // `defaults:` in an unwrapped file, so this check, which holds the files'
-// bytes, does. (`_custom_alerts` was such a key until #3042: the
-// custom-alert compiler read it from a `_defaults.yaml` top level; it now
-// compiles what the exporter serves, and both places are reported.)
+// bytes, does. (`_custom_alerts` was such a key until #3042, when the then
+// Python custom-alert compiler read it from a `_defaults.yaml` top level;
+// the compiler, now pkg/config's (#3229), compiles what the exporter serves,
+// so both places are reported.)
 // A file not in DefaultsFiles is kept (reported), not guessed.
 func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 	var out []string

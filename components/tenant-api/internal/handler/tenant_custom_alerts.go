@@ -157,8 +157,8 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 		// #1017: quantile must arrive as a JSON STRING. A number has already
 		// lost its authored text and would be merged into conf.d as a bare
-		// YAML scalar, which the Go exporter and the Python compiler can read
-		// differently (recipe_id parity → silently muted alert). Fail loud
+		// YAML scalar, which YAML dialects read differently (see
+		// customalerts.QuantileStringViolations). Fail loud
 		// before merging — symmetric with the conf.d schema CI gate, which
 		// would reject the committed file anyway (schema type: string).
 		if viol := customalerts.QuantileStringViolations(*req.CustomAlerts); len(viol) > 0 {

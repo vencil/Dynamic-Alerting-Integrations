@@ -18,7 +18,12 @@ every other copy is GENERATED from it:
              and recipe-status.json (imported by recipe-builder)
   - Python : the block between the GENERATED markers in
              scripts/tools/_lib_constants.py (the per-tenant custom-alert
-             cap validate-config judges)
+             cap validate-config judges, and the forecast's longest lookback)
+  - Policy : the compiled pack's forecast `max_range_duration` (the longest
+             lookback a compiled forecast reads) in
+             .github/custom-rule-policy.yaml and its copy in
+             docs/custom-rule-governance{,.en}.md — the one line that carries
+             `# forecast lookback`
   - Recipes: the `status:` line and each param's `required:` / `enum:` /
              `default:` in rule-packs/recipes/*.yaml, whose params must be
              exactly the recipe's (the rest is hand-written and kept)
@@ -62,6 +67,8 @@ PORTAL_ENUMS_REL = "tools/portal/src/interactive/tools/_common/data/recipe-enums
 PORTAL_STATUS_REL = "tools/portal/src/interactive/tools/_common/data/recipe-status.json"
 CONSTANTS_REL = "scripts/tools/_lib_constants.py"
 RECIPES_DIR_REL = "rule-packs/recipes"
+POLICY_REL = ".github/custom-rule-policy.yaml"
+GOVERNANCE_DOC_RELS = ("docs/custom-rule-governance.md", "docs/custom-rule-governance.en.md")
 #: The targets written whole: a missing one is generated, not an error.
 WHOLE_FILE_TARGETS = frozenset({PORTAL_ENUMS_REL, PORTAL_STATUS_REL})
 
@@ -261,13 +268,56 @@ def render_portal_status(c):
 
 # ---------------------------------------------------------------- Python
 
+_SINGLE_UNIT = re.compile(r"^([0-9]+)([hms])$")
+_UNIT_SECONDS = {"h": 3600, "m": 60, "s": 1}
+
+
+def _seconds(d):
+    """*d* (one unit: h, m or s — the compiler's durationSeconds) in seconds."""
+    m = _SINGLE_UNIT.match(str(d))
+    if not m:
+        raise ContractError(f"cannot convert duration {d!r} to integer seconds")
+    return int(m.group(1)) * _UNIT_SECONDS[m.group(2)]
+
+
+def _duration(seconds):
+    for unit in ("h", "m"):
+        if seconds % _UNIT_SECONDS[unit] == 0:
+            return f"{seconds // _UNIT_SECONDS[unit]}{unit}"
+    return f"{seconds}s"
+
+
+def forecast_max_lookback(c):
+    """The longest range a compiled forecast reads: the compiler's
+    forecastLookbackSeconds (max(lookback_factor·horizon, lookback_floor))
+    at the largest horizon of the enum."""
+    f = c["forecast"]
+    factor = f["lookback_factor"]
+    if not isinstance(factor, int) or isinstance(factor, bool) or factor < 1:
+        raise ContractError(f"forecast lookback_factor {factor!r} must be an integer of at least 1")
+    longest = max(_seconds(h) for h in c["horizon"]["enum"])
+    return _duration(max(factor * longest, _seconds(f["lookback_floor"])))
+
+
 def render_constants(c):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
         f"MAX_CUSTOM_RECIPES: Final[int] = {c['custom_alert_cap']}",
+        f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
         PY_END,
     ]) + "\n"
+
+
+# The compiled pack's max_range_duration, on the one line that carries this
+# comment (the policy file and the governance doc's copy of it).
+_LOOKBACK_LINE = re.compile(r"^([ \t]*max_range_duration: )\S+([ \t]+# forecast lookback.*)$", re.M)
+
+
+def render_max_lookback(text, c, rel):
+    if len(_LOOKBACK_LINE.findall(text)) != 1:
+        raise ContractError(f"{rel}: expected exactly one `max_range_duration: … # forecast lookback` line")
+    return _LOOKBACK_LINE.sub(lambda m: m.group(1) + forecast_max_lookback(c) + m.group(2), text, count=1)
 
 
 def splice_python(text, block, rel=CONSTANTS_REL):
@@ -366,6 +416,8 @@ def targets(root, c, severities):
         (PORTAL_STATUS_REL, lambda _t: render_portal_status(c)),
         (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c), CONSTANTS_REL)),
     ]
+    for rel in (POLICY_REL, *GOVERNANCE_DOC_RELS):
+        out.append((rel, lambda t, rel=rel: render_max_lookback(t, c, rel)))
     yamls = sorted((Path(root) / RECIPES_DIR_REL).glob("*.yaml"))
     names = {p.stem for p in yamls}
     missing = sorted({r["name"] for r in c["recipes"]} - names)

@@ -16,6 +16,7 @@
 """
 
 import itertools
+import json
 import os
 import sys
 import tempfile
@@ -26,6 +27,8 @@ import yaml
 # Add scripts/tools to path
 
 import lint_custom_rules  # noqa: E402
+from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
+from _lib_python import parse_duration_seconds  # noqa: E402
 
 
 # ── Shared Fixture ────────────────────────────────────────────────
@@ -514,7 +517,7 @@ def test_collect_single_file():
 # Regression for the latent CI conflict found while reviewing #819: the policy
 # denies predict_linear + ranges >1h for tenant raw rules, but the forecast
 # recipe (ADR-024 能力 B) legitimately compiles to predict_linear with a
-# platform-derived lookback of up to 96h inside the GENERATED
+# platform-derived lookback of up to FORECAST_MAX_LOOKBACK (96h today) inside the GENERATED
 # rule-packs/rule-pack-custom-alerts.yaml. The `file_overrides` exemption must
 # let the compiled forecast shape through while keeping every other check live.
 
@@ -524,17 +527,26 @@ _REAL_POLICY = os.path.join(_REPO_ROOT, ".github", "custom-rule-policy.yaml")
 _GENERATED_PACK_RELPATH = os.path.join("rule-packs", "rule-pack-custom-alerts.yaml")
 
 
+def _longest_horizon():
+    """The contract's largest forecast horizon (the enum the compiler takes)."""
+    with open(os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pkg", "config",
+                           "recipe_contract.json"), encoding="utf-8") as f:
+        enum = json.load(f)["horizon"]["enum"]
+    return max(enum, key=parse_duration_seconds)
+
+
 def _compiled_forecast_pack_text():
-    """Compile a real forecast declaration (max horizon 48h → lookback 96h =
-    [345600s]) through the actual compiler + renderer, so the fixture cannot
-    drift from what `make custom-alerts-compile` emits."""
+    """Compile a real forecast declaration at the contract's largest horizon
+    (the longest lookback a compiled pack reads) through the actual compiler
+    + renderer, so the fixture cannot drift from what `make
+    custom-alerts-compile` emits."""
     import compile_custom_alerts as cc
     conf = (
         "tenants:\n"
         "  ta:\n"
         "    _custom_alerts:\n"
         '      - {recipe: forecast, name: disk_full, metric: disk_avail,'
-        ' capacity_metric: disk_cap, op: "<", horizon: 48h,'
+        f' capacity_metric: disk_cap, op: "<", horizon: {_longest_horizon()},'
         ' threshold: "0.15:warning"}\n'
     )
     with tempfile.TemporaryDirectory() as confdir:
@@ -549,7 +561,9 @@ def compiled_forecast_pack(tmp_path, da_guard_env):  # the compiler reads throug
     """A real compiled forecast pack written at the canonical relative path."""
     text = _compiled_forecast_pack_text()
     assert "predict_linear" in text          # fixture sanity: forecast shape present
-    assert "[345600s]" in text               # 96h lookback (horizon 48h × 2)
+    # The compiler's longest lookback is the one the policy exempts — the Go
+    # compiler and gen_recipe_contract.py derive it from the same contract.
+    assert f"[{parse_duration_seconds(FORECAST_MAX_LOOKBACK)}s]" in text
     fpath = tmp_path / _GENERATED_PACK_RELPATH
     fpath.parent.mkdir(parents=True)
     fpath.write_text(text, encoding="utf-8")
@@ -604,7 +618,8 @@ def test_override_scoped_to_path_only(compiled_forecast_pack, tmp_path):
 
 
 def test_override_keeps_other_checks_live(tmp_path):
-    """豁免檔內其餘 deny 照跑：holt_winters / 超過 96h range 仍是 ERROR。"""
+    """豁免檔內其餘 deny 照跑：holt_winters / 超過 forecast lookback 上限的 range 仍是 ERROR。"""
+    over = f"{parse_duration_seconds(FORECAST_MAX_LOOKBACK) + 1}s"   # 剛好超過豁免上限
     text = (
         "# GENERATED test fixture — mimics compile_custom_alerts header\n"
         "groups:\n"
@@ -613,7 +628,7 @@ def test_override_keeps_other_checks_live(tmp_path):
         "  - record: custom:metric:x\n"
         "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n"
         "  - record: custom:metric:y\n"
-        "    expr: avg_over_time(my_metric[7d])\n"
+        f"    expr: avg_over_time(my_metric[{over}])\n"
     )
     fpath = tmp_path / _GENERATED_PACK_RELPATH
     fpath.parent.mkdir(parents=True)
@@ -623,7 +638,7 @@ def test_override_keeps_other_checks_live(tmp_path):
     )
     messages = [r.message for r in results if r.severity == "ERROR"]
     assert any("holt_winters" in m for m in messages)
-    assert any("range vector [7d]" in m for m in messages)
+    assert any(f"range vector [{over}]" in m for m in messages)
 
 
 def test_committed_pack_and_policy_in_sync():
@@ -640,7 +655,7 @@ def test_committed_pack_and_policy_in_sync():
 
 def test_nested_path_does_not_get_exemption(compiled_forecast_pack, tmp_path):
     """對抗式 review FINDING 1：租戶把合法檔名塞到 rule-packs/ 樹的 NESTED 路徑
-    （suffix 仍命中 override.path）不得取得豁免——否則 predict_linear + 96h range
+    （suffix 仍命中 override.path）不得取得豁免——否則 predict_linear + 長達 lookback 上限的 range
     被遞迴掃描放行，而 drift gate 只看單一 canonical 路徑、抓不到此檔。"""
     text = compiled_forecast_pack.read_text(encoding="utf-8")  # 帶真 GENERATED 檔頭
     nested = tmp_path / "rule-packs" / "custom" / "rule-packs" / "rule-pack-custom-alerts.yaml"
