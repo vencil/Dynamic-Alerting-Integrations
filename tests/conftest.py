@@ -165,6 +165,30 @@ def _force_utf8_subprocess_io():
 
 
 @pytest.fixture(autouse=True)
+def _no_ignored_signal_outlives_its_test():
+    """A test that leaves SIGINT / SIGTERM at SIG_IGN fails (#3249): the
+    disposition is the worker's, every later test's children inherit it, and
+    a `killpg(SIGTERM)` there does nothing — a later test times out for a
+    reason that says nothing about it. Only SIG_IGN: a Python handler is
+    reset to default across exec, so it reaches no child. The disposition is
+    put back either way, so the leak is reported once, where it happened."""
+    import signal
+    names = ("SIGINT", "SIGTERM")
+    before = {n: signal.getsignal(getattr(signal, n)) for n in names}
+    yield
+    leaked = []
+    for n in names:
+        now = signal.getsignal(getattr(signal, n))
+        if now is signal.SIG_IGN and before[n] is not signal.SIG_IGN:
+            leaked.append(n)
+            signal.signal(getattr(signal, n), before[n])
+    if leaked:
+        pytest.fail(f"left {', '.join(leaked)} at SIG_IGN for the rest of the "
+                    "worker (#3249); restore it in the test (patch_config: "
+                    "SIGNALS.reset())", pytrace=False)
+
+
+@pytest.fixture(autouse=True)
 def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
     process-wide crash envelope (#3094) with whatever ``sys.stdout`` was

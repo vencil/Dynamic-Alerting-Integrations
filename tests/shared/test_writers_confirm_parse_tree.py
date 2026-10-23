@@ -168,6 +168,12 @@ def _pc(cm_data, *argv):
             rc = 0
         except SystemExit as exc:
             rc = exc.code
+        finally:
+            # apply leaves SIGINT/SIGTERM at SIG_IGN to the end of the process
+            # (the CLI's contract); in-process that is this xdist worker, and
+            # every later test's children would start with SIGTERM ignored
+            # (#3249). The seam puts the caller's handlers back.
+            pc.SIGNALS.reset()
     doc = json.loads("".join(c.args[0] for c in out.write.call_args_list))
     return rc, doc, cluster
 
