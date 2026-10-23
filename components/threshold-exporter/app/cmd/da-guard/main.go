@@ -223,7 +223,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --metric <key> [--metric <key> ...]\n", programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--path <rel> --input <file|->]\n", programName, parseTreeCmd)
-		fmt.Fprintf(errOut, "       %s %s|%s --config-dir <dir> --path <rel> --input <file|-> [--dry-run] [--json]\n", programName, editCmd, emitCmd)
+		fmt.Fprintf(errOut, "       %s %s|%s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, editCmd, emitCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
@@ -234,8 +234,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			keyRefsCmd, programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "'%s' prints which conf.d files each reader reads and what each holds as yaml.v3 decodes it, "+
 			"or why it cannot be read, as JSON (see '%s %s -h').\n", parseTreeCmd, programName, parseTreeCmd)
-		fmt.Fprintf(errOut, "'%s' rewrites an existing conf.d file and '%s' writes a new one from the caller's ops or "+
-			"content, read back with parse-tree before anything is written (see '%s %s -h').\n\n", editCmd, emitCmd, programName, editCmd)
+		fmt.Fprintf(errOut, "'%s' rewrites existing conf.d files and '%s' writes new ones from the caller's ops or "+
+			"content, every file of the call judged with parse-tree before any is written (see '%s %s -h').\n\n", editCmd, emitCmd, programName, editCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n"+
 			"  2  caller error, or a conf.d path that is not valid UTF-8 (no output can carry it)\n"+

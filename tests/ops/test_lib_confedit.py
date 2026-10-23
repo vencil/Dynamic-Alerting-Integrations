@@ -1,9 +1,10 @@
 """_lib_confedit：Python 工具改既有 conf.d 檔時把意圖交給 `da-guard edit`（ADR-036 §2，#3206）。
 
 這裡釘的是本模組自己的契約：值的型別規則（讀到的保留型別、使用者打的只有標準
-十進位才是數字）、`da-guard.write/v1` 的三種回答（寫入／拒絕／呼叫錯誤）各自
-怎麼交給工具、以及多檔編輯「全部通過才寫」的兩段式。edit 本身的判定（§4 不變式、
-讀回）是 Go 的，測在 pkg/confedit 與 cmd/da-guard。
+十進位才是數字）、`da-guard.write/v2` 的回答（寫入／拒絕／呼叫錯誤／寫到一半）
+各自怎麼交給工具、以及多檔一次送出（#3206 步驟 10c：一次 da-guard、整批一次判定，
+全部通過才寫）。edit 本身的判定（§4 不變式、讀回）是 Go 的，測在 pkg/confedit 與
+cmd/da-guard。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -161,48 +162,129 @@ def test_every_file_passes_then_each_is_written(tmp_path):
     assert (root / "b.yaml").read_text(encoding="utf-8") == "tenants:\n  t-b:\n    cpu: '6'\n"
 
 
+def test_several_files_are_one_da_guard_run(tmp_path, monkeypatch):
+    # #3206 step 10c: one batch, one subprocess, one judgement — not a dry
+    # run per file and a write per file.
+    root = _tree(tmp_path / "conf.d", {
+        f"t-{i}.yaml": f"tenants:\n  t-{i}:\n    cpu: '5'\n" for i in range(3)})
+    runs = []
+    real = _lib_parse_tree._run
+
+    def run(args, *a, **kw):
+        runs.append(args[0])
+        return real(args, *a, **kw)
+    monkeypatch.setattr(_lib_parse_tree, "_run", run)
+    docs = ce.edit_all(root, [(f"t-{i}.yaml", [ce.unset_op(["tenants", f"t-{i}", "cpu"])])
+                              for i in range(3)])
+    assert runs == ["edit"]
+    assert [(d["path"], d["status"]) for d in docs] == [
+        (f"t-{i}.yaml", ce.WRITTEN) for i in range(3)]
+    assert ce.edit_all(root, []) == [] and runs == ["edit"]  # nothing to send, nothing run
+
+
+def test_the_batch_is_judged_as_one_tree(tmp_path):
+    # Two carrier spellings of one directory pass each alone; written
+    # together, the directory reads one, the other has no reader: refused,
+    # and neither is written.
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-a: {}\n"})
+    content = ce.map_value([("defaults", ce.map_value([("cpu", {"int": "5"})]))])
+    for rel in ("_defaults.yaml", "_defaults.yml"):
+        assert ce.emit(root, rel, content, dry_run=True)["status"] == ce.DRY_RUN
+    before = _bytes(root)
+    with pytest.raises(ce.EditsRefused) as exc:
+        ce.emit_all(root, [("_defaults.yaml", content), ("_defaults.yml", content)])
+    assert [(r.path, r.reason, r.command) for r in exc.value.refusals] == [
+        ("_defaults.yml", "not_read", "emit")]
+    assert _bytes(root) == before
+
+
+def test_emit_all_writes_every_new_file(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    files = [(f"team/t-{i}.yaml", ce.map_value([("tenants", ce.map_value(
+        [(f"t-{i}", ce.map_value([("cpu", ce.cli_value("70"))]))]))])) for i in range(3)]
+    docs = ce.emit_all(root, files)
+    assert [d["status"] for d in docs] == [ce.WRITTEN] * 3
+    assert (root / "team" / "t-1.yaml").read_text(encoding="utf-8") == (
+        "tenants:\n  t-1:\n    cpu: 70\n")
+    with pytest.raises(ce.EditCallerError) as exc:  # they exist now
+        ce.emit_all(root, files)
+    assert (exc.value.path, exc.value.reason) == ("team/t-0.yaml", "path_exists")
+
+
+def test_a_path_given_twice_is_a_caller_error(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n"})
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.edit_all(root, [("a.yaml", []), ("a.yaml", [])])
+    assert (exc.value.path, exc.value.reason) == ("", "bad_input")
+    assert "given once" in exc.value.message
+
+
+def test_set_the_whole_top_level(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"gen.yaml": "# generated\nold: '1'\n"})
+    top = ce.map_value([("tenants", ce.map_value([("t-a", ce.map_value([]))]))])
+    assert ce.edit(root, "gen.yaml", [ce.set_op([], top)])["status"] == ce.WRITTEN
+    assert (root / "gen.yaml").read_text(encoding="utf-8") == "tenants:\n  t-a: {}\n"
+
+
+def _answer(status, reason, files):
+    return {"schema": ce.SCHEMA, "da_guard_version": "test", "command": "edit",
+            "status": status, "reason": reason, "message": "stopped",
+            "files": [{"path": p, "status": s, "reason": r, "message": m, "entry": None,
+                       "problem": None, "difference": None, "content": None, "warnings": []}
+                      for p, s, r, m in files]}
+
+
 def test_a_failure_after_a_write_names_the_files_written(tmp_path, monkeypatch):
-    root = _tree(tmp_path / "conf.d", {
-        "a.yaml": "tenants:\n  t-a:\n    cpu: '5'\n",
-        "b.yaml": "tenants:\n  t-b:\n    cpu: '6'\n",
-    })
-    real = ce.edit
-
-    def edit(r, rel, ops, *, dry_run=False, **kw):
-        if rel == "b.yaml" and not dry_run:  # stands in for a failed write
-            raise ce.EditCallerError({"command": "edit", "path": rel, "status": "caller_error",
-                                      "reason": "write_failed", "message": "disk full"})
-        return real(r, rel, ops, dry_run=dry_run, **kw)
-    monkeypatch.setattr(ce, "edit", edit)
+    # da-guard's answer when a rename fails after another file was renamed
+    # (cmd/da-guard tests make it happen; here the library reads it).
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n", "b.yaml": "tenants: {}\n"})
+    answer = _answer("caller_error", "partial_write", [
+        ("a.yaml", "written", None, None),
+        ("b.yaml", "caller_error", "write_failed", "disk full")])
+    monkeypatch.setattr(_lib_parse_tree, "_run", lambda *a, **kw: answer)
     with pytest.raises(ce.PartialWrite) as exc:
-        ce.edit_all(root, [
-            ("a.yaml", [ce.unset_op(["tenants", "t-a", "cpu"])]),
-            ("b.yaml", [ce.unset_op(["tenants", "t-b", "cpu"])]),
-        ])
-    assert (exc.value.written, exc.value.failed) == (["a.yaml"], "b.yaml")
-    assert exc.value.maybe_written == []  # da-guard answered: b.yaml not written
+        ce.edit_all(root, [("a.yaml", []), ("b.yaml", [])])
+    assert (exc.value.written, exc.value.failed, exc.value.maybe_written) == (["a.yaml"], "b.yaml", [])
+    assert isinstance(exc.value.cause, ce.EditCallerError)
+    assert exc.value.cause.reason == "write_failed"
     assert "already written: a.yaml" in str(exc.value)
-    assert (root / "b.yaml").read_text(encoding="utf-8") == "tenants:\n  t-b:\n    cpu: '6'\n"
 
 
-def test_no_answer_after_a_write_may_have_landed_is_named_apart(tmp_path, monkeypatch):
-    # da-guard killed or timed out in phase 2 (no document): its rename may
-    # have happened, so the file is named as one that MAY have been written.
-    root = _tree(tmp_path / "conf.d", {
-        "a.yaml": "tenants:\n  t-a:\n    cpu: '5'\n",
-        "b.yaml": "tenants:\n  t-b:\n    cpu: '6'\n",
-    })
-    real = ce.edit
-
-    def edit(r, rel, ops, *, dry_run=False, **kw):
-        if rel == "b.yaml" and not dry_run:
-            raise _lib_parse_tree.ParseTreeError("da-guard edit did not finish within 1s")
-        return real(r, rel, ops, dry_run=dry_run, **kw)
-    monkeypatch.setattr(ce, "edit", edit)
+def test_an_emitted_file_left_in_place_may_have_been_written(tmp_path, monkeypatch):
+    root = _tree(tmp_path / "conf.d", {})
+    answer = _answer("caller_error", "partial_write", [
+        ("a.yaml", "maybe_written", None, "could not be removed again"),
+        ("b.yaml", "refused", "changed_during_write", "created meanwhile")])
+    monkeypatch.setattr(_lib_parse_tree, "_run", lambda *a, **kw: answer)
     with pytest.raises(ce.PartialWrite) as exc:
-        ce.edit_all(root, [
-            ("a.yaml", [ce.unset_op(["tenants", "t-a", "cpu"])]),
-            ("b.yaml", [ce.unset_op(["tenants", "t-b", "cpu"])]),
-        ])
-    assert (exc.value.written, exc.value.maybe_written) == (["a.yaml"], ["b.yaml"])
-    assert "may have been written: b.yaml" in str(exc.value)
+        ce.emit_all(root, [("a.yaml", ce.map_value([])), ("b.yaml", ce.map_value([]))])
+    assert (exc.value.written, exc.value.maybe_written, exc.value.failed) == ([], ["a.yaml"], "b.yaml")
+    assert isinstance(exc.value.cause, ce.EditRefused)
+
+
+def test_no_answer_to_a_write_may_have_landed_anywhere(tmp_path, monkeypatch):
+    # da-guard killed or timed out while writing (no document): any of the
+    # batch's renames may have happened, so every file is named as one that
+    # MAY have been written. A dry run writes nothing: the error as it is.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n", "b.yaml": "tenants: {}\n"})
+
+    def run(*a, **kw):
+        raise _lib_parse_tree.ParseTreeError("da-guard edit did not finish within 1s")
+    monkeypatch.setattr(_lib_parse_tree, "_run", run)
+    with pytest.raises(ce.PartialWrite) as exc:
+        ce.edit_all(root, [("a.yaml", []), ("b.yaml", [])])
+    assert (exc.value.written, exc.value.maybe_written) == ([], ["a.yaml", "b.yaml"])
+    assert "may have been written: a.yaml, b.yaml" in str(exc.value)
+    with pytest.raises(_lib_parse_tree.ParseTreeError):
+        ce.edit_all(root, [("a.yaml", [])], dry_run=True)
+    with pytest.raises(_lib_parse_tree.ParseTreeError):  # one file: as every other run
+        ce.edit(root, "a.yaml", [])
+
+
+def test_an_older_da_guard_is_named_as_such(tmp_path, monkeypatch):
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants: {}\n"})
+    v1 = {"schema": "da-guard.write/v1", "status": "written"}
+    monkeypatch.setattr(_lib_parse_tree.subprocess, "run", lambda *a, **kw: type(
+        "P", (), {"returncode": 0, "stdout": __import__("json").dumps(v1).encode(), "stderr": b""})())
+    with pytest.raises(_lib_parse_tree.ParseTreeError, match="older than this tool"):
+        ce.edit(root, "a.yaml", [], dry_run=True)

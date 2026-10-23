@@ -131,6 +131,28 @@ func Verify(base, merged []byte, edits []Edit) *Difference {
 	if len(bDocs) == 0 {
 		return &Difference{Kind: DiffNoDocument}
 	}
+	// A set of the whole top level (an empty path, Doc.Set) leaves nothing
+	// of the first document outside the edit: no node, no anchor of it is
+	// compared, and only the edits made after it are read back. Every other
+	// document is still compared whole.
+	whole := -1
+	for i, e := range edits {
+		if e.Op == OpSet && len(e.Path) == 0 {
+			whole = i
+		}
+	}
+	if whole >= 0 {
+		c := &compare{seen: map[[2]*yaml.Node]bool{}}
+		for i := 1; i < len(bDocs); i++ {
+			if !reflect.DeepEqual(anchorsOf(bDocs[i:i+1]), anchorsOf(mDocs[i:i+1])) {
+				return &Difference{Kind: DiffAnchors}
+			}
+			if path, ok := c.eq(bDocs[i], mDocs[i], nil, nil); !ok {
+				return &Difference{Kind: DiffNode, Path: path}
+			}
+		}
+		return checkEdits(mDocs[0], edits[whole+1:])
+	}
 	if !reflect.DeepEqual(anchorsOf(bDocs), anchorsOf(mDocs)) {
 		return &Difference{Kind: DiffAnchors}
 	}

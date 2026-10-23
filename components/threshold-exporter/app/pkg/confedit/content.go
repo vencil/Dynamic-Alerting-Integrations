@@ -47,10 +47,21 @@ func ContentEnsureMap(c parsetree.Content, path []string) error {
 }
 
 // ContentSet sets the key at path to v in c; the mapping at the rest of path
-// must be there.
+// must be there. An empty path makes c, in place, the mapping v (Doc.Set's
+// whole top level).
 func ContentSet(c parsetree.Content, path []string, v any) error {
 	if len(path) == 0 {
-		return &PathError{Reason: "set needs a key"}
+		m, ok := v.(map[string]any)
+		if !ok {
+			return &PathError{Reason: "the top level is set to a mapping only"}
+		}
+		for k := range c {
+			delete(c, k)
+		}
+		for k, e := range m {
+			c[k] = e
+		}
+		return nil
 	}
 	m, err := contentMapping(c, path[:len(path)-1], false)
 	if err != nil {

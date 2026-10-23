@@ -93,9 +93,8 @@ func TestEmit_RemovesTheDirectoriesItCreated(t *testing.T) {
 	root := writeTree(t, map[string]string{"keep/x.yaml": "a: \"1\"\n"})
 	var out, errOut bytes.Buffer
 	w := &writer{cmd: emitCmd, jsonOut: true, stdout: &out, errOut: &errOut,
-		res:  writeResult{Schema: writeSchema, Command: emitCmd, Path: "keep/new/deeper/t9.yaml", Warnings: []string{}},
 		link: func(string, string) error { return fs.ErrExist }}
-	if code := w.commit(filepath.Join(root, "keep", "new", "deeper", "t9.yaml"), []byte("a: \"1\"\n"), nil, 0o644, nil); code != exitFindings {
+	if code, res := commitOne(w, "keep/new/deeper/t9.yaml", filepath.Join(root, "keep", "new", "deeper", "t9.yaml"), []byte("a: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite {
 		t.Fatalf("exit %d %+v", code, w.res)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "keep", "new")); !os.IsNotExist(err) {

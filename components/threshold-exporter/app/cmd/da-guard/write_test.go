@@ -15,8 +15,9 @@ import (
 	"testing"
 )
 
-// runW runs edit or emit with stdin and --json, and decodes its one document.
-func runW(t *testing.T, cmd, stdin string, args ...string) (int, writeResult) {
+// runBatch runs edit or emit with stdin and --json, and decodes its one
+// document.
+func runBatch(t *testing.T, cmd, stdin string, args ...string) (int, writeResult) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	code := runWrite(cmd, append(args, "--json", "--input", "-"), strings.NewReader(stdin), &out, &errOut)
@@ -31,7 +32,56 @@ func runW(t *testing.T, cmd, stdin string, args ...string) (int, writeResult) {
 	if res.Schema != writeSchema || res.Command != cmd {
 		t.Fatalf("schema %q command %q", res.Schema, res.Command)
 	}
+	if res.Files == nil {
+		t.Fatal(`"files" is null; [] when the call took no file`)
+	}
 	return code, res
+}
+
+// oneFile wraps one file's input — the members after its path, as JSON
+// object text: `{"ops":[...]}` or `{"content":...}` — into a batch of one.
+// The text is spliced, not re-encoded, so input that is not valid JSON
+// (the caller-error cases) reaches da-guard as sent.
+func oneFile(path, body string) string {
+	p, _ := json.Marshal(path)
+	inner := strings.TrimPrefix(body, "{")
+	if strings.TrimSpace(inner) != "}" {
+		inner = "," + inner
+	}
+	return `{"files":[{"path":` + string(p) + inner + `]}`
+}
+
+// runW runs a batch of one file — --path in args names it (taken out of
+// the flags), stdin is its body (oneFile) — and returns that file's result.
+// The call's own status must be the file's; a call that took no file (bad
+// flags or input) answers with the call's status, reason and message.
+func runW(t *testing.T, cmd, stdin string, args ...string) (int, writeFileResult) {
+	t.Helper()
+	var rest []string
+	path := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--path" && i+1 < len(args) {
+			path = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	code, res := runBatch(t, cmd, oneFile(path, stdin), rest...)
+	switch len(res.Files) {
+	case 0:
+		if res.Status != writeStatusCallerError {
+			t.Fatalf("no file result, status %s", res.Status)
+		}
+		return code, writeFileResult{Status: res.Status, Reason: res.Reason, Message: res.Message, Warnings: []string{}}
+	case 1:
+		if f := res.Files[0]; f.Status != res.Status || f.Path != path {
+			t.Fatalf("the call's status %s is not its one file's (%s %s, path %q): %+v", res.Status, f.Path, f.Status, path, res)
+		}
+		return code, res.Files[0]
+	}
+	t.Fatalf("%d file results for one file", len(res.Files))
+	return 0, writeFileResult{}
 }
 
 // snapshot is every file under root (path → bytes), temporary ones included.
@@ -74,11 +124,28 @@ func sameTree(t *testing.T, before, after map[string]string) {
 	}
 }
 
-func reasonOf(r writeResult) string {
+func reasonOf(r writeFileResult) string {
 	if r.Reason == nil {
 		return ""
 	}
 	return *r.Reason
+}
+
+func callReason(r writeResult) string {
+	if r.Reason == nil {
+		return ""
+	}
+	return *r.Reason
+}
+
+// commitOne runs the write phase on one file the judgement passed: w.res
+// holds its one result, and w.res.Files[0] is returned.
+func commitOne(w *writer, rel, abs string, out, original []byte, perm os.FileMode, ofi os.FileInfo) (int, writeFileResult) {
+	w.res = writeResult{Schema: writeSchema, Command: w.cmd, Files: []writeFileResult{{Path: rel, Warnings: []string{}}}}
+	f := &writeFile{rel: rel, abs: abs, out: out, original: original, perm: perm, ofi: ofi,
+		pending: true, res: &w.res.Files[0]}
+	code := w.commit([]*writeFile{f})
+	return code, w.res.Files[0]
 }
 
 // A tenant file in the conf.d convention, so that a re-encode writes every
@@ -144,11 +211,12 @@ func TestEdit_DryRunAndUnchangedWriteNothing(t *testing.T) {
 	}
 	sameTree(t, before, snapshot(t, root))
 
-	// Without --json the dry run prints exactly the text.
+	// Without --json the dry run prints exactly the text, after a line
+	// naming its path.
 	var out, errOut bytes.Buffer
-	in := `{"ops":[{"op":"unset","path":["tenants","t2"]}]}`
-	if code := runWrite(editCmd, []string{"--config-dir", root, "--path", "t1.yaml", "--input", "-", "--dry-run"},
-		strings.NewReader(in), &out, &errOut); code != exitOK || !strings.HasPrefix(out.String(), "# owned by team-a\n") || strings.Contains(out.String(), "t2:") {
+	in := oneFile("t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t2"]}]}`)
+	if code := runWrite(editCmd, []string{"--config-dir", root, "--input", "-", "--dry-run"},
+		strings.NewReader(in), &out, &errOut); code != exitOK || !strings.HasPrefix(out.String(), "==> t1.yaml <==\n# owned by team-a\n") || strings.Contains(out.String(), "t2:") {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out.String(), errOut.String())
 	}
 	sameTree(t, before, snapshot(t, root))
@@ -368,16 +436,16 @@ func TestWrite_CallerErrors(t *testing.T) {
 func TestCommit_RefusesAFileChangedMeanwhile(t *testing.T) {
 	root := writeTree(t, map[string]string{"t1.yaml": "tenants: {}\n"})
 	var out, errOut bytes.Buffer
-	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut, res: writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml"}}
-	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n# was\n"), 0o644, nil); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
+	w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut}
+	if code, res := commitOne(w, "t1.yaml", filepath.Join(root, "t1.yaml"), []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n# was\n"), 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite || w.res.Status != writeStatusRefused {
 		t.Fatalf("exit %d %+v", code, w.res)
 	}
 	got := snapshot(t, root)
 	if len(got) != 1 || got["t1.yaml"] != "tenants: {}\n" {
 		t.Fatalf("tree %v", got)
 	}
-	w.res = writeResult{Schema: writeSchema, Command: emitCmd, Path: "t1.yaml"}
-	if code := w.commit(filepath.Join(root, "t1.yaml"), []byte("x: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(w.res) != writeReasonChangedDuringWrite {
+	w.cmd = emitCmd
+	if code, res := commitOne(w, "t1.yaml", filepath.Join(root, "t1.yaml"), []byte("x: \"1\"\n"), nil, 0o644, nil); code != exitFindings || reasonOf(res) != writeReasonChangedDuringWrite {
 		t.Fatalf("emit over a file created meanwhile: exit %d %+v", code, w.res)
 	}
 	keys := make([]string, 0)

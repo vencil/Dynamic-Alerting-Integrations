@@ -36,7 +36,7 @@ func TestWrite_NeverReadsANonRegularFile(t *testing.T) {
 				}
 				type result struct {
 					code int
-					res  writeResult
+					res  writeFileResult
 				}
 				done := make(chan result, 1)
 				go func() {

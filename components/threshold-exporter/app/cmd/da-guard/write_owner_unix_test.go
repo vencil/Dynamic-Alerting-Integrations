@@ -37,19 +37,19 @@ func TestCommit_ReportsTheOwnerItCannotSet(t *testing.T) {
 			orig := otherOwner{fi, &syscall.Stat_t{Uid: 4321, Gid: 4322}}
 			var out, errOut bytes.Buffer
 			w := &writer{cmd: editCmd, jsonOut: true, stdout: &out, errOut: &errOut,
-				res: writeResult{Schema: writeSchema, Command: editCmd, Path: "t1.yaml", Warnings: []string{}},
 				chown: func(uid, _ int) error {
 					if tc.refuse(uid) {
 						return fmt.Errorf("chown: %w", fs.ErrPermission)
 					}
 					return nil
 				}}
-			if code := w.commit(p, []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n"), 0o644, orig); code != exitOK {
+			code, res := commitOne(w, "t1.yaml", p, []byte("tenants:\n  t1: {}\n"), []byte("tenants: {}\n"), 0o644, orig)
+			if code != exitOK || res.Status != writeStatusWritten {
 				t.Fatalf("exit %d %+v", code, w.res)
 			}
-			if len(w.res.Warnings) != 1 || !strings.Contains(w.res.Warnings[0], tc.want) ||
-				!strings.Contains(errOut.String(), "warning: "+w.res.Warnings[0]) {
-				t.Fatalf("warnings %q, stderr %q: want one naming %q", w.res.Warnings, errOut.String(), tc.want)
+			if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], tc.want) ||
+				!strings.Contains(errOut.String(), "t1.yaml: warning: "+res.Warnings[0]) {
+				t.Fatalf("warnings %q, stderr %q: want one naming %q", res.Warnings, errOut.String(), tc.want)
 			}
 			if !strings.Contains(out.String(), `"warnings":["`) {
 				t.Fatalf("--json document %s", out.String())

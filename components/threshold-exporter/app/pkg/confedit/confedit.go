@@ -400,10 +400,18 @@ func (d *Doc) EnsureMap(path []string) error {
 
 // Set sets the key at path (its last element) to val, in the mapping at the
 // rest of path, which must exist (EnsureMap first). An existing key keeps
-// its key node and position; a new one is appended.
+// its key node and position; a new one is appended. An empty path replaces
+// the whole top level with val, which must be a mapping (a generated file
+// written over in full): nothing of the document's old top level is kept,
+// and Verify has nothing outside the edit to compare.
 func (d *Doc) Set(path []string, val *yaml.Node) error {
 	if len(path) == 0 {
-		return &PathError{Reason: "set needs a key: the top level itself is not set"}
+		if val.Kind != yaml.MappingNode {
+			return &PathError{Reason: "the top level is set to a mapping only (" + kindName(val) + ")"}
+		}
+		d.doc.Content[0] = val
+		d.edits = append(d.edits, Edit{Path: []string{}, Op: OpSet})
+		return nil
 	}
 	if err := checkKeys(path); err != nil {
 		return err

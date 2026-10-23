@@ -512,6 +512,19 @@ type FileOverlay struct {
 // ErrOverlay is wrapped by every refusal of a FileOverlay.
 var ErrOverlay = errors.New("overlay refused")
 
+// OverlayError is the refusal of the FileOverlay at Rel (it wraps
+// ErrOverlay); Reason says why.
+type OverlayError struct {
+	Rel    string
+	Reason string
+}
+
+func (e *OverlayError) Error() string {
+	return fmt.Sprintf("%v: path %q: %s", ErrOverlay, e.Rel, e.Reason)
+}
+
+func (e *OverlayError) Unwrap() error { return ErrOverlay }
+
 // ScanDirTreeWith is ScanDirTree with opts (see ScanOptions; the zero value
 // is ScanDirTree itself).
 func ScanDirTreeWith(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, opts ScanOptions) (*TreeScan, error) {
@@ -522,7 +535,11 @@ func ScanDirTreeWith(root string, prior *TreeScan, obs ScanObserver, logger *log
 		t0 := time.Now()
 		defer func() { obs.ObserveScanElapsed(time.Since(t0)) }()
 	}
-	scan, err := walkDirTree(root, prior, obs, logger, walkFull, opts.Overlay)
+	var ov *overlaySet
+	if opts.Overlay != nil {
+		ov = &overlaySet{files: []FileOverlay{*opts.Overlay}}
+	}
+	scan, err := walkDirTree(root, prior, obs, logger, walkFull, ov)
 	if err != nil {
 		return nil, err
 	}
@@ -583,6 +600,30 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 		logger = log.Default()
 	}
 	return walkDirTree(root, nil, nil, logger, walkListOnly, nil)
+}
+
+// ScanDirTreeFilesWith is ScanDirTreeFiles of the tree as it is once every
+// overlay is written (`da-guard edit` / `emit`, #3206): each one's bytes are
+// read at its path in place of the disk, as FileOverlay says, all in the one
+// walk; no two may name one path. mkdirs: a create whose directories are
+// missing is taken as the writer that makes them leaves it — each missing
+// directory recorded as the walk records it once it exists (Dirs, or a
+// NotFileDirectory for a config-named one) — instead of refused; a
+// directory on the way that exists is held to FileOverlay's rule. A refusal
+// is an *OverlayError naming the path.
+func ScanDirTreeFilesWith(root string, logger *log.Logger, overlays []FileOverlay, mkdirs bool) (*TreeScan, error) {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return walkDirTree(root, nil, nil, logger, walkListOnly, &overlaySet{files: overlays, mkdirs: mkdirs})
+}
+
+// overlaySet is what one walk reads in place of the disk: the overlays, and
+// whether a create's missing directories are taken as made
+// (ScanDirTreeFilesWith).
+type overlaySet struct {
+	files  []FileOverlay
+	mkdirs bool
 }
 
 // ScanDirTreeNames is ScanDirTreeFiles without reading a byte (#3206): the
@@ -673,8 +714,10 @@ func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
 // hash, the classification and the hierarchy products. mode is walkFull for
 // every production caller except scanRootDefaults and scanRootPlatform.
-// overlay is ScanOptions.Overlay (walkFull only; nil everywhere else).
-func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode, overlay *FileOverlay) (*TreeScan, error) {
+// ov is what the walk reads in place of the disk: ScanOptions.Overlay
+// (walkFull) or ScanDirTreeFilesWith's overlays (walkListOnly); nil
+// everywhere else.
+func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode, ov *overlaySet) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 
 	info, serr := os.Stat(absRoot)
@@ -898,27 +941,76 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		return nil, fmt.Errorf("walk %q: %w", absRoot, walkErr)
 	}
 
-	// The overlay's entry: the listed file it substitutes, or a new entry in
-	// its walk-order place (create). -1 for none.
-	overlayAt := -1
-	if overlay != nil {
-		at, create, oerr := overlayPlace(absRoot, overlay.Rel, len(entries), func(i int) string { return entries[i].rel }, unreadable)
-		if oerr != nil {
-			return nil, oerr
+	// The overlays' entries: the listed file each one substitutes, or a new
+	// entry in its walk-order place (create). overlayData is rel → bytes,
+	// nil for none.
+	var overlayData map[string][]byte
+	if ov != nil && len(ov.files) > 0 {
+		listed := make(map[string]int, len(entries))
+		for i, e := range entries {
+			listed[e.rel] = i
 		}
-		if create {
-			abs := filepath.Join(absRoot, filepath.FromSlash(overlay.Rel))
-			entries = append(entries, entry{})
-			copy(entries[at+1:], entries[at:])
-			entries[at] = entry{abs: filepath.Clean(abs), rel: overlay.Rel}
-		} else if _, rerr := ReadConfFile(entries[at].abs); rerr != nil {
-			// Listed by name, yet not a file phase 2 reads (a config-named
-			// symlink to a directory, a file it may not read): substituting
-			// it would resolve a tree the exporter never serves.
-			return nil, fmt.Errorf("%w: path %q: exists but is not a file the walk lists (a directory, a symlink to one, a special or unreadable file): %v",
-				ErrOverlay, overlay.Rel, rerr)
+		overlayData = make(map[string][]byte, len(ov.files))
+		var creates []entry
+		made := map[string]bool{} // directories the creates take as made
+		for _, o := range ov.files {
+			if _, twice := overlayData[o.Rel]; twice {
+				return nil, &OverlayError{Rel: o.Rel, Reason: "is given twice"}
+			}
+			at, isListed := listed[o.Rel]
+			missing, oerr := overlayCheck(absRoot, o.Rel, isListed, ov.mkdirs, unreadable)
+			if oerr != nil {
+				return nil, oerr
+			}
+			if isListed {
+				if _, rerr := ReadConfFile(entries[at].abs); rerr != nil {
+					// Listed by name, yet not a file phase 2 reads (a
+					// config-named symlink to a directory, a file it may not
+					// read): substituting it would resolve a tree the
+					// exporter never serves.
+					return nil, &OverlayError{Rel: o.Rel, Reason: "exists but is not a file the walk lists " +
+						"(a directory, a symlink to one, a special or unreadable file): " + rerr.Error()}
+				}
+			} else {
+				abs := filepath.Join(absRoot, filepath.FromSlash(o.Rel))
+				creates = append(creates, entry{abs: filepath.Clean(abs), rel: o.Rel})
+				for _, d := range missing {
+					made[d] = true
+				}
+			}
+			overlayData[o.Rel] = append(make([]byte, 0, len(o.Data)), o.Data...) // never nil: Data marks "cached"
 		}
-		overlayAt = at
+		if len(creates) > 0 {
+			// Walk order is lexical per directory, depth first: the creates
+			// in that order, merged into the walk's (already in it).
+			sort.Slice(creates, func(i, j int) bool { return walkOrderLess(creates[i].rel, creates[j].rel) })
+			merged := make([]entry, 0, len(entries)+len(creates))
+			i, j := 0, 0
+			for i < len(entries) || j < len(creates) {
+				if j == len(creates) || (i < len(entries) && !walkOrderLess(creates[j].rel, entries[i].rel)) {
+					merged = append(merged, entries[i])
+					i++
+				} else {
+					merged = append(merged, creates[j])
+					j++
+				}
+			}
+			entries = merged
+		}
+		// A directory a create takes as made is recorded as the walk would
+		// record it once it exists: a config-named one is a NotFile
+		// (NotFileDirectory), any other a Dirs entry (none is hidden:
+		// overlayCheck refuses a hidden segment).
+		for d := range made {
+			if _, file := overlayData[d]; file {
+				return nil, &OverlayError{Rel: d, Reason: "is a file one overlay creates and a directory another one's path runs through"}
+			}
+			if confdname.IsScanned(path.Base(d)) {
+				notFiles = append(notFiles, NotFile{RelKey: d, Reason: NotFileDirectory})
+			} else {
+				dirs = append(dirs, d)
+			}
+		}
 	}
 
 	scan := &TreeScan{
@@ -931,7 +1023,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// Phase 2: hash + classify, in WALK order (the duplicate-tenant error
 	// names the first two files in that order, as it always has).
 	var walkOrder []*TreeFile
-	for i, e := range entries {
+	for _, e := range entries {
 		name := e.rel[strings.LastIndexByte(e.rel, '/')+1:]
 		f := &TreeFile{
 			AbsPath:    e.abs,
@@ -945,7 +1037,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if prior != nil {
 			pf = prior.Files[e.rel]
 		}
-		if i != overlayAt && pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
+		odata, overlaid := overlayData[e.rel]
+		if !overlaid && pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
 			time.Since(time.Unix(0, guardMtime(f.Stat, f.LinkStat))) > TreeScanMtimeGuard {
 			f.Hash = pf.Hash
 			// ⛔ THE CARRY. Reusing the hash without the declarations would
@@ -962,8 +1055,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			var data []byte
 			var rerr error
 			switch {
-			case i == overlayAt:
-				data = append(make([]byte, 0, len(overlay.Data)), overlay.Data...) // never nil: Data marks "cached"
+			case overlaid:
+				data = odata
 			case mode == walkNamesOnly:
 				// Opened, judged (a directory or a special file is refused
 				// on the fd) and closed; never read.
@@ -1273,14 +1366,15 @@ func ResolveScanRoot(dir string) string {
 	return dir
 }
 
-// overlayPlace is where a FileOverlay goes among the walk's n entries (rel(i)
-// is entry i's root-relative path, in walk order): the index of the listed
-// file it substitutes (create false), or the index a new entry is inserted
-// at (create true). unreadable is the walk's own record, for a parent it
-// could not list. Every refusal wraps ErrOverlay (see FileOverlay).
-func overlayPlace(absRoot, rel string, n int, relOf func(int) string, unreadable []UnreadableFile) (int, bool, error) {
-	refuse := func(format string, a ...any) (int, bool, error) {
-		return 0, false, fmt.Errorf("%w: path %q: "+format, append([]any{ErrOverlay, rel}, a...)...)
+// overlayCheck holds the FileOverlay at rel to FileOverlay's rule; listed:
+// the walk lists a file at rel (a substitute; the caller checks that phase 2
+// reads it). For a create it returns the directories on the way that are
+// missing (root-relative, outermost first) — always none unless mkdirs,
+// which takes them as made instead of refusing. unreadable is the walk's own
+// record, for a parent it could not list. Every refusal is an *OverlayError.
+func overlayCheck(absRoot, rel string, listed, mkdirs bool, unreadable []UnreadableFile) ([]string, error) {
+	refuse := func(format string, a ...any) ([]string, error) {
+		return nil, &OverlayError{Rel: rel, Reason: fmt.Sprintf(format, a...)}
 	}
 	if rel == "" || strings.HasPrefix(rel, "/") || filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" {
 		return refuse("must be relative to the config dir")
@@ -1291,40 +1385,40 @@ func overlayPlace(absRoot, rel string, n int, relOf func(int) string, unreadable
 	if !confdname.IsScannedPath(rel) {
 		return refuse("is not a name the walk reads (a hidden segment, or not a .yaml / .yml file)")
 	}
-	for i := 0; i < n; i++ {
-		if relOf(i) == rel {
-			return i, false, nil // substitute
-		}
+	if listed {
+		return nil, nil // substitute
 	}
 	// Create: every directory on the way exists, is a real directory and was
-	// listed by the walk — then nothing may be at rel itself.
+	// listed by the walk (under mkdirs: or is missing, and so is every one
+	// below it) — then nothing may be at rel itself.
 	parts := strings.Split(rel, "/")
 	cur := absRoot
+	var missing []string
 	for k, seg := range parts[:len(parts)-1] {
-		cur = filepath.Join(cur, seg)
-		fi, err := os.Lstat(cur)
-		if err != nil || !fi.IsDir() {
-			return refuse("its parent %q is not a directory the walk descends (missing, a symlink or not a directory)", strings.Join(parts[:k+1], "/"))
+		if missing == nil {
+			cur = filepath.Join(cur, seg)
+			fi, err := os.Lstat(cur)
+			switch {
+			case mkdirs && errors.Is(err, fs.ErrNotExist):
+			case err != nil || !fi.IsDir():
+				return refuse("its parent %q is not a directory the walk descends (missing, a symlink or not a directory)", strings.Join(parts[:k+1], "/"))
+			default:
+				continue
+			}
 		}
+		missing = append(missing, strings.Join(parts[:k+1], "/"))
 	}
-	if _, err := os.Lstat(filepath.Join(absRoot, filepath.FromSlash(rel))); err == nil || !errors.Is(err, fs.ErrNotExist) {
-		return refuse("exists but is not a file the walk lists (a directory, a symlink to one, a special or unreadable file)")
+	if missing == nil {
+		if _, err := os.Lstat(filepath.Join(absRoot, filepath.FromSlash(rel))); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return refuse("exists but is not a file the walk lists (a directory, a symlink to one, a special or unreadable file)")
+		}
 	}
 	for _, u := range unreadable {
 		if u.Reason == UnreadableWalkError && (u.RelKey == path.Dir(rel) || strings.HasPrefix(path.Dir(rel), u.RelKey+"/")) {
 			return refuse("its parent %q could not be listed", u.RelKey)
 		}
 	}
-	// Walk order is lexical per directory, depth first: compare segment by
-	// segment, as WalkDir visits them.
-	at := n
-	for i := 0; i < n; i++ {
-		if walkOrderLess(rel, relOf(i)) {
-			at = i
-			break
-		}
-	}
-	return at, true, nil
+	return missing, nil
 }
 
 // walkOrderLess reports whether WalkDir visits root-relative file a before b.

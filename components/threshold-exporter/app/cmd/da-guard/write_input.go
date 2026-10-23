@@ -136,36 +136,53 @@ func checkDuplicateMembers(raw []byte) error {
 }
 
 // checkMemberNames refuses a member whose name is not spelled exactly as
-// the input names it (encoding/json would match "OPS" to "ops").
+// the input names it (encoding/json would match "FILES" to "files"), and a
+// file member of the other command ("content" in an edit, "ops" in an emit).
+// A shape error (a list where an object goes) is left to decodeStrict.
 func checkMemberNames(cmd string, raw []byte) error {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return err
 	}
-	want := map[string]bool{"ops": true}
-	if cmd == emitCmd {
-		want = map[string]bool{"content": true}
-	}
 	for k := range top {
-		if !want[k] {
+		if k != "files" {
 			return fmt.Errorf("unknown member %q", k)
 		}
 	}
-	if cmd != editCmd {
+	var files []json.RawMessage
+	if err := json.Unmarshal(top["files"], &files); err != nil {
 		return nil
 	}
-	var ops []json.RawMessage
-	if err := json.Unmarshal(top["ops"], &ops); err != nil {
-		return nil // decodeStrict names the shape error
+	body := "ops"
+	if cmd == emitCmd {
+		body = "content"
 	}
-	for i, o := range ops {
+	for i, f := range files {
 		var m map[string]json.RawMessage
-		if err := json.Unmarshal(o, &m); err != nil {
+		if err := json.Unmarshal(f, &m); err != nil {
 			return nil
 		}
 		for k := range m {
-			if k != "op" && k != "path" && k != "value" {
-				return fmt.Errorf("op %d: unknown member %q", i, k)
+			if k != "path" && k != body {
+				return fmt.Errorf("files[%d]: unknown member %q (%s takes \"path\" and %q)", i, k, cmd, body)
+			}
+		}
+		if cmd != editCmd {
+			continue
+		}
+		var ops []json.RawMessage
+		if err := json.Unmarshal(m["ops"], &ops); err != nil {
+			continue
+		}
+		for j, o := range ops {
+			var om map[string]json.RawMessage
+			if err := json.Unmarshal(o, &om); err != nil {
+				continue
+			}
+			for k := range om {
+				if k != "op" && k != "path" && k != "value" {
+					return fmt.Errorf("files[%d]: op %d: unknown member %q", i, j, k)
+				}
 			}
 		}
 	}
