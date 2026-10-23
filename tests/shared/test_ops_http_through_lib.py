@@ -4,15 +4,19 @@
 review found another spelling it missed (``getattr`` with a built string, the
 lib's own ``urllib`` attribute, ``sys.modules``, ``exec``, ``asyncio``…).
 Here every ``test_json_stdout_contract`` recipe is run again under
-``_net_hook_runner``, which logs what the process DID: each
-``socket.connect``, each urllib request, each ``curl`` / ``wget``. A
-connection opened by an ops frame with no lib frame on the stack is direct.
+``_net_hook_runner``, which logs what the tool's process DID, in any thread:
+each ``socket.connect``, each HTTP request line, each ``curl`` / ``wget``
+however started, each Python child it cannot see into. A connection with no
+lib frame on the stack is direct.
 
 * A tool not in ``DIRECT_HTTP_ALLOWED`` that connects directly fails.
-* Nobody GETs the Prometheus / Alertmanager API (``/api/v1``, ``/api/v2``,
-  ``/federate``) directly — those answers are read by the lib (#3133), even
-  for a tool allowed to connect directly for something else.
-* Nobody shells out to ``curl`` / ``wget``.
+* Nobody reads the Prometheus / Alertmanager API directly — any request to
+  ``/api/v1/`` (Prometheus also takes queries by POST), a GET / HEAD to
+  ``/api/v2/``, anything to ``/federate``: those answers are read by the lib
+  (#3133), even by a tool allowed to connect directly for something else.
+* Nobody starts ``curl`` / ``wget``, or a Python child that is not a repo tool.
+* A tool that can use HTTP and has a recipe must be SEEN: no event logged
+  means the hook was not there, not that the tool is clean.
 
 The hook only sees what a recipe runs, so its reach is pinned too: the ops
 tools that can use HTTP but have no recipe are ``KNOWN_UNEXERCISED`` (it only
@@ -61,11 +65,22 @@ KNOWN_UNEXERCISED: set[str] = {
     "validate_migration.py",
 }
 
-_RAW_HTTP_MODULES = ("urllib.request", "http.client", "http.server", "socket", "requests")
-_LIB_API_PATHS = ("/api/v1/", "/api/v2/", "/federate")
+# A floor for what no recipe runs; the run-time check is the authority.
+_RAW_HTTP_MODULES = ("urllib.request", "http.client", "http.server", "socket", "requests",
+                     "urllib3", "httpx", "aiohttp", "asyncio", "ssl", "smtplib", "ftplib",
+                     "xmlrpc", "importlib")
+_DYNAMIC = {"__import__"}
+
+
+def _ops_files() -> list[Path]:
+    out = sorted(p for p in OPS_DIR.rglob("*.py") if "__pycache__" not in p.parts)
+    assert out, "no ops tool enumerated"
+    return out
 
 
 def _imports(path: Path) -> set[str]:
+    """Modules a file imports, ``module.name`` for a from-import, and the
+    dotted attributes it reads (``urllib.request`` after a bare ``import urllib``)."""
     out: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
@@ -73,12 +88,19 @@ def _imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             out.add(node.module)
             out |= {f"{node.module}.{a.name}" for a in node.names}
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            out.add(f"{node.value.id}.{node.attr}")
+        elif isinstance(node, ast.Name) and node.id in _DYNAMIC:
+            out.add(node.id)
     return out
 
 
+def _is_raw(name: str) -> bool:
+    return name in _DYNAMIC or any(name == r or name.startswith(r + ".") for r in _RAW_HTTP_MODULES)
+
+
 def _raw_http_importers() -> set[str]:
-    return {p.name for p in sorted(OPS_DIR.glob("*.py"))
-            if any(m == r or m.startswith(r + ".") for m in _imports(p) for r in _RAW_HTTP_MODULES)}
+    return {p.relative_to(OPS_DIR).as_posix() for p in _ops_files() if any(map(_is_raw, _imports(p)))}
 
 
 def _lib_http_names() -> set[str]:
@@ -90,25 +112,42 @@ def _lib_http_names() -> set[str]:
 
 
 def _http_capable() -> set[str]:
-    lib = _lib_http_names() - {"QueryError"}
-    out = set()
-    for p in sorted(OPS_DIR.glob("*.py")):
-        names = _imports(p)
-        if any(n.rsplit(".", 1)[-1] in lib for n in names if "_lib_p" in n) or p.name in _raw_http_importers():
-            out.add(p.name)
-    return out
+    """Ops tools that can use HTTP: a raw-HTTP import, the lib's own module
+    or any name it defines (through the facade too), or a sibling ops module
+    that can. Over-approximates (a pure helper counts) — the safe side for a
+    coverage pin."""
+    lib = _lib_http_names()
+    files = {p.relative_to(OPS_DIR).as_posix(): _imports(p) for p in _ops_files()}
+    stems = {Path(k).stem: k for k in files}
+    out = {k for k, names in files.items()
+           if any(map(_is_raw, names))
+           or any(n == "_lib_prometheus" or n.startswith("_lib_prometheus.")
+                  or (n.startswith(("_lib_python.", "_lib_prometheus.")) and n.rsplit(".", 1)[-1] in lib)
+                  for n in names)}
+    while True:
+        more = {k for k, names in files.items() if k not in out
+                and any(stems.get(n.split(".")[0]) in out for n in names)}
+        if not more:
+            return out
+        out |= more
+
+
+def _reads_the_api(method: str, path: str) -> bool:
+    return (path.startswith("/api/v1/") or path.startswith("/federate")
+            or (path.startswith("/api/v2/") and method in ("GET", "HEAD")))
 
 
 def _violations(tool: str, events: list[dict]) -> list[str]:
     out = []
     for e in events:
-        if e["via_lib"]:
+        if e["event"] == "fetcher":
+            out.append(f"{e['frame']} starts {e['argv']}")
+        elif e["event"] == "python-child":
+            out.append(f"{e['frame']} starts a Python child the hook cannot see into: {e['argv']}")
+        elif e["via_lib"]:
             continue
-        if e["event"] == "subprocess.Popen":
-            out.append(f"{e['frame']} shells out to {e['argv']}")
-        elif e["event"] == "urllib.Request" and e["method"] == "GET" and any(
-                p in e["url"] for p in _LIB_API_PATHS):
-            out.append(f"{e['frame']} GETs {e['url']} directly — read it through _lib_prometheus")
+        elif e["event"] == "request" and _reads_the_api(e["method"], e["path"]):
+            out.append(f"{e['frame']} sends {e['method']} {e['path']} directly — read it through _lib_prometheus")
         elif e["event"] == "socket.connect" and tool not in DIRECT_HTTP_ALLOWED:
             out.append(f"{e['frame']} connects to {e['address']} without the lib")
     return out
@@ -118,7 +157,7 @@ _BY_TOOL: dict[str, list] = {}
 for _r in contract.RECIPES:
     _path = contract.JSON_TOOL_PATHS[_r.tool]
     if _path.parent.name == "ops":
-        _BY_TOOL.setdefault(_path.name, []).append(_r)
+        _BY_TOOL.setdefault(_path.relative_to(contract.OPS_DIR.relative_to(contract.REPO_ROOT)).as_posix(), []).append(_r)
 
 
 @pytest.mark.parametrize("tool", sorted(_BY_TOOL))
@@ -136,6 +175,9 @@ def test_a_tools_http_goes_through_the_lib(tool, tmp_path, stub_url, sandbox_rep
             events += [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     bad = _violations(tool, events)
     assert not bad, f"{tool}: {bad}"
+    if tool in _http_capable():
+        assert events, (f"{tool} can use HTTP and has recipes, but the hook logged nothing: "
+                        "the recipes no longer reach the network, or the hook is not running")
 
 
 def test_the_allowlist_is_the_tools_that_import_raw_http():
@@ -168,6 +210,8 @@ class _Ok(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"ok")
 
+    do_POST = do_GET
+
 
 @pytest.fixture(scope="module")
 def ok_url():
@@ -188,6 +232,12 @@ _PROBES = {
     "http-client": "import http.client, urllib.parse as p\nu = p.urlparse(U)\nc = http.client.HTTPConnection(u.hostname, u.port, timeout=5)\nc.request('GET', '/api/v1/x'); c.getresponse().read()",
     "asyncio": "import asyncio, urllib.parse as p\nasync def m():\n    u = p.urlparse(U); r, w = await asyncio.open_connection(u.hostname, u.port)\n    w.write(b'GET /api/v1/x HTTP/1.0\\r\\n\\r\\n'); await r.read()\nasyncio.run(m())",
     "curl": "import subprocess\nsubprocess.run(['curl', '-s', '-o', '/dev/null', U], timeout=5, check=False)",
+    "curl-shell": "import subprocess\nsubprocess.run('curl -s -o /dev/null ' + U, shell=True, timeout=5)",
+    "curl-env": "import subprocess\nsubprocess.run(['env', 'curl', '-s', '-o', '/dev/null', U], timeout=5)",
+    "curl-os-system": "import os\nos.system('curl -s -o /dev/null ' + U)",
+    "thread": "import threading, urllib.request\nt = threading.Thread(target=urllib.request.urlopen, args=(U + '/x',))\nt.start(); t.join()",
+    "executor": "import concurrent.futures as cf, urllib.request\nwith cf.ThreadPoolExecutor(2) as ex:\n    list(ex.map(lambda u: urllib.request.urlopen(u, timeout=5).read(), [U + '/x']))",
+    "python-child": "import subprocess, sys\nsubprocess.run([sys.executable, '-c', 'import urllib.request as r; r.urlopen(%r).read()' % (U + '/x',)], timeout=30)",
 }
 
 
@@ -236,27 +286,35 @@ def _ev(event, via_lib=False, **kw):
     ("check_alert.py", [_ev("socket.connect", address="x")], True),
     ("check_alert.py", [_ev("socket.connect", via_lib=True, address="x")], False),
     ("notification_tester.py", [_ev("socket.connect", address="x")], False),
-    ("notification_tester.py", [_ev("urllib.Request", url="http://p/api/v1/query", method="GET")], True),
-    ("maintenance_scheduler.py", [_ev("urllib.Request", url="http://am/api/v2/silences", method="POST")], False),
-    ("discover_instance_mappings.py", [_ev("urllib.Request", url="http://p/federate?x", method="GET")], True),
-    ("discover_instance_mappings.py", [_ev("urllib.Request", url="http://e:9104/metrics", method="GET")], False),
-    ("notification_tester.py", [_ev("subprocess.Popen", argv=["curl", "u"])], True),
-    ("check_alert.py", [_ev("urllib.Request", via_lib=True, url="http://p/api/v1/alerts", method="GET")], False),
-], ids=["not-allowed", "via-lib", "allowed", "allowed-but-reads-the-api", "allowed-write",
-        "allowed-but-federate", "allowed-metrics", "curl", "lib-read"])
+    ("notification_tester.py", [_ev("request", path="/api/v1/query", method="GET")], True),
+    ("notification_tester.py", [_ev("request", path="/api/v1/query", method="POST")], True),
+    ("notification_tester.py", [_ev("request", path="/api/v2/alerts", method="HEAD")], True),
+    ("maintenance_scheduler.py", [_ev("request", path="/api/v2/silences", method="POST")], False),
+    ("discover_instance_mappings.py", [_ev("request", path="/federate", method="GET")], True),
+    ("discover_instance_mappings.py", [_ev("request", path="/metrics", method="GET")], False),
+    ("notification_tester.py", [_ev("fetcher", argv=["sh", "-c", "curl u"])], True),
+    ("check_alert.py", [_ev("python-child", argv=["python3", "-c", "x"])], True),
+    ("check_alert.py", [_ev("request", via_lib=True, path="/api/v1/alerts", method="GET")], False),
+], ids=["not-allowed", "via-lib", "allowed", "allowed-but-reads-the-api", "post-query-is-a-read",
+        "head-v2", "allowed-write", "allowed-but-federate", "allowed-metrics", "curl-via-shell",
+        "python-child", "lib-read"])
 def test_the_rules(tool, events, bad):
     assert bool(_violations(tool, events)) is bad
 
 
-def test_the_hook_sees_an_allowed_tools_direct_api_read(tmp_path, ok_url):
+@pytest.mark.parametrize("read", [
+    "import urllib.request\nurllib.request.urlopen(U + '/api/v1/query', timeout=5).read()",
+    "import urllib.request\nurllib.request.urlopen(U + '/api/v1/query', data=b'query=up', timeout=5).read()",
+    "import http.client, urllib.parse as p\nu = p.urlparse(U)\nc = http.client.HTTPConnection(u.hostname, u.port, timeout=5)\nc.request('GET', '/api/v1/query'); c.getresponse().read()",
+], ids=["urllib-get", "urllib-post", "http-client"])
+def test_the_hook_sees_an_allowed_tools_direct_api_read(tmp_path, ok_url, read):
     """A tool allowed to connect directly (for a webhook, OPA…) still may not
     GET the Prometheus / Alertmanager API itself — seen through the request,
     not the socket."""
     ops = tmp_path / "scripts" / "tools" / "ops"
     ops.mkdir(parents=True)
     tool = ops / "probe.py"
-    tool.write_text(f"import urllib.request\nurllib.request.urlopen({ok_url!r} + '/api/v1/query', "
-                    f"timeout=5).read()\n", encoding="utf-8")
+    tool.write_text(f"U = {ok_url!r}\n{read}\n", encoding="utf-8")
     log = tmp_path / "net.jsonl"
     env = dict(os.environ, NET_HOOK_LOG=str(log), NET_HOOK_OPS=str(ops),
                NET_HOOK_LIB=str(contract.TOOLS_DIR / "_lib_prometheus.py"))
