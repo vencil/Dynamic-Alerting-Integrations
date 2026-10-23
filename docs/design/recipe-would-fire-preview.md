@@ -16,10 +16,10 @@ parent: architecture-and-design.md
 >
 > **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。recipe 是租戶在 portal 自助定義的告警規則；本文設計的是「填完當場確認它會不會觸發」的預覽。
 >
-> 本文的設計已實作：服務在 `components/recipe-preview/`，正式部署用 `helm/recipe-preview` chart，da-portal 以 `portal.recipePreviewUrl` 接上。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
+> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart，da-portal 以 `portal.recipePreviewUrl` 接上。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
 > - **已定案**：後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
 > - **首版範圍**：threshold 類 recipe（`>` `>=` `<` `<=` `==`）+ absence（缺口偵測——合成序列「不發該指標」即缺口）。
-> - **延後**：其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。
+> - **延後**：正式環境部署、其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。
 
 ## 1. 要解決的問題
 
@@ -47,7 +47,7 @@ parent: architecture-and-design.md
 
 ## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。（定案的是「形態與契約」，服務本身在實作階段才寫。）
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。
 
 為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
@@ -180,6 +180,7 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 | 延後項 | 觸發條件 |
 |---|---|
+| 正式環境部署預覽服務 | 真正的正式客戶在 portal 寫 recipe 且需要預覽（本機試用不夠時）。屆時重評部署形態 |
 | 其餘 recipe 型別 | 領域專家／租戶實際需要這些型別的預覽 |
 | 歷史回測（「過去 24h 我的真實資料觸發過幾次」） | recipe 的 recording rule 落地、`for:` 語意就緒 |
 | rule-pack 影響矩陣 CI（改 rule-pack 前評估對全租戶的影響） | rule-pack 變更造成預期外的全租戶告警漂移，或需要合併前的影響評估。注意：預覽用合成輸入，**不需要**這條的快照資料 |

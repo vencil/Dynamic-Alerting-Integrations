@@ -51,7 +51,7 @@ spec:
       app: threshold-exporter
 ```
 
-**Effect:** during voluntary disruptions such as draining a node, at least 1 replica keeps serving Prometheus scrapes. The PDB is created only when `replicaCount` is greater than 1 (`helm/threshold-exporter/templates/pdb.yaml`), and it does not cover involuntary disruptions such as a node failure.
+**Effect:** during voluntary disruptions such as draining a node, at least 1 selected Pod stays available (the PDB does not guarantee that Prometheus can scrape it). The PDB is created only when `replicaCount` is greater than 1 (`helm/threshold-exporter/templates/pdb.yaml`), and it does not cover involuntary disruptions such as a node failure.
 
 ### 4.3 Critical: `max by(tenant)` vs `sum`
 

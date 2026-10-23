@@ -16,10 +16,10 @@ parent: architecture-and-design.en.md
 >
 > **Related**: [ADR-024 Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md); tracking issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657). A recipe is the alert rule a tenant defines for themselves in the portal; this doc designs the preview that confirms, right there, whether it would fire.
 >
-> This design is implemented: the service lives in `components/recipe-preview/`, production deploys use the `helm/recipe-preview` chart, and da-portal connects to it through `portal.recipePreviewUrl`. This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
+> This design is implemented: the service lives in `components/recipe-preview/`, a `helm/recipe-preview` chart exists, and da-portal connects to it through `portal.recipePreviewUrl`. It runs in try-local first; production deployment is deferred (the image and a `recipe-preview/v*` tag have not been released). This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
 > - **Settled**: the backend's shape (a standalone Python service, try-local first), the API contract, the production guardrails.
 > - **First scope**: the threshold recipe (`>` `>=` `<` `<=` `==`) + absence (gap detection — the synthetic series simply doesn't emit the metric).
-> - **Deferred**: the remaining recipe types, historical backtest (triggers for each in §9).
+> - **Deferred**: production deployment, the remaining recipe types, historical backtest (triggers for each in §9).
 
 ## 1. The problem
 
@@ -47,7 +47,7 @@ A second copy in the frontend will get these wrong, and **a wrong preview is wor
 
 ## 3. Preview backend: a standalone Python service (try-local first)
 
-**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack); production deployment is deferred. (What's settled is the shape and contract; the service itself is written in the implementation phase.)
+**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack); production deployment is deferred.
 
 Why a standalone service rather than folding it into the existing tenant-api:
 
@@ -180,6 +180,7 @@ The mechanism: the service hardcodes the supported set (`SUPPORTED_RECIPES_MVP` 
 
 | Deferred item | Trigger |
 |---|---|
+| Production deployment of the preview service | A real production customer authoring in the portal who needs preview (when the local trial isn't enough). Re-evaluate the deployment shape then |
 | Remaining recipe types | Domain experts / tenants actually need previews for these types |
 | Historical backtest ("how many times did my real data fire in the past 24h") | The recipe's recording rule lands; `for:` semantics ready |
 | Rule-pack impact-matrix CI (assess fleet-wide impact before changing a rule-pack) | A rule-pack change causes an unexpected fleet-wide alert shift, or a pre-merge impact assessment is needed. Note: the preview uses synthetic input and does **not** need this one's snapshot data |

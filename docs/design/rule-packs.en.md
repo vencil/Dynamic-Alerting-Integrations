@@ -131,7 +131,7 @@ This pattern is applied in all receiver types (email, webhook, Slack, Teams, Pag
 
 - Rule Packs without `*_zh` annotations continue to work — notifications automatically fall back to English
 - Existing Prometheus rules need no changes
-- Alerts in `rule-packs/` must carry both languages: a missing `*_zh` is blocked by the `bilingual-annotations-check` pre-commit hook
+- In `rule-packs/`, every English annotation (such as `summary`) needs its `*_zh` partner; a missing one is blocked by the `bilingual-annotations-check` pre-commit hook. An alert with no annotations is not checked
 
 For examples, see `rule-packs/` directory.
 
