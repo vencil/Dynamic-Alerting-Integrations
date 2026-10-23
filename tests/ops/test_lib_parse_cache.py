@@ -561,3 +561,20 @@ def test_every_miss_is_file_mode_on_the_keyed_bytes(tmp_path, monkeypatch):
                _grar_parse.ROUTING_READ.name)
         assert pc.restricted_loads(cache.new[key]) == want
     assert len(cache.new) == len(names)
+
+
+# ── the long-running writer's fresh judgement (#3206) ───────────────────
+
+def test_judge_now_judges_afresh_and_leaves_the_memo_alone(tmp_path):
+    """`judge_now` / `refusal_now` is the explicit bypass of
+    `require_servable`'s once-per-process memo: a servable verdict is not
+    kept in `_SERVABLE`, and the next call judges the tree again."""
+    key = os.path.realpath(tmp_path)
+    before = set(pc._SERVABLE)
+    assert pc.refusal_now(tmp_path) == []
+    assert key not in pc._SERVABLE and pc._SERVABLE == before
+    (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+    tree, lines = pc.judge_now(tmp_path)
+    assert any("broken.yaml" in ln for ln in lines)
+    assert [e.path for e in tree.entries if e.verdict] == ["broken.yaml"]
+    assert pc._SERVABLE == before

@@ -446,6 +446,13 @@ def require_output_tree(root: "str | os.PathLike[str]", *,
     path named, `--json` reason `conf_d_not_servable` with
     `refused_paths`), and nothing is written.
 
+    ⛔ It judges the output directory AS the tree. A directory inside a
+    larger conf.d (`-o conf.d/sub`) is judged as its own tree: what lies
+    beside it, under the conf.d root the exporter serves, is not looked at
+    — this tool cannot know which root that is (an ancestor test would
+    refuse `-o /tmp/new` under any flagged directory above it). To have the
+    whole conf.d judged, pass the conf.d root.
+
     * *root* missing (or not a directory): a fresh tree; nothing to refuse.
     * *root* an existing directory that holds no conf.d (an empty one, or
       only files no reader reads): Go serves it (no entry has a verdict), so

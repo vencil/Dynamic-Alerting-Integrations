@@ -2519,10 +2519,22 @@ class TestRunOnce:
         crs = [_make_cr(name="first"), _make_cr(name="second")]
         mock_api.list_cluster_custom_object.return_value = {"items": crs}
 
+        # ⚠️ Since #3206 a DIRECTORY at `first.yaml` (this test's old fixture)
+        # is a path Go names, so the shared refusal skips the cycle before
+        # any write; the unusable target is the write failing instead.
+        real_write = da_assembler.write_rendered
+
+        def failing_first(config_dir, filename, *args, **kwargs):
+            if filename == "first.yaml":
+                raise OutputWriteError(
+                    Path(config_dir) / filename, OSError(21, "Is a directory"),
+                    flag="--config-dir")
+            return real_write(config_dir, filename, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "first.yaml").mkdir()   # the wrapped idempotence read
             with mock.patch("da_assembler.reconcile_one",
-                            wraps=reconcile_one) as spy:
+                            wraps=reconcile_one) as spy, \
+                    mock.patch("da_assembler.write_rendered", failing_first):
                 rc = run_once(mock_api, Path(d), dry_run=True)
             assert rc == 0
             assert [c.args[0]["metadata"]["name"] for c in spy.call_args_list] \
@@ -2673,7 +2685,9 @@ class TestControllerJudgesOncePerCycle:
         api.list_cluster_custom_object.return_value = {
             "items": [_make_cr(name=f"cyc-{i}") for i in range(3)]}
         with caplog.at_level("ERROR", logger="da-assembler"):
-            assert da_assembler.run_once(api, tmp_path) == 0
+            # `--once` on a refused tree: the shared refusal's code, after
+            # the ERROR lines (F6).
+            assert da_assembler.run_once(api, tmp_path) == EXIT_CALLER_ERROR
         assert calls == [str(tmp_path)]
         assert not any((tmp_path / f"cyc-{i}.yaml").exists() for i in range(3))
         assert caplog.text.count("broken.yaml") == 1  # named once per cycle
@@ -2720,3 +2734,103 @@ class TestWatchDeleteOnARefusedTree:
         _watch_once(monkeypatch, [{"type": "DELETED", "object": cr}])
         da_assembler.run_watch(mock.MagicMock(), tmp_path)
         assert not (tmp_path / "gone.yaml").exists()
+
+
+def _listing_api(crs, resource_version="41"):
+    api = mock.MagicMock()
+    api.list_cluster_custom_object.return_value = {
+        "items": list(crs), "metadata": {"resourceVersion": resource_version}}
+    return api
+
+
+class TestControllerIsLevelTriggered:
+    """#3206 F5：被拒的樹上略過的 DELETED，下一個可服務的週期由 `run_once`
+    補上——刪掉標頭指名已不存在之 CR 的檔；沒有本工具標頭的檔永遠不碰。"""
+
+    def test_a_skipped_delete_is_caught_up_by_the_next_served_cycle(
+            self, tmp_path, monkeypatch):
+        keep, gone = _make_cr(name="lv-keep"), _make_cr(name="lv-gone")
+        assert da_assembler.run_once(_listing_api([keep, gone]), tmp_path) == 0
+        hand = tmp_path / "hand-written.yaml"  # no da-assembler header
+        hand.write_text("tenants:\n  lv-hand: {}\n", encoding="utf-8")
+        (tmp_path / "x.yaml").mkdir()  # the tree is refused
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": gone}])
+        da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert (tmp_path / "lv-gone.yaml").is_file()  # skipped on the refused tree
+        (tmp_path / "x.yaml").rmdir()  # served again
+        assert da_assembler.run_once(_listing_api([keep]), tmp_path) == 0
+        assert not (tmp_path / "lv-gone.yaml").exists()
+        assert (tmp_path / "lv-keep.yaml").is_file()
+        assert hand.is_file(), "a file without this tool's header was removed"
+
+    def test_a_refused_cycle_removes_nothing(self, tmp_path):
+        gone = _make_cr(name="lv-gone")
+        assert da_assembler.run_once(_listing_api([gone]), tmp_path) == 0
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        assert da_assembler.run_once(_listing_api([]), tmp_path) == EXIT_CALLER_ERROR
+        assert (tmp_path / "lv-gone.yaml").is_file()
+
+    def test_a_namespaced_controller_removes_only_its_namespace(self, tmp_path):
+        mine, other = _make_cr(name="lv-a", namespace="ns-a"), _make_cr(name="lv-b",
+                                                                        namespace="ns-b")
+        reconcile_one(mine, tmp_path)
+        reconcile_one(other, tmp_path)
+        api = mock.MagicMock()
+        api.list_namespaced_custom_object.return_value = {"items": []}
+        assert da_assembler.run_once(api, tmp_path, namespace="ns-a") == 0
+        assert not (tmp_path / "lv-a.yaml").exists()
+        assert (tmp_path / "lv-b.yaml").is_file()
+
+
+class TestControllerListThenWatch:
+    """#3206 Q：watch 從初始 list 的 resourceVersion 起看，啟動時不把既有 CR
+    當成 ADDED 重播（多一次判樹就是重播了）。"""
+
+    def test_start_up_does_not_replay_the_listed_crs(self, tmp_path, monkeypatch):
+        import _lib_parse_tree
+        real, judged = _lib_parse_tree.load, []
+
+        def counting(root, *args, **kwargs):
+            judged.append(str(root))
+            return real(root, *args, **kwargs)
+        monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        crs = [_make_cr(name=f"lw-{i}") for i in range(3)]
+        seen = []
+
+        class _Watch:
+            def stream(self, *args, **kwargs):
+                seen.append(kwargs.get("resource_version"))
+                if not kwargs.get("resource_version"):  # "" replays every CR
+                    yield from ({"type": "ADDED", "object": cr} for cr in crs)
+                monkeypatch.setattr(da_assembler, "_shutdown", True)
+        monkeypatch.setattr(da_assembler, "_shutdown", False)
+        monkeypatch.setattr(da_assembler, "watch", mock.MagicMock(Watch=_Watch),
+                            raising=False)
+        assert da_assembler.run_controller(_listing_api(crs, "77"), tmp_path) == 0
+        assert seen == ["77"]
+        assert judged == [str(tmp_path)]  # the initial cycle only
+
+    def test_a_refused_start_up_keeps_the_controller_running(self, tmp_path, monkeypatch):
+        (tmp_path / "broken.yaml").write_text("a: [\n", encoding="utf-8")
+        _watch_once(monkeypatch, [])
+        assert da_assembler.run_controller(_listing_api([_make_cr(name="lw-r")]),
+                                           tmp_path) == 0
+        assert not (tmp_path / "lw-r.yaml").exists()
+
+
+class TestControllerFailsClosed:
+    """#3206 F7：沒有可用的 da-guard 時 controller 拒絕（fail-closed），
+    不是照寫。"""
+
+    def test_no_da_guard_writes_nothing(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        conf = tmp_path / "conf.d"
+        conf.mkdir()
+        api = _listing_api([_make_cr(name="fc-1")])
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            assert da_assembler.run_once(api, conf) == EXIT_CALLER_ERROR
+        assert not (conf / "fc-1.yaml").exists()
+        assert "cannot judge the conf.d" in caplog.text
+        phase = api.patch_namespaced_custom_object_status.call_args.kwargs[
+            "body"]["status"]["phase"]
+        assert phase == "Error"
