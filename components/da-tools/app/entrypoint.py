@@ -583,6 +583,20 @@ def _crash_message(exc):
     return f"ERROR: unexpected internal error ({type(exc).__name__}): {text}"
 
 
+# Mirrors scripts/tools/_lib_exitcodes.crash_exit_code_from_env (#3092; zero-
+# import, as above): test suites set it so a crash cannot pass for a named
+# rc 2. tests/shared/test_entrypoint.py pins the two together.
+TEST_CRASH_EXIT_CODE_ENV = "DA_TEST_CRASH_EXIT_CODE"
+
+
+def _crash_exit_code_from_env():
+    raw = os.environ.get(TEST_CRASH_EXIT_CODE_ENV)
+    if raw is None or not (raw.isascii() and raw.isdigit()):
+        return None
+    code = int(raw)
+    return code if 3 <= code <= 255 else None
+
+
 def _exit_on_tool_crash(exc):
     """A tool raised an uncaught Exception: report it and exit, never rc 1.
 
@@ -590,7 +604,8 @@ def _exit_on_tool_crash(exc):
     sys.modules, not imported — this module stays zero-import), that
     module's exit_on_crash reports and exits with whatever the tool set via
     set_crash_exit_code (tenant_verify: 1). Otherwise print the same
-    traceback + ERROR line here and exit EXIT_CALLER_ERROR.
+    traceback + ERROR line here and exit EXIT_CALLER_ERROR — or, under a
+    test suite, the code DA_TEST_CRASH_EXIT_CODE names (#3092).
     """
     lib = sys.modules.get("_lib_exitcodes")
     handler = getattr(lib, "exit_on_crash", None)
@@ -602,7 +617,8 @@ def _exit_on_tool_crash(exc):
         pass
     traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
     print(_crash_message(exc), file=sys.stderr, flush=True)
-    sys.exit(EXIT_CALLER_ERROR)
+    override = _crash_exit_code_from_env()
+    sys.exit(EXIT_CALLER_ERROR if override is None else override)
 
 
 def _print_version(tools_dir=None):
