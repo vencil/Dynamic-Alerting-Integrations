@@ -589,7 +589,8 @@ class TestCLI:
         assert doc["warn_days"] == 14
         assert doc["lookback_days"] == 30
         # 設計上歸零的欄位確實是 0 / []
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                                  "non_finite_samples_dropped": 0}
         assert doc["tenants"] == []
         assert doc["generated_at"]
 
@@ -614,7 +615,8 @@ class TestCLI:
         assert doc["status"] == "caller_error"
         assert doc["reason"] == "prometheus_query_error"
         assert doc["error"] == "connection error"
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                                  "non_finite_samples_dropped": 0}
         assert doc["tenants"] == []
         happy_keys = set(cf.generate_json_report(
             cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))

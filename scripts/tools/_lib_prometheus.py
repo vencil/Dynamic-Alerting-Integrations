@@ -6,6 +6,7 @@ Import via _lib_python.py facade for backward compatibility.
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -350,13 +351,44 @@ def _malformed(source: str, defect: str) -> QueryError:
     return QueryError(f"malformed {source} response: {defect}", source=source)
 
 
+def sample_value(raw: Any) -> float:
+    """The float a Prometheus sample holds — ``+Inf`` / ``-Inf`` / ``NaN``
+    included. The API writes every sample value as a JSON string; a JSON
+    number is read too, as the tools read it before (refusing it would
+    change their exit code, which is not decided). Anything ``float()``
+    cannot read — and a boolean — raises ``ValueError``, which
+    ``_matrix_rows`` turns into a ``QueryError`` naming the sample. The one
+    reading of a sample (#3213): tools do not call ``float()`` / ``int()`` on
+    one themselves."""
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raise ValueError(f"{raw!r:.40} is not a sample value")
+    return float(raw)
+
+
+def row_samples(row: dict[str, Any]) -> list[tuple[float, float]]:
+    """``(timestamp, value)`` of every float sample of a ``_matrix_rows``
+    row, parsed once here (non-finite values kept: whether ``+Inf`` is a
+    sample or a gap is the tool's question). A histogram-only row has none."""
+    return [(float(ts), sample_value(val)) for ts, val in row.get("values", [])]
+
+
+def finite_row_samples(row: dict[str, Any]) -> tuple[list[tuple[float, float]], int]:
+    """``row_samples`` without the non-finite ones, and how many were
+    dropped — for a tool that needs a count or a regression (#3213), which
+    reports the number dropped rather than crashing or hiding them."""
+    samples = row_samples(row)
+    kept = [(ts, v) for ts, v in samples if math.isfinite(v)]
+    return kept, len(samples) - len(kept)
+
+
 def _matrix_rows(body: Any) -> list[dict[str, Any]]:
     """The rows of a ``query_range`` answer, or ``QueryError``.
 
     A ``success`` body must hold ``data`` (an object) with ``resultType:
     matrix`` and ``result`` a list whose every row is an object with a
     ``values`` and/or ``histograms`` list of ``[timestamp, sample]`` pairs
-    (and, when present, a ``metric`` object). One row that is not counts for the whole answer:
+    (and, when present, a ``metric`` object); every float sample (``values``)
+    is a number ``sample_value`` reads (#3213). One row that is not counts for the whole answer:
     a tool reading the rows that are fine would report the others as
     absent (#3074).
     """
@@ -390,11 +422,21 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
             samples = row[key]
             if not isinstance(samples, list):
                 raise _malformed("Prometheus", f"result[{i}].{key} is not a list")
-            for sample in samples:
+            for j, sample in enumerate(samples):
                 if not (isinstance(sample, list) and len(sample) == 2):
                     raise _malformed("Prometheus",
                                      f"result[{i}].{key} holds {sample!r:.40}, "
                                      "expected [timestamp, sample]")
+                if key != "values":
+                    continue
+                # Only the value: an unreadable timestamp is not refused here
+                # (backtest never reads it; refusing would change its rc).
+                try:
+                    sample_value(sample[1])
+                except (TypeError, ValueError):
+                    raise _malformed("Prometheus",
+                                     f"result[{i}].values[{j}] is {sample!r:.40}, "
+                                     "expected [timestamp, number]") from None
     return rows
 
 
@@ -467,6 +509,13 @@ def alertmanager_alerts(
     for i, alert in enumerate(data):
         if not isinstance(alert, dict):
             raise _malformed("Alertmanager", f"alert[{i}] is not an object")
-        if not isinstance(alert.get("labels", {}), dict):
+        labels = alert.get("labels", {})
+        if not isinstance(labels, dict):
             raise _malformed("Alertmanager", f"alert[{i}].labels is not an object")
+        # A label value is a string in Alertmanager's API; anything else is
+        # not an answer a tool can match on (#3133, review of #3196).
+        bad = next((k for k, v in labels.items() if not isinstance(v, str)), None)
+        if bad is not None:
+            raise _malformed("Alertmanager",
+                             f"alert[{i}].labels.{bad} is not a string")
     return data

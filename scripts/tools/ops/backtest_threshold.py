@@ -57,6 +57,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import http_get_json, prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample reading)
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -168,13 +169,11 @@ def _is_nan_sample(val_str):
     """Whether a Prometheus sample value is NaN (#2963).
 
     Only NaN: ``+Inf`` / ``-Inf`` are real samples (an alert on them does
-    compare and can fire), so they are NOT missing data. An unparseable value
-    is left to :func:`count_threshold_breaches`, which already skips it.
+    compare and can fire), so they are NOT missing data. Read by the lib
+    (``sample_value``, #3213); a value it cannot read never gets here —
+    ``prometheus_range`` refuses the answer.
     """
-    try:
-        return math.isnan(float(val_str))
-    except (ValueError, TypeError):
-        return False
+    return math.isnan(sample_value(val_str))
 
 
 def count_threshold_breaches(values, threshold, direction="above"):
@@ -191,10 +190,7 @@ def count_threshold_breaches(values, threshold, direction="above"):
 
     count = 0
     for _, val_str in values:
-        try:
-            val = float(val_str)
-        except (ValueError, TypeError):
-            continue
+        val = sample_value(val_str)  # #3213: the lib's reading
         if direction == "above" and val > threshold:
             count += 1
         elif direction == "below" and val < threshold:

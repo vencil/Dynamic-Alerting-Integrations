@@ -53,6 +53,7 @@ try:
         safe_label,
         QueryError,
     )
+    from _lib_prometheus import finite_row_samples  # #3213: one sample reading
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
@@ -63,6 +64,7 @@ except ImportError:
         safe_label,
         QueryError,
     )
+    from scripts.tools._lib_prometheus import finite_row_samples  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -101,6 +103,8 @@ class ForecastReport:
     lookback_days: int = 30
     cardinality_limit: int = DEFAULT_CARDINALITY_LIMIT
     warn_days: int = DEFAULT_WARN_DAYS
+    # #3213: +Inf / -Inf / NaN samples left out of every regression.
+    non_finite_samples_dropped: int = 0
 
     @property
     def critical_count(self) -> int:
@@ -215,8 +219,13 @@ def query_cardinality_range(
     prometheus_url: str,
     lookback: str = DEFAULT_LOOKBACK,
     step: str = DEFAULT_STEP,
+    *,
+    non_finite_dropped: Optional[dict[str, int]] = None,
 ) -> dict[str, list[tuple[float, float]]]:
     """查詢 per-tenant 基數時序。
+
+    #3213：樣本值由 lib 解析；`+Inf`／`-Inf`／`NaN` 不進迴歸，每個租戶丟掉
+    幾點記進 *non_finite_dropped*（給了的話）。全部非有限的租戶不列入。
 
     使用 ``count by (tenant)({__name__=~"tenant_threshold_.*"})``
     取得每個 tenant 的活躍 time series 數量。
@@ -258,10 +267,9 @@ def query_cardinality_range(
     results: dict[str, list[tuple[float, float]]] = {}
     for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
-        values = [
-            (float(ts), float(val))
-            for ts, val in series.get("values", [])
-        ]
+        values, dropped = finite_row_samples(series)
+        if dropped and non_finite_dropped is not None:
+            non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
         if values:
             results[tenant] = values
 
@@ -419,6 +427,12 @@ def generate_text_report(report: ForecastReport, lang: str = "en") -> str:
                      f"Warning: {report.warning_count} | "
                      f"Safe: {report.safe_count}")
 
+    if report.non_finite_samples_dropped:
+        n = report.non_finite_samples_dropped
+        lines.append(f"略過 {n} 個非有限樣本值（+Inf／-Inf／NaN），未計入迴歸"
+                     if lang == "zh" else
+                     f"{n} non-finite sample value(s) (+Inf / -Inf / NaN) left out of the regression")
+
     if not report.tenants:
         lines.append("")
         lines.append("No tenant data available." if lang == "en"
@@ -477,6 +491,7 @@ def generate_json_report(report: ForecastReport) -> dict:
             "warning": report.warning_count,
             "safe": report.safe_count,
             "total": len(report.tenants),
+            "non_finite_samples_dropped": report.non_finite_samples_dropped,
         },
         "tenants": [
             {
@@ -506,6 +521,11 @@ def generate_markdown(report: ForecastReport) -> str:
                  f"**Limit:** {report.cardinality_limit} | "
                  f"**Warn:** {report.warn_days} days")
     lines.append("")
+    if report.non_finite_samples_dropped:
+        # #3213: disclosed in every format, not only --json / text
+        lines.append(f"> {report.non_finite_samples_dropped} non-finite sample value(s) "
+                     "(+Inf / -Inf / NaN) left out of the regression")
+        lines.append("")
 
     risk_icons = {"critical": "🔴", "warning": "🟡", "safe": "🟢"}
 
@@ -612,7 +632,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             "lookback_days": parse_duration_seconds(args.lookback) // SECONDS_PER_DAY,
             "cardinality_limit": args.limit,
             "warn_days": args.warn_days,
-            "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+            "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                        "non_finite_samples_dropped": 0},
             "tenants": [],
         })
 
@@ -622,9 +643,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     lookback_days = lookback_secs // SECONDS_PER_DAY
 
     # Query Prometheus
+    non_finite_dropped: dict[str, int] = {}
     try:
         cardinality_data = query_cardinality_range(
-            args.prometheus, args.lookback
+            args.prometheus, args.lookback, non_finite_dropped=non_finite_dropped,
         )
     except QueryError as exc:
         # #3065: a failed query is not "no data" — distinct reason, raw error.
@@ -643,7 +665,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "lookback_days": lookback_days,
                 "cardinality_limit": args.limit,
                 "warn_days": args.warn_days,
-                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                            "non_finite_samples_dropped": 0},
                 "tenants": [],
             }))
         return EXIT_CALLER_ERROR
@@ -666,7 +689,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "lookback_days": lookback_days,
                 "cardinality_limit": args.limit,
                 "warn_days": args.warn_days,
-                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
+                            # #3213: every sample non-finite (the --tenant's
+                            # only, as in the report)
+                            "non_finite_samples_dropped": sum(
+                                n for t, n in non_finite_dropped.items()
+                                if not args.tenant or t == args.tenant)},
                 "tenants": [],
             }))
         return EXIT_CALLER_ERROR
@@ -679,6 +707,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         lookback_days=lookback_days,
         tenant_filter=args.tenant,
     )
+    report.non_finite_samples_dropped = sum(
+        n for t, n in non_finite_dropped.items()
+        if not args.tenant or t == args.tenant)
 
     # Output
     if args.json_output:
