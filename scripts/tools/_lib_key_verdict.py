@@ -224,15 +224,39 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
                timeout: float = tv.DEFAULT_TIMEOUT,
                effective_tree: tv.EffectiveTree | None = None,
-               reader: Any = None) -> TreeVerdict:
+               reader: Any = None,
+               tenants: Iterable[str] | None = None) -> TreeVerdict:
     """The verdict on every key of every tenant of the tree at `conf_d`.
     `effective_tree`, given, is a `load_effective_tree` of the same tree the
     caller already has (validate-config shares one run among its rows);
     `reader`, given, is the caller's `_lib_parse_cache.ConfdReader` of it
-    (#3206: one parse-tree document for the run)."""
+    (#3206: one parse-tree document for the run).
+
+    With `tenants` (ADR-038 §5: a write's tenants), the verdict is on those
+    tenants' keys only: da-guard computes only them (`--tenant`), the
+    platform files are read whole as always. A requested tenant the tree has
+    none for has no key (it is in neither reading). `effective_tree`, given
+    with `tenants`, must hold every requested tenant the served reading has
+    (ValueError otherwise); a whole-tree reading does.
+
+    Each requested tenant's keys are judged as in the whole tree. A finding
+    on a profile's key is not one tenant's: it is judged over the requested
+    tenants — the tenants it names, and whether some tenant's reader reads
+    the key, so that no notice is given (the reader of an unrequested tenant
+    bound to the profile is not seen)."""
+    tenants = tv.requested_tenants(tenants)  # read three times below
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
-                               disable_effects=disable_effects)
-    effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
+                               disable_effects=disable_effects, tenants=tenants)
+    effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout,
+                                                          tenants=tenants)).tenants
+    if tenants is not None:
+        # Only the requested tenants are judged, whatever an effective_tree
+        # given in holds: a tenant computed on one side only would read as
+        # one whose keys no reader reads.
+        effective = {t: e for t, e in effective.items() if t in tenants}
+        missing = sorted(set(tree.tenants) - set(effective))
+        if missing:
+            raise ValueError(f"effective_tree has no reading of requested tenants {missing!r}")
     if reader is None:
         reader = _reader_for(conf_d, binary)  # one snapshot for the rules and the root files
     all_rules = list(_tree_rules(conf_d, binary, reader)) + list(rules or [])

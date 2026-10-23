@@ -14,14 +14,12 @@
 package customalerts
 
 import (
-	"bytes"
 	"fmt"
-	"reflect"
 	"sort"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/threshold-exporter/pkg/confedit"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -44,19 +42,19 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 		return "", fmt.Errorf("tenant yaml root is not a mapping")
 	}
 
-	tenantsVal := mapValue(root, "tenants")
+	tenantsVal := confedit.MapValue(root, "tenants")
 	if tenantsVal == nil || tenantsVal.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("tenant yaml has no `tenants:` mapping")
 	}
-	tenantVal := mapValue(tenantsVal, tenantID)
+	tenantVal := confedit.MapValue(tenantsVal, tenantID)
 	if tenantVal == nil || tenantVal.Kind != yaml.MappingNode {
 		return "", fmt.Errorf("tenant yaml has no `tenants.%s` mapping", tenantID)
 	}
 
-	const key = "_custom_alerts"
+	const key = confedit.CustomAlertsKey
 	if len(recipes) == 0 {
 		// Reef 2: delete the key + value pair entirely, leaving no debris.
-		deleteMapKey(tenantVal, key)
+		confedit.DeleteMapValue(tenantVal, key)
 	} else {
 		// Build the replacement sequence with CANONICAL key order + quoting —
 		// a raw map encode would alphabetise keys (metric/name/recipe…) and
@@ -66,24 +64,19 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 		for _, r := range recipes {
 			seq.Content = append(seq.Content, recipeNode(r))
 		}
-		setMapValue(tenantVal, key, seq)
+		confedit.SetMapValue(tenantVal, key, seq)
 	}
 
-	DropImplicitTags(&doc)
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	// SetIndent(2) matches the platform's 2-space conf.d convention, under
-	// which a file round-trips unchanged. CAVEAT (self-review F3): a tenant
-	// file authored with a DIFFERENT indent (e.g. 4-space) is re-emitted at
-	// 2 spaces — comments survive, but the whole file reflows to convention.
-	// Acceptable while conf.d is uniformly 2-space; source-indent detection
-	// is a future hardening if non-conventional files appear.
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
+	// confedit.Encode: implicit tags cleared, the platform's 2-space conf.d
+	// indent, under which a file round-trips unchanged. CAVEAT (self-review
+	// F3): a tenant file authored with a DIFFERENT indent (e.g. 4-space) is
+	// re-emitted at 2 spaces — comments survive, but the whole file reflows
+	// to convention.
+	out, err := confedit.Encode(&doc)
+	if err != nil {
 		return "", fmt.Errorf("re-encode tenant yaml: %w", err)
 	}
-	_ = enc.Close()
-	return buf.String(), nil
+	return string(out), nil
 }
 
 // recipeFieldOrder is the canonical emission order for a recipe's keys —
@@ -132,17 +125,13 @@ func recipeNode(r map[string]any) *yaml.Node {
 // its own rules (`1:20` is an integer to PyYAML, `2001-12-14t21:59:43` a
 // datetime), so only a quoted one or a block scalar is a string to all of
 // them. A string with a line break is a literal block (`|`), so a diff shows
-// its lines, when that block reads back as the same text (see
-// literalBlockKeeps); any other string is double-quoted. Numbers
+// its lines, when that block reads back as the same text; any other string
+// is double-quoted (confedit.BlockStringNode, the one writer's rule). Numbers
 // and bools encode as their type; nested maps (selectors / selectors_re) are
 // rendered with the same rule for their string values.
 func valueNode(v any) *yaml.Node {
 	if s, ok := v.(string); ok {
-		style := yaml.DoubleQuotedStyle
-		if strings.Contains(s, "\n") && literalBlockKeeps(s) {
-			style = yaml.LiteralStyle
-		}
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: style}
+		return confedit.BlockStringNode(s)
 	}
 	if m, ok := v.(map[string]any); ok {
 		keys := make([]string, 0, len(m))
@@ -159,26 +148,6 @@ func valueNode(v any) *yaml.Node {
 	var n yaml.Node
 	_ = n.Encode(v) // numbers / bools
 	return &n
-}
-
-// literalBlockKeeps reports whether s, written as a literal block where a
-// recipe value sits, parses and reads back as s. Some texts do not: one
-// opening with a tab is written as YAML that does not parse. (A text a block
-// cannot carry at all, e.g. one with trailing spaces, the encoder itself
-// writes double-quoted. One opening with a line break lost it under yaml.v3
-// v3.0.1's encoder; go.yaml.in/yaml/v3 v3.0.5's writes the blank line, #3206.)
-func literalBlockKeeps(s string) bool {
-	// An encode error leaves out short, and a text that does not parse leaves
-	// back without it: either way the comparison fails, so neither error is
-	// checked on its own. The block is probed at the top level; the indent
-	// a block scalar carries is relative, so the recipe's nesting reads the
-	// same (TestMerge_MultilineStringIsALiteralBlock reads the file back).
-	out, _ := yaml.Marshal(&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "v"},
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.LiteralStyle}}})
-	var back map[string]string
-	_ = yaml.Unmarshal(out, &back)
-	return reflect.DeepEqual(back, map[string]string{"v": s})
 }
 
 // stringTypedContractFields are the recipe fields whose authored TEXT is
@@ -228,53 +197,7 @@ func QuantileStringViolations(recipes []map[string]any) []string {
 	return viol
 }
 
-// mapValue returns the value node for key in a mapping node, or nil.
-func mapValue(m *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return m.Content[i+1]
-		}
-	}
-	return nil
-}
-
-// setMapValue replaces the value node for key (preserving the key node + its
-// comments), or appends a new key/value pair if absent.
-func setMapValue(m *yaml.Node, key string, val *yaml.Node) {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content[i+1] = val
-			return
-		}
-	}
-	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
-	m.Content = append(m.Content, keyNode, val)
-}
-
-// deleteMapKey removes the key/value pair for key from a mapping node.
-func deleteMapKey(m *yaml.Node, key string) {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content = append(m.Content[:i], m.Content[i+2:]...)
-			return
-		}
-	}
-}
-
-// DropImplicitTags clears the tag of every node whose tag was not written
-// (no explicit `!!x`), before a re-encode (#2903). yaml.v3 fills in the tag
-// it resolved, and its encoder writes some of those back out explicitly —
-// a `<<` merge key comes back as `!!merge <<` — so a file would not be
-// re-emitted as it was written. With the tag cleared the encoder resolves
-// it again and writes the node as it came.
-func DropImplicitTags(n *yaml.Node) {
-	if n == nil {
-		return
-	}
-	if n.Kind != yaml.AliasNode && n.Style&yaml.TaggedStyle == 0 {
-		n.Tag = ""
-	}
-	for _, c := range n.Content {
-		DropImplicitTags(c)
-	}
-}
+// DropImplicitTags is confedit.DropImplicitTags (#2903): the tags yaml.v3
+// filled in are cleared before a re-encode, or a `<<` merge key would come
+// back as `!!merge <<`.
+func DropImplicitTags(n *yaml.Node) { confedit.DropImplicitTags(n) }

@@ -65,6 +65,10 @@ type effectiveDoc struct {
 	// Always present ([] when none).
 	Skipped []skippedFile              `json:"skipped"`
 	Tenants map[string]effectiveTenant `json:"tenants"`
+	// tenants_requested / tenants_absent, with --tenant only
+	// (tenant_subset.go): Tenants then holds those of the requested
+	// tenants the tree has.
+	tenantSubset
 }
 
 // effectiveTenant is one tenant: the /effective body (the embedded
@@ -92,6 +96,7 @@ type effectiveFlags struct {
 	configDir string
 	// overlay is --overlay as given (`<rel-path>=<file>`); "" for none.
 	overlay string
+	tenants tenantList
 }
 
 func parseEffectiveFlags(args []string, errOut io.Writer) (effectiveFlags, error) {
@@ -115,8 +120,11 @@ func parseEffectiveFlags(args []string, errOut io.Writer) (effectiveFlags, error
 			f.overlay = v
 			return nil
 		})
+	fs.Var(&f.tenants, "tenant",
+		"Resolve only this tenant (repeatable): the whole tree is still walked and every platform file\n"+
+			"read; the document then carries tenants_requested and tenants_absent (requested, not in the tree).")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--overlay <rel-path>=<file>]\n", programName, effectiveCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--overlay <rel-path>=<file>] [--tenant <id> ...]\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, every tenant's effective config as tenant-api's /effective resolves it,\n"+
 			"with the profile each tenant is bound to and, per key, the layer and file its value came from.\n\n")
 		fs.PrintDefaults()
@@ -190,7 +198,15 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	if refuseNonUTF8Tree(configDir, programName+" "+effectiveCmd, errOut) {
 		return exitCallerErr // utf8_names.go (#3206)
 	}
-	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), config.ScanOptions{Overlay: overlay})
+	requested := flags.tenants.requested()
+	opts := config.ScanOptions{Overlay: overlay}
+	if requested != nil {
+		opts.Tenants = map[string]bool{}
+		for _, t := range requested {
+			opts.Tenants[t] = true
+		}
+	}
+	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), opts)
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)
@@ -241,6 +257,10 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
+	doc.tenantSubset = subset(requested, func(t string) bool {
+		_, ok := doc.Tenants[t]
+		return ok
+	})
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, err)
 		return exitCallerErr

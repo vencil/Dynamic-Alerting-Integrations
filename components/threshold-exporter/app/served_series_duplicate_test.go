@@ -134,6 +134,32 @@ func TestMetrics_DimensionalKeySpellings_OneSeries(t *testing.T) {
 	}
 }
 
+// platformSeries is the samples of the series the platform serves for
+// tenants (`user_*`), one per line: a scrape body without the Go runtime and
+// process collectors, whose values no test controls.
+func platformSeries(body string) string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "user_") {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// A runtime sample that happens to carry a test's value is not the
+// platform's series (#3302: `go_goroutines 200` read as a served `} 200`).
+func TestPlatformSeries_KeepsOnlyTheTenantSeries(t *testing.T) {
+	t.Parallel()
+	body := "# TYPE go_goroutines gauge\ngo_goroutines 200\nprocess_open_fds 200\n" +
+		`user_threshold{severity="warning",tenant="tenant-a"} 100` + "\n" +
+		`da_custom_alert_parse_errors{tenant="tenant-a"} 1` + "\n"
+	got := platformSeries(body)
+	if want := `user_threshold{severity="warning",tenant="tenant-a"} 100`; got != want {
+		t.Fatalf("platformSeries = %q, want %q", got, want)
+	}
+}
+
 // #2031: a `_custom_alerts` entry repeating an earlier entry's series — a
 // custom alert with the same name and shape, or a slo_burn_rate alert of the
 // same shape (one user_slo_objective) — is dropped: 200, the first entry's
@@ -172,10 +198,14 @@ func TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("status = %d, want 200; body:\n%s", code, body)
 			}
-			if !strings.Contains(body, tc.want) {
+			// Matched against the platform's own series only: the body also
+			// carries the Go runtime collector's, whose values move with the
+			// process (`go_goroutines 200` under a parallel load), #3302.
+			served := platformSeries(body)
+			if !strings.Contains(served, tc.want) {
 				t.Errorf("want %s (the first entry); body:\n%s", tc.want, body)
 			}
-			if strings.Contains(body, tc.dropped) {
+			if strings.Contains(served, tc.dropped) {
 				t.Errorf("the later entry is served (%s); body:\n%s", tc.dropped, body)
 			}
 			if !strings.Contains(body, `da_custom_alert_parse_errors{tenant="tenant-a"} 1`) {
