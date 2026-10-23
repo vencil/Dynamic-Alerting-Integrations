@@ -364,6 +364,9 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/ops/generator_service.py": "tenant-api's long-running judge over a stdin protocol, "
                                       "not a CLI over a tree",
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
+    "tools/dx/measure_judgement_budget.py": ("a benchmark of the generator container's judgement: "
+                                             "needs helm and amtool, and reads its tree through "
+                                             "the generator and da-guard, which have their own rows"),
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     "tools/dx/generate_platform_data.py": "reads the repo's own conf.d at a fixed path; takes no operand",
     "tools/dx/sync_schema.py": "generates the schema from Go source; reads no conf.d",
