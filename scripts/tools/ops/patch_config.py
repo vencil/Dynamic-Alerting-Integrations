@@ -529,12 +529,14 @@ def _edit_ops(old_tenants, tenant, metric_key, value, value_node):
         return [_lib_confedit.set_op(["tenants", tenant], m([(metric_key, value_node)]))]
     ops = [_lib_confedit.ensure_map_op(["tenants", tenant])]
     current = _entries(block).get(metric_key)
-    if _lib_parse_tree.is_scalar(current) and current["text"] == str(value):
+    if (_lib_parse_tree.is_scalar(current) and not _is_null(current)
+            and current["text"] == str(value)):
         # The value typed is the one written (`cpu: '50'`, typed `50`): the
         # node is left as it is — its type (a string stays a string) and its
         # spelling (`'50'`, `050`) — so the edit is a no-op, not a change of
         # type; da-guard still judges the key in place (`unchanged`, or a
-        # refusal when validation names it).
+        # refusal when validation names it). A null (`cpu: null`) is no
+        # text: typing `null` writes the string, so it is a change.
         return ops
     return ops + [_lib_confedit.set_op(path, value_node)]
 

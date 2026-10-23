@@ -951,6 +951,12 @@ class TestNoOpIsDaGuardsToSay:
         text = pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "60")["data"]["tenant-x.yaml"]
         assert "cpu: 60\n" in text, text
 
+    def test_typing_null_over_a_null_is_a_change(self):
+        """`cpu: null`（`!!null`）、打 `null`：寫成字串 `"null"`，不是 no-op。"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: null\n")
+        text = pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "null")["data"]["tenant-x.yaml"]
+        assert 'cpu: "null"\n' in text, text
+
     def test_a_no_op_on_a_key_validation_names_is_refused(self):
         """改完（沒變）的 key exporter 仍讀不進去：拒寫（read_back_mismatch），
         不是 no-op；`default` 刪一個不存在的 key 也一樣。"""
