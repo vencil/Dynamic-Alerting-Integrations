@@ -244,6 +244,7 @@ def unlistable_dir(monkeypatch):
                 out["entries"].append({
                     "path": rel, "depth": 0 if rel == "." else rel.count("/"),
                     "class": "directory", "tenant_named": None, "defaults_document": False,
+                    "config_extension": rel.rsplit("/", 1)[-1].lower().endswith((".yaml", ".yml")),
                     "readers": [], "not_read": None,
                     "role": "unlistable_dir",
                     "problem": {"kind": "read_failure",

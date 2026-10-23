@@ -92,7 +92,8 @@ def _v2_doc(files):
                else "platform" if name.startswith("_") else "tenant")
         return {"path": rel, "depth": rel.count("/"), "class": cls,
                 "tenant_named": name.rsplit(".", 1)[0] if cls == "tenant" else None,
-                "defaults_document": cls == "defaults", "readers": ["exporter", "generator"],
+                "defaults_document": cls == "defaults", "config_extension": True,
+                "readers": ["exporter", "generator"],
                 "not_read": None, "role": "config", "problem": None, "verdict": None}
     return {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
             "defaults_carriers": {},

@@ -1502,6 +1502,18 @@ class TestHiddenCarriersAreNotAssembled:
         assert [p.name for p in found] == ["_defaults.yaml"]
         assert ".db-c.yaml" in capsys.readouterr().err
 
+    def test_only_a_hidden_config_name_is_warned_about(self, config_dir, capsys):
+        """#3206: the WARN is for a hidden name WITH a config extension — Go's
+        `config_extension`, which names mode answers for a hidden name too.
+        A hidden `.notcfg` is no carrier anyone would miss: no WARN."""
+        s = self._sources(config_dir, ".x.yaml")
+        _write_file(s / ".notcfg", "anything\n")
+        found = discover_yamls(s)
+        assert [p.name for p in found] == ["_defaults.yaml"]
+        err = capsys.readouterr().err
+        assert ".x.yaml is hidden" in err, err
+        assert ".notcfg" not in err, err
+
 
 class TestTheOutputIsReadAsTheExporterReadsIt:
     """#1827: a broken `.stale.yaml` pre-placed in `--output` once made the

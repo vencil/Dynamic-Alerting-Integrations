@@ -285,7 +285,7 @@ def _entry(path, readers=("exporter", "generator"), *, cls="tenant", tenant="t",
            role="config", problem=None, document=False, verdict=None) -> dict:
     return {"path": path, "depth": path.count("/"), "class": cls,
             "tenant_named": tenant if cls == "tenant" else None, "defaults_document": document,
-            "readers": list(readers), "not_read": not_read, "role": role,
+            "config_extension": cls != "directory", "readers": list(readers), "not_read": not_read, "role": role,
             "problem": None if problem is None else {"kind": problem[0], "message": problem[1]},
             "verdict": verdict}
 
@@ -407,6 +407,7 @@ def _entry_set(i, **kv):
     _set(entries=[_entry("t.yaml"), _entry("t.yaml")]),          # a path twice
     _entry_without("role"),                                       # a da-guard before roles
     _entry_without("defaults_document"),
+    _entry_without("config_extension"),                          # a da-guard before it
     _entry_set(3, role="maybe"),                                  # a role nobody knows
     _entry_set(3, extra=1),
     _entry_set(3, readers=[]),                                    # no reader, no reason
