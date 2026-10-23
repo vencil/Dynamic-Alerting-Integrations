@@ -17,6 +17,11 @@ Tenant ids are fixture names (CLAUDE.md #9).
 """
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+
 import pytest
 import yaml
 
@@ -117,6 +122,131 @@ def test_a_path_no_reader_reads_is_refused(tmp_path, rel, setup):
     with pytest.raises(wc.WriteRefused) as exc:
         wc.original(tmp_path, rel, b"defaults: {}\n")
     assert exc.value.reason == wc.NOT_READ
+
+
+@pytest.mark.parametrize("rel", ["team", "team/", "./team", "a/../team"])
+def test_a_directory_target_is_named_whatever_its_spelling(tmp_path, rel):
+    """#3206: parse-tree holds the entry under the cleaned name, so `team/`,
+    `./team` and `a/../team` get the directory's own reason, not the
+    generic one."""
+    (tmp_path / "team").mkdir()
+    (tmp_path / "team" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    with pytest.raises(wc.WriteRefused) as exc:
+        wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}})
+    assert exc.value.reason == wc.NOT_READ
+    assert "it is a directory (parse-tree role dir)" in exc.value.detail
+
+
+@pytest.mark.parametrize("rel", ["./t.yaml", "sub//t.yaml", "sub/../t.yaml"])
+def test_an_uncleaned_file_target_is_judged_under_its_clean_name(tmp_path, rel):
+    """A spelling Go's `--path` cleans is the same file: it is read, not
+    refused as a path no reader reads."""
+    (tmp_path / "sub").mkdir()
+    wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}})
+    assert wc.original(tmp_path, rel, b"tenants: {}\n") == {"tenants": {}}
+
+
+@pytest.mark.parametrize("rel", ["", ".", "./", "..", "../t.yaml", "a/../../t.yaml",
+                                 "/abs/t.yaml", "a\x00b.yaml", "bad\udcff.yaml"])
+def test_a_target_naming_no_file_inside_the_root_is_refused_before_da_guard(
+        tmp_path, monkeypatch, rel):
+    """Empty, `.`, absolute or leaving the root: a clean WriteRefused, decided
+    before any da-guard run — never parse-tree's caller error read back as
+    a ParseTreeError ("no usable da-guard")."""
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "nope"))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for call in (lambda: wc.confirm(tmp_path, rel, "tenants: {}\n", {"tenants": {}}),
+                 lambda: wc.original(tmp_path, rel, b"tenants: {}\n")):
+        with pytest.raises(wc.WriteRefused) as exc:
+            call()
+        assert exc.value.reason == wc.NOT_READ
+        assert exc.value.detail.startswith(f"the write target {rel!r} "), exc.value.detail
+    with pytest.raises(wc.WriteRefused):
+        with wc.confirm_tree(tmp_path / "out", [(rel, "tenants: {}\n", {"tenants": {}})]):
+            pass
+
+
+def test_confirm_tree_stages_nothing_outside_itself_for_an_absolute_target(tmp_path):
+    """An absolute target joined to the staging directory would be written
+    where it names; it is refused before anything is staged."""
+    outside = tmp_path / "outside.yaml"
+    with pytest.raises(wc.WriteRefused):
+        with wc.confirm_tree(tmp_path / "out", [(str(outside), "tenants: {}\n", {"tenants": {}})]):
+            pass
+    assert not outside.exists()
+
+
+# Spellings both sides judge: Go's `cleanRelPath` (through `parse-tree
+# --path`) and `_clean_target`. A NUL byte is not here: no argv carries it.
+_TARGET_SPELLINGS = [
+    "t.yaml", "./t.yaml", "sub/t.yaml", "sub//t.yaml", "sub/./t.yaml", "sub/../t.yaml",
+    "sub/", "a/b/../../t.yaml", ".", "./", "..", "../t.yaml", "a/../../t.yaml",
+    "/t.yaml", "//t.yaml", "/abs/../t.yaml", "bad\udcff.yaml", "sub/bad\udcff/t.yaml",
+    "é.yaml",
+]
+_GO_REFUSALS = {"must be a path relative": wc.TARGET_NOT_RELATIVE,
+                "must name a file inside": wc.TARGET_NOT_INSIDE,
+                "is not valid UTF-8": wc.TARGET_NOT_UTF8}
+
+
+def _da_guard() -> str:
+    binary = os.environ.get("DA_GUARD_BINARY") or shutil.which("da-guard")
+    assert binary, "no da-guard ($DA_GUARD_BINARY / PATH): this file's checks need one"
+    return binary
+
+
+@pytest.mark.parametrize("rel", _TARGET_SPELLINGS)
+def test_python_and_go_refuse_the_same_write_targets(tmp_path, rel):
+    """`_clean_target` is Go's `cleanRelPath` in Python: for each spelling
+    both refuse for the same reason, or both accept it under one cleaned
+    name — so the two rule sets cannot drift apart. (The empty target is
+    no `--path` at all to Go; the NUL byte reaches it through no argv:
+    both are pinned on the Python side alone.)"""
+    (tmp_path / "sub").mkdir()
+    r = subprocess.run([_da_guard(), "parse-tree", "--config-dir", str(tmp_path),
+                        "--path", os.fsencode(rel), "--input", "-"],
+                       input=b"tenants: {}\n", capture_output=True, timeout=60, check=False)
+    go_why = next((why for needle, why in _GO_REFUSALS.items()
+                   if needle in r.stderr.decode("utf-8", "replace")), None)
+    try:
+        py_clean, py_why = wc._clean_target(rel), None
+    except wc.WriteRefused as exc:
+        py_clean = None
+        py_why = next(w for w in _GO_REFUSALS.values() if w in exc.detail)
+    assert go_why == py_why, (r.returncode, r.stderr, py_why)
+    if py_why is None:
+        assert r.returncode == 0, r.stderr
+        assert [e["path"] for e in json.loads(r.stdout)["entries"]] == [py_clean]
+    else:
+        assert r.returncode == 2, r.stderr
+
+
+def test_a_nul_byte_target_is_refused_not_a_value_error(tmp_path):
+    with pytest.raises(wc.WriteRefused) as exc:
+        wc.confirm(tmp_path, "a\x00b.yaml", "tenants: {}\n", {"tenants": {}})
+    assert wc.TARGET_NUL in exc.value.detail
+
+
+def test_place_takes_any_spelling_of_a_staged_name(tmp_path):
+    """`confirm_tree` stages the cleaned name; `place` finds it whatever
+    spelling the caller passes."""
+    out = tmp_path / "out"
+    items = [("sub/../a.yaml", "tenants: {}\n", {"tenants": {}})]
+    with wc.confirm_tree(out, items) as staged:
+        out.mkdir()
+        staged.place("sub/../a.yaml", out / "a.yaml")
+    assert (out / "a.yaml").read_text(encoding="utf-8") == "tenants: {}\n"
+
+
+def test_two_spellings_of_one_target_are_refused_naming_both(tmp_path):
+    """Staged one over the other, only the last text would be judged and
+    placed: refused, naming both spellings."""
+    items = [("a.yaml", "tenants: {}\n", {"tenants": {}}),
+             ("./a.yaml", "tenants:\n  x: {}\n", {"tenants": {"x": {}}})]
+    with pytest.raises(wc.WriteRefused) as exc:
+        with wc.confirm_tree(tmp_path / "out", items):
+            pass
+    assert "'a.yaml' and './a.yaml' are both 'a.yaml'" in exc.value.detail
 
 
 def test_a_new_file_is_judged_against_what_the_tool_means(tmp_path):

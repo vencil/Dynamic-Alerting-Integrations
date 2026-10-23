@@ -250,6 +250,66 @@ def test_alertmanager_alerts_returns_the_list(monkeypatch):
     assert seen == ["http://am/api/v2/alerts?filter=tenant%3Da+b", "http://am/api/v2/alerts"]
 
 
+@pytest.mark.parametrize("rows,want", [
+    ([], None),
+    ([{"value": [1, "3"]}, {"value": [1, "9"]}], 3),
+    ([{"value": [1, "2.0"]}], 2),
+], ids=["empty", "first-row", "float-string"])
+def test_vector_count(rows, want):
+    assert lp.vector_count(rows) == want
+
+
+@pytest.mark.parametrize("row", [
+    {"value": [1, "NaN"]}, {"value": [1, "+Inf"]}, {"value": [1, "-Inf"]},
+    {"histogram": [1, {}]},
+], ids=["nan", "inf", "-inf", "histogram"])
+def test_vector_count_refuses_what_is_not_a_count(row):
+    """#3133: int(float()) on these used to crash the check tools."""
+    with pytest.raises(lp.QueryError, match="expected a finite count") as exc:
+        lp.vector_count([row])
+    assert exc.value.reason == "prometheus_query_error"
+
+
+def test_instant_or_error(monkeypatch):
+    """The answer is checked as prometheus_instant checks it; only the error
+    is a value."""
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (_vec([_VROW]), None))
+    assert lp.instant_or_error("http://p", "up") == ([_VROW], None)
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (None, "refused"))
+    assert lp.instant_or_error("http://p", "up") == (None, "refused")
+    monkeypatch.setattr(lp, "http_get_json",
+                        lambda url, timeout=10: (_vec([{"metric": {}}]), None))
+    rows, err = lp.instant_or_error("http://p", "up")
+    assert rows is None
+    assert err == "malformed Prometheus response: result[0] has neither 'value' nor 'histogram'"
+
+
+@pytest.mark.parametrize("answer,defect", [
+    ((None, "refused"), "refused"),
+    (({}, None), "malformed Alertmanager response: body is not a JSON array"),
+    ((["x"], None), "malformed Alertmanager response: silence[0] is not an object"),
+    (([{"status": "active"}], None),
+     "malformed Alertmanager response: silence[0].status is not an object"),
+    (([{"status": {"state": 1}}], None),
+     "malformed Alertmanager response: silence[0].status.state is not a string"),
+], ids=["error", "object", "item-string", "status-string", "state-int"])
+def test_alertmanager_silences_raises(monkeypatch, answer, defect):
+    monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=15: answer)
+    with pytest.raises(lp.QueryError) as exc:
+        lp.alertmanager_silences("http://am")
+    assert str(exc.value) == defect
+    assert (exc.value.source, exc.value.reason) == ("Alertmanager", "alertmanager_query_error")
+
+
+def test_alertmanager_silences_returns_the_list(monkeypatch):
+    seen = []
+    silences = [{"status": {"state": "active"}}, {"id": "2"}]
+    monkeypatch.setattr(lp, "http_get_json",
+                        lambda url, timeout=15: (seen.append((url, timeout)) or silences, None))
+    assert lp.alertmanager_silences("http://am", timeout=4) == silences
+    assert seen == [("http://am/api/v2/silences", 4)]
+
+
 def test_query_error_is_a_named_caller_error():
     exc = lp.QueryError("timeout")
     assert isinstance(exc, _lib_exitcodes.CallerError)
@@ -314,8 +374,12 @@ def test_uncaught_query_error_is_rc2_with_its_envelope(tmp_path, armed, call, an
 # this allowlist may only get SHORTER (a new user fails; an entry no longer
 # true fails too, so a migration has to remove its line).
 
+# `instant_or_error` checks the answer as prometheus_instant does but still
+# hands back `(rows, err)`, for the three check tools whose judges take a
+# result and its error (#3133 batch 2b). An `err` can still be dropped, so it
+# is held to the same list: no tool beyond those three may start using it.
 _TUPLE_HELPERS = frozenset({"http_get_json", "query_prometheus_instant",
-                            "query_prometheus_range"})
+                            "query_prometheus_range", "instant_or_error"})
 # Matched on the module's last dotted part, so `scripts.tools._lib_python`,
 # `tools._lib_prometheus` and a relative `from ._lib_python import` all count.
 _LIB_MODULES = frozenset({"_lib_python", "_lib_prometheus"})
@@ -331,11 +395,11 @@ _ALLOWED = frozenset({
     ("scripts/tools/_lib_python.py", "query_prometheus_range"),
     # batch 2: instant callers
     ("scripts/tools/ops/byo_check.py", "http_get_json"),
-    ("scripts/tools/ops/byo_check.py", "query_prometheus_instant"),
+    ("scripts/tools/ops/byo_check.py", "instant_or_error"),
     ("scripts/tools/ops/federation_check.py", "http_get_json"),
-    ("scripts/tools/ops/federation_check.py", "query_prometheus_instant"),
+    ("scripts/tools/ops/federation_check.py", "instant_or_error"),
     ("scripts/tools/ops/shadow_verify.py", "http_get_json"),
-    ("scripts/tools/ops/shadow_verify.py", "query_prometheus_instant"),
+    ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
     # batch 3: direct http_get_json / urlopen callers
     ("scripts/tools/ops/alert_correlate.py", "http_get_json"),
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe

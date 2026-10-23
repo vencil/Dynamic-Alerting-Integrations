@@ -21,6 +21,10 @@ import {
   composeThreshold,
   requiredFields,
   isFieldValid,
+  opOptions,
+  opFor,
+  forecastFloorError,
+  FIELDS_BY_RECIPE,
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
@@ -90,13 +94,13 @@ describe('composeThreshold', () => {
 
 describe('requiredFields', () => {
   it('threshold requires name/metric/threshold/window', () => {
-    expect(requiredFields('threshold')).toEqual(['name', 'metric', 'threshold', 'window']);
+    expect(requiredFields('threshold')).toEqual(['name', 'metric', 'window', 'threshold']);
   });
   it('forecast swaps window for horizon', () => {
-    expect(requiredFields('forecast')).toEqual(['name', 'metric', 'threshold', 'horizon']);
+    expect(requiredFields('forecast')).toEqual(['name', 'metric', 'horizon', 'threshold']);
   });
   it('ratio additionally requires denominator_metric', () => {
-    expect(requiredFields('ratio')).toEqual(['name', 'metric', 'threshold', 'window', 'denominator_metric']);
+    expect(requiredFields('ratio')).toEqual(['name', 'metric', 'denominator_metric', 'window', 'threshold']);
   });
 });
 
@@ -105,13 +109,69 @@ describe('isFieldValid', () => {
     expect(isFieldValid('threshold', '80')).toBe(true);
     expect(isFieldValid('threshold', 'abc')).toBe(false);
   });
-  it('quantile must be in (0,1)', () => {
+  it('quantile must be a decimal in (0,1)', () => {
     expect(isFieldValid('quantile', '0.99')).toBe(true);
+    expect(isFieldValid('quantile', '.5')).toBe(true);
+    expect(isFieldValid('quantile', '95e-2')).toBe(true);
     expect(isFieldValid('quantile', '1.5')).toBe(false);
     expect(isFieldValid('quantile', '0')).toBe(false);
+    // the exporter's decimal charset: Number() accepts these, the exporter does not
+    expect(isFieldValid('quantile', '+0.5')).toBe(false);
+    expect(isFieldValid('quantile', ' 0.5')).toBe(false);
+    expect(isFieldValid('quantile', '0x0.8p0')).toBe(false);
   });
   it('an unknown field is permissive (returns true)', () => {
     expect(isFieldValid('unknown_field', 'anything')).toBe(true);
+  });
+});
+
+describe('the field model comes from the recipe contract', () => {
+  it('absence has no op field; the form fields follow the contract order', () => {
+    expect(FIELDS_BY_RECIPE.absence).not.toContain('op');
+    expect(FIELDS_BY_RECIPE.ratio).toEqual(
+      ['metric', 'denominator_metric', 'op', 'window', 'threshold', 'severity', 'mode', 'for']);
+  });
+  it('a recipe whose required fields the form cannot render has no layout', () => {
+    expect(FIELDS_BY_RECIPE).not.toHaveProperty('slo_burn_rate');
+  });
+});
+
+describe('opFor', () => {
+  it('keeps an op the recipe takes, else falls back to the default', () => {
+    expect(opFor('threshold', '==')).toBe('==');
+    expect(opFor('rate', '==')).toBe('>');
+    expect(opFor('rate', '<')).toBe('<');
+  });
+  it('a fixed-op recipe only offers its op', () => {
+    expect(opOptions('slo_burn_rate')).toEqual(['>']);
+    expect(opFor('slo_burn_rate', '<')).toBe('>');
+  });
+});
+
+describe('forecastFloorError', () => {
+  const base = { capacity_metric: 'cap' };
+  it('names the band for a floor at or above it, nothing inside', () => {
+    expect(forecastFloorError('forecast', { ...base, threshold: '0.5' })).toMatch(/0\.5/);
+    expect(forecastFloorError('forecast', { ...base, threshold: '0' })).not.toBeNull();
+    expect(forecastFloorError('forecast', { ...base, threshold: '0.2' })).toBeNull();
+    expect(forecastFloorError('forecast', { threshold: '9' })).toBeNull(); // raw mode
+    expect(forecastFloorError('rate', { ...base, threshold: '9' })).toBeNull();
+  });
+});
+
+describe('opOptions', () => {
+  // `==` is threshold-only (#810); the exporter refuses it on every other recipe.
+  it('offers == only on the eq recipes', () => {
+    expect(opOptions('threshold')).toContain('==');
+    for (const r of ['rate', 'ratio', 'p99_latency', 'forecast']) {
+      expect(opOptions(r)).not.toContain('==');
+      expect(opOptions(r)).toContain('>');
+    }
+  });
+  it('a form carrying == on a non-eq recipe is never ready', () => {
+    const rate = { name: 'r', metric: 'reqs', threshold: '1', op: '==', window: '5m' };
+    expect(allRequiredValid('rate', rate)).toBe(false);
+    expect(allRequiredValid('threshold', { ...validThreshold, op: '==' })).toBe(true);
   });
 });
 
@@ -125,9 +185,11 @@ describe('allRequiredValid', () => {
   it('is false for a YAML-only (form-unsupported) recipe', () => {
     expect(allRequiredValid('slo_burn_rate', validThreshold)).toBe(false);
   });
-  it('forecast with a capacity_metric requires a floor in (0,1)', () => {
+  it('forecast with a capacity_metric requires a floor below the current band (0.5)', () => {
     const base = { name: 'cap', metric: 'used', capacity_metric: 'total', horizon: '4h', op: '>' };
-    expect(allRequiredValid('forecast', { ...base, threshold: '0.9' })).toBe(true);
+    expect(allRequiredValid('forecast', { ...base, threshold: '0.4' })).toBe(true);
+    expect(allRequiredValid('forecast', { ...base, threshold: '0.5' })).toBe(false);
+    expect(allRequiredValid('forecast', { ...base, threshold: '0.9' })).toBe(false);
     expect(allRequiredValid('forecast', { ...base, threshold: '5' })).toBe(false);
   });
 });
@@ -159,8 +221,8 @@ describe('recipeSummary', () => {
       recipeSummary('forecast', { name: 'f', metric: 'disk', threshold: '0.9', severity: 'warning', op: '>', horizon: '4h' }),
     ).toBe('fires warning when disk is predicted to > 0.9 within 4h');
     expect(
-      recipeSummary('forecast', { name: 'fc', metric: 'used', capacity_metric: 'total', threshold: '0.8', severity: 'critical', op: '>', horizon: '4h' }),
-    ).toBe('fires critical when used / total is predicted to > 0.8 within 4h');
+      recipeSummary('forecast', { name: 'fc', metric: 'used', capacity_metric: 'total', threshold: '0.3', severity: 'critical', op: '>', horizon: '4h' }),
+    ).toBe('fires critical when used / total is predicted to > 0.3 within 4h');
   });
 });
 

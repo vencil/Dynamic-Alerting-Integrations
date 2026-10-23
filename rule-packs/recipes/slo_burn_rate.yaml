@@ -2,19 +2,19 @@
 # Human governance contract for the `slo_burn_rate` recipe. The executable form is
 # scripts/tools/dx/custom_alerts/recipes.py::_slo_burn_records/_slo_core_record.
 recipe: slo_burn_rate
-status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: Multi-window SLO error-budget burn-rate alerting (SRE Workbook ch.5) from one declaration — fast burn pages, slow burn tickets.
 summary_zh: 一條宣告展開多窗 SLO 錯誤預算 burn-rate 告警（SRE Workbook ch.5）——fast 檔叫人、slow 檔開單。
 params:
   metric:             {required: true,  desc: "BAD-events counter (e.g. http_requests_errors_total). v1 = availability/error-ratio SLI only (latency-quantile / freshness are deferred-with-trigger, ADR-031)"}
   denominator_metric: {required: true,  desc: "TOTAL-events counter (e.g. http_requests_total). selectors apply to BOTH numerator and denominator — this is exactly why latency-`le` SLIs cannot be expressed in v1"}
   objective:  {required: true,  desc: "SLO target percentage, STRING, OPEN interval (0,100) — e.g. \"99.9\". =100 (budget 0 → always fires) and =0 are rejected. \"disable\" = tri-state opt-out (declaration keeps compiling; the exporter never emits its user_threshold series). NOT a shape component: editing it never re-slugs"}
-  slo_period: {required: false, default: "30d", enum: ["28d", "30d"], desc: "error-budget window. Only scales the exporter-derived multipliers (30d→14.4/6, 28d→13.44/5.6) — NOT a shape component: switching the period never re-slugs and never forks the rule (the value rides the data plane)"}
+  slo_period: {required: false, default: "30d", enum: ["28d", "30d"], desc: "error-budget window. Only scales the exporter-derived multipliers (per period, in the recipe contract) — NOT a shape component: switching the period never re-slugs and never forks the rule (the value rides the data plane)"}
   min_events: {required: false, default: 10, desc: "positive integer; fast-window (5m) bad-event absolute floor (low-traffic guard). The slow tier's floor is compiler-derived = min_events×6 (30m = 5m×6). IS a shape component (literal in the rule text; `minev{N}` in the slug) — see the override cost note below"}
   selectors:    {required: false, desc: "exact label filters (=), applied to numerator AND denominator"}
   selectors_re: {required: false, desc: "regex label filters (=~), applied to numerator AND denominator"}
-  mode:       {required: false, default: page, enum: [page, silent]}
-  for:        {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326)"}
+  mode:       {required: false, default: "page", enum: ["page", "silent"]}
+  for:        {required: false, default: "1m", enum: ["0s", "1m", "5m", "15m", "30m", "1h"], desc: "pending duration before firing (enum-bounded, TRK-326)"}
 emitted_shape: |
   # recording (6 metric-side + the standard threshold record; NO maintenance
   # suppression here — measurement is never suppressed, budget burn stays fully

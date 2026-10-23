@@ -556,39 +556,41 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # above, one level down.
 #
 # Measured today — generators 93 (chart 8 / scaffold 42 / init 42 / onboard 1),
-# artifacts 83 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
-# fixtures 60) plus 13 read but NOT counted by the key floor (e2e-bench, see
-# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 96 scanned in all. Each floor sits
-# below its class's value; what it would read if a whole group stopped yielding:
+# artifacts 87 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
+# fixtures 60 / da-tools smoke fixtures 4) plus 13 read but NOT counted by the
+# key floor (e2e-bench, see `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 100
+# scanned in all. Each floor sits below its class's value; what it would read
+# if a whole group stopped yielding:
 #
 #   generators   chart 85 / scaffold 51 / init 51 / onboard 92
-#   artifacts    exporter 64 / golden 23 / try-local 79 / recipes 83 /
-#                e2e-bench 83 (unchanged — it was never in the total)
+#   artifacts    exporter 68 / golden 27 / try-local 83 / recipes 87 /
+#                smoke 83 / e2e-bench 87 (unchanged — it was never in the total)
 #
 # (issue 1196: init stopped rendering its own 51-key copy — 36 of whose keys no
 #  alert read — and now renders scaffold's 42, so the generator total went
 #  102 -> 93. The floor did not move: this was dead keys leaving, not a reader
 #  going quiet, and 93 still clears 80.)
 #
-# ⚠️ The e2e-bench row is kept rather than deleted, so the row count stays nine
+# ⚠️ The e2e-bench row is kept rather than deleted, so the row count stays ten
 # and so the reader can see that this floor has NOTHING to say about that group
 # in either direction. Its owner is the fifth floor, below.
 #
 # ⚠️ Stated honestly, BOTH ways — an earlier revision claimed each floor sits
 # "above what that class would read if a whole group stopped yielding", and that
-# claim FAILS on FIVE of the nine rows above: TWO under the generator floor and
-# THREE under the artifact one. They are named below rather than counted,
+# claim FAILS on SIX of the ten rows above: TWO under the generator floor and
+# FOUR under the artifact one. They are named below rather than counted,
 # because this line said "two of the nine rows" while inviting the reader to
 # redo the arithmetic — and doing it yielded four, so the sentence refuted
 # itself. "Two" was the PER-FLOOR count wearing the whole grid's denominator.
 # (Four became five at #1544: e2e-bench left the artifact denominator, so its
-# row went from "caught, 57 < 60" to "unreachable, the total does not move".)
+# row went from "caught, 57 < 60" to "unreachable, the total does not move".
+# Five became six at #3258, which added the da-tools smoke fixture row.)
 #
 # ⛔ Which grouping produced these nine rows matters as much as the count, and
 # it is not the grouping any other figure in this file uses: generators are one
-# row per PRODUCER FACE (4), artifacts one row per DIRECTORY GROUP (5 — the
+# row per PRODUCER FACE (4), artifacts one row per DIRECTORY GROUP (6 — the
 # golden-fixture roots collapse into one row, the two e2e-bench roots into
-# another). It is NOT the per-conf.d-root grouping used elsewhere in this module.
+# another, the two da-tools smoke roots into a third). It is NOT the per-conf.d-root grouping used elsewhere in this module.
 # ⚠️ "Elsewhere" is ONE other grouping, not two: the bracket test's
 # `_artifact_groups` (an rsplit on `/conf.d`) and `conf_d_root` (the fifth
 # floor's, and this module's, definition of a root) produce the IDENTICAL
@@ -613,10 +615,11 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     at exactly zero — so what this floor uniquely watches is a producer that
 #     SHRANK without emptying ("init dropped 30 of its 42 keys"), which nothing
 #     else sees.
-#   * artifact floor 71 does NOT catch try-local (79) or the recipes roots (83,
-#     they carry no keys) — and cannot catch e2e-bench (83) at all, its keys
-#     being outside the denominator. 3 of its 5 rows. The first two are covered
-#     by `_SHIPPED_CONFD_ROOTS`; e2e-bench is covered by the fifth floor.
+#   * artifact floor 75 does NOT catch try-local (83), the recipes roots (87,
+#     they carry no keys) or the da-tools smoke roots (83) — and cannot catch
+#     e2e-bench (87) at all, its keys being outside the denominator. 4 of its
+#     6 rows. The first two are covered by `_SHIPPED_CONFD_ROOTS`; smoke and
+#     e2e-bench are covered by the fifth floor.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
 #
@@ -690,6 +693,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      artifact keys, total 76 -> 83. Same remedy again: the floor went
 #      64 -> 71, the full-l0-l3 probe reads 70 against it, and both figures
 #      here stay at +6 / 12.)
+#     (#3258 added the da-tools release smoke fixture — two roots under
+#      `tests/fixtures/da-tools-smoke/`, 2 keys each — +4 artifact keys, total
+#      83 -> 87. Same remedy again: the floor went 71 -> 75, the full-l0-l3
+#      probe reads 74 against it, and both figures here stay at +6 / 12.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -704,7 +711,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 71
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 75
 
 # ── the artifact floor's DENOMINATOR, and why it is smaller than the scan ────
 #
@@ -808,7 +815,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
 # the table above and the rest covered only by a GLOBAL key floor with 12 keys
-# of DOWNWARD slack (today's COUNTED artifact total 83 − the floor of 71: how
+# of DOWNWARD slack (today's COUNTED artifact total 87 − the floor of 75: how
 # many keys may disappear before that floor speaks), a whole fixture tree can
 # stop yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note —
 # that one is UPWARD, measured against "biggest root gone", and asks for a
@@ -816,7 +823,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 #
 # ⛔ COUNTED, and for the two e2e-bench roots the gap above is not a gap but a
 # TOTAL blind spot: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` (#1544) takes them out
-# of that 83, so no amount of erosion under them will ever reach the key floor.
+# of that 87, so no amount of erosion under them will ever reach the key floor.
 # This floor is the only one that speaks for them, which is why the exclusion
 # was written as a change to the key floor's denominator and NOT as a change to
 # the scan — a scan-level exclusion removes them from this floor too.
@@ -1004,6 +1011,8 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "try-local/seed/conf.d",
     "tests/e2e-bench/fixture/synthetic-v1/conf.d",
     "tests/e2e-bench/fixture/synthetic-v2/conf.d",
+    "tests/fixtures/da-tools-smoke/new/conf.d",
+    "tests/fixtures/da-tools-smoke/old/conf.d",
     "tests/golden/fixtures/array-replace/conf.d",
     "tests/golden/fixtures/full-l0-l3/conf.d",
     "tests/golden/fixtures/l0-only/conf.d",

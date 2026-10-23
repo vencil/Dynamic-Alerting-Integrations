@@ -1,18 +1,18 @@
 # Recipe: p99_latency — platform-authored (ADR-024 Capability B, #741).
 recipe: p99_latency
-status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = shape.py RECIPE_STATUS)
+status: active   # lifecycle: active|deprecated|eol (ADR-024 #6; SSOT = components/threshold-exporter/app/pkg/config/recipe_contract.json)
 summary: A histogram quantile (default p99) latency crosses a threshold.
 summary_zh: histogram 分位數（預設 p99）延遲越過閾值。
 params:
   metric:    {required: true,  desc: "histogram base name; the recipe queries <metric>_bucket"}
-  quantile:  {required: false, default: "0.99", desc: "quantile in (0,1), e.g. 0.99"}
+  quantile:  {required: false, default: "0.99", desc: "quantile in the open interval the recipe contract gives, e.g. 0.99"}
   op:        {required: false, default: ">", enum: [">", ">=", "<", "<="]}
   window:    {required: true,  desc: "rate window over buckets (Go duration, e.g. 5m)"}
   threshold: {required: true,  desc: "value[:severity] — seconds, e.g. 2:warning"}
   selectors:    {required: false, desc: "exact label filters (=) applied to the _bucket series"}
   selectors_re: {required: false, desc: "regex label filters (=~)"}
-  mode:      {required: false, default: page, enum: [page, silent]}
-  for:       {required: false, default: "1m", desc: "pending duration before firing; one of 0s/1m/5m/15m/30m/1h (enum-bounded, TRK-326)"}
+  mode:      {required: false, default: "page", enum: ["page", "silent"]}
+  for:       {required: false, default: "1m", enum: ["0s", "1m", "5m", "15m", "30m", "1h"], desc: "pending duration before firing (enum-bounded, TRK-326)"}
 emitted_shape: |
   histogram_quantile(<quantile>,
     sum by(le,tenant,version)(rate(<metric>_bucket<sel>[<window>]))) {op} on(tenant[,version])

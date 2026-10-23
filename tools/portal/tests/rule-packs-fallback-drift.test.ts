@@ -65,7 +65,7 @@ const MOD = '../src/interactive/tools/_common/data/rule-packs.js';
 
 // Generated source of truth. Resolved relative to this test file:
 // tools/portal/tests/ -> (../../../) -> repo root -> docs/assets/platform-data.json
-// (same path-resolution pattern as recipe-enums.drift.test.ts).
+// (same path-resolution pattern as silent-mode-schema.drift.test.ts).
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const platformData = JSON.parse(
   readFileSync(resolve(__dirname, '../../../docs/assets/platform-data.json'), 'utf8'),

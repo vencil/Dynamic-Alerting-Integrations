@@ -118,10 +118,8 @@ WHAT THIS GUARD DOES **NOT** BUY
   The GitHub leg now captures the code and applies the contract that
   `docs/integration/gitops-deployment.md` already documented for consumers
   (0 skip / 1 report / 2 fail), the shape this platform's own
-  `.github/workflows/config-diff.yaml` has carried in its `Run config diff`
-  step since it was burned by the same thing (cited by step name, not by line
-  range — a range drifts the moment anything above it moves, and nothing here
-  would notice). The GitLab leg's job was REMOVED under #1358 (option C,
+  `.github/workflows/config-diff.yaml` carried in its `Run config diff` step
+  after it was burned by the same thing (that workflow was retired by #3258). The GitLab leg's job was REMOVED under #1358 (option C,
   owner-approved) and came back under issue 1444 with the same contract; see
   `test_generate_stage_body_is_pinned_on_both_legs`, which pins both bodies.
   ⛔ That deferral's original premise — "nothing loads the GitLab pipeline
@@ -1103,7 +1101,7 @@ _GH_JOB_NEEDS = {
     # therefore took the blast-radius comment away from every config pull
     # request in the customer's repository until somebody fixed it, and what
     # reviewers saw in the meantime was the previous run's report, which looks
-    # current. This platform's own config-diff.yaml has no `needs:` either.
+    # current. This platform's own config-diff-advisory.yml has no `needs:` either.
     # ⚠️ So the narrow-edge risk this map was written for still applies to the
     # row BELOW: `apply` is what reaches the cluster, and its edge must stay.
     "generate": (),
@@ -8172,9 +8170,10 @@ def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
 #      relationship to tenant config -> the edge is gone; `_GH_JOB_NEEDS` above
 #      pins its absence, and the note there says why.
 #
-# ⚠️ Face 2 with honesty about the comparison: this platform's own
-# config-diff.yaml declares no concurrency either, so "the platform does it
-# differently" was never the argument. The argument is the in-place edit.
+# ⚠️ Face 2 with honesty about the comparison: when this was written, this
+# platform's own config-diff.yaml (retired, #3258) declared no concurrency
+# either, so "the platform does it differently" was never the argument. The
+# argument is the in-place edit.
 
 # Status functions that make a step reachable after an earlier failure. An `if:`
 # with none of these gets an implicit `success()`, which is exactly the defect.

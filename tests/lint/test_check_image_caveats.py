@@ -221,22 +221,3 @@ def test_every_real_marker_expires_when_the_version_moves() -> None:
     findings = gate.scan(_REPO_ROOT, bumped)
     assert {f["kind"] for f in findings} == {"stale"}, findings
     assert len(findings) == markers
-
-
-def test_the_config_diff_disclosure_and_its_expiry_go_together() -> None:
-    """#1420 D2: the platform `config-diff.yaml` keeps its blind-spot
-    disclosure while its pinned image predates config_diff's own
-    "Changed Files Not Compared" section, and the image-caveat marker is what
-    makes `make pre-tag` force it out at the release that moves the pin.
-
-    Both directions are the defect: the disclosure without the marker is
-    never removed (it duplicates the report forever); the marker without the
-    disclosure means the disclosure went before the pin moved, and the
-    platform's own PRs are back to a bare "No changes detected." for a
-    `_defaults.yaml` edit until the next release.
-    """
-    text = (_REPO_ROOT / ".github/workflows/config-diff.yaml").read_text(encoding="utf-8")
-    has_disclosure = "blind_spots<<EOF" in text
-    has_marker = any(gate.MARKER_RE.search(gate._CODE_SPAN_RE.sub("", line))
-                     for line in text.splitlines())
-    assert has_disclosure == has_marker, (has_disclosure, has_marker)

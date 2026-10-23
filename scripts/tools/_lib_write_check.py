@@ -59,6 +59,7 @@ import copy
 import decimal
 import math
 import os
+import posixpath
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
@@ -198,11 +199,60 @@ def _readers(tree: "_lib_parse_tree.Tree", rel: str) -> "tuple[str, ...]":
     return tuple(tree.selected.get(rel, ()))
 
 
+#: Why `_clean_target` refuses a write target: Go's `cleanRelPath`
+#: (cmd/da-guard/parse_tree.go) refusals, one for one, plus the NUL byte no
+#: argv can carry to it. A test runs each spelling through both and pins
+#: that they refuse the same set.
+TARGET_NOT_RELATIVE = "must be a path relative to the conf.d root"
+TARGET_NOT_INSIDE = "must name a file inside the conf.d root"
+TARGET_NOT_UTF8 = "is not valid UTF-8; JSON cannot carry it"
+TARGET_NUL = "holds a NUL byte, which no file name can"
+
+
+def _clean_target(rel: "str | bytes | os.PathLike[str]") -> str:
+    """The write target *rel* as parse-tree names it: root-relative, '/',
+    lexically cleaned (`team/`, `./team` and `a/../team` are `team`), as Go's
+    `cleanRelPath` cleans `--path` — so the document's entry, readers and
+    `not_read` are looked up under the name they are held by.
+
+    ⛔ The same refusals as `cleanRelPath`, each a :class:`WriteRefused`
+    (:data:`NOT_READ`: a write there reaches no reader), here and before any
+    da-guard run — never parse-tree's caller error read back as "no usable
+    da-guard" (ParseTreeError), never a bare ValueError, and never a path a
+    staging directory would join outside itself: empty or absolute (a drive
+    too) — :data:`TARGET_NOT_RELATIVE`; `.`, `..` or leaving the root —
+    :data:`TARGET_NOT_INSIDE`; not valid UTF-8 (`os.fsdecode`'s lone
+    surrogates) — :data:`TARGET_NOT_UTF8`; and a NUL byte, which no argv
+    can carry to Go — :data:`TARGET_NUL`."""
+    given = os.fspath(rel)
+    if isinstance(given, bytes):
+        given = os.fsdecode(given)
+
+    def refuse(why: str) -> "WriteRefused":
+        return WriteRefused(given, NOT_READ, f"the write target {given!r} {why}")
+
+    if "\x00" in given:
+        raise refuse(TARGET_NUL)
+    s = given.replace(os.sep, "/") if os.sep != "/" else given
+    if not s or s.startswith("/") or os.path.isabs(given) or os.path.splitdrive(given)[0]:
+        raise refuse(TARGET_NOT_RELATIVE)
+    norm = posixpath.normpath(s)
+    if norm in (".", "..") or norm.startswith("../"):
+        raise refuse(TARGET_NOT_INSIDE)
+    try:
+        norm.encode("utf-8")
+    except UnicodeEncodeError:
+        raise refuse(TARGET_NOT_UTF8) from None
+    return norm
+
+
 def _not_read_detail(tree: "_lib_parse_tree.Tree", rel: str) -> str:
     # A directory at the target (role dir / unlistable_dir, #3206) is a path
     # no reader reads as a file — NOT_READ, the kind for "a write here would
     # reach no reader", kept rather than a new kind: the remedy is the same
     # (write somewhere a reader reads) and REASONS stays a closed list.
+    # The entry is held under the cleaned name (`team/` is `team`).
+    rel = _clean_target(rel)
     role = next((e.role for e in tree.entries if e.path == rel), None)
     if role in ("dir", "unlistable_dir"):
         return f"it is a directory (parse-tree role {role}); no reader reads it as a file"
@@ -229,6 +279,7 @@ def original(root: "str | os.PathLike[str]", rel: str, data: "bytes | None", *,
     which returns None) read by parse-tree as the file at *rel*. Raises
     WriteRefused — :data:`ORIGINAL_UNREADABLE` when parse-tree cannot read
     it, :data:`NOT_READ` when no reader reads that path — and ParseTreeError."""
+    rel = _clean_target(rel)
     if data is None:
         return None
     tree = read_as(root, rel, data, binary=binary, timeout=timeout)
@@ -318,6 +369,7 @@ def confirm(root: "str | os.PathLike[str]", rel: str, text: "str | bytes",
     (:data:`NOT_READ`), that parse-tree can read (:data:`TEXT_UNREADABLE`),
     and whose nodes equal *expected* (:data:`CONTENT_DIFFERS`). Raises
     ParseTreeError when there is no usable da-guard."""
+    rel = _clean_target(rel)
     data = text.encode("utf-8") if isinstance(text, str) else text
     tree = read_as(root, rel, data, binary=binary, timeout=timeout)
     if not _readers(tree, rel):
@@ -432,6 +484,7 @@ def confirm_all(root: "str | os.PathLike[str]",
 
 def _judge(tree: "_lib_parse_tree.Tree", rel: str, expected: Any) -> None:
     """:func:`confirm`'s three refusals, for *rel* of an already-read tree."""
+    rel = _clean_target(rel)
     if not _readers(tree, rel):
         raise WriteRefused(rel, NOT_READ, _not_read_detail(tree, rel))
     try:
@@ -477,7 +530,9 @@ class StagedTree:
     def place(self, rel: str, dest: "str | os.PathLike[str]") -> None:
         """Move the staged *rel* to *dest* (its parent must exist): a rename on
         the same file system, otherwise a copy. Raises OSError."""
-        src = self.dir / rel
+        # The staged name is the cleaned one (`confirm_tree`), whatever
+        # spelling the caller places it by.
+        src = self.dir / _clean_target(rel)
         try:
             os.replace(src, dest)
         except OSError as exc:
@@ -517,6 +572,19 @@ def confirm_tree(root: "str | os.PathLike[str]",
     write-error handling). The staging directory is removed on exit, whatever
     happened. Raises WriteRefused and ParseTreeError (no usable da-guard)."""
     root = Path(root)
+    given_rels = [os.fsdecode(os.fspath(rel)) for rel, _t, _e in items]
+    # Each target checked and cleaned before anything is staged: an absolute
+    # or `..` target would be joined outside the staging directory.
+    items = [(_clean_target(rel), text, expected) for rel, text, expected in items]
+    # Two spellings of one path would be staged one over the other, and only
+    # the last text judged and placed: refused, naming both.
+    first: "dict[str, str]" = {}
+    for (rel, _t, _e), given in zip(items, given_rels):
+        if rel in first:
+            raise WriteRefused(rel, NOT_READ,
+                               f"two items of this run name the same file: {first[rel]!r} "
+                               f"and {given!r} are both {rel!r}")
+        first[rel] = given
     rels = tuple(rel for rel, _t, _e in items)
     parent = _staging_parent(root)
     try:
