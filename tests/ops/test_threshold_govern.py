@@ -110,7 +110,7 @@ def test_plan_empty_when_nothing_actionable():
 
 
 # ---------------------------------------------------------------------------
-# 3. apply_threshold_changes — surgical, comment-preserving, minimal diff
+# 3. edit_live_yaml — da-guard edit sets the values (ADR-036 §2, #3206)
 # ---------------------------------------------------------------------------
 FIXTURE = (
     "# headline tenant — do not delete this comment\n"
@@ -127,112 +127,109 @@ FIXTURE = (
 )
 
 
-def test_apply_changes_only_target_value_and_preserves_comments():
-    new, unapplied = tg.apply_threshold_changes(FIXTURE, "db-a", {"mysql_connections": '"45"'})
-    assert unapplied == []
-    # target line changed, inline comment preserved
-    assert '    mysql_connections: "45"            # warning threshold\n' in new
-    # everything else byte-identical
-    assert "# headline tenant — do not delete this comment" in new
-    assert '    mysql_connections_critical: "120"  # critical' in new
-    assert '    mysql_threads_running: "75"' in new
-    assert '      owner: "team-db"' in new
-    assert '    redis_mem: "512"' in new
-    # exactly one line differs
-    diff = [(a, b) for a, b in zip(FIXTURE.split("\n"), new.split("\n")) if a != b]
-    assert len(diff) == 1
-    assert diff[0][0].strip().startswith("mysql_connections:")
+def _edit(raw, tenant, values, **kw):
+    new, err = tg.edit_live_yaml(raw, tenant, values, **kw)
+    assert err is None, err
+    return new
 
 
-def test_apply_multiple_keys_one_tenant():
-    new, unapplied = tg.apply_threshold_changes(
-        FIXTURE, "db-a", {"mysql_connections": '"45"', "mysql_threads_running": '"90"'}
-    )
-    assert unapplied == []
-    assert '    mysql_connections: "45"            # warning threshold' in new
-    assert '    mysql_threads_running: "90"' in new
-    # db-b untouched
-    assert '    redis_mem: "512"' in new
+def test_edit_changes_only_target_value_and_preserves_comments():
+    new = _edit(FIXTURE, "db-a", {"mysql_connections": '"45"'})
+    # target line changed, its trailing comment kept (da-guard writes one
+    # space before it: a layout change, not a content one)
+    assert '    mysql_connections: "45" # warning threshold\n' in new
+    # every other line: same content and comments (the head comment was a
+    # PyYAML-era special case; da-guard keeps every comment outside the edit)
+    assert new.startswith("# headline tenant — do not delete this comment\n")
+    assert '    mysql_connections_critical: "120" # critical\n' in new
+    assert '    mysql_threads_running: "75"\n' in new
+    assert '      owner: "team-db"\n' in new
+    assert '    redis_mem: "512"\n' in new
+    differs = [(a, b) for a, b in zip(FIXTURE.split("\n"), new.split("\n"))
+               if a.split() != b.split()]
+    assert len(differs) == 1 and differs[0][1].strip().startswith("mysql_connections:"), differs
 
 
-def test_apply_does_not_touch_other_tenant():
-    new, _ = tg.apply_threshold_changes(FIXTURE, "db-b", {"redis_mem": '"1024"'})
-    assert '    redis_mem: "1024"' in new
-    # db-a fully intact
-    assert '    mysql_connections: "50"            # warning threshold' in new
-    assert '    mysql_threads_running: "75"' in new
+def test_edit_multiple_keys_one_tenant():
+    new = _edit(FIXTURE, "db-a", {"mysql_connections": '"45"', "mysql_threads_running": '"90"'})
+    assert '    mysql_connections: "45" # warning threshold\n' in new
+    assert '    mysql_threads_running: "90"\n' in new
+    assert '    redis_mem: "512"\n' in new
 
 
-def test_apply_reports_missing_key_unapplied():
-    new, unapplied = tg.apply_threshold_changes(FIXTURE, "db-a", {"nonexistent_key": '"1"'})
-    assert unapplied == ["nonexistent_key"]
-    assert new == FIXTURE  # nothing changed
+def test_edit_does_not_touch_other_tenant():
+    new = _edit(FIXTURE, "db-b", {"redis_mem": '"1024"'})
+    assert '    redis_mem: "1024"\n' in new
+    assert '    mysql_connections: "50" # warning threshold\n' in new
+    assert '    mysql_threads_running: "75"\n' in new
 
 
-def test_apply_does_not_match_nested_metadata_key():
-    # a key that only exists nested under _metadata must NOT be edited as a
-    # direct child (it isn't a threshold) → reported unapplied, file unchanged
-    new, unapplied = tg.apply_threshold_changes(FIXTURE, "db-a", {"owner": '"hacked"'})
-    assert unapplied == ["owner"]
-    assert '      owner: "team-db"' in new
+def test_edit_refuses_a_missing_key():
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"nonexistent_key": '"1"'})
+    assert new is None and err == "keys not found in live config: ['nonexistent_key']"
 
 
-def test_apply_preserves_crlf_line_endings():
-    # A CRLF-authored tenant file (Windows checkout) must NOT become mixed-EOL:
-    # the comment-less edited line previously dropped its trailing \r.
+def test_edit_does_not_match_nested_metadata_key():
+    # a key that only exists nested under _metadata is not a direct child
+    # (it isn't a threshold): refused, never added to the tenant block
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"owner": '"hacked"'})
+    assert new is None and err == "keys not found in live config: ['owner']"
+
+
+def test_edit_preserves_crlf_line_endings():
+    # A CRLF-authored tenant file (Windows checkout) must NOT become mixed-EOL.
     crlf = (
         "tenants:\r\n  db-a:\r\n"
-        '    mysql_connections: "50"\r\n'      # no inline comment — the risky case
+        '    mysql_connections: "50"\r\n'
         '    mysql_threads_running: "75"  # cpu\r\n'
     )
-    new, unapplied = tg.apply_threshold_changes(crlf, "db-a", {"mysql_connections": '"45"'})
-    assert unapplied == []
-    # the edited line keeps its CRLF; no bare-LF was introduced anywhere
+    new = _edit(crlf, "db-a", {"mysql_connections": '"45"'})
     assert '    mysql_connections: "45"\r\n' in new
     assert "\n" not in new.replace("\r\n", "")  # every LF is part of a CRLF pair
 
 
-# ---------------------------------------------------------------------------
-# 4. verify_only_changed — the PUT safety gate
-# ---------------------------------------------------------------------------
-def test_verify_passes_for_clean_edit():
-    old = "tenants:\n  db-a:\n    k1: \"10\"\n    k2: \"20\"\n"
-    new = "tenants:\n  db-a:\n    k1: \"15\"\n    k2: \"20\"\n"
-    assert tg.verify_only_changed(old, new, "db-a", {"k1": '"15"'}) is None
+def test_edit_writes_the_value_as_a_string():
+    old = "tenants:\n  db-a:\n    k1: 10\n    k2: \"20\"\n"
+    new = _edit(old, "db-a", {"k1": '"15"'})
+    assert new == 'tenants:\n  db-a:\n    k1: "15"\n    k2: "20"\n', new
 
 
-def test_verify_fails_when_unrelated_key_changed():
-    old = "tenants:\n  db-a:\n    k1: \"10\"\n    k2: \"20\"\n"
-    new = "tenants:\n  db-a:\n    k1: \"15\"\n    k2: \"99\"\n"  # k2 drifted too
-    err = tg.verify_only_changed(old, new, "db-a", {"k1": '"15"'})
-    assert err and "k2" in err
+def test_edit_refuses_a_literal_that_is_not_a_quoted_string():
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"})
+    assert new is None and "not a double-quoted string" in err
 
 
-def test_verify_fails_when_key_removed():
-    old = "tenants:\n  db-a:\n    k1: \"10\"\n    k2: \"20\"\n"
-    new = "tenants:\n  db-a:\n    k1: \"15\"\n"  # k2 vanished
-    err = tg.verify_only_changed(old, new, "db-a", {"k1": '"15"'})
-    assert err and "keys differ; missing ['k2']" in err
+def test_edit_leaves_the_config_dir_as_it_was(tmp_path):
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "db-a.yaml").write_text("tenants:\n  db-a:\n    k1: \"1\"\n", encoding="utf-8")
+    before = (conf / "db-a.yaml").read_bytes()
+    new = _edit('tenants:\n  db-a:\n    k1: "10"\n', "db-a", {"k1": '"15"'},
+                config_dir=str(conf), rel="db-a.yaml")
+    assert new == 'tenants:\n  db-a:\n    k1: "15"\n'
+    assert sorted(p.name for p in conf.iterdir()) == ["db-a.yaml"]
+    assert (conf / "db-a.yaml").read_bytes() == before
 
 
-def test_verify_fails_when_target_got_wrong_value():
-    old = "tenants:\n  db-a:\n    k1: \"10\"\n"
-    new = "tenants:\n  db-a:\n    k1: \"999\"\n"
-    err = tg.verify_only_changed(old, new, "db-a", {"k1": '"15"'})
-    assert err and "k1" in err
+def test_edit_a_config_dir_that_cannot_be_copied_is_that_tenants_error(monkeypatch):
+    def boom(config_dir):
+        raise OSError("Permission denied")
+    monkeypatch.setattr(tg, "_stage", boom)
+    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": '"45"'},
+                                 config_dir="conf.d")
+    assert new is None and "could not copy conf.d" in err and "Permission denied" in err
 
 
 # #2231: a key written twice — not the one being edited — makes a file the
-# exporter drops whole. Last-wins parsing read old and new as the same
-# mapping and passed the gate; it must take the "did not parse" refusal.
+# exporter drops whole: da-guard edit refuses the original.
 _DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
                   '    k2: "30"\n')
 
 
-def test_verify_refuses_a_duplicate_key_elsewhere_in_the_tenant():
-    new = _DUP_OTHER_KEY.replace('k1: "10"', 'k1: "15"')
-    err = tg.verify_only_changed(_DUP_OTHER_KEY, new, "tenant-a", {"k1": '"15"'})
-    assert err and "original_unreadable" in err and "duplicate_key" in err
+def test_edit_refuses_a_duplicate_key_elsewhere_in_the_tenant():
+    new, err = tg.edit_live_yaml(_DUP_OTHER_KEY, "tenant-a", {"k1": '"15"'})
+    assert new is None
+    assert "original_unreadable" in err and "duplicate_key" in err, err
 
 
 def test_open_pr_never_puts_a_file_with_a_duplicate_key(monkeypatch):
@@ -300,7 +297,7 @@ def test_open_pr_success_maps_to_pr_opened(monkeypatch):
     assert out.status == "pr_opened"
     assert out.pr_url == "https://gh/7" and out.pr_number == 7
     # the PUT body must be the merged config: target changed, others intact
-    assert '    mysql_connections: "45"            # warning threshold' in calls["put_body"]
+    assert '    mysql_connections: "45" # warning threshold\n' in calls["put_body"]
     assert '    mysql_threads_running: "75"' in calls["put_body"]
     # governance channel header sent on both GET and PUT
     assert calls["get_headers"]["X-DA-Write-Source"] == tg.WRITE_SOURCE
@@ -470,7 +467,7 @@ def test_refresh_retry_refetches_and_succeeds_on_the_second_put(monkeypatch):
     assert len(puts) == 2
     assert "base moved upstream" not in puts[0]
     assert "base moved upstream" in puts[1]
-    assert '    mysql_connections: "45"            # warning threshold' in puts[1]
+    assert '    mysql_connections: "45" # warning threshold\n' in puts[1]
 
 
 @pytest.mark.parametrize("why, remedies, body", [

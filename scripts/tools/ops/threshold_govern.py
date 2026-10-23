@@ -28,11 +28,14 @@ the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
     排程在離峰 + ``concurrencyPolicy: Forbid``，不持續 hammer prod。
   - **安全預設 dry-run**：不帶 ``--apply`` 只印出「會開哪些 PR」，**不發任何寫入**。
 
-讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 只 surgical 取代被推薦的
-threshold 值行（保留註解 / 縮排 / 其餘行 byte-identical）→ 以 ``da-guard parse-tree``
-（ADR-036 §2）讀改前、改後兩份文字，確認「只有目標 keys 變成推薦值」（其餘鍵、結構、每個
-純量的原文／型別／值都不變；改前那份 parse-tree 讀不了、或租戶檔路徑沒有讀取端也拒絕）→
-才 PUT。不通過的租戶記為 ``error``、不送 PUT；沒有可用的 da-guard 結束碼 2。產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
+讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 把那份文字放進 ``--config-dir``
+的私有複本、當成租戶檔所在路徑的那個檔 → 交給 ``da-guard edit --dry-run``（ADR-036 §2：寫
+conf.d 的只有 Go，#3206）把被推薦的 key 設成推薦值（字串，寫成 ``"45"``）→ 拿它回的文字 PUT。
+要改的 key 必須已是該租戶區塊的直接子純量（不新增 key）；da-guard 只改被編輯的節點，其餘鍵、
+註解、每個純量的寫法照舊，只重排版面（縮排 2 格、行尾註解前一個空格、空行可能消失；CRLF 與
+BOM 保留），並拒絕讀不了或驗證會點名的原檔、沒有讀取端的路徑、讀回不是「原檔套上這些編輯」
+的結果。不通過的租戶記為 ``error``、不送 PUT；沒有可用的 da-guard 結束碼 2。產出的 PR diff
+因此是那幾個值的變化，加上第一次經 da-guard 寫的檔的版面重排。
 自 #3064 起 tenant-api 只寫「API 管理」的租戶：租戶檔只宣告它自己，body 整檔逐位元組
 寫入。共用檔等其他形狀的租戶由 git 管理：GET 不給 ``raw_yaml``（本工具記為 error、
 不寫入），PUT 回 409 ``TENANT_GIT_MANAGED``（remedy ``fix_in_repo``，不當成 dedup）。
@@ -456,181 +459,139 @@ def collect_not_measured(
 
 
 # ---------------------------------------------------------------------------
-# Surgical YAML editing (preserve comments + minimal diff)
+# The edit: Go applies it (ADR-036 §2 — only Go writes conf.d; #3206)
 # ---------------------------------------------------------------------------
-def _indent(line: str) -> int:
-    return len(line) - len(line.lstrip(" "))
+#: Staged copies of a --config-dir for `da-guard edit` (`_stage`), one per
+#: directory for the process; removed at exit.
+_STAGES: dict[str, str] = {}
 
 
-def _split_inline_comment(line: str) -> tuple[str, str]:
-    """Split a line into (code, trailing_comment) at the first ' #' that is
-    OUTSIDE a quoted string.
-
-    YAML requires whitespace before an inline ``#``. Scanning quote state means a
-    ``#`` inside a quoted value (e.g. ``label: "a # b"``) is NOT mistaken for a
-    comment — so the safety-net verify can't be fooled by such a value (threshold
-    values are numeric/simple, but the editor must not corrupt a non-threshold
-    sibling line either). The whitespace run before ``#`` is kept on the comment
-    side so the code side ends exactly at the value.
-    """
-    in_single = in_double = False
-    for i, c in enumerate(line):
-        if c == "'" and not in_double:
-            in_single = not in_single
-        elif c == '"' and not in_single:
-            in_double = not in_double
-        elif (c == "#" and not in_single and not in_double
-              and i > 0 and line[i - 1] in " \t"):
-            j = i
-            while j > 0 and line[j - 1] in " \t":
-                j -= 1
-            return line[:j], line[j:]
-    return line, ""
+def _cleanup_stages() -> None:
+    import shutil
+    for tmp in _STAGES.values():
+        shutil.rmtree(tmp, ignore_errors=True)
+    _STAGES.clear()
 
 
-def apply_threshold_changes(
-    raw_yaml: str, tenant: str, new_values: dict[str, str]
-) -> tuple[str, list[str]]:
-    """Surgically replace threshold values in ``tenant``'s block of ``raw_yaml``.
-
-    Only DIRECT scalar children of the tenant are touched; indentation, inline
-    comments, and every other byte are preserved so the resulting PR diff is
-    exactly the changed value lines. Returns ``(new_yaml, unapplied_keys)`` —
-    keys not found as a direct child are returned (the caller fails loud rather
-    than silently dropping a recommendation; a separate parse-verify step is the
-    real correctness gate).
-    """
-    lines = raw_yaml.split("\n")
-    unapplied = sorted(new_values)
-
-    # 1. Locate the top-level `tenants:` mapping.
-    t_idx = next(
-        (i for i, ln in enumerate(lines) if re.match(r"^tenants:\s*(#.*)?$", ln)),
-        None,
-    )
-    if t_idx is None:
-        return raw_yaml, unapplied
-
-    # 2. Find the tenant entry (shallowest indent under `tenants:`).
-    tenant_idx = None
-    tenant_indent = None
-    j = t_idx + 1
-    while j < len(lines):
-        ln = lines[j]
-        stripped = ln.strip()
-        if stripped and not stripped.startswith("#"):
-            ind = _indent(ln)
-            if ind == 0:
-                break  # back to top level → left the tenants: block
-            if tenant_indent is None:
-                tenant_indent = ind
-            if ind == tenant_indent:
-                key = stripped.split(":", 1)[0].strip()
-                if key == tenant:
-                    tenant_idx = j
-                    break
-        j += 1
-    if tenant_idx is None:
-        return raw_yaml, unapplied
-
-    # 3. Tenant block = lines after the tenant key, indented deeper than it.
-    block_end = tenant_idx + 1
-    while block_end < len(lines):
-        ln = lines[block_end]
-        stripped = ln.strip()
-        if stripped and not stripped.startswith("#") and _indent(ln) <= tenant_indent:
-            break
-        block_end += 1
-
-    # 4. Direct-child indent = the first child key line's indent.
-    child_indent = None
-    for k in range(tenant_idx + 1, block_end):
-        ln = lines[k]
-        stripped = ln.strip()
-        if stripped and not stripped.startswith("#"):
-            child_indent = _indent(ln)
-            break
-    if child_indent is None:
-        return raw_yaml, unapplied
-
-    # 5. Replace each target key's value on its direct-child line.
-    out = list(lines)
-    remaining = dict(new_values)
-    for k in range(tenant_idx + 1, block_end):
-        if not remaining:
-            break
-        ln = out[k]
-        if _indent(ln) != child_indent:
-            continue
-        code, comment = _split_inline_comment(ln)
-        for key in list(remaining):
-            # Capture a trailing CR so a CRLF file keeps its line ending: without
-            # the (\r?) group, `.*` would swallow the \r on a comment-less line
-            # and emit a lone LF, leaving a mixed-EOL file (spurious diff churn).
-            m = re.match(r"^(\s*" + re.escape(key) + r"\s*:\s*)\S.*?(\r?)$", code)
-            if m:
-                out[k] = m.group(1) + remaining.pop(key) + m.group(2) + comment
-                break
-
-    return "\n".join(out), sorted(remaining)
-
-
-def verify_only_changed(
-    old_yaml: str, new_yaml: str, tenant: str, expected: dict[str, str],
-    *, config_dir: Optional[str] = None, rel: str = "",
-) -> Optional[str]:
-    """Confirm the edit changes ONLY ``expected`` keys of ``tenant``, as
-    ``da-guard parse-tree`` reads both texts (ADR-036 §2, #2906).
-
-    Returns ``None`` if safe, else a human error string. This is the
-    correctness gate: even if the surgical edit had a bug, a mismatch here
-    aborts the write so a corrupted file is never PUT. ``expected`` maps key
-    → conf.d literal (``'"45"'``, a double-quoted string).
-
-    The old text is read by parse-tree as the file at *rel* of *config_dir*
-    (the tenant's own file, ``<tenant>.yaml`` when unknown; a missing
-    *config_dir* is an empty tree); the new text must read back as exactly
-    that content with each expected key set to its string — every other key,
-    the structure, and each scalar's source text, tag and value unchanged.
-    An old text parse-tree cannot read (a duplicate key, a syntax error, …)
-    or a path no reader reads is refused too. No usable da-guard raises
-    ``_lib_parse_tree.ParseTreeError``.
-    """
+def _stage(config_dir: Optional[str]) -> Path:
+    """A private copy of *config_dir* (`<tmp>/conf.d`; an empty one for a
+    missing or unnamed directory), made once per process: the tree the live
+    text is edited in, so `da-guard edit` reads the tenant file with the role
+    it has in the real tree. Directories, regular files and symlinks are
+    copied (a symlink as a link); anything else (a FIFO, a socket) is left
+    out — a tree holding one is refused by the run's read before any edit."""
+    import atexit
+    import shutil
+    import stat
     import tempfile
 
-    import _lib_parse_tree  # lazy: keeps `--dry-run` import-light
-    import _lib_write_check
+    key = os.path.abspath(config_dir) if config_dir else ""
+    if key not in _STAGES:
+        if not _STAGES:
+            atexit.register(_cleanup_stages)
+        tmp = tempfile.mkdtemp(prefix="threshold-govern-")
+        dst = Path(tmp) / "conf.d"
 
-    if config_dir is None:
-        with tempfile.TemporaryDirectory(prefix="threshold-govern-") as empty:
-            return verify_only_changed(old_yaml, new_yaml, tenant, expected,
-                                       config_dir=empty, rel=rel)
-    rel = rel or f"{tenant}.yaml"
-    root = config_dir
-    want: dict[str, Any] = {}
-    for key, literal in expected.items():
-        text = literal.strip()
-        if not (len(text) >= 2 and text[0] == text[-1] == '"'):
-            return f"{key}: the literal {literal!r} is not a double-quoted string"
-        want[key] = _lib_write_check.scalar(text[1:-1])
-    try:
-        old = _lib_write_check.original(root, rel, old_yaml.encode("utf-8"))
-        tenants = old.get("tenants")
-        block = (tenants.get(tenant) if isinstance(tenants, dict)
-                 and not _lib_parse_tree.is_scalar(tenants) else None)
-        if not isinstance(block, dict) or _lib_parse_tree.is_scalar(block):
-            return f"tenant {tenant!r} has no mapping block in the live config"
-        missing = sorted(set(want) - set(block))
-        if missing:
-            return f"keys not in the live config: {missing}"
+        def _special(d: str, names: list[str]) -> list[str]:
+            out = []
+            for n in names:
+                mode = os.lstat(os.path.join(d, n)).st_mode
+                if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+                    out.append(n)
+            return out
+        try:
+            if key and os.path.isdir(key):
+                shutil.copytree(key, dst, symlinks=True, ignore=_special)
+            else:
+                dst.mkdir()
+        except OSError:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        _STAGES[key] = tmp
+    return Path(_STAGES[key]) / "conf.d"
 
-        def _change(tree: Any) -> None:
-            tree["tenants"][tenant].update(want)
-        _lib_write_check.confirm(root, rel, new_yaml,
-                                 _lib_write_check.with_change(old, _change))
-    except _lib_write_check.WriteRefused as exc:
-        return str(exc)
+
+def _string_of(literal: str) -> Optional[str]:
+    """The string a plan's ``new_value`` (a double-quoted conf.d literal,
+    `_quoted_value`) writes; None for anything else."""
+    text = literal.strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        return text[1:-1]
     return None
+
+
+def edit_live_yaml(
+    raw_yaml: str, tenant: str, new_values: dict[str, str],
+    *, config_dir: Optional[str] = None, rel: str = "",
+) -> tuple[Optional[str], Optional[str]]:
+    """The live tenant text with ``new_values`` set, as ``da-guard edit``
+    writes it (ADR-036 §2, #3206): ``(text, None)``, or ``(None, why)``
+    when the edit is refused.
+
+    ``new_values`` maps key → conf.d literal (``'"45"'``, a double-quoted
+    string): each key must already be a scalar DIRECT child of ``tenant``'s
+    block in the live text (as ``da-guard parse-tree`` reads it) — a key
+    missing there is refused, never added. The live text is laid out as the
+    file at *rel* (``<tenant>.yaml`` when unknown) of a private copy of
+    *config_dir* (`_stage`; a missing *config_dir* is an empty tree) and sent
+    to ``da-guard edit --dry-run``: it applies the edits on yaml.v3's node
+    tree — every other node, comment and spelling kept, the file only
+    re-laid out (2-space indentation, one space before a trailing comment,
+    blank lines may go; CRLF and a BOM kept) — and refuses an original it
+    cannot read or that validation names, a path no reader reads, or a
+    result that does not read back as the original with these edits. The
+    value is written as a string (``"45"``), as the plan quotes it. No usable
+    da-guard, or one that fails, raises ``_lib_parse_tree.ParseTreeError``.
+    """
+    import _lib_confedit  # lazy: keeps `--dry-run` import-light
+    import _lib_parse_tree
+
+    rel = rel or f"{tenant}.yaml"
+    ops = []
+    for key, literal in sorted(new_values.items()):
+        text = _string_of(literal)
+        if text is None:
+            return None, f"{key}: the literal {literal!r} is not a double-quoted string"
+        ops.append(_lib_confedit.set_op(["tenants", tenant, key],
+                                        _lib_confedit.str_value(text)))
+    try:
+        root = _stage(config_dir)
+    except OSError as exc:  # shutil.Error included: a file it could not copy
+        return None, f"could not copy {config_dir} to edit the live text in: {exc}"
+    target = root / rel
+    saved = target.read_bytes() if target.is_file() and not target.is_symlink() else None
+    link = os.readlink(target) if target.is_symlink() else None
+    data = raw_yaml.encode("utf-8")
+    try:
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        try:
+            node = _lib_parse_tree.load_file(root, rel, data).node(rel)
+        except (_lib_parse_tree.FileUnreadable, KeyError):
+            node = None  # da-guard edit names it (original_unreadable / not_read)
+        if node is not None:
+            tenants = node.get("tenants")
+            block = (tenants.get(tenant) if isinstance(tenants, dict)
+                     and not _lib_parse_tree.is_scalar(tenants) else None)
+            if not isinstance(block, dict) or _lib_parse_tree.is_scalar(block):
+                return None, f"tenant {tenant!r} has no mapping block in the live config"
+            missing = sorted(k for k in new_values
+                             if not _lib_parse_tree.is_scalar(block.get(k)))
+            if missing:
+                return None, f"keys not found in live config: {missing}"
+        try:
+            doc = _lib_confedit.edit(root, rel, ops, dry_run=True)
+        except _lib_confedit.EditError as exc:
+            return None, f"da-guard edit {exc.status} ({exc.reason}): {exc.message}"
+    finally:
+        target.unlink(missing_ok=True)
+        if link is not None:
+            os.symlink(link, target)
+        elif saved is not None:
+            target.write_bytes(saved)
+    return (raw_yaml if doc["status"] == _lib_confedit.UNCHANGED else doc["content"]), None
 
 
 # ---------------------------------------------------------------------------
@@ -875,7 +836,7 @@ def _error_answer_message(status: int, body: Any, code: str, remedy: str,
 
 def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
                       headers: dict, keys: list[str]) -> "str | TenantOutcome":
-    """GET the live tenant YAML, merge the changes, verify; the body to PUT.
+    """GET the live tenant YAML, have da-guard edit set the changes; the body to PUT.
 
     Returns a TenantOutcome (``error``) instead when any step refuses.
     """
@@ -889,17 +850,11 @@ def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
         )
 
     new_values = {c.key: c.new_value for c in plan.changes}
-    merged, unapplied = apply_threshold_changes(raw_yaml, plan.tenant, new_values)
-    if unapplied:
-        return TenantOutcome(
-            plan.tenant, "error", keys,
-            message=f"keys not found in live config: {unapplied}",
-        )
-    import _lib_parse_tree  # lazy, as in verify_only_changed
+    import _lib_parse_tree  # lazy, as in edit_live_yaml
     try:
-        verify_err = verify_only_changed(raw_yaml, merged, plan.tenant, new_values,
-                                         config_dir=args.config_dir,
-                                         rel=plan.source_file)
+        merged, verify_err = edit_live_yaml(raw_yaml, plan.tenant, new_values,
+                                            config_dir=args.config_dir,
+                                            rel=plan.source_file)
     except _lib_parse_tree.BinaryMissing:
         raise  # no da-guard at all: the whole run is rc 2 (main's decorator)
     except _lib_parse_tree.ParseTreeError as exc:
@@ -915,6 +870,7 @@ def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
             plan.tenant, "error", keys,
             message=f"refused to PUT (verify failed): {verify_err}",
         )
+    assert merged is not None
     return merged
 
 
@@ -959,7 +915,7 @@ def _classify_200(plan: TenantPlan, keys: list[str], body: Any) -> TenantOutcome
 def open_governance_pr(
     plan: TenantPlan, args: argparse.Namespace
 ) -> TenantOutcome:
-    """GET → surgical merge → verify → PUT a per-tenant governance PR.
+    """GET → da-guard edit (verified) → PUT a per-tenant governance PR.
 
     Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
     200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
@@ -1411,7 +1367,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
-@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT parse-tree check has no da-guard → rc 2
+@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT da-guard edit has no da-guard → rc 2
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(

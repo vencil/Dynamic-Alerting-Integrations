@@ -203,7 +203,7 @@ class TestPatchLegacy:
         }
         result = pc.patch_legacy(cm_data, "db-a", "mysql_connections", "50")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-a"]["mysql_connections"] == "50"
+        assert patched["tenants"]["db-a"]["mysql_connections"] == 50
 
     def test_set_default_removes_key(self):
         cm_data = {
@@ -239,13 +239,13 @@ class TestPatchLegacy:
         }
         result = pc.patch_legacy(cm_data, "db-new", "cpu", "90")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-new"]["cpu"] == "90"
+        assert patched["tenants"]["db-new"]["cpu"] == 90
 
     def test_no_tenants_key(self):
         cm_data = {"data": {"config.yaml": yaml.dump({"defaults": {"cpu": 50}})}}
         result = pc.patch_legacy(cm_data, "db-a", "cpu", "90")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-a"]["cpu"] == "90"
+        assert patched["tenants"]["db-a"]["cpu"] == 90
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ class TestPatchMultifile:
         }
         result = pc.patch_multifile(cm_data, "db-a", "mysql_connections", "50")
         patched = yaml.safe_load(result["data"]["db-a.yaml"])
-        assert patched["tenants"]["db-a"]["mysql_connections"] == "50"
+        assert patched["tenants"]["db-a"]["mysql_connections"] == 50
 
     def test_set_default_keeps_empty_tenant(self):
         cm_data = {
@@ -281,13 +281,13 @@ class TestPatchMultifile:
         cm_data = {"data": {}}
         result = pc.patch_multifile(cm_data, "db-new", "cpu", "90")
         patched = yaml.safe_load(result["data"]["db-new.yaml"])
-        assert patched["tenants"]["db-new"]["cpu"] == "90"
+        assert patched["tenants"]["db-new"]["cpu"] == 90
 
     def test_empty_existing_tenant_yaml(self):
         cm_data = {"data": {"db-a.yaml": ""}}
         result = pc.patch_multifile(cm_data, "db-a", "cpu", "90")
         patched = yaml.safe_load(result["data"]["db-a.yaml"])
-        assert patched["tenants"]["db-a"]["cpu"] == "90"
+        assert patched["tenants"]["db-a"]["cpu"] == 90
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ class TestApplyPatch:
                            mode, "db-a", "cpu", "90")
         assert len(cluster.patches) == 1
         (key, text), = cluster.patches[0]["data"].items()
-        assert yaml.safe_load(text)["tenants"]["db-a"]["cpu"] == "90"
+        assert yaml.safe_load(text)["tenants"]["db-a"]["cpu"] == 90
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +541,7 @@ class TestWritePathUsesTheLocator:
         patch = pc.patch_multifile(cm, "tenant-x", "cpu", "90")
         assert list(patch["data"]) == ["tenant-x.yml"]
         assert yaml.safe_load(patch["data"]["tenant-x.yml"]) == {
-            "tenants": {"tenant-x": {"cpu": "90"}}}
+            "tenants": {"tenant-x": {"cpu": 90}}}
 
     def test_carrier_named_differently_is_patched_in_place(self):
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
@@ -644,11 +644,13 @@ class TestCarrierAndValueShapes:
     ])
     def test_scalar_is_read_as_exporter_text_and_survives_a_write_back(
             self, raw, exporter_text):
-        """讀 → 用 patch-config 寫回 → 再讀：兩次都是 exporter 看到的原文。"""
+        """讀 → 用 patch-config 寫回 → 再讀：兩次都是 exporter 看到的原文。
+        None：da-guard edit 判定寫回的就是原檔（`70` 寫回 `70`，#3206），不送 patch。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "tenant-x.yaml": f"tenants:\n  tenant-x:\n    cpu: {raw}\n"})
         assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", exporter_text)
-        written = pc.patch_multifile(cm, "tenant-x", "cpu", exporter_text)["data"]
+        patch = pc.patch_multifile(cm, "tenant-x", "cpu", exporter_text)
+        written = {} if patch is None else patch["data"]
         assert _own(_cm(**{**cm["data"], **written}), "tenant-x", "cpu") == (
             "tenant-x.yaml", exporter_text)
 
@@ -686,7 +688,7 @@ class TestCarrierAndValueShapes:
         """key 在、內容空，不是「not found」。"""
         patch = pc.patch_legacy(_cm(**{"config.yaml": ""}), "tb", "m", "1")
         assert yaml.safe_load(patch["data"]["config.yaml"]) == {
-            "tenants": {"tb": {"m": "1"}}}
+            "tenants": {"tb": {"m": 1}}}
 
     @pytest.mark.parametrize("word", ["Default", "DEFAULT"])
     def test_default_is_case_insensitive(self, word):
@@ -845,7 +847,7 @@ class TestWriteScope:
         cm = _cm(**{"config.yaml": self._SHARED})
         patched = yaml.safe_load(pc.patch_legacy(cm, "tenant-x", "cpu", "6")
                                  ["data"]["config.yaml"])
-        assert patched["tenants"] == {"tenant-x": {"cpu": "6"},
+        assert patched["tenants"] == {"tenant-x": {"cpu": 6},
                                       "other-t": {"cpu": "1"}}
 
     def test_self_referential_alias_makes_the_key_unreadable(self):
@@ -855,22 +857,21 @@ class TestWriteScope:
             pc.patch_multifile(cm, "tenant-x", "cpu", "6")
 
     def test_an_anchor_shared_block_is_refused_before_the_write(self):
-        """ADR-036 §2：PyYAML 改寫共用 anchor 的區塊時連帶改到另一個租戶——寫入前
-        的 parse-tree 確認讀回 `tenants.other-t.cpu` 也變了，整份拒寫（先前要等
+        """ADR-036 §2：改寫共用 anchor 的區塊會連帶改到另一個租戶——da-guard edit
+        （#3206）判定重新輸出會改到 `tenants.other-t.cpu`，整份拒寫（先前要等
         寫入後由 exporter 驗收才回滾，#1950 列 9）。"""
         cm = _cm(**{"config.yaml": "tenants:\n  tenant-x: &s {cpu: '5'}\n"
                                    "  other-t: *s\n"})
         with pytest.raises(pc.ConfigMapShapeError,
-                           match=r"content_differs.*tenants\.other-t\.cpu"):
+                           match=r"not_round_trippable.*tenants\.other-t\.cpu"):
             pc.patch_legacy(cm, "tenant-x", "cpu", "6")
 
-    def test_a_spelling_pyyaml_rewrites_is_refused_naming_it(self):
-        """未動到的 `!!float 1` 被 PyYAML 寫成 `1.0`：原文不同，整份拒寫、點名位置。
-        （未動到的 `~` 照原樣寫回，不算改寫：`keep_null_spelling`。）"""
+    def test_an_untouched_spelling_is_written_as_it_was(self):
+        """未動到的 `!!float 1`、`~` 照原樣寫回（da-guard edit 只改被編輯的節點，
+        #3206；PyYAML 改寫時前者會變成 `1.0` 而整份拒寫）。"""
         cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: !!float 1\n")
-        with pytest.raises(pc.ConfigMapShapeError,
-                           match=r"tenants\.tenant-x\.mem: expected !!float '1', read !!float '1\.0'"):
-            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+        text = pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]["tenant-x.yaml"]
+        assert "mem: !!float 1\n" in text and "cpu: 6\n" in text, text
         cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: ~\n")
         assert "mem: ~" in pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]["tenant-x.yaml"]
 
@@ -914,13 +915,14 @@ class TestDecisionsAreParseTrees:
 
     def test_a_file_yaml_v3_reads_declares_its_tenant(self):
         """TAB 分隔：PyYAML 讀不了，yaml.v3 照讀——team-x.yaml 宣告 tenant-x；
-        改寫的文字要 PyYAML 產生，它讀不了就拒寫並點名。"""
+        改寫的文字也是 Go 的（da-guard edit，#3206），所以照樣改得了。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "team-x.yaml": 'tenants:\n  tenant-x:\n    cpu:\t"70"\n'})
         assert pc.locate_tenant_key(cm, "tenant-x") == "team-x.yaml"
         assert _own(cm, "tenant-x", "cpu") == ("team-x.yaml", "70")
-        with pytest.raises(pc.ConfigMapShapeError, match="team-x.yaml: PyYAML cannot read"):
-            pc.patch_multifile(cm, "tenant-x", "cpu", "9")
+        written = pc.patch_multifile(cm, "tenant-x", "cpu", "9")["data"]
+        assert list(written) == ["team-x.yaml"]
+        assert _own(_cm(**{**cm["data"], **written}), "tenant-x", "cpu") == ("team-x.yaml", "9")
 
     def test_an_unquoted_yes_tenant_is_the_string_yaml_v3_reads(self):
         """`yes:` 是 yaml.v3 的字串鍵 "yes"（PyYAML 讀成 True）。"""
@@ -974,7 +976,7 @@ class TestWriteAndCliEdges:
         patch = pc.patch_multifile(cm, tid, "m", "5")
         assert patch is not None
         written = patch["data"]["t.yaml"]
-        assert _exporter_keys(written) == {"tenants": {tid: {"m": "5", "n": "2"}}}
+        assert _exporter_keys(written) == {"tenants": {tid: {"m": 5, "n": "2"}}}
         cm["data"]["t.yaml"] = written
         assert _own(cm, tid, "m") == ("t.yaml", "5")
 

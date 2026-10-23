@@ -9,16 +9,20 @@ multi-file, else 'config.yaml' means legacy. The tenant's key is the one whose
 The ConfigMap's keys are read by `da-guard parse-tree` (ADR-036 §2, #2906),
 as the exporter mounts them — one flat directory: who declares the tenant,
 what its block holds and whether a write changes anything are decided from
-that, never from PyYAML, which only produces the text of the rewrite. That
-text is read back by parse-tree before anything is sent: unless it is the
-key as it was with this one change (every key, structure, and each scalar's
-source text, tag and value), or if parse-tree cannot read the key as it is,
-nothing is written — exit 2, `--json` reason `write_refused` (a key
-parse-tree cannot read: `configmap_shape`). A key PyYAML rewrites in a
-spelling yaml.v3 reads differently (`~` or an empty value written `null`,
-`!!float 1` written `1.0`) is refused whole: respell it by hand first. No
-usable da-guard (`$DA_GUARD_BINARY`, then `$PATH`) is exit 2, reason
-`da_guard_unavailable`.
+that. The new text of the key is Go's too (ADR-036 §2: only Go writes
+conf.d; step 10b, #3206): the keys are laid out as files of a private
+temporary directory, the change is sent to `da-guard edit --dry-run` (a new
+`<tenant>.yaml` to `da-guard emit --dry-run`) on that copy, and the text it
+answers is what the patch carries. Everything outside the change — other
+keys, comments, how each scalar is spelled — stays as written; da-guard only
+re-lays the key out (2-space indentation, one space before a trailing
+comment, blank lines may go). A value typed here is written as a number only
+when it is canonical decimal (`50`, `0.5`); anything else as a double-quoted
+string (`"70:critical"`, `"010"`, `"disable"`). A change da-guard refuses
+(it does not hold on the key as written) or cannot take writes nothing —
+exit 2, `--json` reason `write_refused` (a key parse-tree cannot read:
+`configmap_shape`). No usable da-guard (`$DA_GUARD_BINARY`, then `$PATH`) is
+exit 2, reason `da_guard_unavailable`.
 
 Usage: patch_config.py <tenant> <metric_key> <value>
        patch_config.py --diff [--json] <tenant> <metric_key> <value>
@@ -57,7 +61,6 @@ import select
 import signal
 import subprocess
 import time
-import yaml
 import sys
 import json
 import tempfile
@@ -69,13 +72,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope)
 from _lib_python import format_json_report, positive_seconds  # noqa: E402
-from _lib_io import (  # noqa: E402
-    strict_load_for_rewrite,    # #2216 / #2237 / #2220: text keys, plain values as written
-)
+import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: Go writes the key's text)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection)
 import _lib_parse_tree  # noqa: E402
-import _lib_write_check  # noqa: E402
-from _lib_yaml_keys import dump_for_rewrite  # noqa: E402  (#2220)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 
 LEGACY_KEY = "config.yaml"
@@ -173,8 +172,8 @@ signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes
   and no envelope is printed.
 exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back;
-  {EXIT_CALLER_ERROR} caller error, nothing written (also: the rewrite refused by the
-  pre-write `da-guard parse-tree` confirmation, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
+  {EXIT_CALLER_ERROR} caller error, nothing written (also: the change refused by
+  `da-guard edit` / `emit`, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
   {EXIT_EXPORTER_UNREACHABLE} exporter unreachable (before the write: nothing written; after: rolled
   back); {EXIT_ROLLBACK_FAILED} rollback failed - the ConfigMap may still hold the new bytes;
   {EXIT_ABORTED_ROLLED_BACK} interrupted or an unexpected error after the write, rolled back;
@@ -265,9 +264,9 @@ def _cm_keys(cm_data):
 
 
 class _WriteRefused(ConfigMapShapeError):
-    """ADR-036 §2: the rewritten key, read back by `da-guard parse-tree`, is
-    not the original with this change applied (or the key is not one a
-    reader reads); nothing is written."""
+    """ADR-036 §2: `da-guard edit` / `emit` refused the change to the key, or
+    could not take it (the message is da-guard's reason and words); nothing
+    is written."""
 
 
 class _ConfdView:
@@ -275,8 +274,8 @@ class _ConfdView:
     of files — read by `da-guard parse-tree` (ADR-036 §2, #2906): which keys
     a reader selects and each one's content as yaml.v3 reads it. Every
     decision of this tool (who declares a tenant, what its block holds,
-    whether a write changes anything) is taken from this, never from PyYAML;
-    PyYAML only produces the text of a rewrite (`_patch_carrier`)."""
+    whether a write changes anything) is taken from this, and the text of a
+    rewrite is `da-guard edit`'s on this same directory (`_patch_carrier`)."""
 
     def __init__(self, data):
         # Two keys that differ only in case are two files in the exporter's
@@ -465,11 +464,11 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
                 f"patch-config does not create {key}: it only uses YAML keys "
                 f"that are not dot-hidden or `_`-prefixed as tenant keys.")
     view = _view(cm_data)
-    old = _cm_keys(cm_data).get(key) or ""
     # The decisions are parse-tree's (ADR-036 §2): which tenants the key
     # declares, whether its `tenants:` is a mapping.
-    old_nodes = view.node(key) if key in _cm_keys(cm_data) else None
-    if key in _cm_keys(cm_data) and old_nodes is None:
+    exists = key in _cm_keys(cm_data)
+    old_nodes = view.node(key) if exists else None
+    if exists and old_nodes is None:
         raise ConfigMapShapeError(
             f"no reader reads {key} (da-guard parse-tree); patch-config does "
             f"not write it.")
@@ -485,51 +484,46 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
             f"{key} would declare tenants {sorted(declared | {tenant})}; "
             f"patch-config only writes a key that declares one. Edit {key} "
             f"by hand.")
-    # The text of the rewrite (PyYAML only produces it, ADR-036 §2).
-    # #2216 / #2237: keys are read as their source text, so `010:` stays
-    # tenant "010". #2220: every UNQUOTED value is kept as its source text
-    # (`RawPlain`) and `dump_for_rewrite` writes it back plain, so the values
-    # this patch does not touch are written as they were. A new value is a
-    # `str` and is quoted when YAML would retype it (`'50'`), as before.
-    # ⚠️ The rewrite still drops the key's comments.
+    # The text is Go's (ADR-036 §2, #3206): the change goes to `da-guard
+    # edit --dry-run` on the view's directory (the keys as the exporter
+    # mounts them), a new key to `emit --dry-run`; the answered text is the
+    # patch. A typed value is a number only when canonical decimal.
+    value_node = _lib_confedit.cli_value(str(value))
     try:
-        doc = strict_load_for_rewrite(old) or {}
-    except (yaml.YAMLError, RecursionError) as exc:
-        raise ConfigMapShapeError(
-            f"{key}: PyYAML cannot read it to produce the rewrite ({exc}); "
-            f"edit it by hand.") from exc
-    # Untouched nulls keep their spelling (`key:`, `~`): text production only.
-    _lib_write_check.keep_null_spelling(doc, old_nodes)
-    tenants = doc.get("tenants") if isinstance(doc, dict) else []
-    if tenants is None:
-        tenants = doc["tenants"] = {}
-    if not isinstance(tenants, dict):
-        raise ConfigMapShapeError(
-            f"{key} or its `tenants:` is not a YAML mapping; refusing to "
-            f"overwrite it.")
-    own = tenants[tenant] = tenants.get(tenant) or {}
-    if _is_default(value):
-        own.pop(metric_key, None)
-    else:
-        own[metric_key] = str(value)
-    new = dump_for_rewrite(doc, sort_keys=False)
-
-    def _change(tree):
-        if not _is_mapping(tree.get("tenants")):
-            tree["tenants"] = {}
-        block = tree["tenants"].get(tenant)
-        block = block if _is_mapping(block) else {}
-        if _is_default(value):
-            block.pop(metric_key, None)
+        if not exists:
+            content = _lib_confedit.map_value([("tenants", _lib_confedit.map_value(
+                [(tenant, _lib_confedit.map_value([(metric_key, value_node)]))]))])
+            doc = _lib_confedit.emit(view.root, key, content, dry_run=True,
+                                     timeout=PARSE_TREE_TIMEOUT_S)
         else:
-            block[metric_key] = _lib_write_check.scalar(str(value))
-        tree["tenants"][tenant] = block
-    expected = _lib_write_check.with_change(old_nodes, _change)
-    try:
-        _lib_write_check.confirm(view.root, key, new, expected)
-    except _lib_write_check.WriteRefused as exc:
+            doc = _lib_confedit.edit(
+                view.root, key, _edit_ops(old_tenants, tenant, metric_key, value,
+                                          value_node),
+                dry_run=True, timeout=PARSE_TREE_TIMEOUT_S)
+    except _lib_confedit.EditError as exc:
         raise _WriteRefused(str(exc)) from None
-    return {"data": {key: new}}
+    if doc["status"] == _lib_confedit.UNCHANGED:
+        return None
+    return {"data": {key: doc["content"]}}
+
+
+def _edit_ops(old_tenants, tenant, metric_key, value, value_node):
+    """The `da-guard edit` operations of this change, from the key as
+    parse-tree reads it (*old_tenants*: its `tenants:` node, None when
+    absent). An emptied block is kept (it still declares the tenant); a null
+    `tenants:` or tenant block becomes a mapping."""
+    path = ["tenants", tenant, metric_key]
+    if _is_default(value):
+        return [_lib_confedit.unset_op(path)]
+    m = _lib_confedit.map_value
+    if old_tenants is not None and _is_null(old_tenants):
+        return [_lib_confedit.set_op(["tenants"], m(
+            [(tenant, m([(metric_key, value_node)]))]))]
+    block = _entries(old_tenants).get(tenant)
+    if block is not None and _is_null(block):
+        return [_lib_confedit.set_op(["tenants", tenant], m([(metric_key, value_node)]))]
+    return [_lib_confedit.ensure_map_op(["tenants", tenant]),
+            _lib_confedit.set_op(path, value_node)]
 
 
 def patch_legacy(cm_data, tenant, metric_key, value):

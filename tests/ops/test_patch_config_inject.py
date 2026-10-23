@@ -22,9 +22,9 @@ SCENARIOS = {
     "applied": ({"_defaults.yaml": _DEFAULTS,
                  "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n",
                  "t-b.yaml": "tenants:\n  t-b:\n    mysql_connections: '60'\n"},
-                "t-a.yaml", "65", "'65'"),
+                "t-a.yaml", "65", "mysql_connections: 65"),
     "verify-fail": ({"config.yaml": "tenants:\n  t-a:\n    mysql_connections: '50'\n", **MIRROR},
-                    "config.yaml", "60", "'60'"),
+                    "config.yaml", "60", "mysql_connections: 60"),
 }
 # verify fails, and so does the rollback patch (the ConfigMap keeps the new bytes)
 SCENARIOS["rollback-fail"] = SCENARIOS["verify-fail"]

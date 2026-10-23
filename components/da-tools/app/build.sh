@@ -240,10 +240,13 @@ TOOL_FILES=(
     # ImportErrors in the flat-layout image. Stdlib-only.
     _lib_parse_cache.py
     # #2906 — a conf.d writer's pre-write parse-tree confirmation (ADR-036
-    # §2); imported by ops/patch_config, ops/da_assembler, ops/init_project,
-    # ops/scaffold_tenant, ops/threshold_govern, ops/deprecate_rule and
-    # dx/migrate_conf_d. Imports _lib_parse_tree (above).
+    # §2); imported by ops/da_assembler, ops/init_project, ops/scaffold_tenant
+    # and dx/migrate_conf_d. Imports _lib_parse_tree (above).
     _lib_write_check.py
+    # #3206 — a tool's change of an existing conf.d file, sent to `da-guard
+    # edit` (ADR-036 §2: only Go writes conf.d); imported by ops/patch_config,
+    # ops/threshold_govern and ops/deprecate_rule. Imports _lib_parse_tree (above).
+    _lib_confedit.py
     # #2883 — reads a tenant-api state store copy (--state); imported by
     # ops/offboard_tenant. Imports _lib_io (above).
     _lib_tenant_state.py
