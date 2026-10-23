@@ -127,18 +127,12 @@ def python_entry(tenant: str, index: int, inst: object) -> Entry:
     where = f"tenant={tenant}: _custom_alerts[{index}]"
     if not isinstance(inst, dict):
         raise CustomAlertConfigError(f"{where} is not a mapping (got {type(inst).__name__}: {inst!r})")
-    # Required fields — tenant-config.schema.json's customAlertInstance. The
-    # shaping duration is recipe-aware: forecast supplies `horizon`, every
-    # other recipe `window`, except slo_burn_rate (ADR-031), whose windows are
-    # fixed and which takes `objective` instead of `threshold` (its
-    # requiredness lives in shape.recipe_id).
+    # Required fields — the recipe contract's (shape.BASE_REQUIRED +
+    # shape.RECIPE_RULES, generated from pkg/config/recipe_contract.json); an
+    # unknown recipe is left to shape.recipe_id to refuse.
     recipe = inst.get("recipe")
-    if recipe == "slo_burn_rate":
-        required: Tuple[str, ...] = ("recipe", "name", "metric")
-    elif recipe == "forecast":
-        required = ("recipe", "name", "metric", "threshold", "horizon")
-    else:
-        required = ("recipe", "name", "metric", "threshold", "window")
+    rules = _shape.RECIPE_RULES.get(recipe)
+    required = _shape.BASE_REQUIRED + (rules[0] if rules else ())
     missing = [f for f in required if f not in inst]
     if missing:
         raise CustomAlertConfigError(f"{where}: missing required field(s) {missing}: {inst!r}")

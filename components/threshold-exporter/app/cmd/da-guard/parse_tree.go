@@ -342,8 +342,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok — an unreadable file is data in the document, not a verdict\n"+
 			"  2  caller error: bad flags, --config-dir missing or not a directory, a --path that is\n"+
 			"     absolute or leaves --config-dir, --input or --names not readable, --names not a\n"+
-			"     JSON array of base names, a file name that is not valid UTF-8 (JSON cannot carry\n"+
-			"     it), or stdout not writable\n")
+			"     JSON array of base names or holding one twice, a file name that is not valid UTF-8\n"+
+			"     (JSON cannot carry it), or stdout not writable\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -498,9 +498,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTre
 	// file — whatever its name: `etc/`, `etc -> /etc`) is what tree mode says
 	// it is — the very entry, from the same walk and the same function
 	// (walkEntries), never a second verdict here. Its text is not read.
-	if d, err := walkedDirEntry(scan, rel); err != nil {
-		return nil, false, false, err
-	} else if d != nil {
+	if d := walkedDirEntry(scan, rel); d != nil {
 		doc.Entries = append(doc.Entries, *d)
 		return doc, true, false, nil
 	}
@@ -620,19 +618,31 @@ func fileOnDisk(root, rel string) *parseTreeEntry {
 
 // walkedDirEntry is tree mode's entry of rel when the walk recorded rel as
 // anything but a config file (role dir, unlistable_dir or not_a_file), else
-// nil: walkEntries over the same scan, so file and tree mode cannot disagree
-// about such a path.
-func walkedDirEntry(scan *config.TreeScan, rel string) (*parseTreeEntry, error) {
-	idx := newParseTreeIndex("tree")
-	if err := walkEntries(scan, &idx); err != nil {
-		return nil, err
-	}
-	for _, e := range idx.Entries {
-		if e.Path == rel && e.Role != config.RoleConfig {
-			return &e, nil
+// nil: the walk record itself (TreeScan.Dirs, NotFiles, Unreadable), turned
+// into an entry by the functions walkEntries uses for it, so file and tree
+// mode cannot disagree about such a path. Looked up directly — not a whole
+// walkEntries index built and sorted for one path on every file-mode call.
+// rel is never "." (cleanRelPath refuses it), so the root's own record
+// (RootWalkErr) is not asked.
+func walkedDirEntry(scan *config.TreeScan, rel string) *parseTreeEntry {
+	for _, d := range scan.Dirs {
+		if d == rel {
+			e := dirAsEntry(d)
+			return &e
 		}
 	}
-	return nil, nil
+	for _, nf := range scan.NotFiles {
+		if nf.RelKey == rel {
+			e := notFileAsEntry(nf)
+			return &e
+		}
+	}
+	for _, u := range scan.Unreadable {
+		if u.RelKey == rel && u.Role() != config.RoleConfig {
+			return unreadableEntry(u)
+		}
+	}
+	return nil
 }
 
 func unreadableEntry(u config.UnreadableFile) *parseTreeEntry {
@@ -737,15 +747,25 @@ func relTo(root, p string) (string, error) {
 }
 
 // writeParseTree refuses an entry path that is not valid UTF-8 (JSON would
-// write U+FFFD for its bad bytes, so two files could come out as one), then
-// writes doc on one line. Every path in "files" and "rendered_by" is an
+// write U+FFFD for its bad bytes, so two files could come out as one) and a
+// path held by two entries, then writes doc on one line. Every path in "files" and "rendered_by" is an
 // entry's; file contents are valid UTF-8 by construction (parsetree refuses
 // anything else).
 func writeParseTree(w io.Writer, entries []parseTreeEntry, doc any) error {
+	seen := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if !utf8.ValidString(e.Path) {
 			return nonUTF8Error(e.Path)
 		}
+		// One entry per path is the document's contract in every mode; the
+		// builders keep it (walkEntries, parseTreeNamesOf), and this is the
+		// last check before any byte is written, so a builder that breaks
+		// it fails here, naming the path, never in a reader.
+		if seen[e.Path] {
+			return fmt.Errorf("the index holds %q twice; a document holds one entry "+
+				"per path (a da-guard defect, not the tree's)", e.Path)
+		}
+		seen[e.Path] = true
 	}
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)

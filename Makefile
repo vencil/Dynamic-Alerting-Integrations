@@ -927,13 +927,13 @@ custom-alerts-compile: $(DA_GUARD_PREREQ) ## 從 LIVE conf.d 的 _custom_alerts 
 custom-alerts-compile-check: $(DA_GUARD_PREREQ) ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate；需要 da-guard）
 	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
-.PHONY: recipe-status-json
-recipe-status-json: ## 從 shape.py RECIPE_STATUS 生成 recipe-status.json（ADR-024 §8 A1；committed artifact，Go go:embed 消費；非 build-time 生成 → 無 build-order flaky）
-	@python3 ./scripts/tools/dx/gen_recipe_status_json.py
+.PHONY: recipe-contract
+recipe-contract: ## 從 pkg/config/recipe_contract.json 產生 schema、portal、shape.py、rule-packs/recipes 的 recipe 副本（#3229）
+	@python3 ./scripts/tools/dx/gen_recipe_contract.py --update
 
-.PHONY: recipe-status-json-check
-recipe-status-json-check: ## 驗證 committed recipe-status.json 與 shape.py RECIPE_STATUS 同步（#741 #6 drift gate）
-	@python3 ./scripts/tools/dx/gen_recipe_status_json.py --check
+.PHONY: recipe-contract-check
+recipe-contract-check: ## 驗證 recipe 副本與 recipe_contract.json 同步（#3229 drift gate）
+	@python3 ./scripts/tools/dx/gen_recipe_contract.py --check
 
 .PHONY: tenant-id-json
 tenant-id-json: ## 從 tenant-config schema 的 definitions.tenantId 生成 tenant-id.json（ADR-035 D2；committed artifact，Go go:embed 與 portal 各一份）

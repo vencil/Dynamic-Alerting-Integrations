@@ -1,8 +1,10 @@
 """Recipe lifecycle status tests (ADR-024 §Custom Alerts governance, #741 item #6).
 
 `status: [active|deprecated|eol]` is platform-authored recipe versioning (distinct
-from capability-A APP versioning). The executable SSOT is shape.py::RECIPE_STATUS;
-the human governance contracts rule-packs/recipes/*.yaml mirror a `status:` field.
+from capability-A APP versioning). It is written once, in the exporter's recipe
+contract (pkg/config/recipe_contract.json); shape.py::RECIPE_STATUS and the
+`status:` field of rule-packs/recipes/*.yaml are generated from it
+(gen_recipe_contract.py).
 
 Pinned here:
 1. SSOT completeness — every shipped recipe has a status; every value is valid.
@@ -68,7 +70,7 @@ def test_governance_yaml_status_matches_code_ssot():
         assert "status" in doc, f"{path.name}: missing `status:` field"
         assert doc["status"] == shp.recipe_status(recipe), (
             f"{path.name}: status {doc['status']!r} drifted from code SSOT "
-            f"{shp.recipe_status(recipe)!r} (update shape.py RECIPE_STATUS + the yaml together)"
+            f"{shp.recipe_status(recipe)!r} (edit recipe_contract.json, then `make recipe-contract`)"
         )
 
 

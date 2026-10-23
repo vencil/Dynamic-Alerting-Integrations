@@ -207,4 +207,4 @@ The exporter does not reject tenants with illegal ids; on every reload it prints
 
 - [#2341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2341), [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655), [#2633](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2633) (transitional rule)
 - [#2180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2180) (precedent for writing the pattern in the schema and having Python read it at runtime)
-- `scripts/tools/dx/gen_recipe_status_json.py` (precedent for generating a copy consumed by both Go and the portal, with a drift guard)
+- `scripts/tools/dx/gen_recipe_contract.py` (precedent for generating a copy consumed by both Go and the portal, with a drift guard)

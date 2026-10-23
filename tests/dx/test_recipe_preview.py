@@ -70,15 +70,16 @@ class TestGatingAndErrors:
         reasons = [s.get("reason", "") for s in out["states"]]
         assert not any("scenario.value is required" in r for r in reasons)
 
-    def test_missing_required_field_is_error_not_crash(self):
-        """A recipe missing a required key (e.g. `metric`, which `recipe_id` reads
-        as `inst["metric"]`) → state:error (the §4 contract), NOT an uncaught
-        KeyError that the HTTP facade would mask as a 500. Runs everywhere."""
-        bad = {k: v for k, v in _ABSENCE.items() if k != "metric"}
+    @pytest.mark.parametrize("drop", ["metric", "window"])
+    def test_missing_required_field_is_error_not_crash(self, drop):
+        """A recipe missing a field the contract requires → state:error (the §4
+        contract) carrying the compiler's RecipeError message, NOT an uncaught
+        exception that the HTTP facade would mask as a 500. Runs everywhere."""
+        bad = {k: v for k, v in _ABSENCE.items() if k != drop}
         out = rp.preview_recipe(bad, "shop-a", {})
         assert out["supported"] is True
         assert out["states"][0]["state"] == "error"
-        assert "missing required field" in out["states"][0]["reason"]
+        assert out["states"][0]["reason"].startswith(f"missing required field {drop} (the absence recipe requires")
 
     def test_malformed_recipe_is_error_not_firing(self):
         """A structurally invalid recipe → state:error (never mislabeled firing)."""

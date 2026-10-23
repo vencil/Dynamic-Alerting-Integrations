@@ -213,4 +213,4 @@ exporter 不拒收不合法 id 的租戶，每次 reload 時對每個不合法 i
 
 - [#2341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2341)、[#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655)、[#2633](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2633)（過渡規則）
 - [#2180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2180)（pattern 寫在 schema、Python 在 runtime 讀取的前例）
-- `scripts/tools/dx/gen_recipe_status_json.py`（產生副本並同時供 Go 與 portal 使用、搭配漂移守衛的前例）
+- `scripts/tools/dx/gen_recipe_contract.py`（產生副本並同時供 Go 與 portal 使用、搭配漂移守衛的前例）
