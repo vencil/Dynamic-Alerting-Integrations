@@ -248,6 +248,52 @@ def test_interactive_session_keeps_the_default_hook(tmp_path):
     assert "unexpected internal error" not in proc.stderr
 
 
+def test_run_in_an_interactive_session_leaves_the_original_exception(tmp_path):
+    """`python -i tool.py` post-mortem through `run(main)`: the crash is
+    re-raised for the default hook, so `sys.last_value` (what `pdb.pm()`
+    debugs) is the tool's exception, not `SystemExit(2)` (#3237)."""
+    script = tmp_path / "crash_tool.py"
+    script.write_text(_CRASH_PRELUDE.format(tools=str(TOOLS_DIR))
+                      + "def main():\n    raise RuntimeError('boom')\n"
+                      + "_lib_exitcodes.run(main)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-i", "-q", str(script)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=30,
+        input="print('LAST', type(sys.last_value).__name__, sys.last_value)\n")
+    assert proc.returncode == 0, proc.stderr
+    assert "LAST RuntimeError boom" in proc.stdout, (proc.stdout, proc.stderr)
+    assert "unexpected internal error" not in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("interactive, inspect, ps1, tty, expected", [
+    (1, 1, False, False, True),   # python -i, piped stdin: a prompt follows
+    (0, 1, False, True, True),    # PYTHONINSPECT with a terminal: a prompt follows
+    (0, 1, False, False, False),  # PYTHONINSPECT, no terminal: CPython exits
+    (0, 0, True, False, True),    # already at a prompt (REPL)
+    (0, 0, False, True, False),   # a plain run from a terminal
+])
+def test_interactive_is_the_interpreters_own_test(monkeypatch, interactive, inspect,
+                                                  ps1, tty, expected):
+    """#3237: `_interactive()` answers "does a prompt follow the script" the way
+    CPython decides it, PYTHONINSPECT (flags.inspect alone) included."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec
+    real = sys.flags
+
+    class _Flags:  # every other flag as it is: importlib reads them too
+        def __getattr__(self, name):
+            return getattr(real, name)
+    flags = _Flags()
+    flags.interactive, flags.inspect = interactive, inspect
+    monkeypatch.setattr(ec.sys, "flags", flags)
+    if ps1:
+        monkeypatch.setattr(ec.sys, "ps1", ">>> ", raising=False)
+    else:
+        monkeypatch.delattr(ec.sys, "ps1", raising=False)
+    monkeypatch.setattr(ec.os, "isatty", lambda fd: tty and fd == 0)
+    assert ec._interactive() is expected
+
+
 def test_importing_tenant_verify_leaves_the_crash_code_alone(tmp_path):
     """tenant_verify sets its crash code 1 only when it is the program
     (`__main__`): a module that imports it keeps 2 (#3090 review)."""
