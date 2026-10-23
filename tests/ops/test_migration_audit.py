@@ -661,7 +661,7 @@ def test_today_selection_is_the_generators(tmp_path, monkeypatch, judging_run) -
 
     monkeypatch.setattr(_lib_parse_cache.ConfdReader, "read", spy)
     res = _grar_parse._parse_config_files(str(root))
-    # tenant_declarations / declared_tenant_ids read the tenant files again
+    # tenant_declarations / declared_tenants read the tenant files again
     opened = sorted(set(opened))
     read, refused = ma.read_tree_today(root)
     expected_refused_unopened = {"dir.yaml"}

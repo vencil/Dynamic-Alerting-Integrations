@@ -49,10 +49,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    config_stem,
-    warn_nested,
-)
+from _lib_confd import warn_nested  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
@@ -86,11 +83,12 @@ def _top_level(config_dir):
 def find_config_file(tenant, config_dir):
     """tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
 
-    #1588: the carrier is found by comparing STEMS, never by pasting an
-    extension onto the id (`alpha.YAML` is alpha's), and exactly — not
-    case-folded (`Alpha` is another tenant). ADR-036 §2: which files there
-    are is parse-tree's answer (a directory named `<tenant>.yaml/` refuses
-    the run, #3206)."""
+    #1588: the carrier is found by comparing the id its NAME carries, never
+    by pasting an extension onto the id (`alpha.YAML` is alpha's), and
+    exactly — not case-folded (`Alpha` is another tenant). ADR-036 §2: which
+    files there are, and the id each name carries (`tenant_named`), are
+    parse-tree's answer (a directory named `<tenant>.yaml/` refuses the run,
+    #3206)."""
     base = Path(config_dir)
     if not base.is_dir():
         return None
@@ -101,7 +99,7 @@ def find_config_file(tenant, config_dir):
     for rel, e in _top_level(config_dir):
         # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
         # refuses the run before this line is reached.
-        if config_stem(rel) == tenant and e.config_file:
+        if e.tenant_named == tenant and e.config_file:
             return str(base / rel)
     return None
 
@@ -121,7 +119,9 @@ def load_all_configs(config_dir):
     """載入 conf.d 頂層的所有設定檔（parse-tree 選到的檔，ADR-036 §2）。
 
     Each entry is {"path", "data" (yaml.v3's values), "nodes" (parse-tree's
-    nodes: every key and scalar as its source text)}.
+    nodes: every key and scalar as its source text), "tenant_named" (the
+    tenant id the file NAME carries, Go's `Entry.tenant_named`; None for a
+    `_` file)}.
 
     ⛔ #3206: the reader's tree read is the run's fail-closed exit
     (`_lib_parse_cache.ConfdReader.tree`): a tree with a path Go names — a
@@ -148,7 +148,7 @@ def load_all_configs(config_dir):
         nodes = reader.node(filename)
         configs[filename] = {"path": str(base / filename),
                              "data": _lib_parse_tree.to_python(nodes),
-                             "nodes": nodes}
+                             "nodes": nodes, "tenant_named": entry.tenant_named}
     return configs
 
 
@@ -171,24 +171,28 @@ def _texts(nodes, *, values=False):
 
 
 def check_cross_references(tenant, configs):
-    """檢查其他設定檔中是否有引用此 tenant。"""
+    """檢查其他設定檔中是否有引用此 tenant（configs 取自 `load_all_configs`）。
+
+    租戶自己的檔是檔名帶著這個租戶 id 的那一個——Go 的 `tenant_named`（#3206），
+    不是以 `<tenant>.` 開頭的任何檔：`db-a.bak.yaml` 帶的是 `db-a.bak`，它對
+    `db-a` 的引用要列出來。"""
     references = []
     for filename, info in configs.items():
-        if filename.startswith(f"{tenant}."):
+        if info["tenant_named"] == tenant:
             continue  # 跳過自己
         # 搜尋檔案內容中是否出現 tenant 名稱：每個 key 與純量的原文（parse-tree，
         # 所以 `[010]` 這種以值點名租戶的清單也找得到，#2216）。
-        texts = (_texts(info["nodes"]) if "nodes" in info
-                 else _texts(info["data"], values=True))
+        texts = _texts(info["nodes"])
         if any(tenant in t for t in texts):
             references.append(filename)
     return references
 
 
 def get_tenant_metrics(tenant, configs):
-    """取得 tenant 的所有已設定指標。"""
+    """取得 tenant 的所有已設定指標：檔名帶著這個租戶 id 的檔（Go 的
+    `tenant_named`，#3206）裡 `tenants.<tenant>` 的內容。"""
     for filename, info in configs.items():
-        if filename.startswith(f"{tenant}."):
+        if info["tenant_named"] == tenant:
             tenants = info["data"].get("tenants", {})
             return tenants.get(tenant, {})
     return {}

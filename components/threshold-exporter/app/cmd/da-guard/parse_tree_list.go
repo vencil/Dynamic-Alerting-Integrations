@@ -112,7 +112,7 @@ func unreadableAsEntry(u config.UnreadableFile) parseTreeEntry {
 		e.Readers = []string{}
 	} else {
 		// Never an unselected carrier: selection runs over the files the
-		// walk could read (the generator's readable_carriers too).
+		// walk could read.
 		e.Readers = readersFor(u.RelKey, true)
 	}
 	e.Problem = &parseTreeProblem{Kind: unreadableKind(u.Reason), Message: unreadableMessage(u.Reason)}

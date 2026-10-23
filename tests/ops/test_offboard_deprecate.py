@@ -67,60 +67,58 @@ def test_find_config_file_not_found():
 # 2. offboard_tenant — check_cross_references
 # ===================================================================
 
-def test_check_cross_references_no_cross_ref():
+def _configs(tmp_path, files):
+    """`load_all_configs` over a real conf.d holding *files* (#3206: which file
+    is a tenant's own is Go's `tenant_named`, read from the tree)."""
+    make_confdir(str(tmp_path), files)
+    return offboard_tenant.load_all_configs(str(tmp_path))
+
+
+def test_check_cross_references_no_cross_ref(tmp_path):
     """測試無交叉引用。"""
-    configs = {
-        "db-a.yaml": {"path": "/x/db-a.yaml", "data": {"tenants": {"db-a": {"m": 1}}}},
-        "db-b.yaml": {"path": "/x/db-b.yaml", "data": {"tenants": {"db-b": {"m": 2}}}},
-    }
+    configs = _configs(tmp_path, {"db-a.yaml": {"tenants": {"db-a": {"m": 1}}},
+                                  "db-b.yaml": {"tenants": {"db-b": {"m": 2}}}})
     refs = offboard_tenant.check_cross_references("db-a", configs)
     assert refs == []
 
-def test_check_cross_references_found_cross_ref():
+def test_check_cross_references_found_cross_ref(tmp_path):
     """測試發現交叉引用。"""
-    configs = {
-        "db-a.yaml": {"path": "/x/db-a.yaml", "data": {"tenants": {"db-a": {"m": 1}}}},
-        "db-b.yaml": {"path": "/x/db-b.yaml", "data": {"note": "depends on db-a"}},
-    }
+    configs = _configs(tmp_path, {"db-a.yaml": {"tenants": {"db-a": {"m": 1}}},
+                                  "db-b.yaml": {"note": "depends on db-a"}})
     refs = offboard_tenant.check_cross_references("db-a", configs)
     assert "db-b.yaml" in refs
+
+def test_a_file_whose_name_only_starts_with_the_tenant_is_not_its_own(tmp_path):
+    """#3206: the tenant's own file is the one whose NAME carries its id (Go's
+    `tenant_named`), not any file starting with `<tenant>.` — `db-a.bak.yaml`
+    carries `db-a.bak`, so its mention of db-a is a reference."""
+    configs = _configs(tmp_path, {"db-a.yaml": {"tenants": {"db-a": {"m": 1}}},
+                                  "db-a.bak.yaml": {"tenants": {"db-a": {"m": 9}}}})
+    assert offboard_tenant.check_cross_references("db-a", configs) == ["db-a.bak.yaml"]
+    assert offboard_tenant.get_tenant_metrics("db-a", configs) == {"m": 1}
 
 
 # ===================================================================
 # 3. offboard_tenant — get_tenant_metrics
 # ===================================================================
 
-def test_get_tenant_metrics_found():
+def test_get_tenant_metrics_found(tmp_path):
     """測試租戶 metrics 已找到。"""
-    configs = {
-        "db-a.yaml": {
-            "path": "/x/db-a.yaml",
-            "data": {"tenants": {"db-a": {"mysql_connections": 70, "mysql_threads_running": 80}}},
-        },
-    }
+    configs = _configs(tmp_path, {"db-a.yaml": {"tenants": {"db-a": {
+        "mysql_connections": 70, "mysql_threads_running": 80}}}})
     metrics = offboard_tenant.get_tenant_metrics("db-a", configs)
     assert len(metrics) == 2
     assert metrics["mysql_connections"] == 70
 
-def test_get_tenant_metrics_empty():
+def test_get_tenant_metrics_empty(tmp_path):
     """測試空租戶 metrics。"""
-    configs = {
-        "db-a.yaml": {
-            "path": "/x/db-a.yaml",
-            "data": {"tenants": {"db-a": {}}},
-        },
-    }
+    configs = _configs(tmp_path, {"db-a.yaml": {"tenants": {"db-a": {}}}})
     metrics = offboard_tenant.get_tenant_metrics("db-a", configs)
     assert metrics == {}
 
-def test_get_tenant_metrics_missing_tenant():
+def test_get_tenant_metrics_missing_tenant(tmp_path):
     """測試缺失租戶。"""
-    configs = {
-        "db-b.yaml": {
-            "path": "/x/db-b.yaml",
-            "data": {"tenants": {"db-b": {"m": 1}}},
-        },
-    }
+    configs = _configs(tmp_path, {"db-b.yaml": {"tenants": {"db-b": {"m": 1}}}})
     metrics = offboard_tenant.get_tenant_metrics("db-a", configs)
     assert metrics == {}
 

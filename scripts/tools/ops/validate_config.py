@@ -129,7 +129,7 @@ from _lib_exitcodes import (  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
-    config_stem,
+    config_listing,
     duplicate_declarations,
     tenant_declarations,
     iter_config_files,
@@ -1840,8 +1840,9 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
 
     Selection mirrors the walker instead of restating it.
     ``iter_config_files`` is the shared recursive, case-insensitive,
-    both-spellings enumerator, and ``is_reserved_name`` is the ``_``-prefix
-    gate the walker applies *before* it parses a ``tenants:`` block at all.
+    both-spellings enumerator, and Go's class (``Entry.reserved``) is the
+    ``_``-prefix gate the walker applies *before* it parses a ``tenants:``
+    block at all.
     The second one matters in both directions: a ``tenants:`` block inside
     ``_defaults.yaml`` is not a declaration for this purpose, so pairing one
     with a real tenant file has to stay green.
@@ -1926,7 +1927,9 @@ def check_tenant_file_name(config_dir: str) -> dict[str, object]:
     ``.``-prefixed names skipped, both extension spellings in any case. A
     file that declares no tenant (no or an empty ``tenants:``) has nothing
     to compare and is not listed. The comparison is case-sensitive, as the
-    stem is: ``Upper.YAML`` carries tenant ``Upper``, not ``upper``.
+    stem is: ``Upper.YAML`` carries tenant ``Upper``, not ``upper``. The id a
+    file name carries is Go's (the entry's ``tenant_named``, #3206), not a
+    stem computed here.
 
     ⚠️ A declared id is the key's source text (``tenant_declarations``'
     notion), not the decoded value tenant-api compares; the two differ only
@@ -1934,6 +1937,7 @@ def check_tenant_file_name(config_dir: str) -> dict[str, object]:
     git-manages as ``yaml_indirection``.
     """
     declared, unreadable = tenant_declarations(config_dir)
+    listing = config_listing(config_dir)  # the same reader's one snapshot
 
     by_file: dict[str, list[str]] = {}
     for tenant_id, labels in declared.items():
@@ -1951,7 +1955,7 @@ def check_tenant_file_name(config_dir: str) -> dict[str, object]:
     for label in sorted(by_file):
         ids = sorted(by_file[label])
         name = label.rsplit("/", 1)[-1]
-        stem = config_stem(name)
+        stem = listing.entry(label).tenant_named
         parent = label[: len(label) - len(name)]
         if len(ids) > 1:
             shown = ", ".join(f'"{printable_name(i)}"' for i in ids)
@@ -2297,7 +2301,7 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
 
     One carrier per directory, the one parse-tree says the chain selects:
     a carrier it lists in ``not_read`` is not read, and the row says so
-    (never ``select_defaults_carrier`` here — a second implementation of the
+    (never a Python carrier selection here — a second implementation of the
     rule; reading a file parse-tree does not select is rc 2, #2906 review).
     A file that does not load as a mapping is left to ``yaml_syntax`` /
     ``root_defaults``. Measured on a subtree: top-level
@@ -2740,7 +2744,7 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     which would turn this row WARN on every ADR-017 tree for files it is
     deliberately not about. The carrier is the one parse-tree says the root's
     chain selects (``ConfdReader.carrier``, its ``defaults_carriers``), the
-    rule every plane shares (#1674) — not ``select_defaults_carrier``, a
+    rule every plane shares (#1674) — not a Python selection, a
     second implementation of it that could hand the read a file parse-tree
     does not select (rc 2, #2906 review).
     """

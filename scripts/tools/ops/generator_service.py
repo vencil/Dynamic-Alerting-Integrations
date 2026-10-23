@@ -832,6 +832,13 @@ class Service:
         if outcome == "git_read":
             return _rejected("git_read", "reading the base commit from git "
                              "failed twice", **common)
+        if outcome == "da_guard":
+            # No reason of its own on the wire (tenant-api's closed list):
+            # no verdict was reached, like any other incomplete judgement;
+            # the message says which step failed.
+            return _rejected("incomplete", "da-guard parse-tree could not classify the "
+                             "base tree's path names: " + str(res.get("message", "")),
+                             **common)
         return _rejected("incomplete", "the judgement process sent no "
                          "complete result", **common)
 

@@ -160,7 +160,8 @@ class TestExtensionSpellingAxis:
         ⛔ You cannot enumerate the complement of an accept-set, so this pins
         counterexamples rather than a rule, and the name says which ones.
         Over-widening a call site to `(".yaml", ".yml", ".json")` is a single
-        token, and `has_yaml_extension`'s own docstring says this argument
+        token, and the docstring of the (since deleted, #3206)
+        `has_yaml_extension` says this argument
         gets touched. Measured on this change's base (`eed193a7`): with that
         widening applied and this file's tests absent, the CI-exact suite is
         15909 passed / 185 skipped / rc=0 — nothing else is watching this
@@ -198,47 +199,44 @@ class TestExtensionSpellingAxis:
         )
 
     def test_every_spelling_the_shared_set_names_is_read(self, tmp_path):
-        """FLOOR, derived: one carrier per member of `CONFIG_SUFFIXES`.
+        """FLOOR, derived: one carrier per member of `SUFFIXES`.
 
         The tests above hard-code `.yaml` and `.yml`, so they stop covering
         the floor the day the exporter grows a third spelling and
-        `_lib_confd.CONFIG_SUFFIXES` follows it. This one reads the set
+        the shared name table follows it. This one reads the set
         instead of restating it.
 
-        ⛔ It does NOT re-implement `has_yaml_extension` — that would be the
-        predicate checking itself. It uses the shared CONSTANT, whose
-        agreement with the exporter's scanner is pinned by
-        `tests/shared/confd_name_classification_matrix.json` (asserted from
-        the Go side by `confd_name_classification_parity_test.go` and from
-        the Python side by
-        `tests/shared/test_confd_name_classification_parity.py`).
+        It reads the set from the shared name table
+        (`_confd_name_table.config_suffixes`), which Go owns — pkg/confdname's
+        matrix test asserts every cell; no Python rule restates it (#3206).
 
         ⚠️ Floor only: satisfied by a reader that is too WIDE, which is what
         the counterexample test above is for.
         """
-        from _lib_confd import CONFIG_SUFFIXES  # noqa: PLC0415
+        from _confd_name_table import config_suffixes  # noqa: PLC0415
+        SUFFIXES = config_suffixes()  # Go's table (#3206)
 
         # ⛔ Anti-vacuity: an empty set would make the assertion below
         # `[] == []`. Guarding the set is not this test's job, so name who
         # does rather than pretending a floor here would be independent.
-        assert len(CONFIG_SUFFIXES) >= 2, (
-            f"CONFIG_SUFFIXES collapsed to {CONFIG_SUFFIXES!r}; the shared "
+        assert len(SUFFIXES) >= 2, (
+            f"SUFFIXES collapsed to {SUFFIXES!r}; the shared "
             f"classification matrix should have gone red first"
         )
 
         root = tmp_path / "confd"
         root.mkdir()
         (root / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
-        for i, suffix in enumerate(CONFIG_SUFFIXES):
+        for i, suffix in enumerate(SUFFIXES):
             (root / f"t{i}{suffix}").write_text(
                 _tenant(f"t{i}", domain=f"d{i}", keys=1), encoding="utf-8")
 
         meta = gtm.build_tenant_metadata(root)
-        expected = sorted(f"t{i}" for i in range(len(CONFIG_SUFFIXES)))
+        expected = sorted(f"t{i}" for i in range(len(SUFFIXES)))
 
         assert sorted(meta["tenant_metadata"]) == expected, (
-            f"one carrier was written per member of CONFIG_SUFFIXES "
-            f"({CONFIG_SUFFIXES!r}) and the generator produced "
+            f"one carrier was written per member of SUFFIXES "
+            f"({SUFFIXES!r}) and the generator produced "
             f"{sorted(meta['tenant_metadata'])}, expected {expected}"
         )
 
