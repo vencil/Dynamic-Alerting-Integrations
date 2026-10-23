@@ -127,7 +127,7 @@ EXTRA_ARGS: dict[str, list[str]] = {
 # Tools that query Prometheus while they read the conf.d. #3133: one that
 # gets no answer fails closed (rc 2), so they get the suite's stub, which
 # answers empty and well-formed — the conf.d stays the only variable.
-UPSTREAM_TOOLS = {"blind_spot_discovery.py"}
+UPSTREAM_TOOLS = {"blind_spot_discovery.py", "threshold_govern.py"}
 
 # Tools whose DEFAULT output path is anchored to the repo via `__file__`
 # rather than to the cwd, so a tmp cwd is not enough to contain the write.
