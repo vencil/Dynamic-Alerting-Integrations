@@ -1291,12 +1291,21 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     except ParseTreeError as e:
         parse_tree_failure_exit(e, config_dir)
     skipped_set = {p for p, _why in not_read}
-    # Under the generator container's cache: every file the loop below reads
-    # that would miss is parsed in ONE parse-tree run, not one run (and one
-    # walk of the whole tree) per file — the cache's entries are unchanged
-    # (`ConfdReader.prefetch`; ADR-036 §3, #3206). Not the skipped ones:
-    # they are never read, so they would miss on every judgement.
-    reader.prefetch([p for p in listed if p not in skipped_set], ROUTING_READ)
+    # Under the generator container's cache: every read below that would
+    # miss is parsed in ONE parse-tree run, not one run (and one walk of the
+    # whole tree) per file — the cache's entries are unchanged
+    # (`ConfdReader.prefetch_reads`; ADR-036 §3, #3206): the loop's routing
+    # read of each file, and the tenant declarations' read of each tenant
+    # file (`tenant_declarations`, `declared_tenants`). Not the skipped
+    # ones: they are never read, so they would miss on every judgement.
+    try:
+        if _lib_parse_cache.active() is not None:
+            reader.prefetch_reads(
+                [(p, ROUTING_READ) for p in listed if p not in skipped_set]
+                + [(rel, _lib_parse_cache.VALUES)
+                   for rel in _lib_parse_cache.tenant_scope(reader).files])
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
     for path_p in listed:
         fname = _rel(path_p)
         level = PurePosixPath(fname).parent.as_posix()

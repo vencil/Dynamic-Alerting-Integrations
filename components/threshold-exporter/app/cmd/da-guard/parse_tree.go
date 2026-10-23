@@ -17,7 +17,8 @@ package main
 // platform carrier reaches where it is written, held to the renders by
 // tests/shared/test_parse_tree_rendered_by.py.
 //
-// ONE DOCUMENT SHAPE, FOUR MODES (schema da-guard.parse-tree/v2): tree and
+// ONE DOCUMENT SHAPE, FIVE MODES (schema da-guard.parse-tree/v2) — batch file
+// mode (--inputs, parse_tree_batch.go) prints one file-mode document per item: tree and
 // file mode read content ("files", "rendered_by"); list mode
 // (--list-only --config-dir) is the same walk and the same "entries" without
 // reading a byte; names mode (--list-only --names) classifies names that are
@@ -353,8 +354,9 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"Batch file mode (--inputs): file mode for many paths over one walk of the tree.\n"+
 			"stdout is one line per item, in the order given, each byte for byte what file\n"+
 			"mode prints for that path and text (a path may be given twice); an item file mode\n"+
-			"would refuse (exit 2) refuses the whole batch: exit 2, and the lines already\n"+
-			"printed are not a result (each line is written as it is made, never buffered).\n"+
+			"would refuse (exit 2) refuses the whole batch: exit 2, and whatever stdout already\n"+
+			"holds is not a result (lines go out through a buffered writer as they are made;\n"+
+			"the whole output is never held in memory).\n"+
 			"List mode (--list-only --config-dir): the walk of tree mode and the same entries\n"+
 			"(the same function builds both), but for the problems only reading finds.\n"+
 			"Names mode (--list-only --names): each given base name in the order given, \"depth\" 0,\n"+

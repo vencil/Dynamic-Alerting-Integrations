@@ -682,7 +682,86 @@ def test_cold_fill_in_one_batch_stores_the_per_file_fills_entries(tmp_path, monk
     assert set(old_files) <= set(new_files) | {r for b in batches for r in b}
     assert {"broken.yaml", "listy.yaml", "not-utf8.yaml", "team/sub/bad-dup.yaml"} <= {
         r for b in batches for r in b}
-    # … in at most two runs, and file mode alone only for the carrier
+    # … in at most two runs (every routing read and tenant-file read; then
+    # the tenant files whose read raised, which nothing caches, read once
+    # more by `declared_tenants`), and file mode alone only for the carrier
     # verdicts of `team/` (two spellings there).
     assert 1 <= len(batches) <= 2
     assert set(new_files) <= {"team/_defaults.yaml", "team/_defaults.yml"}, new_files
+
+
+def _spied_reader(d: Path, monkeypatch):
+    """A reader under a fresh cache, with every file-mode run recorded."""
+    files = []
+    orig = pt.load_file
+    monkeypatch.setattr(pt, "load_file", lambda *a, **k: files.append(a[1]) or orig(*a, **k))
+    return pc.ConfdReader(d), files
+
+
+def test_a_stashed_line_serves_only_its_own_cache_key(tmp_path, monkeypatch):
+    """The stash is keyed as the cache is: a line prefetched for a read is
+    taken only by that read of those bytes, once. A sibling carrier that
+    changes between prefetch and the carrier verdict — whose cache key holds
+    every carrier of the directory — takes file mode on its own, and so
+    does a file whose own bytes changed; the verdict and the value are
+    those of the tree at the time of the read."""
+    d = _write_tree(tmp_path, {
+        "team/_defaults.yaml": "defaults: {a: 1}\n",
+        "team/_defaults.yml": "defaults: {a: 2}\n",
+        "team/t.yaml": "tenants: {t: {}}\n",
+        "u.yaml": "tenants: {u: {}}\n",
+    })
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        reader, files = _spied_reader(d, monkeypatch)
+        mode = _grar_parse.ROUTING_READ
+        reader.prefetch([d / "team/_defaults.yaml", d / "team/_defaults.yml",
+                         d / "team/t.yaml", d / "u.yaml"], mode)
+        assert len(reader._stash) == 4
+        # At prefetch `.yml` is the unselected spelling (`.yaml` wins). The
+        # sibling is removed, so `.yml` is now its directory's carrier; the
+        # stashed line, made beside `.yaml`, would still say unselected.
+        stale = pt.tree_of(pt.file_document(reader._stash[(pc.content_key(
+            "team/_defaults.yml", b"defaults: {a: 2}\n"), mode.name)]))
+        assert stale.not_read.get("team/_defaults.yml") == "unselected_defaults_carrier"
+        (d / "team/_defaults.yaml").unlink()
+        verdict = reader._verdict("team/_defaults.yml")
+        assert files == ["team/_defaults.yml"]  # file mode, not the stashed line
+        assert verdict == (None, {"team": "team/_defaults.yml"})
+        # A file rewritten after the prefetch: its read misses the stash.
+        (d / "u.yaml").write_text("tenants: {u2: {}}\n", encoding="utf-8")
+        assert reader.read(d / "u.yaml", mode) == {"tenants": {"u2": {}}}
+        assert files[-1] == "u.yaml"
+        # An unchanged file: the stashed line, taken once.
+        n = len(files)
+        assert reader.read(d / "team/t.yaml", mode) == {"tenants": {"t": {}}}
+        assert len(files) == n
+        assert (pc.content_key("team/t.yaml", b"tenants: {t: {}}\n"), mode.name) \
+            not in reader._stash
+    finally:
+        pc.install(None)
+
+
+def test_the_stash_is_empty_after_the_fill(tmp_path, monkeypatch):
+    """Every line a generator run stashes is taken by its read: nothing is
+    held for the reader's lifetime."""
+    monkeypatch.setenv("PATH", os.devnull)
+    d = _write_cold_tree(tmp_path)
+    readers = []
+    orig_init = pc.ConfdReader.__init__
+
+    def track(self, *a, **k):
+        orig_init(self, *a, **k)
+        readers.append(self)
+
+    monkeypatch.setattr(pc.ConfdReader, "__init__", track)
+    _lib_confd.reset_warned_for_test()
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        _run_findings(d, tmp_path / "f.json")
+    finally:
+        pc.install(None)
+    assert readers and len(cache.new) > 30
+    assert all(r._stash == {} for r in readers), [len(r._stash) for r in readers]
