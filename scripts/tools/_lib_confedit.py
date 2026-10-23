@@ -39,7 +39,7 @@ document when no file is to blame), the path, and da-guard's `reason` and
 Values
 ------
 Every value carries its type (`{"str": …}`, `{"int": …}`, …; the edit
-contract). Two rules decide which:
+contract). Where the value came from decides which:
 
 * `node_value`: a value the tool READ (a parse-tree node) keeps the type it
   was read with — a `!!str` stays a string, an `!!int` an int. An `!!int` /
@@ -49,6 +49,10 @@ contract). Two rules decide which:
   text is canonical decimal as the edit contract takes it (`80`, `-1`,
   `0.5`), otherwise a `str` (`70:critical`, `010`, `1e3`, `disable` — each
   written double-quoted).
+* `data_value`: a value the tool GENERATED (Python data a new file is made
+  of, #3206 step 10c-2) has the type it has in Python — a `str` stays a
+  string, an `int` an int, a `float` a float in canonical decimal; one with
+  no such type (a NaN, an infinite float) is `ValueError`, naming its key.
 
 Several files, all or nothing
 -----------------------------
@@ -77,6 +81,7 @@ written by then stay written.
 """
 from __future__ import annotations
 
+import decimal
 import json
 import posixpath
 import re
@@ -266,6 +271,49 @@ def cli_value(text: str) -> dict:
     if is_canonical_float(text):
         return {"float": text}
     return {"str": text}
+
+
+def data_value(obj: Any, _at: "tuple[str, ...]" = ()) -> dict:
+    """A value the tool GENERATED (Python data), with the type it has: a
+    `dict` a mapping in its own key order, a `list` / `tuple` a sequence, a
+    `bool` / `None` / `str` as themselves, an `int` an int, a finite `float`
+    a float spelled in canonical decimal (`1e-05` → `0.00001`, `2.0` stays
+    `2.0`). Raises ValueError, naming the key path, for anything else (a
+    NaN / infinite float, an int past the contract's 18 digits, a mapping
+    key that is not a `str`, another type): no spelling is guessed for it."""
+    def bad(why: str) -> ValueError:
+        where = ".".join(_at) or "(the top level)"
+        return ValueError(f"{where}: {why}")
+
+    if isinstance(obj, dict):
+        for k in obj:
+            if not isinstance(k, str):
+                raise bad(f"the key {k!r} is a {type(k).__name__}, not a str")
+        return map_value((k, data_value(v, (*_at, k))) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return {"seq": [data_value(v, (*_at, f"[{i}]")) for i, v in enumerate(obj)]}
+    if obj is None:
+        return {"null": None}
+    if isinstance(obj, bool):
+        return {"bool": obj}
+    if isinstance(obj, str):
+        return {"str": obj}
+    if isinstance(obj, int):
+        text = str(obj)
+        if not is_canonical_int(text):
+            raise bad(f"the int {obj} is longer than {_MAX_INT_DIGITS} characters"
+                      " (the edit contract's limit, a sign included)")
+        return {"int": text}
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            raise bad(f"the float {obj!r} is not a finite number")
+        text = format(decimal.Decimal(repr(obj)), "f")
+        if "." not in text:
+            text += ".0"
+        if not is_canonical_float(text):
+            raise bad(f"the float {obj!r} has no canonical decimal spelling")
+        return {"float": text}
+    raise bad(f"a {type(obj).__name__} ({obj!r}) has no edit-contract type")
 
 
 def node_value(node: Any) -> dict:

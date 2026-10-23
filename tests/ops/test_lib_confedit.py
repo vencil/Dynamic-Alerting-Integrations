@@ -71,6 +71,49 @@ def test_a_read_value_the_edit_cannot_carry_as_written_is_refused(node):
         ce.node_value(node)
 
 
+@pytest.mark.parametrize("obj,want", [
+    ("80", {"str": "80"}), ("disable", {"str": "disable"}), (80, {"int": "80"}),
+    (-1, {"int": "-1"}), (1.5, {"float": "1.5"}), (2.0, {"float": "2.0"}),
+    (1e-05, {"float": "0.00001"}), (1e20, {"float": "100000000000000000000.0"}),
+    (True, {"bool": True}), (None, {"null": None}),
+    (["a", 1], {"seq": [{"str": "a"}, {"int": "1"}]}),
+    ({"b": 1, "a": "x"}, {"map": [["b", {"int": "1"}], ["a", {"str": "x"}]]}),
+])
+def test_a_generated_value_has_its_python_type_and_key_order(obj, want):
+    # `data_value` (#3206 10c-2): what a tool generates keeps its Python type;
+    # a mapping keeps the order the tool built it in (no sorting).
+    assert ce.data_value(obj) == want
+
+
+@pytest.mark.parametrize("obj,where", [
+    ({"defaults": {"k": float("inf")}}, "defaults.k"),
+    ({"defaults": {"k": float("nan")}}, "defaults.k"),
+    ({"x": [10 ** 18]}, r"x\.\[0\]"),
+    ({"x": {1, 2}}, "x"),
+    ({"x": {1: "a"}}, "x"),
+    ({"x": {None: 1}}, "x"),
+])
+def test_a_generated_value_with_no_contract_type_is_refused_by_its_key(obj, where):
+    with pytest.raises(ValueError, match=f"^{where}: "):
+        ce.data_value(obj)
+
+
+def test_a_negative_int_at_the_limit_is_named_by_its_length_not_its_digits():
+    # 18 digits plus a sign is past the contract's 18 characters; the message
+    # must not claim more digits than there are.
+    with pytest.raises(ValueError, match="longer than 18 characters"):
+        ce.data_value(-(10 ** 18 - 1))
+
+
+def test_a_generated_float_reads_back_as_the_number_meant(tmp_path):
+    root = _tree(tmp_path / "conf.d", {})
+    content = ce.data_value({"defaults": {"a": 1e-05, "b": 2.0, "c": 7}})
+    ce.emit_all(root, [("_defaults.yaml", content)])
+    node = _lib_parse_tree.load(root, None, 120).node("_defaults.yaml")["defaults"]
+    assert {k: (v["tag"], v["text"]) for k, v in node.items()} == {
+        "a": ("!!float", "0.00001"), "b": ("!!float", "2.0"), "c": ("!!int", "7")}
+
+
 # ── one file ────────────────────────────────────────────────────────
 
 def test_a_typed_severity_round_trips_as_the_string(tmp_path):

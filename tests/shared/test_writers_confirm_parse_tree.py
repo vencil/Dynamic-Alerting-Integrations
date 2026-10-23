@@ -33,7 +33,9 @@ onboard_platform／migrate_rule／generate_tenant_fixture（#2906 F1）同屬「
 CLI 先以 ADR-035 擋下不合法的 id，函式層呼叫則由確認擋下；migrate_rule 的兩個檔名
 固定，generate_tenant_fixture 的檔名是 `<domain>-<db>-<NNNN>.yaml` 與
 `_defaults.yaml`。第 6 列對產生新檔的工具就是第 2 列：預期內容是工具要寫的資料，
-判定是 yaml.v3 讀回的型別。
+判定是 yaml.v3 讀回的型別。generate_tenant_fixture 改由 `da-guard write` 一次一批寫
+（#3206 步驟 10c-2）：文字是 Go 的，第 2 列成為「值沒有契約型別（`inf`）就不寫」與
+「emit 拒寫一個檔就一個都不寫」。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -942,6 +944,22 @@ def test_generate_tenant_fixture_without_da_guard_is_exit_2(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
     assert "da-guard" in r.stderr, r.stderr
     assert _bytes(out) == {}
+
+
+def test_generate_tenant_fixture_one_refused_file_writes_none(tmp_path, capsys):
+    # #3206 10c-2: one `da-guard write` batch for the whole fixture. Here Go
+    # refuses it (the `_defaults.yaml` it would add deselects the
+    # `_defaults.yml` already there: the tree gets worse), so not one
+    # tenant file is written — only what was there stays.
+    import generate_tenant_fixture as gtf
+    out = _tree(tmp_path / "conf.d", {"_defaults.yml": "defaults:\n  k: 1\n"})
+    before = _bytes(out)
+    with pytest.raises(SystemExit) as exc:
+        gtf.generate_flat(3, out, True, 42)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "_defaults.yml" in err and "nothing was written" in err, err
+    assert _bytes(out) == before
 
 
 def test_generate_tenant_fixture_plain_thresholds_are_numbers(tmp_path):

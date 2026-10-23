@@ -17,15 +17,15 @@ The --with-defaults flag injects _defaults.yaml files with platform-wide thresho
 In hierarchical mode, _defaults.yaml is placed at domain and env levels.
 In flat mode, a single _defaults.yaml is placed at the conf.d/ root.
 
-Before any file is written, every generated text is read back by
-`da-guard parse-tree` (file mode) at the path it is written to and must hold
-exactly what was generated, at a path a reader reads (ADR-036 §2). A refusal,
-or no usable da-guard ($DA_GUARD_BINARY / PATH), is exit 2 with nothing
-written but the output directory itself.
+The files are written by Go (ADR-036 §2, #3206): the generated data goes to
+ONE `da-guard write` batch, which writes the YAML text, judges the whole tree
+once (every file read back by `da-guard parse-tree` at its path, a reader
+reading it, holding exactly what was generated) and writes all of them or
+none. A refusal, or no usable da-guard ($DA_GUARD_BINARY / PATH), is exit 2
+with nothing written but the output directory itself.
 """
 import argparse
 import hashlib
-import io
 import math
 import os
 import random
@@ -43,7 +43,6 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 import _lib_parse_tree  # noqa: E402
-import _lib_write_check  # noqa: E402  (ADR-036 §2)
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -111,10 +110,9 @@ def _seed_rng(seed: int) -> random.Random:
 def _gen_threshold_value(rng: random.Random) -> int | str:
     """Generate a random threshold value in various formats.
 
-    A plain threshold is an ``int``: `_dump_yaml` writes it unquoted, which
-    yaml.v3 reads as ``!!int`` — so that is the value this fixture means
-    (ADR-036 §2 compares the text read back with it; a ``str`` here would be
-    a ``!!str`` that the written text never was)."""
+    A plain threshold is an ``int``: it goes to `da-guard write` as an int
+    and is written unquoted (yaml.v3 ``!!int``); a ``str`` here would be
+    written as a double-quoted ``!!str``."""
     fmt = rng.choice(["scalar", "scalar", "scalar", "severity", "disable"])
     if fmt == "scalar":
         return rng.randint(50, 100000)
@@ -601,128 +599,52 @@ def _domain_defaults(rng: random.Random,
     return out
 
 
-def _yaml_text(data: dict) -> str:
-    """The text `_dump_yaml` writes for *data*."""
-    buf = io.StringIO()
-    _dump_yaml(buf, data, indent=0)
-    return buf.getvalue()
-
-
-def _expected(obj: Any) -> Any:
-    """What the text of *obj* is meant to read back as (ADR-036 §2): the
-    `_lib_write_check.from_python` nodes, except a ``float``, which
-    `_dump_yaml` writes as ``str(v)`` (not PyYAML's spelling) and means as a
-    number — `_lib_write_check.AnyNumber` of that text."""
-    if isinstance(obj, dict):
-        return {k: _expected(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_expected(v) for v in obj]
-    if isinstance(obj, float):
-        return _lib_write_check.AnyNumber(str(obj))
-    return obj
-
-
 def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
                        flag: str | None = OUTPUT_FLAG) -> None:
     """Write every ``(root-relative path, data)`` of one run under
-    *output_dir* — after ALL of them are confirmed (ADR-036 §2): each text,
-    read back by `da-guard parse-tree` at the path it is written to, must hold
-    exactly *data*, at a path a reader reads. The whole tree is staged and
-    read in one tree-mode run (`_lib_write_check.confirm_tree`); confirmed
-    files are then moved into *output_dir*. A refusal, or no usable da-guard,
-    ends the run with rc 2 (EXIT_CALLER_ERROR) and no file written.
-    """
-    items = [(rel, _yaml_text(data), _lib_write_check.from_python(_expected(data)))
-             for rel, data in files]
+    *output_dir* through ONE `da-guard write` batch (ADR-036 §2: only Go
+    writes conf.d; #3206 step 10c-2): the data goes as typed values
+    (`_lib_confedit.data_value`, key order as generated), Go writes the
+    text, judges the whole tree once — every file read back by
+    `parse-tree` at its path, a reader reading it, holding exactly *data* —
+    and writes all of them or none. A refusal, a value with no type the
+    contract carries (``inf``), da-guard's caller error or no usable
+    da-guard ends the run with rc 2 (EXIT_CALLER_ERROR) and no file
+    written; a write that stopped part-way is rc 2 naming the files left
+    in place.
+
+    *flag* (unused by the write itself, which Go makes) names the output
+    flag in a message, ``None`` when it was not given (#1789)."""
+    import _lib_confedit  # noqa: PLC0415
+    batch = []
+    for rel, data in files:
+        try:
+            batch.append((rel, _lib_confedit.data_value(data)))
+        except ValueError as exc:
+            _die(f"{rel}: {exc} — nothing was written")
+    where = f" (the directory given to {flag})" if flag else ""
     try:
-        with _lib_write_check.confirm_tree(output_dir, items) as staged:
-            for rel in staged.rels:
-                _place(staged, rel, output_dir / rel, flag=flag)
-    except _lib_write_check.WriteRefused as exc:
-        print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _lib_confedit.emit_all(output_dir, batch)
+    except _lib_confedit.EditsRefused as exc:
+        for r in exc.refusals:
+            print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
+        _die(f"da-guard write refused {len(exc.refusals)} file(s) under "
+             f"{output_dir}{where} — nothing was written")
+    except _lib_confedit.EditCallerError as exc:
+        _die(f"{exc} — nothing was written")
+    except _lib_confedit.PartialWrite as exc:
+        left = [*exc.written, *exc.maybe_written]
+        _die(f"the write under {output_dir}{where} stopped part-way: {exc.cause}; "
+             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
+             f"been written, not rolled back: {', '.join(left) or '(none)'}")
     except _lib_parse_tree.ParseTreeError as exc:
-        print(f"ERROR: cannot confirm the generated conf.d files through "
-              f"`da-guard parse-tree` (ADR-036 §2): {exc}; nothing was written",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _die(f"cannot write the generated conf.d files through `da-guard write` "
+             f"(ADR-036 §2): {exc}; nothing was written")
 
 
-def _place(staged: "_lib_write_check.StagedTree", rel: str, path: Path, *,
-           flag: str | None = OUTPUT_FLAG) -> None:
-    """Move one confirmed, staged YAML file to *path*.
-
-    #1789: every caller's *path* is inside the tree the output flag names, so
-    an unusable one is that flag's value — hence the wrapper naming it rather
-    than a bare traceback at rc=1.
-
-    ⛔ *flag* is ``None`` when ``-o/--output`` was NOT given and the tool fell
-    back to its in-repo default: "check the value given to -o/--output" would
-    then send the operator to a flag they never typed, so
-    ``OutputWriteError`` prints the internal-path wording instead.
-    """
-    # #1789: the wrapper is given the PARENT — the directory this mkdir
-    # actually creates. Handing it the output FILE makes the message a
-    # sentence about a path nobody was creating (worked example in
-    # `_lib_io.output_write`). The ancestor rule still converts the
-    # failure, and the write below keeps naming the file.
-    with output_write(path.parent, flag=flag, action="create directory"):
-        path.parent.mkdir(parents=True, exist_ok=True)
-    with output_write(path, flag=flag):
-        staged.place(rel, path)
-
-
-def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recursive writer
-    """Minimal YAML serializer (avoids PyYAML dependency for fixture generation).
-
-    It produces the text only; what that text reads as is confirmed by
-    `da-guard parse-tree` before it is written (`_confirm_and_write`)."""
-    prefix = "  " * indent
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if isinstance(v, (dict, list)):
-                f.write(f"{prefix}{k}:\n")
-                _dump_yaml(f, v, indent + 1)
-            elif isinstance(v, bool):
-                f.write(f"{prefix}{k}: {'true' if v else 'false'}\n")
-            elif isinstance(v, (int, float)):
-                f.write(f"{prefix}{k}: {v}\n")
-            else:
-                # String — quote if contains special chars
-                sv = str(v)
-                if any(c in sv for c in ":{}\n#[]") or sv.startswith('"'):
-                    f.write(f'{prefix}{k}: "{sv}"\n')
-                else:
-                    f.write(f"{prefix}{k}: {sv}\n")
-    elif isinstance(obj, list):
-        for item in obj:
-            if isinstance(item, dict):
-                first = True
-                for k, v in item.items():
-                    if first:
-                        f.write(f"{prefix}- {k}:")
-                        first = False
-                    else:
-                        f.write(f"{prefix}  {k}:")
-                    if isinstance(v, (dict, list)):
-                        f.write("\n")
-                        _dump_yaml(f, v, indent + 2)
-                    elif isinstance(v, bool):
-                        f.write(f" {'true' if v else 'false'}\n")
-                    elif isinstance(v, (int, float)):
-                        f.write(f" {v}\n")
-                    else:
-                        sv = str(v)
-                        if any(c in sv for c in ":{}\n#[]"):
-                            f.write(f' "{sv}"\n')
-                        else:
-                            f.write(f" {sv}\n")
-            else:
-                sv = str(item)
-                if any(c in sv for c in ":{}\n#[]"):
-                    f.write(f'{prefix}- "{sv}"\n')
-                else:
-                    f.write(f"{prefix}- {sv}\n")
+def _die(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 @exit_on_output_write_error
