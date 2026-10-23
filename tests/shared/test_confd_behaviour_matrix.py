@@ -229,12 +229,15 @@ TOOLS: dict[str, Tool] = {
                                           "--config-dir", "{conf}", "--validate")),
     "config_history": Tool((_PY, _T + "ops/config_history.py", "--config-dir", "{conf}", "snapshot")),
     "drift_detect": Tool((_PY, _T + "ops/drift_detect.py", "--dirs", "{conf},{conf}")),
-    # The soak's only conf.d selection runs inside a loop of whole minutes
-    # against a live exporter; the cell calls that selection itself.
+    # The soak runs whole minutes against a live exporter; the cell takes
+    # its one index of the tree (behind `main`'s own no-da-guard exit) and
+    # perturbs a file from it, as a pass does.
     "run_chaos_soak": Tool((_PY, "-c",
                             ("import sys; sys.path[:0] = [sys.argv[1], sys.argv[1] + '/dx'];"
                              " from pathlib import Path; import run_chaos_soak as m;"
-                             " sys.exit(0 if m.trigger_reload(Path(sys.argv[2])) else 1)"),
+                             " import _lib_parse_cache as c;"
+                             " carriers = c.exit_on_parse_tree_error(m.reload_carriers)(Path(sys.argv[2]));"
+                             " sys.exit(0 if m.trigger_reload(carriers) else 1)"),
                             "{scripts}/tools", "{conf}"), script="tools/dx/run_chaos_soak.py"),
     "describe_tenant": Tool((_PY, _T + "dx/describe_tenant.py", "--conf-d", "{conf}", "--all")),
     "describe_tenant --replaces": Tool((_PY, _T + "dx/describe_tenant.py", "a", "--conf-d", "{conf}",
@@ -301,7 +304,6 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/lint/check_cli_contract.py": "checks documented commands against argparse; reads no conf.d",
     "tools/lint/check_cli_default_drift.py": "checks documented defaults against argparse; reads no conf.d",
     "tools/lint/check_doc_datools_cmds.py": "checks documented commands; reads no conf.d",
-    "tools/lint/check_frontmatter_versions.py": "scans docs front matter; reads no conf.d",
     "tools/lint/check_md_yaml_drift.py": "checks YAML examples in docs against the schema; "
                                          "reads no conf.d tree",
     "tools/lint/check_structure.py": "checks the repo layout; reads no conf.d",
@@ -319,33 +321,13 @@ NOT_IN_MATRIX: dict[str, str] = {
 #: Table rows outside the population's root (`scripts/tools`).
 OUTSIDE_POPULATION = {"ops/configmap_assemble.py"}
 
-_B2 = "β2: migrates to da-guard"
-
-
 def _cells(tool: str, reason: str, *rows: str) -> dict[tuple[str, str], str]:
     return {(tool, r): reason for r in rows}
 
 
 #: Cells that break the invariant today, measured against this contract.
 #: Each is strict: a fixed cell XPASSes and goes red until it is deleted.
-XFAIL: dict[tuple[str, str], str] = {
-    **_cells("config_history", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("drift_detect", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    **_cells("run_chaos_soak", _B2, "non_utf8_name", "mode_000_file", "link_into_000_dir", "link_to_000_dir", "dir_444",
-             "dangling_link", "looping_link", "chain_41_links", "fifo", "config_named_dir",
-             "unlistable_config_named_dir", "unlistable_subdir", "unlistable_reserved_dir",
-             "config_named_dir_link", "team_link_outside"),
-    # A file the exporter cannot decode (validation's parse_failed).
-    **{(t, r): _B2
-       for r in ("yaml_syntax_error", "multi_document_file")
-       for t in ("run_chaos_soak", "drift_detect", "config_history")},
-}
+XFAIL: dict[tuple[str, str], str] = {}
 
 # ── running one cell ────────────────────────────────────────────────────
 

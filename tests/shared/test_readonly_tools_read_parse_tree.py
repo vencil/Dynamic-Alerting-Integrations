@@ -82,7 +82,7 @@ def no_yaml_parse(monkeypatch):
 @pytest.fixture
 def no_parse_tree_binary(monkeypatch):
     """`da-guard parse-tree` finds no binary; every other da-guard run is real."""
-    def missing(args, binary, timeout, stdin=None):
+    def missing(args, binary, timeout, stdin=None, **_kw):  # every mode's call shape
         raise _lib_parse_tree.BinaryMissing("da-guard binary not found (test)")
 
     monkeypatch.setattr(_lib_parse_tree, "_run", missing)

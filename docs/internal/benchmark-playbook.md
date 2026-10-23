@@ -741,7 +741,7 @@ func silenceLogs(b *testing.B) {
 
 ### 如何 reproduce / characterize（Track 1）
 
-soak harness 已支援所有 sweep；exporter 端調 env/flag，harness 端只負責量測：
+soak harness 已支援所有 sweep；exporter 端調 env/flag，harness 端只負責量測。harness 要擾動的檔取自 da-guard 對 conf.d 的索引，直接跑要先設 `DA_GUARD_BINARY`（或 da-guard 在 `$PATH`；`make soak-readiness` 會自己建）：
 
 ```bash
 # 4-hour baseline（確認 sys_bytes 是 asymptotic 還是 linear unbounded）

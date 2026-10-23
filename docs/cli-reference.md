@@ -1150,6 +1150,8 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 
 比對多個 config-dir 目錄（來自不同叢集或 GitOps 分支），偵測意外的配置漂移。使用 SHA-256 manifest 進行目錄級比對。
 
+比對的是每個目錄頂層的設定檔，清單取自 da-guard 對該目錄的索引（exporter 的走訪）；子目錄裡的設定檔不進 manifest，stderr 會點名。因此需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。任一目錄上有 da-guard 驗證會點名的路徑時，本工具在比對之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+
 **用法**
 
 ```bash
@@ -1190,7 +1192,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
-| `2` | 呼叫端錯誤：`--dirs` 任一目錄不存在、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：`--dirs` 任一目錄不存在、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
 
 ---
 
@@ -1251,6 +1253,8 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 #### config-history
 
 配置快照與歷史追蹤——在 `.da-history/` 中記錄 conf.d/ 的每次變更，提供 git-independent 的輕量級版本控制。
+
+`snapshot` 記錄的是 conf.d 頂層的設定檔，清單取自 da-guard 對這棵樹的索引（exporter 的走訪）；子目錄裡的設定檔不進快照，stderr 會點名。因此 `snapshot` 需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`；conf.d 上有 da-guard 驗證會點名的路徑時，`snapshot` 在寫入任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。`log`／`show`／`diff` 只讀 `.da-history/`。
 
 ```bash
 da-tools config-history --config-dir <PATH> <action>
@@ -1703,7 +1707,7 @@ da-tools migrate-to-operator [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄 | （必填） |
+| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名。這個目錄不是 conf.d，不套用 conf.d 的拒絕：解析不了的檔印 WARNING 並略過 | （必填） |
 | `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 進 `issues` 並略過 | `conf.d` |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |

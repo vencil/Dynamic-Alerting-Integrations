@@ -42,18 +42,18 @@ def two_dirs(tmp_path):
     dir_b.mkdir()
 
     # Identical file
-    _write_yaml(dir_a, "db-shared.yaml", "tenants: {shared: true}")
-    _write_yaml(dir_b, "db-shared.yaml", "tenants: {shared: true}")
+    _write_yaml(dir_a, "db-shared.yaml", "tenants: {shared: {v: true}}")
+    _write_yaml(dir_b, "db-shared.yaml", "tenants: {shared: {v: true}}")
 
     # Modified file
-    _write_yaml(dir_a, "db-prod.yaml", "tenants: {timeout: 30}")
-    _write_yaml(dir_b, "db-prod.yaml", "tenants: {timeout: 60}")
+    _write_yaml(dir_a, "db-prod.yaml", "tenants: {timeout: {v: 30}}")
+    _write_yaml(dir_b, "db-prod.yaml", "tenants: {timeout: {v: 60}}")
 
     # Only in A
-    _write_yaml(dir_a, "db-legacy.yaml", "tenants: {legacy: true}")
+    _write_yaml(dir_a, "db-legacy.yaml", "tenants: {legacy: {v: true}}")
 
     # Only in B
-    _write_yaml(dir_b, "db-new.yaml", "tenants: {new: true}")
+    _write_yaml(dir_b, "db-new.yaml", "tenants: {new: {v: true}}")
 
     # Expected drift (cluster-specific)
     _write_yaml(dir_a, "_cluster_override.yaml", "cluster: a")
@@ -607,7 +607,7 @@ class TestManifestAcceptsBothSpellings:
         d = tmp_path / "conf.d"
         d.mkdir()
         for n in names:
-            (d / n).write_text("tenants: {x: true}", encoding="utf-8")
+            (d / n).write_text("tenants: {x: {v: true}}", encoding="utf-8")
         return set(dd.compute_dir_manifest(str(d)).files)
 
     def test_yml_carrier_is_hashed(self, tmp_path):
@@ -636,9 +636,9 @@ class TestManifestAcceptsBothSpellings:
         a, b = tmp_path / "a", tmp_path / "b"
         for d in (a, b):
             d.mkdir()
-            (d / "db-a.yaml").write_text("tenants: {shared: true}", encoding="utf-8")
-        (a / "db-b.yml").write_text("tenants: {x: 1}", encoding="utf-8")
-        (b / "db-b.yml").write_text("tenants: {x: 2}", encoding="utf-8")
+            (d / "db-a.yaml").write_text("tenants: {shared: {v: true}}", encoding="utf-8")
+        (a / "db-b.yml").write_text("tenants: {x: {v: 1}}", encoding="utf-8")
+        (b / "db-b.yml").write_text("tenants: {x: {v: 2}}", encoding="utf-8")
 
         report = dd.compare_manifests(
             dd.compute_dir_manifest(str(a), label="a"),
@@ -669,9 +669,9 @@ class TestFlatScanSaysSoOutLoud:
         reset_warned_for_test()
         d = tmp_path / "conf.d"
         (d / "region-eu").mkdir(parents=True)
-        (d / "db-a.yaml").write_text("tenants: {a: 1}", encoding="utf-8")
+        (d / "db-a.yaml").write_text("tenants: {a: {v: 1}}", encoding="utf-8")
         (d / "region-eu" / "db-nested.yaml").write_text(
-            "tenants: {n: 1}", encoding="utf-8")
+            "tenants: {n: {v: 1}}", encoding="utf-8")
 
         dd.compute_dir_manifest(str(d))
         err = capsys.readouterr().err
@@ -682,7 +682,7 @@ class TestFlatScanSaysSoOutLoud:
         reset_warned_for_test()
         d = tmp_path / "conf.d"
         d.mkdir()
-        (d / "db-a.yaml").write_text("tenants: {a: 1}", encoding="utf-8")
+        (d / "db-a.yaml").write_text("tenants: {a: {v: 1}}", encoding="utf-8")
 
         dd.compute_dir_manifest(str(d))
         assert capsys.readouterr().err == ""

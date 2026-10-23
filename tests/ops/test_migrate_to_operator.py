@@ -1077,9 +1077,10 @@ class TestAnalyzeMigrationScansOnce:
         assert analysis["tenants"] == 1, "only `db-a` is a valid tenant here"
 
     def test_a_run_reads_one_parse_tree_snapshot(self, tmp_path, monkeypatch, capsys):
-        """Analysis and generation both ask for the tenant set; `main` runs
-        them in one `_lib_parse_cache.session`, so da-guard parse-tree runs
-        once and both answer from the same snapshot of the tree."""
+        """Analysis and generation both ask for the tenant set and the
+        source files; da-guard parse-tree reads the conf.d once (one
+        `_lib_parse_cache.session`) and lists --source-dir once, and both
+        answer from the same snapshot of each."""
         import _lib_parse_tree
 
         confd = tmp_path / "conf.d"
@@ -1087,18 +1088,24 @@ class TestAnalyzeMigrationScansOnce:
         (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
-        loads = []
-        real = _lib_parse_tree.load
+        loads, lists = [], []
+        real, real_list = _lib_parse_tree.load, _lib_parse_tree.list_tree
 
         def counting(*a, **kw):
             loads.append(a[0])
             return real(*a, **kw)
 
+        def counting_list(*a, **kw):
+            lists.append(a[0])
+            return real_list(*a, **kw)
+
         monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        monkeypatch.setattr(_lib_parse_tree, "list_tree", counting_list)
         monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src),
                                           "--config-dir", str(confd), "--dry-run"])
         mto.main()
         assert len(loads) == 1, loads
+        assert [os.path.realpath(d) for d in lists] == [os.path.realpath(src)], lists
         assert "1 tenants" in capsys.readouterr().err
 
 

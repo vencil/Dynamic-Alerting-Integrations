@@ -44,11 +44,11 @@ from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
     TenantSetUnknown,
     TreeTenants,
-    has_yaml_extension,
     tree_tenants,
     warn_nested,
 )
 import _lib_parse_cache  # noqa: E402  (#2906: one parse-tree snapshot per run)
+import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 
@@ -155,7 +155,21 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def parse_configmap_rules(source_dir: Path) -> List[dict]:
+def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
+    """Which files *source_dir* holds, as da-guard's walk lists them
+    (`parse-tree --list-only`, #3206) — no Python listing of its own.
+
+    ⛔ List mode, not a conf.d reader: these are ConfigMap dumps and rule
+    files (a multi-document manifest is ordinary here), not files the
+    exporter serves, so the exporter's judgement of their content — and the
+    conf.d refusal built on it — does not apply. A file that cannot be
+    parsed is a WARN of `parse_configmap_rules`, as before. Raises
+    ParseTreeError (no usable da-guard)."""
+    return _lib_parse_tree.list_tree(source_dir)
+
+
+def parse_configmap_rules(source_dir: Path,
+                          listing: "Optional[_lib_parse_tree.Listing]" = None) -> List[dict]:
     """Parse ConfigMap YAML files and extract rule groups.
 
     Scans source_dir for YAML files containing Prometheus rules in ConfigMap format
@@ -163,6 +177,7 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
 
     Args:
         source_dir: Directory containing ConfigMap YAML files
+        listing: its `list_source_dir` (taken here when None)
 
     Returns:
         List of dicts: {name, file, rule_groups}
@@ -179,21 +194,11 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
         )
 
     results = []
-    # #1911: second scan site — the guard must live where the scan does,
-    # otherwise a hierarchical conf.d is silently empty on THIS path.
-    warn_nested(source_dir, tool="migrate_to_operator")
-    # ⛔ BOTH spellings (#1604). This tool's conf.d reader takes
-    # `CONFIG_SUFFIXES`; leaving this half narrow would put one tool in
-    # disagreement with itself, which is the shape #1604 is about.
-    # `kubectl get cm -o yaml > rules.yml` is an ordinary way to produce
-    # exactly the input this scan reads.
-    # ⚠️ A DIFFERENT TREE from conf.d — these are ConfigMap dumps, not
-    # tenant files, so parse-tree's tenant set does not apply here; only the
-    # extension axis is shared.
-    for yaml_file in sorted(
-        p for p in source_dir.iterdir()
-        if p.is_file() and has_yaml_extension(p.name)
-    ):
+    # Top level only; `warn_nested` names what that leaves out.
+    if listing is None:
+        listing = list_source_dir(source_dir)
+    warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
+    for yaml_file in [source_dir / e.path for e in listing.config_files() if e.depth == 0]:
         try:
             data = load_yaml_file(str(yaml_file))
             if not data:
@@ -379,7 +384,8 @@ def build_alertmanager_config_for_migration(
     }
 
 
-def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
+def analyze_migration(source_dir: Path, config_dir: Path,
+                      source_listing: "Optional[_lib_parse_tree.Listing]" = None) -> dict:
     """Analyze migration scope and identify potential issues.
 
     Args:
@@ -399,7 +405,7 @@ def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
     }
 
     try:
-        cm_rules = parse_configmap_rules(source_dir)
+        cm_rules = parse_configmap_rules(source_dir, source_listing)
         analysis["configmap_files"] = len(cm_rules)
         for item in cm_rules:
             analysis["rule_groups"] += len(item.get("rule_groups", []))
@@ -668,6 +674,7 @@ def generate_migration(
     receiver_template: Optional[str] = None,
     secret_name: Optional[str] = None,
     secret_key: Optional[str] = None,
+    source_listing: "Optional[_lib_parse_tree.Listing]" = None,
 ) -> dict:
     """Main orchestration: parse → convert → write CRDs.
 
@@ -696,7 +703,7 @@ def generate_migration(
 
     # Parse ConfigMap rules
     try:
-        cm_rules = parse_configmap_rules(source_dir)
+        cm_rules = parse_configmap_rules(source_dir, source_listing)
         result["configmap_files"] = len(cm_rules)
 
         for cm_item in cm_rules:
@@ -994,7 +1001,10 @@ def main():
         ),
         file=sys.stderr,
     )
-    analysis = _tenant_set_or_exit(analyze_migration, source_dir, config_dir)
+    # One listing of --source-dir for analysis and generation (#3206).
+    source_listing = (_tenant_set_or_exit(list_source_dir, source_dir)
+                      if source_dir.is_dir() else None)
+    analysis = _tenant_set_or_exit(analyze_migration, source_dir, config_dir, source_listing)
 
     if analysis["issues"]:
         for issue in analysis["issues"]:
@@ -1026,6 +1036,7 @@ def main():
             receiver_template=args.receiver_template,
             secret_name=args.secret_name,
             secret_key=args.secret_key,
+            source_listing=source_listing,
         )
 
     # The checklist is rendered once here (pure string) and reused by both the

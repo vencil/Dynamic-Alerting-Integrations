@@ -117,11 +117,11 @@ benchmark-report-warn: ## benchmark-report 但失敗不阻擋（pre-tag 用，is
 		echo "[pre-tag] ⚠ benchmark-report failed (informational, not blocking — issue #60 Phase 1)"
 
 .PHONY: soak-readiness
-soak-readiness: ## v2.8.0 readiness chaos soak (4hr default; ARGS="--duration-min 240 --reload-interval-sec 60 --metrics-poll-sec 30"). 需先啟動 threshold-exporter 並指向 conf.d
+soak-readiness: ## v2.8.0 readiness chaos soak (4hr default; ARGS="--duration-min 240 --reload-interval-sec 60 --metrics-poll-sec 30"). 需先啟動 threshold-exporter 並指向 conf.d；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard
 	@mkdir -p .build/v2.8.0-soak
 	@echo "[soak-readiness] 預設跑 240 分鐘 / 60s reload interval / 30s metric poll"
 	@echo "[soak-readiness] 確認 threshold-exporter 已在 TARGET_URL（預設 http://localhost:8080）跑起來"
-	@python3 scripts/tools/dx/run_chaos_soak.py \
+	@$(DA_GUARD_ENV) python3 scripts/tools/dx/run_chaos_soak.py \
 		--target-url $${TARGET_URL:-http://localhost:8080} \
 		--config-dir $${CONFIG_DIR:-components/threshold-exporter/config/conf.d} \
 		--output-dir .build/v2.8.0-soak \
@@ -644,8 +644,10 @@ DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
 DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
 
 # 定義在上面、早於 DA_GUARD_PREREQ 的目標：prerequisite 在讀到規則時就展開，
-# 所以在這裡補掛（ADR-036 §2：合成 fixture 產生器寫入前經 da-guard parse-tree 確認）。
+# 所以在這裡補掛（ADR-036 §2：合成 fixture 產生器寫入前經 da-guard parse-tree 確認；
+# soak 要擾動的檔取自 da-guard 的索引，#3206）。
 bench-e2e: $(DA_GUARD_PREREQ)
+soak-readiness: $(DA_GUARD_PREREQ)
 
 # Sharded GitOps（#2906）：assemble_config_dir 的 tenant_uniqueness 經 validate-config
 # 讀 conf.d、來源與輸出都經 da-guard parse-tree 讀（#3206），兩者都要 da-guard。

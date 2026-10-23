@@ -1153,6 +1153,8 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 
 Compare multiple config-dir directories (from different clusters or GitOps branches) and detect unexpected configuration drift. Uses SHA-256 manifests for directory-level comparison.
 
+What is compared is each directory's top-level config files, listed from da-guard's index of that directory (the exporter's walk); config files in subdirectories do not enter the manifest, and stderr names them. So da-guard is required (`$DA_GUARD_BINARY`, then `$PATH`; the da-tools image ships one); without it the exit code is `2`. When any directory holds a path da-guard validation names, this tool refuses with `2` before comparing, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+
 **Usage**
 
 ```bash
@@ -1193,7 +1195,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|-------------|
 | `0` | No unexpected drift |
 | `1` | CI mode: unexpected drift detected |
-| `2` | Caller error: any `--dirs` directory missing, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
+| `2` | Caller error: any `--dirs` directory missing, a directory holding a path da-guard validation names, no usable da-guard, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
 
 ---
 
@@ -1254,6 +1256,8 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 #### config-history
 
 Config snapshot & history tracking — records each change to conf.d/ in `.da-history/`, providing git-independent lightweight version control.
+
+`snapshot` records the conf.d's top-level config files, listed from da-guard's index of the tree (the exporter's walk); config files in subdirectories do not enter the snapshot, and stderr names them. So `snapshot` requires da-guard (`$DA_GUARD_BINARY`, then `$PATH`; the da-tools image ships one); without it the exit code is `2`. When the conf.d holds a path da-guard validation names, `snapshot` refuses with `2` before it writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)). `log` / `show` / `diff` read `.da-history/` only.
 
 ```bash
 da-tools config-history --config-dir <PATH> <action>
@@ -1706,7 +1710,7 @@ da-tools migrate-to-operator [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--source-dir <DIR>` | Directory containing ConfigMap YAML files | (required) |
+| `--source-dir <DIR>` | Directory containing ConfigMap YAML files. Its top-level YAML files are read, listed by da-guard's list-only walk of the directory (`parse-tree --list-only`), so da-guard is required (exit `2` without it); files in subdirectories are not read, and stderr names them. This directory is not a conf.d, so the conf.d refusal does not apply: a file that cannot be parsed gets a WARNING and is skipped | (required) |
 | `--config-dir <DIR>` | Tenant config directory. Tenants are found as in `operator-generate`: the keys of each tenant file's `tenants:` across the whole tree (through `da-guard parse-tree`), not file names. ⚠️ An unreadable tenant file, one tenant declared in two files, or no usable da-guard ⇒ exit `2` (`--json` envelope `reason`: `tenant_set_unknown`). A tenant id that is not RFC 1123 goes into `issues` and is skipped | `conf.d` |
 | `--output-dir <DIR>` | Write CRDs and the checklist into this directory. ⚠️ **Writing requires all three: this flag set, no `--dry-run`, and no `--checklist-only`** (the same discriminators as the `--json` envelope below); if any fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |

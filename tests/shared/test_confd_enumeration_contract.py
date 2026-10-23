@@ -637,15 +637,11 @@ def test_population_keys_synthetic_controls(name, tmp_path: pathlib.Path):
 
 
 # ── `warn_nested` without the caller's snapshot (#3206) ─────────────────
-
-#: The tools that call `warn_nested` with neither `listing=` nor `reader=`,
-#: so its nested files come from a Python walk with `_lib_confd`'s own name
-#: predicates (`_python_nested_files`): the tools that do not need da-guard
-#: yet. ⛔ TRANSITIONAL — ADR-036 §7 step 9 moves them onto da-guard and
-#: empties this set.
-_WARN_NESTED_WITHOUT_SNAPSHOT = {"ops/config_history.py", "ops/drift_detect.py",
-                                 "ops/migrate_to_operator.py"}
-
+#
+# `warn_nested` takes its nested files from the caller's snapshot
+# (`listing=` / `reader=`) and raises TypeError with neither — at run time,
+# on the path that reaches it. This pin finds such a call before any path
+# runs it.
 
 def _warn_nested_without_snapshot(root: pathlib.Path) -> set[str]:
     out = set()
@@ -662,12 +658,11 @@ def _warn_nested_without_snapshot(root: pathlib.Path) -> set[str]:
     return out
 
 
-def test_warn_nested_without_a_snapshot_has_exactly_its_callers():
-    """A reader that calls `warn_nested` with no snapshot gets its nested
-    files from a second, Python walk — a second answer to "which files are
-    there" beside da-guard's. Pinned by set equality: a new caller is red
-    (pass it `listing=` / `reader=`), and a moved tool must leave the set."""
-    assert _warn_nested_without_snapshot(TOOLS) == _WARN_NESTED_WITHOUT_SNAPSHOT
+def test_no_tool_calls_warn_nested_without_a_snapshot():
+    """Every `warn_nested` call passes the caller's snapshot: the nested
+    files it names come from the listing the caller reads, never from a
+    second walk (pass it `listing=` / `reader=`)."""
+    assert _warn_nested_without_snapshot(TOOLS) == set()
 
 
 def test_warn_nested_without_a_snapshot_is_detected(tmp_path: pathlib.Path):

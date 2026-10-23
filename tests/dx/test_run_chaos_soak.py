@@ -1,7 +1,7 @@
 """Tests for run_chaos_soak.py — v2.8.0 readiness chaos soak harness.
 
 Audit flagged 0% coverage. The pure functions (parse_metrics,
-trigger_reload) are easy to test directly. fetch_metrics needs
+reload_carriers, trigger_reload) are easy to test directly. fetch_metrics needs
 urllib.request mocked. main() is the orchestrator (skipped here —
 its loop is time-bound and best exercised end-to-end).
 """
@@ -20,6 +20,12 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import run_chaos_soak as rcs  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+
+
+def _reload(config_dir: Path) -> bool:
+    """One soak pass on *config_dir*: its index (taken once per run), then
+    the perturbation."""
+    return rcs.trigger_reload(rcs.reload_carriers(config_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -154,15 +160,14 @@ class TestFetchMetrics:
 # trigger_reload — filesystem mtime/content toggle
 # ---------------------------------------------------------------------------
 class TestTriggerReload:
-    def test_missing_dir_returns_false(self, tmp_path):
-        ghost = tmp_path / "no-such-dir"
-        assert rcs.trigger_reload(ghost) is False
+    def test_no_carriers_returns_false(self):
+        assert rcs.trigger_reload([]) is False
 
     def test_no_yaml_files_returns_false(self, tmp_path):
         # Directory exists but contains no YAML carrier (`.yaml` / `.yml`,
         # any case — the exporter's rule via `_lib_confd`; #1603).
         (tmp_path / "readme.md").write_text("x", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is False
+        assert _reload(tmp_path) is False
 
     @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
     def test_perturbs_a_yml_or_upper_case_carrier_like_yaml(self, tmp_path, carrier):
@@ -176,7 +181,7 @@ class TestTriggerReload:
         """
         f = tmp_path / carrier
         f.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is True
+        assert _reload(tmp_path) is True
         assert "soak-toggle" in f.read_text(encoding="utf-8")
 
     def test_hidden_file_is_not_a_reload(self, tmp_path):
@@ -190,7 +195,7 @@ class TestTriggerReload:
         defaults.write_text("baseline: 1\n", encoding="utf-8")
         hidden = tmp_path / ".disabled-tenant.yaml"
         hidden.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is False
+        assert _reload(tmp_path) is False
         assert hidden.read_text(encoding="utf-8") == "x: 1\n"
         assert defaults.read_text(encoding="utf-8") == "baseline: 1\n"
 
@@ -204,7 +209,7 @@ class TestTriggerReload:
         draft.mkdir()
         f = draft / "alpha.yaml"
         f.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is False
+        assert _reload(tmp_path) is False
         assert f.read_text(encoding="utf-8") == "x: 1\n"
 
     def test_visible_carrier_beside_hidden_ones_is_the_one_perturbed(self, tmp_path):
@@ -218,7 +223,7 @@ class TestTriggerReload:
         nested.write_text("x: 1\n", encoding="utf-8")
         visible = tmp_path / "alpha.yaml"
         visible.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is True
+        assert _reload(tmp_path) is True
         assert "soak-toggle" in visible.read_text(encoding="utf-8")
         assert hidden.read_text(encoding="utf-8") == "x: 1\n"
         assert nested.read_text(encoding="utf-8") == "x: 1\n"
@@ -227,19 +232,19 @@ class TestTriggerReload:
         # _defaults.yaml is intentionally skipped (platform invariant).
         # If only underscore-prefixed files exist, no eligible target → False.
         (tmp_path / "_defaults.yaml").write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is False
+        assert _reload(tmp_path) is False
 
     def test_appends_marker_on_first_call(self, tmp_path):
         f = tmp_path / "tenant-a.yaml"
         f.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is True
+        assert _reload(tmp_path) is True
         new = f.read_text(encoding="utf-8")
         assert "soak-toggle: A" in new
 
     def test_toggles_a_to_b_on_second_call(self, tmp_path):
         f = tmp_path / "tenant-a.yaml"
         f.write_text("x: 1\n# soak-toggle: A\n", encoding="utf-8")
-        rcs.trigger_reload(tmp_path)
+        _reload(tmp_path)
         toggled = f.read_text(encoding="utf-8")
         assert "soak-toggle: B" in toggled
         assert "soak-toggle: A" not in toggled
@@ -247,7 +252,7 @@ class TestTriggerReload:
     def test_toggles_b_to_a(self, tmp_path):
         f = tmp_path / "tenant-a.yaml"
         f.write_text("x: 1\n# soak-toggle: B\n", encoding="utf-8")
-        rcs.trigger_reload(tmp_path)
+        _reload(tmp_path)
         toggled = f.read_text(encoding="utf-8")
         assert "soak-toggle: A" in toggled
         assert "soak-toggle: B" not in toggled
@@ -258,7 +263,7 @@ class TestTriggerReload:
         defaults.write_text("baseline: 1\n", encoding="utf-8")
         tenant = tmp_path / "tenant-a.yaml"
         tenant.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is True
+        assert _reload(tmp_path) is True
         # _defaults.yaml is unchanged; tenant-a.yaml has the marker.
         assert defaults.read_text(encoding="utf-8") == "baseline: 1\n"
         assert "soak-toggle" in tenant.read_text(encoding="utf-8")
@@ -269,7 +274,7 @@ class TestTriggerReload:
         sub.mkdir()
         f = sub / "tenant-x.yaml"
         f.write_text("x: 1\n", encoding="utf-8")
-        assert rcs.trigger_reload(tmp_path) is True
+        assert _reload(tmp_path) is True
         assert "soak-toggle" in f.read_text(encoding="utf-8")
 
 
@@ -372,7 +377,7 @@ class TestTriggerReloadAcceptsBothSpellings:
         carrier.write_text("mysql_connections: 100\n", encoding="utf-8")
 
         before = carrier.read_text(encoding="utf-8")
-        assert rcs.trigger_reload(d) is True
+        assert _reload(d) is True
         assert carrier.read_text(encoding="utf-8") != before, (
             "returning True is not enough — the SHA-256 the exporter "
             "watches only moves if the bytes moved"
@@ -386,7 +391,7 @@ class TestTriggerReloadAcceptsBothSpellings:
         carrier.write_text("mysql_connections: 100\n", encoding="utf-8")
 
         before = carrier.read_text(encoding="utf-8")
-        assert rcs.trigger_reload(d) is True
+        assert _reload(d) is True
         assert carrier.read_text(encoding="utf-8") != before
 
     @pytest.mark.parametrize("name", ["notes.txt", "db-c.json", "db-d.yang", "plain.y"])
@@ -398,7 +403,7 @@ class TestTriggerReloadAcceptsBothSpellings:
         victim.write_text("mysql_connections: 100\n", encoding="utf-8")
 
         before = victim.read_text(encoding="utf-8")
-        assert rcs.trigger_reload(d) is False
+        assert _reload(d) is False
         assert victim.read_text(encoding="utf-8") == before
 
     @pytest.mark.parametrize("hidden", [".hidden.yaml", ".hidden.yml"])
@@ -420,7 +425,7 @@ class TestTriggerReloadAcceptsBothSpellings:
 
         decoy_before = decoy.read_text(encoding="utf-8")
         carrier_before = carrier.read_text(encoding="utf-8")
-        assert rcs.trigger_reload(d) is True
+        assert _reload(d) is True
         assert decoy.read_text(encoding="utf-8") == decoy_before
         assert carrier.read_text(encoding="utf-8") != carrier_before, (
             "the visible carrier is the only thing the exporter watches here"
@@ -444,7 +449,7 @@ class TestTriggerReloadAcceptsBothSpellings:
         before = buried.read_text(encoding="utf-8")
         # No visible carrier anywhere: nothing the exporter watches, so the
         # honest answer is False rather than "I touched something".
-        assert rcs.trigger_reload(d) is False
+        assert _reload(d) is False
         assert buried.read_text(encoding="utf-8") == before
 
 
