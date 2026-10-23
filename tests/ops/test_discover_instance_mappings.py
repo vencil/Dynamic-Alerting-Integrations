@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import discover_instance_mappings as dim  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+import _lib_prometheus  # noqa: E402
+from _lib_prometheus import QueryError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ class TestQueryPrometheusLabelValues:
                 return {"status": "success", "data": ["sales", "hr"]}, None
             return {"status": "success", "data": []}, None
 
-        monkeypatch.setattr(dim, "http_get_json", mock_get)
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", mock_get)
         result = dim.query_prometheus_label_values("http://prom:9090")
         assert result.get("schema") == {"sales", "hr"}
         assert any("/api/v1/label/schema/values" in u for u in urls)
@@ -180,16 +182,30 @@ class TestQueryPrometheusLabelValues:
                     "data": [{"__name__": "m", "schema": "sales"},
                              {"__name__": "m", "schema": "hr"}]}, None
 
-        monkeypatch.setattr(dim, "http_get_json", mock_get)
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", mock_get)
         result = dim.query_prometheus_label_values(
             "http://prom:9090", instance="db:9104")
         assert result.get("schema") == {"sales", "hr"}
 
-    def test_non_list_data_ignored(self, monkeypatch):
-        """data 非 list（例如錯誤物件）→ 安靜跳過，不 crash。"""
-        monkeypatch.setattr(dim, "http_get_json",
-                            lambda url, timeout=10: ({"data": {"oops": 1}}, None))
-        assert dim.query_prometheus_label_values("http://prom:9090") == {}
+    @pytest.mark.parametrize("instance", [None, "db:9104"], ids=["label-values", "series"])
+    def test_query_not_answered_raises_query_error(self, monkeypatch, instance):
+        """#3133: a failed query used to be skipped — "no labels", exit 1."""
+        monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                            lambda url, timeout=10: (None, "connection refused"))
+        with pytest.raises(QueryError, match="connection refused"):
+            dim.query_prometheus_label_values("http://prom:9090", instance=instance)
+
+    def test_non_list_data_raises_query_error(self, monkeypatch):
+        """data 非 list（例如錯誤物件）→ QueryError，不再當成「沒有值」。
+
+        #3133 第三批：先前安靜回 `{}`，呼叫端把「讀不到」讀成「沒有對映」
+        而 rc 1；現在由 `_lib_prometheus.prometheus_label_values` 驗形狀。
+        """
+        monkeypatch.setattr(
+            _lib_prometheus, "http_get_json",
+            lambda url, timeout=10: ({"status": "success", "data": {"oops": 1}}, None))
+        with pytest.raises(QueryError):
+            dim.query_prometheus_label_values("http://prom:9090")
 
     def test_matcher_with_space_and_quotes_is_encoded(self, monkeypatch):
         """matcher 含空白/引號時 URL 必須合法（#1112 InvalidURL 同類）。
@@ -204,7 +220,7 @@ class TestQueryPrometheusLabelValues:
             urls.append(url)
             return {"status": "success", "data": []}, None
 
-        monkeypatch.setattr(dim, "http_get_json", mock_get)
+        monkeypatch.setattr(_lib_prometheus, "http_get_json", mock_get)
         dim.query_prometheus_label_values(
             "http://prom:9090", instance="oracle prod:9161")
 

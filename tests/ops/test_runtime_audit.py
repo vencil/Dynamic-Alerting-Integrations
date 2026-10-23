@@ -153,18 +153,25 @@ def test_parse_runtime_non_dict_raises():
         ra.parse_runtime_rules(["not", "a", "dict"])
 
 
-def test_parse_runtime_null_data_does_not_crash():
-    # A proxy returning {"status":"success","data":null} must coerce to empty,
-    # not raise an uncaught AttributeError (caller only maps ValueError → exit 2).
-    assert ra.parse_runtime_rules({"status": "success", "data": None}) == {}
+@pytest.mark.parametrize("body", [
+    {"status": "success", "data": None},
+    {"status": "success", "data": {}},
+    {"status": "success", "data": {"groups": None}},
+    {"status": "success", "data": {"groups": ["not-a-dict"]}},
+    {"status": "success", "data": {"groups": [{"name": "g", "rules": None}]}},
+    {"status": "success", "data": {"groups": [{"name": "g", "rules": ["x", {"name": "A"}]}]}},
+], ids=["data-null", "no-groups", "groups-null", "group-not-object", "rules-null",
+        "rule-not-object"])
+def test_parse_runtime_malformed_is_value_error(body):
+    """#3133: an answer that is not a rules list used to read as "no rule
+    loaded" (every declared rule then reported missing)."""
+    with pytest.raises(ValueError):
+        ra.parse_runtime_rules(body)
 
 
-def test_parse_runtime_non_dict_group_and_rule_skipped():
-    rt = ra.parse_runtime_rules({
-        "status": "success",
-        "data": {"groups": ["not-a-dict", {"name": "g", "rules": ["x", {"name": "A"}]}]},
-    })
-    assert list(rt) == [("g", "A")]
+def test_parse_runtime_group_without_rules_is_empty():
+    rt = ra.parse_runtime_rules({"status": "success", "data": {"groups": [{"name": "g"}]}})
+    assert rt == {}
 
 
 def test_parse_runtime_skips_unnamed_rule():
@@ -316,6 +323,31 @@ def test_run_end_to_end_offline(tmp_path, capsys):
     assert report["summary"]["missing"] == 1
     assert report["summary"]["orphan"] == 1
     assert report["summary"]["declared"] == 2
+
+
+@pytest.mark.parametrize("answer", [
+    (None, "connection refused"),
+    ({"status": "success", "data": None}, None),
+], ids=["refused", "data-null"])
+def test_run_prometheus_not_answered_is_caller_error(tmp_path, monkeypatch, answer):
+    """#3133: --prometheus reads /api/v1/rules through the lib; an answer not
+    read is exit 2, and ``data: null`` is no longer "no rule loaded"."""
+    import _lib_prometheus
+    _rule_pack(tmp_path, "k8s", """
+        groups:
+          - name: g
+            rules:
+              - alert: A
+                expr: up == 0
+    """)
+    seen = []
+    monkeypatch.setattr(_lib_prometheus, "http_get_json",
+                        lambda url, timeout=15: (seen.append(url) or answer[0], answer[1]))
+    a = ra.RuntimeAuditor(_args(rule_packs_dir=str(tmp_path), prometheus="http://p", ci=True))
+    a.run()
+    assert seen == ["http://p/api/v1/rules"]
+    assert a.findings == [] and a.caller_error.startswith("Prometheus query failed: ")
+    assert a.exit_code() == ra.EXIT_CALLER_ERROR
 
 
 def test_run_no_runtime_source_is_caller_error(tmp_path):

@@ -27,7 +27,6 @@ import argparse
 import os
 import re
 import sys
-import urllib.parse
 from collections import defaultdict
 from typing import Any, Optional
 
@@ -46,9 +45,12 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
     format_json_report,
-    http_get_json,
     write_text_or_die,
 )
+# #3133: series / label values are read by the lib; a query not answered
+# raises QueryError (exit 2) — it used to be skipped, and the run reported
+# "no label values" at exit 1.
+from _lib_prometheus import prometheus_label_values, prometheus_series  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
@@ -165,6 +167,9 @@ def query_prometheus_label_values(
 
     Uses instance or job selector to filter.
     Returns dict mapping label_name → set of unique values.
+
+    Raises ``QueryError`` (#3133) when a query was not answered — uncaught,
+    it ends the run at exit 2.
     """
     label_values: dict[str, set[str]] = defaultdict(set)
     base = prom_url.rstrip('/')
@@ -178,39 +183,17 @@ def query_prometheus_label_values(
             matchers.append(f'job="{job}"')
         matcher_str = ','.join(matchers)
 
-        # Use series API with matcher
+        # Use the series API with the matcher. #1112: the matcher carries
+        # `{`, `}`, `"` and possibly spaces — the lib percent-encodes it.
         if matcher_str:
-            # W1 bug fix: the matcher carries `{`, `}`, `"` and possibly
-            # spaces — it MUST be percent-encoded (#1112 InvalidURL
-            # bug-class; an f-string interpolation crashes http.client on
-            # any whitespace/control character).
-            params = urllib.parse.urlencode({"match[]": f"{{{matcher_str}}}"})
-            url = f"{base}/api/v1/series?{params}"
-        else:
-            url = f"{base}/api/v1/label/{label}/values"
-
-        data, err = http_get_json(url, timeout=timeout)
-        # isinstance guard: a top-level JSON list (e.g. --prometheus pointed
-        # at an Alertmanager v2 API) must skip, not AttributeError on .get().
-        if err or not isinstance(data, dict):
-            continue
-
-        items = data.get("data")
-        if not isinstance(items, list):
-            continue
-        # W1 bug fix: the two branches previously tested the IDENTICAL
-        # condition (`isinstance(data["data"], list)` twice), so the
-        # /api/v1/label/<label>/values branch was unreachable and the
-        # no-matcher path never collected a value. Dispatch on the ELEMENT
-        # type instead: /api/v1/series returns a list of label-set dicts,
-        # /api/v1/label/.../values returns a list of plain strings.
-        for item in items:
-            if isinstance(item, dict):
-                val = item.get(label)
+            for row in prometheus_series(base, f"{{{matcher_str}}}", timeout=timeout):
+                val = row.get(label)
                 if val:
                     label_values[label].add(val)
-            elif isinstance(item, str) and item:
-                label_values[label].add(item)
+        else:
+            for val in prometheus_label_values(base, label, timeout=timeout):
+                if val:
+                    label_values[label].add(val)
 
     return dict(label_values)
 
