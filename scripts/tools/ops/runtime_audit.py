@@ -97,7 +97,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_python import detect_cli_lang, format_json_report, http_get_json  # noqa: E402
+from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -124,7 +125,7 @@ STRINGS = {
         "summary": "{m} missing, {u} unhealthy, {o} orphan "
                    "({d} declared, {r} runtime, {g} declared groups)",
         "err_no_source": "no runtime source: pass --prometheus URL or --runtime-json FILE",
-        "err_prom": "cannot reach Prometheus",
+        "err_prom": "Prometheus query failed",
         "err_runtime_json": "cannot read --runtime-json file",
         "err_rule_packs": "rule-packs dir not found or empty",
         "err_parse": "malformed input",
@@ -148,7 +149,7 @@ STRINGS = {
         "summary": "{m} 缺漏, {u} 不健康, {o} 孤兒 "
                    "（宣告 {d} 條, runtime {r} 條, 宣告群組 {g} 個）",
         "err_no_source": "未提供 runtime 來源：請給 --prometheus URL 或 --runtime-json FILE",
-        "err_prom": "無法連線 Prometheus",
+        "err_prom": "Prometheus 查詢失敗",
         "err_runtime_json": "無法讀取 --runtime-json 檔",
         "err_rule_packs": "rule-packs 目錄不存在或為空",
         "err_parse": "輸入格式錯誤",
@@ -249,22 +250,23 @@ def parse_runtime_rules(
     ``{"type", "health", "lastError"}``. Raises ValueError on a malformed /
     non-success response.
     """
-    if not isinstance(api_json, dict) or api_json.get("status") != "success":
-        raise ValueError(
-            (api_json or {}).get("error", "non-success /api/v1/rules response")
-            if isinstance(api_json, dict) else "non-dict /api/v1/rules response"
-        )
+    try:
+        # #3133: the one reading of a /api/v1/rules answer; ``data: null`` or
+        # a group of the wrong type used to read as "no rule loaded".
+        return _runtime_from_groups(rules_groups(api_json))
+    except QueryError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _runtime_from_groups(
+    groups: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, str]]:
+    """The :func:`parse_runtime_rules` map of ``data.groups`` already checked
+    by ``_lib_prometheus.rules_groups``."""
     runtime: dict[tuple[str, str], dict[str, str]] = {}
-    # Defensive: a proxy may return {"status":"success","data":null} or a
-    # group/rules of an unexpected type — coerce rather than crash with an
-    # uncaught AttributeError (the caller only maps ValueError to exit 2).
-    for group in (api_json.get("data") or {}).get("groups") or []:
-        if not isinstance(group, dict):
-            continue
+    for group in groups:
         gname = group.get("name", "")
-        for rule in group.get("rules") or []:
-            if not isinstance(rule, dict):
-                continue
+        for rule in group.get("rules", []):
             name = rule.get("name", "")
             if not name:
                 continue
@@ -351,13 +353,13 @@ class RuntimeAuditor:
                 self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {str(exc)[:60]}"
                 return None
         elif self.args.prometheus:
-            data, err = http_get_json(
-                f"{self.args.prometheus}/api/v1/rules", timeout=15
-            )
-            if err:
-                self.caller_error = f"{i18n('err_prom', self.lang)}: {err[:60]}"
+            try:
+                runtime = _runtime_from_groups(prometheus_rules(self.args.prometheus))
+            except QueryError as exc:
+                self.caller_error = f"{i18n('err_prom', self.lang)}: {str(exc)[:120]}"
                 return None
-            raw = data
+            self.runtime_count = len(runtime)
+            return runtime
         else:
             self.caller_error = i18n("err_no_source", self.lang)
             return None

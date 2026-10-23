@@ -52,6 +52,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_python import format_json_report, add_prometheus_arg  # noqa: E402
+from _lib_prometheus import QueryError, prometheus_instant, vector_count  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -193,27 +194,17 @@ def verify_health(tenant, prometheus_url, dry_run=False):
               file=sys.stderr)
         return True, "(dry-run)"
 
-    import urllib.parse
-
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, _this_dir)
-    sys.path.insert(0, os.path.join(_this_dir, '..'))
-    from _lib_python import http_get_json  # noqa: E402
-
     # Check threshold metrics exist for tenant
     query = f'count(user_threshold{{tenant="{tenant}"}})'
-    params = urllib.parse.urlencode({"query": query})
-    url = f"{prometheus_url}/api/v1/query?{params}"
-
-    data, err = http_get_json(url, headers={"Accept": "application/json"})
-    if err:
+    try:
+        count = vector_count(prometheus_instant(prometheus_url, query))
+    except QueryError as exc:
         # #452/#737: cannot reach Prometheus = caller-error (transport), not a
-        # cutover finding. Tag with the machine-readable prefix.
-        return False, f"{CALLER_ERROR_PREFIX}Prometheus query failed: {err}"
-    results = data.get("data", {}).get("result", [])
-    if not results:
+        # cutover finding. #3133: nor is an answer that could not be read —
+        # it used to read as "no threshold metrics" (exit 1).
+        return False, f"{CALLER_ERROR_PREFIX}Prometheus query failed: {exc}"
+    if count is None:
         return False, f"No threshold metrics found for tenant={tenant}"
-    count = results[0].get("value", [None, "0"])[1]
     return True, f"tenant={tenant}: {count} threshold metrics active"
 
 

@@ -16,6 +16,7 @@ Usage:
   maintenance-scheduler --config-dir conf.d/ --dry-run
 """
 import argparse
+import http.client
 import json
 import os
 import re
@@ -42,6 +43,7 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_request_with_retry,
 )
+from _lib_prometheus import QueryError, silences_list  # noqa: E402
 # #2751: the tenants and their `_state_maintenance` are threshold-exporter's
 # own resolution (`da-guard effective`), not a Python re-read of the tree.
 from _lib_tenant_values import (  # noqa: E402
@@ -229,13 +231,20 @@ def get_existing_silences(alertmanager_url):
     """Get active silences created by this tool from Alertmanager.
 
     Returns {(tenant, reason): {"id": ..., "endsAt": datetime}}.
+
+    Raises:
+        QueryError: the silences could not be read (#3133). Reading that as
+            "none active" used to create a second silence for every window
+            already silenced, and exit 0.
     """
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         data = _api_request(url, method="GET")
-    except Exception as e:
-        print(f"  WARN: failed to fetch silences: {e}", file=sys.stderr)
-        return {}
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+        # HTTPException: a truncated or garbled answer (IncompleteRead,
+        # BadStatusLine) — neither an OSError nor retried by the helper.
+        raise QueryError(str(e) or type(e).__name__, source="Alertmanager") from e
+    data = silences_list(data)
 
     result = {}
     for silence in data:
@@ -372,10 +381,10 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
     print(f"Found {sum(len(v) for v in schedules.values())} recurring schedule(s) "
           f"across {len(schedules)} tenant(s)", file=sys.stderr)
 
-    # Get existing silences for idempotency / extend checks
-    existing = {}
-    if alertmanager_url and not dry_run:
-        existing = get_existing_silences(alertmanager_url)
+    # Existing silences for the idempotency / extend checks, read once, at the
+    # first schedule in its window (#3133: a run with nothing to silence does
+    # not depend on Alertmanager answering).
+    existing = None
 
     created = 0
     skipped = 0
@@ -389,6 +398,9 @@ def evaluate_and_apply(config_dir, alertmanager_url, dry_run=False, now=None):
                 continue
 
             reason = entry["reason"]
+            if existing is None:
+                existing = (get_existing_silences(alertmanager_url)
+                            if alertmanager_url and not dry_run else {})
 
             # Idempotency: check if silence already exists
             if (tenant, reason) in existing:
@@ -502,7 +514,8 @@ def main():
       0 — success (silences created or none needed)
       1 — errors occurred
       2 — fatal error (bad args, missing deps, a tenant file that cannot be read,
-          da-guard missing or failing)
+          da-guard missing or failing, Alertmanager's silences that could
+          not be read)
     """
     try_utf8_stdout()
     parser = build_parser()

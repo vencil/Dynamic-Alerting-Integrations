@@ -131,9 +131,7 @@ Rule Pack 支援 **`*_zh` 後綴 annotation** 實現多語言通知：
 
 此模式套用於所有 receiver type（email, webhook, Slack, Teams, PagerDuty），透過 Alertmanager 全域模板實現（見 `k8s/03-monitoring/configmap-alertmanager.yaml`）。
 
-**向後相容**：未加 `*_zh` annotation 的 Rule Pack 自動 fallback 至英文，現有規則無需修改。新規則建議同時包含英文與中文以支援多區域部署。
-
-三支先行 Rule Pack 已完成雙語：MariaDB（8 alerts）、PostgreSQL（9 alerts）、Kubernetes（4 alerts）。完整範例見 `rule-packs/` 目錄。
+**向後相容**：未加 `*_zh` annotation 的 Rule Pack 自動 fallback 至英文，現有規則不必改。`rule-packs/` 裡的告警寫了英文 annotation（如 `summary`）就要有對應的 `*_zh`，缺了會被 pre-commit 的 `bilingual-annotations-check` 擋下；完全沒有 annotation 的告警不檢查。範例見 `rule-packs/` 目錄。
 
 ### 3.3 優點
 

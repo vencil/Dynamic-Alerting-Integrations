@@ -574,7 +574,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|-------------|
 | `0` | Cutover successful |
 | `1` | Readiness says not ready (without `--force`), or a cutover step failed |
-| `2` | Caller error: a required argument is missing, the readiness JSON does not exist, is not valid JSON, or is missing fields, Prometheus is unreachable, or `kubectl` is not found |
+| `2` | Caller error: a required argument is missing, the readiness JSON does not exist, is not valid JSON, or is missing fields, Prometheus is unreachable or its answer is malformed, or `kubectl` is not found. A malformed answer used to read by its shape: `status` other than `success` as "no threshold metrics", exit 1; a `NaN` count or no `resultType` as a pass, exit 0; `data: null` crashed ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -687,7 +687,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|-------------|
 | `0` | Success (silences created, already present, or not needed) |
 | `1` | At least one silence could not be created or extended |
-| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); or `--alertmanager` is given (without `--dry-run`), a schedule is in its window, and the existing silences cannot be read (unreachable, still failing after the retries, or a malformed answer; with `--json-output` stdout holds an `alertmanager_query_error` envelope) — no silence is created then. Unreadable silences used to read as "none exist", so the silences were created anyway, possibly twice, exit 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -1857,6 +1857,8 @@ da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
 | `--strict-orphan` | Promote ORPHAN (stale loaded rule) to a `--ci` gate failure too | false |
 | `--json` | JSON output | false |
 | `--ci` | Exit 1 on drift (MISSING/UNHEALTHY; ORPHAN with `--strict-orphan`) | false |
+
+**Exit codes**: `0` no drift, or no `--ci`; `1` drift with `--ci`; `2` caller error: the rule-packs dir is missing or empty, a rule pack fails to parse, no runtime source is given, or the `/api/v1/rules` answer cannot be read (unreachable, an error, or `data` / `data.groups` / a group / a rule of the wrong type; a `--runtime-json` file is checked the same way). `data: null` used to read as "no rule loaded", reporting every declared rule MISSING ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)).
 
 **Finding categories**
 
@@ -3577,8 +3579,8 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 | Code | Description |
 |------|-------------|
 | `0` | Successfully discovered partition labels and generated mapping draft |
-| `1` | `--prometheus` unreachable (a failed query counts as no labels), or no suitable partition labels found |
-| `2` | Caller error: bad arguments, `--endpoint` unreachable or not a valid URL, or the output path given to `-o/--output` cannot be written (#1641) |
+| `1` | No suitable partition labels found |
+| `2` | Caller error: bad arguments, `--endpoint` unreachable or not a valid URL, a `--prometheus` series / label-values query unreachable, answered with an error, or malformed (it used to count as no labels, exit 1, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)), or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
