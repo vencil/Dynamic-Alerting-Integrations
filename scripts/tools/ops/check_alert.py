@@ -30,17 +30,19 @@ import argparse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import http_get_json, add_prometheus_arg  # noqa: E402
+from _lib_python import add_prometheus_arg  # noqa: E402
+# #3133: the alerts are read by the lib; an answer that is not one raises
+# QueryError (rc 2) — never "inactive".
+from _lib_prometheus import QueryError, prometheus_alerts  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
 
 
 def check_alert(alert_name, tenant, prom_url):
-    data, err = http_get_json(f'{prom_url}/api/v1/alerts')
-    if err:
-        print(json.dumps({"error": f"Cannot connect to Prometheus API ({prom_url}): {err}"}))
+    try:
+        alerts = prometheus_alerts(prom_url)
+    except QueryError as err:
+        print(json.dumps({"error": f"Cannot read Prometheus alerts ({prom_url}): {err}"}))
         sys.exit(EXIT_CALLER_ERROR)  # #452: cannot reach Prometheus = caller/env error
-
-    alerts = data.get('data', {}).get('alerts', [])
 
     # 過濾出符合 Alert Name 且包含特定 Tenant 標籤的警報
     matched_alerts = []
