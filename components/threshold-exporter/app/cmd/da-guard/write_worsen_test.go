@@ -128,6 +128,48 @@ func TestWrite_WhatIsAlreadyWrongElsewhereDoesNotBlock(t *testing.T) {
 	}
 }
 
+// TestWrite_ADuplicateTenantCanBeRepaired: a tenant declared twice does not
+// stop the before-tree's validation, so the error already there elsewhere
+// keeps its baseline; removing one copy passes even when the copy left has
+// an error of its own (it had no baseline: it was not validated before); a
+// batch that leaves the duplicate and adds nothing passes; one that adds a
+// second duplicate is refused, naming only that one.
+func TestWrite_ADuplicateTenantCanBeRepaired(t *testing.T) {
+	tree := map[string]string{
+		"d1.yaml":  "tenants:\n  t8:\n    cpu: \"abc\"\n",
+		"d2.yaml":  "tenants:\n  t8: {}\n  t6: {}\n",
+		"bad.yaml": "tenants:\n  t5:\n    cpu: \"abc\"\n",
+		"ok.yaml":  "tenants:\n  t1:\n    cpu: \"5\"\n",
+	}
+	t.Run("removing a copy", func(t *testing.T) {
+		root := writeTree(t, tree)
+		code, res := runBatch(t, editCmd, `{"files":[{"path":"d2.yaml","ops":[{"op":"unset","path":["tenants","t8"]}]}]}`,
+			"--config-dir", root)
+		if code != exitOK || res.Status != writeStatusWritten {
+			t.Fatalf("exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("leaving it, touching another file", func(t *testing.T) {
+		root := writeTree(t, tree)
+		code, res := runBatch(t, editCmd, `{"files":[{"path":"ok.yaml","ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"str":"6"}}]}]}`,
+			"--config-dir", root)
+		if code != exitOK || res.Status != writeStatusWritten {
+			t.Fatalf("exit %d %s %v %v (%v)", code, res.Status, statuses(res), worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("adding a second duplicate", func(t *testing.T) {
+		root := writeTree(t, tree)
+		before := snapshot(t, root)
+		code, res := runBatch(t, emitCmd, `{"files":[{"path":"new.yaml","content":{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}}]}`,
+			"--config-dir", root)
+		if code != exitFindings || callReason(res) != writeReasonWorsensTree ||
+			!reflect.DeepEqual(worsenedOf(res), []string{"duplicate_tenant ok.yaml t1"}) { // ok.yaml: second in walk order
+			t.Fatalf("exit %d reason %q worsened %v", code, callReason(res), worsenedOf(res))
+		}
+		sameTree(t, before, snapshot(t, root))
+	})
+}
+
 // TestWrite_EveryInputFileIsAnsweredOnceTheInputIsRead: a call that stops
 // after reading its input (here: --config-dir is no directory) still has
 // one result per input file.

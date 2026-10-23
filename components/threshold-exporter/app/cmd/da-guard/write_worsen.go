@@ -17,7 +17,10 @@ package main
 //     that the before-tree did not have, by a stable key — kind, tenant,
 //     field or path — so an error already there elsewhere does not block an
 //     unrelated write, and a batch that moves a tenant between two files
-//     passes.
+//     passes. A tenant declared twice is set aside, not a stop, so the rest
+//     of the tree is still validated; a tenant declared twice before the
+//     call has no baseline, and its findings after it are not new — removing
+//     a copy repairs the tree.
 //
 // ⚠️ Not compared: validation warnings (they do not fail validation), and
 // what only the route generator judges (exit 4's evidence beyond the
@@ -27,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"sort"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
@@ -92,19 +94,26 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 				Message: fmt.Sprintf("parse-tree would name a problem (%s: %s)", a.Problem.Kind, a.Problem.Message)})
 		}
 	}
-	was, err := treeValidation(disk.AbsRoot, config.ScanOptions{}, disk)
+	was, wasDup, err := treeValidation(disk.AbsRoot, config.ScanOptions{}, disk)
 	if err != nil {
 		return nil, err
 	}
-	now, err := treeValidation(disk.AbsRoot, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs}, after)
+	now, _, err := treeValidation(disk.AbsRoot, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs}, after)
 	if err != nil {
 		return nil, err
 	}
 	keys := make([]string, 0, len(now))
-	for k := range now {
-		if _, there := was[k]; !there {
-			keys = append(keys, k)
+	for k, x := range now {
+		if _, there := was[k]; there {
+			continue
 		}
+		// A tenant declared twice before the call was not validated there:
+		// its findings now have no baseline, and the call that makes it
+		// validatable (removing a copy) repairs the tree.
+		if x.Kind == worsenFinding && wasDup[x.Tenant] {
+			continue
+		}
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
@@ -118,26 +127,34 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // same ScopeEffective (ScopeEffectiveWith), the same flags' defaults, the
 // same buildCheckInput and guard check as runWith — and the cardinality cap
 // that tree's own root carrier sets (limits: a cold scan of the same tree).
-// A tenant declared in two files stops validation (exit 2 there): every such
-// tenant is reported, from the walk's own duplicate record (Locate).
-func treeValidation(root string, opts config.ScanOptions, limits *config.TreeScan) (map[string]writeWorsened, error) {
-	out := map[string]writeWorsened{}
+// A tenant declared in two files stops validation there (exit 2); here it is
+// set aside instead (ScanOptions.SkipDuplicated, the walk's own record) and
+// reported as one, so every other tenant is still validated. duplicated is
+// those tenant ids.
+func treeValidation(root string, opts config.ScanOptions, limits *config.TreeScan) (
+	out map[string]writeWorsened, duplicated map[string]bool, err error) {
+	out, duplicated = map[string]writeWorsened{}, map[string]bool{}
+	opts.SkipDuplicated = true
 	scoped, err := config.ScopeEffectiveWith(root, opts)
-	var dup *config.DuplicateTenantError
 	var de *config.DecodeError
 	switch {
-	case errors.As(err, &dup):
-		return duplicateTenants(root, opts)
 	case errors.As(err, &de):
 		out["decode\x00"+de.Path] = writeWorsened{Kind: worsenFinding, Path: de.Path, Finding: "decode_error",
 			Message: "the exporter's merge cannot decode it: " + de.Error()}
-		return out, nil
+		return out, duplicated, nil
 	case err != nil:
-		return nil, err
+		return nil, nil, err
+	}
+	for id, dup := range scoped.Duplicated {
+		duplicated[id] = true
+		a, _ := relTo(limits.AbsRoot, dup.PathA)
+		b, _ := relTo(limits.AbsRoot, dup.PathB)
+		out["duplicate\x00"+id] = writeWorsened{Kind: worsenDuplicateTenant, Path: b, Tenant: id,
+			Message: fmt.Sprintf("tenant %s is declared in %s and in %s", id, a, b)}
 	}
 	f, err := parseFlags([]string{"--config-dir", root}, io.Discard)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	limit, _, lerr := limits.RootMaxMetricsPerTenant()
 	if lerr != nil {
@@ -151,7 +168,7 @@ func treeValidation(root string, opts config.ScanOptions, limits *config.TreeSca
 	f.cardinalityLimit = limit
 	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, f))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	spellFindingsAsWritten(report, scoped)
 	for _, fd := range report.Findings {
@@ -161,33 +178,5 @@ func treeValidation(root string, opts config.ScanOptions, limits *config.TreeSca
 		out["finding\x00"+fd.Kind.String()+"\x00"+fd.TenantID+"\x00"+fd.Field] = writeWorsened{
 			Kind: worsenFinding, Tenant: fd.TenantID, Finding: fd.Kind.String(), Message: fd.Message}
 	}
-	return out, nil
-}
-
-// duplicateTenants is every tenant the tree opts makes it read declares in
-// two or more files, by the walk's own record (TreeScan.Locate).
-func duplicateTenants(root string, opts config.ScanOptions) (map[string]writeWorsened, error) {
-	scan, err := config.ScanDirTreeWith(root, nil, nil, log.New(io.Discard, "", 0), opts)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]writeWorsened{}
-	for _, k := range scan.Keys {
-		for _, id := range scan.Files[k].TenantIDs {
-			_, lerr := scan.Locate(id)
-			var dup *config.DuplicateTenantError
-			if !errors.As(lerr, &dup) {
-				continue
-			}
-			key := "duplicate\x00" + id
-			if _, seen := out[key]; seen {
-				continue
-			}
-			a, _ := relTo(scan.AbsRoot, dup.PathA)
-			b, _ := relTo(scan.AbsRoot, dup.PathB)
-			out[key] = writeWorsened{Kind: worsenDuplicateTenant, Path: b, Tenant: id,
-				Message: fmt.Sprintf("tenant %s is declared in %s and in %s", id, a, b)}
-		}
-	}
-	return out, nil
+	return out, duplicated, nil
 }

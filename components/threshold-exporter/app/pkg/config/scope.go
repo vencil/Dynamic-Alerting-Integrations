@@ -76,6 +76,11 @@ type ScopedTenants struct {
 	// Useful for CLI output ("scanned 12 files, found 47 tenants").
 	SourceFiles []string
 
+	// Duplicated is, under ScanOptions.SkipDuplicated, every in-scope
+	// tenant declared in two or more files — left out of Tenants — with the
+	// walk's own record of it (Locate's error); nil otherwise.
+	Duplicated map[string]*DuplicateTenantError
+
 	// ParseFailed is every file the exporter's own load of this tree drops
 	// (LoadDir's parseFailed — FlatBuild.ParseFailed) that bears on the
 	// scope: at-or-below it, or a `_` file in a directory above it. Root-
@@ -417,6 +422,21 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 			inScope[id] = struct{}{}
 		}
 	}
+	// SkipDuplicated: a tenant declared twice is set aside (Duplicated)
+	// instead of refusing the scope, and every other tenant is resolved.
+	var duplicated map[string]*DuplicateTenantError
+	if opts.SkipDuplicated {
+		for id := range inScope {
+			var dup *DuplicateTenantError
+			if _, lerr := scan.Locate(id); errors.As(lerr, &dup) {
+				if duplicated == nil {
+					duplicated = map[string]*DuplicateTenantError{}
+				}
+				duplicated[id] = dup
+				delete(inScope, id)
+			}
+		}
+	}
 	if opts.Tenants != nil && !anyDuplicated(scan, inScope) {
 		// The subset narrows what is computed, never what is refused: when
 		// an in-scope tenant is declared twice, every in-scope tenant is
@@ -447,7 +467,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 	if len(inScope) == 0 {
 		out := &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
 			RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
-			NoTenant: noTenant}
+			NoTenant: noTenant, Duplicated: duplicated}
 		if built != nil { // #2031: the whole tree's /metrics, whatever the scope
 			out.Config, out.scan, out.built = &built.Config, scan, built
 		}
@@ -487,6 +507,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
 		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
+		Duplicated:             duplicated,
 	}
 	if built != nil {
 		out.Config, out.scan, out.built = &built.Config, scan, built

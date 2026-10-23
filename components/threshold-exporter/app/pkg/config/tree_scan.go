@@ -488,6 +488,12 @@ type ScanOptions struct {
 	// OverlayMakesDirs is ScanDirTreeFilesWith's mkdirs for them.
 	Overlays         []FileOverlay
 	OverlayMakesDirs bool
+	// SkipDuplicated (ScopeEffectiveWith): a tenant declared in two or more
+	// files is set aside (ScopedTenants.Duplicated) instead of stopping the
+	// scope with a DuplicateTenantError, so every other tenant is still
+	// judged — what `da-guard edit` / `emit` compare a tree's validation by
+	// (#3206). The scan ignores it.
+	SkipDuplicated bool
 	// Tenants, when non-nil, is the only tenants EffectiveTreeWith resolves
 	// (`da-guard effective --tenant`, ADR-038 §5): the walk, the platform
 	// files and every file's verdict are the whole tree's as always; a
