@@ -64,11 +64,14 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, ensure_dir_or_die, write_text_or_die, write_json_or_die, query_prometheus_instant, add_prometheus_arg, non_negative_seconds  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# #3133: a query not answered raises QueryError; a sample is read once, by
+# the lib (#3213).
+from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
 
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
+# The query seam tests replace (the lib's raising reader).
+query_prometheus = prometheus_instant
 
 
 def extract_value_map(results, group_by="tenant"):
@@ -77,11 +80,10 @@ def extract_value_map(results, group_by="tenant"):
     for item in results:
         metric = item.get("metric", {})
         key = metric.get(group_by, "__no_label__")
-        val_str = item.get("value", [None, None])[1]
-        try:
-            value_map[key] = float(val_str)
-        except (TypeError, ValueError):
-            value_map[key] = None
+        # None only for a histogram-only row: an unreadable value never gets
+        # here (#3133: prometheus_instant refuses the answer, rc 2 — it used
+        # to read as "missing", rc 1).
+        value_map[key] = vector_sample(item)
     return value_map
 
 
@@ -120,14 +122,16 @@ def compare_vectors(old_map, new_map, tolerance=0.001):
 
 def run_single_comparison(prom_url, old_query, new_query, label, tolerance=0.001):
     """執行單次比對，回傳 diff 結果。"""
-    old_results, old_err = query_prometheus(prom_url, old_query)
-    if old_err:
-        print(f"  ❌ 查詢舊規則失敗: {old_err}", file=sys.stderr)
+    try:
+        old_results = query_prometheus(prom_url, old_query)
+    except QueryError as exc:
+        print(f"  ❌ 查詢舊規則失敗: {exc}", file=sys.stderr)
         return None
 
-    new_results, new_err = query_prometheus(prom_url, new_query)
-    if new_err:
-        print(f"  ❌ 查詢新規則失敗: {new_err}", file=sys.stderr)
+    try:
+        new_results = query_prometheus(prom_url, new_query)
+    except QueryError as exc:
+        print(f"  ❌ 查詢新規則失敗: {exc}", file=sys.stderr)
         return None
 
     old_map = extract_value_map(old_results, group_by="tenant")

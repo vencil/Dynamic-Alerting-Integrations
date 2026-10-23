@@ -40,7 +40,9 @@ from typing import TextIO
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
+# #3133: the lib's raising reader (shape checked, samples read once).
+from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
@@ -145,7 +147,7 @@ _DEADLINE: contextvars.ContextVar[tuple[float, float] | None] = contextvars.Cont
 DEADLINE_GRACE_S = 0.5
 KUBECTL_TIMEOUT_S = 120
 PROMETHEUS_TIMEOUT_S = inspect.signature(
-    query_prometheus_instant).parameters["timeout"].default
+    prometheus_instant).parameters["timeout"].default
 
 
 @contextlib.contextmanager
@@ -230,17 +232,23 @@ def exit_code(result: dict) -> int:
 
 
 def query_prometheus(prom_url: str, promql: str):
-    """query_prometheus_instant, its timeout bounded by the caller's deadline
-    (#2968; see _DEADLINE). No grace: an abandoned query leaves no process
-    behind. Past the deadline nothing is sent, and the result is a failed
-    query."""
+    """``(rows, None)`` from ``prometheus_instant``, or ``(None, error)`` when
+    the query was not answered (#3133: the lib's QueryError — a refused
+    connection, an error status or a malformed answer alike; every caller
+    below turns it into PROMETHEUS_FAILURE). Its timeout is bounded by the
+    caller's deadline (#2968; see _DEADLINE). No grace: an abandoned query
+    leaves no process behind. Past the deadline nothing is sent, and the
+    result is a failed query."""
     left = _time_left(with_grace=False)
-    if left is None:
-        return query_prometheus_instant(prom_url, promql)
-    if left <= 0:
+    if left is not None and left <= 0:
         return None, "not queried: the deadline has passed"
-    return query_prometheus_instant(prom_url, promql,
-                                    timeout=min(PROMETHEUS_TIMEOUT_S, left))
+    try:
+        if left is None:
+            return prometheus_instant(prom_url, promql), None
+        return prometheus_instant(prom_url, promql,
+                                  timeout=min(PROMETHEUS_TIMEOUT_S, left)), None
+    except QueryError as exc:
+        return None, str(exc)
 
 
 # #2526 / #2547 (step 0): the tenant's resolution — which tenants exist, the
@@ -502,22 +510,27 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             errors.append("Metrics check failed")
 
     # 3. 查詢運營模式 (Silent Mode / Maintenance)
+    # #3133: a mode query not answered is not "normal" — the mode is unknown
+    # and the run names the failed query (rc 2), as for the checks above.
     operational_mode = "normal"
-    try:
-        maint_results, maint_err = query_prometheus(prom_url, f'user_state_filter{{tenant="{tenant}",filter="maintenance"}}')
-        if not maint_err and maint_results:
-            operational_mode = "maintenance"
+    maint_results, maint_err = query_prometheus(prom_url, f'user_state_filter{{tenant="{tenant}",filter="maintenance"}}')
+    if maint_err:
+        operational_mode = "unknown"
+        errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
+    elif maint_results:
+        operational_mode = "maintenance"
 
-        if operational_mode == "normal":
-            silent_results, silent_err = query_prometheus(prom_url, f'user_silent_mode{{tenant="{tenant}"}}')
-            if not silent_err and silent_results:
-                severities = [r.get("metric", {}).get("target_severity", "") for r in silent_results]
-                if "warning" in severities and "critical" in severities:
-                    operational_mode = "silent:all"
-                elif severities:
-                    operational_mode = f"silent:{severities[0]}"
-    except (OSError, ValueError):
-        pass  # Non-fatal: mode query failure doesn't affect health status
+    if operational_mode == "normal":
+        silent_results, silent_err = query_prometheus(prom_url, f'user_silent_mode{{tenant="{tenant}"}}')
+        if silent_err:
+            operational_mode = "unknown"
+            errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
+        elif silent_results:
+            severities = [r.get("metric", {}).get("target_severity", "") for r in silent_results]
+            if "warning" in severities and "critical" in severities:
+                operational_mode = "silent:all"
+            elif severities:
+                operational_mode = f"silent:{severities[0]}"
 
     # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)
     # #1522: ONE read of config_dir. The profile is the chain's own

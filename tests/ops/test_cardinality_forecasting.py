@@ -424,32 +424,7 @@ class TestQueryPrometheus:
         with pytest.raises(cf.QueryError, match="bad query"):
             cf.query_cardinality_range("http://prom:9090")
 
-    @patch("_lib_prometheus.http_get_json")
-    def test_query_scrape_series(self, mock_get):
-        """scrape_series_added 查詢。"""
-        mock_get.return_value = ({
-            "status": "success",
-            "data": {
-                "resultType": "vector",
-                "result": [
-                    {"metric": {"tenant": "db-a"}, "value": [1000, "42"]},
-                ]
-            },
-        }, None)
-        result = cf.query_scrape_series_added("http://prom:9090")
-        assert result["db-a"] == 42.0
 
-    @patch("_lib_prometheus.http_get_json")
-    def test_query_scrape_series_empty(self, mock_get):
-        """scrape_series_added 查詢失敗往上拋（#3065）。"""
-        mock_get.return_value = (None, "connection error")
-        with pytest.raises(cf.QueryError, match="connection error"):
-            cf.query_scrape_series_added("http://prom:9090")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TestCLI
-# ═══════════════════════════════════════════════════════════════════
 
 class TestCLI:
     """CLI 整合測試。"""

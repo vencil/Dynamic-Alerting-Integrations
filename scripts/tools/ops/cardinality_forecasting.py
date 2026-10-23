@@ -2,7 +2,7 @@
 """
 cardinality_forecasting.py — 基數預測工具（§5.8）。
 
-基於 Prometheus 時序資料（``scrape_series_added``、``tenant_threshold_*``），
+基於 Prometheus 時序資料（``tenant_threshold_*`` 的 series 數），
 使用線性回歸預測 per-tenant 基數增長趨勢。在觸頂前 N 天發出預警。
 
 主要功能：
@@ -49,7 +49,6 @@ try:
         format_json_report,
         parse_duration_seconds,
         prometheus_range,
-        query_prometheus_instant,
         safe_label,
         QueryError,
     )
@@ -60,7 +59,6 @@ except ImportError:
         format_json_report,
         parse_duration_seconds,
         prometheus_range,
-        query_prometheus_instant,
         safe_label,
         QueryError,
     )
@@ -272,41 +270,6 @@ def query_cardinality_range(
             non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
         if values:
             results[tenant] = values
-
-    return results
-
-
-def query_scrape_series_added(
-    prometheus_url: str,
-) -> dict[str, float]:
-    """查詢 scrape_series_added per job/tenant。
-
-    補充資料：若 tenant_threshold_* 不可用，
-    可用 scrape_series_added 作為基數成長的替代指標。
-
-    Returns:
-        {tenant: current_scrape_series_added}。
-
-    Raises:
-        QueryError: 查詢失敗（#3065）。
-    """
-    query = 'sum by (tenant)(scrape_series_added)'
-    # #1112: percent-encode — delegated to
-    # `_lib_prometheus.query_prometheus_instant` (ROI r3 W1; its default
-    # timeout=10 matches this site's pre-consolidation http_get_json default).
-    result, err = query_prometheus_instant(prometheus_url, query)
-    if err:
-        raise QueryError(err)
-
-    results: dict[str, float] = {}
-    for series in result:
-        tenant = series.get("metric", {}).get("tenant", "unknown")
-        value = series.get("value", [None, "0"])
-        if len(value) >= 2:
-            try:
-                results[tenant] = float(value[1])
-            except (ValueError, TypeError):
-                pass
 
     return results
 

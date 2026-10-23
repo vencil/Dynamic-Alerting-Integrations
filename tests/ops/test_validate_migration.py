@@ -13,7 +13,8 @@ import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
-import validate_migration as vm  # noqa: E402
+import validate_migration as vm
+from _lib_prometheus import QueryError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +46,19 @@ class TestExtractValueMap:
         assert "__no_label__" in got
         assert got["__no_label__"] == 5.0
 
-    def test_invalid_value_becomes_none(self):
-        results = [{"metric": {"tenant": "t1"}, "value": [0, "NaN_bad"]}]
-        got = vm.extract_value_map(results)
-        assert got["t1"] is None
+    def test_an_unreadable_value_is_refused_upstream(self, monkeypatch):
+        """#3133: an unreadable value makes the answer malformed — the
+        comparison is not run (rc 2), not reported as "missing" (rc 1)."""
+        import _lib_prometheus as lp
+        body = {"status": "success", "data": {"resultType": "vector", "result": [
+            {"metric": {"tenant": "t1"}, "value": [0, "NaN_bad"]}]}}
+        monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=10: (body, None))
+        monkeypatch.setattr(vm, "query_prometheus", lp.prometheus_instant)
+        assert vm.run_single_comparison("http://p", "old_q", "new_q", "lbl") is None
 
-    def test_none_value_becomes_none(self):
-        results = [{"metric": {"tenant": "t1"}, "value": [0, None]}]
-        got = vm.extract_value_map(results)
-        assert got["t1"] is None
+    def test_histogram_only_row_becomes_none(self):
+        results = [{"metric": {"tenant": "t1"}, "histogram": [0, {"count": "1"}]}]
+        assert vm.extract_value_map(results)["t1"] is None
 
     def test_empty_results(self):
         assert vm.extract_value_map([]) == {}
@@ -117,42 +122,6 @@ class TestCompareVectors:
 
 
 # ---------------------------------------------------------------------------
-# query_prometheus (mock http_get_json)
-# ---------------------------------------------------------------------------
-
-class TestQueryPrometheus:
-    """Tests via monkeypatch — query_prometheus is now an alias to _lib_python.query_prometheus_instant."""
-
-    def test_success(self, monkeypatch):
-        fake = lambda prom_url, promql: ([{"metric": {}, "value": [0, "1"]}], None)
-        monkeypatch.setattr(vm, "query_prometheus", fake)
-        results, err = vm.query_prometheus("http://prom:9090", "up")
-        assert err is None
-        assert len(results) == 1
-
-    def test_http_error(self, monkeypatch):
-        fake = lambda prom_url, promql: (None, "connection refused")
-        monkeypatch.setattr(vm, "query_prometheus", fake)
-        results, err = vm.query_prometheus("http://prom:9090", "up")
-        assert results is None
-        assert "connection refused" in err
-
-    def test_api_error_status(self, monkeypatch):
-        fake = lambda prom_url, promql: (None, "bad query")
-        monkeypatch.setattr(vm, "query_prometheus", fake)
-        results, err = vm.query_prometheus("http://prom:9090", "bad{}")
-        assert results is None
-        assert "bad query" in err
-
-    def test_api_error_unknown(self, monkeypatch):
-        fake = lambda prom_url, promql: (None, "Unknown error")
-        monkeypatch.setattr(vm, "query_prometheus", fake)
-        results, err = vm.query_prometheus("http://prom:9090", "bad{}")
-        assert results is None
-        assert "Unknown error" in err
-
-
-# ---------------------------------------------------------------------------
 # run_single_comparison
 # ---------------------------------------------------------------------------
 
@@ -162,8 +131,8 @@ class TestRunSingleComparison:
     @mock.patch("validate_migration.query_prometheus")
     def test_success(self, mock_qp):
         mock_qp.side_effect = [
-            ([{"metric": {"tenant": "db-a"}, "value": [0, "10"]}], None),
-            ([{"metric": {"tenant": "db-a"}, "value": [0, "10"]}], None),
+            [{"metric": {"tenant": "db-a"}, "value": [0, "10"]}],
+            [{"metric": {"tenant": "db-a"}, "value": [0, "10"]}],
         ]
         result = vm.run_single_comparison("http://p:9090", "old_q", "new_q", "test_label")
         assert result is not None
@@ -174,15 +143,15 @@ class TestRunSingleComparison:
 
     @mock.patch("validate_migration.query_prometheus")
     def test_old_query_fails(self, mock_qp):
-        mock_qp.return_value = (None, "timeout")
+        mock_qp.side_effect = QueryError("timeout")
         result = vm.run_single_comparison("http://p:9090", "old_q", "new_q", "lbl")
         assert result is None
 
     @mock.patch("validate_migration.query_prometheus")
     def test_new_query_fails(self, mock_qp):
         mock_qp.side_effect = [
-            ([{"metric": {"tenant": "db-a"}, "value": [0, "10"]}], None),
-            (None, "500 error"),
+            [{"metric": {"tenant": "db-a"}, "value": [0, "10"]}],
+            QueryError("500 error"),
         ]
         result = vm.run_single_comparison("http://p:9090", "old_q", "new_q", "lbl")
         assert result is None
@@ -937,8 +906,8 @@ class TestToleranceFlag:
     def _statuses(tmp_path, *extra):
         # 100 vs 105: a 5% gap — a mismatch at the default 0.1%, a match at 10%.
         side = [
-            ([{"metric": {"tenant": "t1"}, "value": [0, "100"]}], None),
-            ([{"metric": {"tenant": "t1"}, "value": [0, "105"]}], None),
+            [{"metric": {"tenant": "t1"}, "value": [0, "100"]}],
+            [{"metric": {"tenant": "t1"}, "value": [0, "105"]}],
         ]
         out_dir = tmp_path / "out"
         with mock.patch("validate_migration.query_prometheus", side_effect=side), \
@@ -980,7 +949,7 @@ class TestIntervalFlag:
 
     @staticmethod
     def _watch(tmp_path, interval):
-        side = [([{"metric": {"tenant": "t1"}, "value": [0, "1"]}], None)] * 4
+        side = [[{"metric": {"tenant": "t1"}, "value": [0, "1"]}]] * 4
         with mock.patch("validate_migration.query_prometheus", side_effect=side) as q, \
              mock.patch("validate_migration.time.sleep") as sleep, \
              mock.patch("sys.argv", ["validate_migration.py", "--old", "old_q",
