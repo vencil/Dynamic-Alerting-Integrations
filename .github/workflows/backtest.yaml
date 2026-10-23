@@ -110,7 +110,7 @@ jobs:
       - name: Check for report
         id: report
         # hashFiles() 只能讀 GITHUB_WORKSPACE 內的檔案（/tmp 恆回空字串），
-        # 改用 step output gate（同 config-diff.yaml 的 has_changes 模式）。
+        # 改用 step output gate：本步寫 has_comment，下一步依它判斷。
         run: |
           if [ -s /tmp/backtest-comment.md ]; then
             echo "has_comment=true" >> "$GITHUB_OUTPUT"
