@@ -409,6 +409,19 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 			inScope[id] = struct{}{}
 		}
 	}
+	if opts.Tenants != nil && !anyDuplicated(scan, inScope) {
+		// The subset narrows what is computed, never what is refused: when
+		// an in-scope tenant is declared twice, every in-scope tenant is
+		// resolved as without --tenant, so the scope is refused with the
+		// same error — the same tenant named, or a file that does not
+		// decode on a tenant resolved before it. Only that error path costs
+		// the whole scope.
+		for id := range inScope {
+			if !opts.Tenants[id] {
+				delete(inScope, id)
+			}
+		}
+	}
 	parseFailed, unreachable, reserved, stateFilters, applied, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger)
 	if err != nil {
 		return nil, err
@@ -525,6 +538,17 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 	out.SourceFiles = files
 
 	return out, nil
+}
+
+// anyDuplicated reports whether a tenant of ids is declared in two or more
+// files (Locate's duplicate).
+func anyDuplicated(scan *TreeScan, ids map[string]struct{}) bool {
+	for id := range ids {
+		if _, ok := scan.dups[id]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // scopeParseFailed is ScopedTenants.ParseFailed: the files the exporter's own

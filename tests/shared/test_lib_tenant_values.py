@@ -971,3 +971,64 @@ def test_partial_reads_the_rest_of_a_tree_with_a_file_that_does_not_decode(tmp_p
         tv.load_served_tree(conf_d, binary=da_guard)
     tree = tv.load_served_tree(conf_d, binary=da_guard, partial=True)
     assert "ta" in tree.tenants and tree.parse_failed == ["bad.yaml"]
+
+
+# ── --tenant 子集模式（ADR-038 §5）──────────────────────────────────────────
+
+def test_the_subset_readers_return_the_requested_tenants_and_the_absent(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "a.yaml": "tenants:\n  t-a:\n    mysql_connections: 50\n",
+        "b.yaml": "tenants:\n  t-b:\n    mysql_connections: 60\n",
+    })
+    served = tv.load_served_tree(conf_d, binary=da_guard, tenants=iter(["t-b", "t-gone", "t-b"]))
+    assert sorted(served.tenants) == ["t-b"] and served.absent == ("t-gone",)
+    effective = tv.load_effective_tree(conf_d, binary=da_guard, tenants=["t-b", "t-gone"])
+    assert sorted(effective.tenants) == ["t-b"] and effective.absent == ("t-gone",)
+    whole = tv.load_served_tree(conf_d, binary=da_guard)
+    assert sorted(whole.tenants) == ["t-a", "t-b"] and whole.absent == ()
+    assert whole.tenants["t-b"].values == served.tenants["t-b"].values
+    with pytest.raises(ValueError):
+        tv.load_served_tree(conf_d, binary=da_guard, tenants=[])
+
+
+@pytest.mark.parametrize("change", [
+    {"tenants_requested": ["t-x"]},                             # not what was asked
+    {"tenants_absent": ["t-a"]},                                # computed and absent at once
+    {"tenants_absent": []},                                     # t-b neither computed nor absent
+])
+def test_a_subset_document_that_does_not_answer_the_request_is_refused(tmp_path, change):
+    """A requested tenant missing from both `tenants` and `tenants_absent`
+    would read as one the exporter does not serve: the document is not
+    da-guard's (`broken`), never a reading."""
+    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
+    doc = json.loads(_sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"t": {', '"t-a": {'))
+    doc["tenants"]["t-a"].update({"keys": {}, "custom_alerts": []})
+    doc.update({"tenants_requested": ["t-a", "t-b"], "tenants_absent": ["t-b"]}, **change)
+    out = tmp_path / "doc.json"
+    out.write_text(json.dumps(doc), encoding="utf-8")
+    fake = tmp_path / "fake-da-guard"
+    fake.write_text(f"#!/bin/sh\ncat '{out}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake), tenants=["t-a", "t-b"])
+    assert ei.value.broken, ei.value
+
+
+@pytest.mark.parametrize("tenants, error", [
+    ("t-a", TypeError),          # a bare string: its characters are not the tenants
+    (b"t-a", TypeError),
+    ([1], TypeError),            # not str(1): a tenant id is a string
+    ([None], TypeError),
+    (["t-\udcff"], ValueError),  # not UTF-8: JSON cannot carry it back
+    ([], ValueError),            # no tenant is not the whole tree
+    (["t-a", ""], ValueError),
+])
+def test_a_request_that_is_not_tenant_ids_is_the_callers_mistake(tenants, error):
+    with pytest.raises(error):
+        tv.requested_tenants(tenants)
+
+
+def test_a_request_is_sorted_and_deduplicated():
+    assert tv.requested_tenants(iter(["t-b", "t-a", "t-b"])) == ["t-a", "t-b"]
+    assert tv.requested_tenants(None) is None
