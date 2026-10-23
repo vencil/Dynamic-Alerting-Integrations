@@ -88,7 +88,7 @@ da-tools blind-spot \
   > blind-spot-report.json
 ```
 
-**預期輸出**：`blind-spot-report.json` 是一個陣列，每個元素對應一種由 scrape job 名稱推得的 DB 類型：`live_instances`（叢集裡的實例）、`monitored_tenants`（已有哪些租戶在監控），以及 `status`。此時還沒有任何租戶配置（`--config-dir /dev/null`，stderr 會印一行 `WARN: config-dir not found` 屬預期），所以每種辨識得出的 DB 類型都是 `blind_spot`；job 名稱對不上任何 DB 類型的實例歸在 `unrecognized`。這份清單就是步驟 0.4 挑試點域時的候選範圍；決策矩陣的 `rule_pack_coverage` 就拿這裡的 DB 類型對照 [Rule Packs README](../rule-packs/README.md) 評。⚠️ Prometheus 連不到時輸出是 `[]`、結束碼仍是 0（stderr 會有 `WARN: Cannot reach Prometheus`），不要讀成「叢集裡沒有東西」。
+**預期輸出**：`blind-spot-report.json` 是一個陣列，每個元素對應一種由 scrape job 名稱推得的 DB 類型：`live_instances`（叢集裡的實例）、`monitored_tenants`（已有哪些租戶在監控），以及 `status`。此時還沒有任何租戶配置（`--config-dir /dev/null`，stderr 會印一行 `WARN: config-dir not found` 屬預期），所以每種辨識得出的 DB 類型都是 `blind_spot`；job 名稱對不上任何 DB 類型的實例歸在 `unrecognized`。這份清單就是步驟 0.4 挑試點域時的候選範圍；決策矩陣的 `rule_pack_coverage` 就拿這裡的 DB 類型對照 [Rule Packs README](../rule-packs/README.md) 評。Prometheus 連不到（或回應格式不對）時不會產出報告：stderr 一行 `ERROR: Prometheus query failed: …`、結束碼 2（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)；先前是輸出 `[]`、結束碼 0）。
 
 ### 步驟 0.4：決策矩陣 — 選擇試點域
 

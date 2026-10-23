@@ -58,6 +58,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
+
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -358,7 +360,8 @@ _ROWS = [
      lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
     ("blind_spot_discovery", OPS / "blind_spot_discovery.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
-     lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
+     # the control needs a Prometheus that answers: one that does not is rc 2 (#3133)
+     lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _stub_upstream.url()], EXIT_OK),
     ("notification_tester --dry-run", OPS / "notification_tester.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),

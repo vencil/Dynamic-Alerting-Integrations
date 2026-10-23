@@ -46,10 +46,15 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, http_get_json, probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import format_json_report, probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
-from _lib_prometheus import QueryError, instant_or_error, vector_count  # noqa: E402
+from _lib_prometheus import (  # noqa: E402
+    QueryError, alertmanager_status, instant_or_error, vector_count)
+
+# --alertmanager when it is not given. Only a URL the caller gave is a source
+# the run must read (#3133, owner 2026-10-23: an optional source).
+_DEFAULT_ALERTMANAGER = "http://localhost:9093"
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
@@ -163,13 +168,19 @@ def check_preflight(args):
         })
 
     # 5. Alertmanager shadow interception route
-    am_status, err = http_get_json(f"{args.alertmanager}/api/v2/status")
-    if err:
-        checks.append({
-            "check": "alertmanager_shadow_route",
-            "status": "skip",
-            "detail": f"Alertmanager not reachable: {err[:60]}",
-        })
+    # Given (--alertmanager) and not answering: a caller error, exit 2. The
+    # default URL not answering stays a skip — nobody asked for it (#3133).
+    try:
+        am_status = alertmanager_status(args.alertmanager or _DEFAULT_ALERTMANAGER)
+    except QueryError as exc:
+        if args.alertmanager:
+            checks.append(_query_failed("alertmanager_shadow_route", str(exc)))
+        else:
+            checks.append({
+                "check": "alertmanager_shadow_route",
+                "status": "skip",
+                "detail": f"Alertmanager not reachable: {str(exc)[:60]}",
+            })
     else:
         config_str = am_status.get("config", {}).get("original", "")
         has_shadow_route = "migration_status" in config_str
@@ -376,8 +387,10 @@ def main():
     add_prometheus_arg(parser,
                        help_text="Prometheus Query API URL "
                                  "(default: $PROMETHEUS_URL, else http://localhost:9090)")
-    parser.add_argument("--alertmanager", default="http://localhost:9093",
-                        help="Alertmanager API URL (default: http://localhost:9093)")
+    parser.add_argument("--alertmanager", default=None,
+                        help=f"Alertmanager API URL (default: {_DEFAULT_ALERTMANAGER}; "
+                             "a URL given here that does not answer is exit 2, "
+                             "the default not answering is a skip)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
     args = parser.parse_args()

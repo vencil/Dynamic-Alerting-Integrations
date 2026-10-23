@@ -256,7 +256,7 @@ da-tools check-alert MariaDBHighConnections db-a
 |------|-------------|
 | `0` | Success (any state) |
 | `1` | Only an uncaught exception (traceback) returns 1 — the command has no violation exit (inactive / pending / firing are all 0) | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: Prometheus API unreachable or errored (stdout carries an `{"error": ...}` JSON), or arguments argparse rejects |
+| `2` | Caller error: Prometheus API unreachable, errored or answered in the wrong shape (stdout carries an `{"error": ...}` JSON), or arguments argparse rejects. A wrong shape is no `data`, `alerts` not an array, or a label value that is not a string; no `data` used to be reported as `inactive` at rc 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -628,8 +628,8 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 | Code | Description |
 |------|-------------|
 | `0` | Success (regardless of blind spots) |
-| `1` | Only an uncaught exception (traceback) returns 1. An unreachable Prometheus only prints a WARN and the run ends at 0 |
-| `2` | Caller error: a file under `--config-dir` that the exporter fails to parse and skips whole (e.g. content not UTF-8 or not valid YAML), or a file or sub-directory the exporter cannot read (e.g. no permission, a dangling symlink; a symlink to a directory excepted) — the `ERROR` line names the file (or directory), and what da-guard prints on stderr (the exporter's reasons among it) follows line by line, each line behind a fixed prefix (see below); a tree the exporter rejects (e.g. one tenant declared in two files); or da-guard not found / failing |
+| `1` | Only an uncaught exception (traceback) returns 1 |
+| `2` | Caller error: Prometheus's targets could not be read (unreachable, errored or answered in the wrong shape; one `ERROR: Prometheus query failed: …` line on stderr — it used to be a WARN, every DB reported as a blind spot at rc 0, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)); a file under `--config-dir` that the exporter fails to parse and skips whole (e.g. content not UTF-8 or not valid YAML), or a file or sub-directory the exporter cannot read (e.g. no permission, a dangling symlink; a symlink to a directory excepted) — the `ERROR` line names the file (or directory), and what da-guard prints on stderr (the exporter's reasons among it) follows line by line, each line behind a fixed prefix (see below); a tree the exporter rejects (e.g. one tenant declared in two files); or da-guard not found / failing |
 
 On exit 2, every line below the `ERROR` line starts with the prefix `da-guard|` (two leading spaces, one trailing; the same prefix as the stderr passed on in a successful run); an `exit 3` among them is da-guard's own exit code, this tool exits 2.
 
@@ -822,7 +822,7 @@ da-tools shadow-verify <phase> [options]
 | `--report-csv <FILE>` | Path to validation-report.csv (for runtime/convergence) | (none) |
 | `--readiness-json <FILE>` | Path to cutover-readiness.json (for convergence) | (none) |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL. Given and not read (unreachable, errored or answered in the wrong shape), the shadow-route check FAILs and the exit code is 2; not given, the default is read and not answering stays a skip ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | `http://localhost:9093` |
 | `--json` | JSON structured output (for CI) | false |
 
 **Three-Phase Checks**
@@ -1145,7 +1145,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|-------------|
 | `0` | Success (CI mode: no critical alert clusters) |
 | `1` | CI mode: a cluster containing a critical alert found (a cluster needs at least 2 alerts; a single critical alert gives 0) |
-| `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. ⚠️ An unreachable Alertmanager/Prometheus is **not** 2 — a WARN is printed and the run continues with zero alerts (rc 0); an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
+| `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. Prometheus's alerts not read (unreachable, errored or answered in the wrong shape) is 2 as well — it used to print a WARN and go on with zero alerts at rc 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)). The Alertmanager URL is derived from `--prometheus` (`:9090` → `:9093`); when it does not answer, one `NOTICE` line goes to stderr and Prometheus is read instead; an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
 
 ---
 
@@ -1800,7 +1800,7 @@ da-tools operator-check [options]
 | `--namespace <NS>` | K8s namespace to explore | `monitoring` (auto-discover) |
 | `--json` | JSON format output | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
-| `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise | (none) |
+| `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise. Given and its targets not read (unreachable, errored or answered in the wrong shape), that check FAILs and the exit code is 2 — it used to be a warn ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | (none) |
 | `--kubeconfig <FILE>` | kubeconfig path | (none) |
 | `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable is always 2) | false |
 

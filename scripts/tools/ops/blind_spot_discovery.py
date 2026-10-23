@@ -24,7 +24,6 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
-    http_get_json,
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
 )
@@ -38,26 +37,20 @@ from _lib_tenant_values import (  # noqa: E402
     print_load_warnings,
 )
 from _lib_exitcodes import EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
+from _lib_prometheus import prometheus_targets  # noqa: E402
 
 
 def query_prometheus_targets(prom_url):
     """Fetch active targets from Prometheus /api/v1/targets.
 
     Returns list of dicts: [{job, instance, namespace, labels}].
+
+    Raises ``QueryError`` (#3133) when Prometheus did not answer with a list of
+    targets — uncaught, it ends the run at rc 2. It used to come back as ``[]``
+    and the report listed every tenant's DB as unseen at rc 0.
     """
-    url = f"{prom_url}/api/v1/targets?state=active"
-    data, err = http_get_json(url)
-    if err:
-        print(f"WARN: Cannot reach Prometheus: {safe_label(err)}", file=sys.stderr)
-        return []
-
-    if data.get("status") != "success":
-        print(f"WARN: Prometheus returned non-success: {data.get('error', '?')}",
-              file=sys.stderr)
-        return []
-
     targets = []
-    for target in data.get("data", {}).get("activeTargets", []):
+    for target in prometheus_targets(prom_url):
         labels = target.get("labels", {})
         targets.append({
             "job": labels.get("job", ""),
@@ -289,7 +282,7 @@ def main():
     # 2. Query Prometheus targets
     targets = query_prometheus_targets(prom_url)
     if not targets:
-        print("WARN: No active targets found (Prometheus unreachable or empty)",
+        print("WARN: No active targets found (Prometheus answered with none)",
               file=sys.stderr)
 
     # 3. Extract DB instances from targets

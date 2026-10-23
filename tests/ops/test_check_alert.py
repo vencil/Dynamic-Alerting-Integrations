@@ -18,13 +18,17 @@ import check_alert as ca  # noqa: E402
 
 
 def _stub_http(monkeypatch, payload, err=None):
-    """Replace _lib_python.http_get_json behind ca's import."""
-    import _lib_python as lib
+    """Replace the HTTP fetch the lib's ``prometheus_alerts`` reads through
+    (#3133). A fixture without ``status`` is given ``success``, as every
+    answer of Prometheus's API carries one."""
+    import _lib_prometheus as lib
+
+    if isinstance(payload, dict) and "status" not in payload:
+        payload = {"status": "success", **payload}
 
     def fake(*args, **kwargs):
         return payload, err
     monkeypatch.setattr(lib, "http_get_json", fake)
-    monkeypatch.setattr(ca, "http_get_json", fake)
 
 
 class TestCheckAlert:
@@ -98,3 +102,19 @@ class TestCheckAlert:
         payload = json.loads(out)
         assert "error" in payload
         assert "connection refused" in payload["error"]
+
+
+@pytest.mark.parametrize("payload,defect", [
+    ({"status": "success"}, "'data' is missing or not an object"),
+    ({"status": "success", "data": {}}, "'data.alerts' is missing or not a list"),
+    ({"status": "error", "error": "bad_data"}, "bad_data"),
+    ({"status": "success", "data": {"alerts": [{"labels": {"alertname": 1}}]}},
+     "alert[0].labels.alertname is not a string"),
+], ids=["no-data", "no-alerts", "error-status", "label-not-string"])
+def test_an_answer_that_is_not_one_is_rc2_not_inactive(monkeypatch, capsys, payload, defect):
+    """#3133: these used to read as no alert — "inactive", rc 0."""
+    _stub_http(monkeypatch, payload)
+    with pytest.raises(SystemExit) as exc:
+        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+    assert exc.value.code == 2
+    assert defect in json.loads(capsys.readouterr().out)["error"]

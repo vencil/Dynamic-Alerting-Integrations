@@ -257,7 +257,7 @@ da-tools check-alert MariaDBHighConnections db-a
 |------|------|
 | `0` | 成功（任何狀態） |
 | `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口（inactive／pending／firing 都是 0） | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：Prometheus API 連不上或回錯（stdout 印 `{"error": ...}` JSON），或 argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：Prometheus API 連不上、回錯或回應格式不對（stdout 印 `{"error": ...}` JSON），或 argparse 拒絕的參數。回應格式不對指缺 `data`、`alerts` 不是陣列、label 值不是字串；缺 `data` 先前被報成 `inactive`、rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
@@ -625,8 +625,8 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（無論是否有盲區） |
-| `1` | 只有未捕捉例外（traceback）會回 1。Prometheus 連不上只印 WARN，照常以 0 結束 |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔（例如內容不是 UTF-8 或不是合法 YAML），或 exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink；指向目錄的 symlink 除外）——`ERROR` 行指名哪一檔（或目錄），da-guard 在 stderr 印的內容（含 exporter 的原因）逐行附在下面，每行加固定前綴（見下）；整棵樹被 exporter 拒收（例如同一租戶在兩個檔宣告）；或找不到 da-guard／da-guard 執行失敗 |
+| `1` | 只有未捕捉例外（traceback）會回 1 |
+| `2` | 呼叫端錯誤：Prometheus 的 targets 讀不到（連不上、回錯或回應格式不對，stderr 一行 `ERROR: Prometheus query failed: …`；先前只印 WARN、把每個 DB 都報成盲區、rc 0，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）；`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔（例如內容不是 UTF-8 或不是合法 YAML），或 exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink；指向目錄的 symlink 除外）——`ERROR` 行指名哪一檔（或目錄），da-guard 在 stderr 印的內容（含 exporter 的原因）逐行附在下面，每行加固定前綴（見下）；整棵樹被 exporter 拒收（例如同一租戶在兩個檔宣告）；或找不到 da-guard／da-guard 執行失敗 |
 
 結束碼 2 時，附在 `ERROR` 行下面的每一行都以前綴 `da-guard|` 開頭（前面兩個空格、後面一個空格）（與正常結束時轉印的 stderr 相同）；其中出現的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。
 
@@ -819,7 +819,7 @@ da-tools shadow-verify <phase> [options]
 | `--report-csv <FILE>` | validation-report.csv 路徑（runtime/convergence 用） | （無） |
 | `--readiness-json <FILE>` | cutover-readiness.json 路徑（convergence 用） | （無） |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
-| `--alertmanager <URL>` | Alertmanager API URL | `http://localhost:9093` |
+| `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | `http://localhost:9093` |
 | `--json` | JSON 結構化輸出（CI 用） | false |
 
 **三階段檢查內容**
@@ -1142,7 +1142,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 |------|------|
 | `0` | 成功（CI 模式：無 critical 告警群組） |
 | `1` | CI 模式：存在含 critical 告警的群組（群組至少 2 筆告警；只有一筆 critical 告警時是 0） |
-| `2` | 呼叫端錯誤：`--window` 解析不出或 ≤ 0，或 argparse 拒絕的參數。⚠️ Alertmanager／Prometheus 連不上**不是** 2——印 WARN 後以零告警繼續、rc 0；`--input` 指到不存在的檔是未捕捉例外（traceback、rc 1） |
+| `2` | 呼叫端錯誤：`--window` 解析不出或 ≤ 0，或 argparse 拒絕的參數。Prometheus 的 alerts 讀不到（連不上、回錯或回應格式不對）也是 2，先前印 WARN 後以零告警繼續、rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。Alertmanager 的 URL 是由 `--prometheus` 把 `:9090` 換成 `:9093` 推出的，讀不到時 stderr 印一行 `NOTICE` 並改讀 Prometheus；`--input` 指到不存在的檔是未捕捉例外（traceback、rc 1） |
 
 ---
 
@@ -1797,7 +1797,7 @@ da-tools operator-check [options]
 | `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML 目錄；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 `rule-pack-*.yaml` 數比 | `rule-packs/` |
-| `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過 | （無） |
+| `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過。給了卻讀不到 targets（連不上、回錯或回應格式不對）時該項 FAIL、結束碼 2，先前只是 warn（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | （無） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 不可用一律 2） | false |
 
