@@ -18,7 +18,9 @@ the files and reads the answer (`da-guard.write/v3`).
 One call is one batch (#3206 step 10c): every file goes to ONE da-guard run,
 judged once, all or nothing (`write_all`; `edit_all` / `emit_all` are its
 edit-only and create-only forms). `edit` / `emit` / `move` are a batch of
-one.
+one. `write_all_or_exit` is `write_all` for a one-shot CLI: every failure
+named on stderr (`<tool>: ERROR: …`) and exit 2, the one exit every
+conf.d-writing tool shares.
 
 Which da-guard, and how long it may run, is `_lib_parse_tree`'s one
 resolution (`_lib_parse_tree._run`: an explicit argument, else the tool's
@@ -94,7 +96,7 @@ import json
 import posixpath
 import re
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, NoReturn, Optional, Sequence
 
 import _lib_parse_tree
 
@@ -599,3 +601,45 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
     written)."""
     return write_all(root, [create_entry(rel, content) for rel, content in files],
                      dry_run=dry_run, binary=binary, timeout=timeout)
+
+
+def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
+                      dry_run: bool = False, binary: Optional[str] = None,
+                      timeout: Optional[float] = None) -> "list[dict]":
+    """`write_all` for a one-shot CLI that writes conf.d (#3206 step 10c):
+    the files' results when the batch passes. Otherwise every line goes to
+    stderr prefixed `<tool>: ` and the process exits 2 (EXIT_CALLER_ERROR)
+    — a refusal (each refused file named with its reason, the tree-worsening
+    ones too; nothing written), da-guard's caller error or an older
+    da-guard (nothing written), no usable da-guard or no answer on a dry run
+    (`ParseTreeError`, nothing written), and a write that stopped part-way
+    (`PartialWrite`: the files written and the ones that may have been,
+    not rolled back)."""
+    import sys  # noqa: PLC0415
+
+    from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: PLC0415
+
+    def say(line: str) -> None:
+        print(f"{tool}: ERROR: {line}", file=sys.stderr)
+
+    def die(line: str) -> NoReturn:
+        say(line)
+        sys.exit(EXIT_CALLER_ERROR)
+
+    try:
+        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
+    except EditsRefused as exc:
+        for r in exc.refusals:
+            say(f"{r.path}: {r.reason}: {r.message}")
+        die(f"da-guard write refused {len(exc.refusals)} file(s) under {root} "
+            f"— nothing was written")
+    except EditCallerError as exc:
+        die(f"{exc} — nothing was written")
+    except PartialWrite as exc:
+        left = [*exc.written, *exc.maybe_written]
+        die(f"the write under {root} stopped part-way: {exc.cause}; "
+            f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
+            f"been written, not rolled back: {', '.join(left) or '(none)'}")
+    except _lib_parse_tree.ParseTreeError as exc:
+        die(f"cannot write the conf.d files through `da-guard write` (ADR-036 §2): "
+            f"{exc}; nothing was written")

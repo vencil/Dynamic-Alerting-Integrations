@@ -574,3 +574,53 @@ def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
 
 def test_comment_text_problem_lets_tabs_lines_and_text_through():
     assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
+
+
+# ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
+
+def test_write_all_or_exit_returns_the_results_when_the_batch_passes(tmp_path, capsys):
+    out = ce.write_all_or_exit(tmp_path, [
+        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"k": "1"}}}))],
+        tool="t")
+    assert [r["status"] for r in out] == [ce.WRITTEN]
+    assert (tmp_path / "a.yaml").read_text(encoding="utf-8") == \
+        'tenants:\n  tenant-a:\n    k: "1"\n'
+    assert capsys.readouterr().err == ""
+
+
+def test_write_all_or_exit_names_each_refusal_and_writes_none(tmp_path, capsys):
+    # One refused (a hidden path no reader reads) ⇒ the other is not written.
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [
+            ce.create_entry("a.yaml", ce.map_value([("tenants", ce.map_value([]))])),
+            ce.create_entry(".hidden.yaml", ce.map_value([]))], tool="my_tool")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    lines = err.splitlines()
+    assert all(ln.startswith("my_tool: ERROR: ") for ln in lines), err
+    assert any(".hidden.yaml: not_read:" in ln for ln in lines), err
+    assert "nothing was written" in lines[-1], err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_all_or_exit_names_the_files_a_partial_write_left(tmp_path, capsys, monkeypatch):
+    def stopped(root, entries, **_kw):
+        raise ce.PartialWrite(["a.yaml"], "b.yaml", OSError("disk full"),
+                              maybe_written=["b.yaml"])
+    monkeypatch.setattr(ce, "write_all", stopped)
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [], tool="t")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("t: ERROR: ") and "stopped part-way: disk full" in err, err
+    assert "1 file(s) written, 1 may have been written, not rolled back: a.yaml, b.yaml" in err
+
+
+def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]))],
+                             tool="t", binary=str(tmp_path / "no-such-da-guard"))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "t: ERROR: cannot write the conf.d files through `da-guard write`" in err, err
+    assert not (tmp_path / "a.yaml").exists()

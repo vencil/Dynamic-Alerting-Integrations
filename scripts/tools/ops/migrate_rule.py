@@ -54,6 +54,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_io import find_metric_dictionary  # noqa: E402
+import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1418,36 +1419,6 @@ def render_report(results):
     return buf.getvalue()
 
 
-def _write_confd_files(output_dir, entries):
-    """一次 `da-guard write` 新建 *entries*（ADR-036 §2，#3206 步驟 10c）：整棵樹
-    判一次，一個被拒就一個都不寫。拒寫、呼叫錯誤、值沒有契約型別或沒有可用的
-    da-guard ⇒ 結束碼 2（EXIT_CALLER_ERROR）、什麼都沒寫；寫到一半停下 ⇒
-    結束碼 2，點名已寫入、不會還原的檔。"""
-    import _lib_confedit  # noqa: PLC0415
-    import _lib_parse_tree  # noqa: PLC0415
-
-    def die(message):
-        print(f"ERROR: {message}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    try:
-        _lib_confedit.write_all(output_dir, entries)
-    except _lib_confedit.EditsRefused as exc:
-        for r in exc.refusals:
-            print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
-        die(f"da-guard write refused {len(exc.refusals)} file(s) under {output_dir} "
-            f"— nothing was written")
-    except _lib_confedit.EditCallerError as exc:
-        die(f"{exc} — nothing was written")
-    except _lib_confedit.PartialWrite as exc:
-        left = [*exc.written, *exc.maybe_written]
-        die(f"the write under {output_dir} stopped part-way: {exc.cause}; "
-            f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
-            f"been written, not rolled back: {', '.join(left) or '(none)'}")
-    except _lib_parse_tree.ParseTreeError as exc:
-        die(f"cannot write the generated conf.d files through `da-guard write` "
-            f"(ADR-036 §2): {exc}; nothing was written")
-
-
 def _require_output_tree(output_dir):
     """寫進 -o 之前（不論寫什麼）：既有的目錄先過共用的 conf.d 拒絕
     （`_lib_write_check.require_output_tree`，#3206）；沒有可用的 da-guard
@@ -1482,7 +1453,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-    _write_confd_files(output_dir, entries)
+    _lib_confedit.write_all_or_exit(output_dir, entries, tool="migrate_rule")
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")

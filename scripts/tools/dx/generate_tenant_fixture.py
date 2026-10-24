@@ -42,7 +42,6 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-import _lib_parse_tree  # noqa: E402
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -613,8 +612,10 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
     written; a write that stopped part-way is rc 2 naming the files left
     in place.
 
-    *flag* (unused by the write itself, which Go makes) names the output
-    flag in a message, ``None`` when it was not given (#1789)."""
+    The refusal, caller-error and part-way messages are
+    `_lib_confedit.write_all_or_exit`'s, shared with every conf.d writer.
+    *flag* is unused by the write itself, which Go makes (kept for the
+    callers' #1789 signature)."""
     import _lib_confedit  # noqa: PLC0415
     batch = []
     for rel, data in files:
@@ -622,24 +623,9 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
             batch.append((rel, _lib_confedit.data_value(data)))
         except ValueError as exc:
             _die(f"{rel}: {exc} — nothing was written")
-    where = f" (the directory given to {flag})" if flag else ""
-    try:
-        _lib_confedit.emit_all(output_dir, batch)
-    except _lib_confedit.EditsRefused as exc:
-        for r in exc.refusals:
-            print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
-        _die(f"da-guard write refused {len(exc.refusals)} file(s) under "
-             f"{output_dir}{where} — nothing was written")
-    except _lib_confedit.EditCallerError as exc:
-        _die(f"{exc} — nothing was written")
-    except _lib_confedit.PartialWrite as exc:
-        left = [*exc.written, *exc.maybe_written]
-        _die(f"the write under {output_dir}{where} stopped part-way: {exc.cause}; "
-             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
-             f"been written, not rolled back: {', '.join(left) or '(none)'}")
-    except _lib_parse_tree.ParseTreeError as exc:
-        _die(f"cannot write the generated conf.d files through `da-guard write` "
-             f"(ADR-036 §2): {exc}; nothing was written")
+    _lib_confedit.write_all_or_exit(
+        output_dir, [_lib_confedit.create_entry(rel, content) for rel, content in batch],
+        tool="generate_tenant_fixture")
 
 
 def _die(message: str) -> None:

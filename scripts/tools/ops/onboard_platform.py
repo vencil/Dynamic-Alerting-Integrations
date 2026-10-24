@@ -82,6 +82,7 @@ from _lib_exitcodes import (  # noqa: E402
 from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1127,39 +1128,6 @@ def _defaults_number(raw):
     return int(value) if value.is_integer() else value
 
 
-def _write_confd_files(output_dir, entries):
-    """Write every `da-guard write` entry of this run in ONE batch (ADR-036
-    §2; #3206 step 10c): Go writes the text, judges the whole tree once (-o
-    as the conf.d root) and writes all of them or none. A refusal, da-guard's
-    caller error or no usable da-guard ends the run with rc 2
-    (EXIT_CALLER_ERROR), every refused file named, nothing written; a write
-    that stopped part-way is rc 2 naming the files written and the ones that
-    may have been."""
-    import _lib_confedit  # noqa: PLC0415
-    import _lib_parse_tree  # noqa: PLC0415
-
-    def die(message):
-        print(f"ERROR: {message}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    try:
-        _lib_confedit.write_all(output_dir, entries)
-    except _lib_confedit.EditsRefused as exc:
-        for r in exc.refusals:
-            print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
-        die(f"da-guard write refused {len(exc.refusals)} file(s) under {output_dir} "
-            f"— nothing was written")
-    except _lib_confedit.EditCallerError as exc:
-        die(f"{exc} — nothing was written")
-    except _lib_confedit.PartialWrite as exc:
-        left = [*exc.written, *exc.maybe_written]
-        die(f"the write under {output_dir} stopped part-way: {exc.cause}; "
-            f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
-            f"been written, not rolled back: {', '.join(left) or '(none)'}")
-    except _lib_parse_tree.ParseTreeError as exc:
-        die(f"cannot write the generated conf.d files through `da-guard write` "
-            f"(ADR-036 §2): {exc}; nothing was written")
-
-
 def _confd_or_die(output_dir, build):
     """*build()*'s entries; a ValueError (a value or a comment `da-guard
     write` cannot carry) is rc 2 naming it, nothing written. Before them,
@@ -1188,7 +1156,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report, confd=None):
         output_dir: 輸出目錄路徑。
         phase1_results: ``(tenant_routings, summary)`` 二元組。
         report: 報告 dict，會被就地更新。
-        confd: `_phase1_confd` 的項目，已由 `_write_confd_files` 寫入；None 時
+        confd: `_phase1_confd` 的項目，已由 `_lib_confedit.write_all_or_exit` 寫入；None 時
             在寫任何檔之前自行產生並一批寫入（ADR-036 §2）。
     """
     tenant_routings, summary = phase1_results
@@ -1196,7 +1164,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report, confd=None):
     if confd is None:
         confd = _confd_or_die(output_dir, lambda: _phase1_confd(phase1_results))
         ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-        _write_confd_files(output_dir, confd)
+        _lib_confedit.write_all_or_exit(output_dir, confd, tool="onboard_platform")
 
     p1 = Path(output_dir) / _PHASE1_DIR
     ensure_dir_or_die(p1, flag=_OUTPUT_FLAG)
@@ -1238,14 +1206,14 @@ def _write_phase2_outputs(output_dir, phase2_results, report, confd=None):
         output_dir: 輸出目錄路徑。
         phase2_results: ``(candidates, recording_rules, summary)`` 三元組。
         report: 報告 dict，會被就地更新。
-        confd: `_phase2_confd` 的項目，已由 `_write_confd_files` 寫入；None 時
+        confd: `_phase2_confd` 的項目，已由 `_lib_confedit.write_all_or_exit` 寫入；None 時
             在寫任何檔之前自行產生並一批寫入（ADR-036 §2）。
     """
     candidates, recording_rules, summary = phase2_results
     if confd is None:
         confd = _confd_or_die(output_dir, lambda: _phase2_confd(phase2_results))
         ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-        _write_confd_files(output_dir, confd)
+        _lib_confedit.write_all_or_exit(output_dir, confd, tool="onboard_platform")
 
     p2 = Path(output_dir) / _PHASE2_DIR
     ensure_dir_or_die(p2, flag=_OUTPUT_FLAG)
@@ -1368,7 +1336,7 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
         _phase2_confd(phase2_results) if phase2_results else []))
 
     ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-    _write_confd_files(output_dir, confd1 + confd2)
+    _lib_confedit.write_all_or_exit(output_dir, confd1 + confd2, tool="onboard_platform")
 
     if phase1_results:
         _write_phase1_outputs(output_dir, phase1_results, report, confd=confd1)
