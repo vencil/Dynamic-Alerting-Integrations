@@ -8,10 +8,13 @@ package confedit
 //
 //	{"str": "80"}  {"int": "80"}  {"float": "0.5"}  {"bool": true}  {"null": null}
 //	{"map": [["key", <value>], ["key", <value>, {"head": <text>, "line": <text>}], ...]}
-//	{"seq": [<value>, ...]}
+//	{"seq": [<value>, [<value>, {"head": <text>, "line": <text>}], ...]}
 //
 // A map entry's optional third element is its comments (CommentText):
-// layout, not content.
+// layout, not content. A sequence item with comments is the pair [<value>,
+// {comments}] — the map entry's [key, value, {comments}] without the key. A
+// value is always a JSON object, so an item that is a JSON array can only be
+// this pair: no value is read two ways.
 //
 // A value has two readings, which the writer compares: the yaml.v3 node it
 // writes (Node), and what parse-tree reads that node as (Content) — the
@@ -61,7 +64,17 @@ type Value struct {
 	Text    string // str, int, float
 	Bool    bool   // bool
 	Entries []Entry
-	Items   []Value
+	Items   []Item
+}
+
+// Item is one item of a sequence Value, in the order written. Head and Line
+// are its comments (CommentText's form, "" for none): Head the lines above
+// its `- `, Line the one after it on that line. As an Entry's, layout, not
+// content.
+type Item struct {
+	Value Value
+	Head  string
+	Line  string
 }
 
 // Entry is one key of a mapping Value, in the order written. Head and Line
@@ -105,9 +118,10 @@ func CommentText(text string, multiline bool) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// decodeComments reads a map entry's third element: an object with "head"
-// and/or "line", each a JSON string, nothing else.
-func decodeComments(raw json.RawMessage, e *Entry) error {
+// decodeComments reads a map entry's third element, or a sequence item's
+// second: an object with "head" and/or "line", each a JSON string, nothing
+// else.
+func decodeComments(raw json.RawMessage, head, line *string) error {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 		return errors.New(`the comments are an object {"head": <text>, "line": <text>}`)
@@ -120,9 +134,9 @@ func decodeComments(raw json.RawMessage, e *Entry) error {
 		var err error
 		switch k {
 		case "head":
-			e.Head, err = CommentText(s, true)
+			*head, err = CommentText(s, true)
 		case "line":
-			e.Line, err = CommentText(s, false)
+			*line, err = CommentText(s, false)
 		default:
 			return fmt.Errorf(`unknown comment member %q ("head", "line")`, k)
 		}
@@ -193,7 +207,7 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 					return fmt.Errorf("map entry %d (%q): %w", i, e.Key, err)
 				}
 				if len(kv) == 3 {
-					if err := decodeComments(kv[2], &e); err != nil {
+					if err := decodeComments(kv[2], &e.Head, &e.Line); err != nil {
 						return fmt.Errorf("map entry %d (%q): %w", i, e.Key, err)
 					}
 					// An empty mapping or sequence is written in flow style
@@ -213,9 +227,31 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 				return errors.New(`a "seq" value is a list of values`)
 			}
 			for i, it := range items {
-				var item Value
-				if err := json.Unmarshal(it, &item); err != nil {
+				var item Item
+				var pair []json.RawMessage
+				if bytes.HasPrefix(bytes.TrimSpace(it), []byte("[")) {
+					// [<value>, {comments}]: a value is an object, never an array.
+					if err := json.Unmarshal(it, &pair); err != nil || len(pair) != 2 {
+						return fmt.Errorf("seq item %d: a value, or a [value, {comments}] pair", i)
+					}
+					it = pair[0]
+				}
+				if err := json.Unmarshal(it, &item.Value); err != nil {
 					return fmt.Errorf("seq item %d: %w", i, err)
+				}
+				if pair != nil {
+					if err := decodeComments(pair[1], &item.Head, &item.Line); err != nil {
+						return fmt.Errorf("seq item %d: %w", i, err)
+					}
+					// yaml.v3 writes an item's line comment after `- <value>`
+					// only when that value is one line: after a block mapping
+					// or sequence it lands on the next item, or is dropped
+					// (TestItemLineCommentAfterABlockIsMisplaced).
+					if item.Line != "" && ((item.Value.Type == TypeMap && len(item.Value.Entries) > 0) ||
+						(item.Value.Type == TypeSeq && len(item.Value.Items) > 0)) {
+						return fmt.Errorf("seq item %d: a line comment cannot follow a non-empty mapping or "+
+							"sequence item (it would be written on another line); give it a head comment instead", i)
+					}
 				}
 				v.Items = append(v.Items, item)
 			}
@@ -274,7 +310,11 @@ func (v Value) Node(blocks bool) *yaml.Node {
 	case TypeSeq:
 		s := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
 		for _, it := range v.Items {
-			s.Content = append(s.Content, it.Node(blocks))
+			n := it.Value.Node(blocks)
+			// On the item node: yaml.v3 writes its head comment above `- `
+			// and its line comment after a one-line value.
+			n.HeadComment, n.LineComment = it.Head, it.Line
+			s.Content = append(s.Content, n)
 		}
 		return s
 	}
@@ -309,7 +349,7 @@ func (v Value) Content() any {
 	case TypeSeq:
 		s := make([]any, 0, len(v.Items))
 		for _, it := range v.Items {
-			s = append(s, it.Content())
+			s = append(s, it.Value.Content())
 		}
 		return s
 	}

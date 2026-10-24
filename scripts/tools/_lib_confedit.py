@@ -6,7 +6,8 @@ ADR-036 §2: only Go writes conf.d. A Python tool that changes conf.d
 `ensure-map` operations on key paths, each value with its type, applied on
 yaml.v3's node tree; ADR-036 §4: no node outside the edit changes), a
 CREATE of a new file from a typed value (its comments are layout:
-`comments()`, `head_comment`), or a MOVE of an existing file, byte for
+`comments()` on a map entry or a sequence item, `head_comment`,
+`foot_comment`), or a MOVE of an existing file, byte for
 byte. Every file is read back by `parse-tree` in the tree with every file
 of the call in place, and written atomically, or nothing is. The contract
 is `da-guard write`'s row in docs/cli-reference.md; this module only sends
@@ -218,11 +219,30 @@ def map_value(entries: "Iterable[tuple]") -> dict:
     return {"map": out}
 
 
+def seq_value(items: "Iterable") -> dict:
+    """A sequence value, its items in the order given. An item is a value,
+    or `(value, comments)` with *comments* from `comments()` (or None: none)
+    — sent as da-guard's `[value, {comments}]` pair."""
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(item)
+            continue
+        v, *rest = item
+        if len(rest) != 1:
+            raise ValueError(f"a seq item is a value or (value, comments), not {item!r}")
+        out.append([v, rest[0]] if rest[0] else v)
+    return {"seq": out}
+
+
 def comments(head: Optional[str] = None, line: Optional[str] = None) -> dict:
-    """A map entry's comments (`map_value`'s third element): *head* above
-    the key (several lines), *line* after `key:` (one line). Layout, not
-    content: da-guard writes each line `# <line>` and never reads it back. A
-    carriage return or another control character is da-guard's bad_input."""
+    """A map entry's comments (`map_value`'s third element) or a sequence
+    item's (`seq_value`'s `(value, comments)`): *head* above the key / the
+    item's `- ` (several lines), *line* after `key:` / the item (one line).
+    Layout, not content: da-guard writes each line `# <line>` and never reads
+    it back. A carriage return or another control character is da-guard's
+    bad_input, and so is a line comment after an item that is a non-empty
+    mapping or sequence (yaml.v3 would write it on another line)."""
     out = {}
     if head is not None:
         out["head"] = str(head)
@@ -238,12 +258,16 @@ def edit_entry(rel: str, ops: "Sequence[dict]") -> dict:
     return {"path": rel, "ops": list(ops)}
 
 
-def create_entry(rel: str, content: dict, head_comment: Optional[str] = None) -> dict:
+def create_entry(rel: str, content: dict, head_comment: Optional[str] = None,
+                 foot_comment: Optional[str] = None) -> dict:
     """A NEW file at *rel* whose top level is *content* (a `map_value`),
-    *head_comment* (several lines, a comment) above it."""
+    *head_comment* (several lines, a comment) above it and *foot_comment*
+    (the same) after its last node, each set off by a blank line."""
     entry = {"path": rel, "create": content}
     if head_comment is not None:
         entry["head_comment"] = str(head_comment)
+    if foot_comment is not None:
+        entry["foot_comment"] = str(foot_comment)
     return entry
 
 
@@ -460,12 +484,14 @@ def edit(root: "Path | str", rel: str, ops: "Sequence[dict]", *, dry_run: bool =
 
 
 def emit(root: "Path | str", rel: str, content: dict, *, head_comment: Optional[str] = None,
-         dry_run: bool = False, binary: Optional[str] = None,
-         timeout: Optional[float] = None) -> dict:
+         foot_comment: Optional[str] = None, dry_run: bool = False,
+         binary: Optional[str] = None, timeout: Optional[float] = None) -> dict:
     """`da-guard write` creating a NEW file at *rel* whose top level is
-    *content* (a `map_value`), *head_comment* above it; answers and raises as
-    `edit` (PartialWrite when the file may be left in place)."""
-    return _one(COMMAND, root, create_entry(rel, content, head_comment), dry_run, binary, timeout)
+    *content* (a `map_value`), *head_comment* above it, *foot_comment* after
+    it; answers and raises as `edit` (PartialWrite when the file may be left
+    in place)."""
+    return _one(COMMAND, root, create_entry(rel, content, head_comment, foot_comment),
+                dry_run, binary, timeout)
 
 
 def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
