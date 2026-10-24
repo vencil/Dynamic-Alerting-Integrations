@@ -7,10 +7,12 @@ package main
 // (pkg/confedit), judges the tree as it would be with every file of the call
 // written, and writes the files itself, or writes nothing.
 //
-// Each file of a call is one of three kinds (writeKind*): edit an existing
+// Each file of a call is one of five kinds (writeKind*): edit an existing
 // file with ops; create a new one from a value (comments in it are layout:
-// confedit.Entry, confedit.Item, head_comment, foot_comment); move an existing file, byte for byte, to a
-// new path (the source is gone after).
+// confedit.Entry, confedit.Item, head_comment, foot_comment); replace a file
+// whole with a value (a create that may overwrite: nothing of the old file is
+// kept, nor read as a base); move an existing file, byte for byte, to a new
+// path (the source is gone after); delete an existing file.
 //
 // ⛔ ONE CALL IS A BATCH (#3206 step 10c): the input names every file
 // (`{"files": [...]}`, one file is a batch of one), and the whole batch is
@@ -43,9 +45,15 @@ package main
 //   - the call does not worsen the tree outside its files' own entries
 //     (write_worsen.go: readers lost, a new verdict or problem anywhere, a
 //     new error of da-guard's own validation) — reason worsens_tree;
-//   - before anything is put in place: every edited file and every move's
-//     source still holds the bytes it was read from; no create's or move's
-//     target exists. This is a comparison, not a lock (write_commit.go).
+//   - before anything is put in place: every edited, replaced or deleted
+//     file and every move's source still holds the bytes it was read from;
+//     no create's or move's target (nor a missing replace target) exists.
+//     This is a comparison, not a lock (write_commit.go).
+//
+// A replace is judged as an edit whose original's text does not matter
+// (prepareReplace: a regular file a reader reads, or no file — then a
+// create); a delete's path as a move's source, the tree without it as a
+// move's (prepareDelete; no file there: unchanged).
 //
 // Each refusal is exit 1 and names its file and reason (writeReason*); with
 // --json the one stdout document lists every file.
@@ -79,6 +87,14 @@ const (
 	writeKindEdit   = "edit"   // {"path", "ops"}
 	writeKindCreate = "create" // {"path", "create", "head_comment"?, "foot_comment"?}
 	writeKindMove   = "move"   // {"path", "from"}
+	// writeKindReplace: {"path", "create", "replace": true, "head_comment"?,
+	// "foot_comment"?} — the file's whole text is the value (and the
+	// comments); the target may exist (a regular file, no symlink: its old
+	// nodes and comments are not kept) or not (then it is a create).
+	writeKindReplace = "replace"
+	// writeKindDelete: {"path", "delete": true} — the file is removed; a
+	// path with no file is unchanged.
+	writeKindDelete = "delete"
 )
 
 // The closed set of writeResult.Status values (the call) and
@@ -86,7 +102,7 @@ const (
 // are a file's only.
 const (
 	writeStatusWritten     = "written"
-	writeStatusUnchanged   = "unchanged" // edit: the text to write is the file's own; nothing written
+	writeStatusUnchanged   = "unchanged" // edit, replace: the text is the file's own; delete: no file; nothing written
 	writeStatusDryRun      = "dry_run"
 	writeStatusRefused     = "refused"      // exit 1
 	writeStatusCallerError = "caller_error" // exit 2
@@ -105,8 +121,8 @@ const (
 	// entry has no readers, or the path is no config file: a directory, a
 	// FIFO, a symlink to a directory) — "entry" is parse-tree's.
 	writeReasonNotRead = "not_read"
-	// writeReasonSymlink (edit): the path is a symlink; writing would
-	// replace the link with a file.
+	// writeReasonSymlink (edit, replace, delete, a move's source): the path
+	// is a symlink; writing would replace (or remove) the link, not the file.
 	writeReasonSymlink = "symlink"
 	// writeReasonOriginalUnreadable (edit): parse-tree cannot read the file
 	// as it is ("problem" says why), or it cannot be read at all.
@@ -123,8 +139,9 @@ const (
 	// verdict ("entry", "problem"), or a value ("difference": path, want,
 	// got).
 	writeReasonReadBackMismatch = "read_back_mismatch"
-	// writeReasonChangedDuringWrite: edit — the file no longer holds the
-	// bytes it was read from; emit — the path was created meanwhile.
+	// writeReasonChangedDuringWrite: edit, replace, delete — the file no
+	// longer holds the bytes it was read from; create (and a replace of a
+	// missing path), move — the path was created meanwhile.
 	writeReasonChangedDuringWrite = "changed_during_write"
 )
 
@@ -181,7 +198,7 @@ type writeFileResult struct {
 	// Problem: the entry's problem, or the read failure of the original.
 	Problem    *parseTreeProblem `json:"problem"`
 	Difference *writeDifference  `json:"difference"`
-	// Content: dry_run — the text that would be written.
+	// Content: dry_run — the text that would be written (null for a delete).
 	Content *string `json:"content"`
 	// Warnings: what the write did not carry over but did not refuse for
 	// (e.g. the original's owner could not be set); [] when none.
@@ -229,6 +246,8 @@ type fileInput struct {
 	HeadComment *string         `json:"head_comment"`
 	FootComment *string         `json:"foot_comment"`
 	From        *string         `json:"from"`
+	Replace     *bool           `json:"replace"`
+	Delete      *bool           `json:"delete"`
 }
 
 type writeInput struct {
@@ -240,27 +259,56 @@ type writeFile struct {
 	kind     string
 	rel, abs string
 	ops      []editOp        // edit
-	content  *confedit.Value // create
-	head     string          // create: the file's head comment (CommentText), "" for none
-	foot     string          // create: the file's foot comment (CommentText), "" for none
+	content  *confedit.Value // create, replace
+	head     string          // create, replace: the file's head comment (CommentText), "" for none
+	foot     string          // create, replace: the file's foot comment (CommentText), "" for none
 	from     string          // move: the source, root-relative
 	fromAbs  string          // move: the source's path
 	res      *writeFileResult
 	// pending: no refusal or caller error so far.
 	pending bool
-	// unchanged (edit): the text in place after the call is the file's own.
+	// unchanged (edit, replace): the text in place after the call is the
+	// file's own; (delete) no file is at the path.
 	unchanged bool
-	out       []byte            // the text to write
-	want      parsetree.Content // what parse-tree must read in it
-	original  []byte            // edit: the bytes read; move: the source's
-	perm      os.FileMode
-	ofi       os.FileInfo // edit: the original's, for its owner
-	tmp       string      // the temporary file, once made (edit, create)
+	// replaces (replace): the target exists — it is put in place as an edit
+	// is (a rename over it); a replace of a missing path as a create.
+	replaces bool
+	out      []byte            // the text to write
+	want     parsetree.Content // what parse-tree must read in it
+	original []byte            // edit, replace of a file, delete: the bytes read; move: the source's
+	perm     os.FileMode
+	ofi      os.FileInfo // edit, replace of a file: the original's, for its owner
+	tmp      string      // the temporary file, once made (edit, create, replace)
 	// placed (create, move): the file this call put at abs (its inode): a
-	// roll-back undoes abs only while it is still this file.
+	// roll-back undoes abs only while it is still this file. (delete) the
+	// file taken from abs, which a roll-back links back.
 	placed os.FileInfo
-	// sourceGone (move): the source name was removed after the link.
+	// sourceGone (move): the source name was removed after the link;
+	// (delete) the path's name was removed.
 	sourceGone bool
+	// backup (delete): a hidden link to the file in its own directory (no
+	// walk reads a hidden name), made before the path's name is removed:
+	// what a roll-back links back at the path. Removed when the call is done
+	// or the file is back; keepBackup — a roll-back that could not put the
+	// file back leaves it, the file's only name.
+	backup     string
+	keepBackup bool
+}
+
+// group is the kind f is put in place as (write_commit.go): a replace of an
+// existing file as an edit (a rename over it), of a missing path as a
+// create; a delete with the moves (it can be undone).
+func (f *writeFile) group() string {
+	switch f.kind {
+	case writeKindReplace:
+		if f.replaces {
+			return writeKindEdit
+		}
+		return writeKindCreate
+	case writeKindDelete:
+		return writeKindMove
+	}
+	return f.kind
 }
 
 func parseWriteFlags(cmd string, args []string, errOut io.Writer) (*writeFlags, error) {
@@ -293,6 +341,14 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"      is gone after. The source is judged as an edit's original: a file the walk reads, with\n"+
 		"      readers, no symlink on the way, that parse-tree reads (else not_read / symlink /\n"+
 		"      original_unreadable; missing: source_missing)\n"+
+		"  {\"path\": <rel>, \"create\": <value>, \"replace\": true, \"head_comment\": <text>, \"foot_comment\": <text>}\n"+
+		"      the file's whole text is the value and its comments, as a create's; the path may hold\n"+
+		"      a file (a regular one, no symlink, a path a reader reads: else not_read / symlink),\n"+
+		"      nothing of which is kept — not even a text parse-tree cannot read, which this repairs;\n"+
+		"      its mode, owner and group are kept, its line ending and BOM are not (LF, no BOM). A\n"+
+		"      text equal to the file's bytes is unchanged. No file there: a create\n"+
+		"  {\"path\": <rel>, \"delete\": true}   remove the file, judged as a move's source; no file\n"+
+		"      there: unchanged\n"+
 		"<rel> is relative to --config-dir. A create's or a move's target must not exist: an existing\n"+
 		"regular file is a caller error (path_exists, exit 2); an existing path that is no regular\n"+
 		"file (a FIFO, a device, a directory, a symlink to one) is refused not_read (exit 1). Missing\n"+
@@ -342,15 +398,16 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"when the tree after it has what the tree before it has not — a path outside the batch\n"+
 		"losing readers, a verdict or problem on any entry, an error of da-guard's own validation\n"+
 		"(a tenant declared twice, ...). An edited file is written in its own directory and renamed\n"+
-		"into place; a created one is linked into place; a move links the source at its target and\n"+
-		"removes the source name.\n\n")
+		"into place (a replace of a file too); a created one is linked into place; a move links the\n"+
+		"source at its target and removes the source name; a delete links the file at a hidden name\n"+
+		"beside it, removes the path's name, and removes the hidden link once the call is done.\n\n")
 	fs.PrintDefaults()
 	fmt.Fprintf(errOut, "\n--json document: {\"schema\": %q, \"da_guard_version\", \"command\",\n"+
 		"  \"status\": written|unchanged|dry_run|refused|caller_error, \"reason\", \"message\",\n"+
-		"  \"files\": [{\"path\", \"kind\": edit|create|move, \"from\", \"status\": written|unchanged|\n"+
+		"  \"files\": [{\"path\", \"kind\": edit|create|replace|move|delete, \"from\", \"status\": written|unchanged|\n"+
 		"  dry_run|refused|caller_error|not_written|maybe_written, \"reason\", \"message\", \"entry\" (a\n"+
 		"  parse-tree entry), \"problem\": {\"kind\", \"message\"}, \"difference\": {\"path\", \"want\", \"got\"},\n"+
-		"  \"content\" (dry_run), \"warnings\": [<text>]}],\n"+
+		"  \"content\" (dry_run; null for a delete), \"warnings\": [<text>]}],\n"+
 		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding, \"path\",\n"+
 		"  \"tenant\", \"finding\", \"message\"}]}; null where it has no value (warnings, worsened: []). The call's\n"+
 		"reason: bad_flags, bad_input, bad_path, write_failed, partial_write, worsens_tree, or null\n"+
@@ -361,11 +418,13 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"carry no verdict.\n"+
 		"A file's refusal reasons: not_read, symlink, original_unreadable, edit_not_applicable,\n"+
 		"not_round_trippable, read_back_mismatch, changed_during_write.\n\n"+
-		"A write that fails after files were put in place: the files it created are removed again and\n"+
-		"its moves undone (each not_written, or maybe_written when it cannot); an edit's rename cannot\n"+
-		"be undone, so the files renamed by then are written (reason partial_write).\n\n"+
+		"A write that fails after files were put in place: the files it created are removed again, its\n"+
+		"moves undone and its deletes linked back (each not_written, or maybe_written when it cannot;\n"+
+		"a delete not put back keeps its file at the hidden name); an edit's or a replace's rename\n"+
+		"cannot be undone, so the files renamed by then are written (reason partial_write).\n\n"+
 		"Exit codes:\n"+
-		"  0  every file written or unchanged (edit: the text is the file's own), or a dry run\n"+
+		"  0  every file written or unchanged (edit, replace: the text is the file's own; delete: no\n"+
+		"     file there), or a dry run\n"+
 		"  1  refused: nothing written; every refused file is named\n"+
 		"  2  caller error: bad flags, input that is not the JSON above, a path given twice, absolute\n"+
 		"     or outside --config-dir, --config-dir not a directory, edit of a missing file or a move\n"+
@@ -560,6 +619,10 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 			w.prepareEdit(scan, wf)
 		case writeKindCreate:
 			w.prepareCreate(scan, wf)
+		case writeKindReplace:
+			w.prepareReplace(scan, wf)
+		case writeKindDelete:
+			w.prepareDelete(scan, wf)
 		case writeKindMove:
 			wf.fromAbs = filepath.Join(scan.AbsRoot, filepath.FromSlash(wf.from))
 			w.prepareMove(scan, wf)
@@ -629,13 +692,20 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		seen[rel] = i
 		wf := &writeFile{rel: rel}
 		n := 0
-		for _, given := range []bool{fi.Ops != nil, fi.Create != nil, fi.From != nil} {
+		for _, given := range []bool{fi.Ops != nil, fi.Create != nil, fi.From != nil, fi.Delete != nil} {
 			if given {
 				n++
 			}
 		}
 		if n != 1 {
-			return bad("files[%d]: exactly one of \"ops\" (edit), \"create\" (a new file) and \"from\" (a move)", i)
+			return bad("files[%d]: exactly one of \"ops\" (edit), \"create\" (a new file, or with \"replace\" a whole one), "+
+				"\"from\" (a move) and \"delete\"", i)
+		}
+		if fi.Replace != nil && (fi.Create == nil || !*fi.Replace) {
+			return bad("files[%d]: \"replace\" is true, and goes with \"create\" only", i)
+		}
+		if fi.Delete != nil && !*fi.Delete {
+			return bad("files[%d]: \"delete\" is true when given", i)
 		}
 		if fi.HeadComment != nil && fi.Create == nil {
 			return bad("files[%d]: \"head_comment\" goes with \"create\" only", i)
@@ -654,6 +724,9 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 				return bad("files[%d]: \"create\" is a \"map\" value (the file's top level)", i)
 			}
 			wf.kind, wf.content = writeKindCreate, fi.Create
+			if fi.Replace != nil {
+				wf.kind = writeKindReplace
+			}
 			if fi.HeadComment != nil {
 				head, err := confedit.CommentText(*fi.HeadComment, true)
 				if err != nil {
@@ -668,6 +741,8 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 				}
 				wf.foot = foot
 			}
+		case fi.Delete != nil:
+			wf.kind = writeKindDelete
 		default:
 			from, err := cleanRelPath(*fi.From)
 			if err != nil {
@@ -806,11 +881,16 @@ type existing struct {
 // not_read), and be read by parse-tree without a problem. A verdict on it is
 // no refusal (repair is allowed). ok false: f's refusal or caller error is
 // recorded. what names rel in messages ("the path", "the source …").
-func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, missing, what string) (existing, bool) {
+//
+// anyText (replace): a file parse-tree cannot read is no refusal — its text
+// is not kept nor read as a base, so replacing it repairs it; it must still
+// be a regular file a reader reads, and one this process can read (the
+// bytes are compared once more right before the rename).
+func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, missing, what string, anyText bool) (existing, bool) {
 	fi, err := os.Lstat(abs)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if f.kind == writeKindMove {
+		if f.kind != writeKindEdit {
 			w.fileCallerError(f, missing, "%s does not exist", what)
 		} else {
 			w.fileCallerError(f, missing, "%q does not exist; an edit rewrites an existing file (a new one is a create's)", rel)
@@ -858,7 +938,7 @@ func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, mis
 		w.refuse(f, writeReasonOriginalUnreadable, what+" cannot be read: "+rerr.Error())
 		return existing{}, false
 	}
-	if e.Problem != nil {
+	if e.Problem != nil && !anyText {
 		f.res.Entry, f.res.Problem = &e, e.Problem
 		w.refuse(f, writeReasonOriginalUnreadable,
 			fmt.Sprintf("parse-tree cannot read %s as it is (%s: %s)", what, e.Problem.Kind, e.Problem.Message))
@@ -874,7 +954,7 @@ func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, mis
 // and the §4 invariant — and leaves the text to write and what it must read
 // as (f.out, f.want) for the batch's judgement; or records why not.
 func (w *writer) prepareEdit(scan *config.TreeScan, f *writeFile) {
-	orig, ok := w.readOriginal(scan, f, f.rel, f.abs, "path_missing", "the path")
+	orig, ok := w.readOriginal(scan, f, f.rel, f.abs, "path_missing", "the path", false)
 	if !ok {
 		return
 	}
@@ -1018,6 +1098,15 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 	if !w.prepareTarget(scan, f) {
 		return
 	}
+	if w.encodeValue(f) {
+		f.perm = 0o644
+	}
+}
+
+// encodeValue leaves a create's or a replace's text (the value, its
+// comments, the head and foot comments) and content in f.out, f.want; or
+// refuses f (ok false).
+func (w *writer) encodeValue(f *writeFile) bool {
 	doc := confedit.NewDoc(f.content.Node(false)).Node()
 	// On the document node: yaml.v3 writes its head comment first, then a
 	// blank line, and its foot comment after a blank line below the last
@@ -1027,10 +1116,65 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 	out, err := confedit.Encode(doc)
 	if err != nil {
 		w.refuse(f, writeReasonEditNotApplicable, "encode: "+err.Error())
-		return
+		return false
 	}
 	want, _ := f.content.Content().(map[string]any)
-	f.out, f.want, f.perm = out, parsetree.Content(want), 0o644
+	f.out, f.want = out, parsetree.Content(want)
+	return true
+}
+
+// prepareReplace judges one replace alone. A missing target is a create's
+// (prepareTarget, mode 0644, put in place as a create). An existing one is
+// judged as an edit's original (readOriginal: a regular file, no symlink, a
+// path a reader reads) except that parse-tree need not read it — its text is
+// neither kept nor read as a base, so a file the exporter cannot read is
+// repaired by its replacement. The text written is exactly the value and
+// its comments: LF line endings and no BOM whatever the old file had (the
+// whole text is new; nothing of the old file is framing to keep); the mode,
+// owner and group are the old file's, as an edit's. A text equal to the old
+// bytes is unchanged — and, as an edit's, still judged where it stays.
+func (w *writer) prepareReplace(scan *config.TreeScan, f *writeFile) {
+	switch _, err := os.Lstat(f.abs); {
+	case errors.Is(err, fs.ErrNotExist):
+		w.prepareCreate(scan, f)
+		return
+	case err != nil:
+		w.fileCallerError(f, writeReasonBadPath, "%q: %v", f.rel, err)
+		return
+	}
+	orig, ok := w.readOriginal(scan, f, f.rel, f.abs, "path_missing", "the path", true)
+	if !ok {
+		return
+	}
+	if !w.encodeValue(f) {
+		return
+	}
+	f.replaces = true
+	f.original, f.ofi, f.perm = orig.data, orig.ofi, orig.fi.Mode().Perm()
+	if bytes.Equal(f.out, orig.data) {
+		f.unchanged, f.out = true, orig.data
+	}
+}
+
+// prepareDelete judges one delete alone: a path with no file is unchanged
+// (nothing to remove — a delete is idempotent); an existing one is judged as
+// a move's source (readOriginal: a regular file, no symlink, a path a reader
+// reads, one parse-tree reads). What its removal does to the rest of the
+// tree is the batch's judgement (judgeTree, worsening).
+func (w *writer) prepareDelete(scan *config.TreeScan, f *writeFile) {
+	switch _, err := os.Lstat(f.abs); {
+	case errors.Is(err, fs.ErrNotExist):
+		f.unchanged = true
+		return
+	case err != nil:
+		w.fileCallerError(f, writeReasonBadPath, "%q: %v", f.rel, err)
+		return
+	}
+	orig, ok := w.readOriginal(scan, f, f.rel, f.abs, "path_missing", "the path", false)
+	if !ok {
+		return
+	}
+	f.original, f.perm = orig.data, orig.fi.Mode().Perm()
 }
 
 // prepareMove judges one move alone — its source exactly as an edit's
@@ -1042,7 +1186,7 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 // symlinked or hidden directory, outside the tree through a link) is
 // refused, so the batch's tree always takes it out (judgeTree).
 func (w *writer) prepareMove(scan *config.TreeScan, f *writeFile) {
-	src, ok := w.readOriginal(scan, f, f.from, f.fromAbs, "source_missing", fmt.Sprintf("the source %q", f.from))
+	src, ok := w.readOriginal(scan, f, f.from, f.fromAbs, "source_missing", fmt.Sprintf("the source %q", f.from), false)
 	if !ok {
 		return
 	}
@@ -1064,6 +1208,12 @@ func (w *writer) prepareMove(scan *config.TreeScan, f *writeFile) {
 func (w *writer) judgeTree(disk *config.TreeScan, files []*writeFile) (*config.TreeScan, *parseTreeDoc, []config.FileOverlay, int, bool) {
 	var overlays []config.FileOverlay
 	for _, f := range files {
+		if f.pending && !f.unchanged && f.kind == writeKindDelete {
+			// Gone after the call: a file of the walk (prepareDelete judged it
+			// as a move's source), so the walk takes it out.
+			overlays = append(overlays, config.FileOverlay{Rel: f.rel, Remove: true})
+			continue
+		}
 		if f.pending && !f.unchanged {
 			overlays = append(overlays, config.FileOverlay{Rel: f.rel, Data: f.out})
 			// A move's source is gone after the call. It is a file of the
@@ -1116,7 +1266,9 @@ func (w *writer) judgeTree(disk *config.TreeScan, files []*writeFile) (*config.T
 		entries[doc.Entries[i].Path] = &doc.Entries[i]
 	}
 	for _, f := range files {
-		if !f.pending {
+		if !f.pending || f.kind == writeKindDelete {
+			// A delete leaves no file to hold to an entry: what its removal
+			// does elsewhere is worsening's.
 			continue
 		}
 		e := entries[f.rel]
@@ -1226,8 +1378,18 @@ func (w *writer) dryRun(files []*writeFile) int {
 			fmt.Fprintf(w.errOut, "%s %s: %s: unchanged\n", programName, w.cmd, f.rel)
 			continue
 		}
-		f.res.Status, f.res.Content = writeStatusDryRun, strp(string(f.out))
 		w.res.Status = writeStatusDryRun
+		if f.kind == writeKindDelete {
+			// Nothing would be written: the file would be removed.
+			f.res.Status = writeStatusDryRun
+			if !w.jsonOut {
+				if _, err := fmt.Fprintf(w.stdout, "==> %s <== (deleted)\n", f.rel); err != nil {
+					return w.callerError(writeReasonWriteFailed, "stdout: %v", err)
+				}
+			}
+			continue
+		}
+		f.res.Status, f.res.Content = writeStatusDryRun, strp(string(f.out))
 		if !w.jsonOut {
 			if _, err := fmt.Fprintf(w.stdout, "==> %s <==\n%s", f.rel, f.out); err != nil {
 				return w.callerError(writeReasonWriteFailed, "stdout: %v", err)

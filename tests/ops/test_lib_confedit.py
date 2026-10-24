@@ -1,4 +1,4 @@
-"""_lib_confedit：Python 工具改 conf.d（改寫、新建、搬移）時把意圖交給 `da-guard write`（ADR-036 §2，#3206）。
+"""_lib_confedit：Python 工具改 conf.d（改寫、新建、整份取代、搬移、刪除）時把意圖交給 `da-guard write`（ADR-036 §2，#3206）。
 
 這裡釘的是本模組自己的契約：值的型別規則（讀到的保留型別、使用者打的只有標準
 十進位才是數字）、`da-guard.write/v3` 的回答（寫入／拒絕／呼叫錯誤／寫到一半）
@@ -485,3 +485,65 @@ def test_a_bad_foot_or_seq_item_comment_writes_nothing(tmp_path):
     assert list(root.iterdir()) == []
     with pytest.raises(ValueError):
         ce.seq_value([({"str": "a"},)])
+
+
+# ── write: replace and delete ───────────────────────────────────────
+
+def test_replace_and_delete_entries_are_the_contracts_shape():
+    content = ce.map_value([])
+    assert ce.create_entry("a.yaml", content) == {"path": "a.yaml", "create": content}
+    assert ce.create_entry("a.yaml", content, head_comment="h", replace=True) == {
+        "path": "a.yaml", "create": content, "replace": True, "head_comment": "h"}
+    assert ce.delete_entry("a.yaml") == {"path": "a.yaml", "delete": True}
+
+
+def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
+    # The replaced file's old text (a CRLF one that parse-tree cannot read)
+    # is not kept: the new one is exactly the value, LF.
+    root = _tree(tmp_path / "conf.d", {"r.yaml": "# old\r\ntenants: [\r\n",
+                                       "d.yaml": "tenants:\n  t-d: {}\n",
+                                       "x.yaml": "tenants:\n  t-x: {}\n"})
+    content = ce.map_value([("tenants", ce.map_value([("t-r", ce.map_value([]))]))])
+    entries = [ce.create_entry("r.yaml", content, replace=True), ce.delete_entry("d.yaml"),
+               ce.delete_entry("gone.yaml")]
+    dry = ce.write_all(root, entries, dry_run=True)
+    assert [(d["kind"], d["status"], d["content"]) for d in dry] == [
+        ("replace", ce.DRY_RUN, "tenants:\n  t-r: {}\n"), ("delete", ce.DRY_RUN, None),
+        ("delete", ce.UNCHANGED, None)]
+    assert (root / "d.yaml").exists()
+    docs = ce.write_all(root, entries)
+    assert [(d["kind"], d["status"]) for d in docs] == [
+        ("replace", ce.WRITTEN), ("delete", ce.WRITTEN), ("delete", ce.UNCHANGED)]
+    assert (root / "r.yaml").read_bytes() == b"tenants:\n  t-r: {}\n"
+    assert sorted(p.name for p in root.iterdir()) == ["r.yaml", "x.yaml"]  # no hidden link left
+    assert ce.write_all(root, entries[:1])[0]["status"] == ce.UNCHANGED
+
+
+def test_deleting_the_selected_carrier_is_tree_worsened(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"_defaults.yaml": "defaults:\n  cpu: 5\n",
+                                       "_defaults.yml": "defaults:\n  - 1\n",
+                                       "t.yaml": "tenants:\n  t-a: {}\n"})
+    before = _bytes(root)
+    with pytest.raises(ce.TreeWorsened):
+        ce.write_all(root, [ce.delete_entry("_defaults.yaml")])
+    assert _bytes(root) == before
+
+
+def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
+    # da-guard's answer when an edit's rename fails after a replace was
+    # renamed and a delete could not be linked back (cmd/da-guard tests make
+    # it happen; here the library reads it).
+    root = _tree(tmp_path / "conf.d", {"r.yaml": "tenants: {}\n", "d.yaml": "tenants: {}\n",
+                                       "b.yaml": "tenants: {}\n"})
+    answer = _answer("caller_error", "partial_write", [
+        ("r.yaml", "written", None, None),
+        ("d.yaml", "maybe_written", None, "deleted, and not put back"),
+        ("b.yaml", "caller_error", "write_failed", "disk full")])
+    for f, kind in zip(answer["files"], ["replace", "delete", "edit"]):
+        f["kind"] = kind
+    monkeypatch.setattr(_lib_parse_tree, "_run", lambda *a, **kw: answer)
+    with pytest.raises(ce.PartialWrite) as exc:
+        ce.write_all(root, [ce.create_entry("r.yaml", ce.map_value([]), replace=True),
+                            ce.delete_entry("d.yaml"), ce.edit_entry("b.yaml", [])])
+    assert (exc.value.written, exc.value.maybe_written, exc.value.failed) == (
+        ["r.yaml"], ["d.yaml"], "b.yaml")

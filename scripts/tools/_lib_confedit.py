@@ -7,8 +7,10 @@ ADR-036 §2: only Go writes conf.d. A Python tool that changes conf.d
 yaml.v3's node tree; ADR-036 §4: no node outside the edit changes), a
 CREATE of a new file from a typed value (its comments are layout:
 `comments()` on a map entry or a sequence item, `head_comment`,
-`foot_comment`), or a MOVE of an existing file, byte for
-byte. Every file is read back by `parse-tree` in the tree with every file
+`foot_comment`), a REPLACE of a file's whole text with a typed value (a
+create that may overwrite: nothing of the old file is kept), a MOVE of an
+existing file, byte for byte, or a DELETE of an existing file (none there:
+`unchanged`). Every file is read back by `parse-tree` in the tree with every file
 of the call in place, and written atomically, or nothing is. The contract
 is `da-guard write`'s row in docs/cli-reference.md; this module only sends
 the files and reads the answer (`da-guard.write/v3`).
@@ -71,8 +73,9 @@ be older (a newer da-guard) may have written: on a real write that is
 `PartialWrite`, every file of the batch maybe written. ⚠️ The write itself can still stop
 part-way — a write error (a full disk, a permission changed), or a file
 another writer changed between the judgement and its rename: a created
-file is removed again by da-guard and a move put back, but an edited file
-already renamed stays. That is `PartialWrite`, which names the files written, and the tool
+file is removed again by da-guard, a move put back and a deleted file linked
+back, but an edited or replaced file already renamed stays (a delete
+da-guard could not link back is `maybe_written`: its path may be gone). That is `PartialWrite`, which names the files written, and the tool
 must say which ones they are: they are NOT rolled back. When da-guard gave
 no answer for a real write (it was killed, timed out, or wrote no document),
 every file of the batch is named as one that MAY have been written.
@@ -91,7 +94,8 @@ from typing import Any, Iterable, Optional, Sequence
 
 import _lib_parse_tree
 
-#: The one da-guard command every change goes through (edit, create, move).
+#: The one da-guard command every change goes through (edit, create,
+#: replace, move, delete).
 COMMAND = "write"
 SUBCOMMAND = COMMAND
 SCHEMA = "da-guard.write/v3"
@@ -169,7 +173,8 @@ class PartialWrite(Exception):
     answer) after `.written` (paths, in order) were written; `.cause` is the
     error. The written files stay written. `.maybe_written` holds the files
     whose write may have landed: an emitted file da-guard could not remove
-    again, or every file of the batch when da-guard gave no answer
+    again, a deleted one it could not link back (its path may be gone; a
+    deleted file `written` is gone), or every file of the batch when da-guard gave no answer
     (`ParseTreeError`: killed, timed out, no document)."""
 
     def __init__(self, written: "Sequence[str]", failed: str, cause: BaseException,
@@ -259,16 +264,32 @@ def edit_entry(rel: str, ops: "Sequence[dict]") -> dict:
 
 
 def create_entry(rel: str, content: dict, head_comment: Optional[str] = None,
-                 foot_comment: Optional[str] = None) -> dict:
+                 foot_comment: Optional[str] = None, replace: bool = False) -> dict:
     """A NEW file at *rel* whose top level is *content* (a `map_value`),
     *head_comment* (several lines, a comment) above it and *foot_comment*
-    (the same) after its last node, each set off by a blank line."""
+    (the same) after its last node, each set off by a blank line.
+
+    *replace*: the file at *rel* may exist and is replaced whole (da-guard
+    kind `replace`): its text becomes exactly this one — no node or comment
+    of the old file is kept, its mode and owner are; LF, no BOM — and the
+    old text need not be one parse-tree reads. The same bytes as the file's
+    are `unchanged`; no file there is a create."""
     entry = {"path": rel, "create": content}
+    if replace:
+        entry["replace"] = True
     if head_comment is not None:
         entry["head_comment"] = str(head_comment)
     if foot_comment is not None:
         entry["foot_comment"] = str(foot_comment)
     return entry
+
+
+def delete_entry(rel: str) -> dict:
+    """Delete the existing file *rel* (judged as a move's source: a regular
+    file a reader reads, one parse-tree reads); no file there is
+    `unchanged`. A batch that would worsen the tree without it (a carrier
+    whose other spelling then is selected, …) is `TreeWorsened`."""
+    return {"path": rel, "delete": True}
 
 
 def move_entry(rel: str, from_rel: str) -> dict:
@@ -381,14 +402,16 @@ def _check(doc: dict) -> None:
     for f in files:
         if not isinstance(f, dict) or f.get("status") not in FILE_STATUSES:
             raise ValueError(f"a file result {f!r} with no status of {sorted(FILE_STATUSES)}")
-        if f["status"] == DRY_RUN and not isinstance(f.get("content"), str):
+        # A delete writes no text: its dry_run has none (content null).
+        if (f["status"] == DRY_RUN and f.get("kind") != "delete"
+                and not isinstance(f.get("content"), str)):
             raise ValueError("a dry_run file without its content")
 
 
 def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
          binary: Optional[str], timeout: Optional[float]) -> dict:
     """One da-guard run of *files* (each an `edit_entry` / `create_entry` /
-    `move_entry`):
+    `move_entry` / `delete_entry`):
     its document, the files answered in the order sent."""
     args = [command, "--config-dir", str(root), "--input", "-", "--json"]
     if dry_run:
@@ -505,7 +528,7 @@ def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
 def write_all(root: "Path | str", entries: "Sequence[dict]", *, dry_run: bool = False,
               binary: Optional[str] = None, timeout: Optional[float] = None) -> "list[dict]":
     """Every entry of *entries* (`edit_entry` / `create_entry` /
-    `move_entry`) or none, in ONE da-guard run (module docstring, "Several
+    `move_entry` / `delete_entry`) or none, in ONE da-guard run (module docstring, "Several
     files"): the files' results, in order.
 
     Raises EditsRefused (one or more refused: nothing written; TreeWorsened
