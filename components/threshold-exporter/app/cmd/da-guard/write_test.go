@@ -398,7 +398,7 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	if len(got) != 1 || got["team/t9.yaml"] != want {
 		t.Fatalf("got %v\nwant\n%s", got, want)
 	}
-	if fi, err := os.Stat(filepath.Join(root, "team", "t9.yaml")); err != nil || fi.Mode().Perm() != 0o644 {
+	if fi, err := os.Stat(filepath.Join(root, "team", "t9.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v %v", fi.Mode(), err)
 	}
 }
