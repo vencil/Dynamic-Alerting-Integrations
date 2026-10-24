@@ -650,10 +650,10 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
 
 
 def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
-                      dry_run: bool = False, binary: Optional[str] = None,
+                      binary: Optional[str] = None,
                       timeout: Optional[float] = None) -> "list[dict]":
-    """One `write_all`; the files' results when it wrote (or would, on a dry
-    run). Otherwise prints to stderr, each line prefixed `<tool>: `, what
+    """One real `write_all` (a dry run is `write_all(..., dry_run=True)`);
+    the files' results when it wrote. Otherwise prints to stderr, each line prefixed `<tool>: `, what
     was not written and why — every refused file with its reason, the caller
     error, an older da-guard, no usable da-guard, or a write that stopped
     part-way with the files written and the ones that may have been — and
@@ -669,7 +669,7 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
         sys.exit(2)
 
     try:
-        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
+        return write_all(root, entries, binary=binary, timeout=timeout)
     except EditsRefused as exc:
         die([*(f"ERROR: {r.path}: {r.reason}: {r.message}" for r in exc.refusals),
              f"ERROR: da-guard write refused {len(exc.refusals)} file(s) under {root} "

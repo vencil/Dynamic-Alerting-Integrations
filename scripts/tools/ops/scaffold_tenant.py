@@ -1055,7 +1055,31 @@ def _write_confd_files(out: Path, files: list) -> None:
     except _lib_parse_tree.ParseTreeError as exc:
         _die(f"cannot judge {out} through `da-guard parse-tree` (ADR-036 §2): "
              f"{exc}; nothing was written")
-    _lib_confedit.write_all_or_exit(out, entries, tool="scaffold_tenant")
+    _write_batch_into(out, entries, "scaffold_tenant")
+
+
+def _write_batch_into(out: Path, entries: list, tool: str) -> None:
+    """`_lib_confedit.write_all_or_exit` under *out*, creating it first (it
+    is da-guard's --config-dir) — and removing again every directory this
+    created when the batch is not written, so a missing da-guard or a
+    refusal leaves no empty output directory behind (#3206)."""
+    created = []
+    p = out
+    while not p.exists() and p != p.parent:
+        created.append(p)
+        p = p.parent
+    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
+    done = False
+    try:
+        _lib_confedit.write_all_or_exit(out, entries, tool=tool)
+        done = True
+    finally:
+        if not done:
+            for d in created:  # innermost first; rmdir removes only an empty one
+                try:
+                    d.rmdir()
+                except OSError:
+                    break
 
 
 _DEFAULTS_HEADER = (
@@ -1145,13 +1169,12 @@ def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
                   mapping_hint: dict | None = None, *, with_defaults: bool = True,
                   declared_keys: list | None = None) -> tuple[list, list]:
     """`(conf.d files [_lib_confedit.NewFile], every other write [(path,
-    text)])` of one tenant's outputs; nothing is written here (the output
-    directory is created). *with_defaults* False leaves `_defaults.yaml` to
+    text)])` of one tenant's outputs; nothing is written here (nor the
+    output directory created: the conf.d batch does that). *with_defaults* False leaves `_defaults.yaml` to
     the caller (`--from-onboard` writes one for all its tenants);
     *declared_keys* is this tenant's declared list (default: the one in
     *defaults_data*)."""
     out = Path(output_dir)
-    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
     if declared_keys is None:
         declared_keys = defaults_data.get("optional_overrides") or []
 
@@ -1454,7 +1477,9 @@ def run_from_onboard(args: argparse.Namespace) -> None:
         print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    tenants = hints.get("tenants", [])
+    # A tenant named twice is scaffolded once (in its first place): two
+    # `<t>.yaml` in one batch are a caller error to da-guard write (#3206).
+    tenants = list(dict.fromkeys(hints.get("tenants", [])))
     if not tenants:
         # #452: readable-but-empty hints = unusable input = caller error,
         # consistent with the "cannot read hints" sibling above.
@@ -1575,7 +1600,6 @@ def main() -> None:
         profile_data = generate_profile(args.generate_profile, selected_dbs,
                                         tier=args.tier)
         output_dir = args.output_dir
-        ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
         profiles_path = str(Path(output_dir) / "_profiles.yaml")
         # ADR-036 §2 (#2906, #3206 10c-3): `_profiles.yaml` is a conf.d file
         # too — written by `da-guard write`, the saturation note above each

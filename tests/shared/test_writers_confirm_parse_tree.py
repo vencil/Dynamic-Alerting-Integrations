@@ -360,7 +360,8 @@ def test_init_project_one_refused_file_writes_none(tmp_path, monkeypatch, capsys
     err = capsys.readouterr().err
     assert "init_project: ERROR:" in err and "nothing was written" in err, err
     assert "duplicate_tenant" in err, err
-    assert not out.exists() or _bytes(out) == {}, sorted(_bytes(out))
+    # Nothing of the run, and no empty conf.d/ or -o directory either.
+    assert not out.exists(), sorted(p.as_posix() for p in out.rglob("*"))
 
 
 def test_init_project_refuses_a_rule_pack_no_comment_can_carry(tmp_path):
@@ -414,7 +415,7 @@ def test_scaffold_tenant_refuses_a_value_with_no_contract_type(tmp_path, capsys)
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "tenant-a.yaml" in err and "tenants.tenant-a.cpu" in err, err
-    assert _bytes(out) == {}
+    assert not out.exists()
 
 
 def test_scaffold_tenant_one_refused_file_writes_none(tmp_path, capsys):
@@ -441,7 +442,8 @@ def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
         st.write_outputs(str(out), "tenant-a", {"defaults": {"cpu": 70}},
                          {"tenants": {"tenant-a": {"cpu": "70"}}}, "report")
     assert exc.value.code == 2
-    assert _bytes(out) == {}
+    # #3206: not even the -o directory is left behind.
+    assert not out.exists()
 
 
 # ── threshold_govern (the pre-PUT edit) ──────────────────────────────────

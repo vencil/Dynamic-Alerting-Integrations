@@ -896,6 +896,22 @@ class TestRunFromOnboard:
         assert [k for k, _ in _stub_key_lines(db_b)] == oracle_declared
         assert _stub_key_lines(db_a) == []
 
+    def test_a_tenant_named_twice_is_scaffolded_once(self):
+        """迴歸（#3206 10c-3）：hints 的 tenants 重複時，舊版 rc 0（同一檔寫兩次），
+        改成一批之後兩個 `db-a.yaml` 會被 da-guard 以 bad_input 拒——進批次前
+        保序去重。"""
+        with tempfile.TemporaryDirectory() as d:
+            hints = {"tenants": ["db-a", "db-b", "db-a"],
+                     "db_types": {"db-a": ["mariadb"], "db-b": ["mariadb"]},
+                     "routing_hints": {}}
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump(hints, f)
+            out = os.path.join(d, "out")
+            run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=out))
+            assert sorted(os.listdir(out)) == [
+                "_defaults.yaml", "db-a.yaml", "db-b.yaml", "scaffold-report.txt"]
+
     def test_with_routing_hints(self):
         with tempfile.TemporaryDirectory() as d:
             hints = {

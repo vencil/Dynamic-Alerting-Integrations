@@ -4161,8 +4161,31 @@ def _write_confd(conf_dir: Path, files: list) -> None:
     _lib_write_check.require_output_tree(conf_dir)
     if not entries:
         return
-    _ensure_dir(str(conf_dir))  # da-guard's --config-dir must exist
-    _lib_confedit.write_all_or_exit(conf_dir, entries, tool="init_project")
+    _write_batch_into(conf_dir, entries, "init_project")
+
+
+def _write_batch_into(out: Path, entries: list, tool: str) -> None:
+    """`_lib_confedit.write_all_or_exit` under *out*, creating it first (it
+    is da-guard's --config-dir) — and removing again every directory this
+    created when the batch is not written, so a missing da-guard or a
+    refusal leaves no empty output directory behind (#3206)."""
+    created = []
+    p = out
+    while not p.exists() and p != p.parent:
+        created.append(p)
+        p = p.parent
+    ensure_dir_or_die(out, flag="-o/--output-dir")
+    done = False
+    try:
+        _lib_confedit.write_all_or_exit(out, entries, tool=tool)
+        done = True
+    finally:
+        if not done:
+            for d in created:  # innermost first; rmdir removes only an empty one
+                try:
+                    d.rmdir()
+                except OSError:
+                    break
 
 
 def run_init(config: dict, output_dir: str,
