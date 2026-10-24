@@ -56,6 +56,10 @@ contract). Where the value came from decides which:
   of, #3206 step 10c-2) has the type it has in Python — a `str` stays a
   string, an `int` an int, a `float` a float in canonical decimal; one with
   no such type (a NaN, an infinite float) is `ValueError`, naming its key.
+* `number_value`: a generated NUMBER that only has to be a number (a
+  `defaults:` value, float64 to the exporter): `data_value`, except that an
+  `int` past the contract's 18 characters (`1e20` as an int) goes as the
+  float it is to the exporter (`100000000000000000000.0`).
 
 Several files, all or nothing
 -----------------------------
@@ -359,6 +363,46 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = ()) -> dict:
             raise bad(f"the float {obj!r} has no canonical decimal spelling")
         return {"float": text}
     raise bad(f"a {type(obj).__name__} ({obj!r}) has no edit-contract type")
+
+
+#: What a comment line may not hold (da-guard's CommentText, pkg/confedit
+#: value.go): a control character but a tab, DEL, U+0085, U+2028, U+2029 and
+#: U+FEFF (a line break is a new comment line, allowed where several lines are).
+def comment_text_problem(text: str) -> Optional[str]:
+    """Why da-guard would refuse *text* in a comment (`bad_input`), or None.
+    A tool that puts an outside value (an alert name, a prefix, a tenant id)
+    into a comment asks this first, to name the field instead of a whole
+    batch refused."""
+    for ch in str(text):
+        o = ord(ch)
+        if ch in "\t\n":
+            continue
+        if o < 0x20 or o == 0x7F or o in (0x85, 0x2028, 0x2029, 0xFEFF):
+            return f"it holds the character U+{o:04X}, which a comment cannot carry"
+    return None
+
+
+def comment_field(what: str, text: Any) -> str:
+    """*text* (an outside value a tool puts into a comment: an alert name, a
+    tenant id) as a str, or ValueError naming *what* when da-guard would
+    refuse it there (`comment_text_problem`)."""
+    problem = comment_text_problem(str(text))
+    if problem:
+        raise ValueError(f"{what} {str(text)!r}: {problem}")
+    return str(text)
+
+
+def number_value(number: "int | float") -> dict:
+    """A generated number that only has to be a number (a `defaults:` value,
+    decoded into float64 by the exporter): `data_value` of it, except an
+    `int` longer than the edit contract's 18 characters, which goes as a
+    float (`10**20` → `100000000000000000000.0`) instead of being refused.
+    A `bool` or anything else that is not an int / float is ValueError."""
+    if isinstance(number, bool) or not isinstance(number, (int, float)):
+        raise ValueError(f"{number!r} is not a number")
+    if isinstance(number, int) and not is_canonical_int(str(number)):
+        number = float(number)
+    return data_value(number)
 
 
 def node_value(node: Any) -> dict:

@@ -547,3 +547,30 @@ def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
                             ce.delete_entry("d.yaml"), ce.edit_entry("b.yaml", [])])
     assert (exc.value.written, exc.value.maybe_written, exc.value.failed) == (
         ["r.yaml"], ["d.yaml"], "b.yaml")
+
+
+def test_number_value_sends_an_int_past_18_characters_as_a_float():
+    # #3206 10c: a generated `defaults:` number only has to be a number.
+    assert ce.number_value(80) == {"int": "80"}
+    assert ce.number_value(0.5) == {"float": "0.5"}
+    assert ce.number_value(10 ** 20) == {"float": "100000000000000000000.0"}
+    # 18 characters, a sign included: the last an int, one more a float
+    assert ce.number_value(-(10 ** 16)) == {"int": str(-(10 ** 16))}
+    assert ce.number_value(-(10 ** 17)) == {"float": "-100000000000000000.0"}
+    for bad in (True, "80", None, float("inf")):
+        with pytest.raises(ValueError):
+            ce.number_value(bad)
+
+
+@pytest.mark.parametrize("ch", ["\r", "\x00", "\x1b", "\x7f", "\x85", " ", " ", "﻿"])
+def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
+    problem = ce.comment_text_problem(f"a{ch}b")
+    assert problem and f"U+{ord(ch):04X}" in problem
+    # …and da-guard does refuse it: the two say the same.
+    with pytest.raises(ce.EditCallerError):
+        ce.write_all(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]),
+                                                head_comment=f"a{ch}b")], dry_run=True)
+
+
+def test_comment_text_problem_lets_tabs_lines_and_text_through():
+    assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
