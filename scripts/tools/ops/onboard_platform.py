@@ -443,7 +443,6 @@ def generate_tenant_routing_yamls(tenant_routings, dedup_info=None):
     """
     import tempfile  # noqa: PLC0415
 
-    import _lib_confedit  # noqa: PLC0415
     docs = _tenant_routing_docs(tenant_routings, dedup_info)
     if not docs:
         return {}
@@ -1036,7 +1035,6 @@ def _phase1_confd(phase1_results):
     `<tenant>.yaml` per tenant, a conf.d tenant document under its header
     comment, replacing a file already there. ValueError for a value with no
     edit-contract type or a tenant id a comment cannot carry, naming it."""
-    import _lib_confedit  # noqa: PLC0415
     field = _lib_confedit.comment_field  # an outside value put into a comment
     tenant_routings, summary = phase1_results
     docs = _tenant_routing_docs(tenant_routings, summary.get("dedup_tenants", {}))
@@ -1058,7 +1056,6 @@ def _phase2_confd(phase2_results):
     """Phase 2's conf.d files as `da-guard write` entries: the suggested
     `_defaults.yaml` content, or none when no threshold was recovered
     (ADR-036 §2), replacing a file already there."""
-    import _lib_confedit  # noqa: PLC0415
     field = _lib_confedit.comment_field  # an outside value put into a comment
     candidates, _recording_rules, _summary = phase2_results
     suggestion = generate_defaults_from_candidates(candidates)

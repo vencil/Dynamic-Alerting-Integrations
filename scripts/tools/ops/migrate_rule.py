@@ -1067,7 +1067,6 @@ def tenant_config_entry(results):
     整份取代（`replace`：重跑同一個 -o 照舊覆寫）。帶進註解的外部輸入（alert
     名、severity、註記、key 與值、維度標籤）含註解寫不了的字元時 ValueError、
     點名欄位。"""
-    import _lib_confedit  # noqa: PLC0415
     field = _lib_confedit.comment_field  # an outside value put into a comment
     tenant_configs = {}
     for r in results:
@@ -1138,7 +1137,6 @@ def _go_texts(entries):
     an empty private directory (nothing is written anywhere)."""
     import tempfile  # noqa: PLC0415
 
-    import _lib_confedit  # noqa: PLC0415
     with tempfile.TemporaryDirectory() as tmp:
         return [r["content"] for r in _lib_confedit.write_all(tmp, entries, dry_run=True)]
 
@@ -1173,7 +1171,6 @@ def defaults_snippet_entry(results):
     觸發任何告警。值是數字（int 或 float，Go 寫成不加引號）；沒有 key 時寫
     `defaults: {}`。
     """
-    import _lib_confedit  # noqa: PLC0415
     defaults = defaults_snippet_doc(results)["defaults"]
     head = "\n".join([
         "============================================================",

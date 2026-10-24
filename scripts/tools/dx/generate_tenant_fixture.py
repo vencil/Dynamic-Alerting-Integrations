@@ -350,7 +350,7 @@ def generate_flat(
         tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
         files.append((f"{tid}.yaml", tenant_config))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {count} tenant files (flat) in {output_dir}")
 
 
@@ -410,7 +410,7 @@ def generate_hierarchical(
                       _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (hierarchical) in {output_dir}")
     print(f"   Structure: {len(DOMAINS)} domains × {len(REGIONS)} regions × {len(ENVIRONMENTS)} envs")
 
@@ -573,7 +573,7 @@ def generate_synthetic_v2(
                       _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
     print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
     print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
@@ -598,8 +598,7 @@ def _domain_defaults(rng: random.Random,
     return out
 
 
-def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
-                       flag: str | None = OUTPUT_FLAG) -> None:
+def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]]) -> None:
     """Write every ``(root-relative path, data)`` of one run under
     *output_dir* through ONE `da-guard write` batch (ADR-036 §2: only Go
     writes conf.d; #3206 step 10c-2): the data goes as typed values
@@ -613,9 +612,7 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
     in place.
 
     The refusal, caller-error and part-way messages are
-    `_lib_confedit.write_all_or_exit`'s, shared with every conf.d writer.
-    *flag* is unused by the write itself, which Go makes (kept for the
-    callers' #1789 signature)."""
+    `_lib_confedit.write_all_or_exit`'s, shared with every conf.d writer."""
     import _lib_confedit  # noqa: PLC0415
     batch = []
     for rel, data in files:
