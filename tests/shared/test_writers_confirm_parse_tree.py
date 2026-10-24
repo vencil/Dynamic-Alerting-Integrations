@@ -934,10 +934,11 @@ def test_migrate_rule_one_refused_file_writes_neither(tmp_path):
     # The two conf.d files are one batch: `defaults-snippet.yaml` (once
     # written last) refused as a symlink ⇒ `tenant-config.yaml` is not
     # written either, nor any rule pack or report.
+    from _platform_fs import symlink_or_skip
     (tmp_path / "elsewhere.yaml").write_text("defaults: {}\n", encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
-    (out / "defaults-snippet.yaml").symlink_to(tmp_path / "elsewhere.yaml")
+    symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "defaults-snippet.yaml")
     before = _bytes(out)
     r, out = _mr(tmp_path, "80")
     assert r.returncode == 2, r.stdout + r.stderr
