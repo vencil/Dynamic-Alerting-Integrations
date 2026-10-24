@@ -457,11 +457,13 @@ def test_changing_one_file_reads_only_that_file(tmp_path, monkeypatch):
         f.write_text(f.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
         new_key = pc.content_key(rel, f.read_bytes())
         warm = pc.ParseCache(dict(cold.new))
-        trees, files = [], []
-        orig_load, orig_file = pt.load, pt.load_file
+        trees, files, batches = [], [], []
+        orig_load, orig_file, orig_batch = pt.load, pt.load_file, pt.run_files_raw
         monkeypatch.setattr(pt, "load", lambda *a, **k: trees.append(a) or orig_load(*a, **k))
         monkeypatch.setattr(pt, "load_file",
                             lambda *a, **k: files.append(a[1]) or orig_file(*a, **k))
+        monkeypatch.setattr(pt, "run_files_raw", lambda root, items, *a, **k: batches.append(
+            [r for r, _t in items]) or orig_batch(root, items, *a, **k))
         _lib_confd.reset_warned_for_test()
         pc.install(warm)
         try:
@@ -470,8 +472,12 @@ def test_changing_one_file_reads_only_that_file(tmp_path, monkeypatch):
             pc.install(None)
             monkeypatch.setattr(pt, "load", orig_load)
             monkeypatch.setattr(pt, "load_file", orig_file)
+            monkeypatch.setattr(pt, "run_files_raw", orig_batch)
         assert warm.parses == len(modes_of_file), rel
-        assert trees == [] and set(files) == {rel}, (rel, trees, files)
+        # A file-mode run (alone, or as a one-file batch) for that file only.
+        ran = files + [r for b in batches for r in b]
+        assert trees == [] and set(ran) == {rel} and len(ran) <= len(modes_of_file), \
+            (rel, trees, files, batches)
         assert {k for (k, _m) in warm.new} == {new_key}, rel
         cold.new.update(warm.new)
 
@@ -578,3 +584,184 @@ def test_judge_now_judges_afresh_and_leaves_the_memo_alone(tmp_path):
     assert any("broken.yaml" in ln for ln in lines)
     assert [e.path for e in tree.entries if e.verdict] == ["broken.yaml"]
     assert pc._SERVABLE == before
+
+
+# ── the cold fill: one batch run, the entries of the per-file fill (#3206) ──
+
+_PROFILE = ("routing_profiles:\n  {name}:\n    receiver:\n      type: webhook\n"
+            "      url: https://hooks.example.com/{name}\n")
+
+# Subdirectories at two depths, a carrier at the root and in each directory
+# (two spellings in `team/`: one unselected), a domain policy, routing
+# profiles at the root and below it, tenants that use them, and files
+# parse-tree refuses (a repeated key, a syntax error, a top level that is not
+# a mapping, invalid UTF-8) beside ones no reader reads (hidden, not a
+# config name).
+_COLD_TREE: dict[str, "str | bytes"] = {
+    **_EVERY_READ,
+    "_routing_profiles.yaml": _PROFILE.format(name="root-p"),
+    "team/_routing_profiles.yaml": _PROFILE.format(name="team-p"),
+    "team/sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n",
+    "team/sub/bad-dup.yaml": "tenants:\n  dup:\n    x: 1\n    x: 2\n",
+    "broken.yaml": "tenants:\n  broken: [unclosed\n",
+    "listy.yaml": "- one\n- two\n",
+    "not-utf8.yaml": b"tenants:\n  nu:\n    k: \xff\n",
+    ".hidden.yaml": "tenants: {hidden: {}}\n",
+    "notes.txt": "not a config file\n",
+    **{f"team/sub/t{i:02d}.yaml": cases._tenant(f"t{i:02d}", extra=(
+        "" if i % 3 else "    _routing_profile: team-p\n"))
+       for i in range(12)},
+    **{f"other/o{i:02d}.yaml": cases._tenant(f"o{i:02d}") for i in range(8)},
+    "other/p.yaml": cases._tenant("p-user") + "    _routing_profile: root-p\n",
+}
+
+
+def _write_cold_tree(root: Path) -> Path:
+    d = root / "conf.d"
+    for rel, body in _COLD_TREE.items():
+        p = d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(body if isinstance(body, bytes) else body.encode("utf-8"))
+    return d
+
+
+@pytest.mark.parametrize("entry", ["judgement", "warming"])
+def test_cold_fill_in_one_batch_stores_the_per_file_fills_entries(tmp_path, monkeypatch, entry):
+    """A cold cache filled through `prefetch` (one `parse-tree --inputs` run
+    for the files the generator reads, one for the tenant files'
+    declarations) holds byte for byte the entries the per-file fill holds —
+    same keys (SHA-256 of path and bytes, mode), same pickled bytes, same
+    order — with the same counters, and the run's rc and findings agree;
+    file mode runs on its own only for the carrier verdicts of a directory
+    with two carriers. The per-file fill is today's miss path with the batch
+    refused (`run_files_raw` raising, as an older da-guard would)."""
+    monkeypatch.setenv("PATH", os.devnull)
+    d = _write_cold_tree(tmp_path)
+    orig_file, orig_batch = pt.load_file, pt.run_files_raw
+
+    def fill(batch: bool):
+        files, batches = [], []
+        if batch:
+            monkeypatch.setattr(pt, "run_files_raw", lambda root, items, *a, **k: batches.append(
+                [r for r, _t in items]) or orig_batch(root, items, *a, **k))
+        else:
+            def refused(*_a, **_k):
+                raise pt.NotThisDocument("no --inputs", older=True)
+            monkeypatch.setattr(pt, "run_files_raw", refused)
+        monkeypatch.setattr(pt, "load_file",
+                            lambda *a, **k: files.append(a[1]) or orig_file(*a, **k))
+        _lib_confd.reset_warned_for_test()
+        cache = pc.ParseCache()
+        pc.install(cache)
+        out = tmp_path / f"findings-{batch}.json"
+        try:
+            if entry == "judgement":
+                result = _run_findings(d, out)
+            else:  # the warming run's read (_gsvc_child._warm)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        gar.load_tenant_tree(str(d), strict_policies=True)
+                    except SystemExit:
+                        pass
+                result = None
+        finally:
+            pc.install(None)
+            monkeypatch.setattr(pt, "load_file", orig_file)
+            monkeypatch.setattr(pt, "run_files_raw", orig_batch)
+        counters = (cache.parses, list(cache.hits), cache.rejected_entries, cache.memory_error)
+        return cache.new, counters, result, files, batches
+
+    old_new, old_counters, old_result, old_files, _ = fill(batch=False)
+    new_new, new_counters, new_result, new_files, batches = fill(batch=True)
+    assert len(old_new) > 30  # the fill is not trivially empty
+    assert list(new_new.items()) == list(old_new.items())
+    assert new_counters == old_counters
+    assert new_result == old_result
+    # Every file the per-file fill ran file mode for, the batch carried
+    # (refused files included: never cached, still parsed once) …
+    assert set(old_files) <= set(new_files) | {r for b in batches for r in b}
+    assert {"broken.yaml", "listy.yaml", "not-utf8.yaml", "team/sub/bad-dup.yaml"} <= {
+        r for b in batches for r in b}
+    # … in at most two runs (every routing read and tenant-file read; then
+    # the tenant files whose read raised, which nothing caches, read once
+    # more by `declared_tenants`), and file mode alone only for the carrier
+    # verdicts of `team/` (two spellings there).
+    assert 1 <= len(batches) <= 2
+    assert set(new_files) <= {"team/_defaults.yaml", "team/_defaults.yml"}, new_files
+
+
+def _spied_reader(d: Path, monkeypatch):
+    """A reader under a fresh cache, with every file-mode run recorded."""
+    files = []
+    orig = pt.load_file
+    monkeypatch.setattr(pt, "load_file", lambda *a, **k: files.append(a[1]) or orig(*a, **k))
+    return pc.ConfdReader(d), files
+
+
+def test_a_stashed_line_serves_only_its_own_cache_key(tmp_path, monkeypatch):
+    """The stash is keyed as the cache is: a line prefetched for a read is
+    taken only by that read of those bytes, once. A sibling carrier that
+    changes between prefetch and the carrier verdict — whose cache key holds
+    every carrier of the directory — takes file mode on its own, and so
+    does a file whose own bytes changed; the verdict and the value are
+    those of the tree at the time of the read."""
+    d = _write_tree(tmp_path, {
+        "team/_defaults.yaml": "defaults: {a: 1}\n",
+        "team/_defaults.yml": "defaults: {a: 2}\n",
+        "team/t.yaml": "tenants: {t: {}}\n",
+        "u.yaml": "tenants: {u: {}}\n",
+    })
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        reader, files = _spied_reader(d, monkeypatch)
+        mode = _grar_parse.ROUTING_READ
+        reader.prefetch([d / "team/_defaults.yaml", d / "team/_defaults.yml",
+                         d / "team/t.yaml", d / "u.yaml"], mode)
+        assert len(reader._stash) == 4
+        # At prefetch `.yml` is the unselected spelling (`.yaml` wins). The
+        # sibling is removed, so `.yml` is now its directory's carrier; the
+        # stashed line, made beside `.yaml`, would still say unselected.
+        stale = pt.tree_of(pt.file_document(reader._stash[(pc.content_key(
+            "team/_defaults.yml", b"defaults: {a: 2}\n"), mode.name)]))
+        assert stale.not_read.get("team/_defaults.yml") == "unselected_defaults_carrier"
+        (d / "team/_defaults.yaml").unlink()
+        verdict = reader._verdict("team/_defaults.yml")
+        assert files == ["team/_defaults.yml"]  # file mode, not the stashed line
+        assert verdict == (None, {"team": "team/_defaults.yml"})
+        # A file rewritten after the prefetch: its read misses the stash.
+        (d / "u.yaml").write_text("tenants: {u2: {}}\n", encoding="utf-8")
+        assert reader.read(d / "u.yaml", mode) == {"tenants": {"u2": {}}}
+        assert files[-1] == "u.yaml"
+        # An unchanged file: the stashed line, taken once.
+        n = len(files)
+        assert reader.read(d / "team/t.yaml", mode) == {"tenants": {"t": {}}}
+        assert len(files) == n
+        assert (pc.content_key("team/t.yaml", b"tenants: {t: {}}\n"), mode.name) \
+            not in reader._stash
+    finally:
+        pc.install(None)
+
+
+def test_the_stash_is_empty_after_the_fill(tmp_path, monkeypatch):
+    """Every line a generator run stashes is taken by its read: nothing is
+    held for the reader's lifetime."""
+    monkeypatch.setenv("PATH", os.devnull)
+    d = _write_cold_tree(tmp_path)
+    readers = []
+    orig_init = pc.ConfdReader.__init__
+
+    def track(self, *a, **k):
+        orig_init(self, *a, **k)
+        readers.append(self)
+
+    monkeypatch.setattr(pc.ConfdReader, "__init__", track)
+    _lib_confd.reset_warned_for_test()
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        _run_findings(d, tmp_path / "f.json")
+    finally:
+        pc.install(None)
+    assert readers and len(cache.new) > 30
+    assert all(r._stash == {} for r in readers), [len(r._stash) for r in readers]

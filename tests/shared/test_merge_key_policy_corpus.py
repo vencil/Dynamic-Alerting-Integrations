@@ -109,6 +109,12 @@ class _PyYamlReader:
     def require(self) -> None:
         pass
 
+    def prefetch(self, paths, mode=None) -> None:
+        """No cache, no parse-tree read to batch (`ConfdReader.prefetch`)."""
+
+    def prefetch_reads(self, reads) -> None:
+        """As `prefetch`."""
+
     def listing(self):
         """Which files there are: da-guard's listing (#3206) — the walk the
         generator shared with this reader; only the CONTENT is PyYAML's."""
