@@ -113,3 +113,28 @@ func TestItemLineCommentAfterABlockIsMisplaced(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstHeadInsideASeqItemFollowsItsDash pins where yaml.v3 writes the
+// head comment of the first node inside a block mapping or sequence item:
+// after that item's `- `, on the line just above the node — still the line
+// before what it heads, so it is allowed (unlike a misplaced line comment);
+// later nodes get theirs above them.
+func TestFirstHeadInsideASeqItemFollowsItsDash(t *testing.T) {
+	one := Value{Type: TypeInt, Text: "1"}
+	two := Value{Type: TypeInt, Text: "2"}
+	for _, tc := range []struct {
+		item Value
+		want string
+	}{
+		{Value{Type: TypeSeq, Items: []Item{{Value: one, Head: "h"}, {Value: two}}}, "k:\n  - # h\n    - 1\n    - 2\n"},
+		{Value{Type: TypeSeq, Items: []Item{{Value: one}, {Value: two, Head: "h"}}}, "k:\n  - - 1\n    # h\n    - 2\n"},
+		{Value{Type: TypeMap, Entries: []Entry{{Key: "a", Value: one, Head: "h"}, {Key: "b", Value: two}}}, "k:\n  - # h\n    a: 1\n    b: 2\n"},
+		{Value{Type: TypeMap, Entries: []Entry{{Key: "a", Value: one}, {Key: "b", Value: two, Head: "h"}}}, "k:\n  - a: 1\n    # h\n    b: 2\n"},
+	} {
+		v := Value{Type: TypeMap, Entries: []Entry{{Key: "k", Value: Value{Type: TypeSeq, Items: []Item{{Value: tc.item}}}}}}
+		out, err := Encode(NewDoc(v.Node(false)).Node())
+		if err != nil || string(out) != tc.want {
+			t.Errorf("written %q (%v), want %q", out, err, tc.want)
+		}
+	}
+}
