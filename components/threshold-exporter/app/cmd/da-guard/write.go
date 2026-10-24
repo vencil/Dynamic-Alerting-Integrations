@@ -331,7 +331,7 @@ func parseWriteFlags(cmd string, args []string, errOut io.Writer) (*writeFlags, 
 
 func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, cmd)
-	fmt.Fprintf(errOut, "Change conf.d files in one batch, judged once, all or nothing (ADR-036 §2, §4).\n\n"+
+	fmt.Fprintf(errOut, "Change conf.d files in one batch, judged once; written only when every file passes (a write that stops part-way is partial_write) (ADR-036 §2, §4).\n\n"+
 		"Input: {\"files\": [<entry>, ...]}, each path once (a move's source counts), each entry one of:\n"+
 		"  {\"path\": <rel>, \"ops\": [<op>, ...]}   edit an existing file: its ops applied in order\n"+
 		"  {\"path\": <rel>, \"create\": <value>, \"head_comment\": <text>, \"foot_comment\": <text>}\n"+
