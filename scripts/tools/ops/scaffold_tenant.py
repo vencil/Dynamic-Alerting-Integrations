@@ -39,6 +39,7 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+import _lib_confedit  # noqa: E402  (ADR-036 §2: the conf.d files go to da-guard write)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -50,13 +51,13 @@ _OUTPUT_FLAG = "-o/--output-dir"
 # list membership exactly, and a third hand-copy of `not endswith("_critical")`
 # is how the two contracts drifted apart in the first place (#1189).
 from _registry_lib import (  # noqa: E402
-    annotate_defaults_counterexamples,
-    append_tenant_declared_stub,
     counterexample_sentence,
+    defaults_counterexample_head,
     is_shipped_optional_key,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
     shipped_optional_keys_for_packs,
+    tenant_declared_foot,
 )
 from _registry_lib import counterexample_for_key as _registry_counterexample_for_key  # noqa: E402
 
@@ -452,7 +453,7 @@ RULE_PACKS = {
 # 詳見 docs/alerting-design-fundamentals.md〈告警該響之前〉。
 SATURATION_CRITICAL_COMMENT = "# 飽和類指標的 critical 層：飽和=容量訊號，建議先確認配對症狀告警（如慢查詢），或 warning＋容量規劃"
 
-_SATURATION_CRITICAL_RE = re.compile(r"^(\s*)([A-Za-z0-9_]+)_critical:")
+_SATURATION_CRITICAL_RE = re.compile(r"([A-Za-z0-9_]+)_critical")
 
 
 def saturation_default_keys() -> set[str]:
@@ -465,24 +466,20 @@ def saturation_default_keys() -> set[str]:
     }
 
 
-def annotate_saturation_criticals(yaml_text: str) -> str:
-    """對飽和類 `<base>_critical:` 鍵行上方插入教育註解（確定性行插入）。
+def saturation_critical_head(at: tuple, value: object) -> str | None:
+    """飽和類 `<base>_critical` 鍵上方的教育註解：`_lib_confedit.data_value` 的
+    *head*（鍵路徑, 值）→ 註解文字，其他鍵 None。
 
     - base key 以 RULE_PACKS defaults 的 ``metric_class == "saturation"`` set 判定
-    - 逐行 regex 比對、保留原縮排；不引入 ruamel（safe_dump 後處理）
-    - 冪等：上一行已是同一註解時不重複插入
-    - 已註解行（``#`` 開頭）不會匹配 key 規則，不誤觸
+    - 任何深度的 mapping 鍵都算（租戶檔、`_profiles.yaml`）；序列項目不算
+    - 註解由 da-guard 寫在該鍵上方、同縮排（ADR-036 §2：寫 conf.d 的只有 Go）
     """
-    saturation_keys = saturation_default_keys()
-    out: list[str] = []
-    for line in yaml_text.split("\n"):
-        m = _SATURATION_CRITICAL_RE.match(line)
-        if m and m.group(2) in saturation_keys:
-            comment_line = f"{m.group(1)}{SATURATION_CRITICAL_COMMENT}"
-            if not out or out[-1] != comment_line:
-                out.append(comment_line)
-        out.append(line)
-    return "\n".join(out)
+    if not at or at[-1].startswith("["):
+        return None
+    m = _SATURATION_CRITICAL_RE.fullmatch(at[-1])
+    if m and m.group(1) in saturation_default_keys():
+        return SATURATION_CRITICAL_COMMENT[len("# "):]
+    return None
 
 
 def prompt_choice(question: str, options: list[tuple[str, str]], default: str | None = None) -> str:
@@ -1029,50 +1026,76 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
     return "\n".join(lines)
 
 
-def _confirm_confd_files(out: Path, items: list) -> None:
-    """`_lib_write_check.confirm_all` over (name, text, data the text was
-    dumped from); a refusal or no usable da-guard ends the run with rc 2
-    (EXIT_CALLER_ERROR) and nothing written."""
+def _die(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _write_confd_files(out: Path, files: list) -> None:
+    """Every conf.d file of the run through ONE `da-guard write` batch (ADR-036
+    §2: only Go writes conf.d; #3206 step 10c-3): each as typed values (key
+    order as generated) with its comments, every file replacing what is at
+    its path (as this tool always has: a fresh path is a create). Go writes
+    the text and judges the whole tree once and writes all of them or none;
+    `_lib_confedit.write_all_or_exit` names every refused file and its
+    reason (a write stopped part-way: the files left) and exits 2. A tree
+    that is already not servable and a value with no type the contract
+    carries end the run with rc 2 before the batch, nothing written."""
     import _lib_parse_tree
     import _lib_write_check
+    entries = []
+    for f in files:
+        try:
+            entries.append(f.entry(replace=True))
+        except ValueError as exc:
+            _die(f"{f.rel}: {exc} — nothing was written")
     try:
-        _lib_write_check.confirm_all(out, [
-            (name, text, _lib_write_check.from_python(data))
-            for name, text, data in items])
-    except _lib_write_check.WriteRefused as exc:
-        print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        # A tree that is already broken is not written into (#3206).
+        _lib_write_check.require_output_tree(out)
     except _lib_parse_tree.ParseTreeError as exc:
-        print(f"ERROR: cannot confirm the generated conf.d files through "
-              f"`da-guard parse-tree` (ADR-036 §2): {exc}; nothing was written",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _die(f"cannot judge {out} through `da-guard parse-tree` (ADR-036 §2): "
+             f"{exc}; nothing was written")
+    # da-guard's --config-dir: made only when the batch is sent, and removed
+    # again (left empty) when it is not written — a failed run leaves no
+    # output directory behind (#3206).
+    _lib_confedit.write_all_or_exit(
+        out, entries, tool="scaffold_tenant",
+        make_root=lambda: ensure_dir_or_die(out, flag=_OUTPUT_FLAG))
 
 
-def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> tuple[list, list]:
-    """`(conf.d files [(name, text, data)], every write [(path, text)])` of
-    one tenant's outputs; nothing is written here (the output directory is
-    created)."""
-    out = Path(output_dir)
-    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
+_DEFAULTS_HEADER = (
+    "# _defaults.yaml — Platform-managed global settings\n"
+    "# Generated by scaffold_tenant.py\n"
+    "#\n"
+    "# optional_overrides（若存在）：只有 key 名稱、沒有值。平台「認得」這些 key\n"
+    "# ——租戶可以在自己的檔案裡設定並生效——但平台不主張任何值，所以租戶不設就是\n"
+    "# 靜默。那是刻意的終態，不是漏掉的預設：這些閾值只有租戶自己的 baseline 校\n"
+    "# 準得出來。⛔ 不要為了「讓它不再靜默」把 key 搬進上面的 defaults——那是對\n"
+    "# 每一個租戶都武裝一個平台選的數字。"
+)
 
-    # Write _defaults.yaml
-    defaults_path = str(out / "_defaults.yaml")
-    defaults_content = (
-        "# _defaults.yaml — Platform-managed global settings\n"
-        "# Generated by scaffold_tenant.py\n"
-        "#\n"
-        "# optional_overrides（若存在）：只有 key 名稱、沒有值。平台「認得」這些 key\n"
-        "# ——租戶可以在自己的檔案裡設定並生效——但平台不主張任何值，所以租戶不設就是\n"
-        "# 靜默。那是刻意的終態，不是漏掉的預設：這些閾值只有租戶自己的 baseline 校\n"
-        "# 準得出來。⛔ 不要為了「讓它不再靜默」把 key 搬進上面的 defaults——那是對\n"
-        "# 每一個租戶都武裝一個平台選的數字。\n"
-        + annotate_defaults_counterexamples(
-            yaml.safe_dump(defaults_data, default_flow_style=False,
-                           allow_unicode=True, sort_keys=False))
-    )
-    # Write tenant yaml
-    #
+
+def defaults_confd_file(defaults_data: dict) -> "_lib_confedit.NewFile":
+    """`_defaults.yaml` of a run: the header, the ⚠ counter-example above each
+    key that has one (`_registry_lib.defaults_counterexample_head`)."""
+    return _lib_confedit.NewFile("_defaults.yaml", defaults_data,
+                                 _lib_confedit.comment_block(_DEFAULTS_HEADER),
+                                 node_head=defaults_counterexample_head)
+
+
+def tenant_confd_file(tenant_name: str, tenant_data: dict, written_defaults: dict,
+                      declared_keys: list) -> "_lib_confedit.NewFile":
+    """`<tenant>.yaml`: the header true for every key population, the
+    saturation note above each saturation `<base>_critical`, the declared-key
+    block after the YAML.
+
+    *written_defaults* is the `_defaults.yaml` data written beside it (the
+    `<base>_critical` paragraph is read off its `defaults:`); *declared_keys*
+    is this tenant's declared list, every one of which that file declares."""
+    try:
+        _lib_confedit.comment_field("the tenant id", tenant_name, line=True)
+    except ValueError as exc:
+        _die(f"{exc} — nothing was written")
     # ⛔ 標頭的三態句必須對「每一種 key」都為真（#1321）。原句「省略=Default」只對
     # `_defaults.yaml` 的 `defaults:` 有值的 key 成立；對宣告層
     # （`optional_overrides:` 只有 key 名、沒有值）它剛好講反：那一格沒有值可繼
@@ -1090,88 +1113,92 @@ def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     # face 對任何 producer 再犯就擋 CI，所以今天兩個生成器同屬同一 regime——但
     # 推導照舊保留：寫死任一 regime 的句子，會在下一次某個生成器移動時靜默變假，
     # 那正是這條紀律存在的理由。第三類敘述由**這一次要寫出去的**
-    # `defaults_data["defaults"]` 推導（見 `render_tenant_critical_note_lines`）。
+    # `_defaults.yaml` 的 `defaults` 推導（見 `render_tenant_critical_note_lines`）。
     #
     # ⛔ 而「清單見檔尾」本身也不能寫死：檔尾那一段只在宣告清單非空時才附上
-    #（`append_tenant_declared_stub` 對空清單原樣回傳）。實測 postgresql /
+    #（`tenant_declared_foot` 對空清單回 None）。實測 postgresql /
     # mariadb / kafka / rabbitmq / jvm / nginx 的 optional tier 全是 `_critical`，
     # `shipped_optional_keys_for_packs` 對它們一律回 []——只選這些 pack 的租戶，
     # 拿到的標頭會指向一個它檔案裡不存在的段落。所以指路句同樣由**這一次要寫出
     # 去的**清單推導（見 `render_tenant_declared_note_lines`），與檔尾同一份 keys。
-    tenant_path = str(out / f"{tenant_name}.yaml")
-    declared_keys = defaults_data.get("optional_overrides") or []
-    critical_note = "\n".join(render_tenant_critical_note_lines(
-        defaults_data.get("defaults") or {}, lang="zh"))
-    declared_note = "\n".join(render_tenant_declared_note_lines(
-        declared_keys, lang="zh"))
-    tenant_content = (
-        f"# {tenant_name}.yaml — Tenant-managed thresholds\n"
-        "# Generated by scaffold_tenant.py\n"
+    head = _lib_confedit.comment_block("\n".join([
+        f"# {tenant_name}.yaml — Tenant-managed thresholds",
+        "# Generated by scaffold_tenant.py",
         "# 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom,"
-        " 省略=Default, \"disable\"=停用\n"
-        + declared_note + "\n"
-        + critical_note + "\n"
-        + yaml.safe_dump(tenant_data, default_flow_style=False,
-                         allow_unicode=True, sort_keys=False)
-    )
-    # 飽和類 _critical 鍵上方插入教育註解（純顯示；API 全檔重寫不保留）
-    tenant_content = annotate_saturation_criticals(tenant_content)
+        " 省略=Default, \"disable\"=停用",
+        *render_tenant_declared_note_lines(declared_keys, lang="zh"),
+        *render_tenant_critical_note_lines(written_defaults.get("defaults") or {},
+                                           lang="zh"),
+    ]))
     # 檔尾附上「你可以設、但平台不主張值」的宣告 key 區塊（#1321）。
     #
-    # ⛔ 清單取自 `defaults_data`——也就是 `generate_defaults` 剛用
-    # `shipped_optional_keys_for_packs` 推導、並且正要寫進同一個目錄的
-    # `_defaults.yaml` 的那一份。刻意不在這裡重算一次：重算需要 pack 選集，而
+    # ⛔ 清單取自 `_defaults.yaml` 的資料——也就是 `generate_defaults` 剛用
+    # `shipped_optional_keys_for_packs` 推導、並且正要寫進同一個目錄的那一份
+    # （`--from-onboard` 時是這個租戶自己選的 pack 那一份，全部都在一起寫出的
+    # `_defaults.yaml` 裡）。刻意不在這裡重算一次：重算需要 pack 選集，而
     # 「這裡拿到的 pack 選集」與「寫進 _defaults.yaml 的那份清單」可以不一致，
     # 那個不一致正好會讓租戶對著一個 tenant-api 判 unknown 的 key 填值（400）。
-    tenant_content = append_tenant_declared_stub(
-        tenant_content, declared_keys, lang="zh")
+    #
+    # 飽和類 _critical 鍵上方插入教育註解（純顯示；API 全檔重寫不保留）。
+    return _lib_confedit.NewFile(f"{tenant_name}.yaml", tenant_data, head,
+                                 tenant_declared_foot(declared_keys, lang="zh"),
+                                 node_head=saturation_critical_head)
 
+
+def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict,
+                  report: str, relabel_snippet: str | None = None,
+                  mapping_hint: dict | None = None, *, with_defaults: bool = True,
+                  declared_keys: list | None = None) -> tuple[list, list]:
+    """`(conf.d files [_lib_confedit.NewFile], every other write [(path,
+    text)])` of one tenant's outputs; nothing is written here (nor the
+    output directory created: the conf.d batch does that). *with_defaults* False leaves `_defaults.yaml` to
+    the caller (`--from-onboard` writes one for all its tenants);
+    *declared_keys* is this tenant's declared list (default: the one in
+    *defaults_data*)."""
+    out = Path(output_dir)
+    if declared_keys is None:
+        declared_keys = defaults_data.get("optional_overrides") or []
+
+    confd = []
+    if with_defaults:
+        confd.append(defaults_confd_file(defaults_data))
+    confd.append(tenant_confd_file(tenant_name, tenant_data, defaults_data, declared_keys))
     # v2.1.0 ADR-006: the _instance_mapping hint (1:N topology)
-    mapping_path = str(out / "_instance_mapping.yaml")
-    mapping_content = None
     if mapping_hint:
-        mapping_content = (
-            "# _instance_mapping.yaml — 1:N Tenant Mapping (ADR-006)\n"
-            "# Generated by scaffold_tenant.py --topology=1:N\n"
-            "# Merge into your config-dir's _instance_mapping.yaml\n"
-            "# Then run: generate_tenant_mapping_rules.py --config-dir <dir>\n"
-            + yaml.safe_dump(mapping_hint, default_flow_style=False,
-                             allow_unicode=True, sort_keys=False)
-        )
+        confd.append(_lib_confedit.NewFile("_instance_mapping.yaml", mapping_hint, "\n".join([
+            "_instance_mapping.yaml — 1:N Tenant Mapping (ADR-006)",
+            "Generated by scaffold_tenant.py --topology=1:N",
+            "Merge into your config-dir's _instance_mapping.yaml",
+            "Then run: generate_tenant_mapping_rules.py --config-dir <dir>",
+        ])))
 
-    # The conf.d files (confirmed before anything is written, ADR-036 §2)
-    # and every file in the order it is written.
-    confd = [
-        ("_defaults.yaml", defaults_content, defaults_data),
-        (f"{tenant_name}.yaml", tenant_content, tenant_data),
-        *([("_instance_mapping.yaml", mapping_content, mapping_hint)]
-          if mapping_content is not None else []),
-    ]
-    writes = [(defaults_path, defaults_content), (tenant_path, tenant_content)]
+    # Every other file, in the order it is written (after the conf.d batch).
+    writes = []
     # relabel_configs (N:1 topology) — a Prometheus snippet, not a conf.d file.
     if relabel_snippet:
         writes.append((str(out / f"relabel_configs-{tenant_name}.yaml"), relabel_snippet))
-    if mapping_content is not None:
-        writes.append((mapping_path, mapping_content))
     writes.append((str(out / "scaffold-report.txt"), report))
     return confd, writes
 
 
-def _perform_writes(writes: list) -> None:
+def _perform_writes(out: Path, confd: list, writes: list) -> None:
+    """The conf.d batch (all or nothing), then every other file."""
+    _write_confd_files(out, confd)
+    for f in confd:
+        print(f"  📄 {out / f.rel}")
     for path, content in writes:
         write_text_or_die(path, content, flag=_OUTPUT_FLAG)
         print(f"  📄 {path}")
 
 
 def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> None:
-    """Write all output files — after the conf.d ones are confirmed (ADR-036
-    §2, #2906: each text read back by `da-guard parse-tree` at the path it is
-    written to in -o, a conf.d layout, must hold exactly what was generated,
-    at a path a reader reads; otherwise rc 2 and nothing written)."""
+    """Write all output files: the conf.d ones through one `da-guard write`
+    batch (ADR-036 §2, #3206 10c-3: Go writes the text, judges the tree once,
+    writes all or none; otherwise rc 2 and nothing written), then the rest."""
+    _refuse_invalid_tenant_id(tenant_name)
     confd, writes = _plan_outputs(output_dir, tenant_name, defaults_data, tenant_data,
                                   report, relabel_snippet, mapping_hint)
-    _confirm_confd_files(Path(output_dir), confd)
-    _perform_writes(writes)
+    _perform_writes(Path(output_dir), confd, writes)
 
 
 def print_catalog() -> None:
@@ -1438,21 +1465,35 @@ def run_from_onboard(args: argparse.Namespace) -> None:
         print("No tenants found in onboard hints.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # ADR-035: judged before the first file is written.
+    # ADR-035: judged before the first file is written — and before the
+    # de-duplication below, which hashes each id (a list there is named
+    # here, not a TypeError).
     _refuse_invalid_tenant_id(*tenants)
+    # A tenant named twice is scaffolded once (in its first place): two
+    # `<t>.yaml` in one batch are a caller error to da-guard write (#3206).
+    tenants = list(dict.fromkeys(tenants))
 
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")
 
-    all_confd: list = []
-    all_writes: list = []
+    # One `_defaults.yaml` for the run, of every pack any tenant selected
+    # (#3206 10c-3). Each tenant used to plan its own, and the last one
+    # written won: every other tenant's pack defaults (and declared keys) were
+    # gone from the file its tenant file points at.
+    per_tenant: list = []
+    union_dbs: list = []
     for tenant_name in tenants:
         # Resolve DB types from hints, fallback to kubernetes only
         db_list = hints.get("db_types", {}).get(tenant_name, [])
         selected_dbs = ["kubernetes"] + [db for db in db_list if db in RULE_PACKS]
+        per_tenant.append((tenant_name, selected_dbs))
+        union_dbs += [db for db in selected_dbs if db not in union_dbs]
+    defaults_data = generate_defaults(union_dbs)
 
+    all_confd: list = [defaults_confd_file(defaults_data)]
+    all_writes: list = []
+    for tenant_name, selected_dbs in per_tenant:
         print(f"\n  {tenant_name}: DBs={', '.join(selected_dbs)}")
-        defaults_data = generate_defaults(selected_dbs)
         tenant_data = generate_tenant(tenant_name, selected_dbs, interactive=False)
 
         # Apply routing hints if available
@@ -1471,15 +1512,17 @@ def run_from_onboard(args: argparse.Namespace) -> None:
                 tenant_data["tenants"][tenant_name].setdefault("_routing", {}).update(routing)
 
         report = generate_report(tenant_name, selected_dbs, output_dir)
+        # This tenant's declared list: its own packs', all in the file above.
+        own_declared = generate_defaults(selected_dbs).get("optional_overrides") or []
         confd, writes = _plan_outputs(output_dir, tenant_name, defaults_data,
-                                      tenant_data, report)
+                                      tenant_data, report, with_defaults=False,
+                                      declared_keys=own_declared)
         all_confd += confd
         all_writes += writes
 
-    # ADR-036 §2 (#2906): every tenant's conf.d files are confirmed before
-    # any file of the run is written — all or nothing.
-    _confirm_confd_files(Path(output_dir), all_confd)
-    _perform_writes(all_writes)
+    # ADR-036 §2 (#2906, #3206 10c-3): every tenant's conf.d files go in one
+    # `da-guard write` batch — all or nothing.
+    _perform_writes(Path(output_dir), all_confd, all_writes)
     print(f"\n  Scaffolded {len(tenants)} tenants to {output_dir}/")
 
 
@@ -1541,21 +1584,16 @@ def main() -> None:
         profile_data = generate_profile(args.generate_profile, selected_dbs,
                                         tier=args.tier)
         output_dir = args.output_dir
-        ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
         profiles_path = str(Path(output_dir) / "_profiles.yaml")
-        profiles_content = (
-            "# _profiles.yaml — Tenant Profile definitions\n"
-            "# Generated by scaffold_tenant.py --generate-profile\n"
-            "# Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant\n"
-            + yaml.safe_dump(profile_data, default_flow_style=False,
-                             allow_unicode=True, sort_keys=False)
-        )
-        # 飽和類 _critical 鍵上方插入教育註解（純顯示）
-        profiles_content = annotate_saturation_criticals(profiles_content)
-        # ADR-036 §2 (#2906): `_profiles.yaml` is a conf.d file too.
-        _confirm_confd_files(Path(output_dir),
-                             [("_profiles.yaml", profiles_content, profile_data)])
-        write_text_or_die(profiles_path, profiles_content, flag=_OUTPUT_FLAG)
+        # ADR-036 §2 (#2906, #3206 10c-3): `_profiles.yaml` is a conf.d file
+        # too — written by `da-guard write`, the saturation note above each
+        # saturation `<base>_critical` (純顯示).
+        _write_confd_files(Path(output_dir), [_lib_confedit.NewFile(
+            "_profiles.yaml", profile_data, "\n".join([
+                "_profiles.yaml — Tenant Profile definitions",
+                "Generated by scaffold_tenant.py --generate-profile",
+                "Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant",
+            ]), node_head=saturation_critical_head)])
         print(f"✅ Profile skeleton generated: {profiles_path}")
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")
         print(f"   DBs: {', '.join(selected_dbs)}")

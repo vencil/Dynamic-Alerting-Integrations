@@ -90,7 +90,7 @@ def written(tmp_path_factory, doc) -> dict:
 
     ⛔ `write_outputs`, not a re-assembly of the steps it takes. An earlier
     version of this file called `generate_defaults` → `yaml.safe_dump` →
-    `annotate_defaults_counterexamples` itself, so deleting the annotate call
+    the comment splice itself, so deleting the annotate call
     from the shipping path left every gate green (blind review, #1344). The
     batch paths (`--non-interactive` / `--from-onboard`) reach this function
     without asking a human anything, so this IS the tenant-facing render.
