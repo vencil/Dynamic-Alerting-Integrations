@@ -1106,7 +1106,8 @@ def _phase2_confd(phase2_results):
         foot += lines
     content = _lib_confedit.map_value(
         [("defaults", _lib_confedit.map_value(
-            (k, _lib_confedit.number_value(v)) for k, v in suggested_defaults.items()))]
+            (k, _lib_confedit.number_value(v, at=("defaults", k)))
+            for k, v in suggested_defaults.items()))]
         if suggested_defaults else [])
     return [_lib_confedit.create_entry(
         _PHASE2_DEFAULTS, content, head_comment=head,
@@ -1160,8 +1161,9 @@ def _write_phase1_outputs(output_dir, phase1_results, report, confd=None):
     dedup_info = summary.get("dedup_tenants", {})
     if confd is None:
         confd = _confd_or_die(output_dir, lambda: _phase1_confd(phase1_results))
-        ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-        _lib_confedit.write_all_or_exit(output_dir, confd, tool="onboard_platform")
+        _lib_confedit.write_all_or_exit(
+            output_dir, confd, tool="onboard_platform",
+            make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
 
     p1 = Path(output_dir) / _PHASE1_DIR
     ensure_dir_or_die(p1, flag=_OUTPUT_FLAG)
@@ -1209,8 +1211,9 @@ def _write_phase2_outputs(output_dir, phase2_results, report, confd=None):
     candidates, recording_rules, summary = phase2_results
     if confd is None:
         confd = _confd_or_die(output_dir, lambda: _phase2_confd(phase2_results))
-        ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-        _lib_confedit.write_all_or_exit(output_dir, confd, tool="onboard_platform")
+        _lib_confedit.write_all_or_exit(
+            output_dir, confd, tool="onboard_platform",
+            make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
 
     p2 = Path(output_dir) / _PHASE2_DIR
     ensure_dir_or_die(p2, flag=_OUTPUT_FLAG)
@@ -1332,8 +1335,9 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
         _phase1_confd(phase1_results) if phase1_results else [],
         _phase2_confd(phase2_results) if phase2_results else []))
 
-    ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-    _lib_confedit.write_all_or_exit(output_dir, confd1 + confd2, tool="onboard_platform")
+    _lib_confedit.write_all_or_exit(
+        output_dir, confd1 + confd2, tool="onboard_platform",
+        make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
 
     if phase1_results:
         _write_phase1_outputs(output_dir, phase1_results, report, confd=confd1)

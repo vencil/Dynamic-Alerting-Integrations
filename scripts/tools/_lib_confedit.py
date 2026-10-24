@@ -96,7 +96,7 @@ import json
 import posixpath
 import re
 from pathlib import Path
-from typing import Any, Iterable, NoReturn, Optional, Sequence
+from typing import Any, Callable, Iterable, NoReturn, Optional, Sequence
 
 import _lib_parse_tree
 
@@ -137,7 +137,9 @@ class EditError(Exception):
         self.status = str(doc.get("status") or "")
         self.reason = str(doc.get("reason") or "")
         self.message = str(doc.get("message") or "")
-        super().__init__(f"{self.path}: da-guard {command} "
+        # The call's document (no file to blame) has no path: no "<path>: ".
+        where = f"{self.path}: " if self.path else ""
+        super().__init__(f"{where}da-guard {command} "
                          f"{self.status} ({self.reason}): {self.message}")
 
 
@@ -394,17 +396,19 @@ def comment_field(what: str, text: Any) -> str:
     return str(text)
 
 
-def number_value(number: "int | float") -> dict:
+def number_value(number: "int | float", at: "Sequence[str]" = ()) -> dict:
     """A generated number that only has to be a number (a `defaults:` value,
     decoded into float64 by the exporter): `data_value` of it, except an
     `int` longer than the edit contract's 18 characters, which goes as a
     float (`10**20` → `100000000000000000000.0`) instead of being refused.
-    A `bool` or anything else that is not an int / float is ValueError."""
+    A `bool`, anything else that is not an int / float, and a NaN / infinite
+    float are ValueError naming *at* (the key path the number sits at)."""
     if isinstance(number, bool) or not isinstance(number, (int, float)):
-        raise ValueError(f"{number!r} is not a number")
+        where = ".".join(at) or "(the top level)"
+        raise ValueError(f"{where}: {number!r} is not a number")
     if isinstance(number, int) and not is_canonical_int(str(number)):
         number = float(number)
-    return data_value(number)
+    return data_value(number, tuple(str(k) for k in at))
 
 
 def node_value(node: Any) -> dict:
@@ -604,30 +608,52 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
 
 
 def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
-                      dry_run: bool = False, binary: Optional[str] = None,
-                      timeout: Optional[float] = None) -> "list[dict]":
+                      binary: Optional[str] = None, timeout: Optional[float] = None,
+                      make_root: "Optional[Callable[[], Any]]" = None) -> "list[dict]":
     """`write_all` for a one-shot CLI that writes conf.d (#3206 step 10c):
-    the files' results when the batch passes. Otherwise every line goes to
-    stderr prefixed `<tool>: ` and the process exits 2 (EXIT_CALLER_ERROR)
-    — a refusal (each refused file named with its reason, the tree-worsening
-    ones too; nothing written), da-guard's caller error or an older
-    da-guard (nothing written), no usable da-guard or no answer on a dry run
-    (`ParseTreeError`, nothing written), and a write that stopped part-way
-    (`PartialWrite`: the files written and the ones that may have been,
-    not rolled back)."""
+    the files' results when the batch passes (a dry run is `write_all(...,
+    dry_run=True)`). Otherwise every line goes to stderr prefixed `<tool>: `
+    and the process exits 2 (EXIT_CALLER_ERROR) — a refusal (each refused
+    file named with its reason, the tree-worsening ones too; nothing
+    written), da-guard's caller error or an older da-guard (nothing
+    written), no usable da-guard (`ParseTreeError`, nothing written), and a
+    write that stopped part-way (`PartialWrite`: the files written and the
+    ones that may have been, not rolled back).
+
+    *make_root*: da-guard writes into an existing *root* only (it creates
+    the directories below it). When *root* is not a directory, *make_root()*
+    (the tool's own mkdir, naming its flag on failure — a *root* that is a
+    file, say) creates it first, and every
+    directory it created is removed again — left empty — when the batch
+    exits 2, so a failed run leaves no output directory behind. Without it a
+    missing *root* is da-guard's caller error (`bad_path`)."""
     import sys  # noqa: PLC0415
 
     from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: PLC0415
+
+    created: "list[Path]" = []
+    if make_root is not None:
+        p = Path(root).absolute()
+        while not p.exists() and p != p.parent:
+            created.append(p)
+            p = p.parent
+        if not Path(root).is_dir():
+            make_root()  # also for a root that is a file: the tool names its flag
 
     def say(line: str) -> None:
         print(f"{tool}: ERROR: {line}", file=sys.stderr)
 
     def die(line: str) -> NoReturn:
         say(line)
+        for d in created:  # deepest first; one holding anything stays
+            try:
+                d.rmdir()
+            except OSError:
+                break
         sys.exit(EXIT_CALLER_ERROR)
 
     try:
-        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
+        return write_all(root, entries, binary=binary, timeout=timeout)
     except EditsRefused as exc:
         for r in exc.refusals:
             say(f"{r.path}: {r.reason}: {r.message}")

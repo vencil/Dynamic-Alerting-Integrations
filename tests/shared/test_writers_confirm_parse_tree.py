@@ -806,7 +806,7 @@ def test_onboard_platform_does_not_write_a_path_no_reader_reads(tmp_path, capsys
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "phase1-routing/.hidden.yaml" in err and "nothing was written" in err, err
-    assert not out.exists() or _bytes(out) == {}
+    assert not out.exists(), sorted(_bytes(out))  # -o is not even created
 
 
 def test_onboard_platform_refuses_a_tenant_id_a_comment_cannot_carry(tmp_path, capsys):
@@ -821,14 +821,14 @@ def test_onboard_platform_refuses_a_tenant_id_a_comment_cannot_carry(tmp_path, c
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "the tenant id" in err and "U+2028" in err, err
-    assert not out.exists() or _bytes(out) == {}
+    assert not out.exists(), sorted(_bytes(out))  # -o is not even created
 
 
 def test_onboard_platform_without_da_guard_is_exit_2(tmp_path):
     r, out = _onb(tmp_path, "30s", env=_no_da_guard(tmp_path))
     assert r.returncode == 2, r.stdout + r.stderr
     assert "da-guard" in r.stderr, r.stderr
-    assert not out.exists() or _bytes(out) == {}
+    assert not out.exists(), sorted(_bytes(out))  # -o is not even created
 
 
 def _onb_rules(tmp_path, *rules):
@@ -971,7 +971,37 @@ def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):
     r, out = _mr(tmp_path, "80", env=_no_da_guard(tmp_path))
     assert r.returncode == 2, r.stdout + r.stderr
     assert "da-guard" in r.stderr, r.stderr
-    assert not out.exists() or _bytes(out) == {}
+    assert not out.exists(), sorted(_bytes(out))  # -o is not even created
+
+
+def test_a_failed_batch_leaves_no_output_directory(tmp_path):
+    # The conf.d batch goes first; when it exits 2 (here: no da-guard), the
+    # -o directories the run created for it — a nested one too — are gone
+    # again, so a failed run leaves nothing behind (as before #3206).
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 80\n", encoding="utf-8")
+    nested = tmp_path / "new" / "deeper" / "out"
+    r = _run("ops/migrate_rule.py", str(rules), "-o", str(nested),
+             env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not (tmp_path / "new").exists()
+    am = tmp_path / "am.yml"
+    am.write_text(_OB_AM.replace("{GW}", "30s"), encoding="utf-8")
+    r = _run("ops/onboard_platform.py", "--alertmanager-config", str(am),
+             "-o", str(nested), env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not (tmp_path / "new").exists()
+
+
+def test_migrate_rule_names_a_threshold_with_no_finite_value(tmp_path):
+    # 1e999 is inf: once written as `.inf`, it has no finite number the
+    # exporter's `defaults:` holds — rc 2 naming the key, nothing written.
+    r, out = _mr(tmp_path, "1e999")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert ("defaults-snippet.yaml: defaults.custom_app_queue_depth: "
+            "the float inf is not a finite number") in r.stderr, r.stderr
+    assert not out.exists(), sorted(_bytes(out))
 
 
 def test_migrate_rule_dry_run_and_triage_need_no_da_guard(tmp_path):

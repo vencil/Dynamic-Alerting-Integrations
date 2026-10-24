@@ -1188,8 +1188,13 @@ def defaults_snippet_entry(results):
         "   defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 \"disable\"。",
         "============================================================",
     ])
-    content = _lib_confedit.map_value([("defaults", _lib_confedit.map_value(
-        (k, _lib_confedit.number_value(v)) for k, v in defaults.items()))])
+    try:
+        numbers = [(k, _lib_confedit.number_value(v, at=("defaults", k)))
+                   for k, v in defaults.items()]
+    except ValueError as exc:
+        # A threshold with no finite value (`1e999`): named, nothing written.
+        raise ValueError(f"{DEFAULTS_SNIPPET}: {exc}") from None
+    content = _lib_confedit.map_value([("defaults", _lib_confedit.map_value(numbers))])
     return _lib_confedit.create_entry(DEFAULTS_SNIPPET, content, head_comment=head,
                                       replace=True)
 
@@ -1449,8 +1454,9 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     except ValueError as exc:
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
-    _lib_confedit.write_all_or_exit(output_dir, entries, tool="migrate_rule")
+    _lib_confedit.write_all_or_exit(
+        output_dir, entries, tool="migrate_rule",
+        make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")

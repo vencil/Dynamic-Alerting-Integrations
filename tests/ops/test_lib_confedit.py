@@ -624,3 +624,49 @@ def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "t: ERROR: cannot write the conf.d files through `da-guard write`" in err, err
     assert not (tmp_path / "a.yaml").exists()
+
+
+def test_a_caller_error_with_no_file_to_blame_names_no_path():
+    err = ce.EditCallerError({"path": "", "status": ce.CALLER_ERROR, "reason": "bad_path",
+                              "message": "no such directory"})
+    assert str(err) == "da-guard write caller_error (bad_path): no such directory"
+    err = ce.EditCallerError({"path": "a.yaml", "status": ce.CALLER_ERROR,
+                              "reason": "path_exists", "message": "m"})
+    assert str(err) == "a.yaml: da-guard write caller_error (path_exists): m"
+
+
+def test_write_all_or_exit_without_make_root_names_a_missing_root_once(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path / "missing", [ce.create_entry("a.yaml", ce.map_value([]))],
+                             tool="t")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("t: ERROR: da-guard write caller_error (bad_path): "), err
+
+
+def test_write_all_or_exit_make_root_creates_and_on_failure_removes_the_root(tmp_path, capsys):
+    root = tmp_path / "a" / "b"
+    made = []
+
+    def make():
+        made.append(1)
+        root.mkdir(parents=True)
+    out = ce.write_all_or_exit(root, [ce.create_entry("x.yaml", ce.map_value([]))],
+                               tool="t", make_root=make)
+    assert made == [1] and [r["status"] for r in out] == [ce.WRITTEN]
+    assert (root / "x.yaml").is_file()
+    # existing root: make_root is not called
+    ce.write_all_or_exit(root, [], tool="t", make_root=lambda: made.append(2))
+    assert made == [1]
+    # a failing batch removes what make_root created, the missing parents too
+    fresh = tmp_path / "c" / "d"
+    with pytest.raises(SystemExit):
+        ce.write_all_or_exit(fresh, [ce.create_entry(".hidden.yaml", ce.map_value([]))],
+                             tool="t", make_root=lambda: fresh.mkdir(parents=True))
+    assert not (tmp_path / "c").exists()
+    assert ".hidden.yaml: not_read:" in capsys.readouterr().err
+
+
+def test_number_value_names_where_a_non_finite_number_sits():
+    with pytest.raises(ValueError, match=r"^defaults\.k: the float inf is not a finite number"):
+        ce.number_value(float("inf"), at=("defaults", "k"))
