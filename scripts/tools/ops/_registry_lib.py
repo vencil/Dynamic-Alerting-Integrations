@@ -872,9 +872,12 @@ def counterexample_sentence(ce: dict, lang: str = "zh") -> str:
     return f"#{ce['issue']} {mark}: {counterexample_observed(ce, 'en')} ({verdict})"
 
 
-def annotate_defaults_counterexamples(dumped: str, rule_packs: Optional[dict] = None,
-                                      lang: str = "zh") -> str:
-    """Splice the ⚠ comment above each emitted key that has one.
+def defaults_counterexample_head(at: tuple, value: Any,
+                                 rule_packs: Optional[dict] = None,
+                                 lang: str = "zh") -> Optional[str]:
+    """The ⚠ comment above an emitted `_defaults.yaml` key that has one: a
+    `_lib_confedit.data_value` *head* (key path, value) → comment text, or
+    None.
 
     ⛔ Why this exists at all: the interactive prompt only reaches a human who
     is ANSWERING PROMPTS. `generate_defaults` → `write_outputs` is the path
@@ -885,45 +888,45 @@ def annotate_defaults_counterexamples(dumped: str, rule_packs: Optional[dict] = 
 
     ⛔ It lives HERE, not in `scaffold_tenant`, because there are TWO producers
     of that file: `scaffold_tenant.write_outputs` and
-    `init_project._gen_defaults_yaml`. It was in `scaffold_tenant`, so the
+    `init_project._defaults_file`. It was in `scaffold_tenant`, so the
     second producer wrote the same declared keys bare — same directory, same
     filename, one annotated and one not (blind review, #1344).
 
-    A text splice rather than a comment-preserving dumper: the file is
-    `yaml.safe_dump`ed, which drops comments by construction, and swapping the
-    dumper for one annotation would rewrite every line of a file the Go loader
-    reads. The splice keys off the emitted line, so it can only annotate a key
-    this run actually wrote.
+    A comment da-guard writes (ADR-036 §2, #3206 10c-3): Go writes the file,
+    this says which comment goes above which node. It is asked about every
+    node `da-guard write` will emit, so it can only annotate a key this run
+    actually writes.
 
     ⛔ BOTH shapes, not just `key: value`. `optional_overrides:` is a plain
-    string LIST (`- oracle_process_count`), so a colon-only splice skipped the
+    string LIST (`- oracle_process_count`), so a mapping-only rule skipped the
     entire declared tier — the tier #1320 D1 says a tenant can fill in today.
+    A sequence item (its path ends `[i]`) is annotated by its string value; a
+    key whose value is a non-empty mapping or sequence (a section) is not.
 
-    ⛔ WRAPPED, like every other composer. This one used to interpolate the
-    sentence raw, so an `observed` containing a newline emitted its tail at
-    column 0 and the written `_defaults.yaml` stopped being valid YAML. The
-    schema now forbids the newline at the source; wrapping here means a single
-    bad field cannot corrupt a customer file even if it slips in some other way.
+    ⛔ WRAPPED, like every other composer, at the width left at the node's
+    indent (yaml.v3's: two columns a level, a sequence item indented under
+    its key). This one used to interpolate the sentence raw, so an `observed`
+    containing a newline emitted its tail at column 0 and the written
+    `_defaults.yaml` stopped being valid YAML. The schema forbids the newline
+    at the source; da-guard writes every comment line as `# <line>` besides.
     """
-    out: list[str] = []
-    for line in dumped.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            key = stripped[2:].strip().strip("'\"")
-        elif stripped.endswith(":") or ":" not in stripped:
-            out.append(line)
-            continue
-        else:
-            key = stripped.split(":", 1)[0].strip()
-        ce = counterexample_for_key(key, rule_packs)
-        if ce:
-            indent = line[: len(line) - len(line.lstrip())]
-            cont = f"{indent}# "
-            body = "⚠ " + " ".join(counterexample_sentence(ce, lang).split())
-            out.extend(f"{cont}{seg}" for seg in _wrap_comment(
-                body, _COMMENT_WIDTH - len(cont)))
-        out.append(line)
-    return "\n".join(out)
+    if not at:
+        return None
+    last = at[-1]
+    if last.startswith("[") and last.endswith("]"):
+        if not isinstance(value, str):
+            return None
+        key = value
+    elif isinstance(value, (dict, list, tuple)) and value:
+        return None
+    else:
+        key = last
+    ce = counterexample_for_key(key, rule_packs)
+    if not ce:
+        return None
+    indent = 2 * (len(at) - 1)
+    body = "⚠ " + " ".join(counterexample_sentence(ce, lang).split())
+    return "\n".join(_wrap_comment(body, _COMMENT_WIDTH - indent - len("# ")))
 
 
 def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
@@ -1400,7 +1403,7 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
             # exactly the reader about to copy the reference figure (#1344).
             #
             # ⚠️ BELOW the item and indented, whereas
-            # `annotate_defaults_counterexamples` puts it ABOVE the key. Not an
+            # `defaults_counterexample_head` puts it ABOVE the key. Not an
             # oversight: this block is a YAML LIST whose items already carry a
             # trailing `# unit — desc` comment that continues on indented
             # comment lines (`_append_wrapped_comment`), so the caveat is the
@@ -1690,8 +1693,8 @@ def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
 
 # The header sentence that POINTS AT the block above — and the pointer is the
 # half that was still asserted rather than derived (#1321 review). The block is
-# emitted only when the declared list is non-empty (``append_tenant_declared_stub``
-# returns ``text`` unchanged for an empty list), while both generators' headers
+# emitted only when the declared list is non-empty (``tenant_declared_foot``
+# returns None for an empty list), while both generators' headers
 # said "the list is at the end of this file" unconditionally. Measured: the
 # optional tier of mariadb / redis / postgresql / kafka / rabbitmq / jvm / nginx
 # is `_critical`-only, so `shipped_optional_keys_for_packs` returns [] for every
@@ -1736,7 +1739,7 @@ def render_tenant_declared_note_lines(keys, lang: str = "zh") -> list[str]:
     """The tenant header's declared-tier paragraph, true for ``keys``.
 
     ``keys`` must be the SAME list the caller hands
-    ``append_tenant_declared_stub`` — that is what makes "the list is at the end
+    ``tenant_declared_foot`` — that is what makes "the list is at the end
     of this file" a fact about the file being written rather than a hope. Both
     generators hold exactly one such list per run (``scaffold_tenant`` from the
     sibling ``_defaults.yaml`` it just built, ``init_project`` from
@@ -1751,28 +1754,29 @@ def render_tenant_declared_note_lines(keys, lang: str = "zh") -> list[str]:
             for line in _TENANT_STUB_DECLARED_NOTE[(lang, bool(keys))]]
 
 
-def append_tenant_declared_stub(
-    text: str,
+def tenant_declared_foot(
     keys,
     rule_packs: Optional[dict] = None,
     lang: str = "zh",
     indent: int = 4,
-) -> str:
-    """Append the declared-key block to a rendered tenant stub. Idempotent.
+) -> Optional[str]:
+    """The declared-key block of a tenant stub as the file's foot comment
+    (`_lib_confedit.create_entry`'s *foot_comment*), or None for an empty
+    list.
 
-    A file-level reference section appended AFTER the dumped YAML, not spliced
-    into the tenant's own mapping: a stub with no overrides dumps as
-    ``<tenant>: {}`` (flow style), so there is no block-mapping context to
-    splice into at all. The prose says so — copying a line into a tenant that
-    still reads ``{}`` needs the ``{}`` removed first, and a hint that quietly
-    produces a YAML syntax error would be worse than no hint.
+    A file-level reference section AFTER the tenant's YAML (da-guard writes
+    it after the last node, set off by a blank line), not inside the
+    tenant's own mapping: a stub with no overrides is ``<tenant>: {}`` (flow
+    style), so there is no block-mapping context to put it in at all. The
+    prose says so — copying a line into a tenant that still reads ``{}``
+    needs the ``{}`` removed first, and a hint that quietly produces a YAML
+    syntax error would be worse than no hint.
     """
     lines = render_tenant_declared_stub_lines(keys, rule_packs, lang, indent)
-    if not lines or TENANT_STUB_DECLARED_HEADING[lang] in text:
-        return text
-    if text and not text.endswith("\n"):
-        text += "\n"
-    return text + "\n".join(lines) + "\n"
+    if not lines:
+        return None
+    import _lib_confedit  # noqa: PLC0415  (scripts/tools, on the path above)
+    return _lib_confedit.comment_block("\n".join(lines))
 
 
 def _confd_mapping(doc: dict, keep) -> dict:

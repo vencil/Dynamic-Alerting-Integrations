@@ -56,6 +56,10 @@ contract). Where the value came from decides which:
   of, #3206 step 10c-2) has the type it has in Python — a `str` stays a
   string, an `int` an int, a `float` a float in canonical decimal; one with
   no such type (a NaN, an infinite float) is `ValueError`, naming its key.
+  Its *head* says which comment goes above which node (#3206 step 10c-3);
+  `NewFile` is such a file with its head and foot comments, and its
+  `preview()` the text da-guard writes for it. An input a tool puts into a
+  comment is checked first (`check_comment_input`), naming the input.
 
 Several files, all or nothing
 -----------------------------
@@ -90,7 +94,7 @@ import json
 import posixpath
 import re
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 import _lib_parse_tree
 
@@ -256,6 +260,41 @@ def comments(head: Optional[str] = None, line: Optional[str] = None) -> dict:
     return out
 
 
+def comment_block(block: str) -> str:
+    """The comment text (`comments()`'s *head*, `head_comment`,
+    `foot_comment`) of *block*, lines a generator renders as comments: each
+    line `# <text>` (or a bare `#`) gives `<text>` (or an empty line), so
+    da-guard writes it back as the same line at the node's indent. A line
+    that is not a comment is ValueError, naming it: no text is guessed."""
+    out = []
+    for line in block.split("\n"):
+        if line == "#":
+            out.append("")
+        elif line.startswith("# "):
+            out.append(line[2:])
+        else:
+            raise ValueError(f"not a comment line: {line!r}")
+    return "\n".join(out)
+
+
+#: What da-guard's comment text refuses (pkg/confedit CommentText): a C0
+#: control but tab (and the line break of a several-line comment), DEL,
+#: U+0085, U+2028, U+2029 and a byte order mark.
+_COMMENT_REFUSED = re.compile("[\x00-\x08\x0a-\x1f\x7f\x85\u2028\u2029\ufeff\ud800-\udfff]")
+
+
+def check_comment_input(text: str, field: str) -> None:
+    """An input this tool puts into a comment (a tenant name, a pack name)
+    holds no character da-guard's comment text refuses (a line break
+    included: it would start a line of its own): ValueError naming *field*
+    and the character, BEFORE the batch is sent — so the caller is told
+    which input it was, not handed a bad_input for the whole batch."""
+    m = _COMMENT_REFUSED.search(str(text))
+    if m:
+        raise ValueError(f"{field} {text!r} holds the character U+{ord(m.group()):04X}, "
+                         "which a conf.d comment cannot carry")
+
+
 # ── batch entries (`write_all`) ─────────────────────────────────────
 
 def edit_entry(rel: str, ops: "Sequence[dict]") -> dict:
@@ -292,6 +331,40 @@ def delete_entry(rel: str) -> dict:
     return {"path": rel, "delete": True}
 
 
+class NewFile:
+    """A conf.d file a generator makes, as data (#3206 step 10c-3): its
+    root-relative path *rel*, its top level *data* (Python data, typed by
+    `data_value`), the comment text above it (*head_comment*) and after it
+    (*foot_comment*), and which comment goes above which node (*node_head*,
+    `data_value`'s *head*). da-guard writes the text: `entry()` is its
+    `write_all` entry, `preview()` the text it would write."""
+
+    def __init__(self, rel: str, data: dict, head_comment: Optional[str] = None,
+                 foot_comment: Optional[str] = None,
+                 node_head: "Optional[HeadFor]" = None) -> None:
+        self.rel = rel
+        self.data = data
+        self.head_comment = head_comment
+        self.foot_comment = foot_comment
+        self.node_head = node_head
+
+    def entry(self, replace: bool = False) -> dict:
+        """`create_entry` of this file (*replace*: whatever is at the path
+        is replaced whole). Raises ValueError, naming the key, for a value
+        with no edit-contract type (`data_value`)."""
+        return create_entry(self.rel, data_value(self.data, head=self.node_head),
+                            self.head_comment, self.foot_comment, replace=replace)
+
+    def preview(self, *, binary: Optional[str] = None,
+                timeout: Optional[float] = None) -> str:
+        """The text `da-guard write` writes for this file: a dry run of it
+        alone, in an empty directory of its own. Raises as `emit`."""
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory(prefix="confedit-preview-") as tmp:
+            doc = _one(COMMAND, tmp, self.entry(), True, binary, timeout)
+        return doc["content"]
+
+
 def move_entry(rel: str, from_rel: str) -> dict:
     """Move the existing file *from_rel* to the new path *rel*, byte for
     byte; *from_rel* is gone after."""
@@ -318,25 +391,44 @@ def cli_value(text: str) -> dict:
     return {"str": text}
 
 
-def data_value(obj: Any, _at: "tuple[str, ...]" = ()) -> dict:
+#: `data_value`'s *head*: (the key path, the value there) → that map entry's
+#: or sequence item's head comment, or None for none.
+HeadFor = Callable[["tuple[str, ...]", Any], Optional[str]]
+
+
+def data_value(obj: Any, _at: "tuple[str, ...]" = (), *,
+               head: "Optional[HeadFor]" = None) -> dict:
     """A value the tool GENERATED (Python data), with the type it has: a
     `dict` a mapping in its own key order, a `list` / `tuple` a sequence, a
     `bool` / `None` / `str` as themselves, an `int` an int, a finite `float`
     a float spelled in canonical decimal (`1e-05` → `0.00001`, `2.0` stays
     `2.0`). Raises ValueError, naming the key path, for anything else (a
     NaN / infinite float, an int past the contract's 18 digits, a mapping
-    key that is not a `str`, another type): no spelling is guessed for it."""
+    key that is not a `str`, another type): no spelling is guessed for it.
+
+    *head*, when given, is asked for every map entry and sequence item —
+    with its key path (a sequence item's last element `[i]`) and its value
+    — and what it returns (comment text, `comments()`'s *head*) is written
+    above that key / that item's `- `; None writes none (#3206 10c-3: the
+    comments a generator puts in a new file are layout it states here)."""
     def bad(why: str) -> ValueError:
         where = ".".join(_at) or "(the top level)"
         return ValueError(f"{where}: {why}")
+
+    def noted(at: "tuple[str, ...]", value: Any) -> Optional[dict]:
+        text = head(at, value) if head is not None else None
+        return comments(head=text) if text is not None else None
 
     if isinstance(obj, dict):
         for k in obj:
             if not isinstance(k, str):
                 raise bad(f"the key {k!r} is a {type(k).__name__}, not a str")
-        return map_value((k, data_value(v, (*_at, k))) for k, v in obj.items())
+        return map_value((k, data_value(v, (*_at, k), head=head), noted((*_at, k), v))
+                         for k, v in obj.items())
     if isinstance(obj, (list, tuple)):
-        return {"seq": [data_value(v, (*_at, f"[{i}]")) for i, v in enumerate(obj)]}
+        return seq_value((data_value(v, (*_at, f"[{i}]"), head=head),
+                          noted((*_at, f"[{i}]"), v))
+                         for i, v in enumerate(obj))
     if obj is None:
         return {"null": None}
     if isinstance(obj, bool):
@@ -555,3 +647,41 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
     written)."""
     return write_all(root, [create_entry(rel, content) for rel, content in files],
                      dry_run=dry_run, binary=binary, timeout=timeout)
+
+
+def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
+                      dry_run: bool = False, binary: Optional[str] = None,
+                      timeout: Optional[float] = None) -> "list[dict]":
+    """One `write_all`; the files' results when it wrote (or would, on a dry
+    run). Otherwise prints to stderr, each line prefixed `<tool>: `, what
+    was not written and why — every refused file with its reason, the caller
+    error, an older da-guard, no usable da-guard, or a write that stopped
+    part-way with the files written and the ones that may have been — and
+    exits 2 (#3206 step 10c: the one place a tool's conf.d batch ends).
+
+    ⚠️ Provisional copy on this branch: the shared one lands with the
+    onboard_platform / migrate_rule change and takes precedence on merge."""
+    import sys  # noqa: PLC0415
+
+    def die(lines: "Sequence[str]") -> None:
+        for line in lines:
+            print(f"{tool}: {line}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
+    except EditsRefused as exc:
+        die([*(f"ERROR: {r.path}: {r.reason}: {r.message}" for r in exc.refusals),
+             f"ERROR: da-guard write refused {len(exc.refusals)} file(s) under {root} "
+             f"— nothing was written"])
+    except EditCallerError as exc:
+        die([f"ERROR: {exc} — nothing was written"])
+    except PartialWrite as exc:
+        left = [*exc.written, *exc.maybe_written]
+        die([f"ERROR: the write under {root} stopped part-way: {exc.cause}; "
+             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
+             f"been written, not rolled back: {', '.join(left) or '(none)'}"])
+    except _lib_parse_tree.ParseTreeError as exc:
+        die([f"ERROR: cannot write through `da-guard write` (ADR-036 §2): {exc}; "
+             f"nothing was written"])
+    raise AssertionError("unreachable")  # die() exits

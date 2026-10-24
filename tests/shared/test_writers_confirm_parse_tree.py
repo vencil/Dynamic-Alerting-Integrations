@@ -35,7 +35,9 @@ CLI 先以 ADR-035 擋下不合法的 id，函式層呼叫則由確認擋下；m
 `_defaults.yaml`。第 6 列對產生新檔的工具就是第 2 列：預期內容是工具要寫的資料，
 判定是 yaml.v3 讀回的型別。generate_tenant_fixture 改由 `da-guard write` 一次一批寫
 （#3206 步驟 10c-2）：文字是 Go 的，第 2 列成為「值沒有契約型別（`inf`）就不寫」與
-「emit 拒寫一個檔就一個都不寫」。
+「emit 拒寫一個檔就一個都不寫」。init_project 與 scaffold_tenant 同樣改由 `da-guard
+write` 一次一批寫 conf.d（#3206 步驟 10c-3，每個檔整份取代原路徑上的檔）：第 2 列同上，
+拒寫一律結束碼 2。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -324,16 +326,52 @@ def test_init_project_writes_what_reads_back(tmp_path):
     assert (tmp_path / "repo" / "conf.d" / "tenant-a.yaml").is_file()
 
 
-def test_init_project_refuses_a_generated_text_that_reads_back_differently(
-        tmp_path, monkeypatch):
+def test_init_project_refuses_a_value_with_no_contract_type(tmp_path, monkeypatch):
+    # #3206 10c-3: the text is Go's, so "reads back differently" cannot
+    # happen; a value the edit contract has no type for (inf) is not sent.
     import init_project as ip
     real = ip._tenant_override_rows
     monkeypatch.setattr(ip, "_tenant_override_rows",
-                        lambda t, packs: {**real(t, packs), "probe_key": "1e3"})
+                        lambda t, packs: {**real(t, packs), "probe_key": float("inf")})
     out = tmp_path / "repo"
     with pytest.raises(ip._ConfdWriteRefused) as exc:
         ip.run_init(_init_config(["tenant-a"]), str(out))
-    assert "probe_key" in str(exc.value)
+    assert "probe_key" in str(exc.value) and "tenant-a.yaml" in str(exc.value)
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_init_project_one_refused_file_writes_none(tmp_path, monkeypatch, capsys):
+    # One batch: tenant-b's file (made to declare tenant-a too) worsens the
+    # tree — a tenant declared twice — so tenant-a's file and `_defaults.yaml`
+    # are not written either, nor anything else of the run.
+    import init_project as ip
+    real = ip._tenant_file
+
+    def twice(tenant, packs):
+        f = real(tenant, packs)
+        if tenant == "tenant-b":
+            f.data["tenants"]["tenant-a"] = {}
+        return f
+    monkeypatch.setattr(ip, "_tenant_file", twice)
+    out = tmp_path / "repo"
+    with pytest.raises(SystemExit) as exc:
+        ip.run_init(_init_config(["tenant-a", "tenant-b"]), str(out))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "init_project: ERROR:" in err and "nothing was written" in err, err
+    assert "duplicate_tenant" in err, err
+    assert not out.exists() or _bytes(out) == {}, sorted(_bytes(out))
+
+
+def test_init_project_refuses_a_rule_pack_no_comment_can_carry(tmp_path):
+    # The pack names go into `_defaults.yaml`'s header comment: refused
+    # before the batch, naming the input — not the whole batch's bad_input.
+    import init_project as ip
+    out = tmp_path / "repo"
+    with pytest.raises(ip._ConfdWriteRefused) as exc:
+        ip.run_init({**_init_config(["tenant-a"]), "rule_packs": ["mariadb\rx"]},
+                    str(out))
+    assert "--rule-packs" in str(exc.value) and "U+000D" in str(exc.value)
     assert not out.exists() or _bytes(out) == {}
 
 
@@ -365,14 +403,34 @@ def test_scaffold_tenant_writes_what_reads_back(tmp_path):
     assert (tmp_path / "out" / "tenant-a.yaml").is_file()
 
 
-def test_scaffold_tenant_refuses_a_generated_text_that_reads_back_differently(tmp_path):
+def test_scaffold_tenant_refuses_a_value_with_no_contract_type(tmp_path, capsys):
+    # #3206 10c-3: a value the edit contract has no type for (inf) is not
+    # sent — rc 2, named, and nothing of the run written (the report neither).
     import scaffold_tenant as st
     out = tmp_path / "out"
     with pytest.raises(SystemExit) as exc:
         st.write_outputs(str(out), "tenant-a", {"defaults": {"cpu": 70}},
-                         {"tenants": {"tenant-a": {"cpu": "1e3"}}}, "report")
+                         {"tenants": {"tenant-a": {"cpu": float("inf")}}}, "report")
     assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "tenant-a.yaml" in err and "tenants.tenant-a.cpu" in err, err
     assert _bytes(out) == {}
+
+
+def test_scaffold_tenant_one_refused_file_writes_none(tmp_path, capsys):
+    # One batch: the `_defaults.yaml` scaffold adds deselects the
+    # `_defaults.yml` already in -o (the tree gets worse) — refused, so the
+    # tenant file and the report are not written either; rc 2.
+    import scaffold_tenant as st
+    out = _tree(tmp_path / "out", {"_defaults.yml": "defaults:\n  k: 1\n"})
+    before = _bytes(out)
+    with pytest.raises(SystemExit) as exc:
+        st.write_outputs(str(out), "tenant-a", {"defaults": {"cpu": 70}},
+                         {"tenants": {"tenant-a": {"cpu": "70"}}}, "report")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "_defaults.yml" in err and "nothing was written" in err, err
+    assert _bytes(out) == before
 
 
 def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
@@ -532,15 +590,14 @@ def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_p
 
 # ── E2 review follow-ups ─────────────────────────────────────────────────
 
-def test_scaffold_generate_profile_is_confirmed_before_it_is_written(tmp_path, monkeypatch):
-    # `_profiles.yaml` is a conf.d file: a profile text that does not read
-    # back as generated is not written (here a key string PyYAML writes
-    # plain and yaml.v3 reads as a number).
+def test_scaffold_generate_profile_goes_through_da_guard_write(tmp_path, monkeypatch):
+    # `_profiles.yaml` is a conf.d file: written by `da-guard write`; a value
+    # the edit contract has no type for (inf) is not written (#3206 10c-3).
     import scaffold_tenant as st
     real = st.generate_profile
     monkeypatch.setattr(st, "generate_profile", lambda name, dbs, tier="prod": {
         "profiles": {name: {**real(name, dbs, tier=tier)["profiles"][name],
-                            "probe_key": "1e3"}}})
+                            "probe_key": float("inf")}}})
     out = tmp_path / "out"
     monkeypatch.setattr(sys, "argv", ["scaffold_tenant.py", "--generate-profile", "p1",
                                       "--db", "mariadb", "-o", str(out)])
@@ -555,7 +612,8 @@ def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
     hints.write_text(json.dumps({
         "tenants": ["db-a", "db-b"],
         "routing_hints": {"db-a": {"receiver_type": "webhook", "group_wait": "30s"},
-                          "db-b": {"receiver_type": "webhook", "group_wait": "1e3"}},
+                          # JSON `Infinity`: a value with no contract type.
+                          "db-b": {"receiver_type": "webhook", "group_wait": float("inf")}},
     }), encoding="utf-8")
     out = tmp_path / "out"
     r = _run("ops/scaffold_tenant.py", "--from-onboard", str(hints), "-o", str(out))

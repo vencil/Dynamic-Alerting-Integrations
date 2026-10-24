@@ -34,8 +34,6 @@ import pytest
 import yaml
 
 from scaffold_tenant import (
-    annotate_defaults_counterexamples,
-    annotate_saturation_criticals,
     build_receiver_from_args,
     counterexample_for_key,
     counterexample_prompt_lines,
@@ -48,6 +46,7 @@ from scaffold_tenant import (
     print_catalog,
     run_non_interactive,
     run_from_onboard,
+    saturation_critical_head,
     saturation_default_keys,
     write_outputs,
     RULE_PACKS,
@@ -364,16 +363,22 @@ class TestWriteOutputs:
             assert os.path.isfile(os.path.join(tmpdir, "scaffold-report.txt"))
 
     @_skipif_unix_modes
-    def test_secure_permissions(self):
-        """輸出檔案權限為 0o600。"""
+    def test_file_permissions(self):
+        """conf.d 檔由 `da-guard write` 新建：權限是它的 0o644（#3206 10c-3；
+        既有檔被取代時沿用原檔權限）；其他檔仍由本工具以 0o600 寫出。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             defaults = {"defaults": {}}
             tenant = {"tenants": {"db-c": {}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            for fn in ["_defaults.yaml", "db-c.yaml", "scaffold-report.txt"]:
+            for fn, want in [("_defaults.yaml", 0o644), ("db-c.yaml", 0o644),
+                             ("scaffold-report.txt", 0o600)]:
                 path = os.path.join(tmpdir, fn)
                 mode = os.stat(path).st_mode & 0o777
-                assert mode == 0o600, f"{fn} permissions {oct(mode)} != 0o600"
+                assert mode == want, f"{fn} permissions {oct(mode)} != {oct(want)}"
+            # A replace keeps the mode the file has.
+            os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o600)
+            write_outputs(tmpdir, "db-c", defaults, tenant, "report")
+            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o600
 
     def test_creates_relabel_file(self):
         """提供 relabel_snippet 時建立 relabel 檔案。"""
@@ -813,8 +818,9 @@ class TestRunNonInteractive:
             assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.yaml"))
 
     @_skipif_unix_modes
-    def test_mapping_file_secure_permissions(self):
-        """_instance_mapping.yaml has secure 0o600 permissions."""
+    def test_mapping_file_permissions(self):
+        """_instance_mapping.yaml is a conf.d file `da-guard write` creates:
+        its mode, 0o644 (#3206 10c-3)."""
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -829,7 +835,7 @@ class TestRunNonInteractive:
             run_non_interactive(args)
             mapping_path = os.path.join(d, "_instance_mapping.yaml")
             mode = os.stat(mapping_path).st_mode & 0o777
-            assert mode == 0o600
+            assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +865,36 @@ class TestRunFromOnboard:
             run_from_onboard(args)
             assert os.path.exists(os.path.join(d, "db-a.yaml"))
             assert os.path.exists(os.path.join(d, "db-b.yaml"))
+
+    def test_one_defaults_file_holds_every_tenants_packs(self):
+        """⛔ 迴歸（#3206 10c-3）：每個租戶各算一份 `_defaults.yaml`、寫到同一個
+        路徑，最後一個贏——db-a 選的 mariadb 的 defaults 與 db-b 選的 oracle
+        的宣告 key 只會剩一邊。現在是所有租戶的 pack 取聯集、只寫一份。"""
+        with tempfile.TemporaryDirectory() as d:
+            hints = {
+                "tenants": ["db-a", "db-b"],
+                "db_types": {"db-a": ["mariadb"], "db-b": ["oracle"]},
+                "routing_hints": {},
+            }
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump(hints, f)
+            run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=d))
+            with open(os.path.join(d, "_defaults.yaml"), encoding="utf-8") as f:
+                written = yaml.safe_load(f)
+            with open(os.path.join(d, "db-a.yaml"), encoding="utf-8") as f:
+                db_a = f.read()
+            with open(os.path.join(d, "db-b.yaml"), encoding="utf-8") as f:
+                db_b = f.read()
+        for db in ("mariadb", "oracle"):
+            for key in RULE_PACKS[db]["defaults"]:
+                assert key in written["defaults"], (db, key)
+        oracle_declared = generate_defaults(["kubernetes", "oracle"])["optional_overrides"]
+        assert written["optional_overrides"] == oracle_declared
+        # Each tenant file lists its OWN packs' declared keys (all in the file
+        # above): db-a chose mariadb, which declares none.
+        assert [k for k, _ in _stub_key_lines(db_b)] == oracle_declared
+        assert _stub_key_lines(db_a) == []
 
     def test_with_routing_hints(self):
         with tempfile.TemporaryDirectory() as d:
@@ -963,52 +999,41 @@ EXPECTED_SATURATION_KEYS = {
 }
 
 
-class TestAnnotateSaturationCriticals:
-    """annotate_saturation_criticals() 行插入測試。"""
+class TestSaturationCriticalHead:
+    """saturation_critical_head()：哪個節點上方有教育註解（#3206 10c-3：註解是
+    交給 da-guard write 的資料，不再是對 PyYAML 文字的行插入）。"""
 
-    def test_inserts_comment_above_saturation_critical(self):
-        """飽和 _critical 鍵上方插入註解，縮排保留。"""
-        text = 'tenants:\n  db-x:\n    mysql_threads_running_critical: "50"\n'
-        out = annotate_saturation_criticals(text)
-        lines = out.split("\n")
-        idx = next(i for i, l in enumerate(lines)
-                   if l.strip().startswith("mysql_threads_running_critical:"))
-        assert lines[idx - 1] == f"    {SATURATION_CRITICAL_COMMENT}"
+    _TEXT = SATURATION_CRITICAL_COMMENT[len("# "):]
+
+    def test_saturation_critical_key_gets_the_note(self):
+        at = ("tenants", "db-x", "mysql_threads_running_critical")
+        assert saturation_critical_head(at, "50") == self._TEXT
 
     def test_non_saturation_critical_untouched(self):
         """非飽和鍵（pg_replication_lag_critical）不插註解。"""
-        text = 'tenants:\n  db-x:\n    pg_replication_lag_critical: "60"\n'
-        out = annotate_saturation_criticals(text)
-        assert out == text
-
-    def test_commented_line_not_annotated(self):
-        """已註解行（# 開頭）不誤觸。"""
-        text = 'tenants:\n  db-x:\n    # mysql_threads_running_critical: "50"\n'
-        out = annotate_saturation_criticals(text)
-        assert out == text
-
-    def test_idempotent(self):
-        """重複套用不重複插入。"""
-        text = 'tenants:\n  db-x:\n    mysql_threads_running_critical: "50"\n'
-        once = annotate_saturation_criticals(text)
-        assert annotate_saturation_criticals(once) == once
-
-    def test_yaml_roundtrip_data_unchanged(self):
-        """插入註解後 safe_load 資料等值（純顯示、不改語義）。"""
-        text = yaml.safe_dump(
-            {"tenants": {"db-x": {
-                "mysql_threads_running_critical": "50",
-                "container_memory_critical": "95",
-                "pg_replication_lag_critical": "60",
-            }}},
-            default_flow_style=False, sort_keys=False)
-        out = annotate_saturation_criticals(text)
-        assert yaml.safe_load(out) == yaml.safe_load(text)
+        assert saturation_critical_head(
+            ("tenants", "db-x", "pg_replication_lag_critical"), "60") is None
 
     def test_base_key_without_critical_suffix_untouched(self):
         """飽和 base 鍵本身（無 _critical 後綴）不插註解。"""
-        text = 'tenants:\n  db-x:\n    mysql_threads_running: "30"\n'
-        assert annotate_saturation_criticals(text) == text
+        assert saturation_critical_head(
+            ("tenants", "db-x", "mysql_threads_running"), "30") is None
+
+    def test_a_sequence_item_is_not_a_key(self):
+        assert saturation_critical_head(
+            ("tenants", "db-x", "_namespaces", "[0]"),
+            "mysql_threads_running_critical") is None
+
+    def test_the_note_lands_on_the_key_in_the_value_sent(self):
+        """data_value 把註解掛在那一個鍵上（其他鍵沒有）。"""
+        import _lib_confedit
+        v = _lib_confedit.data_value({"tenants": {"db-x": {
+            "mysql_threads_running_critical": "50",
+            "pg_replication_lag_critical": "60"}}}, head=saturation_critical_head)
+        rows = v["map"][0][1]["map"][0][1]["map"]
+        assert rows[0] == ["mysql_threads_running_critical", {"str": "50"},
+                           {"head": self._TEXT}]
+        assert rows[1] == ["pg_replication_lag_critical", {"str": "60"}]
 
 
 class TestSaturationWriteOutputs:
@@ -1939,14 +1964,16 @@ class TestTenantStubDeclaredBlock:
         parsed = yaml.safe_load(_paste_declared_lines_under_tenant(content, "db-c"))
         assert set(keys) <= set(parsed["tenants"]["db-c"])
 
-    def test_appending_twice_is_a_no_op(self):
-        """共用 appender 宣稱冪等（比照 annotate_saturation_criticals）——釘住它，
-        免得日後有人把它接到「重寫既有租戶檔」的路徑上時堆出第二段。"""
-        from _registry_lib import append_tenant_declared_stub
+    def test_rewriting_the_tenant_file_does_not_stack_a_second_block(self):
+        """重跑到同一個 -o 會整份取代租戶檔（#3206 10c-3：`da-guard write` 的
+        replace），檔尾那一段仍只有一份——不會疊在舊檔的那段後面。"""
+        from _registry_lib import TENANT_STUB_DECLARED_HEADING
 
-        keys = self._declared(["oracle"])
-        once = append_tenant_declared_stub("tenants:\n  db-c: {}\n", keys, lang="zh")
-        assert append_tenant_declared_stub(once, keys, lang="zh") == once
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first = _tenant_yaml_for(tmpdir, ["oracle"])
+            again = _tenant_yaml_for(tmpdir, ["oracle"])
+        assert first == again
+        assert again.count(TENANT_STUB_DECLARED_HEADING["zh"]) == 1
 
     def test_cli_path_carries_the_block_end_to_end(self):
         """接線也要釘住：run_non_interactive 這條真正的出貨路徑要有這一段。"""
@@ -2002,10 +2029,12 @@ class TestCounterexamplePrompt:
         of those numbers have measured counter-examples.
         """
         defaults = generate_defaults(["oracle", "db2"])
-        dumped = yaml.safe_dump(defaults, default_flow_style=False,
-                                allow_unicode=True, sort_keys=False)
-        annotated = annotate_defaults_counterexamples(dumped)
-        lines = annotated.split("\n")
+        # The file as written (#3206 10c-3: da-guard writes it, the caveat is
+        # the comment this tool puts above the key).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_outputs(tmpdir, "db-c", defaults, {"tenants": {"db-c": {}}}, "r")
+            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+                lines = f.read().split("\n")
 
         marked = 0
         for key, info in (
@@ -2051,7 +2080,7 @@ class TestCounterexamplePrompt:
         assert _CE_MARK not in lines[idx - 1], clean
 
         # ...and the result is still loadable YAML (comments, not corruption).
-        assert yaml.safe_load(annotated) == defaults
+        assert yaml.safe_load("\n".join(lines)) == defaults
 
     def test_every_registry_counterexample_is_reachable_from_a_prompt(self):
         """Non-vacuity: each key carrying the field must live in a tier the

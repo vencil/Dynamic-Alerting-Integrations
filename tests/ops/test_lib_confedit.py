@@ -114,6 +114,50 @@ def test_a_generated_float_reads_back_as_the_number_meant(tmp_path):
         "a": ("!!float", "0.00001"), "b": ("!!float", "2.0"), "c": ("!!int", "7")}
 
 
+def test_a_generated_value_carries_the_head_comments_asked_for():
+    # #3206 10c-3: `head` is asked about every map entry and sequence item
+    # (its key path, its value); what it returns goes above that node only.
+    seen = []
+
+    def head(at, value):
+        seen.append(at)
+        return {("d", "a"): "on a", ("l", "[1]"): "on y"}.get(at)
+
+    v = ce.data_value({"d": {"a": 1, "b": 2}, "l": ["x", "y"]}, head=head)
+    assert v == {"map": [
+        ["d", {"map": [["a", {"int": "1"}, {"head": "on a"}], ["b", {"int": "2"}]]}],
+        ["l", {"seq": [{"str": "x"}, [{"str": "y"}, {"head": "on y"}]]}]]}
+    assert sorted(seen) == sorted([("d",), ("d", "a"), ("d", "b"), ("l",),
+                                   ("l", "[0]"), ("l", "[1]")])
+
+
+def test_a_comment_block_is_its_lines_text():
+    assert ce.comment_block("# a\n#\n#   b") == "a\n\n  b"
+    with pytest.raises(ValueError, match="not a comment line"):
+        ce.comment_block("# a\nkey: 1")
+
+
+@pytest.mark.parametrize("bad", ["a\rb", "a\nb", "a\x00b", "a\x7fb", "a\u2028b", "a\ufeffb"])
+def test_an_input_no_comment_can_carry_is_named_before_the_batch(bad):
+    with pytest.raises(ValueError, match=r"^--rule-packs .* holds the character U\+"):
+        ce.check_comment_input(bad, "--rule-packs")
+
+
+def test_an_input_a_comment_can_carry_passes():
+    ce.check_comment_input("mariadb\tx — 中文", "--rule-packs")
+
+
+def test_a_new_files_preview_is_the_text_da_guard_writes(tmp_path):
+    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"cpu": "70"}}}, "head",
+                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "cpu" else None)
+    text = f.preview()
+    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    cpu: "70"\n'
+                    '\n# foot\n')
+    root = _tree(tmp_path / "conf.d", {"t-a.yaml": "tenants:\n  t-a: {}\n# old\n"})
+    ce.write_all(root, [f.entry(replace=True)])
+    assert (root / "t-a.yaml").read_text(encoding="utf-8") == text
+
+
 # ── one file ────────────────────────────────────────────────────────
 
 def test_a_typed_severity_round_trips_as_the_string(tmp_path):
@@ -547,3 +591,27 @@ def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
                             ce.delete_entry("d.yaml"), ce.edit_entry("b.yaml", [])])
     assert (exc.value.written, exc.value.maybe_written, exc.value.failed) == (
         ["r.yaml"], ["d.yaml"], "b.yaml")
+
+
+def test_write_all_or_exit_names_every_refusal_and_exits_2(tmp_path, capsys):
+    # One refused file (a duplicate key in the edited original) and one
+    # good create: nothing written, each refusal named under the tool's
+    # prefix, exit 2.
+    root = _tree(tmp_path / "conf.d", {"t-a.yaml": "tenants:\n  t-a: {}\n  t-a: {}\n"})
+    before = _bytes(root)
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(root, [
+            ce.edit_entry("t-a.yaml", [ce.ensure_map_op(["tenants", "t-a"])]),
+            ce.create_entry("t-b.yaml", ce.data_value({"tenants": {"t-b": {}}}))],
+            tool="probe")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "probe: ERROR: t-a.yaml:" in err and "nothing was written" in err, err
+    assert _bytes(root) == before
+
+
+def test_write_all_or_exit_returns_the_results_when_written(tmp_path):
+    root = _tree(tmp_path / "conf.d", {})
+    res = ce.write_all_or_exit(root, [ce.create_entry(
+        "t-b.yaml", ce.data_value({"tenants": {"t-b": {}}}))], tool="probe")
+    assert [r["status"] for r in res] == [ce.WRITTEN]
