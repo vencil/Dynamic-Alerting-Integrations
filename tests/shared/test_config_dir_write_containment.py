@@ -238,10 +238,12 @@ def test_a_tool_pointed_elsewhere_does_not_write_into_the_repo(
     named.mkdir()
     subst = dict(_fixture_names(cfg), cfg=str(cfg), named=str(named))
     (named / "p.rego").write_text("package x\n", encoding="utf-8")
+    # A tenant the fixture does not declare: `da-guard write` (#3206) refuses
+    # a file that declares one of its tenants a second time (worsens_tree).
     (named / "tc.yaml").write_text(
         "apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
         "metadata:\n  name: probe\n  namespace: monitoring\n"
-        f"spec:\n  tenants:\n    {subst['tenant']}:\n"
+        f"spec:\n  tenants:\n    {subst['tenant']}-probe:\n"
         f"      {subst['metric']}: '1'\n", encoding="utf-8")
     src = named / "src"
     src.mkdir()
