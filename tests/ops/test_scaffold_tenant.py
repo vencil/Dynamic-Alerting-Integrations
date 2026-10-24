@@ -364,21 +364,35 @@ class TestWriteOutputs:
 
     @_skipif_unix_modes
     def test_file_permissions(self):
-        """conf.d 檔由 `da-guard write` 新建：權限是它的 0o644（#3206 10c-3；
-        既有檔被取代時沿用原檔權限）；其他檔仍由本工具以 0o600 寫出。"""
+        """conf.d 檔由 `da-guard write` 新建：0o600，與本工具一向的權限相同
+        （#3206 10c-3；租戶檔可能含帶 token 的 receiver URL）；既有檔被取代時沿用
+        原檔權限；其他檔仍由本工具以 0o600 寫出。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             defaults = {"defaults": {}}
             tenant = {"tenants": {"db-c": {}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            for fn, want in [("_defaults.yaml", 0o644), ("db-c.yaml", 0o644),
+            for fn, want in [("_defaults.yaml", 0o600), ("db-c.yaml", 0o600),
                              ("scaffold-report.txt", 0o600)]:
                 path = os.path.join(tmpdir, fn)
                 mode = os.stat(path).st_mode & 0o777
                 assert mode == want, f"{fn} permissions {oct(mode)} != {oct(want)}"
             # A replace keeps the mode the file has.
-            os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o600)
+            os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o640)
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o600
+            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o640
+
+    @_skipif_unix_modes
+    def test_profiles_file_is_created_0600(self):
+        """`--generate-profile` 的 `_profiles.yaml` 也是 conf.d 檔：da-guard 新建 0o600。"""
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", ["scaffold_tenant.py", "--generate-profile",
+                                         "p1", "--db", "mariadb", "-o", d]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.main()
+            assert exc_info.value.code == 0
+            mode = os.stat(os.path.join(d, "_profiles.yaml")).st_mode & 0o777
+            assert mode == 0o600, oct(mode)
 
     def test_creates_relabel_file(self):
         """提供 relabel_snippet 時建立 relabel 檔案。"""
@@ -820,7 +834,7 @@ class TestRunNonInteractive:
     @_skipif_unix_modes
     def test_mapping_file_permissions(self):
         """_instance_mapping.yaml is a conf.d file `da-guard write` creates:
-        its mode, 0o644 (#3206 10c-3)."""
+        0o600, the mode this tool always gave it (#3206 10c-3)."""
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -835,7 +849,7 @@ class TestRunNonInteractive:
             run_non_interactive(args)
             mapping_path = os.path.join(d, "_instance_mapping.yaml")
             mode = os.stat(mapping_path).st_mode & 0o777
-            assert mode == 0o644
+            assert mode == 0o600
 
 
 # ---------------------------------------------------------------------------
