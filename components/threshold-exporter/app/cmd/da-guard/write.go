@@ -9,7 +9,7 @@ package main
 //
 // Each file of a call is one of three kinds (writeKind*): edit an existing
 // file with ops; create a new one from a value (comments in it are layout:
-// confedit.Entry, head_comment); move an existing file, byte for byte, to a
+// confedit.Entry, confedit.Item, head_comment, foot_comment); move an existing file, byte for byte, to a
 // new path (the source is gone after).
 //
 // ⛔ ONE CALL IS A BATCH (#3206 step 10c): the input names every file
@@ -77,7 +77,7 @@ const (
 // The closed set of writeFileResult.Kind values: what the input entry asks.
 const (
 	writeKindEdit   = "edit"   // {"path", "ops"}
-	writeKindCreate = "create" // {"path", "create", "head_comment"?}
+	writeKindCreate = "create" // {"path", "create", "head_comment"?, "foot_comment"?}
 	writeKindMove   = "move"   // {"path", "from"}
 )
 
@@ -227,6 +227,7 @@ type fileInput struct {
 	Ops         []editOp        `json:"ops"`
 	Create      *confedit.Value `json:"create"`
 	HeadComment *string         `json:"head_comment"`
+	FootComment *string         `json:"foot_comment"`
 	From        *string         `json:"from"`
 }
 
@@ -241,6 +242,7 @@ type writeFile struct {
 	ops      []editOp        // edit
 	content  *confedit.Value // create
 	head     string          // create: the file's head comment (CommentText), "" for none
+	foot     string          // create: the file's foot comment (CommentText), "" for none
 	from     string          // move: the source, root-relative
 	fromAbs  string          // move: the source's path
 	res      *writeFileResult
@@ -284,8 +286,9 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "Change conf.d files in one batch, judged once, all or nothing (ADR-036 §2, §4).\n\n"+
 		"Input: {\"files\": [<entry>, ...]}, each path once (a move's source counts), each entry one of:\n"+
 		"  {\"path\": <rel>, \"ops\": [<op>, ...]}   edit an existing file: its ops applied in order\n"+
-		"  {\"path\": <rel>, \"create\": <value>, \"head_comment\": <text>}   a new file whose top level is\n"+
-		"      the \"map\" value, keys in the order given; head_comment (optional) above it\n"+
+		"  {\"path\": <rel>, \"create\": <value>, \"head_comment\": <text>, \"foot_comment\": <text>}\n"+
+		"      a new file whose top level is the \"map\" value, keys in the order given;\n"+
+		"      head_comment (optional) above it, foot_comment (optional) after its last node\n"+
 		"  {\"path\": <rel>, \"from\": <rel>}   move an existing file here, byte for byte; the source\n"+
 		"      is gone after. The source is judged as an edit's original: a file the walk reads, with\n"+
 		"      readers, no symlink on the way, that parse-tree reads (else not_read / symlink /\n"+
@@ -319,8 +322,11 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"                 [A-Za-z_][A-Za-z0-9_-]* and not a YAML 1.1 bool/null word (y n yes no on off\n"+
 		"                 true false null, any case), else double-quoted. The optional third element\n"+
 		"                 is the key's comments: head above it, line after `key:`\n"+
-		"  {\"seq\": [<value>, ...]}\n"+
-		"A comment (head, line, head_comment) is layout, not content: never read back, compared or\n"+
+		"  {\"seq\": [<value>, [<value>, {\"head\": <text>, \"line\": <text>}], ...]}\n"+
+		"                 an item given as the pair [value, {comments}] carries its comments: head\n"+
+		"                 above its `- `, line after its value (refused after a non-empty mapping or\n"+
+		"                 sequence item, which yaml.v3 would write on another line)\n"+
+		"A comment (head, line, head_comment, foot_comment) is layout, not content: never read back, compared or\n"+
 		"judged. Each of its lines is written `# <line>`, so it cannot become YAML; a line comment is\n"+
 		"one line; a carriage return, another control character but a tab, DEL, U+0085, U+2028,\n"+
 		"U+2029 and U+FEFF are refused (bad_input), and so is a line comment on a key whose value is\n"+
@@ -634,6 +640,9 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		if fi.HeadComment != nil && fi.Create == nil {
 			return bad("files[%d]: \"head_comment\" goes with \"create\" only", i)
 		}
+		if fi.FootComment != nil && fi.Create == nil {
+			return bad("files[%d]: \"foot_comment\" goes with \"create\" only", i)
+		}
 		switch {
 		case fi.Ops != nil:
 			if err := checkOps(fi.Ops); err != nil {
@@ -651,6 +660,13 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 					return bad("files[%d]: \"head_comment\": %v", i, err)
 				}
 				wf.head = head
+			}
+			if fi.FootComment != nil {
+				foot, err := confedit.CommentText(*fi.FootComment, true)
+				if err != nil {
+					return bad("files[%d]: \"foot_comment\": %v", i, err)
+				}
+				wf.foot = foot
 			}
 		default:
 			from, err := cleanRelPath(*fi.From)
@@ -996,14 +1012,18 @@ func (w *writer) prepareTarget(scan *config.TreeScan, f *writeFile) bool {
 }
 
 // prepareCreate judges one new file alone — its path — and leaves its text
-// (the value, its comments, the head comment) and its content for the
+// (the value, its comments, the head and foot comments) and its content for the
 // batch's judgement; or records why not.
 func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 	if !w.prepareTarget(scan, f) {
 		return
 	}
 	doc := confedit.NewDoc(f.content.Node(false)).Node()
-	doc.HeadComment = f.head
+	// On the document node: yaml.v3 writes its head comment first, then a
+	// blank line, and its foot comment after a blank line below the last
+	// node, at column 0, whatever that node is (an empty `{}` too) —
+	// TestWrite_AFootCommentEndsTheFile pins it.
+	doc.HeadComment, doc.FootComment = f.head, f.foot
 	out, err := confedit.Encode(doc)
 	if err != nil {
 		w.refuse(f, writeReasonEditNotApplicable, "encode: "+err.Error())

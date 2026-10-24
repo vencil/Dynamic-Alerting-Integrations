@@ -452,3 +452,36 @@ def test_comments_are_written_as_comments(tmp_path):
     assert list(root.iterdir()) == []
     with pytest.raises(ValueError):
         ce.map_value([("a", {"int": "1"}, {}, {})])
+
+
+def test_a_foot_comment_ends_the_file_and_a_seq_item_carries_its_comments(tmp_path):
+    root = _tree(tmp_path / "conf.d", {})
+    content = ce.map_value([
+        ("optional_overrides", ce.seq_value([
+            {"str": "a"}, ({"str": "b"}, ce.comments(head="⚠ counterexample", line="x")),
+            ({"str": "c"}, None)])),
+        ("tenants", ce.map_value([("t-a", ce.map_value([]))])),
+    ])
+    assert content["map"][0][1] == {"seq": [{"str": "a"}, [{"str": "b"}, {"head": "⚠ counterexample", "line": "x"}],
+                                            {"str": "c"}]}
+    entry = ce.create_entry("t-a.yaml", content, foot_comment="declared:\n\n  cpu: 80")
+    assert entry["foot_comment"] == "declared:\n\n  cpu: 80" and "head_comment" not in entry
+    doc = ce.emit(root, "t-a.yaml", content, head_comment="h", foot_comment="declared:\n\n  cpu: 80")
+    assert doc["status"] == ce.WRITTEN
+    assert (root / "t-a.yaml").read_text(encoding="utf-8") == (
+        "# h\n\noptional_overrides:\n  - \"a\"\n  # ⚠ counterexample\n  - \"b\" # x\n  - \"c\"\n"
+        "tenants:\n  t-a: {}\n\n# declared:\n#\n#   cpu: 80\n")
+
+
+def test_a_bad_foot_or_seq_item_comment_writes_nothing(tmp_path):
+    root = _tree(tmp_path / "conf.d", {})
+    for kwargs, content in [
+        ({"foot_comment": "x\ry"}, ce.map_value([])),
+        ({}, ce.map_value([("x", ce.seq_value([({"map": [["a", {"int": "1"}]]}, ce.comments(line="l"))]))])),
+    ]:
+        with pytest.raises(ce.EditCallerError) as exc:
+            ce.emit(root, "a.yaml", content, **kwargs)
+        assert exc.value.reason == "bad_input"
+    assert list(root.iterdir()) == []
+    with pytest.raises(ValueError):
+        ce.seq_value([({"str": "a"},)])

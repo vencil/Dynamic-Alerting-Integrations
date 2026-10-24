@@ -244,6 +244,12 @@ func TestWrite_ACommentIsNeverYAML(t *testing.T) {
 		// no YAML, so it is refused, not moved.
 		"a line comment after an empty map": `{"files":[{"path":"a.yaml","create":{"map":[["tenants",{"map":[]},{"line":"l2"}]]}}]}`,
 		"a line comment after an empty seq": `{"files":[{"path":"a.yaml","create":{"map":[["x",{"seq":[]},{"line":"l2"}]]}}]}`,
+		"a carriage return, foot_comment":   `{"files":[{"path":"a.yaml","foot_comment":"x\ry","create":{"map":[]}}]}`,
+		"U+2029, foot_comment":              `{"files":[{"path":"a.yaml","foot_comment":"x y","create":{"map":[]}}]}`,
+		"a seq item line comment break":     `{"files":[{"path":"a.yaml","create":{"map":[["x",{"seq":[[{"str":"a"},{"line":"l\nt6: {}"}]]}]]}}]}`,
+		"a seq item head comment CR":        `{"files":[{"path":"a.yaml","create":{"map":[["x",{"seq":[[{"str":"a"},{"head":"h\rt6: {}"}]]}]]}}]}`,
+		// After a block item yaml.v3 writes the line comment elsewhere.
+		"a line comment after a block item": `{"files":[{"path":"a.yaml","create":{"map":[["x",{"seq":[[{"map":[["a",{"int":"1"}]]},{"line":"l"}]]}]]}}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitCallerErr || callReason(res) != "bad_input" {
@@ -254,4 +260,65 @@ func TestWrite_ACommentIsNeverYAML(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWrite_AFootCommentEndsTheFile: foot_comment is written after the last
+// node, after a blank line, at column 0 — after a block, after `{}` and on a
+// file that is `{}` alone; a sequence item's head comment above its `- `.
+// Neither is content, and an edit elsewhere keeps both.
+func TestWrite_AFootCommentEndsTheFile(t *testing.T) {
+	for name, tc := range map[string]struct{ create, want string }{
+		"after an empty tenant": {
+			`{"map":[["tenants",{"map":[["t1",{"map":[]}]]}]]}`,
+			"# head\n\ntenants:\n  t1: {}\n\n# declared:\n#\n#   cpu: 80\n",
+		},
+		"after a block": {
+			`{"map":[["defaults",{"map":[["cpu",{"int":"80"}]]}]]}`,
+			"# head\n\ndefaults:\n  cpu: 80\n\n# declared:\n#\n#   cpu: 80\n",
+		},
+		"an empty file": {
+			`{"map":[]}`,
+			"# head\n\n{}\n\n# declared:\n#\n#   cpu: 80\n",
+		},
+		"after a sequence, an item with a head comment": {
+			`{"map":[["optional_overrides",{"seq":[{"str":"a"},[{"str":"b"},{"head":"⚠ counterexample"}]]}]]}`,
+			"# head\n\noptional_overrides:\n  - \"a\"\n  # ⚠ counterexample\n  - \"b\"\n\n# declared:\n#\n#   cpu: 80\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := writeTree(t, map[string]string{})
+			in := `{"files":[{"path":"t.yaml","head_comment":"head","foot_comment":"declared:\n\n  cpu: 80","create":` + tc.create + `}]}`
+			code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+			if code != exitOK || res.Status != writeStatusWritten {
+				t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
+			}
+			if got := snapshot(t, root)["t.yaml"]; got != tc.want {
+				t.Fatalf("written\n%s\nwant\n%s", got, tc.want)
+			}
+		})
+	}
+	t.Run("an edit keeps them", func(t *testing.T) {
+		root := writeTree(t, map[string]string{})
+		in := `{"files":[{"path":"t.yaml","foot_comment":"declared","create":{"map":[["tenants",{"map":[["t1",{"map":[` +
+			`["xs",{"seq":[{"str":"a"},[{"str":"b"},{"head":"h","line":"l"}]]}]]}]]}]]}}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("create: exit %d %v (%v)", code, statuses(res), res.Message)
+		}
+		code, one := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"1"}}]}`,
+			"--config-dir", root, "--path", "t.yaml")
+		if code != exitOK || one.Status != writeStatusWritten {
+			t.Fatalf("edit: exit %d %+v", code, one)
+		}
+		want := "tenants:\n  t1:\n    xs:\n      - \"a\"\n      # h\n      - \"b\" # l\n    cpu: 1\n\n# declared\n"
+		if got := snapshot(t, root)["t.yaml"]; got != want {
+			t.Fatalf("after the edit:\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("foot_comment goes with create only", func(t *testing.T) {
+		root := writeTree(t, map[string]string{"a.yaml": "tenants: {}\n"})
+		in := `{"files":[{"path":"a.yaml","foot_comment":"x","ops":[]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitCallerErr || callReason(res) != "bad_input" {
+			t.Fatalf("exit %d %+v", code, res)
+		}
+	})
 }
