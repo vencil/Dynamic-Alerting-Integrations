@@ -145,6 +145,8 @@ func TestParseTreeBatch_CallerErrors(t *testing.T) {
 		"not an array":    {[]string{"--config-dir", conf, "--inputs", "-"}, `{"path": "a.yaml"}`},
 		"null":            {[]string{"--config-dir", conf, "--inputs", "-"}, `null`},
 		"two documents":   {[]string{"--config-dir", conf, "--inputs", "-"}, `[] []`},
+		"trailing brace":  {[]string{"--config-dir", conf, "--inputs", "-"}, `[{"path": "a.yaml", "input": ""}]}`},
+		"trailing text":   {[]string{"--config-dir", conf, "--inputs", "-"}, `[] x`},
 		"unknown field":   {[]string{"--config-dir", conf, "--inputs", "-"}, `[{"path": "a.yaml", "text": ""}]`},
 		"input not b64":   {[]string{"--config-dir", conf, "--inputs", "-"}, `[{"path": "a.yaml", "input": "!!"}]`},
 		"absolute path":   {[]string{"--config-dir", conf, "--inputs", "-"}, `[{"path": "/a.yaml", "input": ""}]`},

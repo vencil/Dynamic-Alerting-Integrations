@@ -17,8 +17,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -51,9 +49,7 @@ func runParseTreeBatch(f *parseTreeFlags, stdin io.Reader, stdout io.Writer,
 		return fail("--inputs: %v", err)
 	}
 	var items []parseTreeBatchItem
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&items); err != nil || items == nil || dec.More() {
+	if err := decodeStrict(raw, &items); err != nil || items == nil {
 		if err == nil {
 			err = errors.New("one array expected")
 		}
