@@ -215,6 +215,28 @@ func TestWrite_DeleteRemovesTheFile(t *testing.T) {
 	}
 }
 
+// A file whose name is near NAME_MAX (250 characters + `.yaml`: the longest
+// Kubernetes object name da-assembler renders) is created, replaced and
+// deleted: the hidden temporary and backup names do not hold its base name,
+// which would make them too long to create (#3206).
+func TestWrite_AFileNameNearNameMaxIsWrittenAndDeleted(t *testing.T) {
+	name := strings.Repeat("a", 250) + ".yaml"
+	root := writeTree(t, map[string]string{})
+	for _, in := range []string{
+		`{"files":[{"path":"` + name + `","create":` + tenantsT3 + `}]}`,
+		`{"files":[{"path":"` + name + `","create":{"map":[["tenants",{"map":[]}]]},"replace":true}]}`,
+		`{"files":[{"path":"` + name + `","delete":true}]}`,
+	} {
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitOK || res.Status != writeStatusWritten {
+			t.Fatalf("%s: exit %d %v (%v)", in[:60], code, statuses(res), res.Message)
+		}
+	}
+	if got := snapshot(t, root); len(got) != 0 {
+		t.Fatalf("tree %q", got)
+	}
+}
+
 func TestWrite_DeleteRefusals(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -339,11 +361,11 @@ func TestWrite_ADeleteThatCannotBeLinkedBackIsMaybeWritten(t *testing.T) {
 		t.Fatalf("tree %q", got)
 	}
 	for k, v := range got {
-		if k != "a.yaml" && (!strings.HasPrefix(k, ".d.yaml.da-guard-deleted-") || v != "tenants:\n  t2: {}\n") {
+		if k != "a.yaml" && (!strings.HasPrefix(k, ".da-guard-deleted-") || v != "tenants:\n  t2: {}\n") {
 			t.Fatalf("the file is not kept at its hidden name: %q", got)
 		}
 	}
-	if m := res.Files[1].Message; m == nil || !strings.Contains(*m, "kept at .d.yaml.da-guard-deleted-") {
+	if m := res.Files[1].Message; m == nil || !strings.Contains(*m, "kept at .da-guard-deleted-") {
 		t.Fatalf("delete message %v", m)
 	}
 }
