@@ -348,8 +348,8 @@ class TestRenderTenantConfig:
             "\n"
             "# --- From: CPU (severity: warning) ---\n"
             'custom_cpu: "0.9"\n'
-            "\n"
         )
+        # The text is Go's (da-guard write, #3206): no trailing blank line.
         assert mr.render_tenant_config([r]) == expected
 
     def test_excludes_unparseable_and_use_golden(self):
@@ -760,3 +760,64 @@ class TestMain:
         mr.main()
         err = capsys.readouterr().err
         assert "promql-parser" in err
+
+
+# ---------------------------------------------------------------------------
+# tenant-config.yaml / defaults-snippet.yaml through da-guard write (#3206 10c)
+# ---------------------------------------------------------------------------
+class TestConfdThroughDaGuardWrite:
+    def test_comments_keep_their_order_and_the_last_ones_are_the_foot(self):
+        # A rule's dimension hints come before the next rule's header (the
+        # next key's head comment); the last rule's, and a last rule whose
+        # every key is a duplicate, are the file's foot comment.
+        a = _make_result("A", tenant_config={"custom_a": "1"})
+        a.dim_hints = [{"labels": {"instance": "db01"}}]
+        b = _make_result("B", tenant_config={"custom_b": "2"})
+        b.dim_hints = [{"labels": {"instance": "db02"}}]
+        dup = _make_result("Dup", tenant_config={"custom_a": "9"})
+        text = mr.render_tenant_config([a, b, dup])
+        order = ['\ncustom_a: "1"\n', 'custom_a{instance="db01"}', "# --- From: B",
+                 '\ncustom_b: "2"\n', 'custom_b{instance="db02"}', "# --- From: Dup",
+                 '# custom_a: "9"  ← 與上方同一個 key，未採用']
+        at = [text.index(s) for s in order]
+        assert at == sorted(at), text
+        body = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+        assert body == ['custom_a: "1"', 'custom_b: "2"'], text
+        # the foot is set off by a blank line after the last key
+        assert 'custom_b: "2"\n\n# 維度標籤替代語法:' in text, text
+
+    def test_no_key_is_a_file_of_comments_and_an_empty_top_level(self):
+        gold = _make_result("Gold", tenant_config={"custom_g": "9"},
+                            triage_action="use_golden")
+        text = mr.render_tenant_config([gold])
+        assert [ln for ln in text.splitlines() if ln and not ln.startswith("#")] == ["{}"]
+        assert "defaults: {}\n" in mr.render_defaults_snippet([gold])
+
+    def test_an_alert_name_a_comment_cannot_carry_is_exit_2_naming_it(self, tmp_path, capsys):
+        r = _make_result("Bad Name", tenant_config={"custom_a": "1"})
+        dest = tmp_path / "out"
+        with pytest.raises(SystemExit) as exc:
+            mr.write_outputs([r], str(dest), prefix="custom_", dictionary={})
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "the alert name" in err and "U+2028" in err and "nothing was written" in err, err
+        assert not dest.exists() or not any(dest.iterdir())
+
+    def test_a_write_stopped_part_way_names_the_files(self, tmp_path, capsys, monkeypatch):
+        import _lib_confedit
+
+        def stopped(root, entries, **_kw):
+            raise _lib_confedit.PartialWrite(["tenant-config.yaml"], "defaults-snippet.yaml",
+                                             OSError("disk full"),
+                                             maybe_written=["defaults-snippet.yaml"])
+        monkeypatch.setattr(_lib_confedit, "write_all", stopped)
+        dest = tmp_path / "out"
+        with pytest.raises(SystemExit) as exc:
+            mr.write_outputs([_make_result("A", tenant_config={"custom_a": "1"})],
+                             str(dest), prefix="custom_", dictionary={})
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "stopped part-way" in err and "tenant-config.yaml" in err \
+            and "defaults-snippet.yaml" in err and "not rolled back" in err, err
+        # nothing after the batch is written either
+        assert not (dest / "platform-alert-rules.yaml").exists()

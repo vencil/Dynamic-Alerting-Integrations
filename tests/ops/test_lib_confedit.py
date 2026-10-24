@@ -547,3 +547,126 @@ def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
                             ce.delete_entry("d.yaml"), ce.edit_entry("b.yaml", [])])
     assert (exc.value.written, exc.value.maybe_written, exc.value.failed) == (
         ["r.yaml"], ["d.yaml"], "b.yaml")
+
+
+def test_number_value_sends_an_int_past_18_characters_as_a_float():
+    # #3206 10c: a generated `defaults:` number only has to be a number.
+    assert ce.number_value(80) == {"int": "80"}
+    assert ce.number_value(0.5) == {"float": "0.5"}
+    assert ce.number_value(10 ** 20) == {"float": "100000000000000000000.0"}
+    # 18 characters, a sign included: the last an int, one more a float
+    assert ce.number_value(-(10 ** 16)) == {"int": str(-(10 ** 16))}
+    assert ce.number_value(-(10 ** 17)) == {"float": "-100000000000000000.0"}
+    for bad in (True, "80", None, float("inf")):
+        with pytest.raises(ValueError):
+            ce.number_value(bad)
+
+
+@pytest.mark.parametrize("ch", ["\r", "\x00", "\x1b", "\x7f", "\x85", " ", " ", "﻿"])
+def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
+    problem = ce.comment_text_problem(f"a{ch}b")
+    assert problem and f"U+{ord(ch):04X}" in problem
+    # …and da-guard does refuse it: the two say the same.
+    with pytest.raises(ce.EditCallerError):
+        ce.write_all(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]),
+                                                head_comment=f"a{ch}b")], dry_run=True)
+
+
+def test_comment_text_problem_lets_tabs_lines_and_text_through():
+    assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
+
+
+# ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
+
+def test_write_all_or_exit_returns_the_results_when_the_batch_passes(tmp_path, capsys):
+    out = ce.write_all_or_exit(tmp_path, [
+        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"k": "1"}}}))],
+        tool="t")
+    assert [r["status"] for r in out] == [ce.WRITTEN]
+    assert (tmp_path / "a.yaml").read_text(encoding="utf-8") == \
+        'tenants:\n  tenant-a:\n    k: "1"\n'
+    assert capsys.readouterr().err == ""
+
+
+def test_write_all_or_exit_names_each_refusal_and_writes_none(tmp_path, capsys):
+    # One refused (a hidden path no reader reads) ⇒ the other is not written.
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [
+            ce.create_entry("a.yaml", ce.map_value([("tenants", ce.map_value([]))])),
+            ce.create_entry(".hidden.yaml", ce.map_value([]))], tool="my_tool")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    lines = err.splitlines()
+    assert all(ln.startswith("my_tool: ERROR: ") for ln in lines), err
+    assert any(".hidden.yaml: not_read:" in ln for ln in lines), err
+    assert "nothing was written" in lines[-1], err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_all_or_exit_names_the_files_a_partial_write_left(tmp_path, capsys, monkeypatch):
+    def stopped(root, entries, **_kw):
+        raise ce.PartialWrite(["a.yaml"], "b.yaml", OSError("disk full"),
+                              maybe_written=["b.yaml"])
+    monkeypatch.setattr(ce, "write_all", stopped)
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [], tool="t")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("t: ERROR: ") and "stopped part-way: disk full" in err, err
+    assert "1 file(s) written, 1 may have been written, not rolled back: a.yaml, b.yaml" in err
+
+
+def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]))],
+                             tool="t", binary=str(tmp_path / "no-such-da-guard"))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "t: ERROR: cannot write the conf.d files through `da-guard write`" in err, err
+    assert not (tmp_path / "a.yaml").exists()
+
+
+def test_a_caller_error_with_no_file_to_blame_names_no_path():
+    err = ce.EditCallerError({"path": "", "status": ce.CALLER_ERROR, "reason": "bad_path",
+                              "message": "no such directory"})
+    assert str(err) == "da-guard write caller_error (bad_path): no such directory"
+    err = ce.EditCallerError({"path": "a.yaml", "status": ce.CALLER_ERROR,
+                              "reason": "path_exists", "message": "m"})
+    assert str(err) == "a.yaml: da-guard write caller_error (path_exists): m"
+
+
+def test_write_all_or_exit_without_make_root_names_a_missing_root_once(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path / "missing", [ce.create_entry("a.yaml", ce.map_value([]))],
+                             tool="t")
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("t: ERROR: da-guard write caller_error (bad_path): "), err
+
+
+def test_write_all_or_exit_make_root_creates_and_on_failure_removes_the_root(tmp_path, capsys):
+    root = tmp_path / "a" / "b"
+    made = []
+
+    def make():
+        made.append(1)
+        root.mkdir(parents=True)
+    out = ce.write_all_or_exit(root, [ce.create_entry("x.yaml", ce.map_value([]))],
+                               tool="t", make_root=make)
+    assert made == [1] and [r["status"] for r in out] == [ce.WRITTEN]
+    assert (root / "x.yaml").is_file()
+    # existing root: make_root is not called
+    ce.write_all_or_exit(root, [], tool="t", make_root=lambda: made.append(2))
+    assert made == [1]
+    # a failing batch removes what make_root created, the missing parents too
+    fresh = tmp_path / "c" / "d"
+    with pytest.raises(SystemExit):
+        ce.write_all_or_exit(fresh, [ce.create_entry(".hidden.yaml", ce.map_value([]))],
+                             tool="t", make_root=lambda: fresh.mkdir(parents=True))
+    assert not (tmp_path / "c").exists()
+    assert ".hidden.yaml: not_read:" in capsys.readouterr().err
+
+
+def test_number_value_names_where_a_non_finite_number_sits():
+    with pytest.raises(ValueError, match=r"^defaults\.k: the float inf is not a finite number"):
+        ce.number_value(float("inf"), at=("defaults", "k"))

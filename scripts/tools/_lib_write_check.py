@@ -462,7 +462,8 @@ def require_output_tree(root: "str | os.PathLike[str]", *,
     `confirm_all` calls this first, whatever it is given (an empty list
     too: a run with no conf.d file to confirm may still write reports into
     the tree), so every writer that confirms through it carries no copy;
-    a writer that writes without confirming (`migrate_rule --triage`)
+    a writer that writes without confirming (`migrate_rule` in every mode,
+    `onboard_platform`: their conf.d files go to `da-guard write`, #3206)
     calls it itself. Judged once per tree and process (a reader of this run
     that already read the tree whole is not asked again). A long-running
     writer, which must judge afresh before every write and must not exit,
@@ -481,9 +482,9 @@ def confirm_all(root: "str | os.PathLike[str]",
     the caller writes any; raises at the first refusal. First of all the
     output tree passes :func:`require_output_tree` (an empty *items* too).
     Every conf.d writer that names an output root confirms through here
-    (`scaffold_tenant`, `onboard_platform`, `migrate_rule`, `init_project`;
-    `confirm_tree` on a non-empty root; `deprecate_rule` sends its changes to
-    `da-guard write` since #3206, `_lib_confedit`). Raises
+    (`scaffold_tenant`, `init_project`; `confirm_tree` on a non-empty root;
+    `deprecate_rule`, `onboard_platform` and `migrate_rule` send their
+    changes to `da-guard write` since #3206, `_lib_confedit`). Raises
     ParseTreeError for no usable da-guard."""
     require_output_tree(root, binary=binary, timeout=timeout)
     for rel, text, expected in items:
