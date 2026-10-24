@@ -18,7 +18,9 @@ the files and reads the answer (`da-guard.write/v3`).
 One call is one batch (#3206 step 10c): every file goes to ONE da-guard run,
 judged once, all or nothing (`write_all`; `edit_all` / `emit_all` are its
 edit-only and create-only forms). `edit` / `emit` / `move` are a batch of
-one.
+one. `write_all_or_exit` is `write_all` for a one-shot CLI: every failure
+named on stderr (`<tool>: ERROR: …`) and exit 2, the one exit every
+conf.d-writing tool shares.
 
 Which da-guard, and how long it may run, is `_lib_parse_tree`'s one
 resolution (`_lib_parse_tree._run`: an explicit argument, else the tool's
@@ -59,7 +61,11 @@ contract). Where the value came from decides which:
   Its *head* says which comment goes above which node (#3206 step 10c-3);
   `NewFile` is such a file with its head and foot comments, and its
   `preview()` the text da-guard writes for it. An input a tool puts into a
-  comment is checked first (`check_comment_input`), naming the input.
+  comment is checked first (`comment_field`), naming the input.
+* `number_value`: a generated NUMBER that only has to be a number (a
+  `defaults:` value, float64 to the exporter): `data_value`, except that an
+  `int` past the contract's 18 characters (`1e20` as an int) goes as the
+  float it is to the exporter (`100000000000000000000.0`).
 
 Several files, all or nothing
 -----------------------------
@@ -94,7 +100,7 @@ import json
 import posixpath
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, NoReturn, Optional, Sequence
 
 import _lib_parse_tree
 
@@ -135,7 +141,9 @@ class EditError(Exception):
         self.status = str(doc.get("status") or "")
         self.reason = str(doc.get("reason") or "")
         self.message = str(doc.get("message") or "")
-        super().__init__(f"{self.path}: da-guard {command} "
+        # The call's document (no file to blame) has no path: no "<path>: ".
+        where = f"{self.path}: " if self.path else ""
+        super().__init__(f"{where}da-guard {command} "
                          f"{self.status} ({self.reason}): {self.message}")
 
 
@@ -275,24 +283,6 @@ def comment_block(block: str) -> str:
         else:
             raise ValueError(f"not a comment line: {line!r}")
     return "\n".join(out)
-
-
-#: What da-guard's comment text refuses (pkg/confedit CommentText): a C0
-#: control but tab (and the line break of a several-line comment), DEL,
-#: U+0085, U+2028, U+2029 and a byte order mark.
-_COMMENT_REFUSED = re.compile("[\x00-\x08\x0a-\x1f\x7f\x85\u2028\u2029\ufeff\ud800-\udfff]")
-
-
-def check_comment_input(text: str, field: str) -> None:
-    """An input this tool puts into a comment (a tenant name, a pack name)
-    holds no character da-guard's comment text refuses (a line break
-    included: it would start a line of its own): ValueError naming *field*
-    and the character, BEFORE the batch is sent — so the caller is told
-    which input it was, not handed a bad_input for the whole batch."""
-    m = _COMMENT_REFUSED.search(str(text))
-    if m:
-        raise ValueError(f"{field} {text!r} holds the character U+{ord(m.group()):04X}, "
-                         "which a conf.d comment cannot carry")
 
 
 # ── batch entries (`write_all`) ─────────────────────────────────────
@@ -451,6 +441,48 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = (), *,
             raise bad(f"the float {obj!r} has no canonical decimal spelling")
         return {"float": text}
     raise bad(f"a {type(obj).__name__} ({obj!r}) has no edit-contract type")
+
+
+#: What a comment line may not hold (da-guard's CommentText, pkg/confedit
+#: value.go): a control character but a tab, DEL, U+0085, U+2028, U+2029 and
+#: U+FEFF (a line break is a new comment line, allowed where several lines are).
+def comment_text_problem(text: str) -> Optional[str]:
+    """Why da-guard would refuse *text* in a comment (`bad_input`), or None.
+    A tool that puts an outside value (an alert name, a prefix, a tenant id)
+    into a comment asks this first, to name the field instead of a whole
+    batch refused."""
+    for ch in str(text):
+        o = ord(ch)
+        if ch in "\t\n":
+            continue
+        if o < 0x20 or o == 0x7F or o in (0x85, 0x2028, 0x2029, 0xFEFF):
+            return f"it holds the character U+{o:04X}, which a comment cannot carry"
+    return None
+
+
+def comment_field(what: str, text: Any) -> str:
+    """*text* (an outside value a tool puts into a comment: an alert name, a
+    tenant id) as a str, or ValueError naming *what* when da-guard would
+    refuse it there (`comment_text_problem`)."""
+    problem = comment_text_problem(str(text))
+    if problem:
+        raise ValueError(f"{what} {str(text)!r}: {problem}")
+    return str(text)
+
+
+def number_value(number: "int | float", at: "Sequence[str]" = ()) -> dict:
+    """A generated number that only has to be a number (a `defaults:` value,
+    decoded into float64 by the exporter): `data_value` of it, except an
+    `int` longer than the edit contract's 18 characters, which goes as a
+    float (`10**20` → `100000000000000000000.0`) instead of being refused.
+    A `bool`, anything else that is not an int / float, and a NaN / infinite
+    float are ValueError naming *at* (the key path the number sits at)."""
+    if isinstance(number, bool) or not isinstance(number, (int, float)):
+        where = ".".join(at) or "(the top level)"
+        raise ValueError(f"{where}: {number!r} is not a number")
+    if isinstance(number, int) and not is_canonical_int(str(number)):
+        number = float(number)
+    return data_value(number, tuple(str(k) for k in at))
 
 
 def node_value(node: Any) -> dict:
@@ -650,38 +682,64 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
 
 
 def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
-                      binary: Optional[str] = None,
-                      timeout: Optional[float] = None) -> "list[dict]":
-    """One real `write_all` (a dry run is `write_all(..., dry_run=True)`);
-    the files' results when it wrote. Otherwise prints to stderr, each line prefixed `<tool>: `, what
-    was not written and why — every refused file with its reason, the caller
-    error, an older da-guard, no usable da-guard, or a write that stopped
-    part-way with the files written and the ones that may have been — and
-    exits 2 (#3206 step 10c: the one place a tool's conf.d batch ends).
+                      binary: Optional[str] = None, timeout: Optional[float] = None,
+                      make_root: "Optional[Callable[[], Any]]" = None) -> "list[dict]":
+    """`write_all` for a one-shot CLI that writes conf.d (#3206 step 10c):
+    the files' results when the batch passes (a dry run is `write_all(...,
+    dry_run=True)`). Otherwise every line goes to stderr prefixed `<tool>: `
+    and the process exits 2 (EXIT_CALLER_ERROR) — a refusal (each refused
+    file named with its reason, the tree-worsening ones too; nothing
+    written), da-guard's caller error or an older da-guard (nothing
+    written), no usable da-guard (`ParseTreeError`, nothing written), and a
+    write that stopped part-way (`PartialWrite`: the files written and the
+    ones that may have been, not rolled back).
 
-    ⚠️ Provisional copy on this branch: the shared one lands with the
-    onboard_platform / migrate_rule change and takes precedence on merge."""
+    *make_root*: da-guard writes into an existing *root* only (it creates
+    the directories below it). When *root* is not a directory, *make_root()*
+    (the tool's own mkdir, naming its flag on failure — a *root* that is a
+    file, say) creates it first, and every
+    directory it created is removed again — left empty — when the batch
+    exits 2, so a failed run leaves no output directory behind. Without it a
+    missing *root* is da-guard's caller error (`bad_path`)."""
     import sys  # noqa: PLC0415
 
-    def die(lines: "Sequence[str]") -> None:
-        for line in lines:
-            print(f"{tool}: {line}", file=sys.stderr)
-        sys.exit(2)
+    from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: PLC0415
+
+    created: "list[Path]" = []
+    if make_root is not None:
+        p = Path(root).absolute()
+        while not p.exists() and p != p.parent:
+            created.append(p)
+            p = p.parent
+        if not Path(root).is_dir():
+            make_root()  # also for a root that is a file: the tool names its flag
+
+    def say(line: str) -> None:
+        print(f"{tool}: ERROR: {line}", file=sys.stderr)
+
+    def die(line: str) -> NoReturn:
+        say(line)
+        for d in created:  # deepest first; one holding anything stays
+            try:
+                d.rmdir()
+            except OSError:
+                break
+        sys.exit(EXIT_CALLER_ERROR)
 
     try:
         return write_all(root, entries, binary=binary, timeout=timeout)
     except EditsRefused as exc:
-        die([*(f"ERROR: {r.path}: {r.reason}: {r.message}" for r in exc.refusals),
-             f"ERROR: da-guard write refused {len(exc.refusals)} file(s) under {root} "
-             f"— nothing was written"])
+        for r in exc.refusals:
+            say(f"{r.path}: {r.reason}: {r.message}")
+        die(f"da-guard write refused {len(exc.refusals)} file(s) under {root} "
+            f"— nothing was written")
     except EditCallerError as exc:
-        die([f"ERROR: {exc} — nothing was written"])
+        die(f"{exc} — nothing was written")
     except PartialWrite as exc:
         left = [*exc.written, *exc.maybe_written]
-        die([f"ERROR: the write under {root} stopped part-way: {exc.cause}; "
-             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
-             f"been written, not rolled back: {', '.join(left) or '(none)'}"])
+        die(f"the write under {root} stopped part-way: {exc.cause}; "
+            f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
+            f"been written, not rolled back: {', '.join(left) or '(none)'}")
     except _lib_parse_tree.ParseTreeError as exc:
-        die([f"ERROR: cannot write through `da-guard write` (ADR-036 §2): {exc}; "
-             f"nothing was written"])
-    raise AssertionError("unreachable")  # die() exits
+        die(f"cannot write the conf.d files through `da-guard write` (ADR-036 §2): "
+            f"{exc}; nothing was written")

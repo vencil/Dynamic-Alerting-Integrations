@@ -1055,31 +1055,12 @@ def _write_confd_files(out: Path, files: list) -> None:
     except _lib_parse_tree.ParseTreeError as exc:
         _die(f"cannot judge {out} through `da-guard parse-tree` (ADR-036 §2): "
              f"{exc}; nothing was written")
-    _write_batch_into(out, entries, "scaffold_tenant")
-
-
-def _write_batch_into(out: Path, entries: list, tool: str) -> None:
-    """`_lib_confedit.write_all_or_exit` under *out*, creating it first (it
-    is da-guard's --config-dir) — and removing again every directory this
-    created when the batch is not written, so a missing da-guard or a
-    refusal leaves no empty output directory behind (#3206)."""
-    created = []
-    p = out
-    while not p.exists() and p != p.parent:
-        created.append(p)
-        p = p.parent
-    ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
-    done = False
-    try:
-        _lib_confedit.write_all_or_exit(out, entries, tool=tool)
-        done = True
-    finally:
-        if not done:
-            for d in created:  # innermost first; rmdir removes only an empty one
-                try:
-                    d.rmdir()
-                except OSError:
-                    break
+    # da-guard's --config-dir: made only when the batch is sent, and removed
+    # again (left empty) when it is not written — a failed run leaves no
+    # output directory behind (#3206).
+    _lib_confedit.write_all_or_exit(
+        out, entries, tool="scaffold_tenant",
+        make_root=lambda: ensure_dir_or_die(out, flag=_OUTPUT_FLAG))
 
 
 _DEFAULTS_HEADER = (
@@ -1112,7 +1093,7 @@ def tenant_confd_file(tenant_name: str, tenant_data: dict, written_defaults: dic
     `<base>_critical` paragraph is read off its `defaults:`); *declared_keys*
     is this tenant's declared list, every one of which that file declares."""
     try:
-        _lib_confedit.check_comment_input(tenant_name, "the tenant id")
+        _lib_confedit.comment_field("the tenant id", tenant_name)
     except ValueError as exc:
         _die(f"{exc} — nothing was written")
     # ⛔ 標頭的三態句必須對「每一種 key」都為真（#1321）。原句「省略=Default」只對

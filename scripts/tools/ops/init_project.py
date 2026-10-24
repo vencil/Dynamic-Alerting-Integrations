@@ -802,7 +802,7 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     # (`run_init` takes a config dict), so a character no comment can carry is
     # refused here, naming the flag, not as the batch's bad_input.
     for rp in rule_packs:
-        _lib_confedit.check_comment_input(rp, "the rule pack (--rule-packs)")
+        _lib_confedit.comment_field("the rule pack (--rule-packs)", rp)
     header = textwrap.dedent("""\
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
@@ -883,7 +883,7 @@ def _tenant_file(tenant: str, rule_packs: list[str]) -> "_lib_confedit.NewFile":
     critical_note += _critical_prefill_note(critical)
     declared_note = '\n'.join(
         render_tenant_declared_note_lines(declared_keys, lang='en'))
-    _lib_confedit.check_comment_input(tenant, "the tenant (--tenants)")
+    _lib_confedit.comment_field("the tenant (--tenants)", tenant)
     header = textwrap.dedent("""\
     # {tenant}.yaml — Tenant threshold overrides
     # Only the 'tenants' section is allowed in tenant files.
@@ -4161,31 +4161,12 @@ def _write_confd(conf_dir: Path, files: list) -> None:
     _lib_write_check.require_output_tree(conf_dir)
     if not entries:
         return
-    _write_batch_into(conf_dir, entries, "init_project")
-
-
-def _write_batch_into(out: Path, entries: list, tool: str) -> None:
-    """`_lib_confedit.write_all_or_exit` under *out*, creating it first (it
-    is da-guard's --config-dir) — and removing again every directory this
-    created when the batch is not written, so a missing da-guard or a
-    refusal leaves no empty output directory behind (#3206)."""
-    created = []
-    p = out
-    while not p.exists() and p != p.parent:
-        created.append(p)
-        p = p.parent
-    ensure_dir_or_die(out, flag="-o/--output-dir")
-    done = False
-    try:
-        _lib_confedit.write_all_or_exit(out, entries, tool=tool)
-        done = True
-    finally:
-        if not done:
-            for d in created:  # innermost first; rmdir removes only an empty one
-                try:
-                    d.rmdir()
-                except OSError:
-                    break
+    # da-guard's --config-dir: made only when the batch is sent, and removed
+    # again (left empty) when it is not written — a failed run leaves no
+    # output directory behind (#3206).
+    _lib_confedit.write_all_or_exit(
+        conf_dir, entries, tool="init_project",
+        make_root=lambda: ensure_dir_or_die(conf_dir, flag="-o/--output-dir"))
 
 
 def run_init(config: dict, output_dir: str,

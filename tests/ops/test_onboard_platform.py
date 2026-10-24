@@ -1178,3 +1178,41 @@ class TestInvalidTenantIdFromAlertmanager:
                                      self._am(tmp_path, ["db-a"]), "-o", str(out)])
         assert rc == 0
         assert (out / "phase1-routing" / "db-a.yaml").exists()
+
+
+class TestConfdThroughDaGuardWrite:
+    """Phase 1／Phase 2 的 conf.d 檔一批交給 da-guard write（#3206 10c）。"""
+
+    def test_a_write_stopped_part_way_names_the_files(self, tmp_path, capsys, monkeypatch):
+        import _lib_confedit
+        import onboard_platform as op
+
+        def stopped(root, entries, **_kw):
+            raise _lib_confedit.PartialWrite(
+                ["phase1-routing/tenant-a.yaml"], "phase2-rules/_defaults-suggestion.yaml",
+                OSError("disk full"), maybe_written=["phase2-rules/_defaults-suggestion.yaml"])
+        monkeypatch.setattr(_lib_confedit, "write_all", stopped)
+        out = tmp_path / "out"
+        with pytest.raises(SystemExit) as exc:
+            op.write_outputs(str(out), phase1_results=(
+                {"tenant-a": {"receiver": {"type": "webhook", "url": "https://h.example/a"}}},
+                {"dedup_tenants": {}}))
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "stopped part-way" in err and "phase1-routing/tenant-a.yaml" in err \
+            and "_defaults-suggestion.yaml" in err and "not rolled back" in err, err
+        # nothing after the batch (the CSV, the hints) is written
+        assert not (out / "phase1-routing" / "routing-summary.csv").exists()
+
+    def test_a_value_with_no_contract_type_is_exit_2_naming_it(self, tmp_path, capsys):
+        import onboard_platform as op
+        out = tmp_path / "out"
+        with pytest.raises(SystemExit) as exc:
+            op.write_outputs(str(out), phase1_results=(
+                {"tenant-a": {"receiver": {"type": "webhook", "url": "https://h.example/a"},
+                              "group_wait": float("inf")}},
+                {"dedup_tenants": {}}))
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "phase1-routing/tenant-a.yaml" in err and "group_wait" in err, err
+        assert not out.exists() or not any(out.rglob("*"))

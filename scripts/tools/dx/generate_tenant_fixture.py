@@ -42,7 +42,6 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-import _lib_parse_tree  # noqa: E402
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -351,7 +350,7 @@ def generate_flat(
         tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
         files.append((f"{tid}.yaml", tenant_config))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {count} tenant files (flat) in {output_dir}")
 
 
@@ -411,7 +410,7 @@ def generate_hierarchical(
                       _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (hierarchical) in {output_dir}")
     print(f"   Structure: {len(DOMAINS)} domains × {len(REGIONS)} regions × {len(ENVIRONMENTS)} envs")
 
@@ -574,7 +573,7 @@ def generate_synthetic_v2(
                       _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
-    _confirm_and_write(output_dir, files, flag=flag)
+    _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
     print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
     print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
@@ -599,8 +598,7 @@ def _domain_defaults(rng: random.Random,
     return out
 
 
-def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
-                       flag: str | None = OUTPUT_FLAG) -> None:
+def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]]) -> None:
     """Write every ``(root-relative path, data)`` of one run under
     *output_dir* through ONE `da-guard write` batch (ADR-036 §2: only Go
     writes conf.d; #3206 step 10c-2): the data goes as typed values
@@ -613,8 +611,8 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
     written; a write that stopped part-way is rc 2 naming the files left
     in place.
 
-    *flag* (unused by the write itself, which Go makes) names the output
-    flag in a message, ``None`` when it was not given (#1789)."""
+    The refusal, caller-error and part-way messages are
+    `_lib_confedit.write_all_or_exit`'s, shared with every conf.d writer."""
     import _lib_confedit  # noqa: PLC0415
     batch = []
     for rel, data in files:
@@ -622,24 +620,9 @@ def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
             batch.append((rel, _lib_confedit.data_value(data)))
         except ValueError as exc:
             _die(f"{rel}: {exc} — nothing was written")
-    where = f" (the directory given to {flag})" if flag else ""
-    try:
-        _lib_confedit.emit_all(output_dir, batch)
-    except _lib_confedit.EditsRefused as exc:
-        for r in exc.refusals:
-            print(f"ERROR: {r.path}: {r.reason}: {r.message}", file=sys.stderr)
-        _die(f"da-guard write refused {len(exc.refusals)} file(s) under "
-             f"{output_dir}{where} — nothing was written")
-    except _lib_confedit.EditCallerError as exc:
-        _die(f"{exc} — nothing was written")
-    except _lib_confedit.PartialWrite as exc:
-        left = [*exc.written, *exc.maybe_written]
-        _die(f"the write under {output_dir}{where} stopped part-way: {exc.cause}; "
-             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
-             f"been written, not rolled back: {', '.join(left) or '(none)'}")
-    except _lib_parse_tree.ParseTreeError as exc:
-        _die(f"cannot write the generated conf.d files through `da-guard write` "
-             f"(ADR-036 §2): {exc}; nothing was written")
+    _lib_confedit.write_all_or_exit(
+        output_dir, [_lib_confedit.create_entry(rel, content) for rel, content in batch],
+        tool="generate_tenant_fixture")
 
 
 def _die(message: str) -> None:
