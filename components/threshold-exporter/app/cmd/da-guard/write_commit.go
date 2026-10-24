@@ -343,7 +343,7 @@ func (w *writer) place(f *writeFile) (string, error) {
 	if serr != nil {
 		return writeReasonWriteFailed, serr
 	}
-	moved, reason, err := w.linkOrRename(f.tmp, f.abs, rename, f)
+	moved, reason, err := w.linkOrRename(f.tmp, f.abs, staged, rename, f)
 	if err != nil {
 		return reason, err
 	}
@@ -354,10 +354,14 @@ func (w *writer) place(f *writeFile) (string, error) {
 	return "", nil
 }
 
-// linkOrRename puts the file at from also at to without replacing anything
-// there: a hard link, or — on a file system without hard links — a rename
-// after checking once more that to is absent (moved true: from is gone).
-func (w *writer) linkOrRename(from, to string, rename func(string, string) error, f *writeFile) (moved bool, reason string, err error) {
+// linkOrRename puts the file want (the inode from held when checked) at from
+// also at to without replacing anything there: a hard link, or — on a file
+// system without hard links — a rename after checking once more that to is
+// absent (moved true: from is gone). A rename moves whatever from holds by
+// then, so the file it moved is checked to be want after; another one is
+// renamed back and nothing is placed (changed_during_write), or, when that
+// rename back fails too, left at to and named in the error.
+func (w *writer) linkOrRename(from, to string, want os.FileInfo, rename func(string, string) error, f *writeFile) (moved bool, reason string, err error) {
 	link := w.link
 	if link == nil {
 		link = os.Link
@@ -372,6 +376,13 @@ func (w *writer) linkOrRename(from, to string, rename func(string, string) error
 		if rerr := rename(from, to); rerr != nil {
 			return false, writeReasonWriteFailed, rerr
 		}
+		if cur, cerr := os.Lstat(to); cerr != nil || !os.SameFile(cur, want) {
+			if berr := rename(to, from); berr != nil {
+				return false, writeReasonWriteFailed, fmt.Errorf(
+					"%s changed while it was moved, and could not be moved back: it is at %s (%v)", from, to, berr)
+			}
+			return false, writeReasonChangedDuringWrite, errors.New(changedMessage(f))
+		}
 		return true, "", nil
 	}
 	return false, "", nil
@@ -385,7 +396,7 @@ func (w *writer) placeMove(f *writeFile, rename func(string, string) error) (str
 	if err != nil {
 		return writeReasonChangedDuringWrite, errors.New(changedMessage(f))
 	}
-	moved, reason, err := w.linkOrRename(f.fromAbs, f.abs, rename, f)
+	moved, reason, err := w.linkOrRename(f.fromAbs, f.abs, src, rename, f)
 	if err != nil {
 		return reason, err
 	}
@@ -432,7 +443,7 @@ func (w *writer) placeDelete(f *writeFile, rename func(string, string) error) (s
 	if err != nil {
 		return writeReasonWriteFailed, err
 	}
-	moved, reason, err := w.linkOrRename(f.abs, backup, rename, f)
+	moved, reason, err := w.linkOrRename(f.abs, backup, src, rename, f)
 	if err != nil {
 		return reason, err
 	}
@@ -481,8 +492,12 @@ func (w *writer) restoreDeleted(f *writeFile, rename func(string, string) error)
 		f.res.Status, f.res.Message = writeStatusMaybeWritten, strp(msg)
 		return
 	}
-	if _, _, err := w.linkOrRename(f.backup, f.abs, rename, f); err != nil {
-		maybe("it could not be linked back at its path: " + err.Error())
+	if _, reason, err := w.linkOrRename(f.backup, f.abs, f.placed, rename, f); err != nil {
+		if reason == writeReasonChangedDuringWrite {
+			maybe("the path holds another file now; it is left as it is")
+		} else {
+			maybe("it could not be linked back at its path: " + err.Error())
+		}
 		return
 	}
 	if cur, err := os.Lstat(f.abs); err != nil || !os.SameFile(cur, f.placed) {
@@ -535,7 +550,7 @@ func (w *writer) rollBack(placed []*writeFile) {
 		}
 		if f.kind == writeKindMove && f.sourceGone {
 			// Back at the source, without replacing what may be there now.
-			if _, _, err := w.linkOrRename(f.abs, f.fromAbs, rename, f); err != nil {
+			if _, _, err := w.linkOrRename(f.abs, f.fromAbs, f.placed, rename, f); err != nil {
 				maybe(f, "it could not be put back at its source "+f.from+": "+err.Error())
 				continue
 			}

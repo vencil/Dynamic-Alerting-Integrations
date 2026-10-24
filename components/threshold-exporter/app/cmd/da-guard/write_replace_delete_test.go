@@ -382,3 +382,38 @@ func TestWrite_AMixedBatchOfAllFiveKinds(t *testing.T) {
 		t.Fatalf("tree %q, want %q", got, want)
 	}
 }
+
+// TestWrite_ARenameFallbackThatMovesAnotherFileMovesItBack: with no hard
+// links, a delete's file is renamed to its hidden name, and a rename moves
+// whatever the path holds by then. Another writer puts a new file there
+// between the check and the rename: it is renamed back, nothing is deleted
+// (changed_during_write), and the new file is still at the path.
+func TestWrite_ARenameFallbackThatMovesAnotherFileMovesItBack(t *testing.T) {
+	root := writeTree(t, map[string]string{"d.yaml": "tenants:\n  t2: {}\n", "x.yaml": "tenants:\n  t9: {}\n"})
+	abs := filepath.Join(root, "d.yaml")
+	swapped := false
+	w := &writer{cmd: writeCmd,
+		link: func(string, string) error { return errors.New("no hard links here") },
+		rename: func(o, n string) error {
+			if o == abs && !swapped {
+				swapped = true
+				// Kept under a name no walk reads, so its inode is not reused.
+				if err := os.Rename(abs, filepath.Join(root, "old.txt")); err != nil {
+					return err
+				}
+				if err := os.WriteFile(abs, []byte("tenants:\n  t3: {}\n"), 0o644); err != nil {
+					return err
+				}
+			}
+			return os.Rename(o, n)
+		}}
+	code, res := runSeamed(t, w, `{"files":[{"path":"d.yaml","delete":true}]}`, "--config-dir", root)
+	if code != exitFindings || res.Status != writeStatusRefused ||
+		!reflect.DeepEqual(statuses(res), []string{"refused/changed_during_write"}) {
+		t.Fatalf("exit %d %s %v (%v)", code, res.Status, statuses(res), res.Message)
+	}
+	want := map[string]string{"d.yaml": "tenants:\n  t3: {}\n", "old.txt": "tenants:\n  t2: {}\n", "x.yaml": "tenants:\n  t9: {}\n"}
+	if got := snapshot(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tree %q, want %q", got, want)
+	}
+}
