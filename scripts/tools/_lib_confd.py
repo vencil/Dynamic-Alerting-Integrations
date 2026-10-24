@@ -905,6 +905,8 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
     declared: dict[str, set[str]] = {}
     scope = tenant_scope(reader) if config_listing(root, reader=reader) is not None else None
     unreadable: list[str] = [] if scope is None else [u.file for u in scope.unknown]
+    if scope is not None:
+        reader.prefetch(scope.files)  # one parse-tree run for the misses (#3206)
     for rel in ([] if scope is None else scope.files):
         path, label = root / rel, rel
         try:
