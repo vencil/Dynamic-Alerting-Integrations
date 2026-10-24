@@ -72,8 +72,8 @@ func TestWrite_ReplaceOfAMissingPathIsACreate(t *testing.T) {
 	if got := snapshot(t, root)["new/t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
 		t.Fatalf("written %q", got)
 	}
-	if fi, err := os.Stat(filepath.Join(root, "new", "t.yaml")); err != nil || fi.Mode().Perm() != 0o644 {
-		t.Fatalf("mode %v %v, want a create's 0644", fi, err)
+	if fi, err := os.Stat(filepath.Join(root, "new", "t.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v %v, want a create's 0600", fi, err)
 	}
 }
 

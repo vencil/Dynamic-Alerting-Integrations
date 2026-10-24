@@ -331,7 +331,7 @@ func parseWriteFlags(cmd string, args []string, errOut io.Writer) (*writeFlags, 
 
 func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, cmd)
-	fmt.Fprintf(errOut, "Change conf.d files in one batch, judged once, all or nothing (ADR-036 §2, §4).\n\n"+
+	fmt.Fprintf(errOut, "Change conf.d files in one batch, judged once; written only when every file passes (a write that stops part-way is partial_write) (ADR-036 §2, §4).\n\n"+
 		"Input: {\"files\": [<entry>, ...]}, each path once (a move's source counts), each entry one of:\n"+
 		"  {\"path\": <rel>, \"ops\": [<op>, ...]}   edit an existing file: its ops applied in order\n"+
 		"  {\"path\": <rel>, \"create\": <value>, \"head_comment\": <text>, \"foot_comment\": <text>}\n"+
@@ -1099,7 +1099,9 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 		return
 	}
 	if w.encodeValue(f) {
-		f.perm = 0o644
+		// 0600, as the Python writers it replaces wrote (_lib_io.write_text_or_die,
+		// #3105): a tenant file can hold a receiver URL with a token in it.
+		f.perm = 0o600
 	}
 }
 
@@ -1124,7 +1126,7 @@ func (w *writer) encodeValue(f *writeFile) bool {
 }
 
 // prepareReplace judges one replace alone. A missing target is a create's
-// (prepareTarget, mode 0644, put in place as a create). An existing one is
+// (prepareTarget, mode 0600, put in place as a create). An existing one is
 // judged as an edit's original (readOriginal: a regular file, no symlink, a
 // path a reader reads) except that parse-tree need not read it — its text is
 // neither kept nor read as a base, so a file the exporter cannot read is
