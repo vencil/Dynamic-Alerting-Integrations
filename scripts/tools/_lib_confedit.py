@@ -460,11 +460,15 @@ def comment_text_problem(text: str) -> Optional[str]:
     return None
 
 
-def comment_field(what: str, text: Any) -> str:
+def comment_field(what: str, text: Any, *, line: bool = False) -> str:
     """*text* (an outside value a tool puts into a comment: an alert name, a
     tenant id) as a str, or ValueError naming *what* when da-guard would
-    refuse it there (`comment_text_problem`)."""
+    refuse it there (`comment_text_problem`). *line*: the value sits inside
+    one comment line (a header built line by line), so a line break is
+    refused too, naming *what*, instead of the header's broken line."""
     problem = comment_text_problem(str(text))
+    if not problem and line and "\n" in str(text):
+        problem = "it holds a line break, which this comment line cannot carry"
     if problem:
         raise ValueError(f"{what} {str(text)!r}: {problem}")
     return str(text)

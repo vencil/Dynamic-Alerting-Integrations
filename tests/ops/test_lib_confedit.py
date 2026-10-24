@@ -610,6 +610,13 @@ def test_comment_text_problem_lets_tabs_lines_and_text_through():
     assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
 
 
+def test_comment_field_refuses_a_line_break_only_inside_one_line():
+    assert ce.comment_field("the pack", "a\nb") == "a\nb"
+    with pytest.raises(ValueError, match=r"^the pack 'a\\nb': it holds a line break"):
+        ce.comment_field("the pack", "a\nb", line=True)
+    assert ce.comment_field("the pack", "a\tb", line=True) == "a\tb"
+
+
 # ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
 
 def test_write_all_or_exit_returns_the_results_when_the_batch_passes(tmp_path, capsys):

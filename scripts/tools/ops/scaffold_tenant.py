@@ -1093,7 +1093,7 @@ def tenant_confd_file(tenant_name: str, tenant_data: dict, written_defaults: dic
     `<base>_critical` paragraph is read off its `defaults:`); *declared_keys*
     is this tenant's declared list, every one of which that file declares."""
     try:
-        _lib_confedit.comment_field("the tenant id", tenant_name)
+        _lib_confedit.comment_field("the tenant id", tenant_name, line=True)
     except ValueError as exc:
         _die(f"{exc} — nothing was written")
     # ⛔ 標頭的三態句必須對「每一種 key」都為真（#1321）。原句「省略=Default」只對
@@ -1458,17 +1458,20 @@ def run_from_onboard(args: argparse.Namespace) -> None:
         print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # A tenant named twice is scaffolded once (in its first place): two
-    # `<t>.yaml` in one batch are a caller error to da-guard write (#3206).
-    tenants = list(dict.fromkeys(hints.get("tenants", [])))
+    tenants = hints.get("tenants", [])
     if not tenants:
         # #452: readable-but-empty hints = unusable input = caller error,
         # consistent with the "cannot read hints" sibling above.
         print("No tenants found in onboard hints.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # ADR-035: judged before the first file is written.
+    # ADR-035: judged before the first file is written — and before the
+    # de-duplication below, which hashes each id (a list there is named
+    # here, not a TypeError).
     _refuse_invalid_tenant_id(*tenants)
+    # A tenant named twice is scaffolded once (in its first place): two
+    # `<t>.yaml` in one batch are a caller error to da-guard write (#3206).
+    tenants = list(dict.fromkeys(tenants))
 
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")

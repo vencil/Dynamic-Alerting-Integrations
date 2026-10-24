@@ -980,6 +980,22 @@ class TestRunFromOnboard:
         err = capsys.readouterr().err
         assert "DNS-1123" in err and repr(tenants[-1]) in err, err
 
+    # An id that is no string (a list, a mapping) is named as an invalid id,
+    # not a TypeError from de-duplicating it first (blind review, #3206 10c-3).
+    @pytest.mark.parametrize("bad", [["a"], {"x": 1}])
+    def test_unhashable_tenant_id_is_named_not_a_traceback(self, bad, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump({"tenants": [bad, "db-b"], "db_types": {}, "routing_hints": {}}, f)
+            out = os.path.join(d, "out")
+            with pytest.raises(SystemExit) as exc_info:
+                run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=out))
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert not os.path.exists(out), os.listdir(out)
+        err = capsys.readouterr().err
+        assert "DNS-1123" in err and repr(bad) in err and "TypeError" not in err, err
+
     def test_no_tenants_exits(self):
         with tempfile.TemporaryDirectory() as d:
             hints_path = os.path.join(d, "empty.json")

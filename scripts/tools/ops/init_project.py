@@ -802,7 +802,7 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     # (`run_init` takes a config dict), so a character no comment can carry is
     # refused here, naming the flag, not as the batch's bad_input.
     for rp in rule_packs:
-        _lib_confedit.comment_field("the rule pack (--rule-packs)", rp)
+        _lib_confedit.comment_field("the rule pack (--rule-packs)", rp, line=True)
     header = textwrap.dedent("""\
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
@@ -883,7 +883,7 @@ def _tenant_file(tenant: str, rule_packs: list[str]) -> "_lib_confedit.NewFile":
     critical_note += _critical_prefill_note(critical)
     declared_note = '\n'.join(
         render_tenant_declared_note_lines(declared_keys, lang='en'))
-    _lib_confedit.comment_field("the tenant (--tenants)", tenant)
+    _lib_confedit.comment_field("the tenant (--tenants)", tenant, line=True)
     header = textwrap.dedent("""\
     # {tenant}.yaml — Tenant threshold overrides
     # Only the 'tenants' section is allowed in tenant files.

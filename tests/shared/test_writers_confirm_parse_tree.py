@@ -365,15 +365,18 @@ def test_init_project_one_refused_file_writes_none(tmp_path, monkeypatch, capsys
     assert not out.exists(), sorted(p.as_posix() for p in out.rglob("*"))
 
 
-def test_init_project_refuses_a_rule_pack_no_comment_can_carry(tmp_path):
-    # The pack names go into `_defaults.yaml`'s header comment: refused
-    # before the batch, naming the input — not the whole batch's bad_input.
+@pytest.mark.parametrize("pack, why", [("mariadb\rx", "U+000D"),
+                                       ("redis\nevil: 1", "line break")])
+def test_init_project_refuses_a_rule_pack_no_comment_can_carry(tmp_path, pack, why):
+    # The pack names go into one line of `_defaults.yaml`'s header comment:
+    # refused before the batch, naming the input — not the whole batch's
+    # bad_input, nor the header's broken line.
     import init_project as ip
     out = tmp_path / "repo"
     with pytest.raises(ip._ConfdWriteRefused) as exc:
-        ip.run_init({**_init_config(["tenant-a"]), "rule_packs": ["mariadb\rx"]},
+        ip.run_init({**_init_config(["tenant-a"]), "rule_packs": [pack]},
                     str(out))
-    assert "--rule-packs" in str(exc.value) and "U+000D" in str(exc.value)
+    assert "--rule-packs" in str(exc.value) and why in str(exc.value)
     assert not out.exists() or _bytes(out) == {}
 
 
