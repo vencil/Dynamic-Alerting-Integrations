@@ -529,6 +529,10 @@ def test_replace_and_delete_entries_are_the_contracts_shape():
     assert ce.create_entry("a.yaml", content, head_comment="h", replace=True) == {
         "path": "a.yaml", "create": content, "replace": True, "head_comment": "h"}
     assert ce.delete_entry("a.yaml") == {"path": "a.yaml", "delete": True}
+    assert ce.delete_entry("a.yaml", tenants=("t-a",)) == {
+        "path": "a.yaml", "delete": True, "tenants": ["t-a"]}
+    with pytest.raises(TypeError):
+        ce.delete_entry("a.yaml", tenants="t-a")  # one string is not a list of ids
 
 
 def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
@@ -561,6 +565,25 @@ def test_deleting_the_selected_carrier_is_tree_worsened(tmp_path):
     with pytest.raises(ce.TreeWorsened):
         ce.write_all(root, [ce.delete_entry("_defaults.yaml")])
     assert _bytes(root) == before
+
+
+def test_a_delete_whose_tenants_differ_is_refused_naming_the_declaration(tmp_path):
+    # #3206: `tenants` is the delete's precondition, judged by da-guard on
+    # the bytes it reads: one more tenant declared, or the file not a tenant
+    # file, refuses the batch (declares_mismatch), nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants:\n  t-a: {}\n  t-b: {}\n",
+                                       "b.yaml": "tenants:\n  t-c: {}\n"})
+    before = _bytes(root)
+    with pytest.raises(ce.EditsRefused) as exc:
+        ce.write_all(root, [ce.delete_entry("a.yaml", tenants=["t-a"]),
+                            ce.delete_entry("b.yaml", tenants=["t-c"])])
+    assert [(r.path, r.reason) for r in exc.value.refusals] == [("a.yaml", "declares_mismatch")]
+    assert "[t-a t-b]" in exc.value.refusals[0].message
+    assert _bytes(root) == before
+    # Paired control: the declaration matches — deleted.
+    assert [r["status"] for r in ce.write_all(root, [ce.delete_entry("b.yaml", tenants=["t-c"])])] == [
+        ce.WRITTEN]
+    assert sorted(_bytes(root)) == ["a.yaml"]
 
 
 def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
