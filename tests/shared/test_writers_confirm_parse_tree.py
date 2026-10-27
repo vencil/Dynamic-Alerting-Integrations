@@ -772,6 +772,39 @@ def test_offboard_tenant_deletes_every_file_that_declares_the_tenant(tmp_path):
     assert all("tenant-a" not in (tree.node(p).get("tenants") or {}) for p in tree.selected)
 
 
+def test_offboard_tenant_finds_a_tenant_declared_in_a_subdirectory(tmp_path):
+    # #3206: the exporter reads the whole tree, so a tenant whose only file
+    # is `team-eu/tenant-a.yaml` is served; offboard finds and deletes it.
+    # The subdirectory's `_defaults.yaml` is not a tenant file: it stays.
+    root = _tree(tmp_path / "conf.d", {"team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/_defaults.yaml": "defaults:\n  cpu: 5\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(_bytes(root)) == ["team-eu/_defaults.yaml", "tenant-b.yaml"]
+
+
+def test_offboard_tenant_deletes_the_top_level_and_the_nested_copy(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "由 2 個檔宣告" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+
+
+def test_offboard_tenant_leaves_a_file_named_for_it_that_declares_nothing(tmp_path):
+    # Read as a tenant file and named for tenant-a, a leftover subset record
+    # `_federation/tenant-a.yaml` declares no tenant: it serves nothing of
+    # tenant-a, so it is not deleted (and does not fail the pre-check).
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "_federation/tenant-a.yaml": "metrics: [cpu]\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(_bytes(root)) == ["_federation/tenant-a.yaml"]
+
+
 def test_offboard_tenant_deletes_none_when_one_carrier_declares_another(tmp_path):
     # One of the files that declare tenant-a also declares tenant-b: the
     # pre-check's rule (deleting it would offboard tenant-b too) refuses the

@@ -28,10 +28,10 @@ Pre-check 項目:
      標為「未判定」，--execute 需另加 --skip-state-check 才執行。
 
 讀取（ADR-036 §2，#2906）：哪些檔、每個檔的內容一律取自 `da-guard parse-tree`
-（yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到的頂層租戶檔裡，檔名帶著
-這個 tenant id（`tenant_named`）或 `tenants:` 宣告了它的每一個（#3206：同一租戶由兩個
-檔宣告時兩個都刪，否則租戶仍被服務），而且每一個都恰好只宣告這個 tenant——沒宣告它、
-或另宣告了別的租戶，Pre-check 不通過（刪檔會連帶下架別的租戶），一個都不刪。parse-tree 讀不了的
+（yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到的租戶檔裡（任何深度，exporter 遞迴讀整棵樹），`tenants:`
+宣告了這個 tenant 的每一個（檔名帶著它、卻沒宣告它的檔不算）（#3206：同一租戶由兩個
+檔宣告時兩個都刪，否則租戶仍被服務），而且每一個都恰好只宣告這個 tenant——另宣告了
+別的租戶時 Pre-check 不通過（刪檔會連帶下架別的租戶），一個都不刪。parse-tree 讀不了的
 檔一律具名、擋下 --execute；沒有可用的 da-guard（`$DA_GUARD_BINARY`→`$PATH`）
 結束碼 2。
 
@@ -56,7 +56,6 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
-from _lib_confd import warn_nested  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
@@ -79,16 +78,17 @@ def _reader(config_dir):
     return _lib_parse_cache.reader_for(config_dir)
 
 
-def _top_level(config_dir):
-    """The top-level paths parse-tree selects (root-relative names), sorted,
-    each with its entry (Go's `role`): this tool reads conf.d FLAT
-    (`warn_nested` names what that leaves out). #3206: the entries of the
-    document the content is read from — one snapshot, no second walk."""
+def _selected(config_dir):
+    """Every config file parse-tree selects, at ANY depth (root-relative entry
+    paths), sorted, each with its entry (Go's `role`, `class`). #3206: the
+    exporter reads the whole tree, so does this tool — a tenant declared in
+    `team-eu/tenant-a.yaml` is served, and offboarding must find it. The
+    entries of the document the content is read from — one snapshot, no
+    second walk."""
     reader = _reader(config_dir)
-    warn_nested(Path(config_dir), reader=reader)  # deduplicated per directory
     selected = reader.tree().selected
     return sorted((e.path, e) for e in reader.listing().entries
-                  if e.depth == 0 and e.config_file and e.path in selected)
+                  if e.config_file and e.path in selected)
 
 
 def find_config_file(tenant, config_dir):
@@ -101,7 +101,7 @@ def find_config_rel(tenant, config_dir):
     """tenant 的設定檔相對 *config_dir* 的路徑（parse-tree 的 entry path：正規形式，
     沒有 `./`、`//`——`da-guard write` 收的就是這個形式），或 None。
 
-    tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
+    tenant 的設定檔：parse-tree 選到的檔裡（任何深度），檔名主幹等於 tenant 的第一個。
 
     #1588: the carrier is found by comparing the id its NAME carries, never
     by pasting an extension onto the id (`alpha.YAML` is alpha's), and
@@ -112,11 +112,7 @@ def find_config_rel(tenant, config_dir):
     base = Path(config_dir)
     if not base.is_dir():
         return None
-    # ⚠️ FLAT, and this says so (`warn_nested`): a tenant whose carrier lives
-    # in a subdirectory is not found here — the OFFBOARD pre-check, where
-    # "no config found" must not read as "safe to remove".
-    warn_nested(base, reader=_reader(config_dir))
-    for rel, e in _top_level(config_dir):
+    for rel, e in _selected(config_dir):
         # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
         # refuses the run before this line is reached.
         if e.tenant_named == tenant and e.config_file:
@@ -126,25 +122,28 @@ def find_config_rel(tenant, config_dir):
 
 def find_carriers(tenant, config_dir):
     """Every file that carries *tenant* — the files `--execute` deletes, in
-    one batch: the top-level tenant files (Go's entry class `tenant`) whose
-    NAME carries the id (`tenant_named`) or whose `tenants:`, as parse-tree
-    reads it, declares it. Root-relative entry paths (parse-tree's clean
+    one batch: the tenant files at any depth (Go's entry class `tenant`) whose
+    `tenants:`, as parse-tree reads it, declares it. A file whose NAME
+    carries the id but which declares no such tenant (a leftover
+    `_federation/<tenant>.yaml` subset record, read as a tenant file) serves
+    nothing of it: not a carrier, at most a cross-reference. Root-relative entry paths (parse-tree's clean
     form, what `da-guard write` takes), sorted.
 
     #3206: a tenant declared in two tenant files (`tenant-a.yaml` and
     `tenant-a.yml`, or `other.yaml`) is served from both; deleting one of
     them leaves the tenant served. Which files those are is the index's
-    answer (class, `tenant_named`, the declared keys), never a name compared
+    answer (class, the declared keys), never a name compared
     here. A platform file (`_platform.yaml`) that mentions the tenant is not
-    a carrier the exporter counts twice: it stays a cross-reference."""
+    a carrier the exporter counts twice: it stays a cross-reference; nor is a
+    subdirectory's `_defaults.yaml` (class `defaults`)."""
     base = Path(config_dir)
     if not base.is_dir():
         return []
     out = []
-    for rel, e in _top_level(config_dir):
+    for rel, e in _selected(config_dir):
         if e.cls != "tenant" or rel in LEGACY_STATE_FILES:
             continue
-        if e.tenant_named == tenant or tenant in (declared_by(str(base / rel), config_dir) or ()):
+        if tenant in (declared_by(str(base / rel), config_dir) or ()):
             out.append(rel)
     return out
 
@@ -161,7 +160,8 @@ def declared_by(path, config_dir):
 
 
 def load_all_configs(config_dir):
-    """載入 conf.d 頂層的所有設定檔（parse-tree 選到的檔，ADR-036 §2）。
+    """載入 conf.d 的所有設定檔（parse-tree 選到的檔，任何深度，ADR-036 §2；鍵是
+    root-relative 的 entry path）。
 
     Each entry is {"path", "data" (yaml.v3's values), "nodes" (parse-tree's
     nodes: every key and scalar as its source text), "tenant_named" (the
@@ -177,12 +177,10 @@ def load_all_configs(config_dir):
     """
     configs = {}
     base = Path(config_dir)
-    # #1911: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
+    # #3206: the whole tree, as the exporter reads it (it used to be flat,
+    # with `warn_nested` naming the files a hierarchical conf.d hid).
     reader = _reader(config_dir)
-    listing = reader.listing()  # #3206: one snapshot for the warning and the skip
-    warn_nested(base, tool="offboard_tenant", listing=listing)
-    for filename, entry in _top_level(config_dir):
+    for filename, entry in _selected(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
             # #2856; it imports this copy at startup only while the store has
@@ -339,13 +337,10 @@ def run_precheck(tenant, config_dir, state=None):
         report.append(f"✅ 設定檔案: {safe_label(config_file)}")
         # ADR-036 §2: whether deleting this file offboards exactly this tenant
         # is parse-tree's answer — the tenants its `tenants:` declares.
+        # (`find_carriers` keeps only the files that declare it.)
         declared = declared_by(config_file, config_dir)
         if declared is not None and declared != [tenant]:
             others = [t for t in declared if t != tenant]
-            if tenant not in declared:
-                report.append(f"❌ {safe_label(config_file)} 沒有宣告 {safe_label(tenant)}"
-                              "（da-guard parse-tree 讀出的 tenants:）")
-                issues.append("設定檔沒有宣告此 tenant")
             if others:
                 report.append(f"❌ {safe_label(config_file)} 另宣告了 "
                               f"{safe_label(', '.join(others))}——刪檔會一併下架它們")
