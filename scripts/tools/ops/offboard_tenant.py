@@ -439,7 +439,7 @@ def run_precheck(tenant, config_dir, state=None, *, emit=None):
         # any "通過" line.
         flush()
         results = _lib_confedit.write_all_or_exit(
-            config_dir, [_lib_confedit.delete_entry(rel) for rel in carriers],
+            config_dir, [_lib_confedit.delete_entry(rel, tenants=[tenant]) for rel in carriers],
             tool=_TOOL, dry_run=True)
         for r in results:
             path = safe_label(str(Path(config_dir) / r["path"]))
@@ -479,7 +479,7 @@ def execute_offboard(tenant, config_dir):
         return False
 
     results = _lib_confedit.write_all_or_exit(
-        config_dir, [_lib_confedit.delete_entry(rel) for rel in rels], tool=_TOOL)
+        config_dir, [_lib_confedit.delete_entry(rel, tenants=[tenant]) for rel in rels], tool=_TOOL)
     gone = [r["path"] for r in results if r["status"] == _lib_confedit.UNCHANGED]
     done = [r["path"] for r in results if r["status"] != _lib_confedit.UNCHANGED]
     for rel in gone:

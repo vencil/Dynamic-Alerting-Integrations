@@ -715,7 +715,7 @@ def test_offboard_tenant_deletes_through_a_da_guard_write_delete_entry(tmp_path,
     monkeypatch.setattr(os, "remove", mock.Mock(side_effect=AssertionError("os.remove")))
     monkeypatch.setattr(os, "unlink", mock.Mock(side_effect=AssertionError("os.unlink")))
     assert ot.execute_offboard("tenant-a", f"{root}/") is True
-    assert sent == [[{"path": "tenant-a.yaml", "delete": True}]]
+    assert sent == [[{"path": "tenant-a.yaml", "delete": True, "tenants": ["tenant-a"]}]]
     assert sorted(_bytes(root)) == ["tenant-b.yaml"]
 
 
@@ -860,6 +860,41 @@ def test_offboard_tenant_deletes_none_when_one_carrier_declares_another(tmp_path
     assert _bytes(root) == before
 
 
+def test_offboard_tenant_refuses_a_file_given_another_tenant_after_the_precheck(
+        tmp_path, monkeypatch, capsys):
+    # #3206 (CodeRabbit on #3363): the pre-check's dry run and --execute's
+    # write are two da-guard runs. A file that gains a declaration of
+    # tenant-b between them must not be deleted: each delete carries
+    # `tenants: [tenant-a]`, which da-guard judges on the bytes it reads for
+    # the real write — declares_mismatch, rc 2, the file named, both files
+    # kept. Real da-guard both times; only the edit in between is the hook.
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    real, calls = _lib_confedit.write_all, []
+
+    def hooked(r, entries, **kw):
+        calls.append([dict(e) for e in entries])
+        assert all(e.get("tenants") == ["tenant-a"] for e in entries), entries
+        out = real(r, entries, **kw)
+        if kw.get("dry_run"):  # after the pre-check, before --execute
+            (root / "team-eu" / "tenant-a.yaml").write_text(
+                "tenants:\n  tenant-a: {}\n  tenant-b: {}\n", encoding="utf-8")
+        return out
+    monkeypatch.setattr(_lib_confedit, "write_all", hooked)
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root),
+                                      "--execute", "--skip-state-check"])
+    with pytest.raises(SystemExit) as exc:
+        ot.main()
+    assert exc.value.code == 2
+    assert len(calls) == 2 and calls[0] == calls[1], calls  # the dry run is the same batch
+    out = capsys.readouterr()
+    assert "offboard_tenant: ERROR: team-eu/tenant-a.yaml: declares_mismatch:" in out.err, out.err
+    assert "tenant-b" in out.err and "已刪除" not in out.out, out.err
+    assert sorted(_bytes(root)) == ["team-eu/tenant-a.yaml", "tenant-a.yaml"]
+
+
 def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path, monkeypatch,
                                                                         capsys):
     # The batch is judged once with the file gone (worsens_tree): every place
@@ -875,7 +910,7 @@ def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path
     real = _lib_confedit.write_all
 
     def worsened(r, entries, **kw):
-        assert entries == [{"path": "tenant-a.yaml", "delete": True}]
+        assert entries == [{"path": "tenant-a.yaml", "delete": True, "tenants": ["tenant-a"]}]
         if kw.get("dry_run"):  # the pre-check's dry run passes; the real write is refused
             return real(r, entries, **kw)
         raise _lib_confedit.TreeWorsened([{"kind": "readers_lost", "path": "other.yaml",
