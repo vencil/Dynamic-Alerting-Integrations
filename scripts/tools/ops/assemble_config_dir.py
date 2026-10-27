@@ -786,6 +786,8 @@ def main() -> int:
         print(format_json_report(result))
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
+        print(f"   New files are mode 0600: if the exporter reads {output_dir} "
+              f"as another uid, widen it (e.g. chmod -R a+rX {output_dir})")
         if residue:
             print(f"   ⚠️  {output_dir} holds "
                   f"{len(carriers_already_in(output_dir))} carrier(s) the "

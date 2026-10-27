@@ -1494,6 +1494,8 @@ class TestHiddenCarriersAreNotAssembled:
         assert sorted(manifest["files"]) == ["_defaults.yaml"]
         # the human face: the count is the exporter's count
         assert "Assembled 1 file(s)" in captured.out
+        # #3206: the new files' 0600 is said where the run succeeds
+        assert f"New files are mode 0600: if the exporter reads {out}" in captured.out
         # loud and precise: the skipped carrier is named, on stderr
         warn = [ln for ln in captured.err.splitlines() if ".db-c.yaml" in ln]
         assert len(warn) == 1, captured.err
