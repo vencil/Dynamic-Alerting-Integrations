@@ -160,6 +160,7 @@ python3 scripts/ops/configmap_assemble.py \
 - **樹上有讀不到的路徑就整個拒絕**：`da-guard` 驗證會點名的每一條路徑——**斷鏈 symlink**、**取了 config 名字的目錄**（`db-x.yaml/`）、指向目錄的 symlink、FIFO、列不出內容的子目錄、exporter 解不開的檔（YAML 語法錯、多文件）——這一步都會在 stderr 逐條 `ERROR:` 點名（**全部列出、不截斷**），然後 **rc 2**、什麼都不寫。⛔ 以前這類載體只印 `WARN`、照樣組出少一個租戶的 ConfigMap，那個租戶在叢集上沒有告警；現在要先修好或移走它們才組得出來。其他 conf.d 工具也是同一個行為（#3206）。
 - **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
 - **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
+- **`--output` 必須是一般檔**（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：產物以暫存檔加改名原子取代，寫出來是 `0600`（既有檔也收緊）。`-`、`/dev/stdout`、裝置、FIFO 結束碼 `2`；要接管線，先寫檔再 `cat`。
 - **⚠️ 上面那個 1 MiB 不是你先撞到的天花板**：`kubectl apply -f`（client-side，也就是本節教的那條命令）會把**整個物件**寫進 `kubectl.kubernetes.io/last-applied-configuration` 這個 annotation，而 k8s 對一個物件的 annotation 總量上限是 **256 KiB**——`data` 上限的四分之一，而且驗證順序在前。超過時 `kubectl apply` 回的是 `metadata.annotations: Too long`，**不點名任何檔**。產物超過那個大小時 assemble 會印一則 `WARN`（不擋），兩條出路：改用 `kubectl apply --server-side -f`（不存那個 annotation），或把租戶拆開（`make sharded-assemble`）。
 
 ### Method B: Helm values overlay

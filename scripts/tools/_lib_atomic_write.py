@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
 
+#3107: the one atomic writer. It moved here from ``scripts/tools/dx/`` so
+the da-tools image ships it (``state-reconcile`` and ``configmap-assemble``
+rewrite their outputs atomically); ``_lib_io.write_repo_artifact`` is its
+entry point for a committed artifact.
+
 Long-running regen tools (``generate_doc_map.py``, ``generate_tool_map.py``,
 …) that write their output directly on top of the target can leave a
 half-written file if the write is interrupted — ENOSPC, a kill, or on FUSE
@@ -67,12 +72,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional, Union
 
-# `_lib_io` (OutputWriteError, safe_label) lives one level up in
-# scripts/tools/. Callers outside scripts/tools/dx/ put only this directory on
-# sys.path, so the helper makes its own dependency importable.
-_TOOLS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-if _TOOLS_DIR not in sys.path:
-    sys.path.insert(0, _TOOLS_DIR)
+# #3107: shipped beside `_lib_io` in scripts/tools/ (and flat in the da-tools
+# image), so its one dependency is a sibling import.
 from _lib_io import OutputWriteError, safe_label  # noqa: E402
 
 _DEFAULT_MODE = 0o644

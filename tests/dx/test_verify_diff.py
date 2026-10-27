@@ -146,7 +146,7 @@ class TestGlob:
         ("**/*.md", "docs/a/b.md", True),
         ("**/*.md", "README.md", True),
         ("*.md", "docs/a.md", False),          # * 不跨 /
-        ("scripts/tools/*/_*.py", "scripts/tools/dx/_atomic_write.py", True),
+        ("scripts/tools/*/_*.py", "scripts/tools/dx/_recipe_preview.py", True),
         ("scripts/tools/*/_*.py", "scripts/tools/dx/tool.py", False),
         ("scripts/tools/_lib_*.py", "scripts/tools/_lib_io.py", True),
         ("scripts/tools/_lib_*.py", "scripts/tools/ops/_lib_io.py", False),

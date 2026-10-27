@@ -1153,17 +1153,8 @@ def write_findings_json(path: str, doc: dict) -> None:
     """
     text = json.dumps(doc, ensure_ascii=False, sort_keys=True,
                       allow_nan=False, indent=2) + "\n"
-    tmp = f"{path}.tmp-{os.getpid()}"
-    try:
-        _lib_io.write_text_secure(tmp, text, flag="--findings-json")
-        os.replace(tmp, path)
-    except OSError as exc:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        cause = exc.cause if isinstance(exc, OutputWriteError) else exc
-        print(f"ERROR: {safe_label(str(OutputWriteError(path, cause, flag='--findings-json')))}",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    _lib_io.write_operator_output_or_die(path, text, flag="--findings-json",
+                                         exit_code=EXIT_CALLER_ERROR)
 
 
 def _exit_code_of(exc: SystemExit) -> int:
@@ -1228,6 +1219,10 @@ def _write_findings_if_asked(early: argparse.Namespace,
     doc = findings_document(findings, config_dir=src.config_dir,
                             exit_code=code, validate=src.validate,
                             strict=src.strict)
+    if getattr(src, "output", None) is None:
+        # #3107 v2: without -o the routes go to stdout; `--findings-json -`
+        # would interleave a second document there.
+        _lib_io.claim_stdout("the routes output (no -o)")
     if not keep_exception:
         write_findings_json(src.findings_json, doc)
         return

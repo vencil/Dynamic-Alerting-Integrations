@@ -42,6 +42,7 @@ BUILD_EXEMPT = frozenset({
     "_lib_constants.py",
     "_lib_validation.py",
     "_lib_prometheus.py",
+    "_lib_atomic_write.py",  # #3107: library, not CLI
     "_lib_io.py",
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # operator_generate + migrate_to_operator. Library, not CLI.

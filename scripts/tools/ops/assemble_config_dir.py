@@ -52,6 +52,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import claim_stdout, write_operator_output  # noqa: E402  (#3107)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
@@ -711,17 +712,11 @@ def main() -> int:
         # copied; without this a retired shard is absent from every face.
         if residue:
             manifest["residue"] = sorted(residue)
-        manifest_path = Path(args.manifest)
-        # A SECOND flag and a second path: `--manifest` is not under
-        # `--output`, so its failure must name `--manifest` (#1789). The
-        # 0644 chmod is inside the same block as the write.
-        with output_write(manifest_path, flag="--manifest"):
-            manifest_path.write_text(
-                format_json_report(manifest) + "\n",
-                encoding="utf-8", newline="\n",
-            )
-            os.chmod(manifest_path,
-                     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        # #3107 v2: an operator output — the kernel opens it; `-` is stdout,
+        # which the assembly report already uses.
+        claim_stdout("the assembly report")
+        write_operator_output(args.manifest, format_json_report(manifest) + "\n",
+                              flag="--manifest", mode=0o644)
 
     # Output
     if args.json:

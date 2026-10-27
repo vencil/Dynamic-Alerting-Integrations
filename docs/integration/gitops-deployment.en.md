@@ -215,6 +215,10 @@ python3 scripts/ops/configmap_assemble.py \
   **untouched** (half a file is worse than an old one). ⛔ So the
   `kubectl apply` step must run only after assemble **succeeds** — a pipeline
   that is not fail-fast will push the **stale** config.
+- **`--output` must be a regular file** ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)): the artifact is
+  replaced atomically (a temp file renamed into place) and ends `0600` (an
+  existing one is tightened). `-`, `/dev/stdout`, a device or a FIFO exits
+  `2`; to pipe it, write the file and `cat` it.
 - **⚠️ That 1 MiB is not the ceiling you hit first**: `kubectl apply -f`
   (client-side, the command this section shows) stores the ENTIRE object in
   the `kubectl.kubernetes.io/last-applied-configuration` annotation, and k8s

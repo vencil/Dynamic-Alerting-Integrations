@@ -244,6 +244,7 @@ lang: zh
 
 ## 共用函式庫
 
+- `scripts/tools/_lib_atomic_write.py`：Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
 - `scripts/tools/_lib_compat.py`：Cross-platform compatibility helpers for Dynamic Alerting CLI tools.
 - `scripts/tools/_lib_confd.py`：Single answer to "what is in a conf.d/ directory".
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).
@@ -278,7 +279,6 @@ lang: zh
 - `scripts/tools/ops/_registry_lib.py`：threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200).
 - `scripts/tools/ops/_render_diff.py`：Render both sides of a config change and compare what they render to (ADR-037).
 - `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
-- `scripts/tools/dx/_atomic_write.py`：Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
 - `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
 - `scripts/tools/lint/_lint_helpers.py`：Shared utilities for lint tools.

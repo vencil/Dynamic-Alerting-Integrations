@@ -48,9 +48,9 @@ import yaml
 # Same import pattern as generate_adr_index.py.
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
-from _atomic_write import atomic_write_text  # noqa: E402
-# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
 
 # Make stdout tolerate non-ASCII on Windows shells.
 if hasattr(sys.stdout, "reconfigure"):
@@ -475,6 +475,8 @@ def main() -> int:
 
     entries = discover_all(args.repo_root)
     body = render_index(entries)
+    from _lib_io import check_repo_artifact  # noqa: E402  (#3107 v2: before the read)
+    check_repo_artifact(args.target, flag="--target")
     current = args.target.read_text(encoding="utf-8")
     try:
         new = replace_sentinel_block(current, body)
@@ -507,7 +509,7 @@ def main() -> int:
         # when it is not the built-in default.
         flag = None if args.target == TARGET_DOC else "--target"
         with output_write(args.target, flag=flag):
-            atomic_write_text(args.target, new, flag=flag)
+            write_repo_artifact(args.target, new, flag=flag)
         print(f"WROTE: {rel_target} ({len(entries)} entries)")
     return 0
 

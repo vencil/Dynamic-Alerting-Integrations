@@ -56,7 +56,7 @@
 訊息作任何宣稱。
 
 ⛔ 其餘幾面**不再逐層轉寫 kubectl 的 parser**，改成**讀回即將寫出的那份
-manifest**（`kubectl` 的 stdout，`_write_atomically` 還沒發生）：
+manifest**（`kubectl` 的 stdout，`write_repo_artifact` 還沒發生）：
 `measure_artifact` 把 manifest 的 key 集合與長度，和我方 `carriers`
 的意圖對帳，總位元組也在**已 parse 的產物**上量。對帳問的是「產物是不是這棵樹」，kubectl 換 parser 也不影響。
 
@@ -77,7 +77,6 @@ import base64
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -243,26 +242,6 @@ def _forward(verdict: tu.Verdict) -> None:
         print(f"  -> {verdict.action}", file=sys.stderr)
 
 
-def _write_atomically(output: Path, text: str) -> None:
-    """Materialise `output` only once its full content exists.
-
-    A truncated-then-failed write leaves a half artifact that `kubectl apply`
-    would happily consume; a failure before this point must leave whatever is
-    on disk untouched, stale or absent.
-    """
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(output.parent),
-                                    prefix=output.name + ".", suffix=".tmp")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        os.replace(tmp, output)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Gate and build the threshold-config ConfigMap "
@@ -419,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.TimeoutExpired:
         # ⛔ Say what is ON DISK, not what we wish were. Nothing was written,
         # so a PREVIOUS run's `{args.output}` is still sitting there intact —
-        # deliberately (see `_write_atomically`: a half file is worse than an
+        # deliberately (see the write in `main`: a half file is worse than an
         # old one). The docs make assemble and `kubectl apply` two steps, so
         # an operator told the artifact was "not left behind" runs the second
         # step anyway and ships the OLD config believing it is this one.
@@ -441,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {line}", file=sys.stderr)
         return EXIT_VIOLATION
 
-    # ⛔ Read back the manifest we are ABOUT to write (`_write_atomically` is
+    # ⛔ Read back the manifest we are ABOUT to write (`write_repo_artifact` is
     # further down, and never runs if this disagrees). Everything above this
     # line is an intention; this is the only place the artifact answers.
     disagreements, measured = measure_artifact(proc.stdout, carriers)
@@ -519,9 +498,16 @@ def main(argv: list[str] | None = None) -> int:
 
     output = Path(args.output)
     try:
-        _write_atomically(output, proc.stdout)
-    except OSError as exc:
-        print(f"ERROR: could not write {output}: {exc}", file=sys.stderr)
+        # #3107 risk 1 (owner 2026-10-24, B): the manifest is replaced
+        # atomically — a half file is one `kubectl apply` would consume — so
+        # it is an artifact: `-`, a device, a FIFO or a socket is refused
+        # (rc 2), and the file ends 0600 (an existing one is tightened).
+        _lib_io.check_repo_artifact(args.output, flag="--output")
+        # The default lands in .build/, which a fresh clone lacks.
+        _lib_io.ensure_dir(output.parent, flag="--output")
+        _lib_io.write_repo_artifact(args.output, proc.stdout, flag="--output", mode=0o600)
+    except _lib_io.OutputWriteError as exc:
+        print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     print(f"✓ {output} ({len(carriers)} files, no duplicate tenant)")

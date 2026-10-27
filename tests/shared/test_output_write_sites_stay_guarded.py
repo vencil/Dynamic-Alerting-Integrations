@@ -135,11 +135,11 @@ PATH_METHOD_SINKS = frozenset({"write_text", "write_bytes", "mkdir", "chmod", "t
 # shared `_atomic_write.atomic_write_text`, so one name is left — and every
 # file that calls it is pinned (`test_every_shared_atomic_writer_caller_is_pinned`).
 NAMED_WRITER_SINKS = frozenset({"atomic_write_text"})
-# The module those names come from. `from _atomic_write import
+# The module those names come from. `from _lib_atomic_write import
 # atomic_write_text as w` makes `w(...)` a sink too (scan_source resolves the
 # alias), and ANY import of it makes a file a caller for
 # `test_every_shared_atomic_writer_caller_is_pinned` (#2128 S3).
-SHARED_WRITER_MODULE = "_atomic_write"
+SHARED_WRITER_MODULE = "_lib_atomic_write"
 # `open` and its aliases; only a WRITE mode is a sink.
 OPEN_NAMES = frozenset({"open"})
 OPEN_MODULE_NAMES = {"io": frozenset({"open"}), "codecs": frozenset({"open"})}
@@ -157,6 +157,8 @@ GUARD_KINDS = ("output_write", "or_die", "try")
 _CLOSED_WRITERS = frozenset({
     "write_text_secure", "write_json_secure",
     "write_text_or_die", "write_json_or_die", "ensure_dir_or_die",
+    # #3107 v2: the two output entry points.
+    "write_operator_output", "write_operator_output_or_die", "write_repo_artifact",
 })
 
 # Handler bodies that end the run rather than swallow. `EXIT_OK` / `0` /
@@ -212,8 +214,6 @@ _STOPPING_CODE = 2
 # `test_every_shared_atomic_writer_caller_is_pinned`, which walks the whole
 # `scripts/` tree.
 GUARDED_FILES: tuple[str, ...] = (
-    "scripts/dx/generate_adr_index.py",
-    "scripts/dx/generate_planning_index.py",
     "scripts/ops/audit_rules_drift.py",
     "scripts/tools/dx/compile_custom_alerts.py",
     "scripts/tools/dx/describe_tenant.py",
@@ -235,11 +235,10 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/ops/baseline_discovery.py",
     "scripts/tools/ops/config_history.py",
     "scripts/tools/ops/da_assembler.py",
-    "scripts/tools/ops/federation_keygen.py",
     "scripts/tools/ops/generate_rule_pack_split.py",
     "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 26
+_GUARDED_FILES_CEILING = 23  # #3107: adr/planning index and keygen moved to the _lib_io entry points
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an
@@ -362,7 +361,7 @@ def _is_shared_writer_module(name: str | None) -> bool:
 
 
 def _named_writer_aliases(tree: ast.AST) -> dict[str, str]:
-    """``{local name: writer name}`` for ``from _atomic_write import X as Y``."""
+    """``{local name: writer name}`` for ``from _lib_atomic_write import X as Y``."""
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and _is_shared_writer_module(node.module):
@@ -1036,10 +1035,10 @@ _KNOWN_SITES = {
     "scripts/tools/dx/describe_tenant.py": {".write_text"},
     "scripts/tools/ops/baseline_discovery.py": {"os.makedirs", "open(w)"},
     "scripts/tools/ops/assemble_config_dir.py": {"shutil.copy2", "os.chmod"},
-    "scripts/tools/ops/state_reconcile.py": {"tempfile.mkstemp", "os.fdopen", "os.replace"},
+    "scripts/tools/ops/state_reconcile.py": {".mkdir"},
     "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
-    "scripts/dx/generate_planning_index.py": {"atomic_write_text()"},
+    "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},
 }
 
 
@@ -1150,11 +1149,14 @@ def test_guarded_files_are_real_and_have_sinks():
 
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 # The helper's own module defines the name; it does not call it.
-_SHARED_WRITER_HOME = "scripts/tools/dx/_atomic_write.py"
+_SHARED_WRITER_HOME = "scripts/tools/_lib_atomic_write.py"
+# #3107: `_lib_io.write_repo_artifact` is the helper's entry point; its callers
+# are found by the `_CLOSED_WRITERS` name instead.
+_SHARED_WRITER_ENTRY = "scripts/tools/_lib_io.py"
 
 
 def shared_writer_import_lines(source: str, label: str = "<snippet>") -> list[int]:
-    """Lines that import ``_atomic_write`` — ``from _atomic_write import …``
+    """Lines that import ``_atomic_write`` — ``from _lib_atomic_write import …``
     (any names, any alias, any relative level) or ``import _atomic_write``
     (``as`` included, dotted too).
 
@@ -1188,7 +1190,7 @@ def shared_writer_callers(root: Path = SCRIPTS_DIR) -> dict[str, list[int]]:
     found: dict[str, list[int]] = {}
     for py in sorted(root.rglob("*.py")):
         rel = py.relative_to(REPO_ROOT).as_posix()
-        if rel == _SHARED_WRITER_HOME:
+        if rel in (_SHARED_WRITER_HOME, _SHARED_WRITER_ENTRY):
             continue
         lines = shared_writer_caller_lines(py.read_text(encoding="utf-8"), rel)
         if lines:
@@ -1200,32 +1202,32 @@ class TestSharedWriterCallerDetection:
     """Controls for the caller derivation, both signs (#2128 S3)."""
 
     def test_an_aliased_import_and_call_is_a_caller(self):
-        src = "from _atomic_write import atomic_write_text as w\nw(p, s)\n"
+        src = "from _lib_atomic_write import atomic_write_text as w\nw(p, s)\n"
         assert shared_writer_caller_lines(src) == [1, 2]
         # …and the aliased call is a sink the guard check sees, unguarded.
         assert [(c.line, c.sink, c.guard) for c in scan_source(src)] == [
             (2, "atomic_write_text()", None)]
 
     def test_a_wrapped_aliased_call_is_guarded(self):
-        src = ("from _atomic_write import atomic_write_text as w\n"
+        src = ("from _lib_atomic_write import atomic_write_text as w\n"
                "with output_write(p, flag=None):\n    w(p, s)\n")
         assert [c.guard for c in scan_source(src)] == ["output_write"]
 
     @pytest.mark.parametrize("src", [
-        "import _atomic_write\n",
-        "import _atomic_write as aw\nfn = aw.atomic_write_text\n",
-        "from _atomic_write import OutputNoSpaceError\n",
-        "from ._atomic_write import atomic_write_text\n",
-        "import dx._atomic_write\n",
+        "import _lib_atomic_write\n",
+        "import _lib_atomic_write as aw\nfn = aw.atomic_write_text\n",
+        "from _lib_atomic_write import OutputNoSpaceError\n",
+        "from ._lib_atomic_write import atomic_write_text\n",
+        "import tools._lib_atomic_write\n",
     ])
     def test_any_import_makes_a_caller(self, src):
         assert shared_writer_import_lines(src) == [1]
 
     @pytest.mark.parametrize("src", [
         "import atomic_write\n",
-        "from _atomic_write_extra import x\n",
+        "from _lib_atomic_write_extra import x\n",
         "w = something.atomic_writer\n",
-        "text = '_atomic_write'\n",
+        "text = '_lib_atomic_write'\n",
     ])
     def test_non_imports_are_not_callers(self, src):
         assert shared_writer_caller_lines(src) == []
