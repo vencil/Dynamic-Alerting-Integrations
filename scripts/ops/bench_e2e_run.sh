@@ -101,6 +101,11 @@ echo "[bench-e2e] staging fixture into fixture/active/conf.d/"
 rm -rf fixture/active/conf.d
 mkdir -p fixture/active/conf.d
 cp -r "$FIXTURE_SOURCE_DIR/." fixture/active/conf.d/
+# The exporter reads this tree as another uid (distroless 65532) through the
+# compose mount, and generate_tenant_fixture.py creates its files 0600
+# (da-guard write, #3339): without this the exporter skips every unreadable
+# tenant file with only a log WARN. The fixture is synthetic, nothing secret.
+chmod -R a+rX fixture/active/conf.d
 
 # Register `bench_trigger` in the active root _defaults.yaml — the
 # synthetic-v* generator only knows DB-domain metrics (mysql_*, pg_*,

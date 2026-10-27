@@ -234,8 +234,11 @@ domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_
 
 ## 練習 3：驗證所有配置
 
+之後每個 `docker run` 都帶 `--user $(id -u):$(id -g)`：`init` 寫出的 conf.d 檔權限是 0600、屬於你自己，映像預設的使用者讀不到（`validate-config` 會把它們報成讀不到的檔）。
+
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   validate-config --config-dir /data/conf.d
@@ -297,6 +300,7 @@ docker run --rm \
 
 # 驗證另外跑一次（只讀、不寫檔）
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d --validate
@@ -337,6 +341,7 @@ OK: all configs valid
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   explain-route --tenant prod-redis --config-dir /data/conf.d
@@ -359,6 +364,7 @@ cp -r conf.d conf.d.new
 sed -i 's/mysql_connections: "150"/mysql_connections: "120"/' conf.d.new/prod-mariadb.yaml
 
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/conf.d.new:/data/conf.d.new:ro \
   ghcr.io/vencil/da-tools:latest \
@@ -382,6 +388,7 @@ Diff 精確顯示哪個 tenant、哪些 metric 受影響 — 這就是 CI 中會
 
 ```bash
 docker run --rm -d --name da-lab-exporter \
+  --user $(id -u):$(id -g) \
   -p 8080:8080 \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/threshold-exporter:latest \
