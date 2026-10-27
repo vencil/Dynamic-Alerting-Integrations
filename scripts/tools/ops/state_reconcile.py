@@ -229,7 +229,7 @@ def write_json(path: Path, data: dict, *, flag: str | None = None) -> None:
     """
     payload = format_json_report(data) + "\n"
     # #3107 v2: a committed state file / manifest — a repo artifact.
-    write_repo_artifact(path, payload, flag=flag, mode=0o600)
+    write_repo_artifact(path, payload, flag=flag, mode=0o600, atomic_only=True)  # never half a manifest
 
 
 def reconcile(

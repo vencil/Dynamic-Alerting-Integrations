@@ -505,7 +505,10 @@ def main(argv: list[str] | None = None) -> int:
         _lib_io.check_repo_artifact(args.output, flag="--output")
         # The default lands in .build/, which a fresh clone lacks.
         _lib_io.ensure_dir(output.parent, flag="--output")
-        _lib_io.write_repo_artifact(args.output, proc.stdout, flag="--output", mode=0o600)
+        # atomic_only: never the in-place fallback — a half manifest is the
+        # thing this write exists to prevent (review of #3107).
+        _lib_io.write_repo_artifact(args.output, proc.stdout, flag="--output", mode=0o600,
+                                    atomic_only=True)
     except _lib_io.OutputWriteError as exc:
         print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
         return EXIT_CALLER_ERROR

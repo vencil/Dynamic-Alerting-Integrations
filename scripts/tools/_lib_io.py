@@ -1159,16 +1159,23 @@ def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[in
     ENXIO instead of blocking forever; it is cleared before any write. A
     socket fails the open (ENXIO) on its own.
     """
-    try:
-        via_link = os.path.islink(path)
-    except OSError:
-        via_link = False
-    flags = _O_OPERATOR | (os.O_APPEND if append else os.O_TRUNC) | getattr(os, "O_NONBLOCK", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    flags = _O_OPERATOR | (os.O_APPEND if append else os.O_TRUNC) | nonblock
     fd = os.open(path, flags, mode)
     try:
-        if hasattr(os, "set_blocking"):
+        # Only where O_NONBLOCK was set: on Windows (3.12+) set_blocking
+        # works on pipes only and fails on a regular file's fd.
+        if nonblock:
             os.set_blocking(fd, True)
         st = os.fstat(fd)
+        try:
+            # The name as it is NOW (after the open): a symlink swapped in
+            # before the open, or after, is not this euid's file to chmod.
+            now = os.lstat(path)
+            via_link = (not stat.S_ISREG(now.st_mode)
+                        or (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino))
+        except OSError:
+            via_link = True
         # R2 + V15 (#3107 risk 2, owner 2026-10-24): a regular file this euid
         # owns gets *mode* before any byte is written — created by this call
         # or already there (an operator-made 0644 file would leave a findings
@@ -1280,7 +1287,7 @@ def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:
 
 
 def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
-                        mode: int = 0o644) -> None:
+                        mode: int = 0o644, atomic_only: bool = False) -> None:
     """Atomically rewrite a committed artifact a regen tool owns.
 
     The ``_atomic_write`` contract, behind two kernel-side preconditions:
@@ -1293,7 +1300,7 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     p = check_repo_artifact(path, flag=flag)
     # Imported here: _lib_atomic_write imports this module (OutputWriteError).
     from _lib_atomic_write import atomic_write_text  # noqa: E402  (implementation)
-    atomic_write_text(p, content, mode=mode, flag=flag)
+    atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)
 
 
 def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:

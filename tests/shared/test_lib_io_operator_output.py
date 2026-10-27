@@ -102,3 +102,76 @@ def test_an_artifact_is_replaced_and_ends_with_the_mode_asked(tmp_path):
     _lib_io.write_repo_artifact(str(p), "new", flag="--output", mode=0o600)
     assert p.read_text(encoding="utf-8") == "new" and _mode(p) == 0o600
     assert os.stat(p).st_ino != ino  # replaced, not rewritten in place
+
+
+def test_the_file_stdout_already_is_counts_as_dash(tmp_path, monkeypatch):
+    """R3: reopening the file fd 1 writes to with O_TRUNC would wipe what the
+    shell redirect already holds; it is written through stdout instead."""
+    p = tmp_path / "out.txt"
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write("head\n")
+        fh.flush()
+        monkeypatch.setattr(sys, "stdout", fh)
+        assert _lib_io.targets_stdout(str(p))
+        _lib_io.write_operator_output(str(p), "doc\n", flag="--out")
+    assert p.read_text(encoding="utf-8") == "head\ndoc\n"
+
+
+def test_a_failed_write_leaves_the_file_empty_not_a_prefix(tmp_path):
+    """R4: a reader never sees half a document."""
+    p = tmp_path / "f.json"
+    p.write_text("old", encoding="utf-8")
+    with pytest.raises(RuntimeError):
+        with _lib_io.open_operator_output(str(p), flag="--out") as fh:
+            fh.write("half")
+            fh.flush()
+            raise RuntimeError("boom")
+    assert p.read_text(encoding="utf-8") == ""
+
+
+def test_an_artifact_that_is_our_standard_stream_is_refused(tmp_path, monkeypatch):
+    p = tmp_path / "m.yaml"
+    p.write_text("old", encoding="utf-8")
+    fd = os.open(p, os.O_RDONLY)
+    saved = os.dup(0)
+    try:
+        os.dup2(fd, 0)
+        with pytest.raises(_lib_io.OutputWriteError, match="standard stream"):
+            _lib_io.write_repo_artifact(str(p), "new", flag="--output")
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+        os.close(fd)
+    assert p.read_text(encoding="utf-8") == "old"
+
+
+def test_atomic_only_never_falls_back_to_an_in_place_write(tmp_path, monkeypatch):
+    """Review of #3107 (M1): a directory that cannot take the tmp used to send
+    the shared writer to an in-place write with a WARN (rc 0) — for
+    configmap-assemble, the half manifest risk-1 B exists to prevent. With
+    atomic_only it is an error and the old file is kept."""
+    import _lib_atomic_write
+    p = tmp_path / "m.yaml"
+    p.write_text("old", encoding="utf-8")
+
+    def no_tmp(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(_lib_atomic_write.tempfile, "mkstemp", no_tmp)
+    with pytest.raises(_lib_io.OutputWriteError, match="atomically"):
+        _lib_io.write_repo_artifact(str(p), "new", flag="--output", atomic_only=True)
+    assert p.read_text(encoding="utf-8") == "old"
+    # Control: without atomic_only the shared contract's fallback stands.
+    _lib_io.write_repo_artifact(str(p), "new", flag="--output")
+    assert p.read_text(encoding="utf-8") == "new"
+
+
+def test_atomic_only_replaces_a_hard_linked_file(tmp_path):
+    """As the tools' own tmp+replace did: the name gets a new inode, the other
+    link keeps the old content — never an in-place rewrite."""
+    p = tmp_path / "m.yaml"
+    p.write_text("old", encoding="utf-8")
+    other = tmp_path / "other"
+    os.link(p, other)
+    _lib_io.write_repo_artifact(str(p), "new", flag="--output", atomic_only=True)
+    assert p.read_text(encoding="utf-8") == "new" and other.read_text(encoding="utf-8") == "old"
