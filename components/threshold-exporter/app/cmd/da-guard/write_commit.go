@@ -438,7 +438,12 @@ func backupName(abs string) (string, error) {
 // placeDelete removes f's file from its path so that it can be put back: it
 // is first linked at a hidden name beside it (f.backup; renamed there on a
 // file system without hard links), then the path's name is removed while it
-// is still that file. f.placed is the file once the hidden link holds it;
+// is still that file. "Still that file" is its bytes (holds: the bytes the
+// judgement read, so a "tenants" precondition judged on them still holds)
+// compared before the link, and its inode (os.SameFile) before the unlink:
+// a file replaced by a rename is refused changed_during_write. ⚠️ The
+// residual window: bytes written into the SAME inode after that byte
+// comparison and before the unlink are not seen — no lock is taken. f.placed is the file once the hidden link holds it;
 // f.sourceGone once the path's name is gone.
 func (w *writer) placeDelete(f *writeFile, rename func(string, string) error) (string, error) {
 	src, err := os.Lstat(f.abs)
