@@ -1222,7 +1222,7 @@ class TestRenderCrExporterShapes:
         import _lib_confedit as ce
         import da_assembler
         cr_path, _ = _write_cr(tmp_path, body)
-        cr, _ = da_assembler.decode_cr(cr_path)
+        cr, _differs, _ = da_assembler.decode_cr(cr_path)
         _header, doc = da_assembler._render_doc(cr)
         value = ce.map_value(
             (k, ce.map_value((m, ce.number_value(v) if isinstance(v, (int, float))
@@ -1565,8 +1565,8 @@ class TestRenderCrNameFormat:
         pytest.param(b"metadata: {name: ok}\nspec: {defaults: &a [1, *a]}\n",
                      id="self-referencing-anchor"),
         pytest.param(b"metadata: {name: ok}\nspec: {defaults: "
-                     + b"[" * 3000 + b"]" * 3000 + b"}\n",
-                     id="deep-nesting"),
+                     + b"[" * 10001 + b"]" * 10001 + b"}\n",
+                     id="deeper-than-the-decoder-reads"),
     ])
     def test_value_that_cannot_be_read_is_caller_error(self, body, tmp_path,
                                                         caplog):
@@ -1575,9 +1575,8 @@ class TestRenderCrNameFormat:
         以 PyYAML 讀時，這些形狀丟的例外（`UnicodeDecodeError`／
         `ValueError`／`KeyError`／`AttributeError`／`IndexError`／
         `RecursionError`）曾穿出 `render_cr_file`（rc 1）。現在由
-        da-crdecode 拒收，或 Python 的 JSON 讀取深度不夠（deep-nesting）。
-        會讓本組轉紅的改動：拿掉 `CrDecodeError` 或 `RecursionError` 的
-        except。
+        da-crdecode 拒收（巢狀超過其解碼器的上限亦同）。會讓本組轉紅的
+        改動：拿掉 `CrDecodeError` 的 except。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_bytes(b"kind: ThresholdConfig\n" + body)
@@ -1587,14 +1586,32 @@ class TestRenderCrNameFormat:
         assert f"Failed to parse {cr_path}" in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    def test_deep_nesting_message_names_the_tool_limit(self, tmp_path,
-                                                       caplog):
+    def test_deep_nesting_message_names_the_tool_limit(
+            self, tmp_path, monkeypatch, caplog):
         """#2476：巢狀過深是本工具（Python 的 JSON 讀取）的上限，不是 K8s
-        拒收：da-crdecode 讀得了這份文件。
+        拒收。以冒充的 da-crdecode 印出 Python 讀不了的深度：真的
+        da-crdecode 在約 1 萬層拒收，與 Python 的上限只差幾層，用真的
+        binary 量會隨 Python 版本漂移。
 
         訊息要能讓人分辨「量不到」與「拒收」。會讓本組轉紅的改動：拿掉
         `RecursionError` 的專屬分支（落到通用分支，訊息只剩例外原文）。
         """
+        TestRenderCrDecoder._fake_binary(
+            tmp_path, monkeypatch,
+            "print('{\"documents\": [' + '[' * 50000 + ']' * 50000 + "
+            "'], \"differs_from_text\": [[]]}')")
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n",
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "nested too deeply for this tool to read" in caplog.text
+
+    def test_nesting_past_the_old_reader_reads(self, tmp_path, caplog):
+        """#3206：3000 層的 CR 先前卡在本工具以 PyYAML 讀原文的那一步
+        （「nested too deeply」）；原文比對移到 da-crdecode 之後讀得進來，
+        依 spec 的形狀判（這裡 `defaults` 不是 mapping → rc 2）。"""
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n"
                            "spec: {defaults: " + "[" * 3000 + "]" * 3000
@@ -1602,7 +1619,8 @@ class TestRenderCrNameFormat:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "nested too deeply for this tool to read" in caplog.text
+        assert "nested too deeply" not in caplog.text
+        assert "spec.defaults must be a mapping" in caplog.text
 
     def test_deep_nesting_that_reads_names_the_tool_limit_at_render(
             self, tmp_path, caplog):
@@ -1944,14 +1962,14 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert [p.name for p in out_dir.iterdir()] == ["2024-01-01.yaml"]
 
-    def test_unreadable_as_written_is_caller_error(self, tmp_path, caplog):
-        """Kubernetes 讀得了、本工具以原文讀不了（自訂標籤 `!foo`）→ 無從
-        比對 id，rc 2、不寫檔（fail-closed；先前以 PyYAML 讀時同為 rc 2）。"""
+    def test_a_custom_tag_renders_as_kubernetes_reads_it(self, tmp_path):
+        """#3206：自訂標籤 `!foo '1'`，Kubernetes 讀成字串 `1`，原文也是
+        `1`。先前本工具以 PyYAML 讀原文時讀不了（rc 2「cannot read it as
+        written」）；比對移到 da-crdecode 之後照 Kubernetes 的讀法 render。"""
         cr_path, out_dir = self._write(
-            tmp_path, self._CR + "  defaults: {cpu: !foo 1}\n")
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "cannot read it as written" in caplog.text
-        assert list(out_dir.iterdir()) == []
+            tmp_path, self._CR.replace("    t1: {}\n", "    t1: {cpu: !foo '1'}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert 'cpu: "1"' in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
     def test_keys_that_become_one_json_key_are_caller_error(
             self, tmp_path, caplog):
@@ -2042,99 +2060,92 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    @pytest.mark.parametrize("value", [
-        pytest.param("!!omap [a: '1']", id="omap"),
-        pytest.param("!!pairs [a: '1']", id="pairs"),
+    @pytest.mark.parametrize("value, line", [
+        pytest.param("!!omap [a: '1']", '- a: "1"', id="omap"),
+        pytest.param("!!pairs [a: '1']", '- a: "1"', id="pairs"),
     ])
-    def test_structure_that_cannot_be_paired_is_caller_error(
-            self, value, tmp_path, caplog):
-        """兩邊的結構對不上（原文讀成 (key, value) tuple、Kubernetes 讀成
-        mapping）時無從逐層比對鍵 → fail-closed rc 2、寫明原因。
-
-        會讓本測試轉紅的改動：`_key_divergence` 遇到結構不一致時直接放行。
-        """
+    def test_omap_and_pairs_render_as_kubernetes_reads_them(
+            self, value, line, tmp_path):
+        """#3206：`!!omap`／`!!pairs` 是一串 mapping，Kubernetes 也這樣讀。
+        先前本工具以 PyYAML 讀原文、讀成 (key, value) tuple，結構對不上而
+        拒收（rc 2）；原文比對移到 da-crdecode（yaml.v3 的節點）之後，兩邊
+        結構相同，照常 render。"""
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{x: {value}}}\n"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert ("spec.tenants.t1.x[0]: Kubernetes reads a mapping here but "
-                "the CR as written holds a (key, value) pair") \
-            in caplog.text, caplog.text
-        assert "cannot be compared" in caplog.text
-        assert list(out_dir.iterdir()) == []
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    @pytest.mark.parametrize("old, new, message", [
+    @pytest.mark.parametrize("old, new, file, line", [
         pytest.param("    t1: {}\n",
                      "    t1: {x: {a: '1'}, <<: {x: {b: '1'}}}\n",
-                     "spec.tenants.t1.x: the keys as written ('a')",
-                     id="merge-overrides-a-mapping"),
+                     "ok.yaml", 'b: "1"', id="merge-overrides-a-mapping"),
         pytest.param("metadata: {name: ok}",
                      "metadata: {name: ok, <<: {name: other}}",
-                     "metadata.name is read by Kubernetes as 'other'",
-                     id="merge-overrides-the-name"),
+                     "other.yaml", "tenants:", id="merge-overrides-the-name"),
         pytest.param("    t1: {}\n",
-                     "    t1: {x: {a: '1'}, <<: {x: ['1']}}\n",
-                     "spec.tenants.t1.x: Kubernetes reads a list of 1 here",
-                     id="merge-overrides-the-structure"),
+                     "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n",
+                     "ok.yaml", 'a: "1"', id="explicit-key-after-merge"),
     ])
-    def test_merge_after_explicit_keys_names_the_mechanism(
-            self, old, new, message, tmp_path, caplog):
-        """go-yaml（Kubernetes 端）讓寫在明寫鍵之後的 `<<` 覆寫明寫鍵，PyYAML
-        是明寫鍵優先，兩種讀法因此不同 → rc 2。這時加引號解決不了，訊息
-        要說明 merge 的機制與改法。
+    def test_merges_render_as_kubernetes_applies_them(
+            self, old, new, file, line, tmp_path):
+        """go-yaml（Kubernetes 端）讓寫在後面的鍵勝出，寫在明寫鍵之後的
+        `<<` 也覆寫它。先前本工具以 PyYAML（明寫鍵優先）讀原文，兩種讀法
+        不同 → rc 2 並附 merge 說明。#3206 起 da-crdecode 以 Kubernetes 的
+        merge 順序讀原文，兩邊相同 → 照 Kubernetes 讀到的 render。
 
-        會讓本測試轉紅的改動：拿掉 `_merge_note`（訊息只叫人加引號）。
+        會讓本測試轉紅的改動：da-crdecode 以明寫鍵優先展開 merge
+        （TestMergeOrderIsTheConversions 在 Go 端量同一件事）。
         """
         cr_path, out_dir = self._write(tmp_path, self._CR.replace(old, new))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / file).read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("differs, message", [
+        pytest.param([{"kind": "structure", "path": ["spec", "tenants", "t1", "x", 0],
+                       "written": "a list of 1", "read": "a mapping"}],
+                     "spec.tenants.t1.x[0]: Kubernetes reads a mapping here but "
+                     "the CR as written holds a list of 1, so the keys below "
+                     "cannot be compared", id="structure-below-tenants"),
+        pytest.param([{"kind": "keys", "path": ["spec"], "written_keys": ["010"],
+                       "read_keys": ["8"]}],
+                     "spec: the keys as written ('010') are not the keys "
+                     "Kubernetes reads ('8')", id="keys-above-tenants"),
+        pytest.param([{"kind": "keys", "path": [], "written_keys": ["x"],
+                       "read_keys": []}],
+                     "metadata.name cannot be compared with the text written in "
+                     "the CR: <document>: the keys as written ('x')",
+                     id="keys-above-the-name"),
+    ])
+    def test_a_difference_da_crdecode_reports_is_caller_error(
+            self, differs, message, tmp_path, monkeypatch, caplog):
+        """#3206：比對是 da-crdecode 的；本工具依它回報的差異拒收。在 id 那一
+        層或之上的 "keys"／"structure" 差異（以下不比對），或 spec.tenants
+        以下任一處的差異，都 rc 2、寫明原因、不寫檔。
+
+        會讓本測試轉紅的改動：`_not_as_written` 只看與路徑完全相同的差異。
+        """
+        doc = {"kind": "ThresholdConfig", "metadata": {"name": "ok"},
+               "spec": {"tenants": {"t1": {"x": [{"a": "1"}]}}}}
+        out = json.dumps({"documents": [doc], "differs_from_text": [differs]})
+        self._fake_binary(tmp_path, monkeypatch, f"print({out!r})")
+        cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert message in caplog.text, caplog.text
-        assert ("if the difference comes from a << written after explicit "
-                "keys (on the Kubernetes side it overrides them), move it "
-                "before them or do not use merges") in caplog.text, caplog.text
         assert list(out_dir.iterdir()) == []
 
-    def test_merge_before_explicit_keys_renders(self, tmp_path):
-        """對照組：`<<` 寫在明寫鍵之前，兩種讀法都是明寫鍵優先，rc 0。"""
-        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
-            "    t1: {}\n", "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n"))
+    def test_a_difference_elsewhere_still_renders(self, tmp_path, monkeypatch):
+        """對照組：spec.tenants 與 metadata 以外的差異（例如 spec.defaults
+        底下的值）不影響 id，照常 render。"""
+        doc = {"kind": "ThresholdConfig", "metadata": {"name": "ok"},
+               "spec": {"tenants": {"t1": {}}}}
+        differs = [{"kind": "string", "path": ["spec", "note"], "text": "b2s="},
+                   {"kind": "keys", "path": ["status"], "written_keys": ["010"],
+                    "read_keys": ["8"]}]
+        out = json.dumps({"documents": [doc], "differs_from_text": [differs]})
+        self._fake_binary(tmp_path, monkeypatch, f"print({out!r})")
+        cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == 0
-        assert 'a: "1"' in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    def test_no_merge_note_without_a_merge(self, tmp_path, caplog):
-        """對照組：沒有 `<<` 的分歧只提示加引號，不附 merge 說明。"""
-        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
-            "    t1: {}\n", "    t1: {010: '1'}\n"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "Quote each such key" in caplog.text
-        assert "<< merges" not in caplog.text
-
-    def test_lists_of_different_length_cannot_be_paired(self):
-        """防禦性分支（YAML 難以觸發）：兩個 list 長度不同 → 拒收並寫明。
-
-        會讓本測試轉紅的改動：list 長度不同時改為逐項比到較短者為止。
-        """
-        assert da_assembler._key_divergence([1], [1, 2], "p") == (
-            "p: Kubernetes reads a list of 1 here but the CR as written holds "
-            "a list of 2, so the keys below cannot be compared; this tool "
-            "refuses such a CR")
-
-    @pytest.mark.parametrize("decoded, written, shapes", [
-        pytest.param([1], "x", ("a list of 1", "a scalar"), id="list-vs-scalar"),
-        pytest.param("x", [1], ("a scalar", "a list of 1"), id="scalar-vs-list"),
-        pytest.param({"a": 1}, ("a", 1), ("a mapping", "a (key, value) pair"),
-                     id="mapping-vs-pair"),
-    ])
-    def test_list_or_mapping_against_another_shape_cannot_be_paired(
-            self, decoded, written, shapes):
-        """防禦性分支：一邊是 list／mapping、另一邊不是 → 拒收並寫明兩邊結構。"""
-        assert da_assembler._key_divergence(decoded, written, "p") == (
-            f"p: Kubernetes reads {shapes[0]} here but the CR as written holds "
-            f"{shapes[1]}, so the keys below cannot be compared; this tool "
-            "refuses such a CR")
-
-    def test_shape_name_of_an_omap_item_is_a_pair(self):
-        """`!!omap`／`!!pairs` 的項目讀成 tuple，不該叫 "a scalar"。"""
-        assert da_assembler._shape_name(("a", 1)) == "a (key, value) pair"
-        assert da_assembler._shape_name("a") == "a scalar"
 
     def test_keys_colliding_through_a_merge_are_caller_error(
             self, tmp_path, caplog):
@@ -2155,9 +2166,10 @@ class TestRenderCrDecoder:
             caplog.clear()
 
     def test_keys_keep_the_order_the_cr_wrote(self, tmp_path):
-        """da-crdecode 的 JSON 物件鍵依字母排序；輸出仍照 CR 原文的順序，
-        既有輸出檔不會只因排序而被重寫。會讓本測試轉紅的改動：拿掉
-        `_in_written_order`（輸出變成 aa、zz／a、b）。
+        """輸出照 CR 原文的鍵順序，既有輸出檔不會只因排序而被重寫。順序由
+        da-crdecode 給（#3206：它的 JSON 物件照原文排鍵，YAMLToJSON 本身依
+        字母排序）。會讓本測試轉紅的改動：da-crdecode 改回照 YAMLToJSON 的
+        排序輸出（輸出變成 aa、zz／a、b）。
         """
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace(
@@ -2172,14 +2184,23 @@ class TestRenderCrDecoder:
         pytest.param("print('hello')", id="not-json"),
         pytest.param("print('{\"documents\": []}')", id="no-document"),
         pytest.param("print('[1]')", id="not-an-object"),
+        # #3206: a da-crdecode older than this tool prints no comparison.
+        pytest.param("print('{\"documents\": [{}]}')", id="no-differs"),
+        pytest.param("print('{\"documents\": [{}], \"differs_from_text\": "
+                     "[[{\"kind\": \"keys\", \"path\": []}]]}')",
+                     id="difference-off-contract"),
     ])
     def test_output_off_contract_is_caller_error(
             self, stdout, tmp_path, monkeypatch, caplog):
-        """rc 0 但 stdout 不合 `{"documents": [<一份>]}` → rc 2，不 traceback。"""
+        """rc 0 但 stdout 不合 `{"documents": [<一份>], "differs_from_text":
+        [[<差異>...]]}` → rc 2，不 traceback。較舊的 da-crdecode 沒有
+        `differs_from_text`，訊息要叫人重建它。"""
         self._fake_binary(tmp_path, monkeypatch, stdout)
         cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "Failed to parse" in caplog.text
+        if "documents\": [{}]" in stdout:
+            assert "older than this tool" in caplog.text, caplog.text
         assert list(out_dir.iterdir()) == []
 
 

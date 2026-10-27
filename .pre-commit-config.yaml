@@ -1087,13 +1087,16 @@ repos:
       # is listed in ci.yml's always-on Lint job.
       - id: md-yaml-drift-check
         name: Markdown YAML example ↔ schema drift
-        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
+        # ADR-036 step 11 (#3206): the documented conf.d examples are read by
+        # `da-guard parse-tree` (with_da_guard.sh, as for confd-schema-check).
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
         # Both SCHEMAS are inputs too: editing a schema can turn a documented
         # example red, and without them here that edit never runs this gate.
-        # check_confd_schema.py is imported for its registry builder (#2232).
-        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py)$
+        # check_confd_schema.py is imported for its registry builder (#2232);
+        # the reader of the examples is Go's, so its source is an input too.
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(parse_tree|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Third sibling of the two above, and separate for the same reason: it
