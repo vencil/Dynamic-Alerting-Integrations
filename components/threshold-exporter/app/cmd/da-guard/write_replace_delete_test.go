@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -437,5 +438,131 @@ func TestWrite_ARenameFallbackThatMovesAnotherFileMovesItBack(t *testing.T) {
 	want := map[string]string{"d.yaml": "tenants:\n  t3: {}\n", "old.txt": "tenants:\n  t2: {}\n", "x.yaml": "tenants:\n  t9: {}\n"}
 	if got := snapshot(t, root); !reflect.DeepEqual(got, want) {
 		t.Fatalf("tree %q, want %q", got, want)
+	}
+}
+
+// TestWrite_DeleteTenantsPrecondition: a delete given "tenants" removes the
+// file only when it is a tenant file declaring exactly those ids, in the
+// bytes read for the judgement; else declares_mismatch, and — one refusal —
+// no file of the batch is written (#3206: offboarding deletes only what it
+// judged to be this tenant's, never a file that declares another).
+func TestWrite_DeleteTenantsPrecondition(t *testing.T) {
+	cases := []struct {
+		name   string
+		tree   map[string]string
+		in     string
+		code   int
+		status []string
+		left   []string
+	}{
+		{"declares exactly them: deleted", map[string]string{"a.yaml": "tenants:\n  t1: {}\n  t2: {}\n"},
+			`{"files":[{"path":"a.yaml","delete":true,"tenants":["t2","t1"]}]}`,
+			exitOK, []string{"written"}, nil},
+		{"declares one more", map[string]string{"a.yaml": "tenants:\n  t1: {}\n  t2: {}\n"},
+			`{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]}]}`,
+			exitFindings, []string{"refused/declares_mismatch"}, []string{"a.yaml"}},
+		{"no longer declares it", map[string]string{"a.yaml": "tenants:\n  t2: {}\n"},
+			`{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]}]}`,
+			exitFindings, []string{"refused/declares_mismatch"}, []string{"a.yaml"}},
+		{"declares nothing", map[string]string{"a.yaml": "tenants: {}\n"},
+			`{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]}]}`,
+			exitFindings, []string{"refused/declares_mismatch"}, []string{"a.yaml"}},
+		{"no tenant file", map[string]string{"_platform.yaml": "tenants:\n  t1: {}\n", "a.yaml": "tenants:\n  t1: {}\n"},
+			`{"files":[{"path":"_platform.yaml","delete":true,"tenants":["t1"]}]}`,
+			exitFindings, []string{"refused/declares_mismatch"}, []string{"_platform.yaml", "a.yaml"}},
+		{"one refused in a batch: none written", map[string]string{
+			"a.yaml": "tenants:\n  t1: {}\n", "b.yaml": "tenants:\n  t1x: {}\n  t2: {}\n", "c.yaml": "tenants:\n  t3: {}\n"},
+			`{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]},` +
+				`{"path":"b.yaml","delete":true,"tenants":["t1x"]},{"path":"c.yaml","ops":[]}]}`,
+			exitFindings, []string{"not_written", "refused/declares_mismatch", "not_written"},
+			[]string{"a.yaml", "b.yaml", "c.yaml"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeTree(t, tc.tree)
+			code, res := runBatch(t, writeCmd, tc.in, "--config-dir", root)
+			if code != tc.code || !reflect.DeepEqual(statuses(res), tc.status) {
+				t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
+			}
+			left := []string{}
+			for p := range snapshot(t, root) {
+				left = append(left, p)
+			}
+			sort.Strings(left)
+			want := tc.left
+			if want == nil {
+				want = []string{}
+			}
+			if !reflect.DeepEqual(left, want) {
+				t.Fatalf("left %v, want %v", left, want)
+			}
+			for _, f := range res.Files {
+				if reasonOf(f) == writeReasonDeclaresMismatch && (f.Message == nil || !strings.Contains(*f.Message, "declare")) {
+					t.Fatalf("the refusal does not say what the file declares: %+v", f)
+				}
+			}
+		})
+	}
+}
+
+// TestWrite_DeleteTenantsPreconditionMessageNamesTheDeclaration: the
+// refusal names what the file declares, so the operator sees whose it is.
+func TestWrite_DeleteTenantsPreconditionMessageNamesTheDeclaration(t *testing.T) {
+	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1: {}\n  t2: {}\n"})
+	_, res := runBatch(t, writeCmd, `{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]}]}`,
+		"--config-dir", root, "--dry-run")
+	if res.Files[0].Message == nil || !strings.Contains(*res.Files[0].Message, "[t1 t2]") {
+		t.Fatalf("%+v", res.Files[0])
+	}
+}
+
+// TestWrite_DeleteTenantsInputShape: "tenants" goes with a delete only, and
+// names each tenant once.
+func TestWrite_DeleteTenantsInputShape(t *testing.T) {
+	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1: {}\n"})
+	before := snapshot(t, root)
+	for name, in := range map[string]string{
+		"with ops":     `{"files":[{"path":"a.yaml","ops":[],"tenants":["t1"]}]}`,
+		"twice":        `{"files":[{"path":"a.yaml","delete":true,"tenants":["t1","t1"]}]}`,
+		"not a list":   `{"files":[{"path":"a.yaml","delete":true,"tenants":"t1"}]}`,
+		"not a string": `{"files":[{"path":"a.yaml","delete":true,"tenants":[1]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+			if code != exitCallerErr || callReason(res) != "bad_input" {
+				t.Fatalf("exit %d %+v", code, res)
+			}
+			sameTree(t, before, snapshot(t, root))
+		})
+	}
+}
+
+// TestWrite_DeleteTenantsADeclarationAddedAfterTheJudgementRead: the file
+// is judged on the bytes read (declaring exactly t1); another tenant is
+// added to it before the commit — the delete is refused
+// changed_during_write, nothing deleted. (A rewrite of the same inode after
+// placeDelete's last comparison is the residual window, not tested here:
+// no lock closes it.)
+func TestWrite_DeleteTenantsADeclarationAddedAfterTheJudgementRead(t *testing.T) {
+	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1: {}\n", "b.yaml": "tenants:\n  t1b: {}\n"})
+	abs := filepath.Join(root, "a.yaml")
+	read := func(p string) ([]byte, os.FileInfo, bool, error) {
+		d, fi, regular, err := readRegular(p)
+		if p == abs && err == nil {
+			if werr := os.WriteFile(abs, []byte("tenants:\n  t1: {}\n  t2: {}\n"), 0o644); werr != nil {
+				t.Fatal(werr)
+			}
+		}
+		return d, fi, regular, err
+	}
+	in := `{"files":[{"path":"a.yaml","delete":true,"tenants":["t1"]},{"path":"b.yaml","delete":true,"tenants":["t1b"]}]}`
+	code, res := runSeamed(t, &writer{cmd: writeCmd, read: read}, in, "--config-dir", root)
+	if code != exitFindings || !reflect.DeepEqual(statuses(res),
+		[]string{"refused/changed_during_write", "not_written"}) {
+		t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
+	}
+	got := snapshot(t, root)
+	if got["a.yaml"] != "tenants:\n  t1: {}\n  t2: {}\n" || got["b.yaml"] != "tenants:\n  t1b: {}\n" || len(got) != 2 {
+		t.Fatalf("tree %q", got)
 	}
 }

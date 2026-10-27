@@ -40,9 +40,30 @@ Go 的，第 2 列成為「值沒有契約型別（`inf`）就不寫」與「wri
 PyYAML 換寫法的那種讀回不同已不會發生（`'1e3'`、含 `#` 的鍵改釘「寫成雙引號、讀回原
 值」）。onboard_platform、migrate_rule、scaffold_tenant、init_project 重跑同一個 -o
 照舊覆寫（`replace`），拒寫一律結束碼 2。
+migrate_conf_d 搬檔（#3206 步驟 10）：整個搬移計畫是一批 `da-guard write` 的搬移
+項目，`--dry-run` 也問同一批（`--dry-run`）。第 1 列是「搬得過去就搬、位元組不變」，
+第 2 列是「一個被拒就一個都不搬」（目的地沒有讀取端、在 conf.d 外），第 3 列是讀不了的
+原檔，第 4 列是隱藏的目的地；它的拒絕一律結束碼 2。
 da_assembler 同樣改由 `da-guard write` 寫（#3206 步驟 10c；CR 刪除時的刪檔也是）：第 2 列
 成為「write 拒寫就不寫」與「`defaults` 的字串一律拒」，第 5 列 `--render-cr` 是 exit 2
 （controller 是例外、不結束）。
+offboard_tenant 的刪檔同樣改由 `da-guard write` 的刪除項目做（#3206 步驟 10）：第 2 列成為
+「write 拒刪就不刪」（symlink；拿掉後樹變壞的 `worsens_tree`），結束碼 2；它不寫內容，
+所以沒有「讀回不同」那一種。
+assemble_config_dir 組裝（#3206 步驟 10）：多個來源 conf.d 的檔是一批 `da-guard write`
+的 `copy` 項目（`replace`：`--output` 裡同名的檔整份取代），`--check` 問同一批的 dry
+run。第 1 列是「位元組原樣放進去」，第 2 列是「一個被拒就一個都不寫」（`--output` 裡
+同名的是 symlink），第 3 列是讀不了的來源檔（共用的 fail-closed 在送批次前就擋下）；
+沒有第 4 列——檔名取自來源自己的 walk、放進 `--output` 的根目錄，有讀取端；`_defaults`
+的另一種拼法撞上 `--output` 裡已有的那個是工具自己的衝突檢查（rc 1，
+tests/ops/test_assemble_config_dir.py）。沒有第 6 列——它不從值做任何決定，只搬位元組
+（跨來源重複租戶是 `_lib_tenant_uniqueness` 的、在它自己的測試裡）。拒寫一律結束碼 2。
+check_threshold_registry `--regen` 同樣改由 `da-guard write` 寫（#3206 步驟 10）：拼好生成
+區塊的兩個 `_defaults.yaml` 各是一個 `replace`（整份新文字），每個 conf.d 根目錄一批，
+寫之前先問同一批的 dry run。第 2 列是「write 拒寫就不寫」（`inf` 驗證會點名），另有
+「兩個根目錄的拒絕逐檔點名」、「權限保留」、「symlink 拒寫」、「區塊不在它的 carrier 底下
+就拒寫」與「後面的寫入失敗時點名已寫入的檔」；第 3 列成為新文字讀不了
+（原檔的重複鍵留在拼好的文字裡：`read_back_mismatch`）。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -577,17 +598,40 @@ def test_migrate_conf_d_plans_a_move_that_reads_back(tmp_path):
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: finance\n"})
     r = _mcd(root)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "finance/tenant-a.yaml" in r.stdout
+    assert "tenant-a.yaml -> finance/tenant-a.yaml" in r.stdout
+
+
+def test_migrate_conf_d_moves_through_da_guard_write(tmp_path, monkeypatch):
+    # The moves are one `da-guard write` batch of move entries; the file
+    # arrives byte for byte.
+    import _lib_confedit
+    import migrate_conf_d
+    body = "tenants:\n  tenant-a:\n    _metadata:\n      domain: finance  # x\n"
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": body})
+    sent = []
+    real = _lib_confedit.write_all
+
+    def spy(r, entries, **kw):
+        sent.append((list(entries), kw.get("dry_run")))
+        return real(r, entries, **kw)
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    monkeypatch.setattr(sys, "argv", ["migrate_conf_d.py", "--conf-d", str(root), "--apply"])
+    migrate_conf_d.main()
+    assert sent == [([{"path": "finance/tenant-a.yaml", "from": "tenant-a.yaml"}], False)]
+    assert _bytes(root) == {"finance/tenant-a.yaml": body.encode("utf-8")}
 
 
 def test_migrate_conf_d_refuses_a_destination_no_reader_reads(tmp_path):
+    # Two moves, one to a hidden directory: the batch is refused, neither moves.
     root = _tree(tmp_path / "conf.d", {
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: .hidden\n"})
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: .hidden\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    _metadata:\n      domain: finance\n"})
     before = _bytes(root)
     r = _run("dx/migrate_conf_d.py", "--conf-d", str(root), "--apply")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "refusing to move" in r.stderr and "path_not_read" in r.stderr
+    assert "migrate_conf_d: ERROR: .hidden/tenant-a.yaml: not_read:" in r.stderr, r.stderr
     assert _bytes(root) == before
+    assert not (root / "finance").exists()
 
 
 def test_migrate_conf_d_refuses_an_unreadable_file(tmp_path):
@@ -611,6 +655,71 @@ def test_migrate_conf_d_places_by_yaml_v3(tmp_path):
     r = _mcd(root)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "yes/tenant-a.yaml" in r.stdout
+
+
+# ── assemble_config_dir（多個來源 conf.d → 一個 config-dir；#3206 步驟 10）──
+
+_ACD_BODY = "# team-a — 團隊\ntenants:\n  tenant-a:\n    cpu: 010 # as written\n"
+
+
+def _acd(*argv, env=None):
+    return _run("ops/assemble_config_dir.py", *argv, env=env)
+
+
+def test_assemble_config_dir_copies_through_da_guard_write(tmp_path, monkeypatch):
+    # The files are one `da-guard write` batch of copy entries; each arrives
+    # byte for byte.
+    import _lib_confedit
+    import assemble_config_dir
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    sent = []
+    real = _lib_confedit.write_all
+
+    def spy(r, entries, **kw):
+        sent.append((list(entries), kw.get("dry_run")))
+        return real(r, entries, **kw)
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    monkeypatch.setattr(sys, "argv", ["assemble_config_dir.py", "--sources", str(src),
+                                      "--output", str(out)])
+    assert assemble_config_dir.main() == 0
+    assert sent == [([{"path": "tenant-a.yaml", "copy": str((src / "tenant-a.yaml").resolve()),
+                       "replace": True}], False)]
+    assert _bytes(out) == {"tenant-a.yaml": _ACD_BODY.encode("utf-8")}
+
+
+def test_assemble_config_dir_one_refused_file_writes_none(tmp_path):
+    # `--output` already holds `tenant-a.yaml` as a symlink: write never
+    # replaces a link, so neither it nor `tenant-b.yaml` is written.
+    from _platform_fs import symlink_or_skip
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY,
+                                 "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    elsewhere = _tree(tmp_path / "elsewhere", {"t.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    out.mkdir()
+    symlink_or_skip(elsewhere / "t.yaml", out / "tenant-a.yaml")
+    for mode in ((), ("--check",)):
+        r = _acd("--sources", str(src), "--output", str(out), *mode)
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "assemble_config_dir: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+        assert sorted(p.name for p in out.iterdir()) == ["tenant-a.yaml"]
+
+
+def test_assemble_config_dir_does_not_copy_an_unreadable_source(tmp_path):
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n  tenant-a: {}\n"})
+    out = tmp_path / "out"
+    r = _acd("--sources", str(src), "--output", str(out))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "tenant-a.yaml" in r.stderr and "duplicate_key" in r.stderr, r.stderr
+    assert not out.exists()
+
+
+def test_assemble_config_dir_without_da_guard_is_exit_2(tmp_path):
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    r = _acd("--sources", str(src), "--output", str(out), env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not out.exists()
 
 
 # ── offboard_tenant (it deletes: the decision is parse-tree's) ───────────
@@ -670,6 +779,242 @@ def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_p
     assert (root / "tenant-a.yaml").exists()
 
 
+def test_offboard_tenant_deletes_through_a_da_guard_write_delete_entry(tmp_path, monkeypatch):
+    # #3206 步驟 10：刪檔是送給 da-guard write 的刪除項目，一批、路徑是 parse-tree
+    # 的正規形式（--config-dir 怎麼拼都一樣，沒有 `./`）；Python 不自己 unlink。
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    sent, real = [], _lib_confedit.write_all
+    monkeypatch.setattr(_lib_confedit, "write_all",
+                        lambda r, entries, **kw: sent.append(list(entries)) or real(r, entries, **kw))
+    monkeypatch.setattr(os, "remove", mock.Mock(side_effect=AssertionError("os.remove")))
+    monkeypatch.setattr(os, "unlink", mock.Mock(side_effect=AssertionError("os.unlink")))
+    assert ot.execute_offboard("tenant-a", f"{root}/") is True
+    assert sent == [[{"path": "tenant-a.yaml", "delete": True, "tenants": ["tenant-a"]}]]
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+
+
+def test_offboard_tenant_does_not_delete_a_file_da_guard_write_refuses(tmp_path):
+    # The pre-check passes (the link's target declares only tenant-a), but
+    # da-guard write judges the delete as a move's source: a symlink is
+    # refused — rc 2 naming it, the link and its target both still there.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    r = _ob(root)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "offboard_tenant: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+    assert "nothing was written" in r.stderr and "已刪除" not in r.stdout, r.stdout + r.stderr
+    assert (root / "tenant-a.yaml").is_symlink()
+    assert (tmp_path / "elsewhere" / "real.yaml").exists()
+
+
+def test_offboard_tenant_precheck_asks_the_same_delete_as_a_dry_run(tmp_path):
+    # #3206: without --execute the pre-check asks da-guard write the batch
+    # --execute would send (--dry-run): the refused symlink is exit 2 there
+    # too, named, nothing deleted.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(root))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "offboard_tenant: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+    assert (root / "tenant-a.yaml").is_symlink()
+    # Paired control: a regular file passes the dry run, rc 0, still there.
+    plain = _tree(tmp_path / "plain", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(plain))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--dry-run：可刪除" in r.stdout and (plain / "tenant-a.yaml").exists(), r.stdout
+
+
+def test_offboard_tenant_deletes_every_file_that_declares_the_tenant(tmp_path):
+    # #3206: a tenant declared in two tenant files is served from both
+    # (da-guard: duplicate tenant ID); deleting one would leave it served.
+    # Both go in one batch; afterwards no file declares it.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-a.yml": "tenants:\n  tenant-a: {cpu: '5'}\n",
+                                       "other.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "由 3 個檔宣告" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+    tree = _lib_parse_tree.load(root)
+    assert all("tenant-a" not in (tree.node(p).get("tenants") or {}) for p in tree.selected)
+
+
+def test_offboard_tenant_finds_a_tenant_declared_in_a_subdirectory(tmp_path):
+    # #3206: the exporter reads the whole tree, so a tenant whose only file
+    # is `team-eu/tenant-a.yaml` is served; offboard finds and deletes it.
+    # The subdirectory's `_defaults.yaml` is not a tenant file: it stays.
+    root = _tree(tmp_path / "conf.d", {"team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/_defaults.yaml": "defaults:\n  cpu: 5\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(_bytes(root)) == ["team-eu/_defaults.yaml", "tenant-b.yaml"]
+
+
+def test_offboard_tenant_deletes_the_top_level_and_the_nested_copy(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "由 2 個檔宣告" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+
+
+def test_offboard_tenant_leaves_a_file_named_for_it_that_declares_nothing(tmp_path):
+    # Read as a tenant file and named for tenant-a, a leftover subset record
+    # `_federation/tenant-a.yaml` declares no tenant: it serves nothing of
+    # tenant-a, so it is not deleted (and does not fail the pre-check).
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "_federation/tenant-a.yaml": "metrics: [cpu]\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(_bytes(root)) == ["_federation/tenant-a.yaml"]
+
+
+def test_offboard_tenant_names_a_file_named_for_it_that_declares_another(tmp_path):
+    # `tenant-a.yaml` is there but declares tenant-z: not "not found" — the
+    # file is named, with what it declares; rc 1, nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-z: {}\n"})
+    before = _bytes(root)
+    r = _ob(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "tenant-a.yaml 檔名是 tenant-a 但沒宣告它（宣告了 tenant-z）" in r.stdout, r.stdout
+    assert "找不到設定檔案" not in r.stdout, r.stdout
+    assert _bytes(root) == before
+
+
+def test_offboard_tenant_names_a_file_named_for_it_beside_a_carrier(tmp_path):
+    # Another file declares tenant-a: `team/tenant-a.yaml`, named for it but
+    # declaring tenant-z, is still named (a warning — it is not deleted).
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yml": "tenants:\n  tenant-a: {}\n",
+                                       "team/tenant-a.yaml": "tenants:\n  tenant-z: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "⚠️  " in r.stdout and "team/tenant-a.yaml 檔名是 tenant-a 但沒宣告它（宣告了 tenant-z），不刪" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["team/tenant-a.yaml"]
+
+
+def test_offboard_tenant_prints_no_pass_line_for_a_refused_dry_run(tmp_path):
+    # #3206: the dry run is part of the pre-check's verdict — the refused
+    # symlink never reads "✅ Pre-check 通過", with or without --execute.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    for extra in ((), ("--execute", "--skip-state-check")):
+        r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(root), *extra)
+        assert r.returncode == 2, (extra, r.stdout + r.stderr)
+        assert "Pre-check 通過" not in r.stdout and "正在執行下架" not in r.stdout, r.stdout
+        assert "✅ 設定檔案:" in r.stdout, r.stdout  # the report is still shown
+        assert (root / "tenant-a.yaml").is_symlink()
+
+
+@pytest.mark.parametrize("bad", ["Bad_Id", "../x", "tenant-a/", ""])
+def test_offboard_tenant_refuses_an_invalid_tenant_id_before_reading(tmp_path, bad):
+    # ADR-035: rc 2 naming the rule; nothing read (no da-guard is even
+    # needed), nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    before = _bytes(root)
+    r = _run("ops/offboard_tenant.py", bad, "--config-dir", str(root), "--execute",
+             "--skip-state-check", env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "不合法的 tenant id" in r.stderr and "da-guard" not in r.stderr, r.stderr
+    assert r.stdout == "" and _bytes(root) == before
+
+
+def test_offboard_tenant_deletes_none_when_one_carrier_declares_another(tmp_path):
+    # One of the files that declare tenant-a also declares tenant-b: the
+    # pre-check's rule (deleting it would offboard tenant-b too) refuses the
+    # run, naming the file — exit 1 as for the single-file case — and
+    # neither file is deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "other.yaml": "tenants:\n  tenant-a: {}\n  tenant-b: {}\n"})
+    before = _bytes(root)
+    r = _ob(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "other.yaml 另宣告了 tenant-b" in r.stdout, r.stdout
+    assert _bytes(root) == before
+
+
+def test_offboard_tenant_refuses_a_file_given_another_tenant_after_the_precheck(
+        tmp_path, monkeypatch, capsys):
+    # #3206 (CodeRabbit on #3363): the pre-check's dry run and --execute's
+    # write are two da-guard runs. A file that gains a declaration of
+    # tenant-b between them must not be deleted: each delete carries
+    # `tenants: [tenant-a]`, which da-guard judges on the bytes it reads for
+    # the real write — declares_mismatch, rc 2, the file named, both files
+    # kept. Real da-guard both times; only the edit in between is the hook.
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    real, calls = _lib_confedit.write_all, []
+
+    def hooked(r, entries, **kw):
+        calls.append([dict(e) for e in entries])
+        assert all(e.get("tenants") == ["tenant-a"] for e in entries), entries
+        out = real(r, entries, **kw)
+        if kw.get("dry_run"):  # after the pre-check, before --execute
+            (root / "team-eu" / "tenant-a.yaml").write_text(
+                "tenants:\n  tenant-a: {}\n  tenant-b: {}\n", encoding="utf-8")
+        return out
+    monkeypatch.setattr(_lib_confedit, "write_all", hooked)
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root),
+                                      "--execute", "--skip-state-check"])
+    with pytest.raises(SystemExit) as exc:
+        ot.main()
+    assert exc.value.code == 2
+    assert len(calls) == 2 and calls[0] == calls[1], calls  # the dry run is the same batch
+    out = capsys.readouterr()
+    assert "offboard_tenant: ERROR: team-eu/tenant-a.yaml: declares_mismatch:" in out.err, out.err
+    assert "tenant-b" in out.err and "已刪除" not in out.out, out.err
+    assert sorted(_bytes(root)) == ["team-eu/tenant-a.yaml", "tenant-a.yaml"]
+
+
+def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path, monkeypatch,
+                                                                        capsys):
+    # The batch is judged once with the file gone (worsens_tree): every place
+    # named, rc 2, nothing deleted. ⚠️ da-guard's answer is stubbed here — a
+    # flat tenant carrier whose pre-check passes has no real tree its removal
+    # worsens that this test could build; Go's own rule is pinned in
+    # write_replace_delete_test.go and tests/ops/test_lib_confedit.py
+    # (`test_deleting_the_selected_carrier_is_tree_worsened`).
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    before = _bytes(root)
+    real = _lib_confedit.write_all
+
+    def worsened(r, entries, **kw):
+        assert entries == [{"path": "tenant-a.yaml", "delete": True, "tenants": ["tenant-a"]}]
+        if kw.get("dry_run"):  # the pre-check's dry run passes; the real write is refused
+            return real(r, entries, **kw)
+        raise _lib_confedit.TreeWorsened([{"kind": "readers_lost", "path": "other.yaml",
+                                           "message": "read by [exporter] before the call"}])
+    monkeypatch.setattr(_lib_confedit, "write_all", worsened)
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root),
+                                      "--execute", "--skip-state-check"])
+    with pytest.raises(SystemExit) as exc:
+        ot.main()
+    assert exc.value.code == 2
+    out = capsys.readouterr()
+    assert "offboard_tenant: ERROR: other.yaml: worsens_tree: readers_lost:" in out.err, out.err
+    assert "已刪除" not in out.out
+    assert _bytes(root) == before
+
+
 # ── E2 review follow-ups ─────────────────────────────────────────────────
 
 def test_scaffold_generate_profile_goes_through_da_guard_write(tmp_path, monkeypatch):
@@ -707,10 +1052,12 @@ def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
 def test_migrate_conf_d_refuses_a_destination_outside_the_tree(tmp_path):
     root = _tree(tmp_path / "conf.d", {
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: ..\n"})
-    r = _mcd(root)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert "refusing to move" in r.stderr and "not a path inside" in r.stderr, r.stderr
-    assert "da-guard parse-tree" not in r.stderr, r.stderr
+    before = _bytes(root)
+    for mode in ("--dry-run", "--apply"):
+        r = _run("dx/migrate_conf_d.py", "--conf-d", str(root), mode)
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "../tenant-a.yaml" in r.stderr and "inside --config-dir" in r.stderr, r.stderr
+        assert _bytes(root) == before
 
 
 def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, monkeypatch):
@@ -746,7 +1093,7 @@ def test_patch_config_refuses_keys_that_differ_only_in_case():
 
 # ── check_threshold_registry --regen (two conf.d `_defaults.yaml`) ───────
 # `--regen` splices generated blocks into the dev template and the try-local
-# seed. The rows run `regen_surfaces` on copies of the two real files in a
+# seed, and `da-guard write` writes them (one batch per conf.d root). The rows run `regen_surfaces` on copies of the two real files in a
 # tmp repo root, with only the conf.d surfaces (the pack headers and helm
 # values are not conf.d, and would be the real files). The two files sit at
 # their conf.d roots under fixed names, so there is no row 4.
@@ -806,8 +1153,9 @@ def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
 def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
         tmp_path, monkeypatch):
     # A registry value of +inf renders `inf`, a string to yaml.v3 — not the
-    # number the exporter's `defaults` takes. Neither file is written (the
-    # seed's change alone would read back fine: all or none).
+    # number the exporter's `defaults` takes: da-guard write's validation
+    # names the file. Neither file is written (the seed's change alone would
+    # pass: all or none).
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                   _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
@@ -815,19 +1163,160 @@ def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
     doc["keys"]["container_cpu"]["value"] = float("inf")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(doc)
-    assert "content_differs" in str(exc.value) and "defaults.container_cpu" in str(exc.value)
+    assert f"{dev}: read_back_mismatch: validation would name" in str(exc.value)
+    assert str(seed) not in str(exc.value)
     assert _bytes(tmp_path / "repo") == before
 
 
 def test_threshold_registry_regen_does_not_write_an_unreadable_original(tmp_path, monkeypatch):
     # A key written twice outside the generated block: PyYAML kept the last
-    # one and the regen wrote; yaml.v3 refuses the file.
+    # one and the regen wrote; yaml.v3 does not read the text to be written.
     text = _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n"
     lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, text)
     before = _bytes(tmp_path / "repo")
-    with pytest.raises(lib.ConfdWriteRefused, match="original_unreadable.*duplicate_key"):
+    with pytest.raises(lib.ConfdWriteRefused, match="read_back_mismatch.*duplicate_key"):
         lib.regen_surfaces(lib.build_registry_doc())
     assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_names_every_refused_file(tmp_path, monkeypatch):
+    """Both conf.d roots refused: each file named, not only the first one
+    (every root is judged before the answer), and nothing written."""
+    lib, dev, seed = _regen_setup(
+        tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n",
+        _stale(_SEED_REL, *_SEED_STALE) + "flag: 1\nflag: 2\n")
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
+        lib.regen_surfaces(lib.build_registry_doc())
+    assert "refused 2 generated conf.d file(s)" in str(exc.value)
+    assert f"{dev}: read_back_mismatch" in str(exc.value)
+    assert f"{seed}: read_back_mismatch" in str(exc.value)
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_writes_through_da_guard_write(tmp_path, monkeypatch):
+    """ADR-036 §2: the conf.d files go to `da-guard write` — one batch per
+    conf.d root, each file a `replace` of its whole text — asked first as a
+    dry run, then the same batch written; no Python write of a conf.d file."""
+    import _lib_confedit
+    import _lib_python
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    calls = []
+    real = _lib_confedit.write_all
+
+    def spy(root, entries, **kw):
+        calls.append((str(root), [{**e, "copy": Path(e["copy"]).read_bytes()} for e in entries],
+                      kw.get("dry_run", False)))
+        return real(root, entries, **kw)
+
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    secure = []
+    real_secure = _lib_python.write_text_secure
+    monkeypatch.setattr(_lib_python, "write_text_secure",
+                        lambda p, *a, **k: (secure.append(str(p)), real_secure(p, *a, **k)))
+    lib.regen_surfaces(lib.build_registry_doc())
+    want = {str(dev.parent): (REPO / _DEV_REL).read_bytes(),
+            str(seed.parent): (REPO / _SEED_REL).read_bytes()}
+    assert [(root, dry) for root, _e, dry in calls] == [
+        (str(dev.parent), True), (str(seed.parent), True),
+        (str(dev.parent), False), (str(seed.parent), False)]
+    for root, entries, _dry in calls:
+        assert entries == [{"path": "_defaults.yaml", "copy": want[root], "replace": True}]
+    assert secure == []
+    assert dev.read_bytes() == want[str(dev.parent)]
+
+
+def test_threshold_registry_regen_keeps_the_file_mode(tmp_path, monkeypatch):
+    # A replace keeps the file's mode (the Python write set 0600).
+    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    dev.chmod(0o644)
+    lib.regen_surfaces(lib.build_registry_doc())
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert dev.stat().st_mode & 0o777 == 0o644
+
+
+def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(
+        tmp_path, monkeypatch, capsys):
+    """A conf.d `_defaults.yaml` that is a symlink to a file inside the repo
+    (one outside it is the containment check's ValueError): da-guard write's
+    dry run refuses it (reason `symlink`) — rc 2, nothing written, the link
+    and its target as they were. The Python write followed the link and
+    wrote its target."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    _lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    target = tmp_path / "repo" / "elsewhere.yaml"
+    target.write_bytes(dev.read_bytes())
+    dev.unlink()
+    from _platform_fs import symlink_or_skip
+    symlink_or_skip(target, dev)
+    before = _bytes(tmp_path / "repo")
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen refused: da-guard write refused 1 generated conf.d file(s): {dev}: symlink:" in err
+    assert "nothing was written" in err
+    assert _bytes(tmp_path / "repo") == before and dev.is_symlink()
+
+
+def test_threshold_registry_regen_refuses_a_block_under_another_key(tmp_path, monkeypatch):
+    """The seed's `optional_overrides:` renamed by hand (`other_carrier:`),
+    the generated markers still inside it: the spliced block is no
+    `optional_overrides` item at all, so it is refused, named, and nothing
+    is written (da-guard alone would write it: the file still reads)."""
+    seed_text = _stale(_SEED_REL, *_SEED_STALE)
+    assert seed_text.count("\noptional_overrides:\n") == 1
+    lib, _dev, seed = _regen_setup(
+        tmp_path, monkeypatch, None,
+        seed_text.replace("\noptional_overrides:\n", "\nother_carrier:\n"))
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
+        lib.regen_surfaces(lib.build_registry_doc())
+    msg = str(exc.value)
+    assert f"{seed}: the generated block 'try-local-optional' does not read as under " \
+           "'optional_overrides'" in msg, msg
+    assert "nothing was written" in msg
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fails(
+        tmp_path, monkeypatch, capsys):
+    """The conf.d batches are written, then the helm values write fails
+    (OSError): rc 2 naming the helm file and the conf.d files already
+    written (not rolled back); the registry, written last, is not."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    import _lib_python
+    import _registry_lib
+    all_specs = _registry_lib.surface_specs  # before `_regen_setup` filters it
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    helm =tmp_path / "repo" / "helm" / "values.yaml"
+    helm.parent.mkdir()
+    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
+    assert text.count(marker) == 1
+    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    # The conf.d surfaces and the helm `defaults` block (on the copy above).
+    monkeypatch.setattr(lib, "surface_specs", lambda doc: [
+        s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-defaults"])
+    registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
+    registry_before = registry.read_bytes()
+    real_write = _lib_python.write_text_secure
+
+    def failing(path, *a, **k):
+        if str(path) == str(helm):
+            raise OSError(28, "No space left on device")
+        return real_write(path, *a, **k)
+
+    monkeypatch.setattr(_lib_python, "write_text_secure", failing)
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen stopped: writing {helm} failed:" in err, err
+    assert f"not rolled back: {dev}, {seed}" in err, err
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert registry.read_bytes() == registry_before
 
 
 def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
@@ -837,7 +1326,8 @@ def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypat
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     before = _bytes(tmp_path / "repo")
     assert gate.main(["--regen"]) == 2
-    assert "da-guard parse-tree" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "through `da-guard write`" in err and "nothing was written" in err
     assert _bytes(tmp_path / "repo") == before
 
 
@@ -863,7 +1353,7 @@ def test_threshold_registry_regen_refused_writes_not_even_the_registry(
         _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
     assert gate.main(["--regen"]) == 2
-    assert "original_unreadable" in capsys.readouterr().err
+    assert "read_back_mismatch" in capsys.readouterr().err
     assert _bytes(tmp_path / "repo") == before
 
 
@@ -1233,56 +1723,3 @@ def test_generate_tenant_fixture_plain_thresholds_are_numbers(tmp_path):
     assert {type(v) for v in vals} == {int, str}
     assert all(not v.isdigit() for v in vals if isinstance(v, str))
 
-
-# ── _lib_write_check.confirm_tree（批次：一次 tree mode）──────────────────
-
-def test_confirm_tree_moves_only_after_every_file_reads_back(tmp_path):
-    import _lib_write_check as wc
-    root = tmp_path / "out"
-    good = ("tenant-a.yaml", "tenants:\n  tenant-a:\n    k: '1'\n",
-            wc.from_python({"tenants": {"tenant-a": {"k": "1"}}}))
-    bad = ("tenant-b.yaml", "tenants:\n  tenant-b:\n    k: 1e3\n",
-           wc.from_python({"tenants": {"tenant-b": {"k": "1e3"}}}))
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(root, [good, bad]):
-            raise AssertionError("entered despite a refusal")
-    assert exc.value.reason == wc.CONTENT_DIFFERS and exc.value.rel == "tenant-b.yaml"
-    assert sorted(p.name for p in tmp_path.iterdir()) == []  # no staging left
-    root.mkdir()
-    with wc.confirm_tree(root, [good]) as staged:
-        staged.place("tenant-a.yaml", root / "tenant-a.yaml")
-    assert (root / "tenant-a.yaml").read_text(encoding="utf-8") == good[1]
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["out"]
-
-
-def test_confirm_tree_refuses_a_path_no_reader_reads(tmp_path):
-    import _lib_write_check as wc
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(tmp_path / "out", [
-                (".hidden.yaml", "tenants: {}\n", {"tenants": {}})]):
-            pass
-    assert exc.value.reason == wc.NOT_READ
-
-
-def test_confirm_tree_judges_against_a_non_empty_root_in_file_mode(tmp_path):
-    # With files already in root the staged tree is not the tree the run
-    # leaves: beside an existing `_defaults.yaml`, a new `_defaults.yml` is a
-    # spelling the directory does not select (alone in the staged tree it
-    # would be) — refused as file mode does.
-    import _lib_write_check as wc
-    root = _tree(tmp_path / "out", {"_defaults.yaml": "defaults:\n  k: 1\n"})
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(root, [("_defaults.yml", "defaults:\n  k: 2\n",
-                                     wc.from_python({"defaults": {"k": 2}}))]):
-            pass
-    assert exc.value.reason == wc.NOT_READ, exc.value
-
-
-def test_confirm_tree_without_da_guard_raises(tmp_path, monkeypatch):
-    import _lib_write_check as wc
-    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-    with pytest.raises(_lib_parse_tree.ParseTreeError):
-        with wc.confirm_tree(tmp_path / "out", [
-                ("t.yaml", "tenants: {}\n", {"tenants": {}})]):
-            pass
-    assert sorted(p.name for p in tmp_path.iterdir()) == []

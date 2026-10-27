@@ -63,7 +63,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -77,7 +77,6 @@ from _lib_io import (  # noqa: E402  (#1789)
     output_write,
     safe_label,
 )
-from _lib_yaml_keys import load_for_rewrite  # noqa: E402  (#2216, #2331)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 import _lib_write_check  # noqa: E402  (ADR-036 §2, #2906)
@@ -779,14 +778,18 @@ def _crdecode_binary() -> str | None:
     return os.environ.get(CRDECODE_ENV) or shutil.which(CRDECODE_BINARY_NAME)
 
 
-def decode_cr(cr_path: Path) -> tuple[Any, list[str]]:
-    """The CR in *cr_path* as Kubernetes clients decode it, and da-crdecode's
-    stderr lines (empty on a normal run).
+def decode_cr(cr_path: Path) -> tuple[Any, list, list[str]]:
+    """The CR in *cr_path* as Kubernetes clients decode it (each object's
+    keys in the order the CR writes them), where that reading is not the
+    CR's text (da-crdecode's ``differs_from_text`` for the document, #3206),
+    and da-crdecode's stderr lines (empty on a normal run).
 
     Raises :class:`CrDecodeError` when the binary is missing, cannot be run,
     does not finish within ``CRDECODE_TIMEOUT_SECONDS``, exits non-zero (the
-    file cannot be read, the conversion refuses it, or it holds more than one
-    document) or prints something that is not its JSON contract.
+    file cannot be read, the conversion refuses it, it holds more than one
+    document, or it cannot be read as written) or prints something that is
+    not its JSON contract — a da-crdecode older than this tool prints no
+    ``differs_from_text``.
     ``json.loads`` raises RecursionError for a document nested too deeply for
     Python's JSON reader; that is left to the caller.
     """
@@ -823,7 +826,35 @@ def decode_cr(cr_path: Path) -> tuple[Any, list[str]]:
         raise CrDecodeError(
             f"{CRDECODE_BINARY_NAME} printed JSON without exactly one "
             "document under \"documents\"", lines)
-    return docs[0], lines
+    differs = out.get("differs_from_text")
+    if (not isinstance(differs, list) or len(differs) != 1
+            or not isinstance(differs[0], list)
+            or not all(_is_difference(d) for d in differs[0])):
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} printed JSON without one list of "
+            "differences under \"differs_from_text\" (a da-crdecode older than "
+            "this tool prints none: rebuild it)", lines)
+    return docs[0], differs[0], lines
+
+
+#: The fields each kind of da-crdecode difference carries (#3206).
+_DIFFERENCE_FIELDS = {
+    "keys": {"kind", "path", "written_keys", "read_keys"},
+    "string": {"kind", "path", "text"},
+    "structure": {"kind", "path", "written", "read"},
+}
+
+
+def _is_difference(d: Any) -> bool:
+    """Whether *d* is one entry of da-crdecode's ``differs_from_text``."""
+    if not isinstance(d, dict) or not isinstance(d.get("kind"), str) \
+            or set(d) != _DIFFERENCE_FIELDS.get(d["kind"]):
+        return False
+    path = d["path"]
+    return (isinstance(path, list)
+            and all(isinstance(s, str) or (isinstance(s, int)
+                                           and not isinstance(s, bool))
+                    for s in path))
 
 
 def _log_crdecode_lines(lines: list[str], level: int) -> None:
@@ -1005,165 +1036,81 @@ def _metadata_name_node(root: Any) -> Any:
     return node if isinstance(node, yaml.ScalarNode) else None
 
 
-def _as_text(value: Any) -> str | None:
-    """*value* from the CR read as written, as the text it was written as:
-    a ``str`` (a plain scalar is RawPlain, its source text), a ``date`` in
-    its ISO spelling (``!!timestamp 2024-01-01``); None for anything else
-    (null, a number or a ``datetime`` from an explicit tag, bytes, ...)."""
-    if isinstance(value, str):
-        return str(value)
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value.isoformat()
+def _path_text(path: "list") -> str:
+    """A da-crdecode difference's path as this tool's messages spell it:
+    ``spec.tenants.t1.x[0]`` (``<document>`` for the document itself)."""
+    out = ""
+    for seg in path:
+        out += f"[{seg}]" if isinstance(seg, int) else (f".{seg}" if out else seg)
+    return out or "<document>"
+
+
+def _difference_message(d: dict) -> str:
+    """Why the keys at a da-crdecode "keys" or "structure" difference cannot
+    be rendered as the CR writes them (#3206: the comparison is
+    da-crdecode's). A "string" difference is worded where it is found."""
+    where = _path_text(d["path"])
+    if d["kind"] == "keys":
+        return (f"{where}: the keys as written ("
+                + (", ".join(repr(k) for k in d["written_keys"]) or "none")
+                + ") are not the keys Kubernetes reads ("
+                + (", ".join(repr(k) for k in d["read_keys"]) or "none")
+                + "); rendering would rename them. Quote each such key so "
+                "both readings are the same text")
+    return (f"{where}: Kubernetes reads {d['read']} here but the CR as "
+            f"written holds {d['written']}, so the keys below cannot be "
+            "compared; this tool refuses such a CR")
+
+
+def _not_as_written(differs: list, path: "list", *,
+                    below: bool = False) -> "dict | None":
+    """The da-crdecode difference that leaves the value at *path* not read
+    as written, or None (#2476, #3206).
+
+    A "keys" or "structure" difference at *path* or above it: below one,
+    da-crdecode compares nothing (which written key a read key came from
+    cannot be told), so the value has no verdict and is taken as not as
+    written. A "string" difference at *path* itself: the value is read as
+    other text. *below*: also any "keys" or "structure" difference under
+    *path* (a subtree whose every key is an id).
+    """
+    n = len(path)
+    for d in differs:
+        at = d["path"]
+        if d["kind"] == "string":
+            if at == path:
+                return d
+            continue
+        if at == path[:len(at)] or (below and at[:n] == path):
+            return d
     return None
 
 
-def _shape_name(value: Any) -> str:
-    """How a value's structure is named in a :func:`_key_divergence` error.
-    A tuple is an item of ``!!omap`` / ``!!pairs`` as written."""
-    if isinstance(value, dict):
-        return "a mapping"
-    if isinstance(value, (set, frozenset)):
-        return "a set"
-    if isinstance(value, list):
-        return f"a list of {len(value)}"
-    if isinstance(value, tuple):
-        return "a (key, value) pair"
-    return "a scalar"
-
-
-#: Appended to a divergence error when the CR uses `<<` merges: quoting does
-#: not help when the two readings differ because of the merge itself.
-_MERGE_NOTE = ("; the CR uses << merges: if the difference comes from a << "
-               "written after explicit keys (on the Kubernetes side it "
-               "overrides them), move it before them or do not use merges")
-
-
-def _merge_note(cr_path: Path) -> str:
-    """:data:`_MERGE_NOTE` when the CR has a ``<<`` merge key anywhere, else
-    ``""``. Read from the composed node graph (no value is built); any
-    failure to read gives ``""`` — the note is an explanation only."""
-    try:
-        with open(cr_path, encoding="utf-8") as fh:
-            root = yaml.compose(fh, Loader=yaml.SafeLoader)
-    except Exception:  # noqa: BLE001 — a note only
-        return ""
-    seen, stack = set(), [root]
-    while stack:
-        node = stack.pop()
-        if node is None or id(node) in seen:
-            continue
-        seen.add(id(node))
-        if isinstance(node, yaml.MappingNode):
-            for key, value in node.value:
-                if key.tag == "tag:yaml.org,2002:merge":
-                    return _MERGE_NOTE
-                stack.extend((key, value))
-        elif isinstance(node, yaml.SequenceNode):
-            stack.extend(node.value)
-    return ""
-
-
-def _key_divergence(decoded: Any, written: Any, path: str) -> str:
-    """#2476: why the keys da-crdecode read under *path* differ from the
-    keys as written, at any depth, or ``""``.
-
-    An unquoted ``010:`` is the key ``8`` to Kubernetes, ``yes:`` is
-    ``true``: rendering either would rename it — a tenant id, a metric
-    name — and ``8:`` next to ``010:`` would become one key. Two real
-    readings are compared mapping by mapping, by their key sets; nothing
-    about YAML typing is decided here. Values are not compared (they are
-    rendered as decoded), but the two readings must have the same
-    structure: where one has a mapping or a list and the other has not, or
-    two lists differ in length, the CR is refused (fail-closed) — the keys
-    below cannot be paired. A ``!!set`` as written is a mapping of keys.
-    A key written twice with the same text is one key in both readings.
-    """
-    if isinstance(written, (set, frozenset)):
-        written = dict.fromkeys(written)
-    if isinstance(decoded, dict) and isinstance(written, dict):
-        by_text = {}
-        for key, value in written.items():
-            by_text[_as_text(key)] = value
-        if set(by_text) != set(decoded):
-            only_written = sorted(repr(k) for k in set(by_text) - set(decoded))
-            only_read = sorted(repr(k) for k in set(decoded) - set(by_text))
-            return (f"{path}: the keys as written ("
-                    + (", ".join(only_written) or "none")
-                    + ") are not the keys Kubernetes reads ("
-                    + (", ".join(only_read) or "none")
-                    + "); rendering would rename them. Quote each such key "
-                    "so both readings are the same text")
-        for key, value in decoded.items():
-            why = _key_divergence(value, by_text[key], f"{path}.{key}")
-            if why:
-                return why
-        return ""
-    if isinstance(decoded, list) and isinstance(written, list) \
-            and len(decoded) == len(written):
-        for i, (d, w) in enumerate(zip(decoded, written)):
-            why = _key_divergence(d, w, f"{path}[{i}]")
-            if why:
-                return why
-        return ""
-    if isinstance(decoded, (dict, list)) or isinstance(written, (dict, list)):
-        return (f"{path}: Kubernetes reads {_shape_name(decoded)} here but "
-                f"the CR as written holds {_shape_name(written)}, so the keys "
-                "below cannot be compared; this tool refuses such a CR")
-    return ""
-
-
-def _profile_divergence(decoded: Any, written: Any) -> str:
-    """#2476: why a tenant's ``_profile`` reads differently to Kubernetes
-    than as written, or ``""``.
+def _profile_divergence(tenants: dict, differs: list) -> str:
+    """#2476: why a tenant's ``_profile`` does not name the profile the CR
+    writes, or ``""``.
 
     ``_profile`` names a profile, as a tenant id names a tenant: an unquoted
     ``_profile: 010`` is the number 8 to Kubernetes, ``yes`` is ``true``,
     and rendering that would point the tenant at a profile that does not
-    exist. Compared as :func:`_key_divergence` compares keys (two real
-    readings); a null on both sides is no profile.
+    exist. A null one is no profile. A string read as other text than the
+    CR writes is da-crdecode's finding (#3206).
     """
-    if not isinstance(decoded, dict) or not isinstance(written, dict):
-        return ""
-    by_text = {_as_text(k): v for k, v in written.items()}
-    for tenant, values in decoded.items():
-        as_written = by_text.get(tenant)
-        if not isinstance(values, dict) or not isinstance(as_written, dict) \
-                or "_profile" not in as_written:
+    for tenant, values in tenants.items():
+        if not isinstance(values, dict) or values.get("_profile") is None:
             continue
-        raw = as_written["_profile"]
-        read = values.get("_profile")
-        if raw is None and read is None:
+        read = values["_profile"]
+        d = _not_as_written(differs, ["spec", "tenants", tenant, "_profile"])
+        if not isinstance(read, str):
+            written = ""
+        elif d is not None:
+            written = f", which is not the text written in the CR ({d['text']!r})"
+        else:
             continue
-        if not isinstance(read, str) or _as_text(raw) != read:
-            return (f"spec.tenants.{tenant}._profile is read by Kubernetes "
-                    f"as {read!r}, which is not the text written in the CR "
-                    f"({raw!r}): the tenant would point at another profile. "
-                    "Quote it so both are the same")
+        return (f"spec.tenants.{tenant}._profile is read by Kubernetes as "
+                f"{read!r}{written}: the tenant would point at another "
+                "profile. Quote it so both are the same")
     return ""
-
-
-def _in_written_order(decoded: Any, written: Any) -> Any:
-    """*decoded* (da-crdecode's JSON, every object's keys sorted) with each
-    mapping's keys in the order the CR wrote them, values untouched.
-
-    A key is matched to the written one by its text; keys with no written
-    counterpart keep their (sorted) order, after the matched ones. A list is
-    walked item by item when both sides have the same length.
-    """
-    if isinstance(decoded, dict) and isinstance(written, dict):
-        by_text = {}
-        for key, value in written.items():
-            text = _as_text(key)
-            if text is not None and text not in by_text:
-                by_text[text] = value
-        order = [k for k in by_text if k in decoded]
-        order += [k for k in decoded if k not in by_text]
-        return {k: _in_written_order(decoded[k], by_text.get(k))
-                for k in order}
-    if (isinstance(decoded, list) and isinstance(written, list)
-            and len(decoded) == len(written)):
-        return [_in_written_order(d, w) for d, w in zip(decoded, written)]
-    return decoded
 
 
 def render_cr_file(
@@ -1177,14 +1124,15 @@ def render_cr_file(
     #2476: the CR is decoded by ``da-crdecode``, as Kubernetes clients decode
     it (see ``CRDECODE_BINARY_NAME``): values are rendered as decoded (an
     unquoted ``010`` VALUE is the number 8). The ids — ``metadata.name`` /
-    ``namespace`` and the tenant ids — must read the same as written
-    (``_lib_yaml_keys``) and as decoded, or the CR is refused: an unquoted
-    ``010:`` tenant would otherwise be renamed. The CR as written also gives
-    the key order. What this path checks on top of the controller path is
-    below; it does not reproduce the API server's validation.
+    ``namespace``, every key under ``spec.tenants`` and each tenant's
+    ``_profile`` — must read as the CR writes them, or the CR is refused: an
+    unquoted ``010:`` tenant would otherwise be renamed. Whether they do is
+    da-crdecode's answer (``differs_from_text``, #3206), and so is the key
+    order. What this path checks on top of the controller path is below; it
+    does not reproduce the API server's validation.
     """
     try:
-        cr, warn_lines = decode_cr(cr_path)
+        cr, differs, warn_lines = decode_cr(cr_path)
     except CrDecodeError as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         _log_crdecode_lines(e.stderr_lines, logging.ERROR)
@@ -1256,39 +1204,23 @@ def render_cr_file(
                       "%d characters)", cr_path, namespace,
                       _DNS1123_LABEL_MAX)
             return EXIT_CALLER_ERROR
-    # #2476: the CR as written (`_lib_yaml_keys`: keys and plain scalars as
-    # their source text), to compare the ids with da-crdecode's reading and
-    # to keep the CR's key order. Not used for any value.
-    try:
-        with open(cr_path, encoding="utf-8") as fh:
-            as_written = load_for_rewrite(fh)
-    except RecursionError:
-        log.error("Failed to parse %s: nested too deeply for this tool to "
-                  "read", cr_path)
-        return EXIT_CALLER_ERROR
-    except Exception as e:  # noqa: BLE001 — any failure: nothing to compare
-        log.error("%s: Kubernetes' YAML→JSON conversion reads this CR, but "
-                  "this tool cannot read it as written (%s: %s), so its ids "
-                  "cannot be compared with that reading", cr_path,
-                  type(e).__name__, e)
-        return EXIT_CALLER_ERROR
-    written_meta = (as_written.get("metadata")
-                    if isinstance(as_written, dict) else None)
-    if not isinstance(written_meta, dict):
-        written_meta = {}
-    if _as_text(written_meta.get("name")) != name:
-        log.error("%s: metadata.name is read by Kubernetes as %r, which is "
-                  "not the text written in the CR (%r). Quote it so both "
-                  "are the same%s", cr_path, name, written_meta.get("name"),
-                  _merge_note(cr_path))
-        return EXIT_CALLER_ERROR
-    namespace = metadata.get("namespace")
-    if namespace is not None \
-            and _as_text(written_meta.get("namespace")) != namespace:
-        log.error("%s: metadata.namespace is read by Kubernetes as %r, "
-                  "which is not the text written in the CR (%r). Quote it "
-                  "so both are the same%s", cr_path, namespace,
-                  written_meta.get("namespace"), _merge_note(cr_path))
+    # #2476, #3206: the ids must read as the CR writes them. da-crdecode
+    # sets its reading against the CR's text (`differs`); this tool reads
+    # no YAML for that. The order of the CR's keys is da-crdecode's too.
+    for field in ("name", "namespace"):
+        if field not in metadata:
+            continue
+        d = _not_as_written(differs, ["metadata", field])
+        if d is None:
+            continue
+        if d["kind"] == "string":
+            log.error("%s: metadata.%s is read by Kubernetes as %r, which is "
+                      "not the text written in the CR (%r). Quote it so both "
+                      "are the same", cr_path, field, metadata[field], d["text"])
+        else:
+            log.error("%s: metadata.%s cannot be compared with the text "
+                      "written in the CR: %s", cr_path, field,
+                      _difference_message(d))
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
@@ -1302,21 +1234,17 @@ def render_cr_file(
                   "rendered file would carry no profile. Set _profile on "
                   "each tenant under spec.tenants instead", cr_path)
         return EXIT_CALLER_ERROR
-    written_spec = (as_written.get("spec")
-                    if isinstance(as_written, dict) else None)
-    if not isinstance(written_spec, dict):
-        written_spec = {}
     why = ""
     if isinstance(spec.get("tenants"), dict):
-        why = (_key_divergence(spec["tenants"], written_spec.get("tenants"),
-                               "spec.tenants")
-               or _profile_divergence(spec["tenants"],
-                                      written_spec.get("tenants")))
+        # Every key under spec.tenants is an id (owner ruling, #2476): a
+        # tenant id, a metric name. And `_profile` names a profile.
+        d = _not_as_written(differs, ["spec", "tenants"], below=True)
+        why = _difference_message(d) if d else _profile_divergence(
+            spec["tenants"], differs)
     if why:
-        log.error("%s: %s%s", cr_path, why, _merge_note(cr_path))
+        log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR
-    if spec:
-        cr["spec"] = spec = _in_written_order(spec, written_spec)
+
     shape_error = _spec_block_shape_error(spec)
     if shape_error:
         log.error("%s: %s", cr_path, shape_error)

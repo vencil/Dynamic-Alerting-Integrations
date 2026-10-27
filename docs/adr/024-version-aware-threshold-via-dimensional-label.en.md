@@ -119,13 +119,22 @@ Of the three risks the "never write PromQL" rule guards against, the hardest —
       _custom_alerts:
         - {recipe: ratio, name: payment_failure_ratio, metric: payment_failed_total,
            denominator_metric: payment_attempts_total, op: ">", window: 5m, threshold: "0.01:critical"}
+  ```
+
+  ```yaml
   # finance/_defaults.yaml — not served
   _custom_alerts:
     - {recipe: ratio, name: refund_ratio, metric: refund_total,
        denominator_metric: payment_attempts_total, op: ">", window: 5m, threshold: "0.05:warning"}
+  ```
+
+  ```yaml
   # finance/pay-a.yaml
   tenants:
     pay-a: {_profile: finance}
+  ```
+
+  ```yaml
   # finance/pay-b.yaml
   tenants:
     pay-b:

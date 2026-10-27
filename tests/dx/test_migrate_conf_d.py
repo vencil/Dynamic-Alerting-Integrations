@@ -134,64 +134,26 @@ class TestPlanMigration:
         assert statuses == {"ok", "skip_no_metadata", "skip_system_file", "skip_already_nested"}
 
 
-class TestGenerateGitCommands:
-    """Tests for generate_git_commands()."""
+class TestMoveEntries:
+    """move_entries(): the "ok" actions as one `da-guard write` batch."""
 
-    def test_generate_git_commands(self, tmp_path):
-        """Correct mkdir -p + git mv list format."""
-        conf_d = tmp_path / "conf.d"
-        actions = [{
-            "source": "tenant-a.yaml",
-            "target": "finance/us-east/prod/tenant-a.yaml",
-            "tenant_id": "tenant-a",
-            "metadata": {"domain": "finance", "region": "us-east", "environment": "prod"},
-            "status": "ok"
-        }]
-
-        commands = mcd.generate_git_commands(actions, conf_d)
-        assert len(commands) == 2
-        assert commands[0][:2] == ["mkdir", "-p"]
-        assert commands[1][:2] == ["git", "mv"]
-
-    def test_generate_git_commands_empty(self, tmp_path):
-        """No 'ok' actions -> empty commands."""
-        conf_d = tmp_path / "conf.d"
-        actions = [{
-            "source": "tenant-a.yaml",
-            "target": "tenant-a.yaml",
-            "tenant_id": None,
-            "metadata": None,
-            "status": "skip_system_file"
-        }]
-
-        commands = mcd.generate_git_commands(actions, conf_d)
-        assert commands == []
-
-    def test_generate_git_commands_dedup_dirs(self, tmp_path):
-        """Deduplicate target directories."""
-        conf_d = tmp_path / "conf.d"
+    def test_only_ok_actions_target_from_source(self):
         actions = [
-            {
-                "source": "tenant-a.yaml",
-                "target": "finance/us-east/prod/tenant-a.yaml",
-                "tenant_id": "tenant-a",
-                "metadata": {},
-                "status": "ok"
-            },
-            {
-                "source": "tenant-b.yaml",
-                "target": "finance/us-east/prod/tenant-b.yaml",
-                "tenant_id": "tenant-b",
-                "metadata": {},
-                "status": "ok"
-            }
+            {"source": "tenant-a.yaml", "target": "finance/us-east/prod/tenant-a.yaml",
+             "tenant_id": "tenant-a", "metadata": {}, "status": "ok"},
+            {"source": "_defaults.yaml", "target": "_defaults.yaml",
+             "tenant_id": None, "metadata": None, "status": "skip_system_file"},
+            {"source": "tenant-b.yaml", "target": "finance/tenant-b.yaml",
+             "tenant_id": "tenant-b", "metadata": {}, "status": "ok"},
+        ]
+        assert mcd.move_entries(actions) == [
+            {"path": "finance/us-east/prod/tenant-a.yaml", "from": "tenant-a.yaml"},
+            {"path": "finance/tenant-b.yaml", "from": "tenant-b.yaml"},
         ]
 
-        commands = mcd.generate_git_commands(actions, conf_d)
-        mkdir_count = sum(1 for c in commands if c[0] == "mkdir")
-        mv_count = sum(1 for c in commands if c[0] == "git")
-        assert mkdir_count == 1
-        assert mv_count == 2
+    def test_no_ok_action_is_an_empty_batch(self):
+        assert mcd.move_entries([{"source": "x.yaml", "target": "x.yaml", "tenant_id": None,
+                                  "metadata": None, "status": "skip_no_metadata"}]) == []
 
 
 class TestCLIIntegration:
@@ -225,8 +187,9 @@ class TestCLIIntegration:
             capture_output=True,
             text=True, encoding="utf-8",
         )
-        assert result.returncode == 0
-        assert "mkdir" in result.stdout or "Dry-run" in result.stdout
+        assert result.returncode == 0, result.stderr
+        assert "tenant-a.yaml -> finance/tenant-a.yaml" in result.stdout
+        assert (conf_d / "tenant-a.yaml").is_file() and not (conf_d / "finance").exists()
 
     def test_cli_missing_conf_d(self, tmp_path):
         """Missing conf.d -> error."""
@@ -315,3 +278,194 @@ class TestUnplaceableMetadata:
         (action,) = mcd.plan_migration(conf_d)
         assert action["status"] == "ok"
         assert action["target"] == "finance/us/t1.yaml"
+
+
+# ── --apply: one `da-guard write` batch of moves (ADR-036 §2, #3206) ──────
+
+_A = "tenants:\n  tenant-a:\n    _metadata:\n      domain: finance\n      region: us\n"
+_B = "tenants:\n  tenant-b:\n    _metadata:\n      domain: ops\n"
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+         "-c", "commit.gpgsign=false", *args],
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=60, check=True)
+
+
+def _mcd(conf_d, *argv):
+    return subprocess.run(
+        [sys.executable, os.path.join(_TOOLS_DIR, "migrate_conf_d.py"), "--conf-d",
+         str(conf_d), *argv],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+
+
+def _files(root):
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _flat(root, files):
+    root.mkdir(parents=True)
+    for rel, body in files.items():
+        (root / rel).write_text(body, encoding="utf-8")
+    return root
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestApply:
+
+    def test_moves_byte_for_byte_keeping_the_file(self, tmp_path):
+        # Not a git working tree: the files are moved, git is skipped and said so.
+        conf_d = _flat(tmp_path / "conf.d", {"tenant-a.yaml": _A + "# kept: comment\n",
+                                             "tenant-b.yaml": _B})
+        os.chmod(conf_d / "tenant-b.yaml", 0o640)
+        before = _files(conf_d)
+        ino = (conf_d / "tenant-b.yaml").stat().st_ino
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _files(conf_d) == {"finance/us/tenant-a.yaml": before["tenant-a.yaml"],
+                                  "ops/tenant-b.yaml": before["tenant-b.yaml"]}
+        moved = conf_d / "ops" / "tenant-b.yaml"
+        if os.name == "posix":
+            assert moved.stat().st_mode & 0o777 == 0o640
+        assert moved.stat().st_ino == ino  # the same file, not a copy
+        assert "not in a git working tree" in r.stdout, r.stdout
+
+    def test_one_refused_move_moves_nothing(self, tmp_path):
+        # tenant-b's destination is hidden (no reader reads it): the whole
+        # batch is refused, tenant-a is not moved either, and no directory is left.
+        conf_d = _flat(tmp_path / "conf.d", {
+            "tenant-a.yaml": _A,
+            "tenant-b.yaml": "tenants:\n  tenant-b:\n    _metadata:\n      domain: .hidden\n"})
+        before = _files(conf_d)
+        for mode in ("--apply", "--dry-run"):
+            r = _mcd(conf_d, mode)
+            assert r.returncode == 2, (mode, r.stdout + r.stderr)
+            assert "migrate_conf_d: ERROR: .hidden/tenant-b.yaml: not_read:" in r.stderr, r.stderr
+            assert "nothing was written" in r.stderr
+            assert _files(conf_d) == before
+            assert sorted(p.name for p in conf_d.iterdir()) == ["tenant-a.yaml", "tenant-b.yaml"]
+
+    def test_an_existing_target_moves_nothing(self, tmp_path):
+        conf_d = _flat(tmp_path / "conf.d", {"tenant-a.yaml": _A, "tenant-b.yaml": _B})
+        (conf_d / "ops").mkdir()
+        (conf_d / "ops" / "tenant-b.yaml").write_text(
+            "tenants:\n  tenant-c: {}\n", encoding="utf-8")
+        before = _files(conf_d)
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "ops/tenant-b.yaml" in r.stderr and "path_exists" in r.stderr, r.stderr
+        assert _files(conf_d) == before
+
+    def test_a_symlinked_tenant_file_moves_nothing(self, tmp_path):
+        from _platform_fs import symlink_or_skip
+        real = tmp_path / "real-b.yaml"
+        real.write_text(_B, encoding="utf-8")
+        conf_d = _flat(tmp_path / "conf.d", {"tenant-a.yaml": _A})
+        symlink_or_skip(real, conf_d / "tenant-b.yaml")
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "tenant-b.yaml" in r.stderr, r.stderr
+        assert (conf_d / "tenant-a.yaml").is_file() and (conf_d / "tenant-b.yaml").is_symlink()
+        assert not (conf_d / "finance").exists()
+
+    def test_git_shows_renames_as_after_git_mv(self, tmp_path):
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-a.yaml": _A, "tenant-b.yaml": _B})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        # An unstaged edit stays unstaged, as `git mv` leaves it.
+        with open(conf_d / "tenant-a.yaml", "a", encoding="utf-8") as f:
+            f.write("# local edit\n")
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 0, r.stdout + r.stderr
+        status = _git(repo, "status", "--porcelain").stdout.splitlines()
+        assert sorted(status) == [
+            "R  conf.d/tenant-b.yaml -> conf.d/ops/tenant-b.yaml",
+            "RM conf.d/tenant-a.yaml -> conf.d/finance/us/tenant-a.yaml",
+        ], status
+
+    def test_an_untracked_source_moves_nothing(self, tmp_path):
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-a.yaml": _A})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        (conf_d / "tenant-b.yaml").write_text(_B, encoding="utf-8")
+        before = _files(conf_d)
+        for mode in ("--apply", "--dry-run"):
+            r = _mcd(conf_d, mode)
+            assert r.returncode == 2, (mode, r.stdout + r.stderr)
+            assert "migrate_conf_d: ERROR: tenant-b.yaml: not a file git tracks" in r.stderr
+            assert _files(conf_d) == before
+
+    @pytest.mark.parametrize("domain", ["a//b", "a/../b", "a/./b", "a/b/"])
+    def test_a_domain_not_in_clean_form_moves_nothing(self, tmp_path, domain):
+        # da-guard write takes a path as sent or refuses it (bad_path): it
+        # never cleans one in silence, so the git index cannot be given a
+        # path other than the one written.
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {
+            "tz.yaml": f"tenants:\n  tz:\n    _metadata:\n      domain: '{domain}'\n"})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        index_before = _git(repo, "ls-files", "--stage").stdout
+        before = _files(conf_d)
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "bad_path" in r.stderr and "clean form" in r.stderr, r.stderr
+        assert _files(conf_d) == before
+        assert _git(repo, "ls-files", "--stage").stdout == index_before
+        assert _git(repo, "status", "--porcelain").stdout == ""
+
+    def test_an_index_record_git_ignores_is_an_error(self, tmp_path):
+        # git answers "Ignoring path" and exit 0 for a record it will not
+        # take: the targets are read back, a missing one is named.
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-b.yaml": _B})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        index, why = mcd.GitIndex.find(conf_d)
+        assert index is not None, why
+        assert index.untracked(["tenant-b.yaml"]) == []
+        with pytest.raises(mcd.GitIndexError, match=r"did not record conf\.d/ops//tenant-b\.yaml"):
+            index.move([("tenant-b.yaml", "ops//tenant-b.yaml")])
+
+    def _apply_in_process(self, conf_d, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["migrate_conf_d.py", "--conf-d", str(conf_d), "--apply"])
+        with pytest.raises(SystemExit) as exc:
+            mcd.main()
+        assert exc.value.code == 2
+        return capsys.readouterr().err
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-b.yaml": _B})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        return conf_d
+
+    def test_a_partial_write_says_the_git_index_was_not_updated(self, tmp_path, monkeypatch, capsys):
+        import _lib_confedit
+
+        def stopped(root, entries, **_kw):
+            raise _lib_confedit.PartialWrite(["ops/tenant-b.yaml"], "", OSError("disk full"))
+        monkeypatch.setattr(_lib_confedit, "write_all", stopped)
+        err = self._apply_in_process(self._repo(tmp_path), monkeypatch, capsys)
+        assert "migrate_conf_d: ERROR: the git index was not updated" in err, err
+        assert "stopped part-way: disk full" in err, err
+
+    def test_a_failed_index_update_names_what_the_fallback_stages(self, tmp_path, monkeypatch, capsys):
+        def locked(self, moves):
+            raise mcd.GitIndexError("git update-index: index.lock exists")
+        monkeypatch.setattr(mcd.GitIndex, "move", locked)
+        conf_d = self._repo(tmp_path)
+        err = self._apply_in_process(conf_d, monkeypatch, capsys)
+        assert (conf_d / "ops" / "tenant-b.yaml").is_file()  # moved; only git is behind
+        assert "index.lock exists" in err and "git rm --cached --ignore-unmatch" in err, err
+        assert "also stages any change to the file not staged before" in err, err
