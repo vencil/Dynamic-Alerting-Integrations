@@ -28,16 +28,18 @@ Pre-check 項目:
      標為「未判定」，--execute 需另加 --skip-state-check 才執行。
 
 讀取（ADR-036 §2，#2906）：哪些檔、每個檔的內容一律取自 `da-guard parse-tree`
-（yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到、檔名主幹等於 tenant
-的那一個，而且 parse-tree 讀出它的 `tenants:` 恰好只宣告這個 tenant——沒宣告它、或
-另宣告了別的租戶，Pre-check 不通過（刪檔會連帶下架別的租戶）。parse-tree 讀不了的
+（yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到的頂層租戶檔裡，檔名帶著
+這個 tenant id（`tenant_named`）或 `tenants:` 宣告了它的每一個（#3206：同一租戶由兩個
+檔宣告時兩個都刪，否則租戶仍被服務），而且每一個都恰好只宣告這個 tenant——沒宣告它、
+或另宣告了別的租戶，Pre-check 不通過（刪檔會連帶下架別的租戶），一個都不刪。parse-tree 讀不了的
 檔一律具名、擋下 --execute；沒有可用的 da-guard（`$DA_GUARD_BINARY`→`$PATH`）
 結束碼 2。
 
-刪除（ADR-036 §2，#3206 步驟 10）：只有 Go 寫 conf.d。--execute 不自己刪檔，而是送
-一個刪除項目 `{path, delete: true}` 給 `da-guard write`：它把這個檔當成搬移的來源判
-（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉它之後的整棵樹判一次
-（樹不能變壞：`worsens_tree`）。被拒時每個理由具名印在 stderr、結束碼 2，什麼都不刪。
+刪除（ADR-036 §2，#3206 步驟 10）：只有 Go 寫 conf.d。--execute 不自己刪檔，而是把
+每個要刪的檔各作一個刪除項目 `{path, delete: true}`，一批送給 `da-guard write`：它把
+每個檔當成搬移的來源判（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉
+它們之後的整棵樹判一次（樹不能變壞：`worsens_tree`）。被拒時每個理由具名印在 stderr、
+結束碼 2，什麼都不刪。只做 Pre-check 時以同一批的 `--dry-run` 判，被拒同樣結束碼 2。
 """
 
 import sys
@@ -122,6 +124,31 @@ def find_config_rel(tenant, config_dir):
     return None
 
 
+def find_carriers(tenant, config_dir):
+    """Every file that carries *tenant* — the files `--execute` deletes, in
+    one batch: the top-level tenant files (Go's entry class `tenant`) whose
+    NAME carries the id (`tenant_named`) or whose `tenants:`, as parse-tree
+    reads it, declares it. Root-relative entry paths (parse-tree's clean
+    form, what `da-guard write` takes), sorted.
+
+    #3206: a tenant declared in two tenant files (`tenant-a.yaml` and
+    `tenant-a.yml`, or `other.yaml`) is served from both; deleting one of
+    them leaves the tenant served. Which files those are is the index's
+    answer (class, `tenant_named`, the declared keys), never a name compared
+    here. A platform file (`_platform.yaml`) that mentions the tenant is not
+    a carrier the exporter counts twice: it stays a cross-reference."""
+    base = Path(config_dir)
+    if not base.is_dir():
+        return []
+    out = []
+    for rel, e in _top_level(config_dir):
+        if e.cls != "tenant" or rel in LEGACY_STATE_FILES:
+            continue
+        if e.tenant_named == tenant or tenant in (declared_by(str(base / rel), config_dir) or ()):
+            out.append(rel)
+    return out
+
+
 def declared_by(path, config_dir):
     """The tenants the file at *path* declares, as parse-tree reads it (its
     `tenants:` mapping's keys), or None when parse-tree cannot read it."""
@@ -188,15 +215,15 @@ def _texts(nodes, *, values=False):
     return out
 
 
-def check_cross_references(tenant, configs):
+def check_cross_references(tenant, configs, carriers=None):
     """檢查其他設定檔中是否有引用此 tenant（configs 取自 `load_all_configs`）。
 
-    租戶自己的檔是檔名帶著這個租戶 id 的那一個——Go 的 `tenant_named`（#3206），
-    不是以 `<tenant>.` 開頭的任何檔：`db-a.bak.yaml` 帶的是 `db-a.bak`，它對
-    `db-a` 的引用要列出來。"""
+    租戶自己的檔是 *carriers*（`find_carriers`：下架時一併刪除的檔）；沒給時是檔名
+    帶著這個租戶 id 的那一個——Go 的 `tenant_named`（#3206），不是以 `<tenant>.`
+    開頭的任何檔：`db-a.bak.yaml` 帶的是 `db-a.bak`，它對 `db-a` 的引用要列出來。"""
     references = []
     for filename, info in configs.items():
-        if info["tenant_named"] == tenant:
+        if (filename in carriers) if carriers is not None else info["tenant_named"] == tenant:
             continue  # 跳過自己
         # 搜尋檔案內容中是否出現 tenant 名稱：每個 key 與純量的原文（parse-tree，
         # 所以 `[010]` 這種以值點名租戶的清單也找得到，#2216）。
@@ -206,14 +233,18 @@ def check_cross_references(tenant, configs):
     return references
 
 
-def get_tenant_metrics(tenant, configs):
-    """取得 tenant 的所有已設定指標：檔名帶著這個租戶 id 的檔（Go 的
-    `tenant_named`，#3206）裡 `tenants.<tenant>` 的內容。"""
-    for filename, info in configs.items():
-        if info["tenant_named"] == tenant:
+def get_tenant_metrics(tenant, configs, carriers=None):
+    """取得 tenant 的所有已設定指標：*carriers*（`find_carriers`；沒給時是檔名帶著
+    這個租戶 id 的檔，Go 的 `tenant_named`，#3206）裡 `tenants.<tenant>` 的內容，
+    依檔名順序合在一起。"""
+    metrics = {}
+    for filename, info in sorted(configs.items()):
+        if (filename in carriers) if carriers is not None else info["tenant_named"] == tenant:
             tenants = info["data"].get("tenants", {})
-            return tenants.get(tenant, {})
-    return {}
+            block = tenants.get(tenant, {}) if isinstance(tenants, dict) else {}
+            if isinstance(block, dict):
+                metrics.update(block)
+    return metrics
 
 
 def _legacy_refs(tenant, state, config_dir):
@@ -301,9 +332,10 @@ def run_precheck(tenant, config_dir, state=None):
     report.append(f"🔍 Tenant 下架 Pre-check: {safe_label(tenant)}")
     report.append(f"{'='*60}\n")
 
-    # 1. 檔案存在性
-    config_file = find_config_file(tenant, config_dir)
-    if config_file:
+    # 1. 檔案存在性：宣告這個租戶的每一個租戶檔（`find_carriers`），--execute 一批刪
+    carriers = find_carriers(tenant, config_dir)
+    for rel in carriers:
+        config_file = str(Path(config_dir) / rel)
         report.append(f"✅ 設定檔案: {safe_label(config_file)}")
         # ADR-036 §2: whether deleting this file offboards exactly this tenant
         # is parse-tree's answer — the tenants its `tenants:` declares.
@@ -318,7 +350,10 @@ def run_precheck(tenant, config_dir, state=None):
                 report.append(f"❌ {safe_label(config_file)} 另宣告了 "
                               f"{safe_label(', '.join(others))}——刪檔會一併下架它們")
                 issues.append(f"設定檔另宣告了其他 tenant: {safe_label(', '.join(others))}")
-    else:
+    if len(carriers) > 1:
+        report.append(f"⚠️  {safe_label(tenant)} 由 {len(carriers)} 個檔宣告（exporter 兩處都讀），"
+                      "下架會一批刪除全部")
+    if not carriers:
         report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
         issues.append("設定檔案不存在")
 
@@ -330,7 +365,7 @@ def run_precheck(tenant, config_dir, state=None):
                   f"({len(configs)} 個檔案)\n")
 
     # 3. Cross-reference check
-    refs = check_cross_references(tenant, configs)
+    refs = check_cross_references(tenant, configs, carriers)
     if refs:
         report.append(f"⚠️  發現跨檔案引用 (請手動確認):")
         for ref in refs:
@@ -357,7 +392,7 @@ def run_precheck(tenant, config_dir, state=None):
             report.append(f"   ℹ️  {line}")
 
     # 4. 列出 tenant 的所有指標
-    metrics = get_tenant_metrics(tenant, configs)
+    metrics = get_tenant_metrics(tenant, configs, carriers)
     if metrics:
         report.append(f"\n📊 此 tenant 的已設定指標 ({len(metrics)} 個):")
         for key, val in metrics.items():
@@ -385,26 +420,38 @@ def run_precheck(tenant, config_dir, state=None):
     return can_proceed, report
 
 
-def execute_offboard(tenant, config_dir):
-    """執行下架：刪除 tenant 設定檔案——經 `da-guard write` 的刪除項目（ADR-036 §2）。
+def execute_offboard(tenant, config_dir, *, dry_run=False):
+    """執行下架：刪除宣告 tenant 的每一個設定檔（`find_carriers`）——一批 `da-guard
+    write` 的刪除項目（ADR-036 §2），整批判一次，全部通過才刪。
 
-    True 是刪了；False 是沒有檔可刪（找不到，或 da-guard 判定時檔已不在：
-    `unchanged`）。da-guard 拒刪（不是一般檔、讀不了、拿掉後樹變壞……）、沒有可用的
-    da-guard、或寫到一半停下，由 `_lib_confedit.write_all_or_exit` 具名印在 stderr、
-    結束碼 2；被拒時什麼都沒刪。"""
-    rel = find_config_rel(tenant, config_dir)
-    if rel is None:
+    *dry_run*（只做 Pre-check 時）：同一批以 `--dry-run` 判，什麼都不刪。
+
+    True 是刪了（*dry_run*：會刪）；False 是沒有檔可刪（找不到，或 da-guard 判定時
+    檔都已不在：`unchanged`）。da-guard 拒刪（不是一般檔、讀不了、拿掉後樹變壞……）、
+    沒有可用的 da-guard、或寫到一半停下，由 `_lib_confedit.write_all_or_exit` 具名印在
+    stderr、結束碼 2；被拒時什麼都沒刪。"""
+    rels = find_carriers(tenant, config_dir)
+    if not rels:
         print(f"❌ 找不到 {safe_label(tenant)} 的設定檔案", file=sys.stderr)
         return False
-    config_file = str(Path(config_dir) / rel)
 
-    [result] = _lib_confedit.write_all_or_exit(
-        config_dir, [_lib_confedit.delete_entry(rel)], tool=_TOOL)
-    if result["status"] == _lib_confedit.UNCHANGED:
-        print(f"❌ {safe_label(config_file)} 已不在（da-guard write 判定時沒有這個檔），"
-              "沒有刪除任何檔", file=sys.stderr)
+    results = _lib_confedit.write_all_or_exit(
+        config_dir, [_lib_confedit.delete_entry(rel) for rel in rels], tool=_TOOL,
+        dry_run=dry_run)
+    gone = [r["path"] for r in results if r["status"] == _lib_confedit.UNCHANGED]
+    done = [r["path"] for r in results if r["status"] != _lib_confedit.UNCHANGED]
+    for rel in gone:
+        print(f"⚠️  {safe_label(str(Path(config_dir) / rel))} 已不在"
+              "（da-guard write 判定時沒有這個檔）", file=sys.stderr)
+    if not done:
+        print("❌ 沒有刪除任何檔", file=sys.stderr)
         return False
-    print(f"🗑️  已刪除: {safe_label(config_file)}")
+    if dry_run:
+        for rel in done:
+            print(f"🔎 da-guard write --dry-run：可刪除 {safe_label(str(Path(config_dir) / rel))}")
+        return True
+    for rel in done:
+        print(f"🗑️  已刪除: {safe_label(str(Path(config_dir) / rel))}")
     print(f"\n📋 後續步驟:")
     print(f"  1. threshold-exporter 將在下次 reload (30s) 時自動清除 "
           f"{safe_label(tenant)} 的閾值")
@@ -468,11 +515,17 @@ def _run(args, state):
             print(f"\n❌ Pre-check 未通過，無法執行下架。")
             sys.exit(EXIT_VIOLATION)
     else:
-        print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
         if not can_proceed:
+            print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
             # #2179: a failed pre-check is a failed run, with or without
             # --execute (it used to print "❌ Pre-check 失敗" and exit 0).
             sys.exit(EXIT_VIOLATION)
+        # #3206: the pre-check asks da-guard write the same batch --execute
+        # sends, as a dry run — a delete it would refuse is exit 2 here too.
+        print()
+        if not execute_offboard(args.tenant, args.config_dir, dry_run=True):
+            sys.exit(EXIT_CALLER_ERROR)
+        print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
 
 
 if __name__ == "__main__":

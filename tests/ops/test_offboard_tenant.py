@@ -224,7 +224,7 @@ class TestExecuteOffboard:
         # when it judges is `unchanged` — nothing deleted, and --execute does
         # not end as a success.
         d = _make_config_dir(tmp_path, {})
-        monkeypatch.setattr(ot, "find_config_rel", lambda tenant, config_dir: "db-a.yaml")
+        monkeypatch.setattr(ot, "find_carriers", lambda tenant, config_dir: ["db-a.yaml"])
         assert ot.execute_offboard("db-a", d) is False
         assert "沒有刪除任何檔" in capsys.readouterr().err
         monkeypatch.setattr(ot, "run_precheck", lambda *a: (True, []))

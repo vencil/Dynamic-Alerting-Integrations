@@ -736,6 +736,56 @@ def test_offboard_tenant_does_not_delete_a_file_da_guard_write_refuses(tmp_path)
     assert (tmp_path / "elsewhere" / "real.yaml").exists()
 
 
+def test_offboard_tenant_precheck_asks_the_same_delete_as_a_dry_run(tmp_path):
+    # #3206: without --execute the pre-check asks da-guard write the batch
+    # --execute would send (--dry-run): the refused symlink is exit 2 there
+    # too, named, nothing deleted.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(root))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "offboard_tenant: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+    assert (root / "tenant-a.yaml").is_symlink()
+    # Paired control: a regular file passes the dry run, rc 0, still there.
+    plain = _tree(tmp_path / "plain", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(plain))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--dry-run：可刪除" in r.stdout and (plain / "tenant-a.yaml").exists(), r.stdout
+
+
+def test_offboard_tenant_deletes_every_file_that_declares_the_tenant(tmp_path):
+    # #3206: a tenant declared in two tenant files is served from both
+    # (da-guard: duplicate tenant ID); deleting one would leave it served.
+    # Both go in one batch; afterwards no file declares it.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-a.yml": "tenants:\n  tenant-a: {cpu: '5'}\n",
+                                       "other.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "由 3 個檔宣告" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+    tree = _lib_parse_tree.load(root)
+    assert all("tenant-a" not in (tree.node(p).get("tenants") or {}) for p in tree.selected)
+
+
+def test_offboard_tenant_deletes_none_when_one_carrier_declares_another(tmp_path):
+    # One of the files that declare tenant-a also declares tenant-b: the
+    # pre-check's rule (deleting it would offboard tenant-b too) refuses the
+    # run, naming the file — exit 1 as for the single-file case — and
+    # neither file is deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "other.yaml": "tenants:\n  tenant-a: {}\n  tenant-b: {}\n"})
+    before = _bytes(root)
+    r = _ob(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "other.yaml 另宣告了 tenant-b" in r.stdout, r.stdout
+    assert _bytes(root) == before
+
+
 def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path, monkeypatch,
                                                                         capsys):
     # The batch is judged once with the file gone (worsens_tree): every place
