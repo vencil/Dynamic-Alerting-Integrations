@@ -1244,7 +1244,8 @@ def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(tmp_path, monk
     target = tmp_path / "repo" / "elsewhere.yaml"
     target.write_bytes(dev.read_bytes())
     dev.unlink()
-    dev.symlink_to(target)
+    from _platform_fs import symlink_or_skip
+    symlink_or_skip(target, dev)
     before = target.read_bytes()
     with pytest.raises(lib.ConfdWriteRefused, match=str(dev)):
         lib.regen_surfaces(lib.build_registry_doc())

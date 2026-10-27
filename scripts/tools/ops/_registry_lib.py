@@ -1940,13 +1940,13 @@ def _confd_batches(confd: "list[tuple[str, str]]"):
     import tempfile  # noqa: PLC0415
 
     import _lib_confedit  # noqa: PLC0415  (scripts/tools, on the path above)
+    from _lib_io import write_text_secure  # noqa: PLC0415  (LF kept, 0600)
     by_root: "dict[str, list[dict]]" = {}
     with tempfile.TemporaryDirectory(prefix="da-regen-surface-") as stage:
         for n, (path, text) in enumerate(confd):
             src = os.path.join(stage, str(n), os.path.basename(path))
             os.mkdir(os.path.dirname(src), 0o700)
-            with open(src, "wb") as fh:
-                fh.write(text.encode("utf-8"))
+            write_text_secure(src, text)
             by_root.setdefault(os.path.dirname(path), []).append(
                 _lib_confedit.copy_entry(os.path.basename(path), src, replace=True))
         yield list(by_root.items())
