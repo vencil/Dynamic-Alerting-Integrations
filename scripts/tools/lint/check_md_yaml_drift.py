@@ -9,7 +9,9 @@
   python3 scripts/tools/lint/check_md_yaml_drift.py --ci          # CI 模式（exit 1 if drift）
   python3 scripts/tools/lint/check_md_yaml_drift.py --verbose     # 顯示所有掃描的區塊
 
-需要: pyyaml, jsonschema
+需要: pyyaml, jsonschema；schema 檢查另需 da-guard（$DA_GUARD_BINARY 或 $PATH）：
+文件裡的 conf.d 範例由 `da-guard parse-tree` 讀（ADR-036 §7 步驟 11），
+本工具不自己解析 conf.d 的 YAML。
 """
 
 import json
@@ -17,6 +19,7 @@ import os
 import re
 import sys
 import argparse
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -28,7 +31,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_yaml_keys import load_all_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 11: conf.d examples read by Go)
 
 try:
     import yaml
@@ -106,6 +109,31 @@ BUILTIN_GROUPS = {
     "networking.k8s.io", "rbac.authorization.k8s.io", "storage.k8s.io",
     "apiextensions.k8s.io", "scheduling.k8s.io", "coordination.k8s.io",
 }
+
+
+def _read_as_confd(texts: List[str]) -> List[Tuple[object, "str | None"]]:
+    """Each of *texts* read as a conf.d file: ``(content, None)``, or
+    ``(None, <parse-tree problem kind>)`` for one parse-tree cannot read.
+
+    One `da-guard parse-tree --inputs -` run over an empty scratch tree, each
+    text as its own tenant file there (ADR-036 §2: Go is the only YAML parser
+    of conf.d). Raises `_lib_parse_tree.ParseTreeError` (BinaryMissing
+    included) when da-guard cannot answer: the run is then unusable whole.
+    """
+    if not texts:
+        return []
+    names = [f"unit{i:06d}.yaml" for i in range(len(texts))]
+    with tempfile.TemporaryDirectory(prefix="md-yaml-drift-") as root:
+        lines = _lib_parse_tree.run_files_raw(
+            root, [(n, t.encode("utf-8")) for n, t in zip(names, texts)])
+    out: List[Tuple[object, "str | None"]] = []
+    for name, raw in zip(names, lines):
+        tree = _lib_parse_tree.tree_of(_lib_parse_tree.file_document(raw))
+        try:
+            out.append((tree.value(name), None))
+        except _lib_parse_tree.FileUnreadable as e:
+            out.append((None, e.kind))
+    return out
 
 
 class MdYamlDriftChecker:
@@ -484,33 +512,48 @@ class MdYamlDriftChecker:
         multi-document stream, so a "unit" is a single YAML document inside a
         single documented file — not a fence.
 
-        Blocks that do not parse are NOT reported here: fence hygiene is the
-        `--check fences` pass's job, and duplicating it would let a mislabelled
-        directory-tree diagram fail the schema gate for a reason that has
-        nothing to do with schemas.
+        Each documented file is read as conf.d is read (ADR-036 §7 step 11,
+        #3206): written into a scratch tree and read by `da-guard parse-tree`
+        (one batch for every unit), so a unit is what the exporter and the
+        route generator read — tenant ids are the keys' text (`010:` and `8:`
+        are two tenants, both bodies judged), `send_resolved: yes` is the
+        string "yes". This tool reads no conf.d YAML itself.
+
+        A file parse-tree cannot read is NOT a unit: a syntax error is the
+        `--check fences` pass's job (a mislabelled directory-tree diagram must
+        not fail the schema gate for a reason that has nothing to do with
+        schemas), a top level that is not a mapping is no config file, and a
+        file the exporter refuses whole — more than one document, a repeated
+        key, a tag outside the allowed set — has no content to judge. Each of
+        the last is named in the report (`self._unreadable`), never dropped
+        silently. ⚠️ Until #3206 these were read leniently (PyYAML: every
+        document of a stream, the last of a repeated key) and judged.
         """
         docs_dir = self.repo_root / "docs"
         self._skipped = []
+        self._unreadable = []
+        units = []
         for md_file in sorted(docs_dir.rglob("*.md")):
             rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
             for line_num, yaml_content in self._extract_yaml_blocks(md_file, self._skipped):
                 for offset, text in self._split_documented_files(yaml_content.split("\n")):
-                    try:
-                        # #2216: tenant ids are the keys' source text, as
-                        # the exporter reads them — `010:` and `8:` are two
-                        # tenants, so both bodies are judged, not one.
-                        docs = load_all_exporter_keys(text)
-                    except yaml.YAMLError:
-                        continue
-                    for data in docs:
-                        if data is None or not self._is_tenant_config(data):
-                            continue
-                        # `line_num` is the ```yaml fence itself; +1 lands on the
-                        # segment's first real line. Matches the Go gate's
-                        # `b.line + s.offset + 1` exactly — the two gates
-                        # reporting the same block at different line numbers is
-                        # the first symptom of their extractors drifting apart.
-                        yield rel_path, line_num + offset + 1, data
+                    # `line_num` is the ```yaml fence itself; +1 lands on the
+                    # segment's first real line. Matches the Go gate's
+                    # `b.line + s.offset + 1` exactly — the two gates
+                    # reporting the same block at different line numbers is
+                    # the first symptom of their extractors drifting apart.
+                    units.append((rel_path, line_num + offset + 1, text))
+        for (rel_path, line, _text), (data, problem) in zip(
+                units, _read_as_confd([text for _r, _l, text in units])):
+            if problem is not None:
+                # Not named: a syntax error is the fence pass's; a top level
+                # that is not a mapping is no config file's shape (a list, a
+                # shell line), as it never was.
+                if problem not in ("syntax_error", "top_level_not_mapping"):
+                    self._unreadable.append((rel_path, line, problem))
+                continue
+            if self._is_tenant_config(data):
+                yield rel_path, line, data
 
     def _receiver_checks(self, data: Dict, kind: str) -> List[Tuple[Dict, Dict, str]]:
         """Hold every `receiver:` to the one contract the generator enforces.
@@ -584,7 +627,13 @@ class MdYamlDriftChecker:
             print(f"ERROR: docs/schemas: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
 
-        for rel_path, line_num, data in self.iter_config_units():
+        try:
+            units = list(self.iter_config_units())
+        except _lib_parse_tree.ParseTreeError as e:
+            print(f"ERROR: the documented config examples are read by `da-guard "
+                  f"parse-tree`, which did not answer: {e}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        for rel_path, line_num, data in units:
             schema, doc, kind = self._route(data)
             by_kind[kind] = by_kind.get(kind, 0) + 1
             checked += 1
@@ -621,6 +670,13 @@ class MdYamlDriftChecker:
         print("=" * 60)
         print(f"Config units checked:        {checked}")
         self._print_skipped(getattr(self, "_skipped", []))
+        # Printed, never silent: these are documented files the exporter
+        # refuses whole, so none of their content is judged here.
+        unreadable = getattr(self, "_unreadable", [])
+        if unreadable:
+            print(f"Files conf.d cannot read:    {len(unreadable)} (not judged)")
+            for rel_path, line_num, kind in unreadable:
+                print(f"    {rel_path}:{line_num} — {kind}")
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
         print(f"Schema violations:           {len(issues)}")

@@ -106,11 +106,38 @@ def test_composite_fence_is_split_per_documented_file(tmp_path: Path) -> None:
     assert "docs/composite.md:6" in r.stdout
 
 
-def test_multi_document_block_validates_each_document(tmp_path: Path) -> None:
+def test_multi_document_block_is_named_not_judged(tmp_path: Path) -> None:
+    """ADR-036 step 11 (#3206): an example is read as conf.d is read (da-guard
+    parse-tree), and the exporter refuses a file of two documents whole. So it
+    is no unit — named in the report, never dropped silently. Before, PyYAML
+    read each document and both were judged."""
     body = "```yaml\ndefaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n"
     r = _run(_mkrepo(tmp_path, "multi.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Config units checked:        2" in r.stdout
+    assert "Config units checked:        0" in r.stdout
+    assert "docs/multi.md:2 — multiple_documents" in r.stdout, r.stdout
+
+
+def test_values_are_read_as_conf_d_reads_them(tmp_path: Path) -> None:
+    """ADR-036 step 11 (#3206): `send_resolved: yes` is the string "yes" to
+    yaml.v3 (the exporter, and the route generator through parse-tree), so a
+    documented receiver with it does not meet the schema's boolean. PyYAML
+    read True, and this gate passed an example the platform reads otherwise."""
+    body = ("```yaml\ntenants:\n  t1:\n    _routing:\n      receiver:\n"
+            "        type: slack\n        api_url: https://hooks.slack.com/x\n"
+            "        send_resolved: yes\n```\n")
+    r = _run(_mkrepo(tmp_path, "yes.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "'send_resolved': 'yes'" in r.stdout, r.stdout
+
+
+def test_no_da_guard_fails_closed(tmp_path: Path) -> None:
+    """Without da-guard nothing is read, and that is an error, never a pass."""
+    body = "```yaml\ndefaults:\n  a: 1\n```\n"
+    r = _run(_mkrepo(tmp_path, "x.md", body),
+             env={"DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")})
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert "da-guard parse-tree" in r.stderr, r.stderr
 
 
 def test_missing_jsonschema_fails_closed(tmp_path: Path) -> None:
