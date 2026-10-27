@@ -315,12 +315,25 @@ def create_entry(rel: str, content: dict, head_comment: Optional[str] = None,
     return entry
 
 
-def delete_entry(rel: str) -> dict:
+def delete_entry(rel: str, *, tenants: "Optional[Sequence[str]]" = None) -> dict:
     """Delete the existing file *rel* (judged as a move's source: a regular
     file a reader reads, one parse-tree reads); no file there is
     `unchanged`. A batch that would worsen the tree without it (a carrier
-    whose other spelling then is selected, …) is `TreeWorsened`."""
-    return {"path": rel, "delete": True}
+    whose other spelling then is selected, …) is `TreeWorsened`.
+
+    *tenants*: the delete's precondition (#3206) — the file, in the bytes
+    da-guard reads for the judgement, must be a tenant file whose `tenants:`
+    declares exactly these ids, else it is refused `declares_mismatch`
+    (naming what it declares) and the batch writes nothing. A file changed
+    after that read is `changed_during_write`; a rewrite of the same inode
+    after da-guard's last byte comparison and before its unlink is the
+    residual window (no lock)."""
+    entry: dict = {"path": rel, "delete": True}
+    if tenants is not None:
+        if isinstance(tenants, str):
+            raise TypeError("tenants is a sequence of tenant ids, not one string")
+        entry["tenants"] = [str(t) for t in tenants]
+    return entry
 
 
 class NewFile:

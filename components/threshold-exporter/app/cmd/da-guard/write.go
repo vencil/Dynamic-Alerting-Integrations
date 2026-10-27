@@ -48,11 +48,14 @@ package main
 //   - the call does not worsen the tree outside its files' own entries
 //     (write_worsen.go: readers lost, a new verdict or problem anywhere, a
 //     new error of da-guard's own validation) — reason worsens_tree;
+//   - a delete given "tenants": the file as read for this judgement is a
+//     tenant file declaring exactly those ids (declares_mismatch);
 //   - before anything is put in place: every edited, replaced or deleted
 //     file and every move's source still holds the bytes it was read from;
 //     no create's, move's or copy's target (nor a missing replace target)
-//     exists.
-//     This is a comparison, not a lock (write_commit.go).
+//     exists. This is a comparison, not a lock (write_commit.go): a file
+//     rewritten in place (same inode) after the last comparison and before
+//     its rename / unlink is not seen.
 //
 // A replace is judged as an edit whose original's text does not matter
 // (prepareReplace: a regular file a reader reads, or no file — then a
@@ -73,6 +76,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -155,6 +160,12 @@ const (
 	// longer holds the bytes it was read from; create (and a replace of a
 	// missing path), move — the path was created meanwhile.
 	writeReasonChangedDuringWrite = "changed_during_write"
+	// writeReasonDeclaresMismatch (a delete given "tenants"): the file, as
+	// read for this judgement, is no tenant file, or its `tenants:` does not
+	// declare exactly the tenants given — the caller's reason to delete it
+	// (offboarding these tenants, no other) no longer holds. The message
+	// names what it declares.
+	writeReasonDeclaresMismatch = "declares_mismatch"
 )
 
 // The call's own writeResult.Reason values (status caller_error, exit 2);
@@ -268,6 +279,7 @@ type fileInput struct {
 	Replace     *bool           `json:"replace"`
 	Delete      *bool           `json:"delete"`
 	Copy        *string         `json:"copy"`
+	Tenants     *[]string       `json:"tenants"`
 }
 
 type writeInput struct {
@@ -315,6 +327,10 @@ type writeFile struct {
 	// file back leaves it, the file's only name.
 	backup     string
 	keepBackup bool
+	// tenants (delete): the tenant ids the file must declare, exactly, for
+	// the delete to go ahead (writeReasonDeclaresMismatch); nil: no such
+	// precondition.
+	tenants []string
 }
 
 // group is the kind f is put in place as (write_commit.go): a replace of an
@@ -370,7 +386,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"      its mode, owner and group are kept, its line ending and BOM are not (LF, no BOM). A\n"+
 		"      text equal to the file's bytes is unchanged. No file there: a create\n"+
 		"  {\"path\": <rel>, \"delete\": true}   remove the file, judged as a move's source; no file\n"+
-		"      there: unchanged\n"+
+		"      there: unchanged. With \"tenants\": [<id>, ...] the file, as read for the judgement, must\n"+
+		"      be a tenant file whose tenants: declares exactly those ids (else declares_mismatch)\n"+
 		"  {\"path\": <rel>, \"copy\": <abs>, \"replace\": true}   put the bytes of the file <abs> (an\n"+
 		"      absolute path in its clean form, outside --config-dir: a move is the tree's own) here as\n"+
 		"      they are, comments and layout too; the source is opened without following a symlink and\n"+
@@ -446,7 +463,7 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"verdict may be edited: the write is judged by the text in place after the call, which must\n"+
 		"carry no verdict.\n"+
 		"A file's refusal reasons: not_read, symlink, original_unreadable, edit_not_applicable,\n"+
-		"not_round_trippable, read_back_mismatch, changed_during_write.\n\n"+
+		"not_round_trippable, read_back_mismatch, changed_during_write, declares_mismatch.\n\n"+
 		"A write that fails after files were put in place: the files it created are removed again, its\n"+
 		"moves undone and its deletes linked back (each not_written, or maybe_written when it cannot;\n"+
 		"a delete not put back keeps its file at the hidden name); an edit's or a replace's rename\n"+
@@ -745,6 +762,9 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		if fi.FootComment != nil && fi.Create == nil {
 			return bad("files[%d]: \"foot_comment\" goes with \"create\" only", i)
 		}
+		if fi.Tenants != nil && fi.Delete == nil {
+			return bad("files[%d]: \"tenants\" goes with \"delete\" only", i)
+		}
 		switch {
 		case fi.Ops != nil:
 			if err := checkOps(fi.Ops); err != nil {
@@ -775,6 +795,16 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 			}
 		case fi.Delete != nil:
 			wf.kind = writeKindDelete
+			if fi.Tenants != nil {
+				ids := append([]string{}, *fi.Tenants...)
+				sort.Strings(ids)
+				for k := 1; k < len(ids); k++ {
+					if ids[k] == ids[k-1] {
+						return bad("files[%d]: \"tenants\" names %q twice: each tenant is given once", i, ids[k])
+					}
+				}
+				wf.tenants = ids
+			}
 		case fi.Copy != nil:
 			src := *fi.Copy
 			if !filepath.IsAbs(src) || filepath.Clean(src) != src || !utf8.ValidString(src) {
@@ -927,6 +957,8 @@ type existing struct {
 	fi   os.FileInfo // its Lstat
 	ofi  os.FileInfo // the opened handle's, for its owner
 	base parsetree.Content
+	// entry: parse-tree's file-mode entry of the file as read (its class).
+	entry parseTreeEntry
 }
 
 // readOriginal reads and judges the existing file at rel (an edit's path, a
@@ -1003,7 +1035,7 @@ func (w *writer) readOriginal(scan *config.TreeScan, f *writeFile, rel, abs, mis
 	if base == nil {
 		base = parsetree.Content{}
 	}
-	return existing{data: original, fi: fi, ofi: ofi, base: base}, true
+	return existing{data: original, fi: fi, ofi: ofi, base: base, entry: e}, true
 }
 
 // prepareEdit judges one edit file alone — its path, its original, its ops
@@ -1236,7 +1268,40 @@ func (w *writer) prepareDelete(scan *config.TreeScan, f *writeFile) {
 	if !ok {
 		return
 	}
+	if f.tenants != nil && !w.declaresExactly(f, orig) {
+		return
+	}
 	f.original, f.perm = orig.data, orig.fi.Mode().Perm()
+}
+
+// declaresExactly: a delete given "tenants" goes ahead only on a tenant file
+// whose `tenants:` — in the bytes read for this judgement, f.original once
+// prepared — declares exactly those ids; else f is refused
+// declares_mismatch, naming what the file declares. The commit deletes only
+// a file still holding those bytes (unchangedOnDisk, placeDelete:
+// changed_during_write), so a declaration added after the judgement read
+// refuses the call too. ⚠️ That is a comparison, not a lock: bytes written
+// into the same file (same inode) after placeDelete's last comparison and
+// before its unlink are not seen (write_commit.go).
+func (w *writer) declaresExactly(f *writeFile, orig existing) bool {
+	if orig.entry.Class != classTenant {
+		w.refuse(f, writeReasonDeclaresMismatch, fmt.Sprintf(
+			"the path is no tenant file (class %s); the call expects it to declare %v", orig.entry.Class, f.tenants))
+		return false
+	}
+	declared := []string{}
+	if block, ok := orig.base["tenants"].(map[string]any); ok {
+		for id := range block {
+			declared = append(declared, id)
+		}
+	}
+	sort.Strings(declared)
+	if !slices.Equal(declared, f.tenants) {
+		w.refuse(f, writeReasonDeclaresMismatch, fmt.Sprintf(
+			"the file declares %v; the call expects exactly %v", declared, f.tenants))
+		return false
+	}
+	return true
 }
 
 // prepareMove judges one move alone — its source exactly as an edit's

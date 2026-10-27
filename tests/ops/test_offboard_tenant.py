@@ -219,6 +219,21 @@ class TestExecuteOffboard:
         result = ot.execute_offboard("db-x", d)
         assert result is False
 
+    def test_a_file_gone_before_the_write_is_not_a_deletion(self, tmp_path, monkeypatch, capsys):
+        # #3206: the delete goes to da-guard write; a file no longer there
+        # when it judges is `unchanged` — nothing deleted, and --execute does
+        # not end as a success.
+        d = _make_config_dir(tmp_path, {})
+        monkeypatch.setattr(ot, "find_carriers", lambda tenant, config_dir: ["db-a.yaml"])
+        assert ot.execute_offboard("db-a", d) is False
+        assert "沒有刪除任何檔" in capsys.readouterr().err
+        monkeypatch.setattr(ot, "run_precheck", lambda *a, **k: (True, []))
+        monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "db-a", "--config-dir", d,
+                                          "--execute", "--skip-state-check"])
+        with pytest.raises(SystemExit) as exc_info:
+            ot.main()
+        assert exc_info.value.code == 2
+
 
 # ---------------------------------------------------------------------------
 # main CLI

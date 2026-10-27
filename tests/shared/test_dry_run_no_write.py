@@ -54,6 +54,8 @@ explicit, meta-asserted allowlist (``MENTION_ONLY_ALLOWLIST``):
 * ``patch_config`` — the mention is ``da-guard write --dry-run``, which it
   runs itself (#3206); its own preview is ``--diff``. (``deprecate_rule``
   no longer dry-runs: its batch is one judged ``da-guard write`` call.)
+* ``offboard_tenant`` — the mention is ``da-guard write --dry-run``, which its
+  pre-check runs (#3206); its preview is the default mode (no ``--execute``).
 
 SCOPE — HONEST BOUNDARIES
 -------------------------
@@ -193,6 +195,8 @@ MENTION_ONLY_ALLOWLIST: dict[str, str] = {
     "drift_detect": "docstring prose only; no --dry-run flag declared",
     "threshold_govern": "dry-run is the default mode (no --apply), not a flag",
     "patch_config": "mentions `da-guard write --dry-run`, which it runs (#3206); its preview is --diff",
+    "offboard_tenant": ("mentions `da-guard write --dry-run`, which its pre-check runs (#3206); "
+                        "its preview is the default mode (no --execute)"),
 }
 
 

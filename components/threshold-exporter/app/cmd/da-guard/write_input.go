@@ -154,7 +154,7 @@ func checkMemberNames(raw []byte) error {
 		return nil
 	}
 	known := map[string]bool{"path": true, "ops": true, "create": true, "head_comment": true, "foot_comment": true,
-		"replace": true, "from": true, "delete": true, "copy": true}
+		"replace": true, "from": true, "delete": true, "tenants": true, "copy": true}
 	for i, f := range files {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(f, &m); err != nil {
@@ -162,7 +162,7 @@ func checkMemberNames(raw []byte) error {
 		}
 		for k := range m {
 			if !known[k] {
-				return fmt.Errorf("files[%d]: unknown member %q (path, and ops, create (+ replace, head_comment, foot_comment), from, copy (+ replace) or delete)", i, k)
+				return fmt.Errorf("files[%d]: unknown member %q (path, and ops, create (+ replace, head_comment, foot_comment), from, copy (+ replace) or delete (+ tenants))", i, k)
 			}
 		}
 		var ops []json.RawMessage
