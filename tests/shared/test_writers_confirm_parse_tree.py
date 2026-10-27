@@ -817,6 +817,17 @@ def test_offboard_tenant_names_a_file_named_for_it_that_declares_another(tmp_pat
     assert _bytes(root) == before
 
 
+def test_offboard_tenant_names_a_file_named_for_it_beside_a_carrier(tmp_path):
+    # Another file declares tenant-a: `team/tenant-a.yaml`, named for it but
+    # declaring tenant-z, is still named (a warning — it is not deleted).
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yml": "tenants:\n  tenant-a: {}\n",
+                                       "team/tenant-a.yaml": "tenants:\n  tenant-z: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "⚠️  " in r.stdout and "team/tenant-a.yaml 檔名是 tenant-a 但沒宣告它（宣告了 tenant-z），不刪" in r.stdout, r.stdout
+    assert sorted(_bytes(root)) == ["team/tenant-a.yaml"]
+
+
 def test_offboard_tenant_prints_no_pass_line_for_a_refused_dry_run(tmp_path):
     # #3206: the dry run is part of the pre-check's verdict — the refused
     # symlink never reads "✅ Pre-check 通過", with or without --execute.

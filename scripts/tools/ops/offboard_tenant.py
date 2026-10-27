@@ -358,18 +358,20 @@ def run_precheck(tenant, config_dir, state=None, *, emit=None):
     if len(carriers) > 1:
         report.append(f"⚠️  {safe_label(tenant)} 由 {len(carriers)} 個檔宣告（exporter 兩處都讀），"
                       "下架會一批刪除全部")
+    # A tenant file NAMED for the tenant that declares no such tenant: name
+    # it, whether or not other files declare the tenant (it is not deleted —
+    # it serves nothing of this tenant). With no carrier it is the reason
+    # there is nothing to offboard, not "not found".
+    named = [rel for rel, e in _selected(config_dir)
+             if e.cls == "tenant" and e.tenant_named == tenant and rel not in carriers]
+    mark = "⚠️ " if carriers else "❌"
+    for rel in named:
+        path = str(Path(config_dir) / rel)
+        declared = declared_by(path, config_dir) or []
+        what = (f"宣告了 {safe_label(', '.join(declared))}" if declared
+                else "沒有宣告任何租戶")
+        report.append(f"{mark} {safe_label(path)} 檔名是 {safe_label(tenant)} 但沒宣告它（{what}），不刪")
     if not carriers:
-        # A tenant file NAMED for the tenant that declares no such tenant is
-        # there: say so, not "not found" (it is not deleted — it serves
-        # nothing of this tenant).
-        named = [rel for rel, e in _selected(config_dir)
-                 if e.cls == "tenant" and e.tenant_named == tenant]
-        for rel in named:
-            path = str(Path(config_dir) / rel)
-            declared = declared_by(path, config_dir) or []
-            what = (f"宣告了 {safe_label(', '.join(declared))}" if declared
-                    else "沒有宣告任何租戶")
-            report.append(f"❌ {safe_label(path)} 檔名是 {safe_label(tenant)} 但沒宣告它（{what}）")
         if not named:
             report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
         issues.append("沒有宣告此 tenant 的設定檔")
