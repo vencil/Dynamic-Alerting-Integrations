@@ -728,7 +728,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 端的 YAML 讀取與檔案選擇函式庫（改讀 `parse-tree`） | `scripts/tools/_lib_io.py`、`_lib_confd.py`、`_lib_yaml_keys.py` |
 | Python 端模仿 yaml.v3 的 loader | `_lib_yaml_keys.ExporterKeyLoader`、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader`（已刪除：describe-tenant 讀 `da-guard effective`）；`ExporterKeyLoader` 與 `StrictExporterKeyLoader` 系列仍被寫入工具的改寫層使用，隨改寫層一起刪除 |
 | 寫 conf.d 的工具的 PyYAML 改寫層（退場） | `_lib_io` 的 `StrictRewriteLoader`、`strict_load_for_rewrite`／`load_yaml_file_for_rewrite` 與 `_lib_yaml_keys.dump_for_rewrite` 的呼叫端（例如 `patch_config`、`deprecate_rule`、`da_assembler`）；以 `yaml.safe_dump` 產生新檔的 `scaffold_tenant` 等；它們依賴的 `_lib_yaml_keys.ExporterKeyLoader` |
-| Python 端的寫入前確認（移進 Go） | `scripts/tools/_lib_write_check.py` |
+| Python 端的寫入前確認（已移進 Go，已刪除） | 判定與寫入是 `da-guard write`（`cmd/da-guard/write.go`），Python 端只送要改什麼（`scripts/tools/_lib_confedit.py`）；`scripts/tools/_lib_write_check.py` 只剩寫進既有輸出目錄前的共用拒絕 `require_output_tree` |
 | 編輯原語（共用套件） | `pkg/confedit`：節點編輯（`Doc` 的 `Set`、`Unset`、`EnsureMap`）、值的寫法（`StringNode`、`BlockStringNode`、`DropImplicitTags`）、§4 的不變式（`Verify`）；抽自 tenant-api 的 `internal/customalerts/merge.go` 與批次 patch 的 `mergePatchYAML`，兩者現在呼叫它。da-guard 的 `write` 在 `cmd/da-guard/write.go` |
 | `parse-tree` 的判定 | `pkg/parsetree` |
 | Go 端的檔名規則（已合併為一份） | `pkg/confdname`。其他各份已刪除，原處改呼叫它：`pkg/config/source.go` 的副檔名判斷與 `hasHiddenSegment`；`pkg/config/tree_scan.go` 的 `IsScannedFileName`、`IsScannedPath` 與走訪內嵌的前綴判斷；tenant-api `internal/confd` 的 `TenantIDFromFile`、`isReservedName`；tenant-api `handler/errors.go` 的 `findingReadable` 自己寫的副檔名判斷；da-guard `parse_tree.go` 的 `hiddenPath` |
