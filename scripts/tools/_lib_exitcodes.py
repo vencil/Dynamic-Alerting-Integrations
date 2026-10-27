@@ -672,7 +672,7 @@ def disarm_crash_envelope() -> None:
     _armed_stdout = None
 
 
-# #3107 v2: who writes to stdout this run (``_lib_io.claim_stdout``). Part of
+# #3107 v2: who writes to stdout this run (the operator-output ``claim_stdout``). Part of
 # the run's exit state: ``run()`` starts each run without an owner and
 # ``reset_exit_state`` clears it, so in-process test runs do not inherit one.
 _stdout_owner: Optional[str] = None

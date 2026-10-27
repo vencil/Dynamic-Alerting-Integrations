@@ -16,6 +16,7 @@ import pytest
 
 import _lib_exitcodes  # noqa: E402  (tests/conftest.py puts scripts/tools on sys.path)
 import _lib_io  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 
@@ -44,7 +45,7 @@ def test_a_symlink_target_keeps_its_mode_and_the_link_stays(tmp_path):
     real.write_text("old", encoding="utf-8")
     real.chmod(0o644)
     link = tmp_path / "f.json"
-    link.symlink_to(real)
+    symlink_or_skip(real, link)
     _lib_io.write_operator_output(str(link), "new", flag="--out")
     assert link.is_symlink() and real.read_text(encoding="utf-8") == "new"
     assert _mode(real) == 0o644
