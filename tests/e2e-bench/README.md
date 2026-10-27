@@ -47,6 +47,9 @@ python3 ../../scripts/tools/dx/generate_tenant_fixture.py \
 # 2. Stage the chosen fixture into the run-time `active` dir.
 mkdir -p fixture/active/conf.d
 cp -r fixture/synthetic-v2/conf.d/* fixture/active/conf.d/
+# The generator writes its files 0600; the exporter container reads them
+# as another uid, so make them readable (the fixture is synthetic).
+chmod -R a+rX fixture/active/conf.d
 
 # 3. Pre-create the bench-run-{i} placeholder files (per design §5.1
 #    — driver mutates these mid-run; pre-creating avoids fsnotify
