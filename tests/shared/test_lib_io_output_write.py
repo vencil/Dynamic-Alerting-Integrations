@@ -293,8 +293,9 @@ def test_missing_input_read_inside_the_block_flies_through(tmp_path: Path):
 def test_copy2_with_a_directory_source_flies_through(tmp_path: Path):
     """Same widening, caught from the shape that motivated the rule.
 
-    ``ops/assemble_config_dir`` copies each ``--sources`` entry into the
-    ``--output`` directory with ``shutil.copy2(src, dst)``. A source tree
+    ``ops/assemble_config_dir`` copied each ``--sources`` entry into the
+    ``--output`` directory with ``shutil.copy2(src, dst)`` (until #3206, when
+    ``da-guard write`` took the copy over). A source tree
     holding a DIRECTORY named ``x.yaml`` (measured, not hypothetical) raises
     ``IsADirectoryError`` whose ``filename`` is the source. The destination
     directory is perfectly writable, so naming ``--output`` here would be a

@@ -280,20 +280,101 @@ class TestAssemble:
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="Windows file ACL semantics don't match Unix mode bits "
-               "(group/other distinction collapses to 0o666). The "
-               "production code's chmod call is a no-op on Windows; "
-               "this test asserts Unix-specific semantics.",
+               "(group/other distinction collapses to 0o666); this test "
+               "asserts Unix-specific semantics.",
     )
     def test_file_permissions(self, config_dir):
-        """組裝後檔案權限正確（owner rw, group r, other r）。"""
+        """#3206：檔案由 da-guard write 放進去——新檔 0600（不沿用來源的權限，
+        也不再 chmod 0644）；`--output` 已有的檔被取代時保留它原本的權限。"""
         src = Path(config_dir) / "src"
         out = Path(config_dir) / "out"
         src.mkdir()
-        _write_file(src / "a.yaml")
-        assemble({"a.yaml": src / "a.yaml"}, out)
-        mode = os.stat(out / "a.yaml").st_mode & 0o777
-        expected = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
-        assert mode == expected
+        _write_file(src / "a.yaml", "tenants:\n  t-a: {}\n")
+        _write_file(src / "b.yaml", "tenants:\n  t-b: {}\n")
+        os.chmod(src / "a.yaml", 0o644)
+        out.mkdir()
+        _write_file(out / "b.yaml", "tenants:\n  t-b:\n    cpu: '1'\n")
+        os.chmod(out / "b.yaml", 0o640)
+        assemble({"a.yaml": src / "a.yaml", "b.yaml": src / "b.yaml"}, out)
+        assert os.stat(out / "a.yaml").st_mode & 0o777 == 0o600
+        assert os.stat(out / "b.yaml").st_mode & 0o777 == 0o640
+        assert (out / "b.yaml").read_text(encoding="utf-8") == "tenants:\n  t-b: {}\n"
+
+
+class TestAssembleWritesThroughDaGuard:
+    """#3206（ADR-036 §2：只有 Go 寫 conf.d）：`assemble()` 把 file_map 做成一批
+    `copy` 交給 `da-guard write`，整批一次判定、全部通過才寫；`--check` 問同一批的
+    dry run。"""
+
+    _BODY = ("# owned by team-b — 團隊 B\ntenants:\n  t-b:\n"
+             "    cpu: 010 # as written\n    note: \"警報\"\n    flow: {a: \"1\"}\n")
+
+    def test_the_bytes_are_the_sources_as_they_are(self, config_dir):
+        src = Path(config_dir) / "src"
+        src.mkdir()
+        (src / "b.yaml").write_bytes(self._BODY.encode("utf-8"))
+        out = Path(config_dir) / "out"
+        assert assemble({"b.yaml": src / "b.yaml"}, out) == 1
+        assert (out / "b.yaml").read_bytes() == self._BODY.encode("utf-8")
+
+    def test_a_symlinked_source_file_is_copied_as_the_file_it_names(self, config_dir):
+        """da-guard 不跟隨 copy 來源的 symlink；來源的 walk 經連結讀到的那個檔，
+        就是送過去的那個（`copy_entries` 送 realpath）。"""
+        real = Path(config_dir) / "real"
+        real.mkdir()
+        (real / "b.yaml").write_bytes(self._BODY.encode("utf-8"))
+        src = Path(config_dir) / "src"
+        src.mkdir()
+        symlink_or_skip(real / "b.yaml", src / "b.yaml")
+        out = Path(config_dir) / "out"
+        assemble({"b.yaml": src / "b.yaml"}, out)
+        assert (out / "b.yaml").read_bytes() == self._BODY.encode("utf-8")
+        assert not (out / "b.yaml").is_symlink()
+
+    def _linked_output(self, config_dir):
+        """A source shard, and an `--output` whose `a.yaml` is a file symlink:
+        `da-guard write` never replaces a link (reason `symlink`)."""
+        src = Path(config_dir) / "src"
+        src.mkdir()
+        _write_file(src / "a.yaml", "tenants:\n  t-a: {}\n")
+        _write_file(src / "c.yaml", "tenants:\n  t-c: {}\n")
+        elsewhere = Path(config_dir) / "elsewhere.yaml"
+        _write_file(elsewhere, "tenants:\n  t-a: {}\n")
+        out = Path(config_dir) / "out"
+        out.mkdir()
+        symlink_or_skip(elsewhere, out / "a.yaml")
+        return src, out
+
+    def test_one_refused_file_writes_none(self, config_dir, cli_argv, capsys):
+        src, out = self._linked_output(config_dir)
+        cli_argv("assemble", "--sources", str(src), "--output", str(out))
+        assert _rc() == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "assemble_config_dir: ERROR: a.yaml: symlink:" in err, err
+        assert sorted(p.name for p in out.iterdir()) == ["a.yaml"]  # c.yaml not written either
+
+    def test_check_asks_the_same_batch_and_writes_nothing(self, config_dir, cli_argv, capsys):
+        src, out = self._linked_output(config_dir)
+        cli_argv("assemble", "--sources", str(src), "--output", str(out), "--check")
+        assert _rc() == EXIT_CALLER_ERROR
+        assert "assemble_config_dir: ERROR: a.yaml: symlink:" in capsys.readouterr().err
+        assert sorted(p.name for p in out.iterdir()) == ["a.yaml"]
+
+    def test_a_refused_batch_leaves_no_new_output_directory(self, config_dir, cli_argv, capsys):
+        """`--output` 由這一輪建立時，整批被拒就移除（`write_all_or_exit` 的
+        make_root）。這裡被拒的是 worsens_tree 以外的單檔拒絕：一個 parse-tree 讀不了
+        的來源（重複鍵）——它在來源端就被共用的 fail-closed 擋下，所以改以函式層呼叫
+        `assemble()` 直接送批次。"""
+        src = Path(config_dir) / "src"
+        src.mkdir()
+        _write_file(src / "a.yaml", "tenants:\n  t-a: {}\n")
+        _write_file(src / "b.yaml", "tenants:\n  t-b: {}\n  t-b: {}\n")
+        out = Path(config_dir) / "new" / "out"
+        with pytest.raises(SystemExit) as ei:
+            assemble({"a.yaml": src / "a.yaml", "b.yaml": src / "b.yaml"}, out)
+        assert ei.value.code == EXIT_CALLER_ERROR
+        assert "b.yaml: read_back_mismatch:" in capsys.readouterr().err
+        assert not (Path(config_dir) / "new").exists()
 
 
 # ============================================================

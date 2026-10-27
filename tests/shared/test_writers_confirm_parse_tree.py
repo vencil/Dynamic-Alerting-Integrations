@@ -47,6 +47,14 @@ migrate_conf_d 搬檔（#3206 步驟 10）：整個搬移計畫是一批 `da-gua
 da_assembler 同樣改由 `da-guard write` 寫（#3206 步驟 10c；CR 刪除時的刪檔也是）：第 2 列
 成為「write 拒寫就不寫」與「`defaults` 的字串一律拒」，第 5 列 `--render-cr` 是 exit 2
 （controller 是例外、不結束）。
+assemble_config_dir 組裝（#3206 步驟 10）：多個來源 conf.d 的檔是一批 `da-guard write`
+的 `copy` 項目（`replace`：`--output` 裡同名的檔整份取代），`--check` 問同一批的 dry
+run。第 1 列是「位元組原樣放進去」，第 2 列是「一個被拒就一個都不寫」（`--output` 裡
+同名的是 symlink），第 3 列是讀不了的來源檔（共用的 fail-closed 在送批次前就擋下）；
+沒有第 4 列——檔名取自來源自己的 walk、放進 `--output` 的根目錄，有讀取端；`_defaults`
+的另一種拼法撞上 `--output` 裡已有的那個是工具自己的衝突檢查（rc 1，
+tests/ops/test_assemble_config_dir.py）。沒有第 6 列——它不從值做任何決定，只搬位元組
+（跨來源重複租戶是 `_lib_tenant_uniqueness` 的、在它自己的測試裡）。拒寫一律結束碼 2。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -640,6 +648,71 @@ def test_migrate_conf_d_places_by_yaml_v3(tmp_path):
     r = _mcd(root)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "yes/tenant-a.yaml" in r.stdout
+
+
+# ── assemble_config_dir（多個來源 conf.d → 一個 config-dir；#3206 步驟 10）──
+
+_ACD_BODY = "# team-a — 團隊\ntenants:\n  tenant-a:\n    cpu: 010 # as written\n"
+
+
+def _acd(*argv, env=None):
+    return _run("ops/assemble_config_dir.py", *argv, env=env)
+
+
+def test_assemble_config_dir_copies_through_da_guard_write(tmp_path, monkeypatch):
+    # The files are one `da-guard write` batch of copy entries; each arrives
+    # byte for byte.
+    import _lib_confedit
+    import assemble_config_dir
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    sent = []
+    real = _lib_confedit.write_all
+
+    def spy(r, entries, **kw):
+        sent.append((list(entries), kw.get("dry_run")))
+        return real(r, entries, **kw)
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    monkeypatch.setattr(sys, "argv", ["assemble_config_dir.py", "--sources", str(src),
+                                      "--output", str(out)])
+    assert assemble_config_dir.main() == 0
+    assert sent == [([{"path": "tenant-a.yaml", "copy": str((src / "tenant-a.yaml").resolve()),
+                       "replace": True}], False)]
+    assert _bytes(out) == {"tenant-a.yaml": _ACD_BODY.encode("utf-8")}
+
+
+def test_assemble_config_dir_one_refused_file_writes_none(tmp_path):
+    # `--output` already holds `tenant-a.yaml` as a symlink: write never
+    # replaces a link, so neither it nor `tenant-b.yaml` is written.
+    from _platform_fs import symlink_or_skip
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY,
+                                 "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    elsewhere = _tree(tmp_path / "elsewhere", {"t.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    out.mkdir()
+    symlink_or_skip(elsewhere / "t.yaml", out / "tenant-a.yaml")
+    for mode in ((), ("--check",)):
+        r = _acd("--sources", str(src), "--output", str(out), *mode)
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "assemble_config_dir: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+        assert sorted(p.name for p in out.iterdir()) == ["tenant-a.yaml"]
+
+
+def test_assemble_config_dir_does_not_copy_an_unreadable_source(tmp_path):
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n  tenant-a: {}\n"})
+    out = tmp_path / "out"
+    r = _acd("--sources", str(src), "--output", str(out))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "tenant-a.yaml" in r.stderr and "duplicate_key" in r.stderr, r.stderr
+    assert not out.exists()
+
+
+def test_assemble_config_dir_without_da_guard_is_exit_2(tmp_path):
+    src = _tree(tmp_path / "a", {"tenant-a.yaml": _ACD_BODY})
+    out = tmp_path / "out"
+    r = _acd("--sources", str(src), "--output", str(out), env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not out.exists()
 
 
 # ── offboard_tenant (it deletes: the decision is parse-tree's) ───────────

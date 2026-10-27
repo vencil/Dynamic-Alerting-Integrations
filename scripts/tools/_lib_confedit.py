@@ -9,8 +9,9 @@ CREATE of a new file from a typed value (its comments are layout:
 `comments()` on a map entry or a sequence item, `head_comment`,
 `foot_comment`), a REPLACE of a file's whole text with a typed value (a
 create that may overwrite: nothing of the old file is kept), a MOVE of an
-existing file, byte for byte, or a DELETE of an existing file (none there:
-`unchanged`). Every file is read back by `parse-tree` in the tree with every file
+existing file, byte for byte, a COPY of a file from outside the tree, byte
+for byte (another tree's file: `assemble_config_dir`), or a DELETE of an
+existing file (none there: `unchanged`). Every file is read back by `parse-tree` in the tree with every file
 of the call in place, and written atomically, or nothing is. The contract
 is `da-guard write`'s row in docs/cli-reference.md; this module only sends
 the files and reads the answer (`da-guard.write/v3`).
@@ -97,6 +98,7 @@ from __future__ import annotations
 
 import decimal
 import json
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -105,7 +107,7 @@ from typing import Any, Callable, Iterable, NoReturn, Optional, Sequence
 import _lib_parse_tree
 
 #: The one da-guard command every change goes through (edit, create,
-#: replace, move, delete).
+#: replace, move, copy, delete).
 COMMAND = "write"
 SUBCOMMAND = COMMAND
 SCHEMA = "da-guard.write/v3"
@@ -355,6 +357,23 @@ class NewFile:
         return doc["content"]
 
 
+def copy_entry(rel: str, source: "Path | str", *, replace: bool = False) -> dict:
+    """Put the bytes of *source* — a file OUTSIDE the tree (another conf.d's)
+    — at *rel*, as they are: comments and layout stay, nothing is decoded and
+    re-encoded. *source* is sent as an absolute path (made absolute here, not
+    resolved); da-guard opens it without following a symlink and takes a
+    regular file only (a symlink, a directory, a FIFO: `bad_source`; missing:
+    `source_missing`), and refuses one inside the tree (a move's: `bad_path`).
+    Judged and put in place as a create (mode 0600, never the source's);
+    *replace*: the file at *rel* may exist and is replaced whole, as
+    `create_entry(..., replace=True)` (its mode and owner kept; the same bytes
+    are `unchanged`)."""
+    entry = {"path": rel, "copy": os.path.abspath(str(source))}
+    if replace:
+        entry["replace"] = True
+    return entry
+
+
 def move_entry(rel: str, from_rel: str) -> dict:
     """Move the existing file *from_rel* to the new path *rel*, byte for
     byte; *from_rel* is gone after."""
@@ -543,7 +562,7 @@ def _check(doc: dict) -> None:
 def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
          binary: Optional[str], timeout: Optional[float]) -> dict:
     """One da-guard run of *files* (each an `edit_entry` / `create_entry` /
-    `move_entry` / `delete_entry`):
+    `move_entry` / `copy_entry` / `delete_entry`):
     its document, the files answered in the order sent."""
     args = [command, "--config-dir", str(root), "--input", "-", "--json"]
     if dry_run:
@@ -660,7 +679,7 @@ def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
 def write_all(root: "Path | str", entries: "Sequence[dict]", *, dry_run: bool = False,
               binary: Optional[str] = None, timeout: Optional[float] = None) -> "list[dict]":
     """Every entry of *entries* (`edit_entry` / `create_entry` /
-    `move_entry` / `delete_entry`) or none, in ONE da-guard run (module docstring, "Several
+    `move_entry` / `copy_entry` / `delete_entry`) or none, in ONE da-guard run (module docstring, "Several
     files"): the files' results, in order.
 
     Raises EditsRefused (one or more refused: nothing written; TreeWorsened
