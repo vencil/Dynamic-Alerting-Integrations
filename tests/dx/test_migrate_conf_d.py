@@ -400,3 +400,72 @@ class TestApply:
             assert r.returncode == 2, (mode, r.stdout + r.stderr)
             assert "migrate_conf_d: ERROR: tenant-b.yaml: not a file git tracks" in r.stderr
             assert _files(conf_d) == before
+
+    @pytest.mark.parametrize("domain", ["a//b", "a/../b", "a/./b", "a/b/"])
+    def test_a_domain_not_in_clean_form_moves_nothing(self, tmp_path, domain):
+        # da-guard write takes a path as sent or refuses it (bad_path): it
+        # never cleans one in silence, so the git index cannot be given a
+        # path other than the one written.
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {
+            "tz.yaml": f"tenants:\n  tz:\n    _metadata:\n      domain: '{domain}'\n"})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        index_before = _git(repo, "ls-files", "--stage").stdout
+        before = _files(conf_d)
+        r = _mcd(conf_d, "--apply")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "bad_path" in r.stderr and "clean form" in r.stderr, r.stderr
+        assert _files(conf_d) == before
+        assert _git(repo, "ls-files", "--stage").stdout == index_before
+        assert _git(repo, "status", "--porcelain").stdout == ""
+
+    def test_an_index_record_git_ignores_is_an_error(self, tmp_path):
+        # git answers "Ignoring path" and exit 0 for a record it will not
+        # take: the targets are read back, a missing one is named.
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-b.yaml": _B})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        index, why = mcd.GitIndex.find(conf_d)
+        assert index is not None, why
+        assert index.untracked(["tenant-b.yaml"]) == []
+        with pytest.raises(mcd.GitIndexError, match=r"did not record conf\.d/ops//tenant-b\.yaml"):
+            index.move([("tenant-b.yaml", "ops//tenant-b.yaml")])
+
+    def _apply_in_process(self, conf_d, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["migrate_conf_d.py", "--conf-d", str(conf_d), "--apply"])
+        with pytest.raises(SystemExit) as exc:
+            mcd.main()
+        assert exc.value.code == 2
+        return capsys.readouterr().err
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        conf_d = _flat(repo / "conf.d", {"tenant-b.yaml": _B})
+        _git(repo, "init", "-q")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "init")
+        return conf_d
+
+    def test_a_partial_write_says_the_git_index_was_not_updated(self, tmp_path, monkeypatch, capsys):
+        import _lib_confedit
+
+        def stopped(root, entries, **_kw):
+            raise _lib_confedit.PartialWrite(["ops/tenant-b.yaml"], "", OSError("disk full"))
+        monkeypatch.setattr(_lib_confedit, "write_all", stopped)
+        err = self._apply_in_process(self._repo(tmp_path), monkeypatch, capsys)
+        assert "migrate_conf_d: ERROR: the git index was not updated" in err, err
+        assert "stopped part-way: disk full" in err, err
+
+    def test_a_failed_index_update_names_what_the_fallback_stages(self, tmp_path, monkeypatch, capsys):
+        def locked(self, moves):
+            raise mcd.GitIndexError("git update-index: index.lock exists")
+        monkeypatch.setattr(mcd.GitIndex, "move", locked)
+        conf_d = self._repo(tmp_path)
+        err = self._apply_in_process(conf_d, monkeypatch, capsys)
+        assert (conf_d / "ops" / "tenant-b.yaml").is_file()  # moved; only git is behind
+        assert "index.lock exists" in err and "git rm --cached --ignore-unmatch" in err, err
+        assert "also stages any change to the file not staged before" in err, err

@@ -657,6 +657,24 @@ def test_write_all_or_exit_names_the_files_a_partial_write_left(tmp_path, capsys
     assert "1 file(s) written, 1 may have been written, not rolled back: a.yaml, b.yaml" in err
 
 
+def test_write_all_or_exit_partial_note_follows_a_partial_write_only(tmp_path, capsys, monkeypatch):
+    def stopped(root, entries, **_kw):
+        raise ce.PartialWrite(["a.yaml"], "", OSError("disk full"))
+    with monkeypatch.context() as m:
+        m.setattr(ce, "write_all", stopped)
+        with pytest.raises(SystemExit):
+            ce.write_all_or_exit(tmp_path, [], tool="t", partial_note="the index was not updated")
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == "t: ERROR: the index was not updated", lines
+    assert "stopped part-way: disk full" in lines[-1], lines
+    # Any other failure (a refusal, by the real da-guard): no note.
+    with pytest.raises(SystemExit):
+        ce.write_all_or_exit(tmp_path, [ce.create_entry(".h.yaml", ce.map_value([]))],
+                             tool="t", partial_note="the index was not updated")
+    err = capsys.readouterr().err
+    assert ".h.yaml: not_read:" in err and "index" not in err, err
+
+
 def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         ce.write_all_or_exit(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]))],

@@ -308,6 +308,19 @@ class GitIndex:
         if r.returncode != 0:
             raise GitIndexError("git update-index: "
                                 + r.stderr.decode("utf-8", "replace").strip())
+        # git skips a record it will not take with a warning and exit 0
+        # ("Ignoring path …"): each target must now be in the index, once.
+        targets = [self.prefix + dst for _, dst in moves]
+        r = self._git(self.top, "ls-files", "--stage", "-z", "--", *targets)
+        if r.returncode != 0:
+            raise GitIndexError("git ls-files: " + r.stderr.decode("utf-8", "replace").strip())
+        listed = [rec.partition(b"\t")[2].decode("utf-8", "surrogateescape")
+                  for rec in r.stdout.split(b"\0") if rec]
+        missing = [t for t in targets if listed.count(t) != 1]
+        if missing:
+            said = r.stderr.decode("utf-8", "replace").strip()
+            raise GitIndexError("git update-index did not record "
+                                + ", ".join(missing) + (f" ({said})" if said else ""))
 
 
 def _die(message: str) -> None:
@@ -418,8 +431,10 @@ def main() -> None:
     # batch by `da-guard write` (a dry run of it when not applying) — every
     # refused move named, exit 2, nothing moved.
     index, no_git = _git_index_or_exit(conf_d, ok)
-    _lib_confedit.write_all_or_exit(conf_d, move_entries(actions), tool=TOOL,
-                                    dry_run=not apply)
+    _lib_confedit.write_all_or_exit(
+        conf_d, move_entries(actions), tool=TOOL, dry_run=not apply,
+        partial_note=None if index is None else
+        "the git index was not updated: it does not record any of these moves")
 
     if apply:
         print("🚀 Moved (da-guard write):")
@@ -431,8 +446,11 @@ def main() -> None:
             try:
                 index.move([(a["source"], a["target"]) for a in ok])
             except (GitIndexError, OSError, subprocess.SubprocessError) as exc:
-                _die(f"the {len(ok)} file(s) above were moved, but the git index was not "
-                     f"updated: {exc}; record the moves with `git add -A -- <old> <new>`")
+                _die(f"the {len(ok)} file(s) above were moved, but the git index does not "
+                     f"record the moves: {exc}; record each with "
+                     f"`git rm --cached --ignore-unmatch -- <old>` and "
+                     f"`git add -- <new>` (unlike `git mv`, that also stages any "
+                     f"change to the file not staged before)")
             print(f"\n✅ Migrated {len(ok)} files (staged as renames, as `git mv` does).")
             print("   Run `git status` to review, then `git commit`.")
     else:
