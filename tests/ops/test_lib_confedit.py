@@ -662,6 +662,24 @@ def test_write_all_or_exit_names_the_files_a_partial_write_left(tmp_path, capsys
     assert "1 file(s) written, 1 may have been written, not rolled back: a.yaml, b.yaml" in err
 
 
+def test_write_all_or_exit_partial_note_follows_a_partial_write_only(tmp_path, capsys, monkeypatch):
+    def stopped(root, entries, **_kw):
+        raise ce.PartialWrite(["a.yaml"], "", OSError("disk full"))
+    with monkeypatch.context() as m:
+        m.setattr(ce, "write_all", stopped)
+        with pytest.raises(SystemExit):
+            ce.write_all_or_exit(tmp_path, [], tool="t", partial_note="the index was not updated")
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == "t: ERROR: the index was not updated", lines
+    assert "stopped part-way: disk full" in lines[-1], lines
+    # Any other failure (a refusal, by the real da-guard): no note.
+    with pytest.raises(SystemExit):
+        ce.write_all_or_exit(tmp_path, [ce.create_entry(".h.yaml", ce.map_value([]))],
+                             tool="t", partial_note="the index was not updated")
+    err = capsys.readouterr().err
+    assert ".h.yaml: not_read:" in err and "index" not in err, err
+
+
 def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         ce.write_all_or_exit(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]))],
@@ -670,6 +688,22 @@ def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "t: ERROR: cannot write the conf.d files through `da-guard write`" in err, err
     assert not (tmp_path / "a.yaml").exists()
+
+
+def test_write_all_or_exit_dry_run_judges_names_and_writes_none(tmp_path, capsys):
+    # A dry run is the same batch judged: passing, nothing written; refused,
+    # named and exit 2 as a real write is — and make_root is not called.
+    _tree(tmp_path, {"a.yaml": "tenants:\n  tenant-a: {}\n"})
+    out = ce.write_all_or_exit(tmp_path, [ce.move_entry("d/a.yaml", "a.yaml")],
+                               tool="t", dry_run=True)
+    assert [r["status"] for r in out] == [ce.DRY_RUN]
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [ce.move_entry(".d/a.yaml", "a.yaml")],
+                             tool="t", dry_run=True, make_root=lambda: pytest.fail("made"))
+    assert exc.value.code == 2
+    assert "t: ERROR: .d/a.yaml: not_read:" in capsys.readouterr().err
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
 
 
 def test_a_caller_error_with_no_file_to_blame_names_no_path():

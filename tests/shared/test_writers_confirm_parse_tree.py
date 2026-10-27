@@ -40,6 +40,10 @@ Go 的，第 2 列成為「值沒有契約型別（`inf`）就不寫」與「wri
 PyYAML 換寫法的那種讀回不同已不會發生（`'1e3'`、含 `#` 的鍵改釘「寫成雙引號、讀回原
 值」）。onboard_platform、migrate_rule、scaffold_tenant、init_project 重跑同一個 -o
 照舊覆寫（`replace`），拒寫一律結束碼 2。
+migrate_conf_d 搬檔（#3206 步驟 10）：整個搬移計畫是一批 `da-guard write` 的搬移
+項目，`--dry-run` 也問同一批（`--dry-run`）。第 1 列是「搬得過去就搬、位元組不變」，
+第 2 列是「一個被拒就一個都不搬」（目的地沒有讀取端、在 conf.d 外），第 3 列是讀不了的
+原檔，第 4 列是隱藏的目的地；它的拒絕一律結束碼 2。
 da_assembler 同樣改由 `da-guard write` 寫（#3206 步驟 10c；CR 刪除時的刪檔也是）：第 2 列
 成為「write 拒寫就不寫」與「`defaults` 的字串一律拒」，第 5 列 `--render-cr` 是 exit 2
 （controller 是例外、不結束）。
@@ -579,17 +583,40 @@ def test_migrate_conf_d_plans_a_move_that_reads_back(tmp_path):
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: finance\n"})
     r = _mcd(root)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "finance/tenant-a.yaml" in r.stdout
+    assert "tenant-a.yaml -> finance/tenant-a.yaml" in r.stdout
+
+
+def test_migrate_conf_d_moves_through_da_guard_write(tmp_path, monkeypatch):
+    # The moves are one `da-guard write` batch of move entries; the file
+    # arrives byte for byte.
+    import _lib_confedit
+    import migrate_conf_d
+    body = "tenants:\n  tenant-a:\n    _metadata:\n      domain: finance  # x\n"
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": body})
+    sent = []
+    real = _lib_confedit.write_all
+
+    def spy(r, entries, **kw):
+        sent.append((list(entries), kw.get("dry_run")))
+        return real(r, entries, **kw)
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    monkeypatch.setattr(sys, "argv", ["migrate_conf_d.py", "--conf-d", str(root), "--apply"])
+    migrate_conf_d.main()
+    assert sent == [([{"path": "finance/tenant-a.yaml", "from": "tenant-a.yaml"}], False)]
+    assert _bytes(root) == {"finance/tenant-a.yaml": body.encode("utf-8")}
 
 
 def test_migrate_conf_d_refuses_a_destination_no_reader_reads(tmp_path):
+    # Two moves, one to a hidden directory: the batch is refused, neither moves.
     root = _tree(tmp_path / "conf.d", {
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: .hidden\n"})
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: .hidden\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    _metadata:\n      domain: finance\n"})
     before = _bytes(root)
     r = _run("dx/migrate_conf_d.py", "--conf-d", str(root), "--apply")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "refusing to move" in r.stderr and "path_not_read" in r.stderr
+    assert "migrate_conf_d: ERROR: .hidden/tenant-a.yaml: not_read:" in r.stderr, r.stderr
     assert _bytes(root) == before
+    assert not (root / "finance").exists()
 
 
 def test_migrate_conf_d_refuses_an_unreadable_file(tmp_path):
@@ -709,10 +736,12 @@ def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
 def test_migrate_conf_d_refuses_a_destination_outside_the_tree(tmp_path):
     root = _tree(tmp_path / "conf.d", {
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: ..\n"})
-    r = _mcd(root)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert "refusing to move" in r.stderr and "not a path inside" in r.stderr, r.stderr
-    assert "da-guard parse-tree" not in r.stderr, r.stderr
+    before = _bytes(root)
+    for mode in ("--dry-run", "--apply"):
+        r = _run("dx/migrate_conf_d.py", "--conf-d", str(root), mode)
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "../tenant-a.yaml" in r.stderr and "inside --config-dir" in r.stderr, r.stderr
+        assert _bytes(root) == before
 
 
 def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, monkeypatch):
