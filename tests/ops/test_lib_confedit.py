@@ -606,6 +606,11 @@ def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
                                                 head_comment=f"a{ch}b")], dry_run=True)
 
 
+def test_number_value_names_the_key_of_an_int_past_float64():
+    with pytest.raises(ValueError, match=r"^tenants\.t1\.h: the int is past float64's range$"):
+        ce.number_value(10 ** 400, ("tenants", "t1", "h"))
+
+
 def test_comment_text_problem_lets_tabs_lines_and_text_through():
     assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
 
