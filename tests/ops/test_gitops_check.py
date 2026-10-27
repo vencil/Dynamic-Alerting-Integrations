@@ -19,13 +19,11 @@ Validates:
      - Multiple tenant files with rule counting
      - Directory scan with OSError → fail
 
-  3. check_sidecar() — K8s git-sync sidecar deployment
-     - kubectl available: full check with secret and sidecar
-     - kubectl not available → warn
+  3. check_sidecar() — K8s git-sync sidecar deployment (#3210)
+     - every read is `_lib_kubectl.kubectl_list`; one with no answer raises
+       KubectlError (main: exit 2), never "not deployed"
      - Secret present + sidecar present → pass
-     - Secret present, sidecar missing → warn
-     - Secret missing, sidecar present → warn
-     - Both missing → warn
+     - anything missing → fail
 
   4. Main entry points
      - repo subcommand with JSON output
@@ -917,121 +915,51 @@ class TestCheckLocalHiddenEntries:
 
 # ── 4. check_sidecar() Tests ───────────────────────────────────────────────
 
+def _stub_cluster(monkeypatch, secret=True, containers=("exporter", "git-sync"), deployment=True, fail=None):
+    """An in-memory cluster behind `kubectl_list` (#3210). Returns the calls."""
+    calls = []
+
+    def fake(kind, name, **kw):
+        calls.append((kind, name, kw))
+        if fail is not None:
+            raise gc.KubectlError(fail)
+        if kind == "secret":
+            return {"metadata": {"name": name}} if secret else None
+        if kind == "deployment":
+            spec = {"template": {"spec": {"containers": [{"name": c} for c in containers]}}}
+            return {"metadata": {"name": name}, "spec": spec} if deployment else None
+        raise AssertionError(kind)
+
+    monkeypatch.setattr(gc, "kubectl_get", fake)
+    return calls
+
+
 class TestCheckSidecar:
-    """Test check_sidecar() K8s deployment validation."""
+    """Test check_sidecar() K8s deployment validation (#3210)."""
 
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_kubectl_not_available(self, mock_run_cmd):
-        """kubectl not available → warning."""
-        mock_run_cmd.return_value = (False, "", "kubectl: command not found")
-
-        result = gc.check_sidecar()
-
-        assert result.check == "sidecar"
-        assert result.status == "warn"
-        assert "kubectl not available" in result.message.lower()
-        assert result.details["namespace"] == "monitoring"
-
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_full_pass(self, mock_run_cmd):
-        """Secret and sidecar both present → pass."""
-        def run_cmd_side_effect(cmd, timeout=10):
-            if cmd[0:2] == ["kubectl", "version"]:
-                return (True, "Client Version: v1.20.0", "")
-            elif "git-sync-credentials" in cmd:
-                return (True, "git-sync-credentials   Opaque   1   2h", "")
-            elif "threshold-exporter" in cmd:
-                return (True, "threshold-exporter git-sync", "")
-            return (False, "", "unknown")
-
-        mock_run_cmd.side_effect = run_cmd_side_effect
-
-        result = gc.check_sidecar()
-
-        assert result.status == "pass"
-        assert "sidecar deployed" in result.message.lower()
-        assert result.details["git_sync_secret"] == "present"
-        assert result.details["sidecar_present"] is True
-
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_secret_present_no_sidecar(self, mock_run_cmd):
-        """Secret present but sidecar missing → warn."""
-        def run_cmd_side_effect(cmd, timeout=10):
-            if cmd[0:2] == ["kubectl", "version"]:
-                return (True, "Client Version: v1.20.0", "")
-            elif "git-sync-credentials" in cmd:
-                return (True, "git-sync-credentials   Opaque   1   2h", "")
-            elif "threshold-exporter" in cmd:
-                return (True, "threshold-exporter", "")
-            return (False, "", "unknown")
-
-        mock_run_cmd.side_effect = run_cmd_side_effect
-
-        result = gc.check_sidecar()
-
-        assert result.status == "warn"
-        assert "partial" in result.message.lower()
-        assert result.details["git_sync_secret"] == "present"
-        assert result.details["sidecar_present"] is False
-
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_no_secret_with_sidecar(self, mock_run_cmd):
-        """Sidecar present but secret missing → warn."""
-        def run_cmd_side_effect(cmd, timeout=10):
-            if cmd[0:2] == ["kubectl", "version"]:
-                return (True, "Client Version: v1.20.0", "")
-            elif "git-sync-credentials" in cmd:
-                return (False, "", "secret not found")
-            elif "threshold-exporter" in cmd:
-                return (True, "threshold-exporter git-sync", "")
-            return (False, "", "unknown")
-
-        mock_run_cmd.side_effect = run_cmd_side_effect
-
-        result = gc.check_sidecar()
-
-        assert result.status == "warn"
-        assert "partial" in result.message.lower()
-        assert result.details["git_sync_secret"] == "missing"
-        assert result.details["sidecar_present"] is True
-
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_both_missing(self, mock_run_cmd):
-        """Both secret and sidecar missing → warn."""
-        def run_cmd_side_effect(cmd, timeout=10):
-            if cmd[0:2] == ["kubectl", "version"]:
-                return (True, "Client Version: v1.20.0", "")
-            elif "git-sync-credentials" in cmd:
-                return (False, "", "secret not found")
-            elif "threshold-exporter" in cmd:
-                return (False, "", "deployment not found")
-            return (False, "", "unknown")
-
-        mock_run_cmd.side_effect = run_cmd_side_effect
-
-        result = gc.check_sidecar()
-
-        assert result.status == "warn"
-        assert "not deployed" in result.message.lower()
-        assert result.details["git_sync_secret"] == "missing"
-
-    @patch("gitops_check._run_cmd")
-    def test_sidecar_custom_namespace(self, mock_run_cmd):
-        """Custom namespace parameter."""
-        def run_cmd_side_effect(cmd, timeout=10):
-            if cmd[0:2] == ["kubectl", "version"]:
-                return (True, "Client Version: v1.20.0", "")
-            elif "custom-ns" in cmd:
-                # Verify namespace is passed correctly
-                assert "custom-ns" in cmd
-                return (True, "", "")
-            return (False, "", "")
-
-        mock_run_cmd.side_effect = run_cmd_side_effect
-
+    def test_full_pass_reads_each_object_by_name(self, monkeypatch):
+        calls = _stub_cluster(monkeypatch)
         result = gc.check_sidecar(namespace="custom-ns")
+        assert result.status == "pass" and result.details["sidecar_present"] is True
+        assert calls == [("secret", "git-sync-credentials", {"namespace": "custom-ns"}),
+                         ("deployment", "threshold-exporter", {"namespace": "custom-ns"})]
 
-        assert result.details["namespace"] == "custom-ns"
+    @pytest.mark.parametrize("kw, missing", [
+        ({"secret": False}, ["Secret git-sync-credentials"]),
+        ({"containers": ("exporter",)}, ["git-sync container"]),
+        ({"deployment": False}, ["git-sync container"]),
+        ({"secret": False, "deployment": False}, ["Secret git-sync-credentials", "git-sync container"]),
+    ], ids=["no-secret", "no-sidecar", "no-deployment", "nothing"])
+    def test_anything_missing_is_a_fail(self, monkeypatch, kw, missing):
+        _stub_cluster(monkeypatch, **kw)
+        result = gc.check_sidecar()
+        assert result.status == "fail", result
+        assert all(m in result.message for m in missing), result.message
+
+    def test_a_read_with_no_answer_raises(self, monkeypatch):
+        _stub_cluster(monkeypatch, fail="`kubectl get secret` failed (exit 1): connection refused")
+        with pytest.raises(gc.KubectlError):
+            gc.check_sidecar()
 
 
 # ── 5. CheckResult & GitOpsReport Tests ────────────────────────────────────
@@ -1279,6 +1207,24 @@ class TestMainLocal:
 class TestMainSidecar:
     """Test main() with sidecar subcommand."""
 
+    @pytest.mark.parametrize("ci", [False, True])
+    def test_a_cluster_with_no_answer_exits_2_with_a_report(self, monkeypatch, capsys, ci):
+        """#3210: kubectl not answering is a caller error — exit 2 with or
+        without --ci, the reason in the JSON report — never "not deployed"."""
+        _stub_cluster(monkeypatch, fail="`kubectl get secret` failed (exit 1): connection refused")
+        exc_info = run_main(["gitops-check", "sidecar", "--json"] + (["--ci"] if ci else []))
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["checks"][0]["details"]["reason"] == "kubectl_error"
+        assert "connection refused" in captured.err
+
+    def test_missing_parts_fail_under_ci(self, monkeypatch, capsys):
+        """#3210: a missing Secret is a fail, so --ci exits 1 (it used to be a
+        warn, exit 0)."""
+        _stub_cluster(monkeypatch, secret=False)
+        assert run_main(["gitops-check", "sidecar", "--ci"]).value.code == 1
+
     @patch("gitops_check.check_sidecar")
     def test_sidecar_subcommand_pass(self, mock_check_sidecar, capsys):
         """sidecar subcommand with pass status."""
@@ -1298,27 +1244,6 @@ class TestMainSidecar:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "✓" in captured.out
-
-    @patch("gitops_check.check_sidecar")
-    def test_sidecar_warn_json(self, mock_check_sidecar, capsys):
-        """sidecar subcommand with warn and --json."""
-        mock_check_sidecar.return_value = gc.CheckResult(
-            check="sidecar",
-            status="warn",
-            message="Partial git-sync configuration",
-            details={
-                "namespace": "monitoring",
-                "git_sync_secret": "missing",
-                "sidecar_present": True,
-            }
-        )
-
-        exc_info = run_main(["gitops-check", "sidecar", "--json"])
-
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["overall_status"] == "warn"
 
     @patch("gitops_check.check_sidecar")
     def test_sidecar_custom_namespace(self, mock_check_sidecar, capsys):

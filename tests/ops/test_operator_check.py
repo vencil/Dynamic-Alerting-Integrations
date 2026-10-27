@@ -36,22 +36,32 @@ def _make_args(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
-def _stub_kubectl(monkeypatch, responses):
-    """Replace OperatorChecker.run_kubectl with a sequence-yielding stub.
+_ALL_CRDS = (oc._CRD_RULES, oc._CRD_MONITORS, oc._CRD_AM_CONFIGS)
 
-    `responses` is a list of (stdout, stderr, returncode) tuples.
-    """
-    it = iter(responses)
 
-    def fake(self, *cmd):
-        try:
-            return next(it)
-        except StopIteration as exc:
-            raise AssertionError(
-                f"run_kubectl called more times than mocked: {cmd}"
-            ) from exc
+def _stub_cluster(monkeypatch, crds=_ALL_CRDS, lists=None, fail=None):
+    """Replace `kubectl_list` (the shared reader, #3207) with an in-memory
+    cluster: `crds` names the installed CRDs, `lists` maps kind → items,
+    `fail` maps kind → the KubectlError message its read raises. Returns
+    the list of (kind, kwargs) calls."""
+    lists, fail, calls = dict(lists or {}), dict(fail or {}), []
 
-    monkeypatch.setattr(oc.OperatorChecker, "run_kubectl", fake)
+    def fake(kind, **kw):
+        calls.append((kind, kw))
+        if kind in fail:
+            raise oc.KubectlError(fail[kind])
+        return lists.get(kind, [])
+
+    def fake_get(kind, name, **kw):
+        assert kind == "crd", kind
+        calls.append(("crd", {"name": name, **kw}))
+        if "crd" in fail:
+            raise oc.KubectlError(fail["crd"])
+        return {"metadata": {"name": name}} if name in crds else None
+
+    monkeypatch.setattr(oc, "kubectl_list", fake)
+    monkeypatch.setattr(oc, "kubectl_get", fake_get)
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -93,65 +103,48 @@ class TestCheckResult:
 # ---------------------------------------------------------------------------
 # OperatorChecker.run_kubectl — subprocess wrapper
 # ---------------------------------------------------------------------------
-class TestRunKubectl:
-    def test_success_returns_stdout_stderr_rc(self, monkeypatch):
-        proc = MagicMock()
-        proc.stdout = "ok\n"
-        proc.stderr = ""
-        proc.returncode = 0
-        monkeypatch.setattr(oc.subprocess, "run", lambda *a, **kw: proc)
-        checker = oc.OperatorChecker(_make_args())
-        out, err, rc = checker.run_kubectl("get", "pods")
-        assert (out, err, rc) == ("ok\n", "", 0)
+class TestClusterReads:
+    """#3207: every read is `kubectl_list` — a read with no answer is a caller
+    error (rc 2), never "not found"; a missing CRD is an answer."""
 
-    def test_kubectl_missing_returns_127(self, monkeypatch):
-        def boom(*a, **kw):
-            raise FileNotFoundError("kubectl: command not found")
-        monkeypatch.setattr(oc.subprocess, "run", boom)
-        checker = oc.OperatorChecker(_make_args())
-        _, err, rc = checker.run_kubectl("get", "pods")
-        assert rc == 127
-        # i18n message — just verify non-empty.
-        assert err
+    def test_kubeconfig_namespace_and_selector_reach_the_reader(self, monkeypatch):
+        calls = _stub_cluster(monkeypatch)
+        oc.OperatorChecker(_make_args(kubeconfig="/path/kc", namespace="ns1")).check_servicemonitor_status()
+        assert ("servicemonitor", {"kubeconfig": "/path/kc", "namespace": "ns1",
+                                   "selector": oc._PART_OF}) in calls
 
-    def test_timeout_returns_124(self, monkeypatch):
-        def boom(*a, **kw):
-            raise subprocess.TimeoutExpired(cmd="kubectl", timeout=10)
-        monkeypatch.setattr(oc.subprocess, "run", boom)
-        checker = oc.OperatorChecker(_make_args())
-        _, err, rc = checker.run_kubectl("get", "pods")
-        assert rc == 124
-        assert err
+    def test_each_crd_is_read_once_by_name_even_when_it_fails(self, monkeypatch):
+        """A CRD is a `get` by name (needs only `get`, review of #3207), once
+        per CRD, a failure raised again rather than re-asked."""
+        calls = _stub_cluster(monkeypatch, fail={"crd": "unreachable"})
+        checker = oc.OperatorChecker(_make_args(kubeconfig="/kc"))
+        for check in (checker.check_operator_detection, checker.check_prometheus_rule_status,
+                      checker.check_servicemonitor_status, checker.check_alertmanager_config):
+            check()
+        assert calls == [("crd", {"name": n, "kubeconfig": "/kc"})
+                         for n in (oc._CRD_RULES, oc._CRD_MONITORS, oc._CRD_AM_CONFIGS)]
 
-    def test_kubeconfig_flag_passed_to_kubectl(self, monkeypatch):
-        captured = {}
-
-        def fake(cmd, **kw):
-            captured["cmd"] = cmd
-            proc = MagicMock(stdout="", stderr="", returncode=0)
-            return proc
-        monkeypatch.setattr(oc.subprocess, "run", fake)
-        checker = oc.OperatorChecker(_make_args(kubeconfig="/path/kc"))
-        checker.run_kubectl("get", "pods")
-        assert "--kubeconfig" in captured["cmd"]
-        assert "/path/kc" in captured["cmd"]
+    @pytest.mark.parametrize("failing", ["crd", "prometheusrule", "servicemonitor", "alertmanagerconfig"])
+    def test_a_read_with_no_answer_is_a_caller_error(self, monkeypatch, failing):
+        _stub_cluster(monkeypatch, fail={failing: f"`kubectl get {failing}` failed (exit 1): Forbidden"})
+        checker = oc.OperatorChecker(_make_args(ci=False))
+        checker.run_all_checks()
+        hit = [c for c in checker.checks if c.caller_error]
+        assert hit and all(c.status == "fail" and "Forbidden" in c.detail for c in hit), checker.checks
+        assert checker.exit_code() == 2
 
 
-# ---------------------------------------------------------------------------
-# check_operator_detection
-# ---------------------------------------------------------------------------
 class TestCheckOperatorDetection:
     def test_crd_found_passes(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [("...", "", 0)])
-        checker = oc.OperatorChecker(_make_args())
-        result = checker.check_operator_detection()
-        assert result.status == "pass"
+        _stub_cluster(monkeypatch)
+        result = oc.OperatorChecker(_make_args()).check_operator_detection()
+        assert result.status == "pass" and not result.caller_error
 
-    def test_crd_missing_fails(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [("", "Error: not found", 1)])
-        checker = oc.OperatorChecker(_make_args())
-        result = checker.check_operator_detection()
-        assert result.status == "fail"
+    def test_crd_missing_is_a_finding(self, monkeypatch):
+        _stub_cluster(monkeypatch, crds=())
+        result = oc.OperatorChecker(_make_args()).check_operator_detection()
+        assert result.status == "fail" and not result.caller_error
+        assert oc._CRD_RULES in result.detail
 
 
 # ---------------------------------------------------------------------------
@@ -159,55 +152,40 @@ class TestCheckOperatorDetection:
 # ---------------------------------------------------------------------------
 class TestCheckPrometheusRuleStatus:
     def test_loaded_equals_expected_passes(self, monkeypatch, tmp_path):
-        # 2 rule packs on disk; kubectl returns 2 items → pass.
+        # 2 rule packs on disk; the cluster lists 2 → pass.
         (tmp_path / "rule-pack-database.yaml").write_text("x", encoding="utf-8")
         (tmp_path / "rule-pack-mongodb.yaml").write_text("x", encoding="utf-8")
-        kubectl_resp = json.dumps({"items": [{"x": 1}, {"x": 2}]})
-        _stub_kubectl(monkeypatch, [(kubectl_resp, "", 0)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path)))
-        result = checker.check_prometheus_rule_status()
+        _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}, {"x": 2}]})
+        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
         assert result.status == "pass"
         assert "2/2" in result.detail
 
     def test_partial_load_warns(self, monkeypatch, tmp_path):
-        # 3 rule packs on disk; kubectl returns 1 → warn.
         for i in range(3):
             (tmp_path / f"rule-pack-{i}.yaml").write_text("x", encoding="utf-8")
-        _stub_kubectl(monkeypatch, [(json.dumps({"items": [{"x": 1}]}), "", 0)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path)))
-        result = checker.check_prometheus_rule_status()
+        _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}]})
+        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
         assert result.status == "warn"
         assert "1/3" in result.detail
 
     def test_nothing_loaded_fails(self, monkeypatch, tmp_path):
         (tmp_path / "rule-pack-x.yaml").write_text("x", encoding="utf-8")
-        _stub_kubectl(monkeypatch, [(json.dumps({"items": []}), "", 0)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path)))
-        result = checker.check_prometheus_rule_status()
-        assert result.status == "fail"
+        _stub_cluster(monkeypatch)
+        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        assert result.status == "fail" and not result.caller_error
 
-    def test_kubectl_error_treated_as_zero_loaded(self, monkeypatch, tmp_path):
+    def test_crd_not_installed_is_a_finding_and_is_not_listed(self, monkeypatch, tmp_path):
         (tmp_path / "rule-pack-x.yaml").write_text("x", encoding="utf-8")
-        _stub_kubectl(monkeypatch, [("", "no permission", 1)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path)))
-        result = checker.check_prometheus_rule_status()
-        assert result.status == "fail"  # 0 loaded, 1 expected
-
-    def test_invalid_json_kubectl_output(self, monkeypatch, tmp_path):
-        # JSON parse error → loaded = 0.
-        (tmp_path / "rule-pack-x.yaml").write_text("x", encoding="utf-8")
-        _stub_kubectl(monkeypatch, [("{not json", "", 0)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path)))
-        result = checker.check_prometheus_rule_status()
-        assert result.status == "fail"
+        calls = _stub_cluster(monkeypatch, crds=(), fail={"prometheusrule": "must not be read"})
+        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        assert result.status == "fail" and not result.caller_error
+        assert oc._CRD_RULES in result.detail and [k for k, _ in calls] == ["crd"]
+        assert "prometheusrule" not in [k for k, _ in calls]
 
     def test_missing_rule_packs_dir_treated_as_zero_expected(self, monkeypatch, tmp_path):
         # No directory → expected = 0; with loaded > 0 → warn.
-        ghost = tmp_path / "ghost"
-        kubectl_resp = json.dumps({"items": [{"x": 1}]})
-        _stub_kubectl(monkeypatch, [(kubectl_resp, "", 0)])
-        checker = oc.OperatorChecker(_make_args(rule_packs_dir=str(ghost)))
-        result = checker.check_prometheus_rule_status()
+        _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}]})
+        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path / "ghost"))).check_prometheus_rule_status()
         assert result.status == "warn"
         assert result.detail == "1"
 
@@ -217,25 +195,18 @@ class TestCheckPrometheusRuleStatus:
 # ---------------------------------------------------------------------------
 class TestCheckServiceMonitorStatus:
     def test_found_passes(self, monkeypatch):
-        _stub_kubectl(monkeypatch,
-                      [(json.dumps({"items": [{"x": 1}]}), "", 0)])
-        result = oc.OperatorChecker(_make_args()).check_servicemonitor_status()
-        assert result.status == "pass"
+        _stub_cluster(monkeypatch, lists={"servicemonitor": [{"x": 1}]})
+        assert oc.OperatorChecker(_make_args()).check_servicemonitor_status().status == "pass"
 
     def test_empty_fails(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [(json.dumps({"items": []}), "", 0)])
+        _stub_cluster(monkeypatch)
         result = oc.OperatorChecker(_make_args()).check_servicemonitor_status()
-        assert result.status == "fail"
+        assert result.status == "fail" and not result.caller_error
 
-    def test_kubectl_error_fails(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [("", "denied", 1)])
+    def test_crd_not_installed_is_a_finding(self, monkeypatch):
+        _stub_cluster(monkeypatch, crds=(oc._CRD_RULES,))
         result = oc.OperatorChecker(_make_args()).check_servicemonitor_status()
-        assert result.status == "fail"
-
-    def test_invalid_json_fails(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [("{not json", "", 0)])
-        result = oc.OperatorChecker(_make_args()).check_servicemonitor_status()
-        assert result.status == "fail"
+        assert result.status == "fail" and not result.caller_error and oc._CRD_MONITORS in result.detail
 
 
 # ---------------------------------------------------------------------------
@@ -243,21 +214,20 @@ class TestCheckServiceMonitorStatus:
 # ---------------------------------------------------------------------------
 class TestCheckAlertmanagerConfig:
     def test_with_tenants_passes(self, monkeypatch):
-        items = [{"x": 1}, {"x": 2}, {"x": 3}]
-        _stub_kubectl(monkeypatch, [(json.dumps({"items": items}), "", 0)])
+        _stub_cluster(monkeypatch, lists={"alertmanagerconfig": [{"x": 1}, {"x": 2}, {"x": 3}]})
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
         assert result.status == "pass"
         assert "3" in result.detail
 
     def test_no_tenants_warns(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [(json.dumps({"items": []}), "", 0)])
+        _stub_cluster(monkeypatch)
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
-        assert result.status == "warn"
+        assert result.status == "warn" and result.detail == "no tenants"
 
-    def test_invalid_json_warns(self, monkeypatch):
-        _stub_kubectl(monkeypatch, [("{not json", "", 0)])
+    def test_crd_not_installed_warns_and_says_so(self, monkeypatch):
+        _stub_cluster(monkeypatch, crds=(oc._CRD_RULES, oc._CRD_MONITORS))
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
-        assert result.status == "warn"
+        assert result.status == "warn" and oc._CRD_AM_CONFIGS in result.detail
 
 
 # ---------------------------------------------------------------------------

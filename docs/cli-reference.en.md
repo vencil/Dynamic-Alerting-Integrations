@@ -153,7 +153,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
 | `operator-generate` | Rule Packs + Tenant config → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
-| `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | (auto-discover or `--namespace <ns>`) |
+| `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | `[--namespace <ns>]` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING / UNHEALTHY / ORPHAN) | `--prometheus <url>` or `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
@@ -1376,9 +1376,13 @@ da-tools gitops-check <subcommand> [options]
 
 | Code | Description |
 |------|-------------|
-| `0` | Passed; with `--ci` a warning is 0 too. Only `sidecar` gives warnings (kubectl unavailable, or the git-sync Secret / sidecar partly or entirely missing); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
-| `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`). Without `--ci` a warning is 1 too |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; an unexpected exception in the tool |
+| `0` | Passed; with `--ci` a warning is 0 too (no subcommand gives one today); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
+| `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`); `sidecar` finds no git-sync Secret (`git-sync-credentials`) or no `git-sync` container in Deployment `threshold-exporter`. Without `--ci` a warning is 1 too |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; `sidecar`'s kubectl gives no answer (cluster unreachable, forbidden, kubectl not on PATH or timed out; `reason: kubectl_error`); an unexpected exception in the tool |
+
+`sidecar` needs `get` on Secret `git-sync-credentials` and Deployment `threshold-exporter` in the namespace (read by name, so a Role restricted by `resourceNames` is enough; no `list`).
+
+⚠️ **Behaviour change (`sidecar`, [#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210))**: it reads the Secret and the Deployment by name through `_lib_kubectl.kubectl_get` and no longer runs `kubectl version --short` (current kubectl dropped `--short`, so it always reported "kubectl not available"). Exit codes: everything present `1` → `0`; a missing part is a fail instead of a warn, `--ci` `0` → `1`; an unreachable or forbidden cluster, or no kubectl, `1` (`--ci` `0`) → `2`.
 
 **Examples**
 
@@ -1801,20 +1805,22 @@ da-tools operator-check [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--namespace <NS>` | K8s namespace to explore | `monitoring` (auto-discover) |
+| `--namespace <NS>` | The namespace the PrometheusRule / ServiceMonitor / AlertmanagerConfig checks list (no auto-discovery) | `monitoring` |
 | `--json` | JSON format output | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise. Given and its targets not read (unreachable, errored or answered in the wrong shape), that check FAILs and the exit code is 2 — it used to be a warn ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | (none) |
 | `--kubeconfig <FILE>` | kubeconfig path | (none) |
-| `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable, or `--prometheus` given and its targets not read, is always 2 — the latter [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | false |
+| `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl not answering, or `--prometheus` given and its targets not read, is always 2 — see below and [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | false |
 
 **Checks Performed**
 
-1. PrometheusRule deployed
-2. AlertmanagerConfig deployed
-3. ServiceMonitor bound
-4. Prometheus scraping
-5. Alerts firing correctly
+1. Operator detection: whether the cluster's CRD list has `prometheusrules.monitoring.coreos.com` (fail if not).
+2. PrometheusRule: how many in `--namespace` carry `app.kubernetes.io/part-of=dynamic-alerting`, against the number of `rule-pack-*.yaml` in `--rule-packs-dir` (equal passes, fewer but more than 0 warns, 0 fails); with the CRD not installed it is 0, a fail saying so.
+3. ServiceMonitor: at least one in that namespace with that label (else fail; says so when the CRD is not installed).
+4. AlertmanagerConfig: how many in that namespace with that label (0 warns; with the CRD not installed it warns and says so).
+5. Target health (only with `--prometheus`): whether every target whose job contains `threshold` or `exporter` is `up`.
+
+**Cluster reads** ([#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)): every read goes through `_lib_kubectl` (`kubectl_get` / `kubectl_list`, `kubectl get … -o json`). kubectl not answering — the cluster unreachable, the list forbidden, kubectl not on PATH or timed out — marks the row `caller_error` with exit 2, never "not found". Whether a CRD is installed is a `get` of that CRD by name (`--ignore-not-found`: absent is an answer, a finding, not a failed read). Permissions needed: `get` on `customresourcedefinitions` (cluster scope), and `list` on PrometheusRule / ServiceMonitor / AlertmanagerConfig in `--namespace`. ⚠️ **Behaviour change**: an unreachable or forbidden cluster used to make three rows `fail` / "not found" with exit 0 (`--ci` 1) and now exits 2; a failed AlertmanagerConfig read used to warn with exit 0 and is 2 now too.
 
 **Examples**
 

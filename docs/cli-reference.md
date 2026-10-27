@@ -154,7 +154,7 @@ da-tools <command> --help
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
-| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | （自動探索或 `--namespace <ns>`） |
+| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | `[--namespace <ns>]` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING / UNHEALTHY / ORPHAN） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
@@ -1373,9 +1373,13 @@ da-tools gitops-check <subcommand> [options]
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 通過；帶 `--ci` 時 warning 也是 0。只有 `sidecar` 會給 warning（kubectl 不可用，或 git-sync Secret／sidecar 缺一或全缺）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
-| `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）。不帶 `--ci` 時 warning 也是 1 |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
+| `0` | 通過；帶 `--ci` 時 warning 也是 0（目前沒有子命令會給 warning）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
+| `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）；`sidecar` 缺 git-sync Secret（`git-sync-credentials`）或 Deployment `threshold-exporter` 裡沒有 `git-sync` 容器。不帶 `--ci` 時 warning 也是 1 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；`sidecar` 的 kubectl 沒有回答（叢集連不上、權限不足、kubectl 不在 PATH 或逾時；`reason: kubectl_error`）；工具未預期的例外 |
+
+`sidecar` 需要的權限：該 namespace 內 Secret `git-sync-credentials` 與 Deployment `threshold-exporter` 的 `get`（以名稱讀，限定 `resourceNames` 的 Role 也夠，不需要 `list`）。
+
+⚠️ **行為變更（`sidecar`，[#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210)）**：探測改用 `_lib_kubectl.kubectl_get` 以名稱讀 Secret 與 Deployment，不再跑 `kubectl version --short`（現行 kubectl 已拿掉 `--short`，先前一律報「kubectl 不可用」）。結束碼：齊全 `1` → `0`；缺件由 warn 改為 fail，`--ci` `0` → `1`；叢集連不上、權限不足、kubectl 不在時 `1`（`--ci` `0`）→ `2`。
 
 **範例**
 
@@ -1798,20 +1802,22 @@ da-tools operator-check [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
+| `--namespace <NS>` | 列 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 namespace（不自動探索） | `monitoring` |
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML 目錄；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 `rule-pack-*.yaml` 數比 | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過。給了卻讀不到 targets（連不上、回錯或回應格式不對）時該項 FAIL、結束碼 2，先前只是 warn（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | （無） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
-| `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 不可用、或給了 `--prometheus` 卻讀不到 targets，一律 2，後者見 [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | false |
+| `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 沒有回答、或給了 `--prometheus` 卻讀不到 targets，一律 2，見下方與 [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | false |
 
 **檢查項目**
 
-1. PrometheusRule 是否部署
-2. AlertmanagerConfig 是否部署
-3. ServiceMonitor 是否綁定
-4. Prometheus 是否掃描
-5. 告警是否正常觸發
+1. Operator 偵測：叢集的 CRD 清單裡有沒有 `prometheusrules.monitoring.coreos.com`（沒有則 fail）。
+2. PrometheusRule：`--namespace` 裡帶 `app.kubernetes.io/part-of=dynamic-alerting` 的數量，與 `--rule-packs-dir` 的 `rule-pack-*.yaml` 數比（相等 pass、少於但大於 0 warn、0 fail）；CRD 沒裝時為 0、fail，並註明 CRD 沒裝。
+3. ServiceMonitor：同一 namespace、同一 label 至少一個（否則 fail；CRD 沒裝時註明）。
+4. AlertmanagerConfig：同一 namespace、同一 label 的數量（0 為 warn；CRD 沒裝時 warn 並註明）。
+5. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
+
+**叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。
 
 **範例**
 
