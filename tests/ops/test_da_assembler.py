@@ -2983,3 +2983,58 @@ class TestControllerWritesThroughDaGuard:
         assert "Watch interrupted" not in caplog.text
         assert (tmp_path / "gone.yaml").exists()
         assert (tmp_path / "new.yaml").exists()
+
+    def test_a_namespace_with_a_line_break_is_named(self, tmp_path):
+        """檔頭第一行的 namespace／name 經 `comment_field(line=True)`：含換行就點名
+        欄位、不寫（不讓一行檔頭被拆成兩行）。"""
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="ok", namespace="ns\nx",
+                               tenants={"t-one": {}}), tmp_path, api=api)
+        assert list(tmp_path.iterdir()) == []
+        [status] = self._status(api)
+        assert status["phase"] == "Error"
+        assert "metadata.namespace" in status["message"] and "line break" in status["message"]
+
+    def test_a_tenant_refused_as_a_duplicate_is_not_judged_again_by_another_crs_event(
+            self, tmp_path, monkeypatch):
+        """⚠️ 釘住現況（#3318 修好時要改這支）：cra 先宣告 t1；crb 也宣告 t1，被
+        da-guard 以 duplicate_tenant 拒寫、status Error；cra 改成 t2 釋出 t1 後，
+        crb 沒有自己的事件就不會重判——仍是 Error、crb.yaml 不存在。被拒的 CR 只在
+        它自己下一個事件、重啟或 `--once` 時重判；週期重判是 #3318 的範圍。"""
+        cra = _make_cr(name="cra", namespace="ns", tenants={"t1": {"cpu": "1"}})
+        crb = _make_cr(name="crb", namespace="ns", tenants={"t1": {"cpu": "2"}})
+        cra2 = _make_cr(name="cra", namespace="ns", tenants={"t2": {"cpu": "1"}})
+        _watch_once(monkeypatch, [{"type": "ADDED", "object": cra},
+                                  {"type": "MODIFIED", "object": crb},
+                                  {"type": "MODIFIED", "object": cra2}])
+        api = mock.MagicMock()
+        da_assembler.run_watch(api, tmp_path)
+        by_name = {}
+        for c in api.patch_namespaced_custom_object_status.call_args_list:
+            by_name[c.args[4]] = c.kwargs["body"]["status"]
+        assert by_name["crb"]["phase"] == "Error"
+        assert "duplicate_tenant" in by_name["crb"]["message"], by_name["crb"]
+        assert by_name["cra"]["phase"] == "Rendered"
+        assert not (tmp_path / "crb.yaml").exists()
+        assert "t2" in (tmp_path / "cra.yaml").read_text(encoding="utf-8")
+
+
+class TestTenantNumbersAreFloat64:
+    def test_a_tenant_int_past_18_digits_is_written_as_a_float(self, tmp_path):
+        """租戶的閾值和 defaults 一樣由 exporter 解成 float64：租戶值裡超過 18 位
+        的整數經 `number_value` 寫成浮點（先前 data_value 拒收）；短的整數、bool、
+        字串、null 照舊。"""
+        import _lib_confedit
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n  tenants:\n"
+            "    t1: {h: 12345678901234567890, si: 80, bo: true, qs: '80', nu: null}\n",
+            encoding="utf-8")
+        out = tmp_path / "out"
+        out.mkdir()
+        assert render_cr_file(cr_path, out) == 0
+        text = (out / "ok.yaml").read_text(encoding="utf-8")
+        want = _lib_confedit.data_value(float(12345678901234567890))["float"]
+        assert f"h: {want}\n" in text, text
+        for line in ("si: 80\n", "bo: true\n", 'qs: "80"\n', "nu: null\n"):
+            assert line in text, (line, text)

@@ -246,8 +246,10 @@ def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
 
     # The CR's namespace and name are outside input put into a comment
     # (`comment_field`: a character da-guard's comment refuses is named here).
-    where = (f"{_lib_confedit.comment_field('metadata.namespace', metadata.get('namespace', '?'))}"
-             f"/{_lib_confedit.comment_field('metadata.name', metadata.get('name', '?'))}")
+    # Both sit inside the header's first line (`line=True`: a line break is
+    # refused too, naming the field), as init / scaffold do.
+    where = (f"{_lib_confedit.comment_field('metadata.namespace', metadata.get('namespace', '?'), line=True)}"
+             f"/{_lib_confedit.comment_field('metadata.name', metadata.get('name', '?'), line=True)}")
     header = (
         f"{_HEADER_PREFIX.removeprefix('# ')}{where}\n"
         "DO NOT EDIT — changes will be overwritten on next reconcile."
@@ -260,13 +262,14 @@ def _render_value(doc: Dict[str, Any]) -> dict:
     """*doc* (`_render_doc`) as the typed value `da-guard write` creates the
     file from. Every value has the type the CR's JSON gave it
     (`_lib_confedit.data_value`: a string is written as a string, double
-    quoted), except each ``defaults`` value: the exporter decodes
-    ``defaults`` into ``map[string]float64``, so a value there is a JSON
-    number (`number_value`: an int past 18 digits goes as the float it is
-    to the exporter) or null — anything else (a string, ``"80"`` too) is
+    quoted), except numbers under ``defaults`` and ``tenants``: the exporter
+    decodes thresholds into ``float64``, so every number there goes through
+    `number_value` (an int past 18 digits goes as the float it is to the
+    exporter; a shorter one stays an int). A ``defaults`` value must be a
+    JSON number or null — anything else (a string, ``"80"`` too) is
     ValueError naming the key, as is a tenant id that is not one (ADR-035)
-    and a value with no edit-contract type (an int past 18 digits outside
-    ``defaults``)."""
+    and a value with no edit-contract type (an int past 18 digits under
+    ``stateFilters``)."""
     entries = []
     for key, block in doc.items():
         if key == "tenants":
@@ -276,6 +279,8 @@ def _render_value(doc: Dict[str, Any]) -> dict:
                         f"spec.tenants.{tenant}: {tenant!r} is not a valid tenant id "
                         "(ADR-035: a DNS-1123 label — lowercase a-z, 0-9 and '-', "
                         "starting and ending alphanumeric, at most 63 characters)")
+            entries.append((key, _numbers_as_float64(block, (key,))))
+            continue
         if key == "defaults":
             values = []
             for metric, value in block.items():
@@ -289,6 +294,23 @@ def _render_value(doc: Dict[str, Any]) -> dict:
             continue
         entries.append((key, _lib_confedit.data_value(block, (key,))))
     return _lib_confedit.map_value(entries)
+
+
+def _numbers_as_float64(obj: Any, at: "tuple[str, ...]") -> dict:
+    """`data_value` of *obj*, every number in it through `number_value`
+    (the exporter's float64: an int past 18 digits goes as a float, instead
+    of being refused); a bool, a string and null as they are."""
+    if isinstance(obj, dict):
+        for k in obj:
+            if not isinstance(k, str):
+                return _lib_confedit.data_value(obj, at)  # its ValueError names it
+        return _lib_confedit.map_value(
+            (k, _numbers_as_float64(v, (*at, k))) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return {"seq": [_numbers_as_float64(v, (*at, f"[{i}]")) for i, v in enumerate(obj)]}
+    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+        return _lib_confedit.number_value(obj, at=at)
+    return _lib_confedit.data_value(obj, at)
 
 
 def render_entry(cr: dict) -> dict:
@@ -500,6 +522,17 @@ def reconcile_one(
     caller from it made a dry-run controller re-raise, which aborts
     ``run_once`` after the first bad CR and turns ``run_watch`` into an
     endless "Watch interrupted … Reconnecting" loop.
+
+    ⚠️ A CR refused here (its status Error) is judged again only on its own
+    next event, a restart's initial sync, or a `--once` run — not when
+    another CR changes what refused it (CR A releases the tenant CR B was
+    refused for declaring twice: B stays Error, unwritten). Judging refused
+    CRs again periodically is the controller redesign's (#3318).
+
+    Cost: each CR is one `da-guard write` run, the tree judged per run
+    (O(N²) over N CRs in a sync). Accepted: direct-render is retired to
+    local debugging (ADR-008), and one batch per CR is what lets each CR's
+    refusal land on its own status.
     """
     name = cr["metadata"]["name"]
     namespace = cr["metadata"].get("namespace", "default")
@@ -621,7 +654,12 @@ def run_watch(
     dry_run: bool = False,
     namespace: str = "",
 ) -> None:
-    """Watch loop: react to ThresholdConfig changes in real time."""
+    """Watch loop: react to ThresholdConfig changes in real time.
+
+    ⚠️ Only the event's own CR is reconciled: a CR refused earlier (status
+    Error) waits for its own next event, a restart or a `--once` run, even
+    when the refusal no longer holds (see `reconcile_one`; periodic
+    judging again is #3318's)."""
     log.info("Starting watch loop (config-dir=%s, dry-run=%s)",
              config_dir, dry_run)
 
