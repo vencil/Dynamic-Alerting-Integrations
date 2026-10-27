@@ -35,16 +35,17 @@ drifting), so every copy relationship is gated:
      tokens (``key{...}``) are exempt. This kills the "header-only claim"
      class where prose advertises keys that exist nowhere.
 
-``--regen`` WRITES two conf.d files (the dev template and the try-local
-seed ``_defaults.yaml``), so it follows ADR-036 §2: each changed one is read
-back through ``da-guard parse-tree`` before anything is written and must read
-as the original file's content with its generated blocks' entries swapped
-for the registry's (``_registry_lib.regen``). The registry text and every
-surface are computed and confirmed before anything is written; on a refusal
-nothing is written — neither the registry nor any surface — and the run
-exits 2, as it does when a conf.d file would change and there is no usable
-da-guard. The check mode reads every surface as bytes
-(a text compare of the generated blocks) and parses no conf.d.
+``--regen`` changes two conf.d files (the dev template and the try-local
+seed ``_defaults.yaml``), so it follows ADR-036 §2: only Go writes conf.d.
+Each changed one is a ``replace`` (its whole spliced text) in one ``da-guard
+write`` batch per conf.d root (``_registry_lib.plan_surfaces``); every batch
+is first asked as a dry run, before anything is written, and a refusal is
+named file by file. On a refusal nothing is written — neither the registry
+nor any surface — and the run exits 2, as it does when a conf.d file would
+change and there is no usable da-guard. A conf.d write that stops part-way
+names the files written (not rolled back), exit 2. The check mode reads
+every surface as bytes (a text compare of the generated blocks) and runs no
+da-guard.
 
 Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error
 (including a refused or unconfirmable ``--regen``).
@@ -69,7 +70,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
-from _lib_parse_cache import parse_tree_error_line  # noqa: E402
+from _lib_io import safe_label  # noqa: E402
 from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
 
 _REGEN_HINT = (
@@ -225,8 +226,13 @@ def main(argv: list[str] | None = None) -> int:
         except registry_lib.ConfdWriteRefused as exc:
             print(f"ERROR: regen refused: {exc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
+        except registry_lib.ConfdWriteStopped as exc:
+            print(f"ERROR: regen stopped: {exc}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
         except _ParseTreeError as exc:
-            print(parse_tree_error_line(exc), file=sys.stderr)
+            print("ERROR: cannot write the generated conf.d surfaces through "
+                  f"`da-guard write` (ADR-036 §2): {safe_label(' '.join(str(exc).split()))}"
+                  "; nothing was written", file=sys.stderr)
             return EXIT_CALLER_ERROR
         except Exception as exc:  # noqa: BLE001 — caller error, not a violation
             print(f"ERROR: regen failed: {exc}", file=sys.stderr)
