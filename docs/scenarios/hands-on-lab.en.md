@@ -239,8 +239,11 @@ A domain policy names the tenants it constrains in its `tenants:` list. The bloc
 
 ## Exercise 3: Validate All Configs
 
+Every `docker run` from here on passes `--user $(id -u):$(id -g)`: the conf.d files `init` wrote are mode 0600 and owned by you, so the image's default user cannot read them (`validate-config` reports them as unreadable files).
+
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   validate-config --config-dir /data/conf.d
@@ -302,6 +305,7 @@ docker run --rm \
 
 # Validate in a separate run (read-only, writes nothing)
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   generate-routes --config-dir /data/conf.d --validate
@@ -342,6 +346,7 @@ Each tenant gets its own block under `route.routes` in `.output/alertmanager-rou
 
 ```bash
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/da-tools:latest \
   explain-route --tenant prod-redis --config-dir /data/conf.d
@@ -366,6 +371,7 @@ cp -r conf.d conf.d.new
 sed -i 's/mysql_connections: "150"/mysql_connections: "120"/' conf.d.new/prod-mariadb.yaml
 
 docker run --rm \
+  --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/conf.d.new:/data/conf.d.new:ro \
   ghcr.io/vencil/da-tools:latest \
@@ -389,6 +395,7 @@ Both states take effect only while alerts are being evaluated: they change nothi
 
 ```bash
 docker run --rm -d --name da-lab-exporter \
+  --user $(id -u):$(id -g) \
   -p 8080:8080 \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   ghcr.io/vencil/threshold-exporter:latest \
