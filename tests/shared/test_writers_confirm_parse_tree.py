@@ -805,6 +805,47 @@ def test_offboard_tenant_leaves_a_file_named_for_it_that_declares_nothing(tmp_pa
     assert sorted(_bytes(root)) == ["_federation/tenant-a.yaml"]
 
 
+def test_offboard_tenant_names_a_file_named_for_it_that_declares_another(tmp_path):
+    # `tenant-a.yaml` is there but declares tenant-z: not "not found" — the
+    # file is named, with what it declares; rc 1, nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-z: {}\n"})
+    before = _bytes(root)
+    r = _ob(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "tenant-a.yaml 檔名是 tenant-a 但沒宣告它（宣告了 tenant-z）" in r.stdout, r.stdout
+    assert "找不到設定檔案" not in r.stdout, r.stdout
+    assert _bytes(root) == before
+
+
+def test_offboard_tenant_prints_no_pass_line_for_a_refused_dry_run(tmp_path):
+    # #3206: the dry run is part of the pre-check's verdict — the refused
+    # symlink never reads "✅ Pre-check 通過", with or without --execute.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    for extra in ((), ("--execute", "--skip-state-check")):
+        r = _run("ops/offboard_tenant.py", "tenant-a", "--config-dir", str(root), *extra)
+        assert r.returncode == 2, (extra, r.stdout + r.stderr)
+        assert "Pre-check 通過" not in r.stdout and "正在執行下架" not in r.stdout, r.stdout
+        assert "✅ 設定檔案:" in r.stdout, r.stdout  # the report is still shown
+        assert (root / "tenant-a.yaml").is_symlink()
+
+
+@pytest.mark.parametrize("bad", ["Bad_Id", "../x", "tenant-a/", ""])
+def test_offboard_tenant_refuses_an_invalid_tenant_id_before_reading(tmp_path, bad):
+    # ADR-035: rc 2 naming the rule; nothing read (no da-guard is even
+    # needed), nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    before = _bytes(root)
+    r = _run("ops/offboard_tenant.py", bad, "--config-dir", str(root), "--execute",
+             "--skip-state-check", env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "不合法的 tenant id" in r.stderr and "da-guard" not in r.stderr, r.stderr
+    assert r.stdout == "" and _bytes(root) == before
+
+
 def test_offboard_tenant_deletes_none_when_one_carrier_declares_another(tmp_path):
     # One of the files that declare tenant-a also declares tenant-b: the
     # pre-check's rule (deleting it would offboard tenant-b too) refuses the
@@ -831,9 +872,12 @@ def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path
     import offboard_tenant as ot
     root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
     before = _bytes(root)
+    real = _lib_confedit.write_all
 
     def worsened(r, entries, **kw):
-        assert entries == [{"path": "tenant-a.yaml", "delete": True}] and not kw.get("dry_run")
+        assert entries == [{"path": "tenant-a.yaml", "delete": True}]
+        if kw.get("dry_run"):  # the pre-check's dry run passes; the real write is refused
+            return real(r, entries, **kw)
         raise _lib_confedit.TreeWorsened([{"kind": "readers_lost", "path": "other.yaml",
                                            "message": "read by [exporter] before the call"}])
     monkeypatch.setattr(_lib_confedit, "write_all", worsened)

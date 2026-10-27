@@ -39,7 +39,10 @@ Pre-check 項目:
 每個要刪的檔各作一個刪除項目 `{path, delete: true}`，一批送給 `da-guard write`：它把
 每個檔當成搬移的來源判（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉
 它們之後的整棵樹判一次（樹不能變壞：`worsens_tree`）。被拒時每個理由具名印在 stderr、
-結束碼 2，什麼都不刪。只做 Pre-check 時以同一批的 `--dry-run` 判，被拒同樣結束碼 2。
+結束碼 2，什麼都不刪。Pre-check（有沒有 --execute 都一樣）的判定包含同一批的 `--dry-run`：
+被拒同樣結束碼 2，「✅ Pre-check 通過」只在它也通過後才印。
+
+<tenant> 先經 ADR-035 的租戶 id 規則驗證：不合法時結束碼 2、點名規則，什麼都不讀不刪。
 """
 
 import sys
@@ -60,6 +63,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
 import _lib_parse_tree  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d — the delete too)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -317,11 +321,17 @@ def check_state_references(tenant, state, config_dir=None):
     return refs, info
 
 
-def run_precheck(tenant, config_dir, state=None):
+def run_precheck(tenant, config_dir, state=None, *, emit=None):
     """執行完整 Pre-check，回傳 (can_proceed, report_lines)。
 
     state: _lib_tenant_state.TenantState，或 None（未提供 --state：state
     store 的引用標為未判定）。
+
+    #3206: when the checks pass, the batch `--execute` sends is asked of
+    `da-guard write --dry-run` BEFORE the verdict: a delete it refuses is
+    exit 2 (`write_all_or_exit`, each reason named), and "✅ Pre-check 通過"
+    is never printed for it. *emit* (the CLI's `print`) gets every report
+    line before that judgement, so the report is on screen when it exits.
     """
     report = []
     issues = []
@@ -349,8 +359,20 @@ def run_precheck(tenant, config_dir, state=None):
         report.append(f"⚠️  {safe_label(tenant)} 由 {len(carriers)} 個檔宣告（exporter 兩處都讀），"
                       "下架會一批刪除全部")
     if not carriers:
-        report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
-        issues.append("設定檔案不存在")
+        # A tenant file NAMED for the tenant that declares no such tenant is
+        # there: say so, not "not found" (it is not deleted — it serves
+        # nothing of this tenant).
+        named = [rel for rel, e in _selected(config_dir)
+                 if e.cls == "tenant" and e.tenant_named == tenant]
+        for rel in named:
+            path = str(Path(config_dir) / rel)
+            declared = declared_by(path, config_dir) or []
+            what = (f"宣告了 {safe_label(', '.join(declared))}" if declared
+                    else "沒有宣告任何租戶")
+            report.append(f"❌ {safe_label(path)} 檔名是 {safe_label(tenant)} 但沒宣告它（{what}）")
+        if not named:
+            report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
+        issues.append("沒有宣告此 tenant 的設定檔")
 
     # 2. 載入所有 configs
     # #2179 / #3206: a file that cannot be read never gets here — the
@@ -401,8 +423,33 @@ def run_precheck(tenant, config_dir, state=None):
                       "(有平台預設值的 key 沿用預設；平台只宣告、不主張值的 key 維持靜默)")
 
     # 5. 最終判定
-    report.append(f"\n{'='*60}")
+    emitted = 0
+
+    def flush():
+        nonlocal emitted
+        if emit is not None:
+            for line in report[emitted:]:
+                emit(line)
+        emitted = len(report)
+
     can_proceed = all(i.startswith("跨檔案引用") for i in issues)
+    if can_proceed:
+        # #3206: da-guard write's judgement of the same batch is part of the
+        # verdict — a refusal exits 2 here (the report already shown), before
+        # any "通過" line.
+        flush()
+        results = _lib_confedit.write_all_or_exit(
+            config_dir, [_lib_confedit.delete_entry(rel) for rel in carriers],
+            tool=_TOOL, dry_run=True)
+        for r in results:
+            path = safe_label(str(Path(config_dir) / r["path"]))
+            if r["status"] == _lib_confedit.UNCHANGED:
+                report.append(f"❌ {path} 已不在（da-guard write 判定時沒有這個檔）")
+                issues.append("設定檔案不存在")
+            else:
+                report.append(f"🔎 da-guard write --dry-run：可刪除 {path}")
+        can_proceed = all(i.startswith("跨檔案引用") for i in issues)
+    report.append(f"\n{'='*60}")
 
     if not issues:
         report.append("✅ Pre-check 通過！可安全下架。")
@@ -411,17 +458,18 @@ def run_precheck(tenant, config_dir, state=None):
     else:
         report.append("❌ Pre-check 失敗，無法下架。")
     report.append(f"{'='*60}")
+    flush()
 
     return can_proceed, report
 
 
-def execute_offboard(tenant, config_dir, *, dry_run=False):
+def execute_offboard(tenant, config_dir):
     """執行下架：刪除宣告 tenant 的每一個設定檔（`find_carriers`）——一批 `da-guard
     write` 的刪除項目（ADR-036 §2），整批判一次，全部通過才刪。
 
-    *dry_run*（只做 Pre-check 時）：同一批以 `--dry-run` 判，什麼都不刪。
+    同一批的 `--dry-run` 是 Pre-check 的一部分（`run_precheck`）。
 
-    True 是刪了（*dry_run*：會刪）；False 是沒有檔可刪（找不到，或 da-guard 判定時
+    True 是刪了；False 是沒有檔可刪（找不到，或 da-guard 判定時
     檔都已不在：`unchanged`）。da-guard 拒刪（不是一般檔、讀不了、拿掉後樹變壞……）、
     沒有可用的 da-guard、或寫到一半停下，由 `_lib_confedit.write_all_or_exit` 具名印在
     stderr、結束碼 2；被拒時什麼都沒刪。"""
@@ -431,8 +479,7 @@ def execute_offboard(tenant, config_dir, *, dry_run=False):
         return False
 
     results = _lib_confedit.write_all_or_exit(
-        config_dir, [_lib_confedit.delete_entry(rel) for rel in rels], tool=_TOOL,
-        dry_run=dry_run)
+        config_dir, [_lib_confedit.delete_entry(rel) for rel in rels], tool=_TOOL)
     gone = [r["path"] for r in results if r["status"] == _lib_confedit.UNCHANGED]
     done = [r["path"] for r in results if r["status"] != _lib_confedit.UNCHANGED]
     for rel in gone:
@@ -441,10 +488,6 @@ def execute_offboard(tenant, config_dir, *, dry_run=False):
     if not done:
         print("❌ 沒有刪除任何檔", file=sys.stderr)
         return False
-    if dry_run:
-        for rel in done:
-            print(f"🔎 da-guard write --dry-run：可刪除 {safe_label(str(Path(config_dir) / rel))}")
-        return True
     for rel in done:
         print(f"🗑️  已刪除: {safe_label(str(Path(config_dir) / rel))}")
     print(f"\n📋 後續步驟:")
@@ -478,6 +521,12 @@ def main():
                         help="沒有 --state 時仍允許 --execute（state store 引用不檢查）")
 
     args = parser.parse_args()
+    # ADR-035: the id names a conf.d key and a file — refuse what the
+    # tenant-id rule refuses before anything is read or deleted (#3206).
+    if not is_valid_tenant_id(args.tenant):
+        print(f"ERROR: 不合法的 tenant id {safe_label(repr(args.tenant))}"
+              f"（{tenant_id_rule()[1]}）", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     state = None
     if args.state:
@@ -492,10 +541,9 @@ def main():
 
 
 def _run(args, state):
-    can_proceed, report = run_precheck(args.tenant, args.config_dir, state)
-
-    for line in report:
-        print(line)
+    # Each line printed as it is final: a pre-check whose dry run is refused
+    # (exit 2) still shows the report above the refusal.
+    can_proceed, _report = run_precheck(args.tenant, args.config_dir, state, emit=print)
 
     if args.execute:
         if can_proceed and state is None and not args.skip_state_check:
@@ -510,17 +558,11 @@ def _run(args, state):
             print(f"\n❌ Pre-check 未通過，無法執行下架。")
             sys.exit(EXIT_VIOLATION)
     else:
+        print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
         if not can_proceed:
-            print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
             # #2179: a failed pre-check is a failed run, with or without
             # --execute (it used to print "❌ Pre-check 失敗" and exit 0).
             sys.exit(EXIT_VIOLATION)
-        # #3206: the pre-check asks da-guard write the same batch --execute
-        # sends, as a dry run — a delete it would refuse is exit 2 here too.
-        print()
-        if not execute_offboard(args.tenant, args.config_dir, dry_run=True):
-            sys.exit(EXIT_CALLER_ERROR)
-        print(f"\n💡 這是 Pre-check 模式。要實際下架，請加 --execute 參數。")
 
 
 if __name__ == "__main__":

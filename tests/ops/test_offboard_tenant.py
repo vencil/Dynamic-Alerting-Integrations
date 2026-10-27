@@ -227,7 +227,7 @@ class TestExecuteOffboard:
         monkeypatch.setattr(ot, "find_carriers", lambda tenant, config_dir: ["db-a.yaml"])
         assert ot.execute_offboard("db-a", d) is False
         assert "沒有刪除任何檔" in capsys.readouterr().err
-        monkeypatch.setattr(ot, "run_precheck", lambda *a: (True, []))
+        monkeypatch.setattr(ot, "run_precheck", lambda *a, **k: (True, []))
         monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "db-a", "--config-dir", d,
                                           "--execute", "--skip-state-check"])
         with pytest.raises(SystemExit) as exc_info:

@@ -2415,7 +2415,7 @@ da-tools offboard <tenant> [options]
 
 **輸出**
 
-Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時刪除宣告這個租戶的每一個租戶檔，任何深度（exporter 遞迴讀整棵樹：`<config-dir>/<tenant>.yaml`、`team-eu/<tenant>.yaml` 都算；同一租戶另由 `<tenant>.yml` 或別的租戶檔宣告時一併刪除，否則 exporter 仍從那個檔服務它；`_` 開頭的平台檔、子目錄的 `_defaults.yaml`、以及檔名帶著租戶 id 卻沒宣告它的檔都不刪，只算跨檔案引用）——不是工具自己刪，而是一批交給 [`da-guard write`](#guard) 的 `delete` 項目（[ADR-036](adr/036-single-parser-effective-config.md) §2：只有 Go 寫 conf.d，#3206）：它把每個檔當成搬移的來源判（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉它們之後的整棵樹判一次（樹不能變壞），被拒時逐條點名、結束碼 `2`、什麼都不刪。不帶 `--execute` 時以同一批的 `--dry-run` 判，被拒同樣是 `2`。**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
+Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時刪除宣告這個租戶的每一個租戶檔，任何深度（exporter 遞迴讀整棵樹：`<config-dir>/<tenant>.yaml`、`team-eu/<tenant>.yaml` 都算；同一租戶另由 `<tenant>.yml` 或別的租戶檔宣告時一併刪除，否則 exporter 仍從那個檔服務它；`_` 開頭的平台檔、子目錄的 `_defaults.yaml`、以及檔名帶著租戶 id 卻沒宣告它的檔都不刪，只算跨檔案引用）——不是工具自己刪，而是一批交給 [`da-guard write`](#guard) 的 `delete` 項目（[ADR-036](adr/036-single-parser-effective-config.md) §2：只有 Go 寫 conf.d，#3206）：它把每個檔當成搬移的來源判（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉它們之後的整棵樹判一次（樹不能變壞），被拒時逐條點名、結束碼 `2`、什麼都不刪。pre-check（有沒有 `--execute` 都一樣）的判定包含同一批的 `--dry-run`，被拒同樣是 `2`，「✅ Pre-check 通過」只在它也通過後才印。**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
 群組、views、federation 子集存在 tenant-api 的 state store，不在 conf.d；conf.d 裡若還留著 `_groups.yaml` 等舊檔，只印 ⚠️ 說明已不再被讀，不拿它當答案。有 `--state` 時列出 state store 裡的引用與要呼叫的 tenant-api API；conf.d 殘留的舊檔若 state store 沒有對應紀錄，tenant-api 下次開機會匯入它，所以其中的引用也一併列出（例如 `PUT /api/v1/groups/{id}` 移除成員），工具本身不寫 state store；AccountID 配發只列為資訊（永不回收）。沒給 `--state` 時這一項標為「未判定」，`--execute` 需另加 `--skip-state-check` 才會執行。
 
@@ -2435,9 +2435,9 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔（da-guard write 判定時檔已不在、沒有刪任何檔是 `2`） |
-| `1` | pre-check 未通過（找不到租戶檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179）。conf.d 上有 parse-tree 讀不了的路徑時不到這一步：pre-check 之前就以 `2` 拒絕（[共用的拒絕](#confd-refusal)，#3206） |
-| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；`da-guard write` 拒刪，不論有沒有 `--execute`（設定檔是 symlink、拿掉後樹變壞……，stderr 逐條點名，什麼都不刪）；找不到可用的 da-guard |
+| `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用），兩者都包含 `da-guard write --dry-run` 判同一批也通過；帶 `--execute` 時已刪除租戶檔（da-guard write 判定時檔已不在、沒有刪任何檔是 `2`） |
+| `1` | pre-check 未通過（沒有任何租戶檔宣告這個租戶——檔名是它卻沒宣告它的檔會點名「`<path>` 檔名是 `<tenant>` 但沒宣告它（宣告了 …）」，都沒有時是「找不到設定檔案」；或要刪的檔另宣告了別的租戶，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179）。conf.d 上有 parse-tree 讀不了的路徑時不到這一步：pre-check 之前就以 `2` 拒絕（[共用的拒絕](#confd-refusal)，#3206） |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`<tenant>` 不合 ADR-035 的租戶 id 規則（點名規則，什麼都不讀不刪）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；`da-guard write` 拒刪，不論有沒有 `--execute`（設定檔是 symlink、拿掉後樹變壞……，stderr 逐條點名，什麼都不刪；pre-check 報告照印，但不印「通過」）；找不到可用的 da-guard |
 
 ---
 
