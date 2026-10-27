@@ -1056,12 +1056,12 @@ da-tools grafana-import --dashboard overview.json --dry-run
 
 #### alert-quality
 
-Analyze Alertmanager history to identify problem alerts. 4 quality metrics (Noise / Stale / Latency / Suppression), 3 grades (GOOD / WARN / BAD), per-tenant weighted scoring.
+Analyze the Prometheus `ALERTS` history to identify problem alerts. 3 quality metrics (Noise / Stale / Latency), 3 grades (GOOD / WARN / BAD), per-tenant weighted scoring. ⚠️ **Behaviour change ([#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212))**: the Suppression dimension and the `--alertmanager` flag are gone — it was never measured right (Alertmanager v2's `filter` matches labels, so `alertstate=suppressed` always answered empty; the numerator was a count of current alerts, the denominator the number of samples over `--period`), and no source answers a per-tenant suppression ratio over a period. A call with `--alertmanager` now exits `2` instead of `0` (an unknown flag to argparse); each alert in the JSON loses `suppressed_count`, `suppression_ratio` and `suppression_grade`; scores do not change (against a real Alertmanager the dimension was always GOOD).
 
 **Usage**
 
 ```bash
-da-tools alert-quality --prometheus <URL> [--alertmanager <URL>] [--period <DURATION>] [--tenant <NAME>] [--json] [--markdown] [--ci] [--min-score <N>]
+da-tools alert-quality --prometheus <URL> [--period <DURATION>] [--tenant <NAME>] [--json] [--markdown] [--ci] [--min-score <N>]
 ```
 
 **Parameters**
@@ -1069,7 +1069,6 @@ da-tools alert-quality --prometheus <URL> [--alertmanager <URL>] [--period <DURA
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--prometheus` | Prometheus URL (required) | - |
-| `--alertmanager` | Alertmanager URL (for suppression data). When given and it does not answer, that is not 0 suppressed: see the exit codes | - |
 | `--period` | Analysis period | `30d` |
 | `--tenant` | Filter to specific tenant | all |
 | `--json` | JSON output | - |
@@ -1096,7 +1095,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|-------------|
 | `0` | Success (CI mode: all alerts meet quality threshold) |
 | `1` | CI mode: BAD alerts found or score below threshold |
-| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects; and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be rc 0); and an `--alertmanager` that was given and did not answer (unreachable, an HTTP error, a body that is not a list of alert objects; [#3073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3073) — it used to count as 0 suppressed, rc 0, and under `--ci --min-score` let through a run that should have been rc 1). No report is printed then and stderr carries `Error: <Prometheus\|Alertmanager> query failed: <raw>`; `--json` prints `{"status": "caller_error", "reason": "prometheus_query_error" (`alertmanager_query_error` for Alertmanager), "error": "<raw>", ...}` (the remaining keys follow the normal report, zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
+| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects; and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be rc 0). No report is printed then and stderr carries `Error: Prometheus query failed: <raw>`; `--json` prints `{"status": "caller_error", "reason": "prometheus_query_error", "error": "<raw>", ...}` (the remaining keys follow the normal report, zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
 
 **Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every `ALERTS` sample is read once, by the lib. A value it cannot read (for example `"abc"`, or not a string) is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are no state and are left out of the grades; how many were dropped is in `summary.non_finite_samples_dropped` of `--json` (and the same field on each alert) and on one line of the text report.
 

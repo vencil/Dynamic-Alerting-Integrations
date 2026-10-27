@@ -15,16 +15,15 @@ This guide covers the end-to-end workflow from alert quality assessment through 
 
 ## Phase 0: Alert Quality Assessment (No Deployment Required)
 
-Before deciding to migrate, use `da-tools alert-quality` to quantify your existing alert health. This tool connects directly to your existing Prometheus/Alertmanager — no Dynamic Alerting components need to be deployed.
+Before deciding to migrate, use `da-tools alert-quality` to quantify your existing alert health. This tool connects directly to your existing Prometheus — no Dynamic Alerting components need to be deployed.
 
-### Four Quality Metrics
+### Three Quality Metrics
 
 | Metric | Measures | Threshold |
 |--------|----------|-----------|
 | **Noise Score** | Firings per time unit | >20 = BAD, >10 = WARN |
 | **Stale Score** | Days since last fire | >14 days = WARN |
 | **Resolution Latency** | Average firing → resolved time | <5 min = flapping (BAD) |
-| **Suppression Ratio** | Proportion inhibited/silenced | >50% = WARN |
 
 ### Run Quality Scan
 

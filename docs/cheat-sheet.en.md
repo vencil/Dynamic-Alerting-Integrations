@@ -80,7 +80,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `validate` — Shadow Monitoring comparison
   - `cutover` — One-click switchover (final migration step)
   - Others: `blind-spot`, `maintenance-scheduler`, `backtest`
-  - `alert-quality` — Alert quality scoring (noise, stale, latency, suppression)
+  - `alert-quality` — Alert quality scoring (noise, stale, latency)
   - `alert-correlate` — Alert correlation analysis (time-window clustering + root cause)
   - `cardinality-forecast` — Per-tenant cardinality trend prediction
   - `threshold-recommend` — Threshold recommendation (P50/P95/P99)

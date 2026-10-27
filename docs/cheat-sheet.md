@@ -80,7 +80,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `validate` — Shadow Monitoring 雙軌比對
   - `cutover` — 一鍵切換（遷移最後一步）
   - 其他：`blind-spot`、`maintenance-scheduler`、`backtest`
-  - `alert-quality` — 警報品質評估（noise, stale, latency, suppression）
+  - `alert-quality` — 警報品質評估（noise, stale, latency）
   - `alert-correlate` — 告警關聯分析（時間窗口聚類 + 根因推斷）
   - `cardinality-forecast` — Per-tenant 基數趨勢預測
   - `threshold-recommend` — 閾值推薦（P50/P95/P99）

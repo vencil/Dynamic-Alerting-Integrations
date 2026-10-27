@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """alert_quality.py — 警報品質評估工具。
 
-分析 Alertmanager 歷史紀錄，對每個 alertname × tenant 組合計算品質指標：
+分析 Prometheus 的 ``ALERTS`` 歷史，對每個 alertname × tenant 組合計算品質指標：
 
 1. **Noise Score** — 單位時間內 firing 次數（反覆震盪偵測）
 2. **Stale Score** — 長期未 fire 的警報（閾值可能已失去意義）
 3. **Resolution Latency** — firing → resolved 平均時間
-4. **Suppression Ratio** — 被 inhibit / silence 壓掉的比例
+
+#3212：先前的第 4 項 Suppression Ratio（與 ``--alertmanager``）已移除——它從來
+沒量對過：Alertmanager v2 的 ``filter`` 比對 label，``alertstate=suppressed``
+永遠回空，分子恆 0；而分子是當下告警筆數、分母是 ``--period`` 的樣本點數，
+兩者不是同一個單位，也不是同一段時間。沒有任何來源能回答「期間內、分租戶的
+抑制比例」，所以不報這個數。
 
 產出 per-tenant JSON 報告，可嵌入 Grafana dashboard 或作為 CI gate。
 
 用法:
     da-tools alert-quality --prometheus http://localhost:9090 --period 30d
     da-tools alert-quality --prometheus http://localhost:9090 --period 7d --json
-    da-tools alert-quality --alertmanager http://localhost:9093 --period 30d --tenant db-a
+    da-tools alert-quality --prometheus http://localhost:9090 --period 30d --tenant <tenant>
 """
 from __future__ import annotations
 
@@ -31,7 +36,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
     QueryError,
-    alertmanager_alerts,
     format_json_report,
     parse_duration_seconds,
     prometheus_range,
@@ -59,7 +63,6 @@ from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (A
 NOISE_THRESHOLDS = {"HIGH": 20, "MEDIUM": 10}  # firings / period
 STALE_DAYS = 14  # 超過此天數未 fire 視為 stale
 FLAPPING_RESOLUTION_SECS = 300  # <5min = flapping
-SUPPRESSION_WARN_RATIO = 0.5  # 超過 50% 被壓掉
 
 # 品質評級
 GRADE_GOOD = "GOOD"
@@ -87,11 +90,8 @@ class AlertQualityMetrics:
     # Resolution latency
     avg_resolution_secs: float = 0.0
     resolution_grade: str = GRADE_GOOD
-    # Suppression ratio
+    # Samples of ALERTS read for this alertname × tenant
     total_alerts: int = 0
-    suppressed_count: int = 0
-    suppression_ratio: float = 0.0
-    suppression_grade: str = GRADE_GOOD
     # Overall
     overall_grade: str = GRADE_GOOD
     # #3213: ALERTS samples that were +Inf / -Inf / NaN, left out of every
@@ -177,39 +177,6 @@ def _require_valid_tenant(tenant: str) -> None:
         raise CallerError(f"invalid tenant name '{tenant}' ({tenant_id_rule()[1]})")
 
 
-def query_alertmanager_alerts(
-    am_url: str,
-    *,
-    tenant: Optional[str] = None,
-    state: str = "",
-    timeout: int = 15,
-) -> list[dict[str, Any]]:
-    """查詢 Alertmanager 當前告警。
-
-    Args:
-        am_url: Alertmanager base URL。
-        tenant: 可選，篩選特定 tenant。
-        state: 可選，篩選狀態（active, suppressed, unprocessed）。
-        timeout: HTTP timeout。
-
-    Returns:
-        Alert 清單。
-
-    Raises:
-        QueryError: Alertmanager 沒回答（連線、HTTP 錯誤、回應不是 alert
-            物件的 list），reason ``alertmanager_query_error``（#3073：以前
-            回 ``[]``，讀起來像「沒有被抑制的告警」）。
-        CallerError: ``tenant`` 不合法。
-    """
-    filters: list[str] = []
-    if state:
-        filters.append(f"alertstate={state}")
-    if tenant:
-        _require_valid_tenant(tenant)
-        filters.append(f"tenant={tenant}")
-    return alertmanager_alerts(am_url, filters=tuple(filters), timeout=timeout)
-
-
 def compute_noise_score(fire_count: int, period_days: int) -> tuple[int, str]:
     """計算 Noise Score（震盪分數）。
 
@@ -282,30 +249,8 @@ def compute_resolution_latency(
     return avg, GRADE_GOOD
 
 
-def compute_suppression_ratio(
-    total: int,
-    suppressed: int,
-) -> tuple[float, str]:
-    """計算 Suppression Ratio（壓制比例）。
-
-    Args:
-        total: 總告警次數。
-        suppressed: 被 inhibit/silence 壓掉的次數。
-
-    Returns:
-        (ratio, grade) — 比例 + 評級。
-    """
-    if total <= 0:
-        return 0.0, GRADE_GOOD
-
-    ratio = suppressed / total
-    if ratio >= SUPPRESSION_WARN_RATIO:
-        return ratio, GRADE_WARN
-    return ratio, GRADE_GOOD
-
-
 def compute_overall_grade(metrics: AlertQualityMetrics) -> str:
-    """綜合四項指標決定 overall grade。
+    """綜合三項指標決定 overall grade。
 
     任一項 BAD → overall BAD。
     兩項以上 WARN → overall BAD。
@@ -316,7 +261,6 @@ def compute_overall_grade(metrics: AlertQualityMetrics) -> str:
         metrics.noise_grade,
         metrics.stale_grade,
         metrics.resolution_grade,
-        metrics.suppression_grade,
     ]
 
     bad_count = grades.count(GRADE_BAD)
@@ -352,7 +296,6 @@ def analyze_from_prometheus(
     period_seconds: int,
     *,
     tenant: Optional[str] = None,
-    am_url: Optional[str] = None,
 ) -> list[AlertQualityMetrics]:
     """從 Prometheus ALERTS metric 分析品質。
 
@@ -360,7 +303,6 @@ def analyze_from_prometheus(
         prom_url: Prometheus URL。
         period_seconds: 回溯秒數。
         tenant: 可選，篩選特定 tenant。
-        am_url: 可選 Alertmanager URL（取得 suppression 資料）。
 
     Returns:
         每個 alertname × tenant 的品質指標清單。
@@ -418,19 +360,6 @@ def analyze_from_prometheus(
 
             prev_val = val
 
-    # 查詢 suppression 資料（從 Alertmanager）
-    suppressed_counts: dict[tuple[str, str], int] = {}
-    if am_url:
-        suppressed_alerts = query_alertmanager_alerts(
-            am_url, tenant=tenant, state="suppressed",
-        )
-        for alert in suppressed_alerts:
-            labels = alert.get("labels", {})
-            aname = labels.get("alertname", "unknown")
-            tname = labels.get("tenant", "unknown")
-            key = (aname, tname)
-            suppressed_counts[key] = suppressed_counts.get(key, 0) + 1
-
     # 組裝指標
     metrics_list: list[AlertQualityMetrics] = []
     for (aname, tname), data in sorted(alert_data.items()):
@@ -452,13 +381,7 @@ def analyze_from_prometheus(
             data["durations"],
         )
 
-        # Suppression
-        key = (aname, tname)
         m.total_alerts = data["total"]
-        m.suppressed_count = suppressed_counts.get(key, 0)
-        m.suppression_ratio, m.suppression_grade = compute_suppression_ratio(
-            m.total_alerts, m.suppressed_count,
-        )
 
         # Overall
         m.overall_grade = compute_overall_grade(m)
@@ -594,9 +517,6 @@ def print_text_report(report: QualityReport) -> None:
                 else:
                     res_label = "解決延遲" if lang == "zh" else "Slow resolution"
                 issues.append(f"{res_label}: {a['avg_resolution_secs']:.0f}s")
-            if a["suppression_grade"] != GRADE_GOOD:
-                supp_label = "壓制率" if lang == "zh" else "Suppressed"
-                issues.append(f"{supp_label}: {a['suppression_ratio']:.0%}")
             if issues:
                 print(f"           {' | '.join(issues)}")
         print()
@@ -638,13 +558,13 @@ def generate_markdown(report: QualityReport) -> str:
             continue
         lines.append(f"### {t['tenant']}")
         lines.append("")
-        lines.append("| Alert | Grade | Noise | Stale | Resolution | Suppressed |")
-        lines.append("|-------|-------|-------|-------|------------|------------|")
+        lines.append("| Alert | Grade | Noise | Stale | Resolution |")
+        lines.append("|-------|-------|-------|-------|------------|")
         for a in problems:
             lines.append(
                 f"| `{a['alertname']}` | {a['overall_grade']} | "
                 f"{a['fire_count']}/30d | {a['days_since_last_fire']:.0f}d | "
-                f"{a['avg_resolution_secs']:.0f}s | {a['suppression_ratio']:.0%} |"
+                f"{a['avg_resolution_secs']:.0f}s |"
             )
         lines.append("")
 
@@ -671,10 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     if lang == "zh":
         parser = argparse.ArgumentParser(
-            description="警報品質評估 — 分析 Alertmanager 歷史以識別問題警報",
+            description="警報品質評估 — 分析 Prometheus ALERTS 歷史以識別問題警報",
         )
         parser.add_argument("--prometheus", required=True, help="Prometheus URL")
-        parser.add_argument("--alertmanager", help="Alertmanager URL（取得 suppression 資料）")
         parser.add_argument("--period", default="30d", help="分析期間（預設: 30d）")
         parser.add_argument("--tenant", help="篩選特定租戶")
         parser.add_argument("--json", action="store_true", dest="json_output", help="JSON 格式輸出")
@@ -683,10 +602,9 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument("--min-score", type=float, default=0, help="CI 最低分數門檻（預設: 0）")
     else:
         parser = argparse.ArgumentParser(
-            description="Alert Quality Scoring — analyze Alertmanager history to identify problem alerts",
+            description="Alert Quality Scoring — analyze the Prometheus ALERTS history to identify problem alerts",
         )
         parser.add_argument("--prometheus", required=True, help="Prometheus URL")
-        parser.add_argument("--alertmanager", help="Alertmanager URL (for suppression data)")
         parser.add_argument("--period", default="30d", help="Analysis period (default: 30d)")
         parser.add_argument("--tenant", help="Filter to specific tenant")
         parser.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
@@ -723,12 +641,9 @@ def main() -> None:
             args.prometheus,
             period_secs,
             tenant=args.tenant,
-            am_url=args.alertmanager,
         )
     except QueryError as exc:
-        # #3065 / #3073: 有要求的來源（Prometheus，或給了 --alertmanager 時的
-        # Alertmanager）沒量成，不是「沒有警報」／「沒有被抑制」— 不出報告、
-        # 不走 CI gate。
+        # #3065: Prometheus 沒量成，不是「沒有警報」— 不出報告、不走 CI gate。
         print(f"Error: {exc.source} query failed: {safe_label(str(exc))}",
               file=sys.stderr)
         if args.json_output:

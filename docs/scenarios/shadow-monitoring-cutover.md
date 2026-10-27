@@ -15,16 +15,15 @@ lang: zh
 
 ## Phase 0：告警品質評估（不需部署任何元件）
 
-在決定是否遷移之前，先用 `da-tools alert-quality` 量化現有告警品質。此工具直接連接現有 Prometheus/Alertmanager，不需要部署 Dynamic Alerting 元件。
+在決定是否遷移之前，先用 `da-tools alert-quality` 量化現有告警品質。此工具直接連接現有 Prometheus，不需要部署 Dynamic Alerting 元件。
 
-### 四大品質指標
+### 三大品質指標
 
 | 指標 | 衡量 | 判定標準 |
 |------|------|---------|
 | **Noise Score** | 單位時間 firing 次數 | >20 = BAD, >10 = WARN |
 | **Stale Score** | 距離上次 fire 天數 | >14 天 = WARN |
 | **Resolution Latency** | firing → resolved 平均時間 | <5 分鐘 = flapping（BAD） |
-| **Suppression Ratio** | 被 inhibit/silence 壓制比例 | >50% = WARN |
 
 ### 執行品質掃描
 
