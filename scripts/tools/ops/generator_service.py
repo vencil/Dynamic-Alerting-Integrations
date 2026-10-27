@@ -286,6 +286,11 @@ class Metrics:
     accept_errors: Counter = field(default_factory=Counter)
     peer_rejected: int = 0
     peak_rss_bytes: int = 0
+    #: ADR-038 decision 5: key verdicts by outcome — complete, or why not
+    #: (no_time, deadline, preempted, memory, error, platform_file) — and
+    #: the latest one's duration.
+    key_verdicts: Counter = field(default_factory=Counter)
+    key_verdict_seconds: float = 0.0
 
 
 def _escape_label(value: str) -> str:
@@ -532,6 +537,13 @@ class Service:
                         received=received)
         self.waiting.append(ticket)
         ticket.timer = self.loop.call_at(ticket.deadline_at, self._expire, ticket)
+        # ADR-038 decision 5: a running judgement's key verdict yields to a
+        # waiting write (the judgement's own verdict is already given).
+        if self.running is not None and self.child_pid is not None:
+            try:
+                os.kill(self.child_pid, signal.SIGUSR1)
+            except ProcessLookupError:
+                pass
         # #2901 E2: a request never waits for a warming run — end it now; the
         # entries it already handed back stay in the cache (E1).
         self._preempt_warm()
@@ -604,7 +616,8 @@ class Service:
         return path
 
     def _job(self, request: ValidateRequest, job_dir: str,
-             policy: Optional[PolicySnapshot], warm: bool = False) -> ChildJob:
+             policy: Optional[PolicySnapshot], warm: bool = False,
+             deadline_at: float = 0.0) -> ChildJob:
         return ChildJob(
             request=request, job_dir=job_dir, repo=self.s.repo,
             config_subdir=self.s.config_subdir, git=self.s.git,
@@ -613,7 +626,8 @@ class Service:
             policy_copy=policy.copy if policy else None,
             policy_sha256=policy.sha256 if policy else None,
             store_entries=self.store.entries,
-            max_transfer=self.s.max_cache_transfer_bytes, warm=warm)
+            max_transfer=self.s.max_cache_transfer_bytes, warm=warm,
+            deadline_at=deadline_at)
 
     async def _judge(self, ticket: Ticket) -> Response:
         remaining = ticket.deadline_at - self.loop.time()
@@ -637,7 +651,8 @@ class Service:
                                     too_old)
             pinned_before = self.pinned_commit
             try:
-                run = await self._spawn(self._job(ticket.request, job_dir, policy),
+                run = await self._spawn(self._job(ticket.request, job_dir, policy,
+                                                  deadline_at=ticket.deadline_at),
                                         ticket.deadline_at, request=True)
             except OSError as exc:
                 if exc.errno not in _LOAD_ERRNOS:
@@ -820,9 +835,15 @@ class Service:
                   "validated": res.get("validated"), "cache": cache}
         if outcome == "ran":
             rc = res.get("rc")
-            return Response(200, {"result": "pass" if rc == 0 else "findings",
-                                  "rc": rc, "findings": res.get("findings"),
-                                  **common})
+            doc = {"result": "pass" if rc == 0 else "findings",
+                   "rc": rc, "findings": res.get("findings"), **common}
+            kv = res.get("key_verdict")
+            if isinstance(kv, dict):
+                # ADR-038 decision 5: reported, never the result.
+                doc["key_verdict"] = kv
+                self.metrics.key_verdicts[kv.get("reason") or kv.get("status") or "error"] += 1
+                self.metrics.key_verdict_seconds = float(kv.get("seconds") or 0.0)
+            return Response(200, doc)
         if outcome == "bad_request":
             return Response(400, {"error": "BAD_REQUEST",
                                   "message": res.get("message", "")})
@@ -912,6 +933,15 @@ class Service:
         for outcome in ("completed", "preempted", "deadline", "failed"):
             out.append(f'da_generator_warm_runs_total{{outcome="{outcome}"}} '
                        f"{self.metrics.warm_runs[outcome]}")
+        out += ["# HELP da_generator_key_verdicts_total Key verdicts (ADR-038) on writes the generator passed, by outcome: complete, or why not completed.",
+                "# TYPE da_generator_key_verdicts_total counter"]
+        for outcome in ("complete", "no_time", "deadline", "preempted", "memory", "error",
+                        "platform_file"):
+            out.append(f'da_generator_key_verdicts_total{{outcome="{outcome}"}} '
+                       f"{self.metrics.key_verdicts[outcome]}")
+        out += ["# HELP da_generator_key_verdict_seconds Duration of the latest key verdict.",
+                "# TYPE da_generator_key_verdict_seconds gauge",
+                f"da_generator_key_verdict_seconds {self.metrics.key_verdict_seconds}"]
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
                 "# TYPE da_generator_cache_base_coverage_ratio gauge",
                 f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
@@ -1213,6 +1243,9 @@ async def serve(settings: Settings, object_format: str) -> None:
     print(f"generator-service: listening on {settings.socket}", file=sys.stderr,
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
+    # Inherited by every judgement process from its fork on: a key verdict
+    # yields to a waiting write (submit); anywhere else SIGUSR1 does nothing.
+    signal.signal(signal.SIGUSR1, _gsvc_child.on_preempt)
     service.loop.set_exception_handler(service.loop_exception)
     service.start_warming()
     try:

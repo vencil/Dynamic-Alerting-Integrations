@@ -2123,13 +2123,15 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 
 | 端點 | 回應 |
 |------|------|
-| `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`；`busy` 也用在同時連線或讀取中、排隊中的 body 總量已滿時，此時 body 不會被讀）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`stderr_tail`、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）。請求格式錯誤 400，寫入路徑與 base 樹衝突（上層在 base 樹裡是檔案或 symlink、要寫的路徑是目錄）也是 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`amtool_missing`、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用） |
+| `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`；`busy` 也用在同時連線或讀取中、排隊中的 body 總量已滿時，此時 body 不會被讀）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`stderr_tail`、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）；`pass` 時另帶 `key_verdict`（見下方「鍵的判決」）。請求格式錯誤 400，寫入路徑與 base 樹衝突（上層在 base 樹裡是檔案或 symlink、要寫的路徑是目錄）也是 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`amtool_missing`、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用） |
 | `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、amtool 是否存在、`ready` |
 | `GET /metrics` | Prometheus 文字格式：快取大小（`pinned` 區分最新 base 樹裡的檔）、最近一次判定的峰值記憶體與子程序記憶體上限、各結果與各拒收原因的計數、佇列長度、版本 |
 
 每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（檔案內容的 SHA-256, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
 
 **預熱**：啟動時（`--warm-ref`）以及收到與目前 base 不同的 `base_commit` 之後，服務在請求之外以同樣的子程序讀一次該 commit 的整棵樹，只為了填快取，不給判定、不跑 amtool；有自己的期限（`--warm-seconds`）。有請求進來時預熱立刻結束、讓請求先跑，已讀完的部分保留。`/metrics` 的 `da_generator_warm_runs_total{outcome}`（`completed`、`preempted`、`deadline`、`failed`）與 `da_generator_cache_base_coverage_ratio`（最新 base 樹的檔有多少比例已在快取裡；狀態端點同樣回報）可看預熱的狀況。
+
+**鍵的判決**（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 5）：產生器放行的寫入，服務接著對被寫的檔寫入前後宣告的租戶跑共用判決（`judge_tree`，served-values 與 effective 都用 `--tenant`），結果放在 `key_verdict`：`status` 為 `complete`（附 `findings`、`truncated`、`tenants`、`seconds`）或 `not_completed`（附 `reason` 與 `message`；`reason` 為 `no_time`、`deadline`、`preempted`、`memory`、`error`、`platform_file`）。判決只回報，**從不改變 `result`、從不拒收寫入**；它有自己的子期限（判定期限前 2 秒停），時間或記憶體不夠就回 `not_completed`；有另一筆寫入在排隊時立刻讓位（`preempted`），排隊的那筆不因判決而少了時間。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時回 `platform_file`：這種檔的鍵會影響它沒有列名的租戶，交給整棵樹的判決（PR 的 CI）。判決耗時隨樹的大小成長（1 CPU 上約 1000 個租戶 1.2 秒、2500 個 3 秒、5000 個 6 秒），樹大時用完的是判決自己的那一份，不是整筆寫入的期限。`/metrics` 的 `da_generator_key_verdicts_total{outcome}`（`complete`，或上面那六種 `reason`）與 `da_generator_key_verdict_seconds`（最近一次的耗時）可看判完的比例。
 
 **Exit codes**
 
