@@ -944,7 +944,7 @@ def _textwrap_wrapping_calls(tree) -> list[int]:
     `render_chart_defaults_lines` alone. Those two sites are green because
     their bodies happen to wrap identically, NOT because a golden comparison
     cannot see them. The three that genuinely reach no golden surface, at 0
-    each, are `annotate_defaults_counterexamples`, `_append_wrapped_comment`
+    each, are `defaults_counterexample_head`, `_append_wrapped_comment`
     and `stub_counterexample_lines` — and the middle one is the very call site
     whose docstring claims a byte-for-byte revert, so that claim has no golden
     witness behind it either.
@@ -1054,3 +1054,48 @@ def test_wrap_comment_never_splits_a_token() -> None:
         f"a token longer than the width came back split: {segments}. ⛔ The "
         "default breaks long words; that is the half none of the six original "
         "call sites had.")
+
+
+# ── defaults_counterexample_head (#3206 10c-3) ──────────────────────────
+
+def _a_counterexample_key(tier: str) -> str:
+    import scaffold_tenant
+    return next(k for pack in scaffold_tenant.RULE_PACKS.values()
+                for k, info in (pack.get(tier) or {}).items()
+                if isinstance(info, dict) and "value_counterexample" in info)
+
+
+def test_counterexample_head_names_a_key_and_a_sequence_item() -> None:
+    """Both shapes `_defaults.yaml` carries a measured key in: a `defaults:`
+    entry (by its key) and an `optional_overrides:` item (by its value)."""
+    key = _a_counterexample_key("defaults")
+    item = _a_counterexample_key("optional_overrides")
+    on_key = lib.defaults_counterexample_head(("defaults", key), 1)
+    on_item = lib.defaults_counterexample_head(("optional_overrides", "[0]"), item)
+    for text in (on_key, on_item):
+        assert text and text.startswith("⚠ ") and lib.COUNTEREXAMPLE_MARK in text
+    # A section (a non-empty mapping) is not annotated, nor a key with
+    # nothing measured, nor a non-string item.
+    assert lib.defaults_counterexample_head((key,), {"a": 1}) is None
+    assert lib.defaults_counterexample_head(("defaults", "no_such_key"), 1) is None
+    assert lib.defaults_counterexample_head(("x", "[0]"), 5) is None
+
+
+def test_counterexample_head_wraps_at_the_width_left_at_its_indent() -> None:
+    """da-guard writes each line `# <line>` at the node's indent (two columns
+    a level): every written line stays within `_COMMENT_WIDTH`."""
+    key = _a_counterexample_key("optional_overrides")
+    for at in (("optional_overrides", "[0]"), ("a", "b", "c", "[0]")):
+        indent = 2 * (len(at) - 1)
+        text = lib.defaults_counterexample_head(at, key)
+        assert all(indent + 2 + len(line) <= lib._COMMENT_WIDTH
+                   for line in text.split("\n")), (at, text)
+
+
+def test_tenant_declared_foot_is_the_stub_block_as_comment_text() -> None:
+    keys = lib.shipped_optional_keys_for_packs(["oracle"])
+    assert keys, "fixture assumption: oracle declares keys"
+    lines = lib.render_tenant_declared_stub_lines(keys, lang="en")
+    foot = lib.tenant_declared_foot(keys, lang="en")
+    assert ["# " + t if t else "#" for t in foot.split("\n")] == lines
+    assert lib.tenant_declared_foot([], lang="en") is None

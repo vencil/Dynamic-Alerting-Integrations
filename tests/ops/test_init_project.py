@@ -6634,3 +6634,21 @@ def test_an_unlistable_directory_refuses_the_run_whatever_its_name(
              "da_tools_image": ip.DA_TOOLS_IMAGE}, str(tmp_path))
     assert ei.value.code == 2
     assert f"ERROR: {name}:" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows NTFS doesn't honor Unix mode bits")
+def test_confd_files_are_created_0600_and_a_replaced_one_keeps_its_mode(tmp_path):
+    """#3206 10c-3: `da-guard write` creates init's conf.d files 0o600 — the
+    mode init's own writer always gave them (a tenant file can hold a
+    receiver URL with a token); a file `--force` replaces keeps its mode."""
+    config = {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
+              "tenants": ["db-a"], "namespace": "monitoring",
+              "da_tools_image": ip.DA_TOOLS_IMAGE}
+    ip.run_init(config, str(tmp_path))
+    conf = tmp_path / "conf.d"
+    for name in ("_defaults.yaml", "db-a.yaml"):
+        assert (conf / name).stat().st_mode & 0o777 == 0o600, name
+    (conf / "db-a.yaml").chmod(0o640)
+    ip.run_init(config, str(tmp_path))
+    assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o640
