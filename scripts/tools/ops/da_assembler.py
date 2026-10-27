@@ -265,9 +265,12 @@ def _render_value(doc: Dict[str, Any]) -> dict:
     quoted), except numbers under ``defaults`` and ``tenants``: the exporter
     decodes thresholds into ``float64``, so every number there goes through
     `number_value` (an int past 18 digits goes as the float it is to the
-    exporter; a shorter one stays an int). A ``defaults`` value must be a
-    JSON number or null — anything else (a string, ``"80"`` too) is
-    ValueError naming the key, as is a tenant id that is not one (ADR-035)
+    exporter; a shorter one stays an int). A ``defaults`` value that is a
+    string or a bool is written as it is: the exporter reads its text as a
+    tenant's value is read and refuses that key alone when it is no number
+    (#3250, served-values' ``root_defaults_refused``). A sequence / mapping
+    there, or an int past float64's range, is ValueError naming the key, as
+    is a tenant id that is not one (ADR-035)
     and a value with no edit-contract type (an int past 18 digits under
     ``stateFilters``)."""
     entries = []
@@ -288,7 +291,8 @@ def _render_value(doc: Dict[str, Any]) -> dict:
                 if why:
                     raise ValueError(f"spec.defaults.{metric} {why}; the exporter skips "
                                      "the whole rendered file otherwise")
-                values.append((metric, _lib_confedit.data_value(None) if value is None
+                values.append((metric, _lib_confedit.data_value(value, ("defaults", metric))
+                               if value is None or isinstance(value, (str, bool))
                                else _lib_confedit.number_value(value, at=("defaults", metric))))
             entries.append((key, _lib_confedit.map_value(values)))
             continue
@@ -1395,17 +1399,16 @@ def _default_value_error(value: Any) -> str:
     """Why *value* is not a ``defaults`` value the exporter decodes, as far
     as its JSON type tells, or ``""``.
 
-    The exporter reads ``defaults`` as ``map[string]float64``: null and
-    numbers are read; a bool, a sequence / mapping make it refuse the whole
-    file. A ``str`` is refused too (#3206): `da-guard write` writes a
-    string as a string (double quoted), which the exporter cannot decode
-    into ``float64`` — ``"80"`` and ``"1e3"`` alike; the number is written
-    unquoted in the CR (da-crdecode reads an unquoted ``1e3`` as 1000).
+    The exporter reads each root ``defaults`` value's text through
+    parseThresholdNumber (#3250): a sequence / mapping makes it refuse the
+    whole file, which is what this names. A scalar never does — a string or
+    a bool it does not read (``foo``, ``true``) refuses that key alone and is
+    the exporter's verdict to report (served-values' ``root_defaults_refused``,
+    da-guard's ``root_default_refused``), not this tool's; ``"80"`` is read
+    as 80. An int past float64's range has no value the writer can send.
     """
-    if value is None:
+    if value is None or isinstance(value, (str, bool)):
         return ""
-    if isinstance(value, bool):
-        return "must be a number, not a boolean"
     if isinstance(value, int):
         # The exporter's float64: an int past 18 digits is sent as the
         # float it rounds to (`_lib_confedit.number_value`), so one past
@@ -1419,9 +1422,6 @@ def _default_value_error(value: Any) -> str:
         return ""
     if isinstance(value, float):
         return ""
-    if isinstance(value, str):
-        return (f"must be a number, not the string {value!r} (write it "
-                "unquoted in the CR)")
     return "must be a number"
 
 

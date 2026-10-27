@@ -1005,8 +1005,8 @@ class TestPlatformSettings:
         "defaults: {cpu: 80, mem: 90}\n"
         "state_filters: {crash: {reasons: [], severity: 'critical'}}\n",            # 排版＋換引號
         "state_filters:\n    crash:\n        severity: critical\n        reasons: []\n"
-        "defaults:\n    mem: 90\n    cpu: 0x50\n",                                 # 縮排、順序、同值的另一種寫法
-    ], ids=["comment", "flow-and-quotes", "reorder-and-hex"])
+        "defaults:\n    mem: 90\n    cpu: 8e1\n",                                  # 縮排、順序、同值的另一種寫法（#3250：`0x50` 已不是數字）
+    ], ids=["comment", "flow-and-quotes", "reorder-and-exponent"])
     def test_same_values_written_differently_are_no_change(self, tmp_path, edited):
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
                          {"db-a.yaml": self.TENANT, "_defaults.yaml": edited})

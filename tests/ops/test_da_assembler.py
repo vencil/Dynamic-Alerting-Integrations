@@ -976,6 +976,28 @@ def _tagged_int(n):
 
 #: (id, spec body below `_T1`) the exporter REFUSES once rendered.
 _REFUSED = [
+    ("defaults-list", "  defaults: {cpu: [1]}\n"),
+    ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
+    ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
+    ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
+    ("sf-int", "  stateFilters: {x: 1}\n"),
+    ("sf-word", "  stateFilters: {x: foo}\n"),
+    ("sf-empty-list", "  stateFilters: {x: []}\n"),
+    ("sf-list", "  stateFilters: {x: [a]}\n"),
+    ("sf-reasons-scalar", "  stateFilters: {x: {reasons: A}}\n"),
+    ("sf-reasons-nested-list", "  stateFilters: {x: {reasons: [[a]]}}\n"),
+    ("sf-reasons-map-item", "  stateFilters: {x: {reasons: [{a: 1}]}}\n"),
+    ("sf-severity-list", "  stateFilters: {x: {severity: [a]}}\n"),
+    ("sf-severity-map", "  stateFilters: {x: {severity: {a: 1}}}\n"),
+    ("sf-default-state-list", "  stateFilters: {x: {default_state: [a]}}\n"),
+]
+
+#: (id, spec body below `_T1`) a scalar `defaults` value the exporter does
+#: not read as YAML typed it (a string or a bool to da-crdecode): since
+#: #3250 it reads the text as a tenant's value and refuses that key alone,
+#: so the file renders and loads — whether the key is served is Go's
+#: verdict (`"80"` is 80, `foo` refused), never this tool's.
+_SCALAR_DEFAULTS = [
     ("defaults-true", "  defaults: {cpu: true}\n"),
     ("defaults-yes", "  defaults: {cpu: yes}\n"),
     ("defaults-word", "  defaults: {cpu: foo}\n"),
@@ -985,10 +1007,6 @@ _REFUSED = [
     ("defaults-str-tag", "  defaults: {cpu: !!str 80}\n"),
     ("defaults-sexagesimal", "  defaults: {cpu: 1:30}\n"),
     ("defaults-date", "  defaults: {cpu: 2024-01-01}\n"),
-    ("defaults-list", "  defaults: {cpu: [1]}\n"),
-    ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
-    # Number-looking texts yaml.v3 still refuses: digits outside the base,
-    # overflow past float64 / uint64 / int64, a `_` not between digits.
     ("defaults-bad-octal-digit", "  defaults: {cpu: 0o8}\n"),
     ("defaults-bad-binary-digit", "  defaults: {cpu: 0b102}\n"),
     ("defaults-hex-digit-in-binary", "  defaults: {cpu: 0b1F}\n"),
@@ -1006,30 +1024,15 @@ _REFUSED = [
     ("defaults-underscore-dot", "  defaults: {cpu: _.5}\n"),
     ("defaults-dot-underscore", "  defaults: {cpu: ._5}\n"),
     ("defaults-dot-trailing-underscore", "  defaults: {cpu: .5_}\n"),
-    # A non-ASCII letter whose lower() is two chars (U+0130); Go reads bytes.
     ("defaults-dotted-I", "  defaults: {cpu: 1İ}\n"),
     ("defaults-hex-dotted-I", "  defaults: {cpu: 0xİ}\n"),
     ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
-    # #3206: a JSON string under `defaults` is written as a string, which the
-    # exporter cannot decode into float64 — also one whose text is a number
-    # to yaml.v3 (the dump once wrote these two plain, so they were read).
     ("defaults-quoted-exponent", "  defaults: {cpu: \"1e3\"}\n"),
     ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
     ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
     ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
-    ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
-    ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
-    ("sf-int", "  stateFilters: {x: 1}\n"),
-    ("sf-word", "  stateFilters: {x: foo}\n"),
-    ("sf-empty-list", "  stateFilters: {x: []}\n"),
-    ("sf-list", "  stateFilters: {x: [a]}\n"),
-    ("sf-reasons-scalar", "  stateFilters: {x: {reasons: A}}\n"),
-    ("sf-reasons-nested-list", "  stateFilters: {x: {reasons: [[a]]}}\n"),
-    ("sf-reasons-map-item", "  stateFilters: {x: {reasons: [{a: 1}]}}\n"),
-    ("sf-severity-list", "  stateFilters: {x: {severity: [a]}}\n"),
-    ("sf-severity-map", "  stateFilters: {x: {severity: {a: 1}}}\n"),
-    ("sf-default-state-list", "  stateFilters: {x: {default_state: [a]}}\n"),
 ]
+
 
 #: (id, spec body below `_T1`) the exporter READS once rendered.
 _READ = [
@@ -1066,14 +1069,8 @@ _READ = [
     ("sf-default-state-int", "  stateFilters: {x: {default_state: 1}}\n"),
     ("sf-unknown-key", "  stateFilters: {x: {other: [a, {b: 1}]}}\n"),
     ("tenant-set", "    t2: !!set {cpu}\n"),
+    *_SCALAR_DEFAULTS,
 ]
-
-#: The `_REFUSED` rows whose value reaches the render as a JSON STRING
-#: (da-crdecode's reading): refused as a string (#3206), whatever its text.
-_REFUSED_AS_A_STRING = frozenset(
-    i for i, _b in _REFUSED
-    if i.startswith("defaults-") and i not in (
-        "defaults-true", "defaults-yes", "defaults-list", "defaults-map"))
 
 #: (id, spec body below `_T1`) Kubernetes clients' YAML→JSON conversion
 #: (da-crdecode, #2476) refuses, so such a CR never reaches a cluster: an
@@ -1160,17 +1157,14 @@ class TestRenderCrExporterShapes:
 
         `defaults` 是 `map[string]float64`、`state_filters` 是
         `map[string]StateFilter`（pkg/config/types.go）。由 JSON 型別判：
-        `_default_value_error`／`_state_filter_error` 擋布林、list、mapping、
-        stateFilters 的形狀，以及 JSON 是字串的 defaults 值（#3206：`da-guard
-        write` 把字串寫成字串，exporter 解不成 float64，不論文字長得像不像數字）。
-        會讓本測試轉紅的改動：拿掉 `_default_value_error`／`_state_filter_error`
-        的呼叫，或讓字串照常寫出。
+        `_default_value_error`／`_state_filter_error` 擋 list、mapping 與
+        stateFilters 的形狀。#3250 起純量（字串、布林）不在此列：exporter 以原文
+        讀、讀不了只拒收那個 key（`_SCALAR_DEFAULTS`）。會讓本測試轉紅的改動：
+        拿掉 `_default_value_error`／`_state_filter_error` 的呼叫。
         """
         cr_path, out_dir = _write_cr(tmp_path, body)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "the exporter skips the whole rendered file" in caplog.text
-        if row in _REFUSED_AS_A_STRING:
-            assert "spec.defaults.cpu must be a number, not the string" in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("body", [pytest.param(b, id=i)
@@ -1202,6 +1196,26 @@ class TestRenderCrExporterShapes:
             in caplog.text
         assert "  da-crdecode| da-crdecode: " in caplog.text
         assert list(out_dir.iterdir()) == []
+
+    def test_a_scalar_default_is_the_exporters_verdict(self, tmp_path, da_guard):
+        """#3250：渲染出的 `cpu: foo` 照寫、檔案照載，exporter 只拒收這個 key
+        （served-values 的 `root_defaults_refused`），`"80"` 照數字送。會讓本測試
+        轉紅的改動：在本工具裡再判一次純量（擋下字串或布林）。"""
+        if da_guard is None:
+            pytest.skip("go not on PATH (set VIBE_REQUIRE_GO=1 to fail)")
+        cr_path, out_dir = _write_cr(tmp_path, "  defaults: {cpu: foo, mem: \"80\"}\n")
+        assert render_cr_file(cr_path, out_dir) == 0
+        # As the root carrier: only a `_` file's `defaults:` is the platform's.
+        conf = tmp_path / "conf"
+        conf.mkdir()
+        (conf / "_defaults.yaml").write_bytes((out_dir / "ok.yaml").read_bytes())
+        (conf / "t1.yaml").write_text("tenants:\n  t1: {}\n", encoding="utf-8")
+        r = subprocess.run([da_guard, "served-values", "--config-dir", str(conf)],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        assert r.returncode == 0, r.stdout + r.stderr
+        doc = json.loads(r.stdout)
+        assert doc["root_defaults_refused"] == [{"key": "cpu", "text": "foo", "refused": "unparsed"}], doc
+        assert doc["tenants"]["t1"]["values"]["mem"] == 80, doc["tenants"]["t1"]["values"]
 
     @pytest.mark.parametrize("body, refused", [
         *[pytest.param(b, True, id=i) for i, b in _REFUSED],
@@ -1248,7 +1262,8 @@ class TestRenderCrExporterShapes:
         assert r.returncode == 0, r.stdout + r.stderr
 
     def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
-        """端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收）。
+        """端到端：30 萬位的整數照時限內處理完。da-crdecode 把它讀成字串；#3250
+        起字串照寫（exporter 讀原文、只拒收那個 key），所以 rc 0、檔案寫出。
 
         計時上限刻意寬鬆（修前約 17.7 s，修後約 0.1–2 s，視 coverage 與 CPU
         搶佔而定）：它只擋「又退回二次方時間」這種量級的回歸；確定性的守衛是
@@ -1257,9 +1272,9 @@ class TestRenderCrExporterShapes:
         cr_path, out_dir = _write_cr(
             tmp_path, "  defaults: {cpu: " + "9" * 300_000 + "}\n")
         start = time.monotonic()
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert render_cr_file(cr_path, out_dir) == 0
         assert time.monotonic() - start < 12
-        assert list(out_dir.iterdir()) == []
+        assert (out_dir / "ok.yaml").exists()
 
 
 #: #2476: (id, text, spec) — `TestRenderCrNameFormat._render_text` input
