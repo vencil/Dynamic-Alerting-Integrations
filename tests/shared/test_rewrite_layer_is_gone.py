@@ -19,17 +19,20 @@ through parse-tree.
 Two checks, by name:
 
 1. no Python file in the repo defines a `REWRITE_LAYER` name (a function, a
-   class, or a module-level assignment), and no file under `scripts/` uses one
-   (an import, a reference, an attribute `<module>.<name>`);
+   class, or a module-level assignment), and no file under `scripts/` or
+   `tests/` uses one — read from the AST, so an aliased import
+   (`from _lib_yaml_keys import RawPlain as R`), a module alias
+   (`import _lib_yaml_keys as k` … `k.load_for_rewrite`) or a constant
+   `getattr(k, "dump_for_rewrite")` is caught under its canonical name;
 2. the files under `scripts/` that use the yaml.v3-imitating loader
    (`LOADER`) are exactly `LOADER_READERS`, each reading YAML that is NOT
    conf.d — ADR-036 §12 moves each to its consumer's reading (step 12; the
    migration audit is deleted in step 13). A new reader turns this red.
 
 ⚠️ WHAT THE GATE CANNOT CATCH (it reads names, not intent): the layer
-re-written under new names; `getattr(module, "load_for_" + "rewrite")`;
-a reader handed the loader through a variable from a module outside
-`scripts/`. Whether a tool's reading of conf.d is yaml.v3's is a behaviour
+re-written under new names; a name built at run time
+(`getattr(module, "load_for_" + "rewrite")`, `importlib`); a reader handed
+the loader through a variable from a module outside `scripts/`. Whether a tool's reading of conf.d is yaml.v3's is a behaviour
 question, answered by `tests/shared/test_yaml_v3_reading_across_tools.py`.
 """
 from __future__ import annotations
@@ -70,11 +73,17 @@ PENDING_DEFINITIONS = {
     "scripts/tools/_lib_write_check.py:keep_null_spelling",
 }
 PENDING_USES = {
-    "tools/_lib_write_check.py:RewriteDumper",
-    "tools/_lib_write_check.py:NullText",
-    "tools/_lib_write_check.py:_represent_null_text",
-    "tools/_lib_write_check.py:_register_null_text",
+    "scripts/tools/_lib_write_check.py:RewriteDumper",
+    "scripts/tools/_lib_write_check.py:NullText",
+    "scripts/tools/_lib_write_check.py:_represent_null_text",
+    "scripts/tools/_lib_write_check.py:_register_null_text",
+    "tests/ops/test_lib_write_check.py:strict_load_for_rewrite",
+    "tests/ops/test_lib_write_check.py:dump_for_rewrite",
+    "tests/ops/test_lib_write_check.py:keep_null_spelling",
 }
+TESTS = REPO / "tests"
+#: This gate names the layer in strings and synthetic sources only; it is
+#: read like any other file (it must report nothing).
 
 #: The yaml.v3-imitating loader that stays until step 12 (`_lib_yaml_keys`,
 #: and `_lib_io`'s strict and file siblings).
@@ -127,16 +136,33 @@ def defines(tree: ast.AST, names: "frozenset[str]") -> "set[str]":
 
 
 def uses(tree: ast.AST, names: "frozenset[str]") -> "set[str]":
-    """Every name of *names* this module imports, refers to, or reaches as
-    an attribute (`_lib_io.strict_load_for_rewrite`)."""
-    out = set()
+    """Every name of *names* this module reaches, under whatever local name:
+    imported (`from _lib_io import strict_load_for_rewrite as s`, then `s(…)`),
+    referred to by its own name (a module using what it defines), reached as
+    an attribute of any binding (`import _lib_yaml_keys as k`, then
+    `k.load_for_rewrite`; `wc.keep_null_spelling`), or fetched by a constant
+    string (`getattr(k, "dump_for_rewrite")`). Reported by the CANONICAL name,
+    never the alias."""
+    aliases: "dict[str, str]" = {}   # local binding -> canonical name
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            out |= {a.name for a in node.names if a.name in names}
-        elif isinstance(node, ast.Name) and node.id in names:
-            out.add(node.id)
+            for a in node.names:
+                if a.name in names:
+                    aliases[a.asname or a.name] = a.name
+    out = set(aliases.values())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in names:
+                out.add(node.id)
+            elif node.id in aliases:
+                out.add(aliases[node.id])
         elif isinstance(node, ast.Attribute) and node.attr in names:
             out.add(node.attr)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in ("getattr", "hasattr") and len(node.args) >= 2
+              and isinstance(node.args[1], ast.Constant)
+              and node.args[1].value in names):
+            out.add(node.args[1].value)
     return out
 
 
@@ -170,11 +196,18 @@ def test_no_file_defines_the_rewrite_layer() -> None:
                   for k in sorted(PENDING_DEFINITIONS - found)))
 
 
-def test_nothing_in_scripts_uses_the_rewrite_layer() -> None:
-    found = {f"{p.relative_to(SCRIPTS).as_posix()}:{n}"
-             for p in _scripts_python() for n in uses(_read(p), REWRITE_LAYER)}
+def _scripts_and_tests() -> "list[pathlib.Path]":
+    return [p for p in _repo_python() if p.is_relative_to(SCRIPTS) or p.is_relative_to(TESTS)]
+
+
+def test_nothing_in_scripts_or_tests_uses_the_rewrite_layer() -> None:
+    files = _scripts_and_tests()
+    assert any(p.is_relative_to(TESTS) for p in files) and any(
+        p.is_relative_to(SCRIPTS) for p in files), "tripwire: both trees are read"
+    found = {f"{p.relative_to(REPO).as_posix()}:{n}"
+             for p in files for n in uses(_read(p), REWRITE_LAYER)}
     assert found == PENDING_USES, (
-        "a script uses the deleted PyYAML rewrite layer:\n"
+        "a script or test uses the deleted PyYAML rewrite layer:\n"
         + "".join(f"  NEW  {k}\n" for k in sorted(found - PENDING_USES))
         + "".join(f"  GONE {k} (drop it from PENDING_USES)\n"
                   for k in sorted(PENDING_USES - found))
@@ -199,6 +232,14 @@ def test_the_loader_reads_no_conf_d() -> None:
     ("import _lib_yaml_keys as k\nx = k.dump_for_rewrite({})\n", {"dump_for_rewrite"}),
     ("def f(d):\n    return keep_null_spelling(d, None)\n", {"keep_null_spelling"}),
     ("from _lib_yaml_keys import RawPlain as R\n", {"RawPlain"}),
+    # aliased, then used only under the alias: reported by the canonical name
+    ("from _lib_io import strict_load_for_rewrite as s\ndef f(t):\n    return s(t)\n",
+     {"strict_load_for_rewrite"}),
+    ("import _lib_yaml_keys as k\ndef f(t):\n    return k.load_for_rewrite(t)\n",
+     {"load_for_rewrite"}),
+    ("from tools import _lib_write_check as wc\nwc.keep_null_spelling({}, {})\n",
+     {"keep_null_spelling"}),
+    ("import _lib_yaml_keys as k\nf = getattr(k, 'dump_for_rewrite')\n", {"dump_for_rewrite"}),
 ])
 def test_each_use_is_caught(src, want) -> None:
     assert uses(ast.parse(src), REWRITE_LAYER) == want
@@ -218,6 +259,7 @@ def test_each_definition_is_caught(src, want) -> None:
     '"""load_for_rewrite was deleted in step 11."""\n',      # prose only
     "x = 'RawPlain'\n",                                      # a string
     "from _lib_parse_tree import to_python\n",
+    "from _lib_yaml_keys import load_exporter_keys as load_for_rewrite_old\n",  # alias of another
 ])
 def test_prose_and_strings_are_not_flagged(src) -> None:
     tree = ast.parse(src)

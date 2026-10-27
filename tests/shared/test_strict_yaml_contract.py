@@ -81,7 +81,7 @@ LENIENT_BY_DESIGN: dict[str, str] = {
     "lint/check_md_yaml_drift.py":
         "the fence and CRD passes read YAML fences / k8s objects quoted in docs, not a "
         "tenant conf.d; its conf.d examples are read by da-guard parse-tree (ADR-036 "
-        "step 11)",
+        "step 11) — PyYAML only tells whether a file parse-tree refuses looks like one",
     "lint/check_threshold_unit_sanity.py":
         "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
         "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",

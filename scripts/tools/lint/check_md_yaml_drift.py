@@ -522,12 +522,19 @@ class MdYamlDriftChecker:
         A file parse-tree cannot read is NOT a unit: a syntax error is the
         `--check fences` pass's job (a mislabelled directory-tree diagram must
         not fail the schema gate for a reason that has nothing to do with
-        schemas), a top level that is not a mapping is no config file, and a
-        file the exporter refuses whole — more than one document, a repeated
-        key, a tag outside the allowed set — has no content to judge. Each of
-        the last is named in the report (`self._unreadable`), never dropped
-        silently. ⚠️ Until #3206 these were read leniently (PyYAML: every
-        document of a stream, the last of a repeated key) and judged.
+        schemas), and a top level that is not a mapping is no config file.
+
+        ⛔ Any other refusal — more than one document, a repeated key, a tag
+        outside the allowed set — is a file the exporter refuses whole. When
+        that file is a conf.d example it is a VIOLATION (`self._unreadable`,
+        reported by `run`): a reader who copies it gets a file that is not
+        served. A deliberate counter-example carries the ignore marker with a
+        reason. Whether such a file is a conf.d example is asked of its
+        content, which parse-tree cannot give: `_looks_like_confd` reads it
+        leniently (PyYAML, as the fence and CRD passes read every fence) and
+        applies `_is_tenant_config` to each document — a classification only,
+        nothing of it is judged. So a `---`-separated k8s manifest or a
+        frontmatter example is no conf.d example and passes, as before.
         """
         docs_dir = self.repo_root / "docs"
         self._skipped = []
@@ -543,17 +550,28 @@ class MdYamlDriftChecker:
                     # reporting the same block at different line numbers is
                     # the first symptom of their extractors drifting apart.
                     units.append((rel_path, line_num + offset + 1, text))
-        for (rel_path, line, _text), (data, problem) in zip(
+        for (rel_path, line, text), (data, problem) in zip(
                 units, _read_as_confd([text for _r, _l, text in units])):
             if problem is not None:
                 # Not named: a syntax error is the fence pass's; a top level
                 # that is not a mapping is no config file's shape (a list, a
                 # shell line), as it never was.
-                if problem not in ("syntax_error", "top_level_not_mapping"):
+                if (problem not in ("syntax_error", "top_level_not_mapping")
+                        and self._looks_like_confd(text)):
                     self._unreadable.append((rel_path, line, problem))
                 continue
             if self._is_tenant_config(data):
                 yield rel_path, line, data
+
+    def _looks_like_confd(self, text: str) -> bool:
+        """Is a file parse-tree refused a conf.d example? Classification
+        only (see `iter_config_units`). A text PyYAML cannot read either is
+        taken as one (fail-closed: its marker says what it is)."""
+        try:
+            docs = list(yaml.safe_load_all(text))
+        except yaml.YAMLError:
+            return True
+        return any(self._is_tenant_config(d) for d in docs)
 
     def _receiver_checks(self, data: Dict, kind: str) -> List[Tuple[Dict, Dict, str]]:
         """Hold every `receiver:` to the one contract the generator enforces.
@@ -670,25 +688,32 @@ class MdYamlDriftChecker:
         print("=" * 60)
         print(f"Config units checked:        {checked}")
         self._print_skipped(getattr(self, "_skipped", []))
-        # Printed, never silent: these are documented files the exporter
-        # refuses whole, so none of their content is judged here.
-        unreadable = getattr(self, "_unreadable", [])
-        if unreadable:
-            print(f"Files conf.d cannot read:    {len(unreadable)} (not judged)")
-            for rel_path, line_num, kind in unreadable:
-                print(f"    {rel_path}:{line_num} — {kind}")
+        # #3206: a conf.d example the exporter refuses whole is a violation
+        # of its own (it has no content to judge against a schema).
+        unreadable = [{"file": rel_path, "line": line_num, "kind": problem,
+                       "error": f"da-guard parse-tree cannot read this conf.d example "
+                                f"({problem}); the exporter refuses such a file whole"}
+                      for rel_path, line_num, problem in getattr(self, "_unreadable", [])]
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
+        print(f"Unreadable conf.d examples:  {len(unreadable)}")
         print(f"Schema violations:           {len(issues)}")
         print()
 
-        if not issues:
+        if not issues and not unreadable:
             print("✓ Every documented config example matches its schema.")
             return EXIT_OK
+        for issue in unreadable:
+            print(f"  [UNREADABLE] {issue['file']}:{issue['line']} ({issue['kind']})")
+            print(f"               {issue['error']}")
         for issue in issues:
             print(f"  [SCHEMA] {issue['file']}:{issue['line']} ({issue['kind']})")
             print(f"           {issue['error']}")
         print()
+        if unreadable:
+            print("An unreadable example: fix it so it is one config file the exporter")
+            print("reads, or — when it shows refused input on purpose — mark it")
+            print("`<!-- md-yaml-drift: ignore — <reason> -->` on the line above the fence.")
         print("Fix the example, or the schema if the contract genuinely changed.")
         print("Note which contract the block was judged against — a `_defaults.yaml`")
         print("is governed by platform-defaults.schema.json, a tenant snippet by")

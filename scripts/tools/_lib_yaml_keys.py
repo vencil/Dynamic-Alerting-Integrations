@@ -81,10 +81,6 @@ to the tenant keys above. Likewise a scalar VALUE that names a key — a
 tenant's ``_profile: 010`` naming profile ``010:`` — is opt-in per call
 through *raw_text_scalars* (#2216; non-null scalars only).
 
-A tool that WRITES the file back reads it through ``load_for_rewrite`` /
-``RewriteLoader`` instead (#2220, end of this module): there plain scalar
-values keep their source text too, so the rewrite does not retype them.
-
 ⛔ Leaf module: imports ``yaml`` and the standard library ONLY, never another
 ``_lib_*`` — ``_lib_io`` and ``_lib_confd`` import it.
 

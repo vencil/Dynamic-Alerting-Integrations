@@ -74,6 +74,7 @@ updated_at: 2026-10-23
 
 YAML 有一種「把另一個 mapping 併進來」的寫法，常見的是 `<<:`。PyYAML 把任何標上 `!!merge` 的鍵都當成這種合併；yaml.v3 只認字面上的 `<<`。下面這份租戶檔就踩在這個落差上：
 
+<!-- md-yaml-drift: ignore — 示範讀不了的輸入：`!!merge` 標記在白名單外，exporter 整份拒收 -->
 ```yaml
 # t1.yaml
 tenants:
@@ -219,6 +220,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 
 這是 breaking change：前面「問題」一節實測的 9 種寫法裡，exporter 今天照讀 7 種，之後這些檔整份不服務。範例。輸入：
 
+<!-- md-yaml-drift: ignore — 示範讀不了的輸入：一個檔裡有兩份文件，exporter 整份拒收 -->
 ```yaml
 # t1.yaml
 tenants:
@@ -711,7 +713,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
 - 進行中，步驟 9：已完成 Go 端檔名規則收斂為一份、`parse-tree` 只列檔模式、每種模式同一份逐路徑索引與 Go 的 `role` 判定（`da-guard.parse-tree/v2`）、原本就依賴 da-guard 的 Python 工具改讀 `role`（已有整棵樹文件的工具直接讀其 `entries`，不另列一次）；Python 的名稱規則已刪除（步驟 9b-3）：`_lib_confd` 的名稱述詞（`is_reserved_name`、`is_hidden_name`、`has_yaml_extension`、`is_defaults_name`、`select_defaults_carrier`、`config_stem` 等）連同拿它們和 Go 對照的測試一起刪掉，原本的呼叫點改讀 Go 給的資料——樹裡的路徑讀索引的 `role`、`class`、`tenant_named`、`not_read` 與 `defaults_carriers`，不在樹裡的名稱（ConfigMap 的鍵、還沒寫上磁碟的檔名）問 `parse-tree` 的名稱模式——它也回答名稱是否帶設定檔副檔名（`config_extension`，隱藏的名稱也答）、以及這些名稱放在同一個目錄時選哪一份 defaults 載體（落選的標 `not_read: unselected_defaults_carrier`），Go 測試要求名稱模式與整棵樹模式在名稱對照表的每一列都答得一樣；檔名規則對照表（`tests/shared/confd_name_classification_matrix.json`）只由 Go 的 `pkg/confdname` 測試擁有，逐格驗證並守住列的涵蓋下限。`tests/shared/test_confd_tools_no_python_judgement.py` 改為守住這些述詞不再出現。尚未完成：閘門看不到、由行為矩陣測試（`tests/shared/test_confd_behaviour_matrix.py`）守住的。矩陣用的樹來自一份目錄檔，Go 端測試要求 Go 能寫出的每一種 role 與 problem 都有一棵樹；矩陣跑其中列檔層面的樹，加上兩種內容錯誤（YAML 語法錯、一個檔裡有多份文件），其餘內容錯誤只由 Go 端測試驗。每支工具以 nobody 身分執行，判準是同一棵樹上 da-guard 驗證的結束碼：0 時工具必須結束碼 0；3 或 4 時工具必須以非 0 結束、不得 traceback 或卡住，並點名驗證報告列出的每一條路徑；樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束（哪一碼依工具文件化的契約：`tenant_verify` 的 2 代表驗證不一致，所以是 1）、不得 traceback 或卡住，並以跳脫形式點名那個檔名。讀 conf.d 的工具共用一個失敗即停的出口：取得這次執行的整棵樹索引時，只要有一筆 `verdict` 不是 null，就逐條 `ERROR:` 點名那些路徑、在寫入任何東西之前以結束碼 2 結束；判定本身就是輸出的 `validate-config`、路由產生器、`check_routing_profiles`、`check_confd_schema`、`config_diff` 不經這個出口，自己點名並失敗；只讀 conf.d 一個子樹的工具（`deprecate_rule --plane subtree`）同樣經這個出口：它的索引取自 conf.d root 的整棵樹、再切出子樹那一段，因為 `parse-tree` 對子樹單獨執行時會把它當 root 判。還不符的格子會逐格列為預期失敗；目前沒有。`config_history`、`drift_detect`、`run_chaos_soak` 讀的檔一律取自這份索引，所以都需要 da-guard；`migrate_to_operator` 的 `--source-dir` 是 ConfigMap 匯出檔、不是 conf.d，它的檔取自 `parse-tree` 只列檔模式，不經這個出口。矩陣之外也還沒接上這個出口的：`batch_diagnose` 以名稱篩 ConfigMap 匯出檔，它在下一步（β2）接上。它守住的是：以 stat 或前綴自己判斷 conf.d 路徑的 `describe_tenant` 的 `--replaces`、`check_path_metadata_consistency`。`offboard_tenant` 認租戶自己的檔，也改看檔名帶的租戶 id（`tenant_named`），不再看檔名前綴。generator service 把 git 樹寫上磁碟時（`_gsvc_child`）略過隱藏路徑，改由名稱模式判定哪一段是隱藏的；路由產生器與 routing profile 的 lint 判斷平台檔裡的租戶有沒有人宣告時，改讀 `TenantScope` 的兩半，可能藏著租戶檔的項目會寫進訊息，不再把有人宣告的租戶說成 orphan。
 - 已完成，步驟 10：編輯原語的共用套件（`pkg/confedit`，含 §4 的不變式）與 da-guard 的 `write`（一次改寫、新建、取代、搬移、複製、刪除一批檔，整棵樹判一次，讀回確認後由它自己寫檔）；tenant-api 的批次 patch 與 custom-alerts 合併改用該套件。所有寫 conf.d 的 Python 工具都只送「要改什麼」：改既有檔的 `patch_config`、`threshold_govern`、`deprecate_rule`；產生新檔的 `generate_tenant_fixture`、`onboard_platform`、`migrate_rule`、`scaffold_tenant`、`init_project`、`da_assembler`（長跑的 controller 遇到拒寫只記在該 CR 的狀態、不結束程序）；搬檔的 `migrate_conf_d`；刪檔的 `offboard_tenant`（每個刪除項目帶「這個檔恰好宣告這個租戶」的前提，以同一次判定讀到的內容比對）；以及把多個來源組裝成一個 config-dir 的 `assemble_config_dir`（逐位元組複製，`--check` 判同一批）。每支都是一批交給 `da-guard write`、全部通過才寫，預覽問同一批的 dry run。Python 端不再直接寫、搬或刪 conf.d 檔；`run_chaos_soak` 與 bench 的 fixture 腳本直接改檔，是刻意模擬人手改檔的測試工具，不在此列。
-- 已完成，步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層（把未加引號的純量留成原文的 loader、照原文寫回的 dumper、保留 null 寫法的輔助函式）。最後一個讀它、但不寫 conf.d 的 `da_assembler --render-cr`（讀 CR 原文，比對 id 與 Kubernetes 的讀法、保留鍵順序）改由 `da-crdecode` 回答：它的輸出每份文件另帶 `differs_from_text`，列出 Kubernetes 讀法與原文不同的鍵與字串，物件的鍵照原文順序排；原文以 yaml.v3 的節點讀、`<<` 照 Kubernetes 的順序展開，所以只因 merge 順序不同的 CR 不再被拒收。文件裡的 conf.d 範例（`check_md_yaml_drift`）改經 `parse-tree` 讀；exporter 整份拒收的範例（多份文件、重複鍵、白名單外的標記）不再判 schema，在報告裡逐一列出。模仿 yaml.v3 的 loader 不再讀任何 conf.d，只剩讀 conf.d 以外 YAML 的地方還用它（步驟 12、13 處理）；CI 檢查守住改寫層不再出現、loader 的使用者只有這幾處。
+- 已完成，步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層（把未加引號的純量留成原文的 loader、照原文寫回的 dumper、保留 null 寫法的輔助函式）。最後一個讀它、但不寫 conf.d 的 `da_assembler --render-cr`（讀 CR 原文，比對 id 與 Kubernetes 的讀法、保留鍵順序）改由 `da-crdecode` 回答：它的輸出每份文件另帶 `differs_from_text`，列出 Kubernetes 讀法與原文不同的鍵與字串，物件的鍵照原文順序排；原文以 yaml.v3 的節點讀、`<<` 照 Kubernetes 的順序展開，所以只因 merge 順序不同的 CR 不再被拒收。文件裡的 conf.d 範例（`check_md_yaml_drift`）改經 `parse-tree` 讀；exporter 整份拒收的 conf.d 範例（多份文件、重複鍵、白名單外的標記）判為違規，刻意示範讀不了的輸入要加 ignore 標記並寫理由。模仿 yaml.v3 的 loader 不再讀任何 conf.d，只剩讀 conf.d 以外 YAML 的地方還用它（步驟 12、13 處理）；CI 檢查守住改寫層不再出現、loader 的使用者只有這幾處。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準；`da-crdecode` 通用化並支援多份文件；AST lint 與白名單。
 - 步驟 13：刪除遷移稽核指令；漸進遷移 playbook 補上升級前檢查。
 - 可平行：`parse-tree` 串流輸出與「快取的去留」的量測。
