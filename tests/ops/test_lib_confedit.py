@@ -557,6 +557,55 @@ def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
     assert ce.write_all(root, entries[:1])[0]["status"] == ce.UNCHANGED
 
 
+# ── write: copy（另一棵樹的檔，位元組原樣；assemble_config_dir）──────
+
+_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    cpu: 010 # as written\n    note: \"警報\"\n"
+
+
+def test_copy_entry_is_the_contracts_shape(tmp_path):
+    src = tmp_path / "s.yaml"
+    assert ce.copy_entry("a.yaml", src) == {"path": "a.yaml", "copy": str(src)}
+    assert ce.copy_entry("a.yaml", src, replace=True) == {
+        "path": "a.yaml", "copy": str(src), "replace": True}
+
+
+def test_copy_entry_sends_a_relative_source_as_an_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert ce.copy_entry("a.yaml", "src/./s.yaml")["copy"] == str(tmp_path / "src" / "s.yaml")
+
+
+def test_copy_is_byte_for_byte_and_replace_overwrites(tmp_path):
+    src = tmp_path / "src" / "c.yaml"
+    src.parent.mkdir()
+    src.write_bytes(_COPIED.encode("utf-8"))
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    [dry] = ce.write_all(root, [ce.copy_entry("c.yaml", src)], dry_run=True)
+    assert (dry["kind"], dry["status"], dry["content"]) == ("copy", ce.DRY_RUN, _COPIED)
+    assert not (root / "c.yaml").exists()
+    assert ce.write_all(root, [ce.copy_entry("c.yaml", src)])[0]["status"] == ce.WRITTEN
+    assert (root / "c.yaml").read_bytes() == _COPIED.encode("utf-8")
+    # Again without replace: the target exists, a caller error; with it: the
+    # same bytes are unchanged.
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("c.yaml", src)])
+    assert (exc.value.path, exc.value.reason) == ("c.yaml", "path_exists")
+    assert ce.write_all(root, [ce.copy_entry("c.yaml", src, replace=True)])[0]["status"] == ce.UNCHANGED
+
+
+def test_a_copy_source_that_is_no_regular_file_is_named(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    before = _bytes(root)
+    (tmp_path / "dir.yaml").mkdir()
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("d.yaml", tmp_path / "dir.yaml")])
+    assert (exc.value.path, exc.value.reason) == ("d.yaml", "bad_source")
+    assert str(tmp_path / "dir.yaml") in exc.value.message
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("x2.yaml", root / "x.yaml")])
+    assert (exc.value.path, exc.value.reason) == ("x2.yaml", "bad_path")
+    assert _bytes(root) == before
+
+
 def test_deleting_the_selected_carrier_is_tree_worsened(tmp_path):
     root = _tree(tmp_path / "conf.d", {"_defaults.yaml": "defaults:\n  cpu: 5\n",
                                        "_defaults.yml": "defaults:\n  - 1\n",
