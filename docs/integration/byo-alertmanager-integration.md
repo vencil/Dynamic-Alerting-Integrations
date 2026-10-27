@@ -469,7 +469,7 @@ _routing_enforced:
 
 ## 9. 一站式配置驗證
 
-v1.7.0 新增 `validate_config.py`，一次檢查 YAML syntax、schema、routes、policy、custom rules、版號一致性：
+v1.7.0 新增 `validate_config.py`，一次檢查 YAML syntax、schema、routes（含 `--policy` 的 allowlist）、custom rules、版號一致性：
 
 ```bash
 # 一站式驗證

@@ -193,14 +193,14 @@ def test_explain_unusable_policy_is_rc2(tmp_path):
 
 
 def test_validate_config_refuses_an_unmet_min_generator_version(tmp_path):
-    """owner 核可的唯一既有呼叫 rc 變更：0 → 2（routes 與 policy 兩列都擋）。"""
+    """owner 核可的唯一既有呼叫 rc 變更：0 → 2（routes 列擋；#3303 起沒有 policy 列）。"""
     conf = _tree(tmp_path, {"receiver": _OK})
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _too_new(tmp_path))
     assert res.returncode == 2, res.stdout + res.stderr
     rows = {r["check"]: r for r in json.loads(res.stdout)}
-    for name in ("routes", "policy"):
-        assert rows[name]["status"] == "fail" and rows[name]["caller_error"], rows[name]
-        assert any("min_generator_version" in d for d in rows[name]["details"]), rows[name]
+    assert "policy" not in rows, rows
+    assert rows["routes"]["status"] == "fail" and rows["routes"]["caller_error"], rows["routes"]
+    assert any("min_generator_version" in d for d in rows["routes"]["details"]), rows["routes"]
 
 
 def test_validate_config_policy_fail_points_at_the_policy_file(tmp_path):
@@ -208,7 +208,9 @@ def test_validate_config_policy_fail_points_at_the_policy_file(tmp_path):
     conf = _tree(tmp_path, {"receiver": _BAD})
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _allow(tmp_path))
     assert res.returncode == 1, res.stdout + res.stderr
-    (row,) = [r for r in json.loads(res.stdout) if r["check"] == "policy"]
+    # #3303: the routes row carries the allowlist advice; no policy row.
+    (row,) = [r for r in json.loads(res.stdout) if r["check"] == "routes"]
+    assert "policy" not in {r["check"] for r in json.loads(res.stdout)}
     assert row["status"] == "fail"
     assert row["suggested_action"] == gar.POLICY_REFUSAL_REMEDY
     assert "_domain_policy.yaml" not in row["suggested_action"]
@@ -328,22 +330,38 @@ def test_validate_config_version_error_gets_the_version_remedy(tmp_path):
     conf = _tree(tmp_path, {"receiver": _OK})
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _too_new(tmp_path))
     rows = {r["check"]: r for r in json.loads(res.stdout)}
-    for name in ("routes", "policy"):
-        assert rows[name]["suggested_action"] == gar.POLICY_VERSION_REMEDY, rows[name]
+    assert rows["routes"]["suggested_action"] == gar.POLICY_VERSION_REMEDY, rows["routes"]
 
 
-def test_validate_config_allowlist_advice_only_for_an_allowlist_refusal(tmp_path):
-    """租戶 id 含 "domain" 的路由 WARN 被 policy 列的字串過濾撿到時，建議不是
-    「改 allowlist」，而是路由的建議（那一行講的是路由）。"""
+def test_validate_config_a_tenant_named_domain_is_not_an_allowlist_finding(tmp_path):
+    """#3303：租戶 id 含 "domain" 的路由行先前被 policy 列的字串過濾撿成第二個 FAIL，並帶
+    「改 allowlist」以外的建議。policy 列已移除：帶 `--policy` 與不帶得到同一份 routes 判定，
+    沒有 policy 列，建議也不是 allowlist 的（這棵樹的 override 缺 matcher，routes 本來就 FAIL；
+    只有 clamp 類 WARN 的樹結束碼 1 → 0，見 test_validate_config.py 的 TestPolicyCheck）。"""
     conf = _tree(tmp_path, {"receiver": _OK, "overrides": [{"receiver": _OK_O}]})
     (conf / "t1.yaml").rename(conf / "domain-a.yaml")
     text = (conf / "domain-a.yaml").read_text(encoding="utf-8").replace("t1:", "domain-a:")
     (conf / "domain-a.yaml").write_text(text, encoding="utf-8")
+    bare = _run(_VALIDATE, "--config-dir", str(conf), "--json")
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _allow(tmp_path))
-    (row,) = [r for r in json.loads(res.stdout) if r["check"] == "policy"]
-    assert row["status"] == "fail", row
+    rows = {r["check"]: r for r in json.loads(res.stdout)}
+    assert res.returncode == bare.returncode, res.stdout + res.stderr
+    assert "policy" not in rows, rows
+    assert rows["routes"] == {r["check"]: r for r in json.loads(bare.stdout)}["routes"]
+    assert rows["routes"]["suggested_action"] != gar.POLICY_REFUSAL_REMEDY, rows["routes"]
+
+
+def test_validate_config_a_mixed_routes_row_gets_the_routes_advice(tmp_path):
+    """#3303：allowlist 拒收與其他阻擋錯誤並存時，routes 列給一般路由建議
+    （`_collision_hint` 是「全部」才給 allowlist 的修法，不是「任一」）。"""
+    conf = _tree(tmp_path, {"receiver": _BAD})
+    write_yaml(str(conf), "t2.yaml", make_tenant_yaml(
+        "t2", keys={"mysql_connections": 5}, routing={"receiver": _OK, "group_wait": "bogus"}))
+    res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _allow(tmp_path))
+    (row,) = [r for r in json.loads(res.stdout) if r["check"] == "routes"]
+    assert res.returncode == 1 and row["status"] == "fail", row
+    assert any("not in allowed_domains" in d for d in row["details"]), row
     assert row["suggested_action"] != gar.POLICY_REFUSAL_REMEDY, row
-    assert "allowed_domains" not in row["suggested_action"], row
 
 
 def test_explain_profile_expansion_prints_no_notice(tmp_path):

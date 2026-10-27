@@ -670,7 +670,7 @@ validate-routes: $(DA_GUARD_PREREQ) ## 驗證 Alertmanager route config (CI lint
 		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 .PHONY: validate-config
-validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
+validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + routes + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
 	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \

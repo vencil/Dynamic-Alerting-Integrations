@@ -176,49 +176,62 @@ class TestReportOutput:
 
 
 class TestPolicyCheck:
-    """Check 4: Webhook domain allowlist."""
+    """`--policy`: the webhook domain allowlist, judged by the routes row only
+    (#3303 removed the `policy` row, which re-read the generator's warnings by
+    substring)."""
+
+    @staticmethod
+    def _tree(d, tenant="tenant-a", host="hooks.example.com", extra=None):
+        """conf.d is *d*; the policy file sits beside it (a stray YAML in
+        conf.d is a config_dir finding of its own)."""
+        policy_path = d + "-policy.yaml"
+        with open(policy_path, "w", encoding="utf-8") as f:
+            yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
+        with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+        routing = {"receiver": {"type": "webhook", "url": f"https://{host}/alert"}}
+        routing.update(extra or {})
+        with open(os.path.join(d, f"{tenant}.yaml"), "w", encoding="utf-8") as f:
+            yaml.dump({"tenants": {tenant: {"_routing": routing}}}, f)
+        return policy_path
 
     def test_supplied_but_missing_policy_file_is_caller_error(self):
-        """A policy path that is not a file is a caller error, not a skip.
-
-        ⛔ Renamed from `test_no_policy_file_skips`, which asserted PASS +
-        "skipped" (#1556). That row is exactly what a customer copying the
-        documented `--policy "webhook.company.com,slack.com"` example saw:
-        `[PASS] policy — No policy file — skipped`, exit 0, and the webhook
-        domain allowlist never ran. Omitting the flag is still a legitimate
-        skip — `test_none_policy_skips` below is the other half of the
-        distinction this check now draws.
-        """
+        """A policy path that is not a file is a caller error, not a skip
+        (#1556) — now on the routes row."""
         with tempfile.TemporaryDirectory() as d:
-            result = vc.check_policy(d, "/nonexistent/policy.yaml")
+            result = vc.check_routes(d, "/nonexistent/policy.yaml")
             assert result["status"] == vc.FAIL
             assert result["caller_error"] is True
 
-    def test_none_policy_skips(self):
-        """None policy should skip with PASS."""
-        with tempfile.TemporaryDirectory() as d:
-            result = vc.check_policy(d, None)
-            assert result["status"] == vc.PASS
-
     def test_valid_webhook_passes_policy(self):
-        """Webhook URL matching allowed_domains should pass."""
         with tempfile.TemporaryDirectory() as d:
-            # Create policy
-            policy_path = os.path.join(d, "policy.yaml")
-            with open(policy_path, "w", encoding="utf-8") as f:
-                yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
-            # Create config with matching webhook
-            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"tenant-a": {
-                    "_routing": {
-                        "receiver": {"type": "webhook",
-                                     "url": "https://hooks.example.com/alert"},
-                    }
-                }}}, f)
-            result = vc.check_policy(d, policy_path)
-            assert result["status"] in (vc.PASS, vc.WARN)
+            result = vc.check_routes(d, self._tree(d))
+            assert result["status"] in (vc.PASS, vc.WARN), result
+
+    def test_a_refused_domain_fails_routes_with_the_allowlist_advice(self):
+        """#3303: the allowlist advice, by the generator's kind
+        (`is_policy_refusal`), now rides on the routes row."""
+        with tempfile.TemporaryDirectory() as d:
+            result = vc.check_routes(d, self._tree(d, host="evil.example.org"))
+            assert result["status"] == vc.FAIL, result
+            assert result["hint"] == vc.POLICY_REFUSAL_REMEDY, result
+
+    def test_a_tenant_named_domain_is_not_a_policy_finding(self, capsys, cli_argv):
+        """#3303: a clamp WARN of a tenant whose name contains `domain` used to
+        be picked by the `policy` row's substring filter and FAIL it (exit 1;
+        the same tree without --policy exited 0). Now the run is the routes
+        row's verdict alone: a WARN, exit 0, and no `policy` row."""
+        with tempfile.TemporaryDirectory() as d:
+            policy = self._tree(d, tenant="domain-a", extra={"group_wait": "1s"})
+            cli_argv("validate_config", "--config-dir", d, "--policy", policy, "--json")
+            with pytest.raises(SystemExit) as exc:
+                vc.main()
+            rows = json.loads(capsys.readouterr().out)
+            rows = rows["checks"] if isinstance(rows, dict) else rows
+            assert exc.value.code == 0, rows
+            assert "policy" not in {r["check"] for r in rows}, rows
+            (routes,) = [r for r in rows if r["check"] == "routes"]
+            assert routes["status"] == vc.WARN and any("domain-a" in l for l in routes["details"]), routes
 
 
 class TestCustomRulesCheck:
@@ -2117,7 +2130,7 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
     """⛔ `SystemExit` is not an `Exception`, and both catchers had to learn it.
 
     `_parse_config_files` calls `sys.exit(EXIT_CALLER_ERROR)` when the config
-    directory has gone; `check_schema` / `check_routes` / `check_policy` all
+    directory has gone; `check_schema` / `check_routes` both
     reach it, and so does `_no_declared_defaults_hint`. `main()` checks
     `isdir` first, so firing it needs a TOCTOU — a GitOps ConfigMap projected
     volume swaps `..data` atomically — and then the process dies before
