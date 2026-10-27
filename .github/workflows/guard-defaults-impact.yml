@@ -416,8 +416,12 @@ jobs:
           tr '\0' '\n' < "$RUNNER_TEMP/changed-defaults.txt"
 
           # This repo's _defaults.yaml files live in SEVERAL independent conf.d
-          # trees (shipped config, try-local seed, recipe examples, e2e-bench and
-          # golden fixtures) — only one of them sits under the auto-detected root.
+          # trees (shipped config, try-local seed, recipe examples, e2e-bench
+          # fixtures) — only one of them sits under the auto-detected root. The
+          # golden fixtures (tests/golden/fixtures/) are conf.d trees too but are
+          # NOT validated: they are malformed on purpose and their da-guard exit
+          # codes are pinned by golden_served_test.go. The helper reports them as
+          # `excluded` rows (its EXCLUDED_PREFIXES is the one list), listed below.
           # So the scope is not one directory: it is one (config-dir, scope) pair
           # per tree that the PR actually touched. Resolution lives in a tested
           # helper rather than inline bash, because this is the step that failed.
@@ -580,11 +584,12 @@ jobs:
               # audit guard_defaults_scopes.py's kind vocabulary — where nothing
               # is wrong — while naming an EMPTY path. The required fields come
               # from that helper's own output contract
-              # (`target<TAB>dir<TAB>scope`, `unmanaged<TAB>path`).
+              # (`target<TAB>dir<TAB>scope`, `unmanaged<TAB>path`,
+              # `excluded<TAB>path<TAB>reason`).
               bad_row=0
               if [ -z "$kind" ] || [ -z "$a" ]; then
                 bad_row=1
-              elif [ "$kind" = "target" ] && [ -z "$b" ]; then
+              elif { [ "$kind" = "target" ] || [ "$kind" = "excluded" ]; } && [ -z "$b" ]; then
                 bad_row=1
               fi
               if [ "$bad_row" -eq 1 ]; then
@@ -608,6 +613,14 @@ jobs:
                            echo "此檔不在任何 \`conf.d\` 樹底下，不是 da-guard 會讀的設定。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::warning::${a} is outside every conf.d tree — not validated" ;;
+                # ⛔ Never silent either: a tree the helper excludes on purpose
+                # (EXCLUDED_PREFIXES — the golden fixtures) is named with the
+                # helper's reason, so "not in the comment" never means "checked".
+                excluded)  echo "### \`$a\` — NOT CHECKED: $b" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "此檔屬於刻意寫壞的測試 fixture 樹，da-guard 不驗它；每棵樹的結束碼由 \`tests/golden/not_served.json\` 與 \`golden_served_test.go\` 釘住。" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "::notice::${a} is a test fixture — not validated here (${b})" ;;
                 # The whole point of guard_defaults_scopes.py is that a file
                 # it cannot place is reported rather than dropped. A `case`
                 # with no catch-all would drop a third kind on the floor and
@@ -619,7 +632,7 @@ jobs:
                 # In the isolated case this section IS the whole comment.
                 *)         echo "### \`${a}\` — NOT CHECKED (unrecognised scope kind \`${kind}\`)" >> "$REPORT"
                            echo >> "$REPORT"
-                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\` 與 \`unmanaged\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
+                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\`、\`unmanaged\` 與 \`excluded\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::error::unrecognised scope kind '${kind}' for ${a} — guard_defaults_scopes.py and this workflow disagree"
                            WORST=2 ;;
@@ -631,12 +644,12 @@ jobs:
             # broken scope computation: apart from the `**/_*` pair, every
             # entry in the `paths:` filter above is the guard's own source /
             # this workflow. A PR that touches only those (plus, possibly, `_`
-            # files outside every conf.d tree, reported above) legitimately
-            # resolves no tree — and validating the whole detected tree is
+            # files outside every conf.d tree, or golden-fixture files — both
+            # reported above as NOT CHECKED) legitimately resolves no tree — and validating the whole detected tree is
             # exactly the right smoke test for "does the guard still work
             # after this change".
             # (push / workflow_dispatch land here too: no PR diff to scope against.)
-            echo "No conf.d tree resolved from this diff — running whole-tree over ${CONF_D}"
+            echo "No conf.d tree resolved from this diff (any unmanaged / excluded files are listed as NOT CHECKED) — running whole-tree over ${CONF_D}"
             # --scope is relative to --config-dir (#2588): "." = the whole tree.
             run_one "${CONF_D}" "."
           fi

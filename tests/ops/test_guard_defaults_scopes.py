@@ -827,6 +827,74 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         assert b"?" not in out
 
 
+class TestGoldenFixturesAreExcludedOutLoud:
+    """#3341：`tests/golden/fixtures/**` 刻意寫壞（root `defaults:` 放 mapping、字串），
+    每棵樹的 da-guard 結束碼由 not_served.json + golden_served_test.go 釘住，所以
+    guard 不驗它——但要**點名**（`excluded` 列），不可靜默消失。前綴只在 helper 定義。"""
+
+    _GOLDEN = "tests/golden/fixtures/reserved-null/conf.d/_defaults.yaml"
+
+    def _run(self, payload: str, capsys, monkeypatch) -> tuple[int, list[str]]:
+        monkeypatch.setattr("sys.stdin", _Stdin(payload))
+        rc = mod.main(["--null", "-"])
+        return rc, capsys.readouterr().out.splitlines()
+
+    def test_a_golden_fixture_path_is_an_excluded_row(self, capsys, monkeypatch):
+        rc, rows = self._run(self._GOLDEN + "\0", capsys, monkeypatch)
+        assert rc == 0, rows
+        assert rows == [f"excluded\t{self._GOLDEN}\t{mod.EXCLUDED_PREFIXES['tests/golden/fixtures/']}"], rows
+
+    def test_a_real_tree_beside_it_is_still_targeted(self, capsys, monkeypatch):
+        """混在一起時，真的樹照樣解析成 target；golden 那一份也不會把那棵樹的 scope 撐大。"""
+        rc, rows = self._run(self._GOLDEN + "\0try-local/seed/conf.d/_defaults.yaml\0",
+                             capsys, monkeypatch)
+        assert rc == 0, rows
+        assert rows == ["target\ttry-local/seed/conf.d\t.",
+                        f"excluded\t{self._GOLDEN}\ttest fixture (pinned by golden_served_test.go)"], rows
+
+    def test_the_prefix_is_matched_verbatim(self):
+        """看起來像的路徑不算：前綴只認字面。"""
+        assert mod.excluded_reason("./tests/golden/fixtures/x/conf.d/_defaults.yaml") is None
+        assert mod.excluded_reason("tests/golden/fixtures-old/conf.d/_defaults.yaml") is None
+
+    def test_every_excluded_tree_in_the_repo_is_pinned_by_its_exit_code(self):
+        """排除的理由是「另有東西釘住它」：每棵 golden fixture 樹都要被
+        golden_served_test.go 掃到——它掃 tests/golden/fixtures/*/conf.d 全部。"""
+        served_test = (_REPO / "components" / "threshold-exporter" / "app" / "cmd" / "da-guard"
+                       / "golden_served_test.go").read_text(encoding="utf-8")
+        assert "not_served.json" in served_test, "golden_served_test.go no longer reads not_served.json"
+        assert '"fixtures", "*", "conf.d"' in served_test, (
+            "golden_served_test.go no longer globs every tests/golden/fixtures/*/conf.d — "
+            "the guard's exclusion would then leave a tree unpinned")
+        trees = sorted(d.name for d in (_REPO / "tests" / "golden" / "fixtures").iterdir()
+                       if (d / "conf.d").is_dir())
+        assert trees, "no golden fixture tree found — this assertion is vacuous"
+
+    @staticmethod
+    def _run_step() -> str:
+        steps = TestWorkflowContract._steps()
+        runs = [s.get("run") or "" for s in steps if "RAN_TARGET" in (s.get("run") or "")]
+        assert len(runs) == 1, "expected exactly one step that dispatches the TSV rows"
+        return runs[0]
+
+    def test_the_workflow_reports_excluded_rows_and_does_not_count_them_as_a_run(self):
+        """`excluded` 列寫進 PR 留言（NOT CHECKED + 原因），不設 RAN_TARGET——所以
+        只動 golden fixture 的 PR 會走整棵樹 smoke，而不是什麼都沒驗；也不設 WORST。"""
+        run = self._run_step()
+        branch = run.split("excluded)", 1)
+        assert len(branch) == 2, "the dispatch has no `excluded)` branch"
+        body = branch[1].split(";;", 1)[0]
+        assert "NOT CHECKED" in body and "$b" in body and ">> \"$REPORT\"" in body, body
+        assert "RAN_TARGET" not in body and "WORST" not in body, body
+        assert 'run_one "${CONF_D}" "."' in run, "the no-target fallback smoke is gone"
+
+    def test_the_prefix_lives_only_in_the_helper(self):
+        """SSOT：workflow 的可執行行不自己比對 golden 前綴。"""
+        for step in TestWorkflowContract._steps():
+            for line in TestWorkflowContract._code_lines(step.get("run") or ""):
+                assert "tests/golden/fixtures" not in line, line
+
+
 class _Stdin:
     """⛔ Exposes `.buffer`, because the script reads BYTES.
 

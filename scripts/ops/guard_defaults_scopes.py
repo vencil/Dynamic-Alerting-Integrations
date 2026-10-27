@@ -5,7 +5,7 @@
 `guard-defaults-impact.yml` 原本假設「所有 `_defaults.yaml` 都住在同一個
 conf.d 根底下」，於是把 scope 算成單一目錄、config-dir 固定成偵測到的那個根。
 實際上本 repo 的 `_defaults.yaml` 橫跨多個彼此獨立的 conf.d 樹（出貨設定、
-try-local seed、recipe 範例、e2e-bench fixture、golden fixture），
+try-local seed、recipe 範例、e2e-bench fixture；golden fixture 刻意不驗，見下），
 **其中只有一個**在預設偵測到的根底下。加上 shallow clone 讓 `git diff` 取不到
 base ref、失敗又被 `|| true` 吞掉，scope 於是靜默退回一個 PR 從沒碰過的目錄，
 guard 驗錯樹之後貼上綠色 sticky comment。
@@ -25,11 +25,18 @@ guard 驗錯樹之後貼上綠色 sticky comment。
   `conf.d/conf.d/db`。
 * 找不到 `conf.d` 祖先的檔案 ＝ **unmanaged**，由呼叫端顯式回報「未檢查、原因為何」。
   ⛔ 不可靜默略過——那正是本票要消滅的失效形狀。
+* 落在 `EXCLUDED_PREFIXES` 底下的檔案 ＝ **excluded**，不交給 da-guard、也不併進任何
+  target，同樣由呼叫端點名回報（原因欄是這裡給的那句）。目前只有
+  `tests/golden/fixtures/`：那些樹**刻意**寫壞（root `defaults:` 放 mapping、字串），
+  每棵樹的 da-guard 結束碼改由 `tests/golden/not_served.json` 與
+  `cmd/da-guard/golden_served_test.go` 釘住，與 `.pre-commit-config.yaml` 的 schema
+  檢查排除它的理由相同。⛔ 前綴只在這裡定義一次；workflow 只認 row kind。
 
 輸出（TSV，供 workflow 的 bash 直接讀）
 --------------------------------------
   target<TAB><config-dir><TAB><scope（相對 config-dir）>
   unmanaged<TAB><path>
+  excluded<TAB><path><TAB><原因>
 
 用法
 ----
@@ -117,6 +124,46 @@ ROW_SEP = "\n"
 # proposal again: the defect was the sentence, not the set.
 UNREPRESENTABLE = frozenset(chr(c) for c in range(0x20)) | {"\x7f",
                                                             FIELD_SEP, ROW_SEP}
+
+# Trees the guard deliberately does not validate, by repo-relative prefix →
+# the reason the caller prints. ⛔ The one place this is defined: the workflow
+# reports `excluded` rows by kind and never matches a path itself.
+# tests/golden/fixtures/ encodes malformed shapes ON PURPOSE (a root
+# `defaults:` holding a mapping or a string, which the exporter drops whole);
+# each tree's da-guard exit code is pinned instead by
+# tests/golden/not_served.json and
+# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go — the
+# same reason .pre-commit-config.yaml keeps these trees out of the schema check.
+EXCLUDED_PREFIXES = {
+    "tests/golden/fixtures/": "test fixture (pinned by golden_served_test.go)",
+}
+
+
+def excluded_reason(path: str) -> str | None:
+    """The reason `path` is not validated (EXCLUDED_PREFIXES), or None.
+
+    Matched on the verbatim string, like everything else here: a path that
+    only looks like the prefix after rewriting is not excluded."""
+    for prefix, reason in EXCLUDED_PREFIXES.items():
+        if path.startswith(prefix):
+            return reason
+    return None
+
+
+def partition(paths: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """(kept, excluded): `excluded` is (path, reason), sorted; `kept` keeps the
+    input order. ⛔ An excluded path is still a row the caller reports — it is
+    taken out of `resolve()` only so it neither becomes a target nor widens
+    another tree's scope."""
+    kept: list[str] = []
+    excluded: list[tuple[str, str]] = []
+    for path in paths:
+        reason = excluded_reason(path) if path else None
+        if reason is None:
+            kept.append(path)
+        else:
+            excluded.append((path, reason))
+    return kept, sorted(excluded)
 
 
 def conf_d_root(path: str) -> str | None:
@@ -320,10 +367,13 @@ def main(argv: list[str] | None = None) -> int:
             "file, or change this contract on both ends together.\n")
         return EXIT_UNREPRESENTABLE_PATH
 
-    targets, unmanaged = resolve(paths)
+    kept, excluded = partition(paths)
+    targets, unmanaged = resolve(kept)
     lines = [f"target{FIELD_SEP}{config_dir}{FIELD_SEP}{scope}{ROW_SEP}"
              for config_dir, scope in targets]
     lines += [f"unmanaged{FIELD_SEP}{path}{ROW_SEP}" for path in unmanaged]
+    lines += [f"excluded{FIELD_SEP}{path}{FIELD_SEP}{reason}{ROW_SEP}"
+              for path, reason in excluded]
     # ⛔ Written as bytes with the same surrogateescape handler that read them,
     # and with `\n` pinned. Going back through `sys.stdout` would re-encode
     # strictly (UnicodeEncodeError on a surrogate) and, on Windows, would turn
