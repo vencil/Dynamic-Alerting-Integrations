@@ -146,7 +146,7 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 
 ### 5.2 升級 / 退版安全
 
-- **升級**：`migrate_conf_d.py --apply` 走 `git mv`，每個檔案獨立 commit；任何時刻 `git revert` 部分 commit 即可暫停
+- **升級**：`migrate_conf_d.py --apply` 把整批搬移交給 `da-guard write`（全部通過才搬），再把 git index 照 `git mv` 的方式更新成改名（不會替你 commit）；分批 commit 後，任何時刻 `git revert` 部分 commit 即可暫停
 - **完全退版**：`incremental-migration-playbook.md` §Emergency Rollback Procedures（[文件](incremental-migration-playbook.md)） §「退版順序」表格 + `da-tools tenant-verify --all --json > pre-base.json` 拍快照 + 反序 revert + 驗證 checklist
 
 ### 5.3 Customer escalation triggers

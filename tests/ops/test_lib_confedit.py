@@ -667,6 +667,22 @@ def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     assert not (tmp_path / "a.yaml").exists()
 
 
+def test_write_all_or_exit_dry_run_judges_names_and_writes_none(tmp_path, capsys):
+    # A dry run is the same batch judged: passing, nothing written; refused,
+    # named and exit 2 as a real write is — and make_root is not called.
+    _tree(tmp_path, {"a.yaml": "tenants:\n  tenant-a: {}\n"})
+    out = ce.write_all_or_exit(tmp_path, [ce.move_entry("d/a.yaml", "a.yaml")],
+                               tool="t", dry_run=True)
+    assert [r["status"] for r in out] == [ce.DRY_RUN]
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [ce.move_entry(".d/a.yaml", "a.yaml")],
+                             tool="t", dry_run=True, make_root=lambda: pytest.fail("made"))
+    assert exc.value.code == 2
+    assert "t: ERROR: .d/a.yaml: not_read:" in capsys.readouterr().err
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
+
+
 def test_a_caller_error_with_no_file_to_blame_names_no_path():
     err = ce.EditCallerError({"path": "", "status": ce.CALLER_ERROR, "reason": "bad_path",
                               "message": "no such directory"})
