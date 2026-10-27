@@ -479,13 +479,17 @@ def number_value(number: "int | float", at: "Sequence[str]" = ()) -> dict:
     decoded into float64 by the exporter): `data_value` of it, except an
     `int` longer than the edit contract's 18 characters, which goes as a
     float (`10**20` → `100000000000000000000.0`) instead of being refused.
-    A `bool`, anything else that is not an int / float, and a NaN / infinite
-    float are ValueError naming *at* (the key path the number sits at)."""
+    A `bool`, anything else that is not an int / float, an int past float64's
+    range, and a NaN / infinite float are ValueError naming *at* (the key path
+    the number sits at)."""
+    where = ".".join(at) or "(the top level)"
     if isinstance(number, bool) or not isinstance(number, (int, float)):
-        where = ".".join(at) or "(the top level)"
         raise ValueError(f"{where}: {number!r} is not a number")
     if isinstance(number, int) and not is_canonical_int(str(number)):
-        number = float(number)
+        try:
+            number = float(number)
+        except OverflowError:
+            raise ValueError(f"{where}: the int is past float64's range") from None
     return data_value(number, tuple(str(k) for k in at))
 
 
