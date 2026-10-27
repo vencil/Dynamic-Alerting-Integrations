@@ -146,7 +146,7 @@ sum(rate(da_config_reload_trigger_total[5m])) by (reason)
 
 ### 5.2 Upgrade / rollback safety
 
-- **Upgrade**: `migrate_conf_d.py --apply` does `git mv` per file with independent commits; pause at any time via `git revert` of partial commits
+- **Upgrade**: `migrate_conf_d.py --apply` hands the whole batch of moves to `da-guard write` (moved only when every move passes), then updates the git index as `git mv` does, so each move is staged as a rename (it does not commit for you); commit in batches, and pause at any time via `git revert` of partial commits
 - **Full rollback**: [`incremental-migration-playbook.en.md` §Emergency Rollback Procedures](incremental-migration-playbook.en.md#emergency-rollback-procedures) "rollback order" table + `da-tools tenant-verify --all --json > pre-base.json` to snapshot + reverse-order revert + verification checklist
 
 ### 5.3 Customer escalation triggers

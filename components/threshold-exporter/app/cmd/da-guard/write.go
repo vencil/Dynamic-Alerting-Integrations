@@ -682,7 +682,7 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		if fi.Path == nil {
 			return bad("files[%d]: \"path\" is required", i)
 		}
-		rel, err := cleanRelPath(*fi.Path)
+		rel, err := canonicalRelPath(*fi.Path)
 		if err != nil {
 			return nil, w.callerError(writeReasonBadPath, "--input: files[%d].path %q: %v", i, *fi.Path, err), false
 		}
@@ -744,7 +744,7 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		case fi.Delete != nil:
 			wf.kind = writeKindDelete
 		default:
-			from, err := cleanRelPath(*fi.From)
+			from, err := canonicalRelPath(*fi.From)
 			if err != nil {
 				return nil, w.callerError(writeReasonBadPath, "--input: files[%d].from %q: %v", i, *fi.From, err), false
 			}
@@ -763,6 +763,23 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 		seen[wf.from] = i
 	}
 	return files, 0, true
+}
+
+// canonicalRelPath is cleanRelPath for a path `write` acts on, which must
+// already be in its clean form: `a//b.yaml`, `a/./b.yaml`, `a/../b.yaml`,
+// `a/b/` (or `\` separators) are refused, never cleaned in silence — a
+// caller that goes on to use the string it sent (a git index entry, a
+// message, a second tool) would otherwise act on a path other than the one
+// written.
+func canonicalRelPath(p string) (string, error) {
+	clean, err := cleanRelPath(p)
+	if err != nil {
+		return "", err
+	}
+	if clean != p {
+		return "", fmt.Errorf("is not in its clean form (it names %q): send that path", clean)
+	}
+	return clean, nil
 }
 
 // decodeStrict reads exactly one JSON object with no unknown member.

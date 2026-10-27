@@ -691,10 +691,18 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
 
 def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
                       binary: Optional[str] = None, timeout: Optional[float] = None,
-                      make_root: "Optional[Callable[[], Any]]" = None) -> "list[dict]":
+                      make_root: "Optional[Callable[[], Any]]" = None,
+                      dry_run: bool = False,
+                      partial_note: Optional[str] = None) -> "list[dict]":
     """`write_all` for a one-shot CLI that writes conf.d (#3206 step 10c):
-    the files' results when the batch passes (a dry run is `write_all(...,
-    dry_run=True)`). Otherwise every line goes to stderr prefixed `<tool>: `
+    the files' results when the batch passes. *dry_run*: the same batch
+    judged and nothing written (`write_all(..., dry_run=True)`), a refusal
+    named and exit 2 as on a real write — a tool whose preview must say
+    whether the run would be refused; *make_root* is then not called.
+    *partial_note*: one more line after a write that stopped part-way — what
+    the tool had yet to do with the files it wrote (its own step after the
+    batch), which nobody else can say.
+    Otherwise every line goes to stderr prefixed `<tool>: `
     and the process exits 2 (EXIT_CALLER_ERROR) — a refusal (each refused
     file named with its reason, the tree-worsening ones too; nothing
     written), da-guard's caller error or an older da-guard (nothing
@@ -714,7 +722,7 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
     from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: PLC0415
 
     created: "list[Path]" = []
-    if make_root is not None:
+    if make_root is not None and not dry_run:
         p = Path(root).absolute()
         while not p.exists() and p != p.parent:
             created.append(p)
@@ -735,7 +743,7 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
         sys.exit(EXIT_CALLER_ERROR)
 
     try:
-        return write_all(root, entries, binary=binary, timeout=timeout)
+        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
     except EditsRefused as exc:
         for r in exc.refusals:
             say(f"{r.path}: {r.reason}: {r.message}")
@@ -745,6 +753,8 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
         die(f"{exc} — nothing was written")
     except PartialWrite as exc:
         left = [*exc.written, *exc.maybe_written]
+        if partial_note:
+            say(partial_note)
         die(f"the write under {root} stopped part-way: {exc.cause}; "
             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
             f"been written, not rolled back: {', '.join(left) or '(none)'}")
