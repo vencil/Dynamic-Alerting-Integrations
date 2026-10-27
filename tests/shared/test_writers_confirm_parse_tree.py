@@ -58,6 +58,12 @@ run。第 1 列是「位元組原樣放進去」，第 2 列是「一個被拒�
 的另一種拼法撞上 `--output` 裡已有的那個是工具自己的衝突檢查（rc 1，
 tests/ops/test_assemble_config_dir.py）。沒有第 6 列——它不從值做任何決定，只搬位元組
 （跨來源重複租戶是 `_lib_tenant_uniqueness` 的、在它自己的測試裡）。拒寫一律結束碼 2。
+check_threshold_registry `--regen` 同樣改由 `da-guard write` 寫（#3206 步驟 10）：拼好生成
+區塊的兩個 `_defaults.yaml` 各是一個 `replace`（整份新文字），每個 conf.d 根目錄一批，
+寫之前先問同一批的 dry run。第 2 列是「write 拒寫就不寫」（`inf` 驗證會點名），另有
+「兩個根目錄的拒絕逐檔點名」、「權限保留」、「symlink 拒寫」、「區塊不在它的 carrier 底下
+就拒寫」與「後面的寫入失敗時點名已寫入的檔」；第 3 列成為新文字讀不了
+（原檔的重複鍵留在拼好的文字裡：`read_back_mismatch`）。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -1089,7 +1095,7 @@ def test_patch_config_refuses_keys_that_differ_only_in_case():
 
 # ── check_threshold_registry --regen (two conf.d `_defaults.yaml`) ───────
 # `--regen` splices generated blocks into the dev template and the try-local
-# seed. The rows run `regen_surfaces` on copies of the two real files in a
+# seed, and `da-guard write` writes them (one batch per conf.d root). The rows run `regen_surfaces` on copies of the two real files in a
 # tmp repo root, with only the conf.d surfaces (the pack headers and helm
 # values are not conf.d, and would be the real files). The two files sit at
 # their conf.d roots under fixed names, so there is no row 4.
@@ -1149,8 +1155,9 @@ def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
 def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
         tmp_path, monkeypatch):
     # A registry value of +inf renders `inf`, a string to yaml.v3 — not the
-    # number the exporter's `defaults` takes. Neither file is written (the
-    # seed's change alone would read back fine: all or none).
+    # number the exporter's `defaults` takes: da-guard write's validation
+    # names the file. Neither file is written (the seed's change alone would
+    # pass: all or none).
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                   _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
@@ -1158,19 +1165,160 @@ def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
     doc["keys"]["container_cpu"]["value"] = float("inf")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(doc)
-    assert "content_differs" in str(exc.value) and "defaults.container_cpu" in str(exc.value)
+    assert f"{dev}: read_back_mismatch: validation would name" in str(exc.value)
+    assert str(seed) not in str(exc.value)
     assert _bytes(tmp_path / "repo") == before
 
 
 def test_threshold_registry_regen_does_not_write_an_unreadable_original(tmp_path, monkeypatch):
     # A key written twice outside the generated block: PyYAML kept the last
-    # one and the regen wrote; yaml.v3 refuses the file.
+    # one and the regen wrote; yaml.v3 does not read the text to be written.
     text = _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n"
     lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, text)
     before = _bytes(tmp_path / "repo")
-    with pytest.raises(lib.ConfdWriteRefused, match="original_unreadable.*duplicate_key"):
+    with pytest.raises(lib.ConfdWriteRefused, match="read_back_mismatch.*duplicate_key"):
         lib.regen_surfaces(lib.build_registry_doc())
     assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_names_every_refused_file(tmp_path, monkeypatch):
+    """Both conf.d roots refused: each file named, not only the first one
+    (every root is judged before the answer), and nothing written."""
+    lib, dev, seed = _regen_setup(
+        tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n",
+        _stale(_SEED_REL, *_SEED_STALE) + "flag: 1\nflag: 2\n")
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
+        lib.regen_surfaces(lib.build_registry_doc())
+    assert "refused 2 generated conf.d file(s)" in str(exc.value)
+    assert f"{dev}: read_back_mismatch" in str(exc.value)
+    assert f"{seed}: read_back_mismatch" in str(exc.value)
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_writes_through_da_guard_write(tmp_path, monkeypatch):
+    """ADR-036 §2: the conf.d files go to `da-guard write` — one batch per
+    conf.d root, each file a `replace` of its whole text — asked first as a
+    dry run, then the same batch written; no Python write of a conf.d file."""
+    import _lib_confedit
+    import _lib_python
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    calls = []
+    real = _lib_confedit.write_all
+
+    def spy(root, entries, **kw):
+        calls.append((str(root), [{**e, "copy": Path(e["copy"]).read_bytes()} for e in entries],
+                      kw.get("dry_run", False)))
+        return real(root, entries, **kw)
+
+    monkeypatch.setattr(_lib_confedit, "write_all", spy)
+    secure = []
+    real_secure = _lib_python.write_text_secure
+    monkeypatch.setattr(_lib_python, "write_text_secure",
+                        lambda p, *a, **k: (secure.append(str(p)), real_secure(p, *a, **k)))
+    lib.regen_surfaces(lib.build_registry_doc())
+    want = {str(dev.parent): (REPO / _DEV_REL).read_bytes(),
+            str(seed.parent): (REPO / _SEED_REL).read_bytes()}
+    assert [(root, dry) for root, _e, dry in calls] == [
+        (str(dev.parent), True), (str(seed.parent), True),
+        (str(dev.parent), False), (str(seed.parent), False)]
+    for root, entries, _dry in calls:
+        assert entries == [{"path": "_defaults.yaml", "copy": want[root], "replace": True}]
+    assert secure == []
+    assert dev.read_bytes() == want[str(dev.parent)]
+
+
+def test_threshold_registry_regen_keeps_the_file_mode(tmp_path, monkeypatch):
+    # A replace keeps the file's mode (the Python write set 0600).
+    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    dev.chmod(0o644)
+    lib.regen_surfaces(lib.build_registry_doc())
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert dev.stat().st_mode & 0o777 == 0o644
+
+
+def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(
+        tmp_path, monkeypatch, capsys):
+    """A conf.d `_defaults.yaml` that is a symlink to a file inside the repo
+    (one outside it is the containment check's ValueError): da-guard write's
+    dry run refuses it (reason `symlink`) — rc 2, nothing written, the link
+    and its target as they were. The Python write followed the link and
+    wrote its target."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    _lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    target = tmp_path / "repo" / "elsewhere.yaml"
+    target.write_bytes(dev.read_bytes())
+    dev.unlink()
+    from _platform_fs import symlink_or_skip
+    symlink_or_skip(target, dev)
+    before = _bytes(tmp_path / "repo")
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen refused: da-guard write refused 1 generated conf.d file(s): {dev}: symlink:" in err
+    assert "nothing was written" in err
+    assert _bytes(tmp_path / "repo") == before and dev.is_symlink()
+
+
+def test_threshold_registry_regen_refuses_a_block_under_another_key(tmp_path, monkeypatch):
+    """The seed's `optional_overrides:` renamed by hand (`other_carrier:`),
+    the generated markers still inside it: the spliced block is no
+    `optional_overrides` item at all, so it is refused, named, and nothing
+    is written (da-guard alone would write it: the file still reads)."""
+    seed_text = _stale(_SEED_REL, *_SEED_STALE)
+    assert seed_text.count("\noptional_overrides:\n") == 1
+    lib, _dev, seed = _regen_setup(
+        tmp_path, monkeypatch, None,
+        seed_text.replace("\noptional_overrides:\n", "\nother_carrier:\n"))
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
+        lib.regen_surfaces(lib.build_registry_doc())
+    msg = str(exc.value)
+    assert f"{seed}: the generated block 'try-local-optional' does not read as under " \
+           "'optional_overrides'" in msg, msg
+    assert "nothing was written" in msg
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fails(
+        tmp_path, monkeypatch, capsys):
+    """The conf.d batches are written, then the helm values write fails
+    (OSError): rc 2 naming the helm file and the conf.d files already
+    written (not rolled back); the registry, written last, is not."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    import _lib_python
+    import _registry_lib
+    all_specs = _registry_lib.surface_specs  # before `_regen_setup` filters it
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    helm =tmp_path / "repo" / "helm" / "values.yaml"
+    helm.parent.mkdir()
+    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
+    assert text.count(marker) == 1
+    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    # The conf.d surfaces and the helm `defaults` block (on the copy above).
+    monkeypatch.setattr(lib, "surface_specs", lambda doc: [
+        s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-defaults"])
+    registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
+    registry_before = registry.read_bytes()
+    real_write = _lib_python.write_text_secure
+
+    def failing(path, *a, **k):
+        if str(path) == str(helm):
+            raise OSError(28, "No space left on device")
+        return real_write(path, *a, **k)
+
+    monkeypatch.setattr(_lib_python, "write_text_secure", failing)
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen stopped: writing {helm} failed:" in err, err
+    assert f"not rolled back: {dev}, {seed}" in err, err
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert registry.read_bytes() == registry_before
 
 
 def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
@@ -1180,7 +1328,8 @@ def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypat
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     before = _bytes(tmp_path / "repo")
     assert gate.main(["--regen"]) == 2
-    assert "da-guard parse-tree" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "through `da-guard write`" in err and "nothing was written" in err
     assert _bytes(tmp_path / "repo") == before
 
 
@@ -1206,7 +1355,7 @@ def test_threshold_registry_regen_refused_writes_not_even_the_registry(
         _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
     assert gate.main(["--regen"]) == 2
-    assert "original_unreadable" in capsys.readouterr().err
+    assert "read_back_mismatch" in capsys.readouterr().err
     assert _bytes(tmp_path / "repo") == before
 
 
@@ -1576,56 +1725,3 @@ def test_generate_tenant_fixture_plain_thresholds_are_numbers(tmp_path):
     assert {type(v) for v in vals} == {int, str}
     assert all(not v.isdigit() for v in vals if isinstance(v, str))
 
-
-# ── _lib_write_check.confirm_tree（批次：一次 tree mode）──────────────────
-
-def test_confirm_tree_moves_only_after_every_file_reads_back(tmp_path):
-    import _lib_write_check as wc
-    root = tmp_path / "out"
-    good = ("tenant-a.yaml", "tenants:\n  tenant-a:\n    k: '1'\n",
-            wc.from_python({"tenants": {"tenant-a": {"k": "1"}}}))
-    bad = ("tenant-b.yaml", "tenants:\n  tenant-b:\n    k: 1e3\n",
-           wc.from_python({"tenants": {"tenant-b": {"k": "1e3"}}}))
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(root, [good, bad]):
-            raise AssertionError("entered despite a refusal")
-    assert exc.value.reason == wc.CONTENT_DIFFERS and exc.value.rel == "tenant-b.yaml"
-    assert sorted(p.name for p in tmp_path.iterdir()) == []  # no staging left
-    root.mkdir()
-    with wc.confirm_tree(root, [good]) as staged:
-        staged.place("tenant-a.yaml", root / "tenant-a.yaml")
-    assert (root / "tenant-a.yaml").read_text(encoding="utf-8") == good[1]
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["out"]
-
-
-def test_confirm_tree_refuses_a_path_no_reader_reads(tmp_path):
-    import _lib_write_check as wc
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(tmp_path / "out", [
-                (".hidden.yaml", "tenants: {}\n", {"tenants": {}})]):
-            pass
-    assert exc.value.reason == wc.NOT_READ
-
-
-def test_confirm_tree_judges_against_a_non_empty_root_in_file_mode(tmp_path):
-    # With files already in root the staged tree is not the tree the run
-    # leaves: beside an existing `_defaults.yaml`, a new `_defaults.yml` is a
-    # spelling the directory does not select (alone in the staged tree it
-    # would be) — refused as file mode does.
-    import _lib_write_check as wc
-    root = _tree(tmp_path / "out", {"_defaults.yaml": "defaults:\n  k: 1\n"})
-    with pytest.raises(wc.WriteRefused) as exc:
-        with wc.confirm_tree(root, [("_defaults.yml", "defaults:\n  k: 2\n",
-                                     wc.from_python({"defaults": {"k": 2}}))]):
-            pass
-    assert exc.value.reason == wc.NOT_READ, exc.value
-
-
-def test_confirm_tree_without_da_guard_raises(tmp_path, monkeypatch):
-    import _lib_write_check as wc
-    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-    with pytest.raises(_lib_parse_tree.ParseTreeError):
-        with wc.confirm_tree(tmp_path / "out", [
-                ("t.yaml", "tenants: {}\n", {"tenants": {}})]):
-            pass
-    assert sorted(p.name for p in tmp_path.iterdir()) == []

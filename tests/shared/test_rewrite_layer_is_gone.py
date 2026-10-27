@@ -60,27 +60,6 @@ REWRITE_LAYER = frozenset({
     "_represent_raw_plain", "_is_plain_as_written", "_RAW_PLAIN_TAGS",
 })
 
-#: ⚠️ TEMPORARY: the leftovers another change deletes (`_lib_write_check`'s
-#: dead null-spelling helper, which registers itself on `RewriteDumper` at
-#: import, and the one test of it). Matched EXACTLY, both ways: once that
-#: change is merged these are gone, the tests below turn red, and this table
-#: is to be emptied — it never grows.
-PENDING_DEFINITIONS = {
-    "scripts/tools/_lib_yaml_keys.py:RewriteDumper",
-    "scripts/tools/_lib_write_check.py:NullText",
-    "scripts/tools/_lib_write_check.py:_represent_null_text",
-    "scripts/tools/_lib_write_check.py:_register_null_text",
-    "scripts/tools/_lib_write_check.py:keep_null_spelling",
-}
-PENDING_USES = {
-    "scripts/tools/_lib_write_check.py:RewriteDumper",
-    "scripts/tools/_lib_write_check.py:NullText",
-    "scripts/tools/_lib_write_check.py:_represent_null_text",
-    "scripts/tools/_lib_write_check.py:_register_null_text",
-    "tests/ops/test_lib_write_check.py:strict_load_for_rewrite",
-    "tests/ops/test_lib_write_check.py:dump_for_rewrite",
-    "tests/ops/test_lib_write_check.py:keep_null_spelling",
-}
 TESTS = REPO / "tests"
 #: This gate names the layer in strings and synthetic sources only; it is
 #: read like any other file (it must report nothing).
@@ -189,11 +168,8 @@ def test_the_files_are_read() -> None:
 def test_no_file_defines_the_rewrite_layer() -> None:
     found = {f"{p.relative_to(REPO).as_posix()}:{n}"
              for p in _repo_python() for n in defines(_read(p), REWRITE_LAYER)}
-    assert found == PENDING_DEFINITIONS, (
-        "the deleted PyYAML rewrite layer is defined (ADR-036 step 11):\n"
-        + "".join(f"  NEW  {k}\n" for k in sorted(found - PENDING_DEFINITIONS))
-        + "".join(f"  GONE {k} (drop it from PENDING_DEFINITIONS)\n"
-                  for k in sorted(PENDING_DEFINITIONS - found)))
+    assert not found, ("the deleted PyYAML rewrite layer is defined again "
+                       "(ADR-036 step 11):\n" + "".join(f"  {k}\n" for k in sorted(found)))
 
 
 def _scripts_and_tests() -> "list[pathlib.Path]":
@@ -206,11 +182,9 @@ def test_nothing_in_scripts_or_tests_uses_the_rewrite_layer() -> None:
         p.is_relative_to(SCRIPTS) for p in files), "tripwire: both trees are read"
     found = {f"{p.relative_to(REPO).as_posix()}:{n}"
              for p in files for n in uses(_read(p), REWRITE_LAYER)}
-    assert found == PENDING_USES, (
+    assert not found, (
         "a script or test uses the deleted PyYAML rewrite layer:\n"
-        + "".join(f"  NEW  {k}\n" for k in sorted(found - PENDING_USES))
-        + "".join(f"  GONE {k} (drop it from PENDING_USES)\n"
-                  for k in sorted(PENDING_USES - found))
+        + "".join(f"  {k}\n" for k in sorted(found))
         + "conf.d is read by `da-guard parse-tree` (`_lib_parse_tree`) and written by "
           "`da-guard write` (`_lib_confedit`); a CR's text is compared by da-crdecode.")
 

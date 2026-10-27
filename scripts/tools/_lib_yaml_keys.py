@@ -3,10 +3,9 @@
 ⛔ NOT FOR conf.d (ADR-036 §7 step 11, #3206). conf.d is read by Go only
 (`da-guard parse-tree`, `_lib_parse_tree`), and only Go writes it (`da-guard
 write`, `_lib_confedit`). The PyYAML rewrite layer that once lived here
-(``RewriteLoader``, ``load_for_rewrite``, ``dump_for_rewrite`` …) is deleted
-— all but an empty ``RewriteDumper`` that one import still needs (see the
-end of this module) — and ``tests/shared/test_rewrite_layer_is_gone.py``
-keeps it gone. What is left
+(``RewriteLoader``, ``RewriteDumper``, ``load_for_rewrite``,
+``dump_for_rewrite`` …) is deleted, and
+``tests/shared/test_rewrite_layer_is_gone.py`` keeps it gone. What is left
 is this loader for the YAML that is NOT conf.d and that some tools still read
 themselves: the Alertmanager config (``onboard_platform``), Namespace manifests
 (``check_retire_drift``), tenant-api's state store (``_lib_tenant_state``) and
@@ -255,13 +254,3 @@ def load_all_exporter_keys(stream: Any, *,
         return docs
     finally:
         loader.dispose()
-
-
-# ⚠️ TEMPORARY (#3206): the last piece of the deleted rewrite layer.
-# `_lib_write_check` still registers its dead `NullText` representer on this
-# class at import time; the change that deletes that module's dead code also
-# drops this import. Delete this class with it — `test_rewrite_layer_is_gone`
-# allows exactly this leftover and turns red once it is gone (drop the
-# allowance there then).
-class RewriteDumper(yaml.SafeDumper):
-    """A plain ``SafeDumper``; nothing in ``scripts/`` dumps with it."""
