@@ -110,7 +110,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -233,6 +236,14 @@ func TestGoldenParity_MergedHash(t *testing.T) {
 // type coercion drift (e.g. int vs float64 producing the same 16-char hash
 // by coincidence but different structural output). If merged_hash passes
 // but this fails, something semantically equivalent has shifted.
+//
+// ⚠️ golden.json's effective_config is the reported view, this leg the merge
+// core (merged_hash's input). Since #3341 the two part on one set of keys by
+// design: a `_` key (not a routing key) a SUBTREE `_defaults.yaml` writes is
+// kept by the merge and laid by no plane's view. Those keys are left out on
+// both sides here (subtreeNotCarriedKeys); TestGoldenParity_ResolveEffective
+// compares the view whole, and merged_hash still pins the merge's handling
+// of them.
 func TestGoldenParity_EffectiveConfig(t *testing.T) {
 	t.Parallel()
 	entries := loadGolden(t)
@@ -260,6 +271,14 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("config.ComputeEffectiveConfig: %v", err)
 			}
+			want := make(map[string]any, len(g.EffectiveConfig))
+			for k, v := range g.EffectiveConfig {
+				want[k] = v
+			}
+			for k := range subtreeNotCarriedKeys(t, g.DefaultsChain, defaultsBytes) {
+				delete(got, k)
+				delete(want, k)
+			}
 
 			// Compare via canonical JSON round-trip so int vs float coercion
 			// can't false-positive a "different" result — if both sides
@@ -268,7 +287,7 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("canonicalJSON(got): %v", err)
 			}
-			wantJSON, err := canonicalJSON(g.EffectiveConfig)
+			wantJSON, err := canonicalJSON(want)
 			if err != nil {
 				t.Fatalf("canonicalJSON(want): %v", err)
 			}
@@ -280,6 +299,35 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// subtreeNotCarriedKeys is the `_` keys (routing keys aside) the SUBTREE
+// files of chain — every entry with a directory part; the conf.d root's has
+// none — write in their defaults block (the `defaults:` mapping, or the
+// whole document without one): the keys a subtree does not carry (#3341,
+// config.SubtreeDefaultsRefusedKey less config.IsRoutingKey).
+func subtreeNotCarriedKeys(t *testing.T, chain []string, chainBytes [][]byte) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for i, rel := range chain {
+		if !strings.Contains(rel, "/") {
+			continue
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(chainBytes[i], &doc); err != nil {
+			t.Fatalf("decode %s: %v", rel, err)
+		}
+		block := doc
+		if d, ok := doc["defaults"].(map[string]any); ok {
+			block = d
+		}
+		for k := range block {
+			if config.SubtreeDefaultsRefusedKey(k) && !config.IsRoutingKey(k) {
+				out[k] = true
+			}
+		}
+	}
+	return out
 }
 
 // TestGoldenParity_ScannerChainOrder verifies that scanDirHierarchical picks

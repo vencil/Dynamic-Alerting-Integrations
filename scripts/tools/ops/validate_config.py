@@ -1396,7 +1396,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     A `_profile` is read as written plus inherited (#2115 (c)): one that
     binds no profile is reported — as an unknown profile when the tenant's
     own entry names it, and as binding nothing when it comes from a defaults
-    file, where the exporter does not read it. A file the exporter's load
+    file, where the exporter does not read it (the root's: a subtree
+    `_defaults.yaml` does not carry `_profile`, so effective shows none from
+    it and da-guard's `subtree_default_reserved_key` names it, #3341). A file the exporter's load
     drops or cannot read is a FAIL naming it (#2115 R5: fail-closed), as is
     a missing da-guard (a caller error) and a --config-dir with no config
     file at all (the exporter refuses to start on it; it is not "0 tenants").

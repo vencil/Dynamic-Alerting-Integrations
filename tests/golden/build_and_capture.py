@@ -440,6 +440,13 @@ def s_canonical_json_escaping():
 # pkg/config) starts treating a nested null as a deletion, or copies it
 # through as a JSON null.
 #
+# ⚠️ Since #3341 that holds for the MERGE only (merged_hash): `_x` sits in a
+# subtree `_defaults.yaml` (mixed-mode/reserved-nested-null/), which does
+# not carry `_` keys, so effective_config inherits no `_x` and shows the
+# tenant's mapping as written — its nulls included, as the view shows any
+# mapping no layer below writes. The inherited-vs-uninherited split above is
+# then pinned by merged_hash, not by the effective_config row.
+#
 # ⛔ The key is a deliberately meaningless `_x`, not `_routing` (#2417). This
 # row used `_routing` until #2362 (#2291) made da-guard reject `_routing`
 # inside a `defaults:` block (`routing_in_unread_location`: the route
@@ -476,9 +483,14 @@ def s_reserved_nested_null():
 # a child after it was inherited. Before this row no scenario's
 # effective_config held a `_` key at all, so removing the deletion branch on
 # either side left the oracle green (#1550 item 5). Written defaults ->
-# defaults, the path ADR-017 names as the reachable one (a tenant file's null
-# on these keys is rejected by check_confd_schema.py). `_silent_mode` is the
-# control: inherited and not nulled, so it must survive.
+# defaults. `_silent_mode` is the control: inherited and not nulled, so it
+# survives the merge. Since #3341 a subtree `_defaults.yaml` does not carry
+# reserved keys: the merge (merged_hash) still deletes on the null, but
+# effective_config lays neither key (both are da-guard
+# subtree_default_reserved_key errors and named in not_served). A tenant
+# file's null on a reserved key is allowed (tenant-config.schema.json: e.g.
+# `_severity_dedup: ~` is the default, enable) and deletes the inherited
+# value too, so the tenant gets the platform default.
 def s_reserved_null_delete():
     d = reset("mixed-mode") / "reserved-null"
     write(d / "_defaults.yaml", """defaults:

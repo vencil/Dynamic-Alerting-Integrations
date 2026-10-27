@@ -1421,7 +1421,10 @@ definitions:
           NotServed names each key of EffectiveConfig whose value, as shown,
           /metrics does not serve, with the reason the exporter's own build or
           resolver gives for it and the file of the value shown (#2296,
-          not_served.go). EffectiveConfig keeps the value as written. Filled by
+          not_served.go). EffectiveConfig keeps the value as written. It also
+          names a reserved key a subtree `_defaults.yaml` writes but does not
+          carry, which neither EffectiveConfig nor /metrics holds (#3341;
+          withNotCarried), with that file. Filled by
           ResolveEffective and EffectiveTree; nil from ScopeEffective, and
           omitted when no key is named.
         type: object
@@ -2985,7 +2988,11 @@ paths:
         serves in no layer; spelling_duplicate names a
         spelling of a threshold that the same mapping also writes
         under the spelling /metrics serves (two spellings of one
-        dimensional key, or both #1231 names). Dimensional keys are
+        dimensional key, or both #1231 names). value_rejected also
+        names a `_` key (not a routing key) a subtree _defaults.yaml
+        writes: a subtree does not carry it (#3341), so neither
+        effective_config nor /metrics holds it, and file is that
+        subtree file. Dimensional keys are
         one threshold whatever their label order or quoting: every key
         here is spelled as the layer that supplied its value wrote it.
         chain_parse_failed lists the

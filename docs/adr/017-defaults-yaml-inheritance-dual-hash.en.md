@@ -26,6 +26,7 @@ lang: en
 | 2026-10-10 | The `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is read from da-guard; the blast-radius report compares custom alerts separately | Decision 2 |
 | 2026-10-17 | The custom-alert compiler compiles what the exporter serves, so `_custom_alerts` in a `_defaults.yaml` no longer produces rules | Decisions 5, 6 |
 | 2026-10-21 | `describe_tenant` moves to showing only the custom-alert list the exporter serves, and the blast-radius report is retired | Decision 2 |
+| 2026-10-27 | A subdirectory `_defaults.yaml` no longer carries keys starting with `_` (da-guard reports an error); a tenant-side `null` on such a key always means the platform default | Decisions 2, 4, 10 |
 
 ## Terms
 
@@ -71,9 +72,10 @@ The order is root → each level downwards → tenant file; what is applied late
 | List | Replaced whole, never concatenated | upper `[ns-a, ns-b]`, tenant `[ns-c]` → `[ns-c]` |
 | Scalar (number, string) | The lower level overrides | upper `200`, tenant `"150"` → `"150"` |
 
-Two exceptions:
+Three exceptions:
 
 - **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config. A root platform file's `tenants.<id>._metadata` is not part of this chain: it merges with the tenant file's `_metadata` key by key ([#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370); the rule is in [config-driven](../design/config-driven.en.md)).
+- **A subdirectory `_defaults.yaml` does not carry keys starting with `_`** (the routing keys `_routing` and `_routing_*` aside, see Decision 9): see Decision 4.
 - **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) is not merged across levels**: each tenant takes it from one place only — its own, else its `tenants:` entry in a root platform file, else the bound profile; a subdirectory `_defaults.yaml`'s list is marked `not_served` and not served (see ADR-024 §3 "Where a recipe is declared"). tenant-api, da-guard and `describe_tenant.py` all follow this rule: the effective config `describe_tenant.py` shows is the one da-guard computes, and beside it the tool lists `custom_alerts` — the exporter's verdict on each entry of the list the exporter takes (name, recipe and status: `served`, switched off `disabled`, `rejected`, or `duplicate` of an earlier entry); a list marked `not_served` is not among them. `merged_hash` is da-guard's value too, the same as tenant-api's, and does not change with file names. "What does this conf.d change affect" is answered by config-diff ([ADR-037](037-config-diff-compares-rendered-output.en.md)); the blast-radius report that answered the same question by reading `describe_tenant`'s output is retired.
 
 ### 3. Example
@@ -140,14 +142,11 @@ Other keys behave differently with `null`:
 
 - **The four routing fields** (`group_by`, `group_wait`, `group_interval`, `repeat_interval` under `_routing`): `null` means "do not inherit the upper value", and the generated route omits the field. `""`, `0` and `[]` have the same effect.
 - **`_routing.receiver` cannot be used this way**: when a tenant writes `receiver: null`, the route generator prints a WARN and skips the tenant, whose alerts go back to Alertmanager's root route.
-- **Other keys starting with `_`** (such as `_namespaces`): `null` in a `_defaults.yaml` deletes the value inherited from above. It works only inside `defaults:`, or at the top level of a file without `defaults:`; a `null` in a tenant file is rejected by `check_confd_schema.py`. And the `null` must sit in the same position as the inherited value:
+- **Other keys starting with `_`** (reserved keys, such as `_silent_mode`, `_severity_dedup`, `_state_<filter>`): a `null` on the tenant side (the tenant file, a root platform file's `tenants:` entry, a profile) — `kx:`, `kx: ~` or `kx: {default: null}` — deletes the value handed down, and the tenant gets the platform default: `_state_<filter>` follows the root `state_filters` entry's `default_state`, `_severity_dedup` is on, `_silent_mode` silences nothing; `/metrics` and `/effective` agree. `check_confd_schema.py` rejects most such `null`s in a tenant file or a root platform file's `tenants:` entry — to get the platform default, delete the key; `_severity_dedup: ~` is the exception the schema allows, and it means the default, on.
 
-| Upper level (has `defaults:`) | Lower level writes `null` | Result |
-|:--|:--|:--|
-| `defaults: {_foo: "on"}` | nowhere (control) | kept |
-| same | **next to** its `defaults:` (top level) | kept: the `null` has no effect |
-| same | **inside** its `defaults:` | deleted |
-| same | at the top level of a file without `defaults:` | deleted |
+**A subdirectory `_defaults.yaml` does not carry keys starting with `_`** (the routing keys `_routing` and `_routing_*` aside; the route generator judges them): `_state_*`, `_silent_mode`, `_severity_dedup`, `_metadata`, `_profile` and the like written in a subdirectory's defaults are not applied by the exporter whatever the value (`disable`, a number and `null` alike), and `/effective` does not show them either, naming the file in `not_served` with `value_rejected` instead; da-guard reports `subtree_default_reserved_key` (an error, exit code 1) for each tenant affected, naming every file that writes the key and its value. To give some tenants a value, write it in each one's own `tenants:` entry; for `_state_<filter>` the root's `default_state` is the other option (it changes the whole tree). These keys still go through the merge rules into `merged_hash`, so changing one moves the `merged_hash` of the subtree's tenants while what is served stays the same.
+
+Example: the root has `state_filters: {maintenance: {default_state: enable}}`, `team/_defaults.yaml` has `defaults: {_state_maintenance: disable}`, and `team/t1.yaml` has `tenants: {t1: {}}`. `t1`'s maintenance filter is on, as the root says; `/effective` has no `_state_maintenance`, `not_served` has `_state_maintenance: {reason: value_rejected, file: team/_defaults.yaml}`, and da-guard exits 1. With `_state_maintenance: disable` moved into `t1`'s entry and the subdirectory line deleted, the filter is off and da-guard exits 0.
 
 When `defaults:` itself is `null` (`defaults:` followed by nothing), the whole file is treated as having no `defaults:`.
 
@@ -266,7 +265,7 @@ For example, when the root supplies `receiver` and `group_wait: 60s` and `a/_def
 
 On the same tree, `/effective` and `/metrics` can give different values — for example a subdirectory value the root does not declare, or a file with broken syntax. The decisions:
 
-1. **The effective config shows the value each level wrote, verbatim, deleting and changing nothing.** A value `/metrics` does not serve is named key by key in each tenant's `not_served`, with the reason and the file of the value shown. The reasons are a closed set; the full list is in [the CLI reference for `da-guard effective`](../cli-reference.en.md#guard).
+1. **The effective config shows the value each level wrote, verbatim, deleting and changing nothing.** The one exception is a key starting with `_` that a subdirectory `_defaults.yaml` writes (Decision 4): neither side applies it, the effective config does not show it, and `not_served` still names the subdirectory file that writes it. A value `/metrics` does not serve is named key by key in each tenant's `not_served`, with the reason and the file of the value shown. The reasons are a closed set; the full list is in [the CLI reference for `da-guard effective`](../cli-reference.en.md#guard).
 2. **Reasons come from the exporter's own verdicts while loading and resolving, never from comparing the two outputs.** A legal spelling's text and the served value can differ by design (for example `"60:critical"`), so comparing values would misjudge.
 3. **An empty `not_served` does not mean `/metrics` serves what the effective config shows.** For example, when a tenant override has expired (`expires:`), the effective config shows the text as written, `/metrics` serves the platform default, and `not_served` is still empty.
 4. **A `_defaults.yaml` on the chain with broken syntax does not make the tenant disappear.** The exporter does not read that file; `/effective` reads it as empty, still returns the tenant and lists the file in `chain_parse_failed`, and `merged_hash` is computed over the chain without it. tenant-api answers HTTP 200, `da-guard effective` exits 3, and da-guard's main check also stops with exit 3.

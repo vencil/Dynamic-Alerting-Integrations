@@ -95,7 +95,10 @@ type EffectiveConfig struct {
 	// NotServed names each key of EffectiveConfig whose value, as shown,
 	// /metrics does not serve, with the reason the exporter's own build or
 	// resolver gives for it and the file of the value shown (#2296,
-	// not_served.go). EffectiveConfig keeps the value as written. Filled by
+	// not_served.go). EffectiveConfig keeps the value as written. It also
+	// names a reserved key a subtree `_defaults.yaml` writes but does not
+	// carry, which neither EffectiveConfig nor /metrics holds (#3341;
+	// withNotCarried), with that file. Filled by
 	// ResolveEffective and EffectiveTree; nil from ScopeEffective, and
 	// omitted when no key is named.
 	NotServed map[string]NotServedKey `json:"not_served,omitempty"`
@@ -429,6 +432,9 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 	spells.addPlatform(overlay)
 	spells.addProfile(r.platformProfiles(), parts.profile)
+	// #3341: a reserved key a subtree level does not carry is not laid —
+	// /metrics applies none — and is named in not_served below.
+	blocks, notCarried := withoutSubtreeReserved(blocks, rootLevel)
 	view := effectiveView(blocks, parts.override)
 
 	ec := &EffectiveConfig{
@@ -473,7 +479,34 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 			ec.NotServed[k] = ns
 		}
 	}
+	if r.served != nil {
+		ec.NotServed = withNotCarried(ec.NotServed, view, notCarried, relChain)
+	}
 	return ec, nil
+}
+
+// withNotCarried adds to notServed each reserved key a subtree level of the
+// chain writes but does not carry (withoutSubtreeReserved: key → the deepest
+// level writing it) that the view does not hold — the tenant side sets no
+// value of it, so neither /effective nor /metrics has one: value_rejected
+// (unregistered for a `_` key the registry does not list), with that
+// level's file (#3341). A key the view holds is the tenant side's
+// own value, which is served.
+func withNotCarried(notServed map[string]NotServedKey, view map[string]any, notCarried map[string]int, relChain []string) map[string]NotServedKey {
+	for k, level := range notCarried {
+		if _, shown := view[k]; shown {
+			continue
+		}
+		if notServed == nil {
+			notServed = map[string]NotServedKey{}
+		}
+		reason := NotServedValueRejected
+		if IsUnregisteredUnderscoreKey(k) {
+			reason = NotServedUnregistered // served in no layer, as in a tenant's own file
+		}
+		notServed[k] = NotServedKey{Reason: reason, File: relChain[level]}
+	}
+	return notServed
 }
 
 // chainBlock is absPath's defaults block as the merge parsed it

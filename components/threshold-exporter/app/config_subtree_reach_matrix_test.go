@@ -18,7 +18,9 @@ package main
 // divergence report. The one licensed third outcome is a key whose consumer
 // WARNs on its own (`_critical` with no base default, an unparseable
 // dimensional key) — loud through a different channel, so the gate does not
-// repeat it.
+// repeat it. A `_` key other than a routing key is not carried by a subtree
+// at all (#3341): never written, and named by da-guard's
+// subtree_default_reserved_key error instead (verdictNotCarried).
 //
 // ⛔ WHAT THIS CATCHES THAT A PER-SHAPE TEST CANNOT. `verdictSilent` is not a
 // case anyone writes on purpose; it is what a NEW bypass arm produces when its
@@ -35,6 +37,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 type reachVerdict int
@@ -49,6 +53,10 @@ const (
 	// verdictInert: written, changes nothing, nobody warns — licensed ONLY where
 	// the value is semantically identical to the key's absence.
 	verdictInert
+	// verdictNotCarried: a key a subtree does not carry (#3341) — not
+	// written, whatever the value, and named by da-guard's
+	// subtree_default_reserved_key (config.ScopedTenants.SubtreeReserved).
+	verdictNotCarried
 	// verdictSilent: written, changes nothing, nobody warns, not the inert case.
 	// Never licensed. Present so the table can say so out loud.
 	verdictSilent
@@ -64,6 +72,8 @@ func (v reachVerdict) String() string {
 		return "written, consumer WARNs"
 	case verdictInert:
 		return "written, inert (== absent)"
+	case verdictNotCarried:
+		return "not carried, named by subtree_default_reserved_key"
 	default:
 		return "SILENT (written, no reader, no report)"
 	}
@@ -108,16 +118,19 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"resolveCriticalRows finds mysql_connections in defaults"},
 		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictWarned, "",
 			"resolveCriticalRows logs `no matching default` itself"},
-		{"a state filter the platform declares", "  _state_maintenance: disable\n", "_state_maintenance", verdictDelivered, "",
-			"ResolveStateFiltersAt iterates cfg.StateFilters, which has maintenance"},
-		{"a state filter the platform never declared", "  _state_no_such_filter: disable\n", "_state_no_such_filter", verdictRefused, "",
-			"ResolveStateFiltersAt never looks the key up, and `_state_` is a valid reserved PREFIX so ValidateTenantKeys stays quiet too"},
-		{"severity dedup turned off", "  _severity_dedup: disable\n", "_severity_dedup", verdictDelivered, "",
-			"ResolveSeverityDedup reads the exact key and drops the tenant's entry"},
-		{"silent mode turned off", "  _silent_mode: disable\n", "_silent_mode", verdictInert, "",
-			"`disable` is what absence already means — ResolveSilentModesAt emits nothing either way"},
-		{"junk under the silent prefix", "  _silent_bogus: disable\n", "_silent_bogus", verdictRefused, "",
-			"only the exact key _silent_mode has a reader"},
+		// #3341: until then these were delivered (`_state_maintenance`,
+		// `_severity_dedup`), inert (`_silent_mode`) or refused as
+		// unreachable; a subtree now hands none of them down.
+		{"a state filter the platform declares", "  _state_maintenance: disable\n", "_state_maintenance", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341); set it in the tenant's entry"},
+		{"a state filter the platform never declared", "  _state_no_such_filter: disable\n", "_state_no_such_filter", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341)"},
+		{"severity dedup turned off", "  _severity_dedup: disable\n", "_severity_dedup", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341)"},
+		{"silent mode turned off", "  _silent_mode: disable\n", "_silent_mode", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341)"},
+		{"junk under the silent prefix", "  _silent_bogus: disable\n", "_silent_bogus", verdictNotCarried, "",
+			"a subtree carries no `_` key but a routing key (#3341)"},
 		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRefused, "",
 			"ResolveRouting reads the exact key _routing, and `_routing` is a valid reserved PREFIX so nothing warns"},
 
@@ -127,25 +140,26 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 		// so every shape here reached a `return true` without ever consulting
 		// the consumer — the arm-order blind spot of the very table that was
 		// supposed to be exhaustive. All four were measured silent then:
-		// written, no reader, no report, no WARN.
-		{"a critical tier under an undeclared state filter", "  _state_bogus_critical: 5\n", "_state_bogus_critical", verdictRefused, "",
-			"resolveCriticalRows skips `_state_`-prefixed keys itself, so the _critical arm must not claim it will read this"},
-		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictRefused, "",
-			"resolveDimensionalRows skips `_state_`-prefixed keys itself"},
+		// written, no reader, no report, no WARN. Since #3341 only the
+		// routing rows of this block reach the predicate at all.
+		{"a critical tier under an undeclared state filter", "  _state_bogus_critical: 5\n", "_state_bogus_critical", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341); before, resolveCriticalRows' own `_state_` skip made it refused"},
+		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341)"},
 		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRefused, "",
 			"resolveDimensionalRows skips `_routing`-prefixed keys itself"},
-		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictRefused, "",
-			"resolveDimensionalRows skips `_silent_`-prefixed keys itself"},
-		{"a critical tier under the silent prefix", "  _silent_bogus_critical: 5\n", "_silent_bogus_critical", verdictRefused, "",
-			"resolveCriticalRows skips `_silent_`-prefixed keys itself"},
-		{"a junk value on the dedup key", "  _severity_dedup: 5\n", "_severity_dedup", verdictWarned, "",
-			"ResolveSeverityDedup reads it, cannot make sense of it, and WARNs — under the spelling `severity_dedup`, without the underscore"},
-		{"a state filter carrying a time window", "  _state_maintenance:\n    default: disable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", "_state_maintenance", verdictDelivered, "",
-			"judged by its `default` alone (#3295) — ResolveStateFiltersAt reads sv.Default and never the windows — so it is the scalar `disable` row above, delivered"},
+		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictNotCarried, "",
+			"a subtree carries no `_` key but a routing key (#3341)"},
+		{"a critical tier under the silent prefix", "  _silent_bogus_critical: 5\n", "_silent_bogus_critical", verdictNotCarried, "",
+			"a subtree carries no `_` key but a routing key (#3341)"},
+		{"a junk value on the dedup key", "  _severity_dedup: 5\n", "_severity_dedup", verdictNotCarried, "",
+			"a subtree carries no reserved key (#3341); before, ResolveSeverityDedup WARNed on it"},
+		{"a state filter carrying a time window", "  _state_maintenance:\n    default: disable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", "_state_maintenance", verdictNotCarried, "",
+			"a subtree carries no reserved key, windowed or not (#3341)"},
 		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictWarned, "",
 			"resolveCriticalRows excludes `_state_` and `_silent_` but NOT `_routing` — so this one it does read, and WARNs. Mirroring the dimensional arm's exclusions here instead would be a plausible-looking consistency edit that silently changes the verdict"},
-		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictWarned, "",
-			"resolveCriticalRows does NOT exclude this one — it reads it, fails to find the base default, and WARNs; the predicate must keep matching it"},
+		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictNotCarried, "",
+			"a subtree carries no `_` key but a routing key (#3341); before, resolveCriticalRows read it and WARNed"},
 	}
 
 	for _, tc := range cases {
@@ -175,8 +189,8 @@ func classifyInheritedKey(t *testing.T, root, line, key string) (reachVerdict, s
 	log.SetFlags(0)
 	t.Cleanup(func() { log.SetOutput(origOut); log.SetFlags(origFlags) })
 
-	with, written, reported := loadReachTree(t, root, line, key)
-	without, _, _ := loadReachTree(t, root, "", key)
+	with, written, reported, named := loadReachTree(t, root, line, key)
+	without, _, _, _ := loadReachTree(t, root, "", key)
 	observable := resolverFingerprint(with) != resolverFingerprint(without)
 
 	// A WARN naming this key, from a consumer rather than from the divergence
@@ -202,10 +216,12 @@ func classifyInheritedKey(t *testing.T, root, line, key string) (reachVerdict, s
 		}
 	}
 
-	ev := fmt.Sprintf("evidence: written=%v observable=%v reported=%v warned=%v\n--- log ---\n%s",
-		written, observable, reported, warned, logBuf.String())
+	ev := fmt.Sprintf("evidence: written=%v observable=%v reported=%v warned=%v named=%v\n--- log ---\n%s",
+		written, observable, reported, warned, named, logBuf.String())
 
 	switch {
+	case !written && !reported && named:
+		return verdictNotCarried, ev
 	case written && observable:
 		return verdictDelivered, ev
 	case !written && reported:
@@ -221,7 +237,7 @@ func classifyInheritedKey(t *testing.T, root, line, key string) (reachVerdict, s
 	}
 }
 
-func loadReachTree(t *testing.T, root, line, key string) (cfg *ThresholdConfig, written, reported bool) {
+func loadReachTree(t *testing.T, root, line, key string) (cfg *ThresholdConfig, written, reported, named bool) {
 	t.Helper()
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), root)
@@ -247,7 +263,12 @@ func loadReachTree(t *testing.T, root, line, key string) (cfg *ThresholdConfig, 
 			}
 		}
 	}
-	return cfg, written, reported
+	scoped, err := config.ScopeEffective(dir, "")
+	if err != nil {
+		t.Fatalf("ScopeEffective: %v", err)
+	}
+	_, named = scoped.SubtreeReserved["t1"][key]
+	return cfg, written, reported, named
 }
 
 // resolverFingerprint is every resolver that reads a tenant's override map,

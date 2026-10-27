@@ -4,7 +4,7 @@
     "tenant": "a tenant's entry in its own tenant file",
     "platform_tenants": "a tenant's entry under `tenants:` in a root `_` file (the platform's per-tenant default; the tenant file wins)",
     "profile": "a profile in `_profiles.yaml` that a tenant names with `_profile`",
-    "subtree_defaults": "`defaults:` of a subdirectory's `_defaults.yaml`",
+    "subtree_defaults": "`defaults:` of a subdirectory's `_defaults.yaml` (no reader takes a `_` key there but a routing key, #3341)",
     "platform_top": "the top level of a root conf.d `_` file"
   },
   "readers": {
@@ -22,7 +22,7 @@
     },
     "_severity_dedup": {
       "read_by": {
-        "exporter": ["tenant", "platform_tenants", "subtree_defaults"],
+        "exporter": ["tenant", "platform_tenants"],
         "generator": ["tenant", "platform_tenants"]
       },
       "description": "Whether a firing critical suppresses its warning twin.",
@@ -82,7 +82,7 @@
   },
   "prefixes": {
     "_state_": {
-      "read_by": {"exporter": ["tenant", "platform_tenants", "profile", "subtree_defaults"]},
+      "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
       "description": "`_state_<filter>`: turns a state filter declared under the root `state_filters:` on or off."
     },
     "_routing": {

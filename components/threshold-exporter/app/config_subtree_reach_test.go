@@ -752,21 +752,25 @@ func assertUndeliverableLineNames(t *testing.T, logs, name string) {
 //
 // ⛔ EVERY ONE OF THESE WAS MEASURED BEING DROPPED by a broader version of the
 // gate, while a tenant writing the IDENTICAL key in its own file got it
-// emitted. They do not go through the declared surface at all — three separate
+// emitted. They do not go through the declared surface at all — two separate
 // resolvers read the tenant's override map directly:
 //
 //	`k{label="v"}`  → resolveDimensionalRows
 //	`k_critical`    → resolveCriticalRows
-//	`_state_<name>` → ResolveStateFiltersAt
+//
+// (`_state_<name>` → ResolveStateFiltersAt was the third until #3341, when a
+// subtree stopped carrying reserved keys; its subtest below now pins that.)
 //
 // The fourth case — the declared surface consulted under a RETIRED spelling —
 // lives in `config_subtree_alias_test.go`, because writing that key with a
 // value is the exact shape the #1231 re-introduction guard forbids and that
 // file is the named exception.
 //
-// ⛔ `_state_` IS THE ONE WITH A SAFETY CONSEQUENCE: refusing an inherited
-// `"disable"` silently switched a tenant's maintenance filter back ON
-// (`ResolveStateFilters` went from empty to `[{t1 maintenance warning}]`).
+// ⚠️ `_state_` IS THE ONE WITH A SAFETY CONSEQUENCE, and #3341 takes it
+// deliberately: a subtree `"disable"` no longer switches the maintenance
+// filter off — that is da-guard's subtree_default_reserved_key error, which
+// names the value to move into the tenant's own entry — and the exporter's
+// undeliverable audit stays quiet (it names thresholds only).
 func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name, rootDefaults, subtreeKey, wantInMap string
@@ -802,9 +806,10 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 		})
 	}
 
-	// `_state_` gets its own body because the assertion is behavioural, not
-	// just presence: the inherited disable must actually take effect.
-	t.Run("state-filter-disable", func(t *testing.T) {
+	// `_state_` gets its own body because the assertion is behavioural: the
+	// subtree's disable is not applied (#3341), so the filter follows the
+	// root's default_state.
+	t.Run("state-filter-disable-is-not-carried", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 			"defaults:\n  mysql_connections: 80\n"+
@@ -818,9 +823,9 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 		if err := m.Load(); err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if filters := m.GetConfig().ResolveStateFilters(); len(filters) != 0 {
-			t.Errorf("the inherited `disable` did not take effect — the tenant's "+
-				"maintenance filter is back ON: %v", filters)
+		if filters := m.GetConfig().ResolveStateFilters(); len(filters) != 1 || filters[0].Tenant != "t1" {
+			t.Errorf("the subtree's `disable` was applied, or the filter is off: %v "+
+				"(want t1's maintenance filter on, the root's default_state)", filters)
 		}
 		if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
 			t.Errorf("a legitimate tree was reported as undeliverable (gauge=%v)", got)

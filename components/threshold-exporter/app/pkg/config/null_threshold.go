@@ -28,10 +28,15 @@ package config
 // downstream "does this layer write the key" question then sees the key as
 // absent, which is what the ruling says it is.
 //
-// ⚠️ RESERVED (`_`-prefixed) KEYS ARE NOT TOUCHED. For them ADR-017's null
-// is a real instruction — "delete the inherited value" — honoured by
-// deepMerge on the walker and, on /metrics, by the empty value displacing
-// the platform's (a `_state_<f>: null` turns a platform `disable` off).
+// ⚠️ RESERVED (`_`-prefixed) KEYS ARE NOT DROPPED. For them ADR-017's null
+// is a real instruction — "delete the inherited value", so the tenant gets
+// the platform default — honoured by deepMerge on the walker and, on
+// /metrics, by reservedNullMarker: the null stays in the body as a marker,
+// which displaces a platform `tenants:` entry's and a profile's value like
+// any written value, and which the readers take as no key at all
+// (tenantReserved, #3341). Before, the null decoded to a present `""`
+// indistinguishable from a written `""`, and `_state_<f>: null` turned the
+// filter ON even under `default_state: disable`.
 // Threshold keys are exactly the non-`_` keys (deepMerge's comment has the
 // schema argument), dimensional `k{…}` and `<k>_critical` keys included.
 //
@@ -85,6 +90,44 @@ func nullSchedule(raw any) bool {
 	return true
 }
 
+// reservedNull reports whether (key, raw) is a reserved (`_`) key written as
+// null: a null, or a schedule that writes nothing (nullSchedule) — except
+// for a key whose mapping is kept whole (mappingReservedKeys), where
+// `default:` is a field of the mapping, not a schedule's. raw is the generic
+// YAML decode of the value. A schedule whose `default:` is null beside a
+// window is not one: the write gate refuses that form (#3269).
+func reservedNull(key string, raw any) bool {
+	if !strings.HasPrefix(key, "_") {
+		return false
+	}
+	return raw == nil || (!mappingReservedKeys[key] && nullSchedule(raw))
+}
+
+// reservedNullMarker is the value a reserved key written as null holds in a
+// decoded `tenants:` / `profiles:` body (#3341): present, so the flat merge
+// and the profile fill treat it as this layer's write and the layers below
+// do not show through; and read as no key by tenantReserved, so each reader
+// takes its no-key branch — the platform default.
+//
+// ⛔ A MARKER IN THE MAP, NOT A KEY DELETED AFTER THE MERGE. The exporter's
+// incremental reload (package main's patchTenants) reuses the published
+// maps of the tenants it does not re-read and runs ApplyProfiles over them
+// again; a key deleted after the first build would then be filled from the
+// profile on the next reload of an unrelated file — and written into a map
+// a scrape is reading. A marker is still there, so the fill skips it.
+var reservedNullMarker = ScheduledValue{deleted: true}
+
+// tenantReserved is overrides[key] as the readers of a reserved key read it:
+// ok=false both when the key is absent and when the tenant side wrote it as
+// null (reservedNullMarker).
+func tenantReserved(overrides map[string]ScheduledValue, key string) (ScheduledValue, bool) {
+	sv, ok := overrides[key]
+	if !ok || sv.deleted {
+		return ScheduledValue{}, false
+	}
+	return sv, true
+}
+
 // withoutNullThresholds returns m without its nullThreshold entries — m
 // itself (no copy) when it has none, so the steady state allocates nothing.
 func withoutNullThresholds(m map[string]any) map[string]any {
@@ -109,7 +152,8 @@ func withoutNullThresholds(m map[string]any) map[string]any {
 // dropNullThresholds removes from a typed decode every entry the file wrote
 // as null: a `defaults:` key (any key — at the root nothing sits below it,
 // and the walker's root level has no such key either), and a threshold key
-// (nullThreshold) of a `tenants:` or `profiles:` body.
+// (nullThreshold) of a `tenants:` or `profiles:` body; a reserved key of
+// such a body written as null (reservedNull) becomes reservedNullMarker.
 //
 // The typed decode cannot tell a null from what it decodes to — 0 in
 // `defaults:`, an empty ScheduledValue in a body (yaml.v3 never calls
@@ -277,8 +321,13 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]Ro
 func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]map[string]any) {
 	for id, body := range raw {
 		for k, v := range body {
-			if nullThreshold(k, v) {
+			switch {
+			case nullThreshold(k, v):
 				delete(typed[id], k)
+			case reservedNull(k, v):
+				if _, in := typed[id][k]; in {
+					typed[id][k] = reservedNullMarker
+				}
 			}
 		}
 	}
@@ -286,21 +335,21 @@ func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]m
 
 // hasNullCandidate reports whether the typed decode holds a value a null
 // decodes to: a 0 default, or a ScheduledValue with no default and no window
-// under a threshold key (its expiry is not asked: `{default: null, expires:
-// …}` is null too, #2708).
+// (its expiry is not asked: `{default: null, expires: …}` is null too,
+// #2708), under a threshold key or a reserved one (#3341).
 func hasNullCandidate(cfg *ThresholdConfig) bool {
 	for _, v := range cfg.Defaults {
 		if v == 0 {
 			return true
 		}
 	}
-	return hasEmptyThreshold(cfg.Tenants) || hasEmptyThreshold(cfg.Profiles)
+	return hasEmptyValue(cfg.Tenants) || hasEmptyValue(cfg.Profiles)
 }
 
-func hasEmptyThreshold(bodies map[string]map[string]ScheduledValue) bool {
+func hasEmptyValue(bodies map[string]map[string]ScheduledValue) bool {
 	for _, body := range bodies {
-		for k, sv := range body {
-			if sv.Default == "" && len(sv.Overrides) == 0 && !strings.HasPrefix(k, "_") {
+		for _, sv := range body {
+			if sv.Default == "" && len(sv.Overrides) == 0 {
 				return true
 			}
 		}

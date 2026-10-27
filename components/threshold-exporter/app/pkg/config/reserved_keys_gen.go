@@ -81,7 +81,7 @@ var reservedKeyReaders = map[string]map[string][]string{
 		"generator": {"tenant", "platform_tenants"},
 	},
 	"_severity_dedup": {
-		"exporter":  {"tenant", "platform_tenants", "subtree_defaults"},
+		"exporter":  {"tenant", "platform_tenants"},
 		"generator": {"tenant", "platform_tenants"},
 	},
 	"_silent_mode": {
@@ -91,7 +91,7 @@ var reservedKeyReaders = map[string]map[string][]string{
 
 var reservedPrefixReaders = []prefixReaders{
 	{"_state_", map[string][]string{
-		"exporter": {"tenant", "platform_tenants", "profile", "subtree_defaults"},
+		"exporter": {"tenant", "platform_tenants", "profile"},
 	}},
 	{"_routing", map[string][]string{}},
 }
