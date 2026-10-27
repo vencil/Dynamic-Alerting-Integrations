@@ -105,9 +105,9 @@ is what keeps either of them off column 0.
   not, why (`SERVED_KEY_REASONS`; #3140: `value_non_finite` /
   `value_unparsed` is a value the row resolver refused and served no row
   for, not a switch-off, and `refused` names such a refusal also when the
-  platform default is served instead; `root_default_non_finite` is a key
-  the tenant does not write whose root `defaults:` value is non-finite, so
-  it gets no default row — `refused` "non_finite"). A no-row schedule segment's `reason`
+  platform default is served instead; `root_default_refused` is a key
+  the tenant does not write whose root `defaults:` value the resolver
+  refuses, so it gets no default row — `refused` says why, #3250). A no-row schedule segment's `reason`
   says the same per part of the day (`SEGMENT_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
@@ -439,7 +439,7 @@ class ServedKey(NamedTuple):
     # `at` — one of `SERVED_KEY_REFUSALS` ("non_finite", "unparsed") — both
     # when it then served the platform default (`exporter` True) and when it
     # served no row (`reason` "value_non_finite" / "value_unparsed", or
-    # "root_default_non_finite": the refused value is the root default's).
+    # "root_default_refused": the refused value is the root default's).
     # None when the value is read (a number, or a disable).
     refused: str | None = None
 
@@ -458,12 +458,12 @@ DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
 SERVED_KEY_REASONS = frozenset({
     "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
     "state_filter_undeclared", "unregistered", "retired",
-    "value_non_finite", "value_unparsed", "root_default_non_finite",
+    "value_non_finite", "value_unparsed", "root_default_refused",
 })
 
 #: The `keys[*].reason` values of a refused value that leaves no row: the
 #: ones `refused` comes with when `exporter` is False.
-SERVED_KEY_REFUSED_REASONS = frozenset({"value_non_finite", "value_unparsed", "root_default_non_finite"})
+SERVED_KEY_REFUSED_REASONS = frozenset({"value_non_finite", "value_unparsed", "root_default_refused"})
 
 
 class SkippedFile(NamedTuple):
@@ -483,6 +483,16 @@ class ServedTree(NamedTuple):
     # With `tenants` only (the subset mode): the requested tenants the tree
     # has no tenant for; `tenants` then holds the others.
     absent: "tuple[str, ...]" = ()
+    # #3250: the root `defaults:` thresholds whose value the exporter refuses
+    # (served-values' `root_defaults_refused`), sorted by key: the tree's
+    # verdict, for every tenant that does not write the key.
+    root_defaults_refused: "tuple[RootDefaultRefused, ...]" = ()
+
+
+class RootDefaultRefused(NamedTuple):
+    key: str      # the threshold key, as the root `defaults:` writes it
+    text: str     # its value, as written
+    refused: str  # one of `SERVED_KEY_REFUSALS`
 
 
 class UnreadableFile(NamedTuple):
@@ -978,14 +988,14 @@ def load_served_tree(
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases, dropped, absent), returncode, stderr = _run_da_guard(
+    (tenants, skipped, aliases, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested)),
+                          _subset_absent(doc, requested), doc.get("root_defaults_refused")),
         reads_unreadable=True, dropped_ok=partial)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
@@ -1078,7 +1088,27 @@ def load_served_tree(
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent)
+    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
+                      _root_defaults_refused(root_refused, returncode, stderr))
+
+
+def _root_defaults_refused(entries: Any, returncode: int, stderr: str) -> "tuple[RootDefaultRefused, ...]":
+    """served-values' `root_defaults_refused`, checked; a da-guard without it
+    is named as older than this tool."""
+    if entries is None:
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('root_defaults_refused') — "
+            "this da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+    try:
+        out = tuple(RootDefaultRefused(str(e["key"]), str(e["text"]), str(e["refused"])) for e in entries)
+        bad = [e.refused for e in out if e.refused not in SERVED_KEY_REFUSALS]
+        if bad:
+            raise ValueError(f"refused {bad[0]!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND}: root_defaults_refused is not of its shape ({e!r})",
+            returncode, stderr, broken=True) from e
+    return out
 
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:

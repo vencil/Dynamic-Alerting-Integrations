@@ -65,7 +65,7 @@ func TestScopeEffective_ListsParseFailedFilesInScope(t *testing.T) {
 func TestScopeEffective_ParseFailedIsTheExportersVerdict(t *testing.T) {
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
-		"conf.d/_defaults.yaml":   "defaults:\n  cpu: abc\n",
+		"conf.d/_defaults.yaml":   "defaults:\n  cpu: [1]\n",
 		"conf.d/_profiles.yaml":   "profiles:\n  gold:\n    mem: 1\n    mem: 2\n",
 		"conf.d/a/_defaults.yaml": "defaults:\n  mem: abc\n",
 		"conf.d/a/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",

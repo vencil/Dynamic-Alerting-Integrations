@@ -2094,15 +2094,17 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
-def _root_defaults_non_finite_detail(rel: str, key: str, raw: str) -> str:
-    """One FAIL line for a root threshold written as a non-finite number
-    (#3140; da-guard's root_default_non_finite says the same)."""
-    return (f"{rel}: `defaults.{key}` is `{raw}`, not a finite number — an alert "
-            f"compared against it never fires (NaN, or the infinity on the side the "
-            f"alert compares) or always fires. threshold-exporter serves no default "
-            f"row for `{key}`; only a tenant's own value is served, as for an "
-            f"`optional_overrides:` key. Write a finite number, or list `{key}` under "
-            f"`optional_overrides:` instead.")
+def _root_defaults_refused_detail(rel: str, key: str, text: str, refused: str) -> str:
+    """One FAIL line for a root threshold whose value threshold-exporter
+    refuses (#3140, #3250; da-guard's root_default_refused says the same):
+    served-values' `root_defaults_refused` entry, `refused` its reason."""
+    why = ("not a finite number — an alert compared against NaN or an infinity never "
+           "fires or always fires" if refused == "non_finite"
+           else "not a number threshold-exporter reads")
+    return (f"{rel}: `defaults.{key}` is `{text}`, {why}. threshold-exporter serves no "
+            f"default row for `{key}`; only a tenant's own value is served, as for an "
+            f"`optional_overrides:` key. Write a finite number (a root default takes no "
+            f"`:severity`), or list `{key}` under `optional_overrides:` instead.")
 
 
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
@@ -2572,20 +2574,20 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
 
 
 def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
-    """How the exporter decodes the root carrier's `defaults:` into
-    `map[string]float64`, read off the file's parse-tree nodes (yaml.v3's
-    tags, aliases and `<<` merges expanded): `[(key, source text, kind), …]`
+    """What of the root carrier's `defaults:` makes the exporter drop the
+    file or leave a key unwritten, read off the file's parse-tree nodes
+    (aliases and `<<` merges expanded): `[(key, source text, kind), …]`
     with *dr*'s kinds (``deprecate_rule``), key None for the whole block.
 
-    yaml.v3 decodes a scalar into a float64 when its tag is `!!int` or
-    `!!float`; `!!null` leaves the key unwritten (#2518,
-    ``NULL_NOT_DECLARED``); any other scalar (`"70"`, `disable`, `yes`, a
-    timestamp, `!!bool`), a mapping or a list fails the decode and the
-    exporter drops the whole block (``UNPARSEABLE``). A file parse-tree
-    cannot read (a repeated key, several documents …) never gets here: its
-    read fails first. The truth table is
-    ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the Go test
-    ``TestDefaultsCarrierOracle`` judges against the exporter."""
+    A null leaves the key unwritten (#2518, ``NULL_NOT_DECLARED``); a
+    mapping or a list fails the decode and the exporter drops the whole
+    file (``UNPARSEABLE``). A scalar is never judged here: since #3250 the
+    exporter reads its text through parseThresholdNumber and refuses that key
+    alone — served-values' `root_defaults_refused`, which `check_root_defaults`
+    reads, is that verdict. A file parse-tree cannot read (a repeated key,
+    several documents …) never gets here: its read fails first. The truth
+    table is ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the
+    Go test ``TestDefaultsCarrierOracle`` judges against the exporter."""
     block = root.get("defaults")
     if block is None or (_lib_parse_tree.is_scalar(block) and block["tag"] == "!!null"):
         return []                              # absent, or `defaults:` with no value
@@ -2598,24 +2600,7 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
                         dr.UNPARSEABLE))
         elif node["tag"] == "!!null":
             out.append((key, node["text"], dr.NULL_NOT_DECLARED))
-        elif node["tag"] == "!!str":
-            # Shown as the string it is: `"70"` (quoted or not in the file).
-            out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
-        elif node["tag"] not in ("!!int", "!!float"):
-            out.append((key, node["text"], dr.UNPARSEABLE))
-        elif node["tag"] == "!!float" and "value" not in node:
-            # #3140: parse-tree gives a `!!float` no value exactly when
-            # yaml.v3 decodes it to NaN or ±Inf (`.nan`, `.inf`, `-.inf`).
-            # The file loads; the exporter serves no default row for the key.
-            out.append((key, node["text"], _NON_FINITE))
     return out
-
-
-#: `_root_defaults_verdicts`' kind for a root threshold yaml.v3 decodes to a
-#: non-finite number (#3140): not one of deprecate_rule's kinds (the carrier
-#: loads), but a FAIL of this row, as da-guard's root_default_non_finite is an
-#: error. The oracle's `default_row: false` rows are these.
-_NON_FINITE = "non_finite"
 
 
 _CUSTOM_ALERT_CAP_HINT = (
@@ -2678,16 +2663,18 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
 
     Three rules, one row:
 
-    * #1414 — every value must decode as a number. The exporter decodes the
-      root ``defaults:`` as ``map[string]float64`` with yaml.v3: a value it
-      cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
-      the exporter drops the root file's whole ``defaults:`` — every platform
-      threshold, while the load is reported as successful; a null / empty
+    * #1414, #3250 — every value must be a number the exporter reads. A
+      mapping or a list fails the exporter's decode and it drops the root
+      file's whole ``defaults:`` — every platform threshold, while the load
+      is reported as successful; a scalar it does not read (``abc``,
+      ``0x10``, ``.nan``, ``disable``) refuses that key alone — no default
+      row, served-values' ``root_defaults_refused`` — and a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
-      not judged here. Both FAIL. The verdict is ``_root_defaults_verdicts``
-      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906:
-      yaml.v3's own tags), checked against the truth table
+      not judged here. All FAIL. The structure is ``_root_defaults_verdicts``
+      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906);
+      a scalar's verdict is the exporter's own, read from served-values;
+      both are checked against the truth table
       ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
       ``TestDefaultsCarrierOracle`` judges. Every kind in
       ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
@@ -2770,9 +2757,6 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
-    details += [_root_defaults_non_finite_detail(rel, k, r)
-                for k, r, kind in verdicts
-                if kind == _NON_FINITE and k is not None and not k.startswith("_")]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
@@ -2785,6 +2769,20 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                                               dropped.get(str(k)))
                 for k, v in block.items()
                 if isinstance(k, str) and k.startswith("_routing")]
+    if details:
+        return _make_result("root_defaults", FAIL, details)
+    # #3250: which scalar the exporter refuses is its own verdict — the
+    # tree's root `defaults:` as served-values reads it, for the keys this
+    # carrier writes — never a reading of the text here.
+    try:
+        refused = load_served_tree(config_dir, partial=True).root_defaults_refused
+    except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
+        return _make_result("root_defaults", WARN, [
+            f"{rel}: which `defaults:` values threshold-exporter refuses was not judged: "
+            f"da-guard served-values failed ({type(exc).__name__}: {' '.join(str(exc).split())})"])
+    written = {str(k) for k in block}
+    details = [_root_defaults_refused_detail(rel, e.key, e.text, e.refused)
+               for e in refused if e.key in written]
     if details:
         return _make_result("root_defaults", FAIL, details)
     dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "

@@ -8,7 +8,6 @@ package config
 
 import (
 	"fmt"
-	"math"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -159,8 +158,10 @@ func TestNonFiniteThreshold_RootDefaultServesNoDefaultRow(t *testing.T) {
 			})
 		}
 	}
-	if got := NonFiniteDefaultKeys(map[string]any{"a": math.NaN(), "b": math.Inf(-1), "c": 80.0, "_x": math.NaN(), "d": "NaN"}); !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Errorf("NonFiniteDefaultKeys = %v, want [a b]", got)
+	got := RootDefaultRefusals([]byte("defaults:\n  a: .nan\n  b: -.inf\n  c: 80\n  _x: .nan\n  d: NaN\n"))
+	want := []RootDefaultRefusal{{"a", ".nan", RefusedUnparsed}, {"b", "-.inf", RefusedUnparsed}, {"d", "NaN", RefusedNonFinite}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RootDefaultRefusals = %+v, want %+v", got, want)
 	}
 }
 

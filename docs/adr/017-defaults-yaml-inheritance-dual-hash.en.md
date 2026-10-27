@@ -26,6 +26,7 @@ lang: en
 | 2026-10-10 | The `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is read from da-guard; the blast-radius report compares custom alerts separately | Decision 2 |
 | 2026-10-17 | The custom-alert compiler compiles what the exporter serves, so `_custom_alerts` in a `_defaults.yaml` no longer produces rules | Decisions 5, 6 |
 | 2026-10-21 | `describe_tenant` moves to showing only the custom-alert list the exporter serves, and the blast-radius report is retired | Decision 2 |
+| 2026-10-27 | Root `defaults:` values are read the way a tenant's value is: a scalar the exporter cannot read refuses that key alone, and no longer drops the whole file | Decisions 4, 6 |
 
 ## Terms
 
@@ -129,7 +130,7 @@ Two things to notice in this example:
 
 ### 4. A threshold written as `null` is the same as not writing it at that level
 
-A threshold key written as `null` in a tenant file or a subdirectory `_defaults.yaml` does not switch the alert off (for `null` in the root `defaults:`, see the second item below); to switch it off, write `"disable"` in either of those places. Do not write `"disable"` in the root `defaults:`: `check_confd_schema.py` does not reject it, but /metrics drops the whole root `_defaults.yaml`, its `optional_overrides:` included, and da-guard exits 3.
+A threshold key written as `null` in a tenant file or a subdirectory `_defaults.yaml` does not switch the alert off (for `null` in the root `defaults:`, see the second item below); to switch it off, write `"disable"` in either of those places. Do not write `"disable"` in the root `defaults:`: a root default is a number only, so `disable` is a value the exporter cannot read and it refuses that key alone — no default row for it, the file's other thresholds served; `check_confd_schema.py` does not reject it, and da-guard reports `root_default_refused` and exits 1.
 
 - When a tenant file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`), `/effective` (`da-guard effective`) and `describe_tenant` give the same result as when that level does not write the key. A `null` in a tenant file (`kx:` and `kx: ~` included), however, is rejected by `check_confd_schema.py`; to keep the inherited value, a tenant deletes the key.
 - When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold and `/metrics` serves no series for it (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual. (`optional_overrides:` is a list of key names at the top level of the root `_defaults.yaml`: it declares that these thresholds exist without giving them a platform default, so they are served only when a tenant writes them.)
@@ -174,9 +175,10 @@ This table is not complete. For a key that is not in it, find the code that read
 
 ### 6. Do not indent top-level keys into `defaults:`
 
-Indenting a top-level key into `defaults:` to make it "appear in the effective config" has an outcome that depends on the value's type, and the schema check (`check_confd_schema.py`) answers `OK` to both:
+Indenting a top-level key into `defaults:` to make it "appear in the effective config" has an outcome that depends on the value's type, and the schema check (`check_confd_schema.py`) answers `OK` to each:
 
-- **The value is not a number** (mapping, list, string): the exporter drops the **whole file**, logs `ERROR: skip unparseable defaults/profiles file …`, sets `da_config_defaults_unusable{reason="parse_failure"}` to 1, and the file's other thresholds disappear with it.
+- **The value is a mapping or a list**: the exporter drops the **whole file**, logs `ERROR: skip unparseable defaults/profiles file …`, sets `da_config_defaults_unusable{reason="parse_failure"}` to 1, and the file's other thresholds disappear with it.
+- **The value is a string that does not read as a number** (e.g. `_severity_dedup: disable`): that key alone is refused, and the file's other thresholds are served. For a key without the `_` prefix da-guard reports `root_default_refused`; a `_` key is no threshold, so nothing happens, and `validate-config` WARNs that no reader reads it.
 - **The value is a number**: it becomes one threshold series per tenant, with no warning. Indenting `max_metrics_per_tenant: 100`, for example, adds `user_threshold{component="max",metric="metrics_per_tenant"} 100` to `/metrics`.
 
 The readers of these keys look only at the document's top level, so an indented key is not there for them:

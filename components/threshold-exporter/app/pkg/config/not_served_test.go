@@ -33,12 +33,13 @@ func TestNotServed_Table(t *testing.T) {
 			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  " + retiredCPU + ": 5\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
+		// #3250: a root value that is not a number no longer drops the file;
+		// the key is refused alone and served like an optional_overrides one
+		// (no default row, nothing for a tenant that does not write it — as a
+		// root `.nan` since #3140), and the file's other keys are served.
 		{name: "L0 root value not a number", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: abc\n  " + retiredCPU + ": 5\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
-		}, want: map[string]NotServedKey{
-			"mysql_connections": ns(NotServedParseFailed, "_defaults.yaml"),
-			retiredCPU:          ns(NotServedParseFailed, "_defaults.yaml"),
 		}},
 		{name: "root defaults a list", files: map[string]string{
 			"_defaults.yaml": "defaults: [1, 2]\n",

@@ -514,7 +514,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// "7O:critical" resolves exactly like the bare "7O". #3071: so does
 			// a severity no threshold rule selects ("70:high", "70:"). #3140:
 			// so does a non-finite number ("NaN", "-Inf"; parseThresholdNumber).
-			// With no finite default either (#3140, rootNonFiniteDefaults)
+			// With no finite default either (#3140, RefusedRootDefaults)
 			// there is nothing to fall back to and the row is dropped.
 			hint := suffixedHint(suffixedOff, metricKey)
 			if !finiteThreshold(defaultValue) {

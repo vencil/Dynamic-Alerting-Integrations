@@ -13,7 +13,10 @@ package config
 //     write (#2518 — a `defaults:` key, and a threshold key of a `tenants:` /
 //     `profiles:` body), and a `defaults:` spelling that the file does not
 //     write (±Inf, NaN) beside another spelling of the same threshold that
-//     it does write is dropped (#2418). The oracle is written out here rather
+//     it does write is dropped (#2418). And one rule for every row (#3250):
+//     a `defaults:` value is its text through parseThresholdNumber, not
+//     yaml.v3's float64 — a value it refuses is refusedDefault(text), and no
+//     longer the whole file's error (oracleDefaults). The oracle is written out here rather
 //     than calling ParseConfigFile twice, so the SSOT cannot drift from it
 //     quietly; the exceptions are the explicit per-row list decodeDrops, not
 //     a call into the code under test.
@@ -30,6 +33,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -141,8 +145,6 @@ func dropRef(cfg *ThresholdConfig, ref string, drop bool) bool {
 var lighterDecodeWouldAccept = []string{
 	"defaults value in schedule form",
 	"defaults value is a mapping (M5)",
-	"defaults value is a quoted number",
-	"defaults value is a string",
 	"duplicate metric key",
 	"max_metrics_per_tenant non-int",
 	"multi-document", // parse-tree's multiple_documents, since ADR-036 step 6 (#3206)
@@ -166,14 +168,109 @@ func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	if _, bad := parsetree.Parse(data); bad != nil {
 		return ThresholdConfig{}, &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
 	}
+	var shape oracleShape
+	err := yaml.Unmarshal(data, &shape)
 	var cfg ThresholdConfig
-	err := yaml.Unmarshal(data, &cfg)
 	if err == nil {
-		for _, ref := range decodeDrops[name] {
-			dropRef(&cfg, ref, true)
+		cfg = ThresholdConfig{OptionalOverrides: shape.OptionalOverrides, StateFilters: shape.StateFilters,
+			Tenants: shape.Tenants, Profiles: shape.Profiles, MaxMetricsPerTenant: shape.MaxMetricsPerTenant}
+		cfg.Defaults, err = oracleDefaults(&shape.Defaults)
+	}
+	if err != nil {
+		return ThresholdConfig{}, err
+	}
+	for _, ref := range decodeDrops[name] {
+		dropRef(&cfg, ref, true)
+	}
+	return cfg, nil
+}
+
+// oracleShape is ThresholdConfig's yaml shape with `defaults:` kept as
+// nodes (TestOracleShape_MatchesThresholdConfig pins the two together).
+type oracleShape struct {
+	Defaults            yaml.Node                            `yaml:"defaults"`
+	OptionalOverrides   []string                             `yaml:"optional_overrides"`
+	StateFilters        map[string]StateFilter               `yaml:"state_filters"`
+	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
+	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`
+	MaxMetricsPerTenant int                                  `yaml:"max_metrics_per_tenant"`
+}
+
+// oracleDefaults is #3250's reading of a `defaults:` node, spelled out: each
+// scalar's text through parseThresholdNumber, refusedDefault(text) when it
+// refuses, a null a present 0 (decodeDrops takes it out); anything else is
+// yaml.v3's error for decoding it into a float64, as before.
+func oracleDefaults(n *yaml.Node) (map[string]float64, error) {
+	if n.Kind == 0 || n.Tag == "!!null" {
+		return nil, nil
+	}
+	if n.Kind != yaml.MappingNode {
+		var m map[string]float64
+		return nil, n.Decode(&m)
+	}
+	out := map[string]float64{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i].Value, n.Content[i+1]
+		if v.Kind == yaml.AliasNode {
+			v = v.Alias
+		}
+		switch {
+		case v.Kind != yaml.ScalarNode:
+			var f float64
+			return nil, v.Decode(&f)
+		case v.Tag == "!!null":
+			out[k] = 0
+		default:
+			if f, ok := parseThresholdNumber(strings.TrimSpace(v.Value)); ok {
+				out[k] = f
+			} else {
+				out[k] = refusedDefault(v.Value)
+			}
 		}
 	}
-	return cfg, err
+	return out, nil
+}
+
+// TestOracleShape_MatchesThresholdConfig: oracleShape has ThresholdConfig's
+// yaml keys, so the oracle decodes every field the decode under test does.
+func TestOracleShape_MatchesThresholdConfig(t *testing.T) {
+	t.Parallel()
+	tags := func(v any) []string {
+		var out []string
+		rt := reflect.TypeOf(v)
+		for i := 0; i < rt.NumField(); i++ {
+			if tag := rt.Field(i).Tag.Get("yaml"); tag != "" && tag != "-" {
+				out = append(out, tag)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got, want := tags(oracleShape{}), tags(ThresholdConfig{}); !reflect.DeepEqual(got, want) {
+		t.Errorf("oracleShape yaml keys = %v, want ThresholdConfig's %v", got, want)
+	}
+}
+
+// sameConfig is reflect.DeepEqual with each refused root default compared by
+// its bits: a NaN is never == itself, and the bits are the verdict
+// (refusedDefault).
+func sameConfig(a, b ThresholdConfig) bool {
+	return reflect.DeepEqual(comparableDefaults(a), comparableDefaults(b))
+}
+
+func comparableDefaults(c ThresholdConfig) ThresholdConfig {
+	if len(c.Defaults) == 0 {
+		return c
+	}
+	d := make(map[string]float64, len(c.Defaults))
+	for k, v := range c.Defaults {
+		if math.IsNaN(v) {
+			v = float64(math.Float64bits(v))
+		}
+		d[k] = v
+	}
+	c.Defaults = d
+	return c
 }
 
 // TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode keeps the
@@ -214,7 +311,7 @@ func TestParseConfigFile_IsThePlainDecode(t *testing.T) {
 				}
 				return
 			}
-			if !reflect.DeepEqual(got, want) {
+			if !sameConfig(got, want) {
 				t.Errorf("decoded content differs:\n got  %#v\n want %#v", got, want)
 			}
 		})
@@ -231,7 +328,7 @@ func TestParseTenantFile_OnlyAddsTheUTF8Rejection(t *testing.T) {
 	for name, body := range configFileCorpus {
 		want, wantErr := ParseConfigFile([]byte(body))
 		got, gotErr := ParseTenantFile([]byte(body))
-		if (gotErr == nil) != (wantErr == nil) || !reflect.DeepEqual(got, want) {
+		if (gotErr == nil) != (wantErr == nil) || !sameConfig(got, want) {
 			t.Errorf("%s: ParseTenantFile = (%#v, %v), ParseConfigFile = (%#v, %v)", name, got, gotErr, want, wantErr)
 		}
 	}
@@ -308,7 +405,7 @@ func TestScanDirTree_JudgesEachFileByTheOneDecode(t *testing.T) {
 			if !ok {
 				t.Fatalf("an accepted file has no decoded partial in TreeScan.Partials")
 			}
-			if !reflect.DeepEqual(got, want) {
+			if !sameConfig(got, want) {
 				t.Errorf("TreeScan.Partials content differs from the one decode:\n got  %#v\n want %#v", got, want)
 			}
 			if len(obs.parseFailures) != 0 {

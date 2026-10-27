@@ -2756,7 +2756,7 @@ class TestRootDefaultsRouting:
     @pytest.mark.parametrize("line, louder", [
         ("  _routing: ~\n", False),
         ("  _routing_enforced:\n    enabled: true\n", True),
-        ("  _routing_profile: team-a\n", True),
+        ("  _routing_profile: team-a\n", False),  # #3250: a scalar refuses that key alone
     ])
     def test_every_routing_prefixed_key_fails_whatever_its_value(
             self, tmp_path, line, louder):
@@ -2891,12 +2891,8 @@ class TestRootDefaultsValues:
         return d
 
     @pytest.mark.parametrize("value, shown", [
-        ('"70"', '`"70"`'),
-        ("disable", '`"disable"`'),  # #2906: a string, shown as one
         ("\n    default: 30", "a mapping"),
         ("\n    - 30", "a list"),
-        ("true", "`true`"),
-        ("2026-01-01", "`2026-01-01`"),
     ])
     def test_a_value_the_exporter_cannot_decode_fails(self, tmp_path, value,
                                                       shown):
@@ -2923,27 +2919,38 @@ class TestRootDefaultsValues:
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail
 
-    @pytest.mark.parametrize("value", ["80", "0", "-5", "1.5", "1e3", "0x10",
-                                       "!!float 80"])
+    @pytest.mark.parametrize("value", ["80", "0", "-5", "1.5", "1e3", "0x1p4", "1_000",
+                                       "!!float 80", '"70"', "'70'"])
     def test_numbers_the_exporter_decodes_pass(self, tmp_path, value):
-        """Must-stay-green: every spelling here decodes in yaml.v3 to a
-        finite number. (`.inf` used to be here; #3140 below.)"""
+        """Must-stay-green: every spelling here is text parseThresholdNumber
+        reads as a finite number (#3250: a quoted number included; `0x10`
+        is not, below)."""
         d = self._tree(tmp_path, f"defaults:\n  mysql_connections: {value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
-    @pytest.mark.parametrize("value", [".inf", "-.inf", "+.inf", ".nan", ".NaN", ".INF",
-                                       "!!float .inf"])
-    def test_non_finite_numbers_fail(self, tmp_path, value):
-        """#3140: yaml.v3 decodes these to NaN / ±Inf; the exporter serves no
-        default row for the key (da-guard's root_default_non_finite). The
+    @pytest.mark.parametrize("value, text, why", [
+        ("NaN", "NaN", "not a finite number"), ("-Inf", "-Inf", "not a finite number"),
+        (".inf", ".inf", "not a number threshold-exporter reads"),
+        (".nan", ".nan", "not a number threshold-exporter reads"),
+        ("!!float .inf", ".inf", "not a number threshold-exporter reads"),
+        ("disable", "disable", "not a number threshold-exporter reads"),
+        ("true", "true", "not a number threshold-exporter reads"),
+        ("2026-01-01", "2026-01-01", "not a number threshold-exporter reads"),
+        ("0x10", "0x10", "not a number threshold-exporter reads"),
+        ('"70:critical"', "70:critical", "not a number threshold-exporter reads"),
+    ])
+    def test_refused_values_fail(self, tmp_path, value, text, why):
+        """#3140, #3250: the exporter refuses these (its text through
+        parseThresholdNumber, served-values' root_defaults_refused) and serves
+        no default row for the key (da-guard's root_default_refused). The
         file loads, so the line names the key only, never "drops ALL"."""
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
                        f"  mysql_connections: {value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "`defaults.mysql_connections` is" in detail and "not a finite number" in detail, detail
+        assert f"`defaults.mysql_connections` is `{text}`, {why}" in detail, detail
         assert "container_cpu" not in detail and "drops ALL of it" not in detail, detail
 
     def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):
@@ -2981,12 +2988,13 @@ class TestRootDefaultsValues:
         assert "_routing_defaults" in r["details"][0], r
 
     def test_routing_sentence_follows_the_exporter_not_pyyaml(self, tmp_path):
-        """`1:30` is an int to PyYAML (YAML 1.1 sexagesimal) and not a number
-        to yaml.v3, which drops the block over it."""
+        """`1:30` is an int to PyYAML (YAML 1.1 sexagesimal); to the exporter
+        it is text it does not read, which since #3250 refuses that key alone
+        — so the #2291 line must not claim the block is lost."""
         d = self._tree(tmp_path, "defaults:\n  _routing_x: 1:30\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
-        assert "drops ALL of it" in r["details"][0], r
+        assert "drops ALL of it" not in r["details"][0], r
 
     def test_subtree_defaults_are_out_of_scope(self, tmp_path):
         """A subtree `_defaults.yaml` is merged by the hierarchical plane,
@@ -3055,9 +3063,16 @@ class TestRootDefaultsUnderscoreKeys:
                                 "the `_` to make it a threshold"]
 
     def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
-        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata: owner\n")))
+        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata:\n    owner: dba\n")))
         assert r["status"] == vc.FAIL, r
         assert not any("read by nothing" in d for d in r["details"]), r
+
+    def test_a_string_value_is_dead_config_too(self, tmp_path):
+        """#3250: a scalar no longer drops the file, and a `_` key is no
+        threshold the exporter refuses: `_metadata: owner` is read by nothing."""
+        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata: owner\n")))
+        assert r["status"] == vc.WARN, r
+        assert any("read by nothing" in d for d in r["details"]), r
 
     def test_control_no_underscore_key_passes(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "")))

@@ -739,11 +739,11 @@ def _not_served(tv, key):
 
 
 def _root_refused(tv, key):
-    """served-values' `keys[].reason` "root_default_non_finite" (#3140): the
-    root `defaults:` writes `key` as a non-finite number and the tenant does
-    not write it, so no row is served — not a removal of the key."""
+    """served-values' `keys[].reason` "root_default_refused" (#3140, #3250):
+    the resolver refuses the root `defaults:` value of `key` and the tenant
+    does not write it, so no row is served — not a removal of the key."""
     entry = (tv.keys or {}).get(key)
-    return entry is not None and entry.reason == "root_default_non_finite"
+    return entry is not None and entry.reason == "root_default_refused"
 
 
 def served_metric_diff(old_tenants, new_tenants):

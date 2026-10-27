@@ -297,7 +297,7 @@ func TestExitThree_RootDefaultsTypeError_IsNeverSafe(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
-		"conf.d/_defaults.yaml": "defaults:\n  cpu: abc\n",
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: [1]\n",
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: \"80\"\n",
 		"conf.d/empty/":         "",
 	})

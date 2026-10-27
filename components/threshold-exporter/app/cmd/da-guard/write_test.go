@@ -268,7 +268,7 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 		{"set under a missing mapping", map[string]string{"t1.yaml": "tenants: {}\n"}, writeCmd, "t1.yaml", setA, writeReasonEditNotApplicable},
 		// The text in place after the call must read back clean, changed or
 		// not: a no-op edit on a file validation names is no `unchanged`.
-		{"a no-op edit leaves a verdict in place", map[string]string{"_defaults.yaml": "defaults:\n  cpu: \"abc\"\n  mem: 5\n"},
+		{"a no-op edit leaves a verdict in place", map[string]string{"_defaults.yaml": "defaults:\n  cpu: [1]\n  mem: 5\n"},
 			writeCmd, "_defaults.yaml", `{"ops":[{"op":"set","path":["defaults","mem"],"value":{"int":"5"}}]}`, writeReasonReadBackMismatch},
 		{"a no-op unset leaves a verdict in place", map[string]string{"t1.yaml": "tenants:\n  t1:\n    cpu: 5\n    mem:\n      default: [1]\n"},
 			writeCmd, "t1.yaml", `{"ops":[{"op":"unset","path":["tenants","t1","nope"]}]}`, writeReasonReadBackMismatch},

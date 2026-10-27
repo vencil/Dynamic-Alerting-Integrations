@@ -93,6 +93,14 @@ type servedValuesDoc struct {
 	// them (and names them in its not_served). Not a failure: the exit code
 	// is unchanged. Always present ([] when none).
 	UnreadKeys []unreadKey `json:"unread_keys"`
+	// RootDefaultsRefused: the root `defaults:` thresholds (not `_` keys)
+	// whose value the exporter refuses (#3250: parseThresholdNumber on the
+	// text as written, config.RootDefaultRefusals' verdict), each {key, text,
+	// refused}, sorted by key: no tenant gets a default row for one. The
+	// tree's verdict, not a tenant's — a tenant that does not write the key
+	// also names it in keys[] (root_default_refused). Always present ([]
+	// when none).
+	RootDefaultsRefused []rootDefaultRefused `json:"root_defaults_refused"`
 	// tenants_requested / tenants_absent, with --tenant only
 	// (tenant_subset.go): Tenants then holds those of the requested
 	// tenants the tree has, judged over them alone.
@@ -104,6 +112,27 @@ type unreadKey struct {
 	File   string `json:"file"`
 	Key    string `json:"key"`
 	Reason string `json:"reason"`
+}
+
+// rootDefaultRefused is one entry of servedValuesDoc.RootDefaultsRefused.
+type rootDefaultRefused struct {
+	Key     string `json:"key"`
+	Text    string `json:"text"`
+	Refused string `json:"refused"`
+}
+
+// rootDefaultsRefused is cfg's refused root thresholds, sorted by key.
+func rootDefaultsRefused(cfg *config.ThresholdConfig) []rootDefaultRefused {
+	out := []rootDefaultRefused{}
+	if cfg == nil {
+		return out
+	}
+	for k, reason := range cfg.RefusedRootDefaults() {
+		text, _, _ := config.RefusedDefault(cfg.Defaults[k])
+		out = append(out, rootDefaultRefused{Key: k, Text: text, Refused: reason})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // skippedFile is one entry of servedValuesDoc.Skipped or .Unreadable.
@@ -268,9 +297,9 @@ type servedKey struct {
 	// when the value is read: a number, or a disable (Reason disabled). Set
 	// only when the resolver itself recorded the refusal
 	// (config.TenantValuesNotServed), so a key the platform does not declare
-	// stays no_row whatever it holds. Also "non_finite" on a key with
-	// Reason root_default_non_finite: the value refused is the root
-	// default's, which leaves the tenant no row.
+	// stays no_row whatever it holds. Also set on a key with Reason
+	// root_default_refused: the value refused is the root default's, which
+	// leaves the tenant no row.
 	Refused string `json:"refused,omitempty"`
 	// Disable, only with --disable-effects and only for a key that reads
 	// `disable` in some part of the day and is not a registered `_` key:
@@ -315,13 +344,14 @@ const (
 	// keyReasonValueUnparsed (#3140): the resolver refused the key's value
 	// as one it cannot read and serves no row for it.
 	keyReasonValueUnparsed = "value_unparsed"
-	// keyReasonRootDefaultNonFinite (#3140): a threshold key the tenant
-	// does not write, whose root `defaults:` value is a non-finite number
-	// (config.NonFiniteRootDefaults): the resolver serves no default row
-	// for it, so the tenant has none — not a switch-off, and not a key
-	// nobody declares. Refused is "non_finite". da-guard reports the root
-	// value as root_default_non_finite.
-	keyReasonRootDefaultNonFinite = "root_default_non_finite"
+	// keyReasonRootDefaultRefused (#3140, #3250): a threshold key the
+	// tenant does not write, whose root `defaults:` value the resolver
+	// refuses (config.RefusedRootDefaults: parseThresholdNumber on the text
+	// as written): it serves no default row for it, so the tenant has none —
+	// not a switch-off, and not a key nobody declares. Refused is why, in the
+	// tenant values' own words (non_finite, unparsed). da-guard reports the
+	// root value as root_default_refused.
+	keyReasonRootDefaultRefused = "root_default_refused"
 )
 
 // refusedReason is the keyReason* / segment reason of a refusal
@@ -527,14 +557,15 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		unreadKeys = append(unreadKeys, unreadKey{File: u.File, Key: u.Key, Reason: config.NotServedRootDefaultsUnwrapped})
 	}
 	doc := servedValuesDoc{
-		Schema:      servedValuesSchema,
-		At:          at.Format(time.RFC3339),
-		ParseFailed: parseFailed,
-		Skipped:     skipped,
-		Unreadable:  unreadable,
-		Tenants:     tenants,
-		Aliases:     config.DeprecatedKeyAliases(),
-		UnreadKeys:  unreadKeys,
+		Schema:              servedValuesSchema,
+		At:                  at.Format(time.RFC3339),
+		ParseFailed:         parseFailed,
+		Skipped:             skipped,
+		Unreadable:          unreadable,
+		Tenants:             tenants,
+		Aliases:             config.DeprecatedKeyAliases(),
+		UnreadKeys:          unreadKeys,
+		RootDefaultsRefused: rootDefaultsRefused(cfg),
 		tenantSubset: subset(requested, func(t string) bool {
 			_, ok := tenants[t]
 			return ok
@@ -769,8 +800,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		stateOn[sf.Tenant][sf.FilterName] = servedStateFilter{Severity: sf.Severity}
 	}
 
-	// #3140: the root defaults the resolver serves no default row for.
-	rootNonFinite := cfg.NonFiniteRootDefaults()
+	// #3140, #3250: the root defaults the resolver serves no default row for.
+	rootRefused := cfg.RefusedRootDefaults()
 
 	out := make(map[string]servedTenantValues, len(cfg.Tenants))
 	for tenant, overrides := range cfg.Tenants {
@@ -887,9 +918,17 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			canon, _ := config.CanonicalKeyFor(k)
 			_, own := overrides[canon]
 			perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
-			if _, served := tv.Values[canon]; served || own || !perTenant || rootNonFinite[k] {
-				// A non-finite one (#3140) is in Keys instead (below): it
-				// is no value to show, and JSON has no NaN.
+			if _, refused := rootRefused[k]; refused {
+				// In Keys instead (below): its value is no number to show.
+				continue
+			}
+			if _, served := tv.Values[canon]; served || own || !perTenant {
+				continue
+			}
+			// #3250: a refused `_` key's value is the text the file wrote,
+			// as for a tenant's (rawScheduledValue): JSON has no NaN.
+			if text, _, refused := config.RefusedDefault(v); refused {
+				tv.Unserved[k] = text
 				continue
 			}
 			tv.Unserved[k] = v
@@ -912,7 +951,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedRefusals(cfg, tenant, at))
-		addRootNonFinite(tv, overrides, rootNonFinite)
+		addRootRefused(tv, overrides, rootRefused)
 		out[tenant] = tv
 	}
 	if withSchedules {
@@ -1049,14 +1088,14 @@ func servedKeys(tv servedTenantValues,
 	return out
 }
 
-// addRootNonFinite gives tv.Keys an entry, reason
-// root_default_non_finite, for every key of rootNonFinite
-// (config.NonFiniteRootDefaults) the tenant does not write under any
+// addRootRefused gives tv.Keys an entry, reason root_default_refused
+// and Refused the reason, for every key of rootRefused
+// (config.RefusedRootDefaults) the tenant does not write under any
 // spelling and has no row for: the root's value is refused, so the tenant
-// gets no default row (#3140). A tenant that writes the key is read as
+// gets no default row (#3140, #3250). A tenant that writes the key is read as
 // any key it writes (servedKeys).
-func addRootNonFinite(tv servedTenantValues, overrides map[string]config.ScheduledValue, rootNonFinite map[string]bool) {
-	if len(rootNonFinite) == 0 {
+func addRootRefused(tv servedTenantValues, overrides map[string]config.ScheduledValue, rootRefused map[string]string) {
+	if len(rootRefused) == 0 {
 		return
 	}
 	written := map[string]bool{}
@@ -1064,7 +1103,7 @@ func addRootNonFinite(tv servedTenantValues, overrides map[string]config.Schedul
 		canon, _ := config.CanonicalKeyFor(k)
 		written[canon] = true
 	}
-	for k := range rootNonFinite {
+	for k, reason := range rootRefused {
 		canon, _ := config.CanonicalKeyFor(k)
 		_, served := tv.Values[canon]
 		_, listed := tv.Keys[canon]
@@ -1073,7 +1112,7 @@ func addRootNonFinite(tv servedTenantValues, overrides map[string]config.Schedul
 		}
 		// Keyed by the canonical spelling, as tv.Values is: a root that still
 		// writes a retired alias (mysql_cpu) names the key readers know.
-		tv.Keys[canon] = servedKey{Reason: keyReasonRootDefaultNonFinite, Refused: config.RefusedNonFinite}
+		tv.Keys[canon] = servedKey{Reason: keyReasonRootDefaultRefused, Refused: reason}
 	}
 }
 

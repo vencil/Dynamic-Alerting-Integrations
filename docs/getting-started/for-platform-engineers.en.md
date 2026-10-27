@@ -127,9 +127,10 @@ Requires:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64. Writing
-  #    "80" fails the unmarshal for the WHOLE file, dropping every default in it
-  #    (the exporter logs one ERROR; the tenant-api validation path swallows it).
+  # ⚠️ Values are NUMBERS — one that does not read as a number (e.g. disable,
+  #    abc) gets no default row for its key, and da-guard reports
+  #    root_default_refused; a mapping or a list drops the WHOLE file and
+  #    every default in it (#3250).
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80
