@@ -61,7 +61,8 @@ tests/ops/test_assemble_config_dir.py）。沒有第 6 列——它不從值做�
 check_threshold_registry `--regen` 同樣改由 `da-guard write` 寫（#3206 步驟 10）：拼好生成
 區塊的兩個 `_defaults.yaml` 各是一個 `replace`（整份新文字），每個 conf.d 根目錄一批，
 寫之前先問同一批的 dry run。第 2 列是「write 拒寫就不寫」（`inf` 驗證會點名），另有
-「兩個根目錄的拒絕逐檔點名」、「權限保留」與「symlink 拒寫」；第 3 列成為新文字讀不了
+「兩個根目錄的拒絕逐檔點名」、「權限保留」、「symlink 拒寫」、「區塊不在它的 carrier 底下
+就拒寫」與「後面的寫入失敗時點名已寫入的檔」；第 3 列成為新文字讀不了
 （原檔的重複鍵留在拼好的文字裡：`read_back_mismatch`）。
 
 Tenant ids are fixture names (CLAUDE.md #9).
@@ -1237,19 +1238,87 @@ def test_threshold_registry_regen_keeps_the_file_mode(tmp_path, monkeypatch):
     assert dev.stat().st_mode & 0o777 == 0o644
 
 
-def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(tmp_path, monkeypatch):
-    # The Python write followed the link and wrote its target (in the repo:
-    # one outside it is the containment check's).
-    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(
+        tmp_path, monkeypatch, capsys):
+    """A conf.d `_defaults.yaml` that is a symlink to a file inside the repo
+    (one outside it is the containment check's ValueError): da-guard write's
+    dry run refuses it (reason `symlink`) — rc 2, nothing written, the link
+    and its target as they were. The Python write followed the link and
+    wrote its target."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    _lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
     target = tmp_path / "repo" / "elsewhere.yaml"
     target.write_bytes(dev.read_bytes())
     dev.unlink()
     from _platform_fs import symlink_or_skip
     symlink_or_skip(target, dev)
-    before = target.read_bytes()
-    with pytest.raises(lib.ConfdWriteRefused, match=str(dev)):
+    before = _bytes(tmp_path / "repo")
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen refused: da-guard write refused 1 generated conf.d file(s): {dev}: symlink:" in err
+    assert "nothing was written" in err
+    assert _bytes(tmp_path / "repo") == before and dev.is_symlink()
+
+
+def test_threshold_registry_regen_refuses_a_block_under_another_key(tmp_path, monkeypatch):
+    """The seed's `optional_overrides:` renamed by hand (`other_carrier:`),
+    the generated markers still inside it: the spliced block is no
+    `optional_overrides` item at all, so it is refused, named, and nothing
+    is written (da-guard alone would write it: the file still reads)."""
+    seed_text = _stale(_SEED_REL, *_SEED_STALE)
+    assert seed_text.count("\noptional_overrides:\n") == 1
+    lib, _dev, seed = _regen_setup(
+        tmp_path, monkeypatch, None,
+        seed_text.replace("\noptional_overrides:\n", "\nother_carrier:\n"))
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(lib.build_registry_doc())
-    assert target.read_bytes() == before and dev.is_symlink()
+    msg = str(exc.value)
+    assert f"{seed}: the generated block 'try-local-optional' does not read as under " \
+           "'optional_overrides'" in msg, msg
+    assert "nothing was written" in msg
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fails(
+        tmp_path, monkeypatch, capsys):
+    """The conf.d batches are written, then the helm values write fails
+    (OSError): rc 2 naming the helm file and the conf.d files already
+    written (not rolled back); the registry, written last, is not."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    import _lib_python
+    import _registry_lib
+    all_specs = _registry_lib.surface_specs  # before `_regen_setup` filters it
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    helm =tmp_path / "repo" / "helm" / "values.yaml"
+    helm.parent.mkdir()
+    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
+    assert text.count(marker) == 1
+    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    # The conf.d surfaces and the helm `defaults` block (on the copy above).
+    monkeypatch.setattr(lib, "surface_specs", lambda doc: [
+        s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-defaults"])
+    registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
+    registry_before = registry.read_bytes()
+    real_write = _lib_python.write_text_secure
+
+    def failing(path, *a, **k):
+        if str(path) == str(helm):
+            raise OSError(28, "No space left on device")
+        return real_write(path, *a, **k)
+
+    monkeypatch.setattr(_lib_python, "write_text_secure", failing)
+    assert gate.main(["--regen"]) == 2
+    err = capsys.readouterr().err
+    assert f"regen stopped: writing {helm} failed:" in err, err
+    assert f"not rolled back: {dev}, {seed}" in err, err
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert registry.read_bytes() == registry_before
 
 
 def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):

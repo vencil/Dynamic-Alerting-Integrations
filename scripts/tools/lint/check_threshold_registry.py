@@ -42,8 +42,12 @@ write`` batch per conf.d root (``_registry_lib.plan_surfaces``); every batch
 is first asked as a dry run, before anything is written, and a refusal is
 named file by file. On a refusal nothing is written — neither the registry
 nor any surface — and the run exits 2, as it does when a conf.d file would
-change and there is no usable da-guard. A conf.d write that stops part-way
-names the files written (not rolled back), exit 2. The check mode reads
+change and there is no usable da-guard. A generated block whose
+enclosing key is not the carrier its surface names (read back by
+parse-tree) is refused the same way. A write that stops part-way — a
+conf.d batch, a helm values / rule pack file, the registry — names the file
+that failed and the files already written (not rolled back), exit 2. The
+check mode reads
 every surface as bytes (a text compare of the generated blocks) and runs no
 da-guard.
 
@@ -226,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         except registry_lib.ConfdWriteRefused as exc:
             print(f"ERROR: regen refused: {exc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        except registry_lib.ConfdWriteStopped as exc:
+        except registry_lib.SurfaceWriteStopped as exc:  # ConfdWriteStopped too
             print(f"ERROR: regen stopped: {exc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         except _ParseTreeError as exc:
