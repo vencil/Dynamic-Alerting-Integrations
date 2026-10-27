@@ -33,6 +33,11 @@ Pre-check 項目:
 另宣告了別的租戶，Pre-check 不通過（刪檔會連帶下架別的租戶）。parse-tree 讀不了的
 檔一律具名、擋下 --execute；沒有可用的 da-guard（`$DA_GUARD_BINARY`→`$PATH`）
 結束碼 2。
+
+刪除（ADR-036 §2，#3206 步驟 10）：只有 Go 寫 conf.d。--execute 不自己刪檔，而是送
+一個刪除項目 `{path, delete: true}` 給 `da-guard write`：它把這個檔當成搬移的來源判
+（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉它之後的整棵樹判一次
+（樹不能變壞：`worsens_tree`）。被拒時每個理由具名印在 stderr、結束碼 2，什麼都不刪。
 """
 
 import sys
@@ -54,7 +59,11 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
 import _lib_parse_tree  # noqa: E402
+import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d — the delete too)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+
+#: The tool name on every line `_lib_confedit.write_all_or_exit` prints.
+_TOOL = "offboard_tenant"
 from _lib_confd import LEGACY_STATE_FILES  # noqa: E402  (#2883)
 from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets live in tenant-api's state store)
     StateInputError,
@@ -81,7 +90,16 @@ def _top_level(config_dir):
 
 
 def find_config_file(tenant, config_dir):
-    """tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
+    """tenant 的設定檔（`<config_dir>/<rel>`，見 `find_config_rel`），或 None。"""
+    rel = find_config_rel(tenant, config_dir)
+    return None if rel is None else str(Path(config_dir) / rel)
+
+
+def find_config_rel(tenant, config_dir):
+    """tenant 的設定檔相對 *config_dir* 的路徑（parse-tree 的 entry path：正規形式，
+    沒有 `./`、`//`——`da-guard write` 收的就是這個形式），或 None。
+
+    tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
 
     #1588: the carrier is found by comparing the id its NAME carries, never
     by pasting an extension onto the id (`alpha.YAML` is alpha's), and
@@ -100,7 +118,7 @@ def find_config_file(tenant, config_dir):
         # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
         # refuses the run before this line is reached.
         if e.tenant_named == tenant and e.config_file:
-            return str(base / rel)
+            return rel
     return None
 
 
@@ -368,26 +386,33 @@ def run_precheck(tenant, config_dir, state=None):
 
 
 def execute_offboard(tenant, config_dir):
-    """執行下架: 刪除 tenant 設定檔案。"""
-    config_file = find_config_file(tenant, config_dir)
-    if not config_file:
+    """執行下架：刪除 tenant 設定檔案——經 `da-guard write` 的刪除項目（ADR-036 §2）。
+
+    True 是刪了；False 是沒有檔可刪（找不到，或 da-guard 判定時檔已不在：
+    `unchanged`）。da-guard 拒刪（不是一般檔、讀不了、拿掉後樹變壞……）、沒有可用的
+    da-guard、或寫到一半停下，由 `_lib_confedit.write_all_or_exit` 具名印在 stderr、
+    結束碼 2；被拒時什麼都沒刪。"""
+    rel = find_config_rel(tenant, config_dir)
+    if rel is None:
         print(f"❌ 找不到 {safe_label(tenant)} 的設定檔案", file=sys.stderr)
         return False
+    config_file = str(Path(config_dir) / rel)
 
-    try:
-        os.remove(config_file)
-        print(f"🗑️  已刪除: {safe_label(config_file)}")
-        print(f"\n📋 後續步驟:")
-        print(f"  1. threshold-exporter 將在下次 reload (30s) 時自動清除 "
-              f"{safe_label(tenant)} 的閾值")
-        print(f"  2. Prometheus 下次 scrape 時，{safe_label(tenant)} 的向量將消失")
-        print(f"  3. 所有相關 Alert 將自動解除")
-        print(f"  4. 請記得一併清理 Alertmanager 中 "
-              f"tenant={safe_label(tenant)} 的 routing 設定")
-        return True
-    except (ValueError, TypeError, IndexError) as e:
-        print(f"❌ 刪除失敗: {safe_label(e)}", file=sys.stderr)
+    [result] = _lib_confedit.write_all_or_exit(
+        config_dir, [_lib_confedit.delete_entry(rel)], tool=_TOOL)
+    if result["status"] == _lib_confedit.UNCHANGED:
+        print(f"❌ {safe_label(config_file)} 已不在（da-guard write 判定時沒有這個檔），"
+              "沒有刪除任何檔", file=sys.stderr)
         return False
+    print(f"🗑️  已刪除: {safe_label(config_file)}")
+    print(f"\n📋 後續步驟:")
+    print(f"  1. threshold-exporter 將在下次 reload (30s) 時自動清除 "
+          f"{safe_label(tenant)} 的閾值")
+    print(f"  2. Prometheus 下次 scrape 時，{safe_label(tenant)} 的向量將消失")
+    print(f"  3. 所有相關 Alert 將自動解除")
+    print(f"  4. 請記得一併清理 Alertmanager 中 "
+          f"tenant={safe_label(tenant)} 的 routing 設定")
+    return True
 
 
 @exit_on_yaml_file_error  # #2883: an unreadable --state record → rc 2, named
@@ -437,7 +462,8 @@ def _run(args, state):
             sys.exit(EXIT_CALLER_ERROR)
         if can_proceed:
             print(f"\n⚡ 正在執行下架...\n")
-            execute_offboard(args.tenant, args.config_dir)
+            if not execute_offboard(args.tenant, args.config_dir):
+                sys.exit(EXIT_CALLER_ERROR)  # nothing was deleted: not a success
         else:
             print(f"\n❌ Pre-check 未通過，無法執行下架。")
             sys.exit(EXIT_VIOLATION)

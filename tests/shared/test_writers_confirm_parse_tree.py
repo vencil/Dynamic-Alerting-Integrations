@@ -43,6 +43,9 @@ PyYAML 換寫法的那種讀回不同已不會發生（`'1e3'`、含 `#` 的鍵�
 da_assembler 同樣改由 `da-guard write` 寫（#3206 步驟 10c；CR 刪除時的刪檔也是）：第 2 列
 成為「write 拒寫就不寫」與「`defaults` 的字串一律拒」，第 5 列 `--render-cr` 是 exit 2
 （controller 是例外、不結束）。
+offboard_tenant 的刪檔同樣改由 `da-guard write` 的刪除項目做（#3206 步驟 10）：第 2 列成為
+「write 拒刪就不刪」（symlink；拿掉後樹變壞的 `worsens_tree`），結束碼 2；它不寫內容，
+所以沒有「讀回不同」那一種。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -670,6 +673,69 @@ def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_p
     assert r.returncode == 2, r.stdout + r.stderr  # #3206: refused before the pre-check
     assert "ERROR: tenant-a.yaml:" in r.stderr and "duplicate_key" in r.stderr, r.stderr
     assert (root / "tenant-a.yaml").exists()
+
+
+def test_offboard_tenant_deletes_through_a_da_guard_write_delete_entry(tmp_path, monkeypatch):
+    # #3206 步驟 10：刪檔是送給 da-guard write 的刪除項目，一批、路徑是 parse-tree
+    # 的正規形式（--config-dir 怎麼拼都一樣，沒有 `./`）；Python 不自己 unlink。
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
+                                       "tenant-b.yaml": "tenants:\n  tenant-b: {}\n"})
+    sent, real = [], _lib_confedit.write_all
+    monkeypatch.setattr(_lib_confedit, "write_all",
+                        lambda r, entries, **kw: sent.append(list(entries)) or real(r, entries, **kw))
+    monkeypatch.setattr(os, "remove", mock.Mock(side_effect=AssertionError("os.remove")))
+    monkeypatch.setattr(os, "unlink", mock.Mock(side_effect=AssertionError("os.unlink")))
+    assert ot.execute_offboard("tenant-a", f"{root}/") is True
+    assert sent == [[{"path": "tenant-a.yaml", "delete": True}]]
+    assert sorted(_bytes(root)) == ["tenant-b.yaml"]
+
+
+def test_offboard_tenant_does_not_delete_a_file_da_guard_write_refuses(tmp_path):
+    # The pre-check passes (the link's target declares only tenant-a), but
+    # da-guard write judges the delete as a move's source: a symlink is
+    # refused — rc 2 naming it, the link and its target both still there.
+    from _platform_fs import symlink_or_skip
+    _tree(tmp_path / "elsewhere", {"real.yaml": "tenants:\n  tenant-a: {}\n"})
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    symlink_or_skip(str(tmp_path / "elsewhere" / "real.yaml"), root / "tenant-a.yaml")
+    r = _ob(root)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "offboard_tenant: ERROR: tenant-a.yaml: symlink:" in r.stderr, r.stderr
+    assert "nothing was written" in r.stderr and "已刪除" not in r.stdout, r.stdout + r.stderr
+    assert (root / "tenant-a.yaml").is_symlink()
+    assert (tmp_path / "elsewhere" / "real.yaml").exists()
+
+
+def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path, monkeypatch,
+                                                                        capsys):
+    # The batch is judged once with the file gone (worsens_tree): every place
+    # named, rc 2, nothing deleted. ⚠️ da-guard's answer is stubbed here — a
+    # flat tenant carrier whose pre-check passes has no real tree its removal
+    # worsens that this test could build; Go's own rule is pinned in
+    # write_replace_delete_test.go and tests/ops/test_lib_confedit.py
+    # (`test_deleting_the_selected_carrier_is_tree_worsened`).
+    import _lib_confedit
+    import offboard_tenant as ot
+    root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    before = _bytes(root)
+
+    def worsened(r, entries, **kw):
+        assert entries == [{"path": "tenant-a.yaml", "delete": True}] and not kw.get("dry_run")
+        raise _lib_confedit.TreeWorsened([{"kind": "readers_lost", "path": "other.yaml",
+                                           "message": "read by [exporter] before the call"}])
+    monkeypatch.setattr(_lib_confedit, "write_all", worsened)
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root),
+                                      "--execute", "--skip-state-check"])
+    with pytest.raises(SystemExit) as exc:
+        ot.main()
+    assert exc.value.code == 2
+    out = capsys.readouterr()
+    assert "offboard_tenant: ERROR: other.yaml: worsens_tree: readers_lost:" in out.err, out.err
+    assert "已刪除" not in out.out
+    assert _bytes(root) == before
 
 
 # ── E2 review follow-ups ─────────────────────────────────────────────────
