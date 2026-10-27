@@ -42,6 +42,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 # so it finds every generator module already loaded (ADR-036 §3).
 import generate_alertmanager_routes as gar  # noqa: E402
 import _grar_parse  # noqa: E402
+import _lib_confd  # noqa: E402
+import _lib_key_verdict  # noqa: E402
+import _lib_tenant_values  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
@@ -95,6 +99,10 @@ class ChildJob:
     #: (``load_tenant_tree``, where every parse of the judgement happens),
     #: no writes, no verdict, no amtool: it exists to fill the cache.
     warm: bool = False
+    #: The judgement deadline (``time.monotonic()``, which the service's
+    #: event loop clock is; the fork shares it): where the service ends this
+    #: process. 0: none known — the key verdict is not started.
+    deadline_at: float = 0.0
 
 
 # ── git ──────────────────────────────────────────────────────────────────
@@ -356,6 +364,8 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     stream.send(frame(b"B", json.dumps(sorted(
         {_lib_parse_cache.content_key(p, c) for mode, _o, p, c in tree
          if mode != "160000"})).encode("utf-8")))
+    written = {w.path for w in job.request.writes}
+    base = {p: c for mode, _o, p, c in tree if p in written and mode in ("100644", "100755")}
     try:
         files = apply_writes(tree_dir, job.request, irregular)
     except BadWrite as exc:
@@ -410,7 +420,209 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         return {"outcome": "incomplete", **common}
     if not isinstance(doc, dict) or doc.get("exit_code") != rc:
         return {"outcome": "incomplete", **common}
-    return {"outcome": "ran", "rc": rc, "findings": doc, **common}
+    out = {"outcome": "ran", "rc": rc, "findings": doc, **common}
+    if rc == 0:
+        # A write the generator refuses is refused whatever the verdict
+        # says; one it passes gets the verdict, never refused by it.
+        out["key_verdict"] = key_verdict(job, tree_dir, base, cache)
+        out["hit_keys"] = [list(k) for k in cache.hits]  # the verdict's hits keep their entries too
+    return out
+
+
+# ── the key verdict (ADR-038 decision 5) ─────────────────────────────────
+#
+# After a write the generator passes, the shared verdict on the keys of the
+# tenants the write touches (_lib_key_verdict.judge_tree, `--tenant`), in
+# this process, under its RLIMIT_DATA. It never refuses the write: it has
+# its own share of the judgement deadline, and a verdict that does not fit
+# — out of time or memory, or da-guard failing — is reported as not
+# completed, with the reason (ADR-038 §5: "verdict not completed" is a
+# notice, never a refusal). Its cost grows with the tree (measured: about
+# 1.2 s at 1000 tenants, 3 s at 2500, 6 s at 5000 on one CPU, #3206), so on
+# a large tree it is the share that runs out, not the write's deadline.
+
+#: The verdict stops this long before the judgement deadline, so the result
+#: is still sent in time — with room for a C call (a JSON decode of
+#: da-guard's output, a wait for the killed da-guard) that holds off the
+#: alarm until it returns.
+VERDICT_RESERVE_SECONDS = 2.0
+#: Less time than this left for the verdict: it is not started.
+VERDICT_MIN_SECONDS = 0.5
+#: Findings sent at most (the rest counted in ``truncated``).
+VERDICT_MAX_FINDINGS = 1000
+
+
+class _VerdictDeadline(BaseException):
+    """The verdict's share of the deadline ran out (SIGALRM). A
+    BaseException, so no ``except Exception`` on the way swallows it."""
+
+
+class _VerdictPreempted(BaseException):
+    """Another write is waiting (the service's SIGUSR1): the verdict yields
+    to it, as a warming run does — judgements run one at a time, and the
+    queued write's deadline counts its wait."""
+
+
+#: Whether the verdict is running in this process (on_preempt's switch).
+_VERDICT_RUNNING = [False]
+
+
+def _on_alarm(_signum, _frame) -> None:
+    raise _VerdictDeadline()
+
+
+def on_preempt(_signum, _frame) -> None:
+    """The SIGUSR1 handler. The long-running service installs it at start,
+    so every judgement process has it from its fork on (SIGUSR1's default
+    would end the process); outside the verdict it does nothing."""
+    if _VERDICT_RUNNING[0]:
+        raise _VerdictPreempted()
+
+
+def written_scope(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
+                  reader: "_lib_parse_cache.ConfdReader") -> "tuple[list[str], list[str]]":
+    """``(platform paths, tenants)`` of the write (ADR-038 §5).
+
+    *tenants*: those the written files declare, before and after the write
+    (a tenant file's ``tenants:``, and a root platform file's — its
+    per-tenant platform defaults), read through the installed cache, where
+    the generator's run (after) and the long-running process (before) left
+    them.
+
+    *platform paths*: the written files whose keys reach tenants they do
+    not name: a defaults file at any depth, or a root platform file with
+    ``profiles:`` before or after (the verdict reads profiles from those
+    files too, ``_lib_key_verdict._root_profiles``). What a path is, is Go's
+    classification of the tree after the write (*reader*'s listing); a
+    deleted path, gone from it, by its name alone. A file no reader selects
+    (a hidden one, a ``_`` file below the root that is not a defaults file)
+    declares nothing."""
+    listing = _lib_confd.config_listing(tree_dir, reader=reader)
+    after = {e.path: e for e in listing.config_files()} if listing is not None else {}
+    deleted = sorted({w.path.split("/")[-1] for w in job.request.writes if w.delete})
+    named = _lib_parse_tree.classify_names(deleted) if deleted else {}
+    cache = _lib_parse_cache.active()
+    platform: list[str] = []
+    tenants: set[str] = set()
+    for w in job.request.writes:
+        if any(part.startswith(".") for part in w.path.split("/")):
+            continue  # hidden: no reader walks into it
+        if w.delete:
+            e = named.get(w.path.split("/")[-1])
+            cls, root_platform = (e.cls if e else None), (e is not None and e.reserved and "/" not in w.path)
+        else:
+            e = after.get(w.path)
+            cls, root_platform = (e.cls if e else None), (e is not None and e.root_platform_file)
+        if cls == "defaults":
+            platform.append(w.path)
+            continue
+        if cls != "tenant" and not root_platform:
+            continue  # declares nothing a reader serves
+        docs = []
+        try:
+            before = base.get(w.path)
+            if before is not None:
+                key = (_lib_parse_cache.content_key(w.path, before), _lib_parse_cache.VALUES.name)
+                doc = cache.cached(key) if cache is not None else _lib_parse_cache.MISS
+                if doc is _lib_parse_cache.MISS:
+                    doc = _lib_parse_cache.read_text_as(tree_dir, w.path, before)
+                docs.append(doc)
+            if not w.delete:
+                docs.append(reader.read(os.path.join(tree_dir, w.path)))
+        except (_lib_parse_cache.NotSelected, _lib_parse_cache.FileUnreadable):
+            continue  # declares nothing the exporter serves
+        if root_platform and any(isinstance(d, dict) and d.get("profiles") for d in docs):
+            platform.append(w.path)
+            continue
+        for doc in docs:
+            block = doc.get("tenants") if isinstance(doc, dict) else None
+            if isinstance(block, dict):
+                tenants.update(str(t) for t in block)
+    return platform, sorted(tenants)
+
+
+def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
+                cache: "_lib_parse_cache.ParseCache") -> dict:
+    """The verdict's report: ``status`` complete or not_completed (with
+    ``reason`` no_time / deadline / preempted / memory / error /
+    platform_file and ``message``), ``tenants`` judged, ``seconds``, and
+    when complete the findings."""
+    started = time.monotonic()
+    try:
+        return _key_verdict(job, tree_dir, base, cache, started)
+    except (_VerdictDeadline, _VerdictPreempted) as exc:
+        # The signal came after the verdict's own handlers, on its way out.
+        _VERDICT_RUNNING[0] = False
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        reason = "deadline" if isinstance(exc, _VerdictDeadline) else "preempted"
+        return {"status": "not_completed", "reason": reason, "tenants": 0,
+                "seconds": round(time.monotonic() - started, 3), "message": _STOPPED[reason]}
+
+
+_STOPPED = {"deadline": "its share of the judgement deadline ran out",
+            "preempted": "another write was waiting: the verdict yields to it"}
+
+
+def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
+                 cache: "_lib_parse_cache.ParseCache", started: float) -> dict:
+    budget = job.deadline_at - VERDICT_RESERVE_SECONDS - started if job.deadline_at else 0.0
+
+    def report(status: str, **fields) -> dict:
+        return {"status": status, "seconds": round(time.monotonic() - started, 3), **fields}
+    if budget < VERDICT_MIN_SECONDS:
+        return report("not_completed", reason="no_time", tenants=0,
+                      message=f"{max(budget, 0.0):.1f}s of the judgement deadline left for it")
+    previous = signal.signal(signal.SIGALRM, _on_alarm)
+    outer = signal.setitimer(signal.ITIMER_REAL, budget)  # a timer someone set before (a test runner's)
+    # The verdict's parses are not streamed: a signal ending it in the middle
+    # of writing an entry would leave half a frame on the pipe, and the
+    # result after it unreadable. They stay in this process.
+    on_store, cache.on_store = cache.on_store, None
+    _lib_parse_cache.install(cache)
+    _VERDICT_RUNNING[0] = True
+    tenants: list[str] = []
+    try:
+        # One reader for the whole verdict: its tree-mode document is read once.
+        reader = _lib_parse_cache.ConfdReader(tree_dir)
+        platform, tenants = written_scope(job, tree_dir, base, reader)
+        if platform:
+            # Its keys reach tenants it does not name: the whole tree's
+            # verdict (the PR's CI) judges it, not this one.
+            return report("not_completed", reason="platform_file", tenants=0,
+                          message=f"{platform[0]} is a platform file: its keys reach tenants "
+                                  "it does not name, which only a whole-tree verdict judges")
+        if not tenants:
+            return report("complete", tenants=0, findings=[], truncated=0)
+        verdict = _lib_key_verdict.judge_tree(
+            tree_dir, tenants=tenants, timeout=budget, reader=reader)
+        findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
+                     "tenants": list(f.tenants), "reason": f.reason}
+                    for f in verdict.findings[:VERDICT_MAX_FINDINGS]]
+        return report("complete", tenants=len(tenants), findings=findings,
+                      truncated=max(0, len(verdict.findings) - VERDICT_MAX_FINDINGS))
+    except (_VerdictDeadline, _VerdictPreempted) as exc:
+        reason = "deadline" if isinstance(exc, _VerdictDeadline) else "preempted"
+        return report("not_completed", reason=reason, tenants=len(tenants), message=_STOPPED[reason])
+    except MemoryError as exc:
+        return report("not_completed", reason="memory", tenants=len(tenants),
+                      message=" ".join(str(exc).split())[:300] or "MemoryError")
+    except _lib_tenant_values.DaGuardError as exc:
+        # A da-guard ended by a signal under RLIMIT_DATA is its memory limit.
+        reason = "memory" if (exc.returncode or 0) < 0 else "error"
+        return report("not_completed", reason=reason, tenants=len(tenants),
+                      message=" ".join(str(exc).split())[:300])
+    except BaseException as exc:  # noqa: BLE001 — a verdict that fails never refuses the write
+        return report("not_completed", reason="error", tenants=len(tenants),
+                      message=f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}")
+    finally:
+        _VERDICT_RUNNING[0] = False
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if outer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL,
+                             max(outer[0] - (time.monotonic() - started), 0.001), outer[1])
+        _lib_parse_cache.install(None)
+        cache.on_store = on_store
 
 
 def _close_inherited(keep: int) -> None:

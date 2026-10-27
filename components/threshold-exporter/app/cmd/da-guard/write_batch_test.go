@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,12 +125,36 @@ func TestEmit_TheBatchIsJudgedAsOneTree(t *testing.T) {
 	}
 }
 
+// TestWrite_APathNotInItsCleanFormIsACallerError: `path` and `from` are
+// taken as sent or refused — never cleaned in silence, so a caller that
+// goes on to use its own string (a git index entry) names the file written.
+func TestWrite_APathNotInItsCleanFormIsACallerError(t *testing.T) {
+	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  tenant-a: {}\n"})
+	before := snapshot(t, root)
+	for _, p := range []string{"x//a.yaml", "x/../a.yaml", "x/./a.yaml", "x/a.yaml/", "./x/a.yaml"} {
+		for kind, in := range map[string]string{
+			"path":   fmt.Sprintf(`{"files":[{"path":%q,"from":"a.yaml"}]}`, p),
+			"from":   fmt.Sprintf(`{"files":[{"path":"y/a.yaml","from":%q}]}`, p),
+			"create": fmt.Sprintf(`{"files":[{"path":%q,"create":{"map":[]}}]}`, p),
+		} {
+			t.Run(kind+" "+p, func(t *testing.T) {
+				code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+				if code != exitCallerErr || res.Status != writeStatusCallerError || callReason(res) != "bad_path" ||
+					res.Message == nil || !strings.Contains(*res.Message, fmt.Sprintf("%q", p)) ||
+					!strings.Contains(*res.Message, "clean form") {
+					t.Fatalf("exit %d %+v %v", code, res, res.Message)
+				}
+				sameTree(t, before, snapshot(t, root))
+			})
+		}
+	}
+}
+
 func TestWrite_APathGivenTwiceIsACallerError(t *testing.T) {
 	root := writeTree(t, map[string]string{"a.yaml": "tenants: {}\n"})
 	before := snapshot(t, root)
 	for name, in := range map[string]string{
 		"edit":                            `{"files":[{"path":"a.yaml","ops":[]},{"path":"a.yaml","ops":[]}]}`,
-		"edit, spelled two ways":          `{"files":[{"path":"a.yaml","ops":[]},{"path":"x/../a.yaml","ops":[]}]}`,
 		"create":                          `{"files":[{"path":"n.yaml","create":{"map":[]}},{"path":"n.yaml","create":{"map":[]}}]}`,
 		"a move's source as another path": `{"files":[{"path":"n.yaml","from":"a.yaml"},{"path":"a.yaml","ops":[]}]}`,
 		"two moves of one source":         `{"files":[{"path":"n.yaml","from":"a.yaml"},{"path":"m.yaml","from":"a.yaml"}]}`,

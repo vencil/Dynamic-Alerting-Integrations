@@ -252,9 +252,13 @@ func (w *writer) makeDirs(dir string, created *[]string) error {
 
 // temporary writes f.out to a hidden temporary file beside f.abs (f.tmp):
 // its mode, for an edit the original's owner and group when they can be set
-// (else a warning), synced and closed.
+// (else a warning), synced and closed. ⛔ The name does not hold f.abs's
+// base name: a file name near NAME_MAX (255 bytes; a 250-character
+// Kubernetes object name + `.yaml`) would make the temporary one too long
+// to create, and a file that can be written directly could not be written
+// through here.
 func (w *writer) temporary(f *writeFile) error {
-	tmp, err := os.CreateTemp(filepath.Dir(f.abs), "."+filepath.Base(f.abs)+".da-guard-*")
+	tmp, err := os.CreateTemp(filepath.Dir(f.abs), ".da-guard-*")
 	if err != nil {
 		return err
 	}
@@ -420,19 +424,26 @@ func (w *writer) placeMove(f *writeFile, rename func(string, string) error) (str
 }
 
 // backupName is a fresh hidden name beside abs for a delete's link to its
-// file (no walk reads a hidden name; temporary() names its files alike).
+// file (no walk reads a hidden name; temporary() names its files alike,
+// and for the same reason without abs's base name: one near NAME_MAX
+// could not be deleted otherwise — the file's own path is in the result).
 func backupName(abs string) (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(abs), "."+filepath.Base(abs)+".da-guard-deleted-"+hex.EncodeToString(b[:])), nil
+	return filepath.Join(filepath.Dir(abs), ".da-guard-deleted-"+hex.EncodeToString(b[:])), nil
 }
 
 // placeDelete removes f's file from its path so that it can be put back: it
 // is first linked at a hidden name beside it (f.backup; renamed there on a
 // file system without hard links), then the path's name is removed while it
-// is still that file. f.placed is the file once the hidden link holds it;
+// is still that file. "Still that file" is its bytes (holds: the bytes the
+// judgement read, so a "tenants" precondition judged on them still holds)
+// compared before the link, and its inode (os.SameFile) before the unlink:
+// a file replaced by a rename is refused changed_during_write. ⚠️ The
+// residual window: bytes written into the SAME inode after that byte
+// comparison and before the unlink are not seen — no lock is taken. f.placed is the file once the hidden link holds it;
 // f.sourceGone once the path's name is gone.
 func (w *writer) placeDelete(f *writeFile, rename func(string, string) error) (string, error) {
 	src, err := os.Lstat(f.abs)

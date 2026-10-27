@@ -28,6 +28,7 @@ from da_assembler import (  # noqa: E402
     reconcile_one,
     remove_rendered,
     render_cr_file,
+    render_entry,
     render_cr_to_yaml,
     run_once,
     update_cr_status,
@@ -107,38 +108,114 @@ class TestOutputFilename:
         cr = _make_cr(name="payment-db")
         assert _output_filename(cr) == "payment-db.yaml"
 
-    def test_missing_name(self):
-        """測試缺失名稱時的預設檔名。"""
-        cr = {"metadata": {}}
-        assert _output_filename(cr) == "unknown.yaml"
+    @pytest.mark.parametrize("metadata", [
+        pytest.param({}, id="missing"),
+        pytest.param({"name": None}, id="null"),
+        pytest.param({"name": "../x"}, id="path"),
+        pytest.param({"name": ".hidden"}, id="hidden"),
+        pytest.param({"name": "_defaults"}, id="underscore"),
+        pytest.param({"name": "Upper"}, id="upper"),
+        pytest.param({"name": "a" * 254}, id="too-long"),
+    ])
+    def test_a_name_that_is_not_an_object_name_is_refused(self, metadata):
+        """#3206：檔名是 `<metadata.name>.yaml`，兩條路徑（controller 也是）都先以
+        DNS-1123 subdomain 驗，不合格就拒寫（先前缺 name 寫成 `unknown.yaml`）。
+
+        會讓本測試轉紅的改動：拿掉 `_output_filename` 的檢查，或改用 ADR-035 的
+        租戶 id 規則（`a.b` 是合法物件名稱、不是合法租戶 id，見下一支）。
+        """
+        with pytest.raises(ValueError, match="not a valid Kubernetes object name"):
+            _output_filename({"metadata": metadata})
+
+    def test_a_dotted_object_name_is_a_file_name(self):
+        """物件名稱可以帶 `.`（subdomain），租戶 id 不行（label）：檔名照物件名稱。"""
+        assert _output_filename(_make_cr(name="team.alpha")) == "team.alpha.yaml"
 
 
 class TestWriteRendered:
-    """write_rendered() 測試。"""
+    """write_rendered()：經 `da-guard write` 寫（ADR-036 §2，#3206）。"""
 
-    def test_writes_file(self):
-        """測試寫入檔案。"""
-        with tempfile.TemporaryDirectory() as d:
-            changed = write_rendered(
-                Path(d), "test.yaml", "tenants:\n  a: 1\n")
-            assert changed
-            assert (Path(d) / "test.yaml").exists()
+    def test_writes_file(self, tmp_path):
+        """寫入的就是 render_cr_to_yaml 預覽的文字；回傳的 sha 是檔案位元組的。"""
+        cr = _make_cr(name="test")
+        changed, sha = write_rendered(tmp_path, render_entry(cr))
+        assert changed
+        raw = (tmp_path / "test.yaml").read_bytes()
+        assert raw.decode("utf-8") == render_cr_to_yaml(cr)
+        assert sha == _content_sha256(raw)
 
-    def test_no_change_skips_write(self):
-        """測試無變更時跳過寫入。"""
-        with tempfile.TemporaryDirectory() as d:
-            content = "tenants:\n  a: 1\n"
-            (Path(d) / "test.yaml").write_text(content, encoding="utf-8")
-            changed = write_rendered(Path(d), "test.yaml", content)
-            assert not changed
+    def test_no_change_skips_write(self, tmp_path):
+        """同樣的位元組不再寫（da-guard 的 unchanged）：mtime 不動、回傳 False。"""
+        entry = render_entry(_make_cr(name="test"))
+        write_rendered(tmp_path, entry)
+        dest = tmp_path / "test.yaml"
+        os.utime(dest, (1, 1))
+        changed, sha = write_rendered(tmp_path, entry)
+        assert not changed
+        assert dest.stat().st_mtime == 1
+        assert sha == _content_sha256(dest.read_bytes())
+        # Under --dry-run too: the same bytes are no change.
+        assert write_rendered(tmp_path, entry, dry_run=True)[0] is False
 
-    def test_dry_run(self):
-        """測試乾執行模式。"""
-        with tempfile.TemporaryDirectory() as d:
-            changed = write_rendered(
-                Path(d), "test.yaml", "content", dry_run=True)
-            assert changed
-            assert not (Path(d) / "test.yaml").exists()
+    def test_dry_run(self, tmp_path):
+        """乾執行不寫；--config-dir 還不存在時也不建。"""
+        out = tmp_path / "new"
+        changed, sha = write_rendered(out, render_entry(_make_cr(name="test")),
+                                      dry_run=True)
+        assert changed
+        assert sha == _content_sha256(render_cr_to_yaml(_make_cr(name="test")))
+        assert not out.exists()
+
+    def test_a_rerun_replaces_the_file_whole(self, tmp_path):
+        """檔案整份由 CR 產生：重跑以 `replace` 整份取代，手改的內容不留。"""
+        dest = tmp_path / "test.yaml"
+        dest.write_text("# hand edit\ntenants:\n  other: {}\n", encoding="utf-8")
+        cr = _make_cr(name="test")
+        assert write_rendered(tmp_path, render_entry(cr))[0]
+        assert dest.read_text(encoding="utf-8") == render_cr_to_yaml(cr)
+
+    def test_the_file_mode_is_da_guards(self, tmp_path):
+        """新檔是 da-guard write 的 0600、取代的檔保留原權限（先前一律 chmod 0644）。
+
+        ⚠️ 未決（#3206）：exporter 若以不同 uid 讀這個目錄，0600 的新檔它讀不到；
+        要哪一種做法（write 可指定 mode、寫後 chmod、部署同 uid）尚未拍板，這支只釘
+        現況，拍板後隨之改。
+        """
+        cr = _make_cr(name="test")
+        write_rendered(tmp_path, render_entry(cr))
+        dest = tmp_path / "test.yaml"
+        assert dest.stat().st_mode & 0o777 == 0o600
+        os.chmod(dest, 0o644)
+        cr["spec"]["tenants"]["test"]["mysql_connections"] = "71"
+        assert write_rendered(tmp_path, render_entry(cr))[0]
+        assert dest.stat().st_mode & 0o777 == 0o644
+
+    def test_the_controller_never_exits_on_a_refusal(self, tmp_path):
+        """controller（cli=False）走 write_all：拒寫是例外，不是 sys.exit——
+        長跑的 watch 迴圈接得住、記在 CR status。會讓本測試轉紅的改動：
+        controller 也改用 write_all_or_exit。"""
+        import _lib_confedit
+        from _platform_fs import symlink_or_skip
+        (tmp_path / "elsewhere.yaml").write_text("tenants: {}\n", encoding="utf-8")
+        out = tmp_path / "out"
+        out.mkdir()
+        symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "test.yaml")
+        with pytest.raises(_lib_confedit.EditsRefused):
+            write_rendered(out, render_entry(_make_cr(name="test")))
+        assert (out / "test.yaml").is_symlink()
+
+    def test_the_cli_exits_2_naming_the_refused_file(self, tmp_path, capsys):
+        """`--render-cr`（cli=True）走 write_all_or_exit：rc 2、逐檔點名、不寫。"""
+        from _platform_fs import symlink_or_skip
+        (tmp_path / "elsewhere.yaml").write_text("tenants: {}\n", encoding="utf-8")
+        out = tmp_path / "out"
+        out.mkdir()
+        symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "test.yaml")
+        with pytest.raises(SystemExit) as exc:
+            write_rendered(out, render_entry(_make_cr(name="test")), cli=True)
+        assert exc.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "da_assembler: ERROR: test.yaml: " in err and "nothing was written" in err, err
 
 
 class TestRemoveRendered:
@@ -148,7 +225,7 @@ class TestRemoveRendered:
         """測試刪除現存檔案。"""
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "test.yaml"
-            p.write_text("data", encoding="utf-8")
+            p.write_text("tenants:\n  t1: {}\n", encoding="utf-8")
             removed = remove_rendered(Path(d), "test.yaml")
             assert removed
             assert not p.exists()
@@ -163,10 +240,22 @@ class TestRemoveRendered:
         """測試乾執行模式不刪除檔案。"""
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "test.yaml"
-            p.write_text("data", encoding="utf-8")
+            p.write_text("tenants:\n  t1: {}\n", encoding="utf-8")
             removed = remove_rendered(Path(d), "test.yaml", dry_run=True)
             assert removed
             assert p.exists()  # not actually deleted
+
+    def test_a_missing_config_dir_removes_nothing(self, tmp_path):
+        assert remove_rendered(tmp_path / "none", "test.yaml") is False
+
+    def test_a_refused_delete_raises_and_keeps_the_file(self, tmp_path):
+        """da-guard 拒刪（讀不了的檔）就是例外、檔案原樣——由 watch 迴圈記 log。"""
+        import _lib_confedit
+        p = tmp_path / "test.yaml"
+        p.write_text("not: [a mapping\n", encoding="utf-8")
+        with pytest.raises(_lib_confedit.EditsRefused):
+            remove_rendered(tmp_path, "test.yaml")
+        assert p.exists()
 
 
 class TestContentSha256:
@@ -774,7 +863,7 @@ class TestRenderCrFile:
                            encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        with mock.patch("da_assembler.dump_for_rewrite",
+        with mock.patch("da_assembler._render_value",
                         side_effect=RuntimeError("injected")):
             rc = render_cr_file(cr_path, out_dir)
         assert rc == EXIT_CALLER_ERROR
@@ -836,15 +925,15 @@ class TestRenderCrFile:
 
     @pytest.mark.parametrize("spec, body", [
         pytest.param("  tenants: {t1: {m: '1'}, t2: null}\n",
-                     "tenants:\n  t1:\n    m: '1'\n  t2: null\n",
+                     'tenants:\n  t1:\n    m: "1"\n  t2: null\n',
                      id="null-tenant"),
         pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: null\n"
                      "  stateFilters: {}\n",
-                     "tenants:\n  t1:\n    m: '1'\n",
+                     'tenants:\n  t1:\n    m: "1"\n',
                      id="null-and-empty-blocks"),
         pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: 0\n"
                      "  stateFilters: []\n",
-                     "tenants:\n  t1:\n    m: '1'\n",
+                     'tenants:\n  t1:\n    m: "1"\n',
                      id="falsy-blocks"),
     ])
     def test_null_or_empty_shapes_still_render(self, spec, body, tmp_path):
@@ -861,15 +950,17 @@ class TestRenderCrFile:
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == 0
         text = (out_dir / "ok.yaml").read_text(encoding="utf-8")
-        assert text.split("\n", 2)[2] == body
+        # Two header lines and the blank line Go sets the document off by.
+        assert text.split("\n", 3)[3] == body
 
 
 # ── #2395 round 2: shapes below the blocks, judged against the exporter ──
 #
 # Each row is a CR `spec:` body and whether the exporter reads the file
-# `render_cr_to_yaml` makes of it. The `oracle` test below re-measures every
-# row with `da-guard served-values` (rc 3 = the exporter refused the file);
-# the other tests pin the tool's rc for the same rows.
+# `da-guard write` makes of it (#3206: Go writes the file; every value with
+# its JSON type, a string double quoted). The `oracle` test below re-measures
+# every row with `da-guard served-values` (rc 3 = the exporter refused the
+# file); the other tests pin the tool's rc for the same rows.
 
 _T1 = "  tenants:\n    t1: {mysql_connections: '70'}\n"
 
@@ -919,6 +1010,11 @@ _REFUSED = [
     ("defaults-dotted-I", "  defaults: {cpu: 1İ}\n"),
     ("defaults-hex-dotted-I", "  defaults: {cpu: 0xİ}\n"),
     ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
+    # #3206: a JSON string under `defaults` is written as a string, which the
+    # exporter cannot decode into float64 — also one whose text is a number
+    # to yaml.v3 (the dump once wrote these two plain, so they were read).
+    ("defaults-quoted-exponent", "  defaults: {cpu: \"1e3\"}\n"),
+    ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
     ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
     ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
     ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
@@ -942,7 +1038,6 @@ _READ = [
     ("defaults-negative", "  defaults: {cpu: -5}\n"),
     ("defaults-leading-dot", "  defaults: {cpu: .5}\n"),
     ("defaults-exponent", "  defaults: {cpu: 1e3}\n"),
-    ("defaults-quoted-exponent", "  defaults: {cpu: \"1e3\"}\n"),
     ("defaults-underscore", "  defaults: {cpu: 1_000}\n"),
     ("defaults-hex", "  defaults: {cpu: 0x10}\n"),
     ("defaults-signed-hex", "  defaults: {cpu: +0x10}\n"),
@@ -957,10 +1052,8 @@ _READ = [
     ("defaults-min-int64", "  defaults: {cpu: -0x8000000000000000}\n"),
     ("defaults-trailing-underscore", "  defaults: {cpu: 1_}\n"),
     ("defaults-dot-exponent-underscore", "  defaults: {cpu: .5e1_0}\n"),
-    # yaml.v3's 0b / 0o fallback hands the rest to ParseInt(base 2 / 8),
-    # which takes a sign there.
+    # Kubernetes' YAML→JSON (da-crdecode) reads `0b-1` as a number.
     ("defaults-binary-signed-digits", "  defaults: {cpu: 0b-1}\n"),
-    ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
     ("defaults-tagged-int", _tagged_int(80)),
     ("sf-null", "  stateFilters: {x: null}\n"),
     ("sf-empty", "  stateFilters: {x: {}}\n"),
@@ -975,10 +1068,9 @@ _READ = [
     ("tenant-set", "    t2: !!set {cpu}\n"),
 ]
 
-#: The `_REFUSED` rows whose value reaches the render as a JSON STRING: the
-#: text the dump writes is judged by the pre-write parse-tree confirmation
-#: (ADR-036 §2), not by a JSON type check.
-_REFUSED_BY_PARSE_TREE = frozenset(
+#: The `_REFUSED` rows whose value reaches the render as a JSON STRING
+#: (da-crdecode's reading): refused as a string (#3206), whatever its text.
+_REFUSED_AS_A_STRING = frozenset(
     i for i, _b in _REFUSED
     if i.startswith("defaults-") and i not in (
         "defaults-true", "defaults-yes", "defaults-list", "defaults-map"))
@@ -1067,21 +1159,18 @@ class TestRenderCrExporterShapes:
         """F2：exporter 會因值型別整份拒收的 defaults／stateFilters → rc 2。
 
         `defaults` 是 `map[string]float64`、`state_filters` 是
-        `map[string]StateFilter`（pkg/config/types.go）。JSON 型別就看得出來
-        的（布林、list、mapping、stateFilters 的形狀）由 `_default_value_error`
-        ／`_state_filter_error` 擋；JSON 是字串的 defaults 值，寫出的文字
-        yaml.v3 讀不讀成數字由寫入前的 parse-tree 確認判（ADR-036 §2，#2906），
-        先前那段 yaml.v3 數字解析的 Python 仿製已刪。會讓本測試轉紅的改動：
-        拿掉 `_default_value_error`／`_state_filter_error` 的呼叫，或拿掉
-        `reconcile_one` 寫入前的 `_lib_write_check.confirm`。
+        `map[string]StateFilter`（pkg/config/types.go）。由 JSON 型別判：
+        `_default_value_error`／`_state_filter_error` 擋布林、list、mapping、
+        stateFilters 的形狀，以及 JSON 是字串的 defaults 值（#3206：`da-guard
+        write` 把字串寫成字串，exporter 解不成 float64，不論文字長得像不像數字）。
+        會讓本測試轉紅的改動：拿掉 `_default_value_error`／`_state_filter_error`
+        的呼叫，或讓字串照常寫出。
         """
         cr_path, out_dir = _write_cr(tmp_path, body)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        if row in _REFUSED_BY_PARSE_TREE:
-            assert "refusing to write (content_differs)" in caplog.text
-            assert "at defaults.cpu: expected a number (!!int or !!float)" in caplog.text
-        else:
-            assert "the exporter skips the whole rendered file" in caplog.text
+        assert "the exporter skips the whole rendered file" in caplog.text
+        if row in _REFUSED_AS_A_STRING:
+            assert "spec.defaults.cpu must be a number, not the string" in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("body", [pytest.param(b, id=i)
@@ -1122,24 +1211,41 @@ class TestRenderCrExporterShapes:
             self, body, refused, tmp_path, da_guard):
         """上面兩張表的分類本身，以 exporter 的解碼器重量。
 
-        把 CR 以 da-crdecode 解碼（與 --render-cr 同一個入口）、再以
-        render_cr_to_yaml（不經 --render-cr 的檢查）寫成檔，餵
-        `da-guard served-values`：拒收的列必須 rc 3，讀得了的列必須
-        rc 0。表錯了（例如把 exporter 讀得了的形狀列進拒收）這裡會紅。
+        把 CR 以 da-crdecode 解碼（與 --render-cr 同一個入口）、再交給
+        `da-guard write`（不經本工具的檢查：值照 JSON 型別、defaults 的數字經
+        `number_value`）：拒收的列必須被 write 以 exporter 的 `unservable`
+        判定拒寫，讀得了的列必須寫成、且 `da-guard served-values` rc 0。表錯了
+        （例如把 exporter 讀得了的形狀列進拒收）這裡會紅。
         """
         if da_guard is None:
             pytest.skip("go not on PATH (set VIBE_REQUIRE_GO=1 to fail)")
+        import _lib_confedit as ce
         import da_assembler
         cr_path, _ = _write_cr(tmp_path, body)
-        cr, _ = da_assembler.decode_cr(cr_path)
+        cr, _differs, _ = da_assembler.decode_cr(cr_path)
+        _header, doc = da_assembler._render_doc(cr)
+        value = ce.map_value(
+            (k, ce.map_value((m, ce.number_value(v) if isinstance(v, (int, float))
+                              and not isinstance(v, bool) else ce.data_value(v))
+                             for m, v in b.items()) if k == "defaults" else ce.data_value(b))
+            for k, b in doc.items())
         conf = tmp_path / "conf"
         conf.mkdir()
-        (conf / "ok.yaml").write_text(
-            da_assembler.render_cr_to_yaml(cr), encoding="utf-8")
+        # da-guard write reads the file back as the exporter does and does
+        # not write one it would skip (validation's `unservable`): that
+        # refusal is the exporter's verdict on the refused rows.
+        try:
+            ce.write_all(conf, [ce.create_entry("ok.yaml", value)])
+        except ce.EditsRefused as exc:
+            assert refused, exc
+            assert "under verdict unservable" in str(exc), exc
+            assert list(conf.iterdir()) == []
+            return
+        assert not refused, (conf / "ok.yaml").read_text(encoding="utf-8")
         r = subprocess.run([da_guard, "served-values", "--config-dir",
                             str(conf)], capture_output=True, text=True,
                            encoding="utf-8", timeout=120)
-        assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
+        assert r.returncode == 0, r.stdout + r.stderr
 
     def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
         """端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收）。
@@ -1459,8 +1565,8 @@ class TestRenderCrNameFormat:
         pytest.param(b"metadata: {name: ok}\nspec: {defaults: &a [1, *a]}\n",
                      id="self-referencing-anchor"),
         pytest.param(b"metadata: {name: ok}\nspec: {defaults: "
-                     + b"[" * 3000 + b"]" * 3000 + b"}\n",
-                     id="deep-nesting"),
+                     + b"[" * 10001 + b"]" * 10001 + b"}\n",
+                     id="deeper-than-the-decoder-reads"),
     ])
     def test_value_that_cannot_be_read_is_caller_error(self, body, tmp_path,
                                                         caplog):
@@ -1469,9 +1575,8 @@ class TestRenderCrNameFormat:
         以 PyYAML 讀時，這些形狀丟的例外（`UnicodeDecodeError`／
         `ValueError`／`KeyError`／`AttributeError`／`IndexError`／
         `RecursionError`）曾穿出 `render_cr_file`（rc 1）。現在由
-        da-crdecode 拒收，或 Python 的 JSON 讀取深度不夠（deep-nesting）。
-        會讓本組轉紅的改動：拿掉 `CrDecodeError` 或 `RecursionError` 的
-        except。
+        da-crdecode 拒收（巢狀超過其解碼器的上限亦同）。會讓本組轉紅的
+        改動：拿掉 `CrDecodeError` 的 except。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_bytes(b"kind: ThresholdConfig\n" + body)
@@ -1481,14 +1586,32 @@ class TestRenderCrNameFormat:
         assert f"Failed to parse {cr_path}" in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    def test_deep_nesting_message_names_the_tool_limit(self, tmp_path,
-                                                       caplog):
+    def test_deep_nesting_message_names_the_tool_limit(
+            self, tmp_path, monkeypatch, caplog):
         """#2476：巢狀過深是本工具（Python 的 JSON 讀取）的上限，不是 K8s
-        拒收：da-crdecode 讀得了這份文件。
+        拒收。以冒充的 da-crdecode 印出 Python 讀不了的深度：真的
+        da-crdecode 在約 1 萬層拒收，與 Python 的上限只差幾層，用真的
+        binary 量會隨 Python 版本漂移。
 
         訊息要能讓人分辨「量不到」與「拒收」。會讓本組轉紅的改動：拿掉
         `RecursionError` 的專屬分支（落到通用分支，訊息只剩例外原文）。
         """
+        TestRenderCrDecoder._fake_binary(
+            tmp_path, monkeypatch,
+            "print('{\"documents\": [' + '[' * 50000 + ']' * 50000 + "
+            "'], \"differs_from_text\": [[]]}')")
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n",
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "nested too deeply for this tool to read" in caplog.text
+
+    def test_nesting_past_the_old_reader_reads(self, tmp_path, caplog):
+        """#3206：3000 層的 CR 先前卡在本工具以 PyYAML 讀原文的那一步
+        （「nested too deeply」）；原文比對移到 da-crdecode 之後讀得進來，
+        依 spec 的形狀判（這裡 `defaults` 不是 mapping → rc 2）。"""
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n"
                            "spec: {defaults: " + "[" * 3000 + "]" * 3000
@@ -1496,7 +1619,8 @@ class TestRenderCrNameFormat:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "nested too deeply for this tool to read" in caplog.text
+        assert "nested too deeply" not in caplog.text
+        assert "spec.defaults must be a mapping" in caplog.text
 
     def test_deep_nesting_that_reads_names_the_tool_limit_at_render(
             self, tmp_path, caplog):
@@ -1838,14 +1962,14 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert [p.name for p in out_dir.iterdir()] == ["2024-01-01.yaml"]
 
-    def test_unreadable_as_written_is_caller_error(self, tmp_path, caplog):
-        """Kubernetes 讀得了、本工具以原文讀不了（自訂標籤 `!foo`）→ 無從
-        比對 id，rc 2、不寫檔（fail-closed；先前以 PyYAML 讀時同為 rc 2）。"""
+    def test_a_custom_tag_renders_as_kubernetes_reads_it(self, tmp_path):
+        """#3206：自訂標籤 `!foo '1'`，Kubernetes 讀成字串 `1`，原文也是
+        `1`。先前本工具以 PyYAML 讀原文時讀不了（rc 2「cannot read it as
+        written」）；比對移到 da-crdecode 之後照 Kubernetes 的讀法 render。"""
         cr_path, out_dir = self._write(
-            tmp_path, self._CR + "  defaults: {cpu: !foo 1}\n")
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "cannot read it as written" in caplog.text
-        assert list(out_dir.iterdir()) == []
+            tmp_path, self._CR.replace("    t1: {}\n", "    t1: {cpu: !foo '1'}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert 'cpu: "1"' in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
     def test_keys_that_become_one_json_key_are_caller_error(
             self, tmp_path, caplog):
@@ -1889,8 +2013,8 @@ class TestRenderCrDecoder:
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("written, line", [
-        pytest.param('"010"', "_profile: '010'", id="quoted"),
-        pytest.param("gold", "_profile: gold", id="word"),
+        pytest.param('"010"', '_profile: "010"', id="quoted"),
+        pytest.param("gold", '_profile: "gold"', id="word"),
         pytest.param("null", "_profile: null", id="null"),
     ])
     def test_profile_read_the_same_renders(self, written, line, tmp_path):
@@ -1924,9 +2048,9 @@ class TestRenderCrDecoder:
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("tenant, line", [
-        pytest.param("{'010': '1'}", "'010': '1'", id="quoted-010"),
-        pytest.param("{a: '1', a: '2'}", "a: '2'", id="same-text-twice"),
-        pytest.param("{a: [{b: '1'}]}", "- b: '1'", id="list-of-maps"),
+        pytest.param("{'010': '1'}", '"010": "1"', id="quoted-010"),
+        pytest.param("{a: '1', a: '2'}", 'a: "2"', id="same-text-twice"),
+        pytest.param("{a: [{b: '1'}]}", '- b: "1"', id="list-of-maps"),
     ])
     def test_inner_key_read_the_same_renders(self, tenant, line, tmp_path):
         """對照組：加引號的鍵、同字重複鍵（後者勝，維持先前行為）、list
@@ -1936,99 +2060,92 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    @pytest.mark.parametrize("value", [
-        pytest.param("!!omap [a: '1']", id="omap"),
-        pytest.param("!!pairs [a: '1']", id="pairs"),
+    @pytest.mark.parametrize("value, line", [
+        pytest.param("!!omap [a: '1']", '- a: "1"', id="omap"),
+        pytest.param("!!pairs [a: '1']", '- a: "1"', id="pairs"),
     ])
-    def test_structure_that_cannot_be_paired_is_caller_error(
-            self, value, tmp_path, caplog):
-        """兩邊的結構對不上（原文讀成 (key, value) tuple、Kubernetes 讀成
-        mapping）時無從逐層比對鍵 → fail-closed rc 2、寫明原因。
-
-        會讓本測試轉紅的改動：`_key_divergence` 遇到結構不一致時直接放行。
-        """
+    def test_omap_and_pairs_render_as_kubernetes_reads_them(
+            self, value, line, tmp_path):
+        """#3206：`!!omap`／`!!pairs` 是一串 mapping，Kubernetes 也這樣讀。
+        先前本工具以 PyYAML 讀原文、讀成 (key, value) tuple，結構對不上而
+        拒收（rc 2）；原文比對移到 da-crdecode（yaml.v3 的節點）之後，兩邊
+        結構相同，照常 render。"""
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{x: {value}}}\n"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert ("spec.tenants.t1.x[0]: Kubernetes reads a mapping here but "
-                "the CR as written holds a (key, value) pair") \
-            in caplog.text, caplog.text
-        assert "cannot be compared" in caplog.text
-        assert list(out_dir.iterdir()) == []
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    @pytest.mark.parametrize("old, new, message", [
+    @pytest.mark.parametrize("old, new, file, line", [
         pytest.param("    t1: {}\n",
                      "    t1: {x: {a: '1'}, <<: {x: {b: '1'}}}\n",
-                     "spec.tenants.t1.x: the keys as written ('a')",
-                     id="merge-overrides-a-mapping"),
+                     "ok.yaml", 'b: "1"', id="merge-overrides-a-mapping"),
         pytest.param("metadata: {name: ok}",
                      "metadata: {name: ok, <<: {name: other}}",
-                     "metadata.name is read by Kubernetes as 'other'",
-                     id="merge-overrides-the-name"),
+                     "other.yaml", "tenants:", id="merge-overrides-the-name"),
         pytest.param("    t1: {}\n",
-                     "    t1: {x: {a: '1'}, <<: {x: ['1']}}\n",
-                     "spec.tenants.t1.x: Kubernetes reads a list of 1 here",
-                     id="merge-overrides-the-structure"),
+                     "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n",
+                     "ok.yaml", 'a: "1"', id="explicit-key-after-merge"),
     ])
-    def test_merge_after_explicit_keys_names_the_mechanism(
-            self, old, new, message, tmp_path, caplog):
-        """go-yaml（Kubernetes 端）讓寫在明寫鍵之後的 `<<` 覆寫明寫鍵，PyYAML
-        是明寫鍵優先，兩種讀法因此不同 → rc 2。這時加引號解決不了，訊息
-        要說明 merge 的機制與改法。
+    def test_merges_render_as_kubernetes_applies_them(
+            self, old, new, file, line, tmp_path):
+        """go-yaml（Kubernetes 端）讓寫在後面的鍵勝出，寫在明寫鍵之後的
+        `<<` 也覆寫它。先前本工具以 PyYAML（明寫鍵優先）讀原文，兩種讀法
+        不同 → rc 2 並附 merge 說明。#3206 起 da-crdecode 以 Kubernetes 的
+        merge 順序讀原文，兩邊相同 → 照 Kubernetes 讀到的 render。
 
-        會讓本測試轉紅的改動：拿掉 `_merge_note`（訊息只叫人加引號）。
+        會讓本測試轉紅的改動：da-crdecode 以明寫鍵優先展開 merge
+        （TestMergeOrderIsTheConversions 在 Go 端量同一件事）。
         """
         cr_path, out_dir = self._write(tmp_path, self._CR.replace(old, new))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / file).read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("differs, message", [
+        pytest.param([{"kind": "structure", "path": ["spec", "tenants", "t1", "x", 0],
+                       "written": "a list of 1", "read": "a mapping"}],
+                     "spec.tenants.t1.x[0]: Kubernetes reads a mapping here but "
+                     "the CR as written holds a list of 1, so the keys below "
+                     "cannot be compared", id="structure-below-tenants"),
+        pytest.param([{"kind": "keys", "path": ["spec"], "written_keys": ["010"],
+                       "read_keys": ["8"]}],
+                     "spec: the keys as written ('010') are not the keys "
+                     "Kubernetes reads ('8')", id="keys-above-tenants"),
+        pytest.param([{"kind": "keys", "path": [], "written_keys": ["x"],
+                       "read_keys": []}],
+                     "metadata.name cannot be compared with the text written in "
+                     "the CR: <document>: the keys as written ('x')",
+                     id="keys-above-the-name"),
+    ])
+    def test_a_difference_da_crdecode_reports_is_caller_error(
+            self, differs, message, tmp_path, monkeypatch, caplog):
+        """#3206：比對是 da-crdecode 的；本工具依它回報的差異拒收。在 id 那一
+        層或之上的 "keys"／"structure" 差異（以下不比對），或 spec.tenants
+        以下任一處的差異，都 rc 2、寫明原因、不寫檔。
+
+        會讓本測試轉紅的改動：`_not_as_written` 只看與路徑完全相同的差異。
+        """
+        doc = {"kind": "ThresholdConfig", "metadata": {"name": "ok"},
+               "spec": {"tenants": {"t1": {"x": [{"a": "1"}]}}}}
+        out = json.dumps({"documents": [doc], "differs_from_text": [differs]})
+        self._fake_binary(tmp_path, monkeypatch, f"print({out!r})")
+        cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert message in caplog.text, caplog.text
-        assert ("if the difference comes from a << written after explicit "
-                "keys (on the Kubernetes side it overrides them), move it "
-                "before them or do not use merges") in caplog.text, caplog.text
         assert list(out_dir.iterdir()) == []
 
-    def test_merge_before_explicit_keys_renders(self, tmp_path):
-        """對照組：`<<` 寫在明寫鍵之前，兩種讀法都是明寫鍵優先，rc 0。"""
-        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
-            "    t1: {}\n", "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n"))
+    def test_a_difference_elsewhere_still_renders(self, tmp_path, monkeypatch):
+        """對照組：spec.tenants 與 metadata 以外的差異（例如 spec.defaults
+        底下的值）不影響 id，照常 render。"""
+        doc = {"kind": "ThresholdConfig", "metadata": {"name": "ok"},
+               "spec": {"tenants": {"t1": {}}}}
+        differs = [{"kind": "string", "path": ["spec", "note"], "text": "b2s="},
+                   {"kind": "keys", "path": ["status"], "written_keys": ["010"],
+                    "read_keys": ["8"]}]
+        out = json.dumps({"documents": [doc], "differs_from_text": [differs]})
+        self._fake_binary(tmp_path, monkeypatch, f"print({out!r})")
+        cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == 0
-        assert "a: '1'" in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
-    def test_no_merge_note_without_a_merge(self, tmp_path, caplog):
-        """對照組：沒有 `<<` 的分歧只提示加引號，不附 merge 說明。"""
-        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
-            "    t1: {}\n", "    t1: {010: '1'}\n"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "Quote each such key" in caplog.text
-        assert "<< merges" not in caplog.text
-
-    def test_lists_of_different_length_cannot_be_paired(self):
-        """防禦性分支（YAML 難以觸發）：兩個 list 長度不同 → 拒收並寫明。
-
-        會讓本測試轉紅的改動：list 長度不同時改為逐項比到較短者為止。
-        """
-        assert da_assembler._key_divergence([1], [1, 2], "p") == (
-            "p: Kubernetes reads a list of 1 here but the CR as written holds "
-            "a list of 2, so the keys below cannot be compared; this tool "
-            "refuses such a CR")
-
-    @pytest.mark.parametrize("decoded, written, shapes", [
-        pytest.param([1], "x", ("a list of 1", "a scalar"), id="list-vs-scalar"),
-        pytest.param("x", [1], ("a scalar", "a list of 1"), id="scalar-vs-list"),
-        pytest.param({"a": 1}, ("a", 1), ("a mapping", "a (key, value) pair"),
-                     id="mapping-vs-pair"),
-    ])
-    def test_list_or_mapping_against_another_shape_cannot_be_paired(
-            self, decoded, written, shapes):
-        """防禦性分支：一邊是 list／mapping、另一邊不是 → 拒收並寫明兩邊結構。"""
-        assert da_assembler._key_divergence(decoded, written, "p") == (
-            f"p: Kubernetes reads {shapes[0]} here but the CR as written holds "
-            f"{shapes[1]}, so the keys below cannot be compared; this tool "
-            "refuses such a CR")
-
-    def test_shape_name_of_an_omap_item_is_a_pair(self):
-        """`!!omap`／`!!pairs` 的項目讀成 tuple，不該叫 "a scalar"。"""
-        assert da_assembler._shape_name(("a", 1)) == "a (key, value) pair"
-        assert da_assembler._shape_name("a") == "a scalar"
 
     def test_keys_colliding_through_a_merge_are_caller_error(
             self, tmp_path, caplog):
@@ -2049,9 +2166,10 @@ class TestRenderCrDecoder:
             caplog.clear()
 
     def test_keys_keep_the_order_the_cr_wrote(self, tmp_path):
-        """da-crdecode 的 JSON 物件鍵依字母排序；輸出仍照 CR 原文的順序，
-        既有輸出檔不會只因排序而被重寫。會讓本測試轉紅的改動：拿掉
-        `_in_written_order`（輸出變成 aa、zz／a、b）。
+        """輸出照 CR 原文的鍵順序，既有輸出檔不會只因排序而被重寫。順序由
+        da-crdecode 給（#3206：它的 JSON 物件照原文排鍵，YAMLToJSON 本身依
+        字母排序）。會讓本測試轉紅的改動：da-crdecode 改回照 YAMLToJSON 的
+        排序輸出（輸出變成 aa、zz／a、b）。
         """
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace(
@@ -2059,21 +2177,30 @@ class TestRenderCrDecoder:
                 "    zz: {b: '1', a: '2'}\n    aa: {cpu: '1'}\n"))
         assert render_cr_file(cr_path, out_dir) == 0
         body = (out_dir / "ok.yaml").read_text(encoding="utf-8")
-        assert body.split("\n", 2)[2] == (
-            "tenants:\n  zz:\n    b: '1'\n    a: '2'\n  aa:\n    cpu: '1'\n")
+        assert body.split("\n", 3)[3] == (
+            'tenants:\n  zz:\n    b: "1"\n    a: "2"\n  aa:\n    cpu: "1"\n')
 
     @pytest.mark.parametrize("stdout", [
         pytest.param("print('hello')", id="not-json"),
         pytest.param("print('{\"documents\": []}')", id="no-document"),
         pytest.param("print('[1]')", id="not-an-object"),
+        # #3206: a da-crdecode older than this tool prints no comparison.
+        pytest.param("print('{\"documents\": [{}]}')", id="no-differs"),
+        pytest.param("print('{\"documents\": [{}], \"differs_from_text\": "
+                     "[[{\"kind\": \"keys\", \"path\": []}]]}')",
+                     id="difference-off-contract"),
     ])
     def test_output_off_contract_is_caller_error(
             self, stdout, tmp_path, monkeypatch, caplog):
-        """rc 0 但 stdout 不合 `{"documents": [<一份>]}` → rc 2，不 traceback。"""
+        """rc 0 但 stdout 不合 `{"documents": [<一份>], "differs_from_text":
+        [[<差異>...]]}` → rc 2，不 traceback。較舊的 da-crdecode 沒有
+        `differs_from_text`，訊息要叫人重建它。"""
         self._fake_binary(tmp_path, monkeypatch, stdout)
         cr_path, out_dir = self._write(tmp_path, self._CR)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "Failed to parse" in caplog.text
+        if "documents\": [{}]" in stdout:
+            assert "older than this tool" in caplog.text, caplog.text
         assert list(out_dir.iterdir()) == []
 
 
@@ -2448,7 +2575,7 @@ class TestReconcileOne:
         mock_api.list_cluster_custom_object.return_value = {
             "items": [_make_cr(name="first"), _make_cr(name="second")]}
         with tempfile.TemporaryDirectory() as d, \
-                mock.patch("da_assembler.dump_for_rewrite",
+                mock.patch("da_assembler._render_value",
                            side_effect=RuntimeError("injected")), \
                 mock.patch("da_assembler.reconcile_one",
                            wraps=reconcile_one) as spy:
@@ -2797,3 +2924,138 @@ class TestControllerFailsClosed:
         phase = api.patch_namespaced_custom_object_status.call_args.kwargs[
             "body"]["status"]["phase"]
         assert phase == "Error"
+
+
+class TestControllerWritesThroughDaGuard:
+    """#3206（ADR-036 §2）：controller 經 `da-guard write` 寫、刪；拒寫或失敗都
+    記在 CR status／log，迴圈照走，行程不結束。"""
+
+    def _status(self, api):
+        return [c.kwargs["body"]["status"]
+                for c in api.patch_namespaced_custom_object_status.call_args_list]
+
+    def test_an_invalid_tenant_id_is_an_error_status_and_the_next_cr_is_written(
+            self, tmp_path):
+        """租戶 id 以 ADR-035 驗（`_lib_validation.is_valid_tenant_id`）：不合格的
+        CR 不寫、status Error 點名該 id；同一週期的下一個 CR 照寫。da-guard write
+        本身不擋不合法的租戶 id（實測照寫），所以這一步在本工具。"""
+        bad = _make_cr(name="bad", namespace="ns", tenants={"Bad_Id": {"cpu": "1"}})
+        good = _make_cr(name="good", namespace="ns", tenants={"t-one": {"cpu": "1"}})
+        api = _listing_api([bad, good])
+        assert run_once(api, tmp_path) == 0
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["good.yaml"]
+        bad_status, good_status = self._status(api)
+        assert bad_status["phase"] == "Error"
+        assert "'Bad_Id' is not a valid tenant id (ADR-035" in bad_status["message"]
+        assert good_status["phase"] == "Rendered"
+
+    def test_an_invalid_name_is_an_error_status(self, tmp_path):
+        """controller 路徑也驗 metadata.name（先前只有 --render-cr 驗）。"""
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="Not_A_Name", namespace="ns",
+                               tenants={"t-one": {}}), tmp_path, api=api)
+        assert list(tmp_path.iterdir()) == []
+        [status] = self._status(api)
+        assert status["phase"] == "Error"
+        assert "not a valid Kubernetes object name" in status["message"]
+
+    def test_a_namespace_a_comment_cannot_carry_is_named(self, tmp_path):
+        """namespace／name 進檔頭註解，經 `comment_field`：da-guard 註解拒收的
+        字元先在這裡點名欄位，不寫。"""
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="ok", namespace="ns x",
+                               tenants={"t-one": {}}), tmp_path, api=api)
+        assert list(tmp_path.iterdir()) == []
+        [status] = self._status(api)
+        assert status["phase"] == "Error"
+        assert "metadata.namespace" in status["message"] and "U+2028" in status["message"]
+
+    def test_the_status_hash_is_the_written_files(self, tmp_path):
+        api = mock.MagicMock()
+        cr = _make_cr(name="ok", namespace="ns", tenants={"t-one": {"cpu": "1"}})
+        reconcile_one(cr, tmp_path, api=api)
+        reconcile_one(cr, tmp_path, api=api)  # unchanged: the same hash
+        raw = (tmp_path / "ok.yaml").read_bytes()
+        assert raw.decode("utf-8") == render_cr_to_yaml(cr)
+        assert [s["lastRenderedHash"] for s in self._status(api)] == \
+            [_content_sha256(raw)] * 2
+
+    def test_a_dry_run_into_a_missing_config_dir_creates_nothing(self, tmp_path):
+        out = tmp_path / "new"
+        api = _listing_api([_make_cr(name="ok", namespace="ns", tenants={"t-one": {}})])
+        assert run_once(api, out, dry_run=True) == 0
+        assert not out.exists()
+
+    def test_a_refused_delete_is_logged_and_the_watch_goes_on(
+            self, tmp_path, monkeypatch, caplog):
+        """DELETED 的檔 da-guard 拒刪（讀不了）：記一行 ERROR、檔案原樣，下一個
+        事件照處理——不落進 `Watch interrupted … Reconnecting` 的重連。"""
+        (tmp_path / "gone.yaml").write_text("not: [a mapping\n", encoding="utf-8")
+        gone = _make_cr(name="gone", namespace="ns", tenants={"t-one": {}})
+        new = _make_cr(name="new", namespace="ns", tenants={"t-two": {}})
+        _watch_once(monkeypatch, [{"type": "DELETED", "object": gone},
+                                  {"type": "ADDED", "object": new}])
+        # The tree is judged per event; the unreadable file would refuse it,
+        # so the judgement is stubbed: this pins the delete's own failure.
+        monkeypatch.setattr(da_assembler, "controller_refusal", lambda _d: [])
+        with caplog.at_level("ERROR", logger="da-assembler"):
+            da_assembler.run_watch(mock.MagicMock(), tmp_path)
+        assert "Failed to delete the file of CR ns/gone" in caplog.text
+        assert "Watch interrupted" not in caplog.text
+        assert (tmp_path / "gone.yaml").exists()
+        assert (tmp_path / "new.yaml").exists()
+
+    def test_a_namespace_with_a_line_break_is_named(self, tmp_path):
+        """檔頭第一行的 namespace／name 經 `comment_field(line=True)`：含換行就點名
+        欄位、不寫（不讓一行檔頭被拆成兩行）。"""
+        api = mock.MagicMock()
+        reconcile_one(_make_cr(name="ok", namespace="ns\nx",
+                               tenants={"t-one": {}}), tmp_path, api=api)
+        assert list(tmp_path.iterdir()) == []
+        [status] = self._status(api)
+        assert status["phase"] == "Error"
+        assert "metadata.namespace" in status["message"] and "line break" in status["message"]
+
+    def test_a_tenant_refused_as_a_duplicate_is_not_judged_again_by_another_crs_event(
+            self, tmp_path, monkeypatch):
+        """⚠️ 釘住現況（#3318 修好時要改這支）：cra 先宣告 t1；crb 也宣告 t1，被
+        da-guard 以 duplicate_tenant 拒寫、status Error；cra 改成 t2 釋出 t1 後，
+        crb 沒有自己的事件就不會重判——仍是 Error、crb.yaml 不存在。被拒的 CR 只在
+        它自己下一個事件、重啟或 `--once` 時重判；週期重判是 #3318 的範圍。"""
+        cra = _make_cr(name="cra", namespace="ns", tenants={"t1": {"cpu": "1"}})
+        crb = _make_cr(name="crb", namespace="ns", tenants={"t1": {"cpu": "2"}})
+        cra2 = _make_cr(name="cra", namespace="ns", tenants={"t2": {"cpu": "1"}})
+        _watch_once(monkeypatch, [{"type": "ADDED", "object": cra},
+                                  {"type": "MODIFIED", "object": crb},
+                                  {"type": "MODIFIED", "object": cra2}])
+        api = mock.MagicMock()
+        da_assembler.run_watch(api, tmp_path)
+        by_name = {}
+        for c in api.patch_namespaced_custom_object_status.call_args_list:
+            by_name[c.args[4]] = c.kwargs["body"]["status"]
+        assert by_name["crb"]["phase"] == "Error"
+        assert "duplicate_tenant" in by_name["crb"]["message"], by_name["crb"]
+        assert by_name["cra"]["phase"] == "Rendered"
+        assert not (tmp_path / "crb.yaml").exists()
+        assert "t2" in (tmp_path / "cra.yaml").read_text(encoding="utf-8")
+
+
+class TestTenantNumbersAreFloat64:
+    def test_a_tenant_int_past_18_digits_is_written_as_a_float(self, tmp_path):
+        """租戶的閾值和 defaults 一樣由 exporter 解成 float64：租戶值裡超過 18 位
+        的整數經 `number_value` 寫成浮點（先前 data_value 拒收）；短的整數、bool、
+        字串、null 照舊。"""
+        import _lib_confedit
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n  tenants:\n"
+            "    t1: {h: 12345678901234567890, si: 80, bo: true, qs: '80', nu: null}\n",
+            encoding="utf-8")
+        out = tmp_path / "out"
+        out.mkdir()
+        assert render_cr_file(cr_path, out) == 0
+        text = (out / "ok.yaml").read_text(encoding="utf-8")
+        want = _lib_confedit.data_value(float(12345678901234567890))["float"]
+        assert f"h: {want}\n" in text, text
+        for line in ("si: 80\n", "bo: true\n", 'qs: "80"\n', "nu: null\n"):
+            assert line in text, (line, text)

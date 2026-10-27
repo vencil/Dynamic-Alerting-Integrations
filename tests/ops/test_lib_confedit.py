@@ -529,6 +529,10 @@ def test_replace_and_delete_entries_are_the_contracts_shape():
     assert ce.create_entry("a.yaml", content, head_comment="h", replace=True) == {
         "path": "a.yaml", "create": content, "replace": True, "head_comment": "h"}
     assert ce.delete_entry("a.yaml") == {"path": "a.yaml", "delete": True}
+    assert ce.delete_entry("a.yaml", tenants=("t-a",)) == {
+        "path": "a.yaml", "delete": True, "tenants": ["t-a"]}
+    with pytest.raises(TypeError):
+        ce.delete_entry("a.yaml", tenants="t-a")  # one string is not a list of ids
 
 
 def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
@@ -553,6 +557,55 @@ def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
     assert ce.write_all(root, entries[:1])[0]["status"] == ce.UNCHANGED
 
 
+# ── write: copy（另一棵樹的檔，位元組原樣；assemble_config_dir）──────
+
+_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    cpu: 010 # as written\n    note: \"警報\"\n"
+
+
+def test_copy_entry_is_the_contracts_shape(tmp_path):
+    src = tmp_path / "s.yaml"
+    assert ce.copy_entry("a.yaml", src) == {"path": "a.yaml", "copy": str(src)}
+    assert ce.copy_entry("a.yaml", src, replace=True) == {
+        "path": "a.yaml", "copy": str(src), "replace": True}
+
+
+def test_copy_entry_sends_a_relative_source_as_an_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert ce.copy_entry("a.yaml", "src/./s.yaml")["copy"] == str(tmp_path / "src" / "s.yaml")
+
+
+def test_copy_is_byte_for_byte_and_replace_overwrites(tmp_path):
+    src = tmp_path / "src" / "c.yaml"
+    src.parent.mkdir()
+    src.write_bytes(_COPIED.encode("utf-8"))
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    [dry] = ce.write_all(root, [ce.copy_entry("c.yaml", src)], dry_run=True)
+    assert (dry["kind"], dry["status"], dry["content"]) == ("copy", ce.DRY_RUN, _COPIED)
+    assert not (root / "c.yaml").exists()
+    assert ce.write_all(root, [ce.copy_entry("c.yaml", src)])[0]["status"] == ce.WRITTEN
+    assert (root / "c.yaml").read_bytes() == _COPIED.encode("utf-8")
+    # Again without replace: the target exists, a caller error; with it: the
+    # same bytes are unchanged.
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("c.yaml", src)])
+    assert (exc.value.path, exc.value.reason) == ("c.yaml", "path_exists")
+    assert ce.write_all(root, [ce.copy_entry("c.yaml", src, replace=True)])[0]["status"] == ce.UNCHANGED
+
+
+def test_a_copy_source_that_is_no_regular_file_is_named(tmp_path):
+    root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    before = _bytes(root)
+    (tmp_path / "dir.yaml").mkdir()
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("d.yaml", tmp_path / "dir.yaml")])
+    assert (exc.value.path, exc.value.reason) == ("d.yaml", "bad_source")
+    assert str(tmp_path / "dir.yaml") in exc.value.message
+    with pytest.raises(ce.EditCallerError) as exc:
+        ce.write_all(root, [ce.copy_entry("x2.yaml", root / "x.yaml")])
+    assert (exc.value.path, exc.value.reason) == ("x2.yaml", "bad_path")
+    assert _bytes(root) == before
+
+
 def test_deleting_the_selected_carrier_is_tree_worsened(tmp_path):
     root = _tree(tmp_path / "conf.d", {"_defaults.yaml": "defaults:\n  cpu: 5\n",
                                        "_defaults.yml": "defaults:\n  - 1\n",
@@ -561,6 +614,25 @@ def test_deleting_the_selected_carrier_is_tree_worsened(tmp_path):
     with pytest.raises(ce.TreeWorsened):
         ce.write_all(root, [ce.delete_entry("_defaults.yaml")])
     assert _bytes(root) == before
+
+
+def test_a_delete_whose_tenants_differ_is_refused_naming_the_declaration(tmp_path):
+    # #3206: `tenants` is the delete's precondition, judged by da-guard on
+    # the bytes it reads: one more tenant declared, or the file not a tenant
+    # file, refuses the batch (declares_mismatch), nothing deleted.
+    root = _tree(tmp_path / "conf.d", {"a.yaml": "tenants:\n  t-a: {}\n  t-b: {}\n",
+                                       "b.yaml": "tenants:\n  t-c: {}\n"})
+    before = _bytes(root)
+    with pytest.raises(ce.EditsRefused) as exc:
+        ce.write_all(root, [ce.delete_entry("a.yaml", tenants=["t-a"]),
+                            ce.delete_entry("b.yaml", tenants=["t-c"])])
+    assert [(r.path, r.reason) for r in exc.value.refusals] == [("a.yaml", "declares_mismatch")]
+    assert "[t-a t-b]" in exc.value.refusals[0].message
+    assert _bytes(root) == before
+    # Paired control: the declaration matches — deleted.
+    assert [r["status"] for r in ce.write_all(root, [ce.delete_entry("b.yaml", tenants=["t-c"])])] == [
+        ce.WRITTEN]
+    assert sorted(_bytes(root)) == ["a.yaml"]
 
 
 def test_a_delete_not_linked_back_may_have_been_written(tmp_path, monkeypatch):
@@ -604,6 +676,11 @@ def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
     with pytest.raises(ce.EditCallerError):
         ce.write_all(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]),
                                                 head_comment=f"a{ch}b")], dry_run=True)
+
+
+def test_number_value_names_the_key_of_an_int_past_float64():
+    with pytest.raises(ValueError, match=r"^tenants\.t1\.h: the int is past float64's range$"):
+        ce.number_value(10 ** 400, ("tenants", "t1", "h"))
 
 
 def test_comment_text_problem_lets_tabs_lines_and_text_through():
@@ -657,6 +734,24 @@ def test_write_all_or_exit_names_the_files_a_partial_write_left(tmp_path, capsys
     assert "1 file(s) written, 1 may have been written, not rolled back: a.yaml, b.yaml" in err
 
 
+def test_write_all_or_exit_partial_note_follows_a_partial_write_only(tmp_path, capsys, monkeypatch):
+    def stopped(root, entries, **_kw):
+        raise ce.PartialWrite(["a.yaml"], "", OSError("disk full"))
+    with monkeypatch.context() as m:
+        m.setattr(ce, "write_all", stopped)
+        with pytest.raises(SystemExit):
+            ce.write_all_or_exit(tmp_path, [], tool="t", partial_note="the index was not updated")
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == "t: ERROR: the index was not updated", lines
+    assert "stopped part-way: disk full" in lines[-1], lines
+    # Any other failure (a refusal, by the real da-guard): no note.
+    with pytest.raises(SystemExit):
+        ce.write_all_or_exit(tmp_path, [ce.create_entry(".h.yaml", ce.map_value([]))],
+                             tool="t", partial_note="the index was not updated")
+    err = capsys.readouterr().err
+    assert ".h.yaml: not_read:" in err and "index" not in err, err
+
+
 def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         ce.write_all_or_exit(tmp_path, [ce.create_entry("a.yaml", ce.map_value([]))],
@@ -665,6 +760,22 @@ def test_write_all_or_exit_without_da_guard_is_exit_2(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "t: ERROR: cannot write the conf.d files through `da-guard write`" in err, err
     assert not (tmp_path / "a.yaml").exists()
+
+
+def test_write_all_or_exit_dry_run_judges_names_and_writes_none(tmp_path, capsys):
+    # A dry run is the same batch judged: passing, nothing written; refused,
+    # named and exit 2 as a real write is — and make_root is not called.
+    _tree(tmp_path, {"a.yaml": "tenants:\n  tenant-a: {}\n"})
+    out = ce.write_all_or_exit(tmp_path, [ce.move_entry("d/a.yaml", "a.yaml")],
+                               tool="t", dry_run=True)
+    assert [r["status"] for r in out] == [ce.DRY_RUN]
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
+    with pytest.raises(SystemExit) as exc:
+        ce.write_all_or_exit(tmp_path, [ce.move_entry(".d/a.yaml", "a.yaml")],
+                             tool="t", dry_run=True, make_root=lambda: pytest.fail("made"))
+    assert exc.value.code == 2
+    assert "t: ERROR: .d/a.yaml: not_read:" in capsys.readouterr().err
+    assert _bytes(tmp_path) == {"a.yaml": b"tenants:\n  tenant-a: {}\n"}
 
 
 def test_a_caller_error_with_no_file_to_blame_names_no_path():

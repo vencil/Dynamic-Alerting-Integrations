@@ -21,13 +21,17 @@ Prerequisites:
     named by $DA_CRDECODE_BINARY. Build it with
     `go build ./cmd/da-crdecode` in components/threshold-exporter/app
     (`make assembler-render` does).
-    Every mode also needs da-guard (ADR-036 §2, #2906): on $PATH, or named
-    by $DA_GUARD_BINARY. Before a rendered file is written, its text is
-    read back by `da-guard parse-tree` at the path it is written to; a text
-    that does not read back as the CR's content (e.g. a tenant value the
-    dump writes plain that yaml.v3 reads as a number, a `defaults` value
-    that is not a number) or a path no reader reads is not written —
-    `--render-cr` exits 2, the controller sets the CR's status to Error.
+    Every mode also needs da-guard (ADR-036 §2, #2906, #3206): on $PATH, or
+    named by $DA_GUARD_BINARY. Only Go writes conf.d: the CR is sent to
+    `da-guard write` as data (each value with its JSON type, the header a
+    comment), which writes the file — replacing one already there whole —
+    or deletes it when the CR is deleted, after reading it back in the
+    tree. A CR whose name is not a Kubernetes object name, whose tenant id
+    is not one (ADR-035), whose `defaults` value is not a number (a string
+    included), or that da-guard refuses (a path no reader reads) is not
+    written — `--render-cr` exits 2 naming it, the controller logs it, sets
+    the CR's status to Error and goes on. A new file is mode 0600 (da-guard
+    write's), a replaced one keeps its mode.
     And an existing --config-dir is a tree this writes INTO (#3206): it
     must first pass the shared conf.d refusal — any path da-guard
     validation names. `--render-cr` then exits 2 naming every such path,
@@ -53,11 +57,11 @@ import os
 import re
 import shutil
 import signal
-import stat
 import subprocess
 import sys
+import tempfile
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -71,10 +75,8 @@ from _lib_io import (  # noqa: E402  (#1789)
     output_write,
     safe_label,
 )
-from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
-    dump_for_rewrite,
-    load_for_rewrite,
-)
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
+import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 import _lib_write_check  # noqa: E402  (ADR-036 §2, #2906)
 
 try:
@@ -193,30 +195,30 @@ def _die_by_signal(signum: int) -> int:
     return EXIT_CALLER_ERROR
 
 
-# ── CR → YAML rendering ─────────────────────────────────────────────
+# ── CR → conf.d file (ADR-036 §2: Go writes it) ─────────────────────
+
+#: The tool name on every line `_lib_confedit.write_all_or_exit` prints.
+_TOOL = "da_assembler"
+
 
 def render_cr_to_yaml(cr: dict) -> str:
-    """Convert a ThresholdConfig CR spec into tenant YAML content.
-
-    The output format matches hand-written conf.d/<tenant>.yaml exactly.
-
-    Tenant ids must arrive as ``str`` (#2216): the dump quotes a text
-    key YAML would retype (``'010':``), so the exporter reads back the same
-    id. Both callers hand over JSON, whose keys are strings: the API path,
-    and ``render_cr_file`` (decoded as Kubernetes clients decode it, #2476).
-
-    Values dump as ``yaml.safe_dump`` would: both callers hand over
-    JSON-decoded data, so ``dump_for_rewrite``'s plain-text case
-    (``RawPlain``) never applies here.
+    """The text the rendered file of *cr* holds, as `da-guard write` writes
+    it (ADR-036 §2, #3206): a preview — `write --dry-run` of
+    `render_entry(cr)` into an empty private directory, nothing written
+    anywhere. The file `reconcile_one` writes is this text, byte for byte
+    (the same entry, the same Go). Raises ValueError for a CR this tool
+    does not render (`render_entry`), and `_lib_confedit`'s errors (no
+    usable da-guard: `ParseTreeError`; a refusal: `EditsRefused`).
     """
-    header, doc = _render_doc(cr)
-    return header + dump_for_rewrite(
-        doc, default_flow_style=False, allow_unicode=True, sort_keys=False,
-    )
+    entry = render_entry(cr)
+    with tempfile.TemporaryDirectory(prefix="da-assembler-") as tmp:
+        [result] = _lib_confedit.write_all(tmp, [entry], dry_run=True)
+    return result["content"]
 
 
 def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
-    """``(header comment, document)`` `render_cr_to_yaml` dumps."""
+    """``(head comment, document)`` of *cr*'s rendered file: the comment's
+    lines without their ``# `` (Go writes it), the document as Python data."""
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
 
@@ -241,94 +243,168 @@ def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
     if isinstance(state_filters, dict) and state_filters:
         doc["state_filters"] = state_filters
 
+    # The CR's namespace and name are outside input put into a comment
+    # (`comment_field`: a character da-guard's comment refuses is named here).
+    # Both sit inside the header's first line (`line=True`: a line break is
+    # refused too, naming the field), as init / scaffold do.
+    where = (f"{_lib_confedit.comment_field('metadata.namespace', metadata.get('namespace', '?'), line=True)}"
+             f"/{_lib_confedit.comment_field('metadata.name', metadata.get('name', '?'), line=True)}")
     header = (
-        f"{_HEADER_PREFIX}"
-        f"{metadata.get('namespace', '?')}/{metadata.get('name', '?')}\n"
-        f"# DO NOT EDIT — changes will be overwritten on next reconcile.\n"
+        f"{_HEADER_PREFIX.removeprefix('# ')}{where}\n"
+        "DO NOT EDIT — changes will be overwritten on next reconcile."
     )
 
     return header, doc
 
 
-def _expected_nodes(doc: Dict[str, Any]) -> Any:
-    """What `render_cr_to_yaml` means the rendered file to hold, as
-    parse-tree nodes (ADR-036 §2, `_lib_write_check`): every value as the
-    JSON decoded it, except each ``defaults`` value, which the exporter
-    reads as ``float64`` — a number (``!!int`` / ``!!float``) spelled as the
-    dump spells it (an int in decimal, a float as PyYAML's representer, a
-    string as written), or null."""
-    nodes = _lib_write_check.from_python(
-        {k: v for k, v in doc.items() if k != "defaults"})
-    if "defaults" in doc:
-        defaults: Dict[str, Any] = {}
-        for metric, value in doc["defaults"].items():
-            if value is None or isinstance(value, bool):
-                defaults[metric] = _lib_write_check.from_python(value)
-            elif isinstance(value, str):
-                defaults[metric] = _lib_write_check.AnyNumber(value)
-            elif isinstance(value, (int, float)):
-                defaults[metric] = _lib_write_check.AnyNumber(
-                    _lib_write_check.scalar(value)["text"])
-            else:
-                defaults[metric] = _lib_write_check.from_python(value)
-        nodes["defaults"] = defaults
-    return nodes
+def _render_value(doc: Dict[str, Any]) -> dict:
+    """*doc* (`_render_doc`) as the typed value `da-guard write` creates the
+    file from. Every value has the type the CR's JSON gave it
+    (`_lib_confedit.data_value`: a string is written as a string, double
+    quoted), except numbers under ``defaults`` and ``tenants``: the exporter
+    decodes thresholds into ``float64``, so every number there goes through
+    `number_value` (an int past 18 digits goes as the float it is to the
+    exporter; a shorter one stays an int). A ``defaults`` value must be a
+    JSON number or null — anything else (a string, ``"80"`` too) is
+    ValueError naming the key, as is a tenant id that is not one (ADR-035)
+    and a value with no edit-contract type (an int past 18 digits under
+    ``stateFilters``)."""
+    entries = []
+    for key, block in doc.items():
+        if key == "tenants":
+            for tenant in block:
+                if not is_valid_tenant_id(tenant):
+                    raise ValueError(
+                        f"spec.tenants.{tenant}: {tenant!r} is not a valid tenant id "
+                        "(ADR-035: a DNS-1123 label — lowercase a-z, 0-9 and '-', "
+                        "starting and ending alphanumeric, at most 63 characters)")
+            entries.append((key, _numbers_as_float64(block, (key,))))
+            continue
+        if key == "defaults":
+            values = []
+            for metric, value in block.items():
+                why = _default_value_error(value)
+                if why:
+                    raise ValueError(f"spec.defaults.{metric} {why}; the exporter skips "
+                                     "the whole rendered file otherwise")
+                values.append((metric, _lib_confedit.data_value(None) if value is None
+                               else _lib_confedit.number_value(value, at=("defaults", metric))))
+            entries.append((key, _lib_confedit.map_value(values)))
+            continue
+        entries.append((key, _lib_confedit.data_value(block, (key,))))
+    return _lib_confedit.map_value(entries)
 
 
-def _content_sha256(content: str) -> str:
-    """Compute SHA-256 hex digest of string content."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+def _numbers_as_float64(obj: Any, at: "tuple[str, ...]") -> dict:
+    """`data_value` of *obj*, every number in it through `number_value`
+    (the exporter's float64: an int past 18 digits goes as a float, instead
+    of being refused); a bool, a string and null as they are."""
+    if isinstance(obj, dict):
+        for k in obj:
+            if not isinstance(k, str):
+                return _lib_confedit.data_value(obj, at)  # its ValueError names it
+        return _lib_confedit.map_value(
+            (k, _numbers_as_float64(v, (*at, k))) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return {"seq": [_numbers_as_float64(v, (*at, f"[{i}]")) for i, v in enumerate(obj)]}
+    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
+        return _lib_confedit.number_value(obj, at=at)
+    return _lib_confedit.data_value(obj, at)
+
+
+def render_entry(cr: dict) -> dict:
+    """*cr*'s rendered file as one `da-guard write` entry (ADR-036 §2): a
+    file generated whole from the CR, so a file already at its path is
+    replaced whole (`replace`: its mode and owner are kept; a new file is
+    0600, da-guard's). ValueError for a CR this tool does not render
+    (`_output_filename`, `_render_value`)."""
+    filename = _output_filename(cr)
+    header, doc = _render_doc(cr)
+    return _lib_confedit.create_entry(filename, _render_value(doc),
+                                      head_comment=header, replace=True)
+
+
+def _content_sha256(content: "str | bytes") -> str:
+    """Compute SHA-256 hex digest of the file's content."""
+    raw = content.encode("utf-8") if isinstance(content, str) else content
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _output_filename(cr: dict) -> str:
-    """Derive the output filename from a CR's metadata.name."""
-    name = cr.get("metadata", {}).get("name", "unknown")
+    """The output filename, ``<metadata.name>.yaml``. ValueError when the
+    name is not a Kubernetes object name (DNS-1123 subdomain, as the API
+    server checks it, #2396): the name is a path under --config-dir and goes
+    into the header comment. Not ADR-035's tenant-id rule: the file holds
+    the CR's tenants, its name is the CR's (a subdomain may hold ``.`` and
+    253 characters, which a tenant id may not)."""
+    name = (cr.get("metadata") or {}).get("name")
+    if not isinstance(name, str) or not _is_dns1123_subdomain(name):
+        raise ValueError(
+            f"metadata.name {name!r} is not a valid Kubernetes object name "
+            "(DNS-1123 subdomain: lowercase a-z, 0-9, '-' and '.', starting "
+            f"and ending alphanumeric, at most {_DNS1123_SUBDOMAIN_MAX} "
+            "characters); not written")
     return f"{name}.yaml"
 
 
 # ── File writing ─────────────────────────────────────────────────────
 
-def write_rendered(
-    config_dir: Path,
-    filename: str,
-    content: str,
-    *,
-    dry_run: bool = False,
-) -> bool:
-    """Write rendered YAML to config-dir.  Returns True if file changed."""
-    dest = config_dir / filename
-
-    # Skip write if content is identical.
-    # #1789: the idempotence read is wrapped TOO, because it reads the very
-    # file this function exists to produce — when `dest` is a directory this
-    # is where the run actually dies (measured), and "cannot write <dest>: Is
-    # a directory" is the true statement about it. Contrast
-    # `ops/config_history._load_history`, whose read is left alone: that one
-    # reads a DIFFERENT path (the history state) from the one being written.
-    with output_write(dest, flag="--config-dir"):
-        if dest.exists():
-            existing = dest.read_text(encoding="utf-8")
-            if existing == content:
-                return False
-
-    if dry_run:
-        log.info("DRY-RUN: would write %s (%d bytes)", filename, len(content))
-        return True
-
-    # #1789: the wrapper is given the PARENT — the directory this mkdir
-    # actually creates. Handing it the output FILE makes the message a
-    # sentence about a path nobody was creating (worked example in
-    # `_lib_io.output_write`). The ancestor rule still converts the
-    # failure, and the write below keeps naming the file.
+def _make_config_dir(config_dir: Path) -> None:
+    """Create --config-dir (da-guard writes into an existing root only)."""
+    # #1789: the wrapper is given the directory this mkdir creates.
     with output_write(config_dir, flag="--config-dir", action="create directory"):
         config_dir.mkdir(parents=True, exist_ok=True)
-    # The 0644 chmod is inside the same block as the write: the rendered file
-    # is read by the exporter, and a chmod that failed would leave a mode the
-    # tool did not choose.
-    with output_write(dest, flag="--config-dir"):
-        dest.write_text(content, encoding="utf-8", newline="\n")
-        os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-    return True
+
+
+def write_rendered(
+    config_dir: Path,
+    entry: dict,
+    *,
+    dry_run: bool = False,
+    cli: bool = False,
+) -> "tuple[bool, str]":
+    """Write *entry* (`render_entry`) under *config_dir* through `da-guard
+    write` (ADR-036 §2): ``(changed, sha256 of the file's content)``.
+    The same bytes as the file already there are not written (da-guard's
+    `unchanged`: changed False); under *dry_run* nothing is written and
+    *changed* says whether it would be.
+
+    *cli* (``--render-cr``, a one-shot run) writes through
+    `_lib_confedit.write_all_or_exit`: a refusal, a write that stopped
+    part-way or no usable da-guard is named on stderr and the process exits
+    2 (a --config-dir it created is removed again). The controller (*cli*
+    False) is a long-running process — one CR among many, in a watch loop
+    that must outlive it — so it never exits here: `_lib_confedit.write_all`
+    raises (EditsRefused, EditCallerError, PartialWrite, ParseTreeError),
+    and `reconcile_one` logs it and sets the CR's status to Error.
+    """
+    filename = entry["path"]
+    dest = config_dir / filename
+    if dry_run:
+        # A --config-dir not there yet is an empty tree: previewed in one.
+        if config_dir.is_dir():
+            [result] = _lib_confedit.write_all(config_dir, [entry], dry_run=True)
+        else:
+            with tempfile.TemporaryDirectory(prefix="da-assembler-") as tmp:
+                [result] = _lib_confedit.write_all(tmp, [entry], dry_run=True)
+        if result["status"] == _lib_confedit.UNCHANGED:
+            with output_write(dest, flag="--config-dir", action="read"):
+                return False, _content_sha256(dest.read_bytes())
+        log.info("DRY-RUN: would write %s (%d bytes)", filename,
+                 len(result["content"].encode("utf-8")))
+        return True, _content_sha256(result["content"])
+    if cli:
+        [result] = _lib_confedit.write_all_or_exit(
+            config_dir, [entry], tool=_TOOL,
+            make_root=lambda: _make_config_dir(config_dir))
+    else:
+        if not config_dir.is_dir():
+            _make_config_dir(config_dir)
+        [result] = _lib_confedit.write_all(config_dir, [entry])
+    # The bytes da-guard wrote (or left: unchanged) are the file's now.
+    with output_write(dest, flag="--config-dir", action="read"):
+        sha = _content_sha256(dest.read_bytes())
+    return result["status"] != _lib_confedit.UNCHANGED, sha
 
 
 def remove_rendered(
@@ -337,14 +413,19 @@ def remove_rendered(
     *,
     dry_run: bool = False,
 ) -> bool:
-    """Remove a rendered file (CR deleted).  Returns True if file existed."""
-    dest = config_dir / filename
-    if not dest.exists():
+    """Remove a rendered file (CR deleted) through `da-guard write`'s delete
+    (ADR-036 §2): True when the file was there (under *dry_run*: would be
+    removed). Raises `_lib_confedit`'s errors — a delete da-guard refuses
+    (the tree would be worse without the file), no usable da-guard — for
+    the caller to log; never exits."""
+    if not config_dir.is_dir():
+        return False
+    [result] = _lib_confedit.write_all(
+        config_dir, [_lib_confedit.delete_entry(filename)], dry_run=dry_run)
+    if result["status"] == _lib_confedit.UNCHANGED:
         return False
     if dry_run:
         log.info("DRY-RUN: would delete %s", filename)
-        return True
-    dest.unlink()
     return True
 
 
@@ -440,20 +521,28 @@ def reconcile_one(
     caller from it made a dry-run controller re-raise, which aborts
     ``run_once`` after the first bad CR and turns ``run_watch`` into an
     endless "Watch interrupted … Reconnecting" loop.
+
+    ⚠️ A CR refused here (its status Error) is judged again only on its own
+    next event, a restart's initial sync, or a `--once` run — not when
+    another CR changes what refused it (CR A releases the tenant CR B was
+    refused for declaring twice: B stays Error, unwritten). Judging refused
+    CRs again periodically is the controller redesign's (#3318).
+
+    Cost: each CR is one `da-guard write` run, the tree judged per run
+    (O(N²) over N CRs in a sync). Accepted: direct-render is retired to
+    local debugging (ADR-008), and one batch per CR is what lets each CR's
+    refusal land on its own status.
     """
     name = cr["metadata"]["name"]
     namespace = cr["metadata"].get("namespace", "default")
-    filename = _output_filename(cr)
 
     try:
-        content = render_cr_to_yaml(cr)
-        # ADR-036 §2: the rendered text, read back by `da-guard parse-tree`
-        # at the path it is written to, must hold exactly what was meant —
-        # else nothing is written (WriteRefused; no da-guard is a
-        # ParseTreeError). The file is generated whole from the CR, so the
-        # file it replaces is not read: it is not the base of a change. A
-        # destination that exists and is not a file (a directory) is the
-        # write's own failure (#1789's one line), not a parse-tree verdict.
+        # ADR-036 §2 (#3206): Go writes the file. The CR becomes one
+        # `da-guard write` entry (typed values, the header a head comment;
+        # ValueError for a name, a tenant id or a value this tool does not
+        # render), which da-guard writes after reading it back in the tree,
+        # replacing the file there whole (it is generated whole from the CR:
+        # the file it replaces is not the base of a change).
         # #3206: the tree this writes INTO passes the shared refusal first.
         # `--render-cr` (one shot): exit 2, every path named, nothing
         # written. The controller: judged afresh on every reconcile; refused
@@ -465,14 +554,9 @@ def reconcile_one(
                 update_cr_status(api, cr, "Error", message=(
                     "conf.d holds paths da-guard validation names; not written")[:200])
             return
-        dest = config_dir / filename
-        if dest.exists() and not dest.is_file():
-            write_rendered(config_dir, filename, content, dry_run=dry_run)
-        _lib_write_check.confirm(config_dir, filename, content,
-                                 _expected_nodes(_render_doc(cr)[1]))
-        sha = _content_sha256(content)
-        changed = write_rendered(config_dir, filename, content,
-                                 dry_run=dry_run)
+        entry = render_entry(cr)
+        filename = entry["path"]
+        changed, sha = write_rendered(config_dir, entry, dry_run=dry_run, cli=cli)
 
         if changed:
             log.info("Rendered %s/%s → %s (sha256:%s)",
@@ -502,6 +586,13 @@ def reconcile_one(
         # #2395: ANY exception on the CLI path, not only OutputWriteError —
         # anything else was logged here and `render_cr_file` still returned
         # EXIT_OK with nothing written. `render_cr_file` turns it into rc 2.
+        #
+        # ADR-036 §2 (#3206): the same split for `da-guard write`. The CLI
+        # writes through `write_all_or_exit` (rc 2, every refused file named);
+        # the controller through `write_all`, whose refusal / caller error /
+        # PartialWrite / no-da-guard land here as exceptions — never a
+        # `sys.exit`, which `except Exception` would not catch and which
+        # would end the watch loop and every other CR's reconcile with it.
         if cli:
             raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
@@ -562,7 +653,12 @@ def run_watch(
     dry_run: bool = False,
     namespace: str = "",
 ) -> None:
-    """Watch loop: react to ThresholdConfig changes in real time."""
+    """Watch loop: react to ThresholdConfig changes in real time.
+
+    ⚠️ Only the event's own CR is reconciled: a CR refused earlier (status
+    Error) waits for its own next event, a restart or a `--once` run, even
+    when the refusal no longer holds (see `reconcile_one`; periodic
+    judging again is #3318's)."""
     log.info("Starting watch loop (config-dir=%s, dry-run=%s)",
              config_dir, dry_run)
 
@@ -604,11 +700,20 @@ def run_watch(
                     reconcile_one(cr, config_dir, dry_run=dry_run,
                                   api=None if dry_run else api, refusal=refusal)
                 elif event_type == "DELETED":
-                    filename = _output_filename(cr)
                     if refusal:
                         continue  # #3206: no write (a delete too) this event
-                    removed = remove_rendered(config_dir, filename,
-                                              dry_run=dry_run)
+                    # ADR-036 §2: da-guard deletes the file. A refused or
+                    # failed delete (or a name this tool never renders) is
+                    # logged and the loop goes on: one CR's file never ends
+                    # the watch.
+                    try:
+                        filename = _output_filename(cr)
+                        removed = remove_rendered(config_dir, filename,
+                                                  dry_run=dry_run)
+                    except Exception as e:  # noqa: BLE001 — logged, loop goes on
+                        log.error("Failed to delete the file of CR %s/%s: %s",
+                                  ns, name, e)
+                        continue
                     if removed:
                         log.info("Deleted %s (CR %s/%s removed)",
                                  filename, ns, name)
@@ -667,14 +772,18 @@ def _crdecode_binary() -> str | None:
     return os.environ.get(CRDECODE_ENV) or shutil.which(CRDECODE_BINARY_NAME)
 
 
-def decode_cr(cr_path: Path) -> tuple[Any, list[str]]:
-    """The CR in *cr_path* as Kubernetes clients decode it, and da-crdecode's
-    stderr lines (empty on a normal run).
+def decode_cr(cr_path: Path) -> tuple[Any, list, list[str]]:
+    """The CR in *cr_path* as Kubernetes clients decode it (each object's
+    keys in the order the CR writes them), where that reading is not the
+    CR's text (da-crdecode's ``differs_from_text`` for the document, #3206),
+    and da-crdecode's stderr lines (empty on a normal run).
 
     Raises :class:`CrDecodeError` when the binary is missing, cannot be run,
     does not finish within ``CRDECODE_TIMEOUT_SECONDS``, exits non-zero (the
-    file cannot be read, the conversion refuses it, or it holds more than one
-    document) or prints something that is not its JSON contract.
+    file cannot be read, the conversion refuses it, it holds more than one
+    document, or it cannot be read as written) or prints something that is
+    not its JSON contract — a da-crdecode older than this tool prints no
+    ``differs_from_text``.
     ``json.loads`` raises RecursionError for a document nested too deeply for
     Python's JSON reader; that is left to the caller.
     """
@@ -711,7 +820,35 @@ def decode_cr(cr_path: Path) -> tuple[Any, list[str]]:
         raise CrDecodeError(
             f"{CRDECODE_BINARY_NAME} printed JSON without exactly one "
             "document under \"documents\"", lines)
-    return docs[0], lines
+    differs = out.get("differs_from_text")
+    if (not isinstance(differs, list) or len(differs) != 1
+            or not isinstance(differs[0], list)
+            or not all(_is_difference(d) for d in differs[0])):
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} printed JSON without one list of "
+            "differences under \"differs_from_text\" (a da-crdecode older than "
+            "this tool prints none: rebuild it)", lines)
+    return docs[0], differs[0], lines
+
+
+#: The fields each kind of da-crdecode difference carries (#3206).
+_DIFFERENCE_FIELDS = {
+    "keys": {"kind", "path", "written_keys", "read_keys"},
+    "string": {"kind", "path", "text"},
+    "structure": {"kind", "path", "written", "read"},
+}
+
+
+def _is_difference(d: Any) -> bool:
+    """Whether *d* is one entry of da-crdecode's ``differs_from_text``."""
+    if not isinstance(d, dict) or not isinstance(d.get("kind"), str) \
+            or set(d) != _DIFFERENCE_FIELDS.get(d["kind"]):
+        return False
+    path = d["path"]
+    return (isinstance(path, list)
+            and all(isinstance(s, str) or (isinstance(s, int)
+                                           and not isinstance(s, bool))
+                    for s in path))
 
 
 def _log_crdecode_lines(lines: list[str], level: int) -> None:
@@ -893,165 +1030,81 @@ def _metadata_name_node(root: Any) -> Any:
     return node if isinstance(node, yaml.ScalarNode) else None
 
 
-def _as_text(value: Any) -> str | None:
-    """*value* from the CR read as written, as the text it was written as:
-    a ``str`` (a plain scalar is RawPlain, its source text), a ``date`` in
-    its ISO spelling (``!!timestamp 2024-01-01``); None for anything else
-    (null, a number or a ``datetime`` from an explicit tag, bytes, ...)."""
-    if isinstance(value, str):
-        return str(value)
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value.isoformat()
+def _path_text(path: "list") -> str:
+    """A da-crdecode difference's path as this tool's messages spell it:
+    ``spec.tenants.t1.x[0]`` (``<document>`` for the document itself)."""
+    out = ""
+    for seg in path:
+        out += f"[{seg}]" if isinstance(seg, int) else (f".{seg}" if out else seg)
+    return out or "<document>"
+
+
+def _difference_message(d: dict) -> str:
+    """Why the keys at a da-crdecode "keys" or "structure" difference cannot
+    be rendered as the CR writes them (#3206: the comparison is
+    da-crdecode's). A "string" difference is worded where it is found."""
+    where = _path_text(d["path"])
+    if d["kind"] == "keys":
+        return (f"{where}: the keys as written ("
+                + (", ".join(repr(k) for k in d["written_keys"]) or "none")
+                + ") are not the keys Kubernetes reads ("
+                + (", ".join(repr(k) for k in d["read_keys"]) or "none")
+                + "); rendering would rename them. Quote each such key so "
+                "both readings are the same text")
+    return (f"{where}: Kubernetes reads {d['read']} here but the CR as "
+            f"written holds {d['written']}, so the keys below cannot be "
+            "compared; this tool refuses such a CR")
+
+
+def _not_as_written(differs: list, path: "list", *,
+                    below: bool = False) -> "dict | None":
+    """The da-crdecode difference that leaves the value at *path* not read
+    as written, or None (#2476, #3206).
+
+    A "keys" or "structure" difference at *path* or above it: below one,
+    da-crdecode compares nothing (which written key a read key came from
+    cannot be told), so the value has no verdict and is taken as not as
+    written. A "string" difference at *path* itself: the value is read as
+    other text. *below*: also any "keys" or "structure" difference under
+    *path* (a subtree whose every key is an id).
+    """
+    n = len(path)
+    for d in differs:
+        at = d["path"]
+        if d["kind"] == "string":
+            if at == path:
+                return d
+            continue
+        if at == path[:len(at)] or (below and at[:n] == path):
+            return d
     return None
 
 
-def _shape_name(value: Any) -> str:
-    """How a value's structure is named in a :func:`_key_divergence` error.
-    A tuple is an item of ``!!omap`` / ``!!pairs`` as written."""
-    if isinstance(value, dict):
-        return "a mapping"
-    if isinstance(value, (set, frozenset)):
-        return "a set"
-    if isinstance(value, list):
-        return f"a list of {len(value)}"
-    if isinstance(value, tuple):
-        return "a (key, value) pair"
-    return "a scalar"
-
-
-#: Appended to a divergence error when the CR uses `<<` merges: quoting does
-#: not help when the two readings differ because of the merge itself.
-_MERGE_NOTE = ("; the CR uses << merges: if the difference comes from a << "
-               "written after explicit keys (on the Kubernetes side it "
-               "overrides them), move it before them or do not use merges")
-
-
-def _merge_note(cr_path: Path) -> str:
-    """:data:`_MERGE_NOTE` when the CR has a ``<<`` merge key anywhere, else
-    ``""``. Read from the composed node graph (no value is built); any
-    failure to read gives ``""`` — the note is an explanation only."""
-    try:
-        with open(cr_path, encoding="utf-8") as fh:
-            root = yaml.compose(fh, Loader=yaml.SafeLoader)
-    except Exception:  # noqa: BLE001 — a note only
-        return ""
-    seen, stack = set(), [root]
-    while stack:
-        node = stack.pop()
-        if node is None or id(node) in seen:
-            continue
-        seen.add(id(node))
-        if isinstance(node, yaml.MappingNode):
-            for key, value in node.value:
-                if key.tag == "tag:yaml.org,2002:merge":
-                    return _MERGE_NOTE
-                stack.extend((key, value))
-        elif isinstance(node, yaml.SequenceNode):
-            stack.extend(node.value)
-    return ""
-
-
-def _key_divergence(decoded: Any, written: Any, path: str) -> str:
-    """#2476: why the keys da-crdecode read under *path* differ from the
-    keys as written, at any depth, or ``""``.
-
-    An unquoted ``010:`` is the key ``8`` to Kubernetes, ``yes:`` is
-    ``true``: rendering either would rename it — a tenant id, a metric
-    name — and ``8:`` next to ``010:`` would become one key. Two real
-    readings are compared mapping by mapping, by their key sets; nothing
-    about YAML typing is decided here. Values are not compared (they are
-    rendered as decoded), but the two readings must have the same
-    structure: where one has a mapping or a list and the other has not, or
-    two lists differ in length, the CR is refused (fail-closed) — the keys
-    below cannot be paired. A ``!!set`` as written is a mapping of keys.
-    A key written twice with the same text is one key in both readings.
-    """
-    if isinstance(written, (set, frozenset)):
-        written = dict.fromkeys(written)
-    if isinstance(decoded, dict) and isinstance(written, dict):
-        by_text = {}
-        for key, value in written.items():
-            by_text[_as_text(key)] = value
-        if set(by_text) != set(decoded):
-            only_written = sorted(repr(k) for k in set(by_text) - set(decoded))
-            only_read = sorted(repr(k) for k in set(decoded) - set(by_text))
-            return (f"{path}: the keys as written ("
-                    + (", ".join(only_written) or "none")
-                    + ") are not the keys Kubernetes reads ("
-                    + (", ".join(only_read) or "none")
-                    + "); rendering would rename them. Quote each such key "
-                    "so both readings are the same text")
-        for key, value in decoded.items():
-            why = _key_divergence(value, by_text[key], f"{path}.{key}")
-            if why:
-                return why
-        return ""
-    if isinstance(decoded, list) and isinstance(written, list) \
-            and len(decoded) == len(written):
-        for i, (d, w) in enumerate(zip(decoded, written)):
-            why = _key_divergence(d, w, f"{path}[{i}]")
-            if why:
-                return why
-        return ""
-    if isinstance(decoded, (dict, list)) or isinstance(written, (dict, list)):
-        return (f"{path}: Kubernetes reads {_shape_name(decoded)} here but "
-                f"the CR as written holds {_shape_name(written)}, so the keys "
-                "below cannot be compared; this tool refuses such a CR")
-    return ""
-
-
-def _profile_divergence(decoded: Any, written: Any) -> str:
-    """#2476: why a tenant's ``_profile`` reads differently to Kubernetes
-    than as written, or ``""``.
+def _profile_divergence(tenants: dict, differs: list) -> str:
+    """#2476: why a tenant's ``_profile`` does not name the profile the CR
+    writes, or ``""``.
 
     ``_profile`` names a profile, as a tenant id names a tenant: an unquoted
     ``_profile: 010`` is the number 8 to Kubernetes, ``yes`` is ``true``,
     and rendering that would point the tenant at a profile that does not
-    exist. Compared as :func:`_key_divergence` compares keys (two real
-    readings); a null on both sides is no profile.
+    exist. A null one is no profile. A string read as other text than the
+    CR writes is da-crdecode's finding (#3206).
     """
-    if not isinstance(decoded, dict) or not isinstance(written, dict):
-        return ""
-    by_text = {_as_text(k): v for k, v in written.items()}
-    for tenant, values in decoded.items():
-        as_written = by_text.get(tenant)
-        if not isinstance(values, dict) or not isinstance(as_written, dict) \
-                or "_profile" not in as_written:
+    for tenant, values in tenants.items():
+        if not isinstance(values, dict) or values.get("_profile") is None:
             continue
-        raw = as_written["_profile"]
-        read = values.get("_profile")
-        if raw is None and read is None:
+        read = values["_profile"]
+        d = _not_as_written(differs, ["spec", "tenants", tenant, "_profile"])
+        if not isinstance(read, str):
+            written = ""
+        elif d is not None:
+            written = f", which is not the text written in the CR ({d['text']!r})"
+        else:
             continue
-        if not isinstance(read, str) or _as_text(raw) != read:
-            return (f"spec.tenants.{tenant}._profile is read by Kubernetes "
-                    f"as {read!r}, which is not the text written in the CR "
-                    f"({raw!r}): the tenant would point at another profile. "
-                    "Quote it so both are the same")
+        return (f"spec.tenants.{tenant}._profile is read by Kubernetes as "
+                f"{read!r}{written}: the tenant would point at another "
+                "profile. Quote it so both are the same")
     return ""
-
-
-def _in_written_order(decoded: Any, written: Any) -> Any:
-    """*decoded* (da-crdecode's JSON, every object's keys sorted) with each
-    mapping's keys in the order the CR wrote them, values untouched.
-
-    A key is matched to the written one by its text; keys with no written
-    counterpart keep their (sorted) order, after the matched ones. A list is
-    walked item by item when both sides have the same length.
-    """
-    if isinstance(decoded, dict) and isinstance(written, dict):
-        by_text = {}
-        for key, value in written.items():
-            text = _as_text(key)
-            if text is not None and text not in by_text:
-                by_text[text] = value
-        order = [k for k in by_text if k in decoded]
-        order += [k for k in decoded if k not in by_text]
-        return {k: _in_written_order(decoded[k], by_text.get(k))
-                for k in order}
-    if (isinstance(decoded, list) and isinstance(written, list)
-            and len(decoded) == len(written)):
-        return [_in_written_order(d, w) for d, w in zip(decoded, written)]
-    return decoded
 
 
 def render_cr_file(
@@ -1065,14 +1118,15 @@ def render_cr_file(
     #2476: the CR is decoded by ``da-crdecode``, as Kubernetes clients decode
     it (see ``CRDECODE_BINARY_NAME``): values are rendered as decoded (an
     unquoted ``010`` VALUE is the number 8). The ids — ``metadata.name`` /
-    ``namespace`` and the tenant ids — must read the same as written
-    (``_lib_yaml_keys``) and as decoded, or the CR is refused: an unquoted
-    ``010:`` tenant would otherwise be renamed. The CR as written also gives
-    the key order. What this path checks on top of the controller path is
-    below; it does not reproduce the API server's validation.
+    ``namespace``, every key under ``spec.tenants`` and each tenant's
+    ``_profile`` — must read as the CR writes them, or the CR is refused: an
+    unquoted ``010:`` tenant would otherwise be renamed. Whether they do is
+    da-crdecode's answer (``differs_from_text``, #3206), and so is the key
+    order. What this path checks on top of the controller path is below; it
+    does not reproduce the API server's validation.
     """
     try:
-        cr, warn_lines = decode_cr(cr_path)
+        cr, differs, warn_lines = decode_cr(cr_path)
     except CrDecodeError as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         _log_crdecode_lines(e.stderr_lines, logging.ERROR)
@@ -1144,39 +1198,23 @@ def render_cr_file(
                       "%d characters)", cr_path, namespace,
                       _DNS1123_LABEL_MAX)
             return EXIT_CALLER_ERROR
-    # #2476: the CR as written (`_lib_yaml_keys`: keys and plain scalars as
-    # their source text), to compare the ids with da-crdecode's reading and
-    # to keep the CR's key order. Not used for any value.
-    try:
-        with open(cr_path, encoding="utf-8") as fh:
-            as_written = load_for_rewrite(fh)
-    except RecursionError:
-        log.error("Failed to parse %s: nested too deeply for this tool to "
-                  "read", cr_path)
-        return EXIT_CALLER_ERROR
-    except Exception as e:  # noqa: BLE001 — any failure: nothing to compare
-        log.error("%s: Kubernetes' YAML→JSON conversion reads this CR, but "
-                  "this tool cannot read it as written (%s: %s), so its ids "
-                  "cannot be compared with that reading", cr_path,
-                  type(e).__name__, e)
-        return EXIT_CALLER_ERROR
-    written_meta = (as_written.get("metadata")
-                    if isinstance(as_written, dict) else None)
-    if not isinstance(written_meta, dict):
-        written_meta = {}
-    if _as_text(written_meta.get("name")) != name:
-        log.error("%s: metadata.name is read by Kubernetes as %r, which is "
-                  "not the text written in the CR (%r). Quote it so both "
-                  "are the same%s", cr_path, name, written_meta.get("name"),
-                  _merge_note(cr_path))
-        return EXIT_CALLER_ERROR
-    namespace = metadata.get("namespace")
-    if namespace is not None \
-            and _as_text(written_meta.get("namespace")) != namespace:
-        log.error("%s: metadata.namespace is read by Kubernetes as %r, "
-                  "which is not the text written in the CR (%r). Quote it "
-                  "so both are the same%s", cr_path, namespace,
-                  written_meta.get("namespace"), _merge_note(cr_path))
+    # #2476, #3206: the ids must read as the CR writes them. da-crdecode
+    # sets its reading against the CR's text (`differs`); this tool reads
+    # no YAML for that. The order of the CR's keys is da-crdecode's too.
+    for field in ("name", "namespace"):
+        if field not in metadata:
+            continue
+        d = _not_as_written(differs, ["metadata", field])
+        if d is None:
+            continue
+        if d["kind"] == "string":
+            log.error("%s: metadata.%s is read by Kubernetes as %r, which is "
+                      "not the text written in the CR (%r). Quote it so both "
+                      "are the same", cr_path, field, metadata[field], d["text"])
+        else:
+            log.error("%s: metadata.%s cannot be compared with the text "
+                      "written in the CR: %s", cr_path, field,
+                      _difference_message(d))
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
@@ -1190,21 +1228,17 @@ def render_cr_file(
                   "rendered file would carry no profile. Set _profile on "
                   "each tenant under spec.tenants instead", cr_path)
         return EXIT_CALLER_ERROR
-    written_spec = (as_written.get("spec")
-                    if isinstance(as_written, dict) else None)
-    if not isinstance(written_spec, dict):
-        written_spec = {}
     why = ""
     if isinstance(spec.get("tenants"), dict):
-        why = (_key_divergence(spec["tenants"], written_spec.get("tenants"),
-                               "spec.tenants")
-               or _profile_divergence(spec["tenants"],
-                                      written_spec.get("tenants")))
+        # Every key under spec.tenants is an id (owner ruling, #2476): a
+        # tenant id, a metric name. And `_profile` names a profile.
+        d = _not_as_written(differs, ["spec", "tenants"], below=True)
+        why = _difference_message(d) if d else _profile_divergence(
+            spec["tenants"], differs)
     if why:
-        log.error("%s: %s%s", cr_path, why, _merge_note(cr_path))
+        log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR
-    if spec:
-        cr["spec"] = spec = _in_written_order(spec, written_spec)
+
     shape_error = _spec_block_shape_error(spec)
     if shape_error:
         log.error("%s: %s", cr_path, shape_error)
@@ -1291,31 +1325,31 @@ def _default_value_error(value: Any) -> str:
 
     The exporter reads ``defaults`` as ``map[string]float64``: null and
     numbers are read; a bool, a sequence / mapping make it refuse the whole
-    file. A ``str`` (da-crdecode's JSON, #2476) is not judged here: whether
-    the text the dump writes for it reads as a number is yaml.v3's question,
-    and the pre-write confirmation (``_expected_nodes`` / ``_lib_write_check``,
-    ADR-036 §2) asks parse-tree — a quoted ``"80"`` (dumped ``'80'``, a
-    string) or ``foo`` is refused there, ``1e3`` (dumped plain, a float to
-    yaml.v3) is written.
+    file. A ``str`` is refused too (#3206): `da-guard write` writes a
+    string as a string (double quoted), which the exporter cannot decode
+    into ``float64`` — ``"80"`` and ``"1e3"`` alike; the number is written
+    unquoted in the CR (da-crdecode reads an unquoted ``1e3`` as 1000).
     """
     if value is None:
         return ""
     if isinstance(value, bool):
         return "must be a number, not a boolean"
     if isinstance(value, int):
-        # An int (`!!int "…"`) is dumped as its decimal digits, which
-        # yaml.v3 reads through ParseFloat when it passes 64 bits: refused
-        # once it rounds past float64 max (Go-measured: (2^54-1)*2^970 and
-        # up, either sign). `float()` rounds the same way and raises there;
-        # it also needs no `str()`, which is capped at 4300 digits — the
-        # dump could not write such an int at all.
+        # The exporter's float64: an int past 18 digits is sent as the
+        # float it rounds to (`_lib_confedit.number_value`), so one past
+        # float64 max (Go-measured: (2^54-1)*2^970 and up, either sign) has
+        # no value there. `float()` rounds the same way and raises there;
+        # it also needs no `str()`, which is capped at 4300 digits.
         try:
             float(value)
         except OverflowError:
             return "must be a number within float64 range"
         return ""
-    if isinstance(value, (float, str)):
+    if isinstance(value, float):
         return ""
+    if isinstance(value, str):
+        return (f"must be a number, not the string {value!r} (write it "
+                "unquoted in the CR)")
     return "must be a number"
 
 

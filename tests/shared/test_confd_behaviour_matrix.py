@@ -306,7 +306,7 @@ TOOLS: dict[str, Tool] = {
     # The three writers below write conf.d files into an output directory;
     # here that directory is the tree under test (an EXISTING conf.d), which
     # the write must first pass the shared refusal over
-    # (`_lib_write_check.confirm_all`).
+    # (`_lib_write_check.require_output_tree`).
     "scaffold_tenant": Tool((_PY, _T + "ops/scaffold_tenant.py", "--non-interactive",
                              "--tenant", "newt", "--db", "mariadb", "-o", "{conf}")),
     "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",

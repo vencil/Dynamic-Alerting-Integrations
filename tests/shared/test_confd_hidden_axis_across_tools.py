@@ -324,10 +324,6 @@ KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {
-    "_lib_write_check.py":
-        "`confirm_tree` asks only whether a writer's output directory is "
-        "empty (to choose tree or file mode); every file it judges is read "
-        "by da-guard parse-tree, whose hidden axis is da-guard's",
     "dx/generate_tenant_fixture.py":
         "lists its own OUTPUT directory (what it just generated), not a "
         "conf.d it reads",
@@ -343,6 +339,10 @@ NOT_A_CELL: dict[str, str] = {
         "a directory's carriers, for the cache-mode `not_read` verdict",
     "ops/_grar_parse.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
+    "ops/_gsvc_child.py":
+        "lists only through `_lib_confd.config_listing` (library cell), to "
+        "classify the paths a write changes for the key verdict; a hidden "
+        "written path is skipped (tests/ops/test_gsvc_key_verdict.py)",
     "ops/validate_config.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/_render_diff.py":
