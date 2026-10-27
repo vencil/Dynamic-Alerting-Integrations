@@ -114,6 +114,40 @@ def test_a_generated_float_reads_back_as_the_number_meant(tmp_path):
         "a": ("!!float", "0.00001"), "b": ("!!float", "2.0"), "c": ("!!int", "7")}
 
 
+def test_a_generated_value_carries_the_head_comments_asked_for():
+    # #3206 10c-3: `head` is asked about every map entry and sequence item
+    # (its key path, its value); what it returns goes above that node only.
+    seen = []
+
+    def head(at, value):
+        seen.append(at)
+        return {("d", "a"): "on a", ("l", "[1]"): "on y"}.get(at)
+
+    v = ce.data_value({"d": {"a": 1, "b": 2}, "l": ["x", "y"]}, head=head)
+    assert v == {"map": [
+        ["d", {"map": [["a", {"int": "1"}, {"head": "on a"}], ["b", {"int": "2"}]]}],
+        ["l", {"seq": [{"str": "x"}, [{"str": "y"}, {"head": "on y"}]]}]]}
+    assert sorted(seen) == sorted([("d",), ("d", "a"), ("d", "b"), ("l",),
+                                   ("l", "[0]"), ("l", "[1]")])
+
+
+def test_a_comment_block_is_its_lines_text():
+    assert ce.comment_block("# a\n#\n#   b") == "a\n\n  b"
+    with pytest.raises(ValueError, match="not a comment line"):
+        ce.comment_block("# a\nkey: 1")
+
+
+def test_a_new_files_preview_is_the_text_da_guard_writes(tmp_path):
+    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"cpu": "70"}}}, "head",
+                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "cpu" else None)
+    text = f.preview()
+    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    cpu: "70"\n'
+                    '\n# foot\n')
+    root = _tree(tmp_path / "conf.d", {"t-a.yaml": "tenants:\n  t-a: {}\n# old\n"})
+    ce.write_all(root, [f.entry(replace=True)])
+    assert (root / "t-a.yaml").read_text(encoding="utf-8") == text
+
+
 # ── one file ────────────────────────────────────────────────────────
 
 def test_a_typed_severity_round_trips_as_the_string(tmp_path):
@@ -574,6 +608,13 @@ def test_comment_text_problem_names_what_da_guard_refuses(ch, tmp_path):
 
 def test_comment_text_problem_lets_tabs_lines_and_text_through():
     assert ce.comment_text_problem("tab\there\nnext — 中文 ⚠️") is None
+
+
+def test_comment_field_refuses_a_line_break_only_inside_one_line():
+    assert ce.comment_field("the pack", "a\nb") == "a\nb"
+    with pytest.raises(ValueError, match=r"^the pack 'a\\nb': it holds a line break"):
+        ce.comment_field("the pack", "a\nb", line=True)
+    assert ce.comment_field("the pack", "a\tb", line=True) == "a\tb"
 
 
 # ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
