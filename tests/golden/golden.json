@@ -238,38 +238,47 @@
   },
   {
     "defaults_chain": [
-      "reserved-nested-null/_defaults.yaml"
+      "_defaults.yaml"
     ],
     "effective_config": {
+      "_severity_dedup": "disable",
+      "_silent_mode": "warning",
       "_x": {
         "added": {
           "type": "webhook",
           "url": "https://hooks.example.com/alerts"
         },
-        "inherited_list": null,
-        "inherited_str": null,
-        "never_set_a": null,
-        "never_set_b": null
+        "inherited_list": [
+          "alertname"
+        ],
+        "inherited_str": "30s"
       }
     },
-    "fixture_dir": "mixed-mode",
-    "merged_hash": "7f30b0042d53e9d4",
+    "fixture_dir": "reserved-null",
+    "merged_hash": "339185b9e5179569",
     "scenario": "reserved-nested-null",
-    "source_file": "reserved-nested-null/tenants.yaml",
+    "source_file": "nested/tenants.yaml",
     "source_hash": "45e36c5a758a9a94",
     "tenant_id": "tenant-nested"
   },
   {
     "defaults_chain": [
-      "reserved-null/_defaults.yaml",
-      "reserved-null/child/_defaults.yaml"
+      "_defaults.yaml"
     ],
-    "effective_config": {},
-    "fixture_dir": "mixed-mode",
-    "merged_hash": "9998c1033c4d2c19",
+    "effective_config": {
+      "_silent_mode": "warning",
+      "_x": {
+        "inherited_list": [
+          "alertname"
+        ],
+        "inherited_str": "30s"
+      }
+    },
+    "fixture_dir": "reserved-null",
+    "merged_hash": "c6353e0b1ceb0ab0",
     "scenario": "reserved-null-delete",
-    "source_file": "reserved-null/child/tenants.yaml",
-    "source_hash": "8a3e644e7b760369",
+    "source_file": "child/tenants.yaml",
+    "source_hash": "dd3254cba933947c",
     "tenant_id": "tenant-reserved"
   },
   {

@@ -149,7 +149,7 @@ tenants:
 - **`_routing.receiver` 不能這樣用**：租戶寫 `receiver: null`，路由產生器會印 WARN 並略過這個租戶，它的告警交回 Alertmanager 的根路由。
 - **其他 `_` 開頭的鍵**（保留鍵，例如 `_silent_mode`、`_severity_dedup`、`_state_<filter>`）：租戶這一側（租戶檔、根目錄平台檔的 `tenants:` 條目、profile）寫 `null`——`kx:`、`kx: ~` 或 `kx: {default: null}`——會刪掉往下傳來的值，租戶拿到平台預設：`_state_<filter>` 依根目錄 `state_filters` 的 `default_state`，`_severity_dedup` 開啟，`_silent_mode` 不靜音；`/metrics` 與 `/effective` 結果相同。`check_confd_schema.py` 對租戶檔與根目錄平台檔 `tenants:` 條目裡的這類 `null` 多半會擋下，要回到平台預設就刪掉這個鍵；`_severity_dedup: ~` 是例外，schema 允許，意思就是預設的開啟。
 
-**子目錄 `_defaults.yaml` 不帶 `_` 開頭的鍵**（路由鍵 `_routing`、`_routing_*` 除外，由路由產生器判）：寫在子目錄 defaults 裡的 `_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata`、`_profile` 等，不論值（`disable`、數字、`null` 皆同）exporter 都不套用，`/effective` 也不顯示，改在 `not_served` 以 `value_rejected` 列出該檔；da-guard 對每個受影響的租戶報 `subtree_default_reserved_key`（error，結束碼 1），訊息列出每個寫了該鍵的檔與值。要讓某些租戶拿到某個值，寫進它們各自的 `tenants:` 條目；`_state_<filter>` 也可以改根目錄的 `default_state`（整棵樹一起變）。這些鍵仍照合併規則進入 `merged_hash` 的計算，所以改動它們會讓子樹租戶的 `merged_hash` 變動，但送出的值不變。
+**子目錄 `_defaults.yaml` 不帶 `_` 開頭的鍵**（路由鍵 `_routing`、`_routing_*` 除外，由路由產生器判）：寫在子目錄 defaults 裡的 `_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata`、`_profile` 等，不論值（`disable`、數字皆同）exporter 都不套用，`/effective` 也不顯示這一層的值；da-guard 對每個受影響的租戶報 `subtree_default_reserved_key`（error，結束碼 1），訊息列出每個寫了該鍵的檔與值。租戶這一側（租戶檔、根目錄平台檔 `tenants:`、profile）沒寫這個鍵時，`not_served` 以 `value_rejected` 列出該子目錄檔；寫了時，`/effective` 顯示的是租戶這一側的值（也就是送出的值），`not_served` 不列這個鍵，da-guard 仍報子目錄檔。寫成 `null`（含 `{default: null}`）等於這一層沒寫：da-guard 不報，`not_served` 也不列。要讓某些租戶拿到某個值，寫進它們各自的 `tenants:` 條目；`_state_<filter>` 也可以改根目錄的 `default_state`（整棵樹一起變）。這些鍵仍照合併規則進入 `merged_hash` 的計算，所以改動它們會讓子樹租戶的 `merged_hash` 變動，但送出的值不變。
 
 例：根目錄 `state_filters: {maintenance: {default_state: enable}}`，`team/_defaults.yaml` 寫 `defaults: {_state_maintenance: disable}`，租戶 `team/t1.yaml` 寫 `tenants: {t1: {}}`：`t1` 的 maintenance filter 照根目錄開啟，`/effective` 沒有 `_state_maintenance`、`not_served` 有 `_state_maintenance: {reason: value_rejected, file: team/_defaults.yaml}`，da-guard 結束碼 1。把 `_state_maintenance: disable` 移到 `t1` 的條目、刪掉子目錄那行之後，filter 關閉，da-guard 結束碼 0。
 
@@ -270,7 +270,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 同一棵樹上，`/effective` 與 `/metrics` 可能給出不同的值，例如子目錄的值根目錄沒宣告、某個檔語法壞掉。決定如下：
 
-1. **最終設定逐字顯示每一層寫下的值，不刪、不改。** `/metrics` 不送的值，在每個租戶的 `not_served` 逐鍵標出原因與所顯示那個值的來源檔。唯一的例外是子目錄 `_defaults.yaml` 寫的 `_` 開頭鍵（決策 4）：兩邊都不套用，最終設定不顯示，`not_served` 仍列出寫了它的子目錄檔。原因是封閉集合，完整清單見 [CLI 參考的 `da-guard effective`](../cli-reference.md#guard)。
+1. **最終設定逐字顯示每一層寫下的值，不刪、不改。** `/metrics` 不送的值，在每個租戶的 `not_served` 逐鍵標出原因與所顯示那個值的來源檔。唯一的例外是子目錄 `_defaults.yaml` 寫的 `_` 開頭鍵（決策 4）：兩邊都不套用，最終設定不顯示子目錄那份；租戶這一側沒寫這個鍵時，`not_served` 列出寫了它的子目錄檔。原因是封閉集合，完整清單見 [CLI 參考的 `da-guard effective`](../cli-reference.md#guard)。
 2. **原因取自 exporter 載入與解析時自己的判定，不靠比對兩份輸出。** 合法寫法的原文與送出值本來就可能不同（例如 `"60:critical"`），用值比對會誤判。
 3. **`not_served` 為空不代表 `/metrics` 送的就是最終設定顯示的值。** 例如租戶覆寫已經過期（`expires:`）時，最終設定顯示原文，`/metrics` 送平台預設，`not_served` 仍是空的。
 4. **鏈上語法壞掉的 `_defaults.yaml` 不讓租戶消失。** exporter 不讀那個檔；`/effective` 把它當成空檔，租戶照常回傳並列在 `chain_parse_failed`，`merged_hash` 以略過該檔後的鏈計算。tenant-api 回 HTTP 200，`da-guard effective` 結束碼 3，da-guard 的主檢查也以結束碼 3 停下。

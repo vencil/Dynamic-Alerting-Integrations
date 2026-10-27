@@ -251,9 +251,10 @@ func TestGuard_SubtreeCustomAlertsAreReadByNoOne(t *testing.T) {
 	}
 }
 
-// #2388 r1b: the golden fixture tree mixed-mode/conf.d, whose
-// reserved-null/child/_defaults.yaml nulls `_severity_dedup`: the null level is
-// not named (the parent's non-null one still is).
+// #2388 r1b: the golden fixture tree mixed-mode/conf.d: every reserved key a
+// subtree level writes is named (the null-level shape is
+// TestScopeEffective_SubtreeReservedNullIsNotWritten's; the golden
+// reserved-null rows moved to a tree of their own, #3341).
 func TestGuard_SubtreeReservedGoldenMixedMode(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(goldenDir(t), "fixtures", "mixed-mode", "conf.d")
@@ -270,9 +271,6 @@ func TestGuard_SubtreeReservedGoldenMixedMode(t *testing.T) {
 		// #3045: `_x`, a `_` key the registry does not list, is read in no
 		// layer, so the subtree's `_x` is named as a key nothing reads.
 		"tenant-keys _x",
-		"tenant-nested _x",
-		"tenant-reserved _severity_dedup",
-		"tenant-reserved _silent_mode",
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Errorf("findings = %v, want %v", rows, want)

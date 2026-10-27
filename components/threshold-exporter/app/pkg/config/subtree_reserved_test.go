@@ -78,8 +78,8 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 
 // #2388 r1b: a null reserved key in a subtree level is treated as not written
 // (the #2518 ruling: null deletes that level's value, the next level's
-// applies). The shape of the golden fixture mixed-mode/conf.d/reserved-null:
-// the parent writes `_severity_dedup` and `_silent_mode`, the child nulls
+// applies). The shape the golden fixture mixed-mode/conf.d/reserved-null had
+// until #3341 moved those rows to a root: the parent writes `_severity_dedup` and `_silent_mode`, the child nulls
 // `_severity_dedup` — only the parent is listed. A tree whose only subtree
 // mention of the key is the null lists nothing.
 func TestScopeEffective_SubtreeReservedNullIsNotWritten(t *testing.T) {

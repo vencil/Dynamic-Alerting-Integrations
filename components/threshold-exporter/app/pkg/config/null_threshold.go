@@ -128,6 +128,12 @@ func tenantReserved(overrides map[string]ScheduledValue, key string) (ScheduledV
 	return sv, true
 }
 
+// TenantReserved is tenantReserved, for package main's readers of a tenant
+// map (logConfigStats): the same "no key" for a tenant-side null.
+func TenantReserved(overrides map[string]ScheduledValue, key string) (ScheduledValue, bool) {
+	return tenantReserved(overrides, key)
+}
+
 // withoutNullThresholds returns m without its nullThreshold entries — m
 // itself (no copy) when it has none, so the steady state allocates nothing.
 func withoutNullThresholds(m map[string]any) map[string]any {

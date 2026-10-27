@@ -39,9 +39,11 @@ package main
 //                       reserved key (`_x.*`): an inherited value is retained
 //                       and an uninherited null dropped (#1550; was
 //                       `_routing` until #2417)
-//   reserved-null-delete — a `_` key inherited from L0 and nulled in an L1
-//                       _defaults.yaml is deleted; a sibling `_` key survives
-//                       (#1550)
+//   reserved-null-delete — a `_` key inherited from L0 and nulled in the
+//                       tenant file is deleted; a sibling `_` key survives
+//                       (#1550). Both rows are the reserved-null tree, whose
+//                       root is the only level that hands a `_` key down
+//                       (#3341) and which the exporter drops (not_served)
 //   served-chain      — numeric L0 -> L1 -> L2 chain in the shipped shape, plus
 //                       a root-level sibling tenant (served-root) (#2387)
 //   served-disable    — "disable" on an L0 key while L1 overrides another
@@ -58,8 +60,8 @@ package main
 //                       per-shape table: pkg/config/
 //                       yaml_number_value_parity_test.go (#2415)
 //
-// ⚠️ Five trees (l0-only, full-l0-l3, array-replace, opt-out-null,
-// metadata-skipped) have a ROOT _defaults.yaml the exporter drops whole, so
+// ⚠️ Six trees (l0-only, full-l0-l3, array-replace, opt-out-null,
+// metadata-skipped, reserved-null) have a ROOT _defaults.yaml the exporter drops whole, so
 // /metrics serves none of it: parity there proves the readers agree with each
 // other, not that they describe served values. They are kept as merge-core
 // corpus and listed in tests/golden/not_served.json;

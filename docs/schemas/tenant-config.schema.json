@@ -1263,7 +1263,7 @@
       "properties": {
         "_metadata": {
           "$ref": "#/definitions/metadata",
-          "description": "Not inherited from a _defaults.yaml: the merge skips _metadata at every level, and below the conf.d root a reserved key is an error (da-guard subtree_default_reserved_key, #3341). Write it in each tenant's own entry, or in a root platform file's `tenants:` entry."
+          "description": "Not inherited from a _defaults.yaml: the merge skips _metadata at every level, and below the conf.d root a reserved key written with a value is an error (da-guard subtree_default_reserved_key, #3341; a null writes nothing and is not reported). Write it in each tenant's own entry, or in a root platform file's `tenants:` entry."
         },
         "_routing": {
           "$ref": "#/definitions/routing",
@@ -1276,11 +1276,11 @@
         },
         "_silent_mode": {
           "$ref": "#/definitions/silentMode",
-          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it and da-guard reports subtree_default_reserved_key, an error (#3341). Write it in each tenant's own entry."
+          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it, and a value written there (not a null, which writes nothing) is da-guard's subtree_default_reserved_key, an error (#3341). Write it in each tenant's own entry."
         },
         "_severity_dedup": {
           "$ref": "#/definitions/severityDedup",
-          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it and da-guard reports subtree_default_reserved_key, an error (#3341). Write it in each tenant's own entry; same vocabulary as the tenant-level key (definitions.severityDedup)."
+          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it, and a value written there (not a null, which writes nothing) is da-guard's subtree_default_reserved_key, an error (#3341). Write it in each tenant's own entry; same vocabulary as the tenant-level key (definitions.severityDedup)."
         },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",

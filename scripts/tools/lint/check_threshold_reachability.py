@@ -697,6 +697,11 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      `tests/fixtures/da-tools-smoke/`, 2 keys each — +4 artifact keys, total
 #      83 -> 87. Same remedy again: the floor went 71 -> 75, the full-l0-l3
 #      probe reads 74 against it, and both figures here stay at +6 / 12.)
+#     (#3341 moved the reserved-null golden rows out of mixed-mode into a root
+#      of their own, `reserved-null/` — a subtree `_defaults.yaml` no longer
+#      hands a `_` key down — and the subtree levels they retired held one key
+#      more than the new root: total 87 -> 86. A deliberate removal, so the
+#      floor went 75 -> 74 and both figures here stay at +6 / 12.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -711,7 +716,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 75
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
 
 # ── the artifact floor's DENOMINATOR, and why it is smaller than the scan ────
 #
@@ -1020,6 +1025,7 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "tests/golden/fixtures/mixed-mode/conf.d",
     "tests/golden/fixtures/opt-out-null/conf.d",
     "tests/golden/fixtures/opt-out-null-threshold/conf.d",
+    "tests/golden/fixtures/reserved-null/conf.d",
     "tests/golden/fixtures/served-chain/conf.d",
     "tests/golden/fixtures/served-disable/conf.d",
     "tests/golden/fixtures/wrapper-siblings/conf.d",
