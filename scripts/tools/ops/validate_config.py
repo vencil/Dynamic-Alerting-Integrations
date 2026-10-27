@@ -2171,7 +2171,8 @@ def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
 
 _ROOT_NUMBERS_ONLY = (
     "A threshold among them goes under `defaults:`; the root `defaults:` "
-    "holds numbers only (a non-numeric value there drops the whole block), "
+    "holds numbers only (a mapping or a list there drops the whole block; a "
+    "scalar that is no number is refused for that key alone), "
     "so another key has no place in this file.")
 
 # #3042: no reader takes custom alerts from a `_defaults.yaml` (the exporter

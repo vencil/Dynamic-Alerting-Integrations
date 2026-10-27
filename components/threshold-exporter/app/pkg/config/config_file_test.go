@@ -255,22 +255,17 @@ func TestOracleShape_MatchesThresholdConfig(t *testing.T) {
 // its bits: a NaN is never == itself, and the bits are the verdict
 // (refusedDefault).
 func sameConfig(a, b ThresholdConfig) bool {
-	return reflect.DeepEqual(comparableDefaults(a), comparableDefaults(b))
-}
-
-func comparableDefaults(c ThresholdConfig) ThresholdConfig {
-	if len(c.Defaults) == 0 {
-		return c
+	if len(a.Defaults) != len(b.Defaults) {
+		return false
 	}
-	d := make(map[string]float64, len(c.Defaults))
-	for k, v := range c.Defaults {
-		if math.IsNaN(v) {
-			v = float64(math.Float64bits(v))
+	for k, av := range a.Defaults {
+		bv, ok := b.Defaults[k]
+		if !ok || math.Float64bits(av) != math.Float64bits(bv) {
+			return false
 		}
-		d[k] = v
 	}
-	c.Defaults = d
-	return c
+	a.Defaults, b.Defaults = nil, nil
+	return reflect.DeepEqual(a, b)
 }
 
 // TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode keeps the

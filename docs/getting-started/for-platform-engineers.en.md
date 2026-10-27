@@ -49,7 +49,7 @@ Minimal viable platform config:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64
+  # ⚠️ Values are NUMBERS (a quoted "80" reads as 80 too; one that is no number is refused for its key alone, #3250)
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
   mysql_replication_lag: 30  # seconds — async replication lag

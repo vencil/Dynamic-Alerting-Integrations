@@ -27,8 +27,10 @@ Prerequisites:
     comment), which writes the file — replacing one already there whole —
     or deletes it when the CR is deleted, after reading it back in the
     tree. A CR whose name is not a Kubernetes object name, whose tenant id
-    is not one (ADR-035), whose `defaults` value is not a number (a string
-    included), or that da-guard refuses (a path no reader reads) is not
+    is not one (ADR-035), whose `defaults` value is a sequence, a mapping or
+    an int past float64's range (a string or a bool is written as it is: the
+    exporter refuses that key alone when it is no number, #3250), or that
+    da-guard refuses (a path no reader reads) is not
     written — `--render-cr` exits 2 naming it, the controller logs it, sets
     the CR's status to Error and goes on. A new file is mode 0600 (da-guard
     write's), a replaced one keeps its mode.

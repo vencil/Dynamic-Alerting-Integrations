@@ -49,7 +49,7 @@ lang: zh
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64
+  # ⚠️ 值是數字（"80" 加引號也照數字讀；讀不成數字的值只拒收那個 key，#3250）
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
   mysql_replication_lag: 30  # 秒 — 非同步複製延遲
