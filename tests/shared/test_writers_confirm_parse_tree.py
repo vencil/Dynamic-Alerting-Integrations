@@ -337,11 +337,10 @@ def test_da_assembler_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
 
 
 def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
-    # The exporter decodes `defaults:` into float64. A number is written as
-    # one (an int past 18 digits as the float it is); a JSON string is
-    # refused whatever its text — Go writes it as a string, which the
-    # exporter cannot decode (#3206: "1e3" and "0o17" alike, once written
-    # plain and read as numbers).
+    # A number is written as one (an int past 18 digits as the float it is).
+    # A JSON string is written as a string (Go writes it quoted): since
+    # #3250 the exporter reads a root default's text as a tenant's value and
+    # refuses that key alone when it is no number, so the file still loads.
     import da_assembler
     da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": 10**20, "mem": 0.5}),
                                tmp_path, cli=True)
@@ -352,11 +351,10 @@ def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
                         timeout=120, check=False)
     assert sv.returncode == 0, sv.stdout + sv.stderr  # the exporter reads the file
     assert json.loads(sv.stdout)["parse_failed"] == [], sv.stderr
-    for text in ("1e3", "0o17", "80"):
-        with pytest.raises(ValueError, match="must be a number, not the string"):
-            da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": text}, name="ok2"),
-                                       tmp_path, cli=True)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["ok.yaml"]
+    da_assembler.reconcile_one(_cr({"tenant-b": {}}, {"cpu": "0o17", "mem": "80"}, name="ok2"),
+                               tmp_path, cli=True)
+    text = (tmp_path / "ok2.yaml").read_text(encoding="utf-8")
+    assert 'cpu: "0o17"\n' in text and 'mem: "80"\n' in text, text
 
 
 def test_da_assembler_refuses_a_tenant_id_and_a_name_before_any_write(tmp_path):
