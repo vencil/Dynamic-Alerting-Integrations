@@ -81,11 +81,12 @@ import (
 // @Description serves in no layer; spelling_duplicate names a
 // @Description spelling of a threshold that the same mapping also writes
 // @Description under the spelling /metrics serves (two spellings of one
-// @Description dimensional key, or both #1231 names). value_rejected also
-// @Description names a `_` key (not a routing key) a subtree _defaults.yaml
-// @Description writes: a subtree does not carry it (#3341), so neither
-// @Description effective_config nor /metrics holds it, and file is that
-// @Description subtree file. Dimensional keys are
+// @Description dimensional key, or both #1231 names). One entry is not a
+// @Description key of effective_config: a `_` key (not a routing key) a
+// @Description subtree _defaults.yaml writes non-null and effective_config
+// @Description does not show; the subtree value is never applied (#3341) —
+// @Description value_rejected, or unregistered when the registry does not list it, with file
+// @Description the subtree file (ADR-017 Decision 4's table). Dimensional keys are
 // @Description one threshold whatever their label order or quoting: every key
 // @Description here is spelled as the layer that supplied its value wrote it.
 // @Description chain_parse_failed lists the

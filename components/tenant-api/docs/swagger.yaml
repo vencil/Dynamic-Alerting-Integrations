@@ -209,8 +209,10 @@ definitions:
       file:
         description: |-
           File is the root-relative slash path of the file whose value the
-          effective config shows (the key's winning layer); empty when no single
-          file applies.
+          effective config shows (the key's winning layer) — or, for a `_` key a
+          subtree level writes non-null that the effective config does not show
+          (#3341), the deepest subtree file writing it; empty when no single file
+          applies.
         type: string
       reason:
         description: Reason is one of the NotServed* constants.
@@ -2988,11 +2990,12 @@ paths:
         serves in no layer; spelling_duplicate names a
         spelling of a threshold that the same mapping also writes
         under the spelling /metrics serves (two spellings of one
-        dimensional key, or both #1231 names). value_rejected also
-        names a `_` key (not a routing key) a subtree _defaults.yaml
-        writes: a subtree does not carry it (#3341), so neither
-        effective_config nor /metrics holds it, and file is that
-        subtree file. Dimensional keys are
+        dimensional key, or both #1231 names). One entry is not a
+        key of effective_config: a `_` key (not a routing key) a
+        subtree _defaults.yaml writes non-null and effective_config
+        does not show; the subtree value is never applied (#3341) —
+        value_rejected, or unregistered when the registry does not list it, with file
+        the subtree file (ADR-017 Decision 4's table). Dimensional keys are
         one threshold whatever their label order or quoting: every key
         here is spelled as the layer that supplied its value wrote it.
         chain_parse_failed lists the

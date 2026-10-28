@@ -147,7 +147,7 @@ tenants:
 
 - **路由的四個欄位**（`_routing` 底下的 `group_by`、`group_wait`、`group_interval`、`repeat_interval`）：寫 `null` 表示不沿用上層的值，產出的 route 不帶這個欄位。寫 `""`、`0` 或 `[]` 效果相同。
 - **`_routing.receiver` 不能這樣用**：租戶寫 `receiver: null`，路由產生器會印 WARN 並略過這個租戶，它的告警交回 Alertmanager 的根路由。
-- **其他 `_` 開頭的鍵**（保留鍵，例如 `_silent_mode`、`_severity_dedup`、`_state_<filter>`）：租戶這一側（租戶檔、根目錄平台檔的 `tenants:` 條目、profile）寫 `null`——`kx:`、`kx: ~` 或 `kx: {default: null}`——會刪掉往下傳來的值，租戶拿到平台預設：`_state_<filter>` 依根目錄 `state_filters` 的 `default_state`，`_severity_dedup` 開啟，`_silent_mode` 不靜音；`/metrics` 與 `/effective` 結果相同。`check_confd_schema.py` 對租戶檔與根目錄平台檔 `tenants:` 條目裡的這類 `null` 多半會擋下，要回到平台預設就刪掉這個鍵；`_severity_dedup: ~` 是例外，schema 允許，意思就是預設的開啟。
+- **其他 `_` 開頭的鍵**（保留鍵，例如 `_silent_mode`、`_severity_dedup`、`_state_<filter>`）：租戶這一側（租戶檔、根目錄平台檔的 `tenants:` 條目、profile）寫 `null`——`kx:`、`kx: ~`，或（`_metadata`、`_routing`、`_routing_defaults`、`_routing_enforced` 以外的鍵）`kx: {default: null}`——會刪掉往下傳來的值，租戶拿到平台預設：`_state_<filter>` 依根目錄 `state_filters` 的 `default_state`，`_severity_dedup` 開啟，`_silent_mode` 不靜音；`/metrics` 與 `/effective` 結果相同。`check_confd_schema.py` 對租戶檔與根目錄平台檔 `tenants:` 條目裡的這類 `null` 多半會擋下，要回到平台預設就刪掉這個鍵；`_severity_dedup: ~` 是例外，schema 允許，意思就是預設的開啟。
 
 **子目錄 `_defaults.yaml` 不帶 `_` 開頭的鍵**（路由鍵 `_routing`、`_routing_*` 除外，由路由產生器判）：寫在子目錄 defaults 裡的 `_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata`、`_profile` 等，exporter 一律不套用，不論值為何。其餘結果取決於兩件事——子目錄寫的是不是 `null`，以及租戶這一側（租戶檔、根目錄平台檔 `tenants:`、profile）對同一鍵寫了什麼：
 
@@ -160,9 +160,11 @@ tenants:
 | `null` | 非 null | 不報 | 租戶這一側的值 | 不列 | 租戶這一側的值 |
 | `null` | `null` | 不報 | 不出現 | 不列 | 平台預設 |
 
-- 「平台預設」：`_state_<filter>` 依根目錄 `state_filters` 的 `default_state`，`_severity_dedup` 開啟，`_silent_mode` 不靜音，`_metadata` 全空。`null` 包含 `kx:`、`kx: ~` 與 `kx: {default: null}`。
+- 「平台預設」：`_state_<filter>` 依根目錄 `state_filters` 的 `default_state`，`_severity_dedup` 開啟，`_silent_mode` 不靜音，`_metadata` 全空。
+- 「`null`」：`kx:` 與 `kx: ~`，對每個 `_` 鍵都是。`kx: {default: null}` 在子目錄 `_defaults.yaml` 對每個鍵都算 `null`；在租戶這一側則不含 `_metadata`、`_routing`、`_routing_defaults`、`_routing_enforced`——這幾個鍵整個 mapping 原樣保留，`default:` 只是 mapping 裡的一個欄位（例：平台檔給 `_metadata: {owner: plat}`、租戶檔寫 `_metadata: {default: null}`，送出的 `owner` 仍是 `plat`）。
+- `not_served` 那一格的 reason：登錄表列出的鍵是 `value_rejected`，登錄表沒有的 `_` 鍵（例如 `_x`）是 `unregistered`；`file` 是寫了非 null 值的最深一層子目錄檔。這一格只在 `/effective` 不顯示這個鍵時才有：一般是租戶這一側沒有提供它（上表第 1、3 列），`_metadata` 則見下一點。
 - `_metadata` 不論哪一層都不出現在 `/effective`（見決策 2），所以子目錄寫了非 null 的 `_metadata` 時，`not_served` 一律列出子目錄檔，租戶自己寫了也一樣；租戶的 `_metadata` 照常送出。
-- da-guard 的訊息列出每個寫了該鍵的子目錄檔與值；結束碼 1。要讓某些租戶拿到某個值，寫進它們各自的 `tenants:` 條目；`_state_<filter>` 也可以改根目錄的 `default_state`（整棵樹一起變）。
+- da-guard 的訊息列出每個寫了該鍵的子目錄檔，以及能寫成一行 YAML 的值（寫不成一行的只列檔）；`_custom_alerts` 另有一句訊息，只列檔、說明該寫在哪裡；登錄表沒有的鍵與根目錄未宣告的 `_state_<filter>` 也各有一句修法。結束碼 1。要讓某些租戶拿到某個值，寫進它們各自的 `tenants:` 條目；`_state_<filter>` 也可以改根目錄的 `default_state`（整棵樹一起變）。
 - `merged_hash` 仍照合併規則計算，只在合併結果改變時才動：租戶這一側沒寫、子目錄改了非 null 的值，或兩邊都寫 mapping（逐鍵合併）時會動；租戶這一側寫了純量或 `null`、或鍵是 `_metadata`（合併時略過）時不動。送出的值都不受影響。
 
 例：根目錄 `state_filters: {maintenance: {default_state: enable}}`，`team/_defaults.yaml` 寫 `defaults: {_state_maintenance: disable}`，租戶 `team/t1.yaml` 寫 `tenants: {t1: {}}`：`t1` 的 maintenance filter 照根目錄開啟，`/effective` 沒有 `_state_maintenance`、`not_served` 有 `_state_maintenance: {reason: value_rejected, file: team/_defaults.yaml}`，da-guard 結束碼 1。把 `_state_maintenance: disable` 移到 `t1` 的條目、刪掉子目錄那行之後，filter 關閉，da-guard 結束碼 0。

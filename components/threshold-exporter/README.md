@@ -171,7 +171,7 @@ conf.d/
 
 合併語義：**deep merge**（map 遞迴）+ **array 整包替換**（不串接）+ **null 即刪除**（下層設 `null` 等同顯式否決）+ **前綴保留**（`_state_*` / `_routing*` / `_metadata` 等只允許在 `_` 前綴檔）。
 
-⚠️ **子目錄 `_defaults.yaml` 的 defaults 不帶保留鍵**（`_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata` 等；`_routing`／`_routing_*` 由 route generator 判）：exporter 不論值為何都不套用；寫了非 null 的值時 `da-guard` 報 `subtree_default_reserved_key` error（結束碼 1；`_custom_alerts` 寫在檔案頂層也照報——exporter 不送出它、自訂告警編譯器也不為它產生規則，見 [ADR-024 §3](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)），訊息列出寫了該鍵的每個檔與值。`/effective`、`not_served` 與送出的值依租戶這一側寫了什麼而定，見 [ADR-017 決策 4 的表](../../docs/adr/017-defaults-yaml-inheritance-dual-hash.md)。要讓值生效，寫進租戶自己的 `tenants:` 條目（`_state_<filter>` 也可改根目錄 `state_filters.<filter>.default_state`，影響樹中所有租戶），再從子目錄檔刪掉；根目錄未宣告的 filter 與非受承認的 `_silent_*` 等鍵寫在租戶條目也沒人讀，請宣告或刪除（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)、[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)）。租戶這一側把保留鍵寫成 null（`~`、空值或 `{default: null}`）等於刪掉繼承值、回到平台預設。
+⚠️ **子目錄 `_defaults.yaml` 的 defaults 不帶保留鍵**（`_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata`、`_custom_alerts` 等；`_routing`／`_routing_*` 由 route generator 判）：exporter 不論值為何都不套用，寫了非 null 的值時 `da-guard` 報 `subtree_default_reserved_key` error（結束碼 1）。`/effective`、`not_served`、送出的值、訊息內容與哪些寫法算 null，都見 [ADR-017 決策 4 的表](../../docs/adr/017-defaults-yaml-inheritance-dual-hash.md)。要讓值生效，寫進租戶自己的 `tenants:` 條目（`_state_<filter>` 也可改根目錄 `state_filters.<filter>.default_state`，影響樹中所有租戶），再從子目錄檔刪掉（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)、[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)）。
 
 ### 4.3 三態 + 嚴重度
 
