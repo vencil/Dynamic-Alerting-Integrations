@@ -3,10 +3,13 @@ only by ``_lib_io``'s operator writer, and never renamed onto.
 
 Each row runs the real CLI with the flag pointing at a sentinel path, under
 a start-up audit hook (``_write_audit/sitecustomize.py``) that logs every
-write-mode open, rename and chmod. Blind spot: a write path no row exercises.
+write-mode open, rename and chmod. A write path no row exercises is the
+blind spot; test_every_writer_caller_has_a_row closes it for the CLIs that
+call the writer entry points (a new caller without a row turns it red).
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -102,3 +105,32 @@ def test_artifact_written_only_by_the_atomic_writer(row: str, tmp_path: Path) ->
     assert not bad, f"{row}: writes to the artifact outside _lib_atomic_write: {bad}"
     direct = [e for e in mine if e["ev"] == "open" and os.path.abspath(e["path"]) == str(target)]
     assert not direct, f"{row}: the artifact itself was opened for writing (not atomic): {direct}"
+
+
+# `_lib_io`'s writer entry points (#3107): a CLI that calls one of them has
+# an output path some row above must exercise.
+_WRITER_ENTRY_POINTS = frozenset({"open_operator_output", "write_operator_output",
+                                  "write_operator_output_or_die", "write_repo_artifact"})
+
+
+def _writer_callers() -> set[str]:
+    out = set()
+    for root in ("scripts/tools", "scripts/ops"):
+        for f in (REPO / root).rglob("*.py"):
+            if f.name == "_lib_io.py":
+                continue
+            for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+                    if name in _WRITER_ENTRY_POINTS:
+                        out.add(f.relative_to(REPO).as_posix())
+    return out
+
+
+def test_every_writer_caller_has_a_row(tmp_path: Path) -> None:
+    callers = _writer_callers()
+    assert callers, "no caller of the writer entry points found — the scan measured nothing"
+    rowed = {row(tmp_path / "t", tmp_path)[0] for row in (*ROWS.values(), *ARTIFACT_ROWS.values())}
+    missing = sorted(callers - rowed)
+    assert not missing, f"CLIs calling a writer entry point with no audit row: {missing}"
