@@ -35,9 +35,9 @@ exit identically fails the flip assertion outright.
 SCOPE — WHAT COUNTS AS A --ci TOOL
 ----------------------------------
 Argparse-based, mirroring the sibling --dry-run gate: an ops tool is in
-scope iff it *declares* ``add_argument("--ci")`` (either quote style).
-15 tools declare it today; ``test_recipe_table_covers_every_ci_tool`` pins
-the count.
+scope iff it *declares* ``add_argument("--ci")`` (either quote style);
+``test_recipe_table_covers_every_ci_tool`` holds the recipe table to that
+set both ways (no pinned count).
 
 One declared flag is the SAME NAME with a DIFFERENT MEANING and is held in
 ``SAME_NAME_DIFFERENT_MEANING`` rather than given a recipe:

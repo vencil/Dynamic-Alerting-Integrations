@@ -784,17 +784,23 @@ class TestMainEdgeCases:
         run_main(["gitops-check", "invalid"])
 
 
-    @pytest.mark.parametrize("argv", [
-        ["repo", "--url", "https://example.com/r.git"],
-        ["sidecar"],
-        ["local", "--dir", ".", "--ci"],
+    @pytest.mark.parametrize("argv, refusal", [
+        (["repo", "--url", "https://example.com/r.git"], "invalid choice: 'repo'"),
+        (["sidecar"], "invalid choice: 'sidecar'"),
+        (["local", "--dir", "{conf}", "--ci"], "unrecognized arguments: --ci"),
     ], ids=["repo", "sidecar", "local --ci"])
-    def test_removed_subcommands_and_ci_are_caller_errors(self, argv):
+    def test_removed_subcommands_and_ci_are_caller_errors(self, argv, refusal,
+                                                          valid_config_dir, capsys):
         """#3376, #3348: `repo`, `sidecar` and `--ci` checked GitOps Native
         Mode, refused since #1349; they are gone, so argparse refuses them
-        (exit 2) rather than run a check that could only fail."""
+        (exit 2) rather than run a check that could only fail. The refusal
+        text is asserted, not only the 2: without kubectl `sidecar` was 2
+        too, and `--ci` against a valid conf.d is the only way its absence
+        shows."""
+        argv = [a.replace("{conf}", valid_config_dir) for a in argv]
         exc_info = run_main(["gitops-check", *argv])
         assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert refusal in capsys.readouterr().err
 
     def test_local_missing_required_dir(self):
         """local subcommand without --dir → error."""

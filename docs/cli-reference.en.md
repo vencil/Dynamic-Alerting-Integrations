@@ -1356,15 +1356,15 @@ da-tools gitops-check local --dir <path> [--json]
 | `--dir <PATH>` | Local config directory (required) | (none) |
 | `--json` | JSON output | false |
 
-**How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and every file the exporter reads (`_` platform files included) that cannot be read is listed in `parse_errors` and fails the check. It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
+**How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and when a file the exporter reads (`_` platform files included) cannot be read, the whole tree is refused with `2`, each such file named (the shared refusal above, `reason: conf_d_not_servable`). It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
 
 **Exit codes**
 
 | Code | Meaning |
 |------|---------|
 | `0` | Passed |
-| `1` | A failure: the root defaults carrier is missing, or a file cannot be read (`parse_errors`) |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--dir`, unknown flag); `--dir` naming no directory (`reason: dir_not_found`), or whether it is one cannot be told, e.g. a parent directory the caller cannot enter (`reason: dir_not_accessible`); no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it failed; an unexpected exception in the tool |
+| `1` | A failure: the root defaults carrier is missing |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--dir`, unknown flag); a file in the conf.d that cannot be read (`reason: conf_d_not_servable`); `--dir` naming no directory (`reason: dir_not_found`), or whether it is one cannot be told, e.g. a parent directory the caller cannot enter (`reason: dir_not_accessible`); no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it failed; an unexpected exception in the tool |
 
 ⚠️ **Behaviour change ([#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376), [#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348))**: the `repo` and `sidecar` subcommands and `--ci` are removed. They checked GitOps Native Mode, unsupported since [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349): the chart deploys no git-sync container, so `sidecar` could only fail, and `repo` cannot verify `--path` on GitHub (no `git archive --remote` there). A call with them exits `0` / `1` → `2`.
 

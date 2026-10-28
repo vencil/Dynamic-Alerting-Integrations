@@ -1353,15 +1353,15 @@ da-tools gitops-check local --dir <path> [--json]
 | `--dir <PATH>` | 本地配置目錄（必填） | （無） |
 | `--json` | JSON 輸出 | false |
 
-**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了就列在 `parse_errors`、fail。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
+**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了時，整棵樹以 `2` 拒收、逐條點名（上述共用的拒絕，`reason: conf_d_not_servable`）。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
 | `0` | 通過 |
-| `1` | 有 fail：缺根目錄 defaults 載體、有檔讀不了（`parse_errors`） |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--dir`、未知旗標）；`--dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
+| `1` | 有 fail：缺根目錄 defaults 載體 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--dir`、未知旗標）；conf.d 有讀不了的檔（`reason: conf_d_not_servable`）；`--dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
 
 ⚠️ **行為變更（[#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376)、[#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348)）**：`repo`、`sidecar` 子命令與 `--ci` 移除。它們檢查的是 GitOps Native Mode，自 [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349) 起不支援：chart 不部署 git-sync 容器，`sidecar` 只會 fail；`repo` 在 GitHub 上驗不了 `--path`（不支援 `git archive --remote`）。帶它們的呼叫結束碼 `0`／`1` → `2`。
 
