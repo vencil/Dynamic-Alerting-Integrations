@@ -158,8 +158,12 @@ func TestScopeEffective_UndeliverableKeepsInScopeTenants(t *testing.T) {
 // and gauge, unchanged) first; then LoadReport.Undeliverable and
 // ScopedTenants.Undeliverable — both through the one filter — are checked.
 // Each exclusion has a case only it catches, so dropping any one of them
-// turns a case red: reserved-keys (IsReservedKey), silent-bogus
-// (baseRowsSkipKey), switched-off (disabledEverywhere).
+// turns a case red: routing-key (subtreeDefaultsRefusedKey — since #3341 a
+// subtree hands no other `_` key down, so a routing key is the only `_` key
+// that can be unreachable), switched-off (disabledEverywhere). The `_` keys a
+// subtree does not carry are in no unreachable set at all (reserved-declared,
+// reserved-keys, silent-bogus, unrecognised-underscore-key): da-guard's
+// subtree_default_reserved_key error reports them.
 
 // reservedOnlyRoot / reservedOnlySubtree: `_metadata` and a scheduled
 // `_state_maintenance` (both in the root's optional_overrides), `_profile`,
@@ -176,11 +180,10 @@ const reservedOnlySubtree = "defaults:\n  _metadata: 5\n" +
 const plainRoot = "defaults:\n  mysql_connections: 80\n"
 
 // scheduleThenScalarStateFiles: `_state_maintenance` as a schedule at
-// finance/ and a scalar `disable` at finance/us/ (delivered). Before #3295
-// the shallow schedule was refused as unreachable and stayed in
-// FlatBuild.Unreachable although the key is delivered; it is now judged by
-// its `default` alone — `enable`, not threshold-shaped, refused as the
-// scalar would be — so it is in no unreachable set at all.
+// finance/ and a scalar `disable` at finance/us/. Before #3295 the shallow
+// schedule was refused as unreachable and stayed in FlatBuild.Unreachable
+// although the deeper `disable` was delivered; since #3341 a subtree carries
+// neither, so it is in no unreachable set at all.
 func scheduleThenScalarStateFiles() map[string]string {
 	return map[string]string{
 		"_defaults.yaml": plainRoot +
@@ -228,27 +231,29 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 		wantReported []string // tenant-a's reported keys; nil = tenant absent
 	}{
 		{
-			// `_metadata` is in optional_overrides, which the build counts
-			// as declared; the windowed `_state_maintenance` is judged by its
-			// `default: enable` alone (#3295), refused as not threshold-
-			// shaped before any reachability question.
-			name:        "reserved-declared",
-			files:       subtreeTree(reservedOnlyRoot, reservedOnlySubtree),
-			wantUnreach: []string{"_profile", "_silent_bogus"},
+			// #3341: a subtree carries none of these, listed in
+			// optional_overrides or not, so the overlay asks no reachability
+			// question of them (before, `_profile` / `_silent_bogus` were
+			// unreachable here).
+			name:  "reserved-declared",
+			files: subtreeTree(reservedOnlyRoot, reservedOnlySubtree),
 		},
 		{
-			// Only IsReservedKey leaves these out (not skipped by the row
-			// generator, not disabled).
-			name:        "reserved-keys",
-			files:       subtreeTree(plainRoot, "defaults:\n  _metadata: 5\n  _namespaces: 3\n"),
-			wantUnreach: []string{"_metadata", "_namespaces"},
+			name:  "reserved-keys",
+			files: subtreeTree(plainRoot, "defaults:\n  _metadata: 5\n  _namespaces: 3\n"),
 		},
 		{
-			// Only baseRowsSkipKey leaves it out: IsReservedKey says false,
-			// and `_silent_bogus` declared at the root serves no row either.
-			name:        "silent-bogus",
-			files:       subtreeTree(plainRoot, "defaults:\n  _silent_bogus: 5\n"),
-			wantUnreach: []string{"_silent_bogus"},
+			name:  "silent-bogus",
+			files: subtreeTree(plainRoot, "defaults:\n  _silent_bogus: 5\n"),
+		},
+		{
+			// Only subtreeDefaultsRefusedKey leaves it out: a routing key a
+			// subtree still hands down (the route generator's checks own
+			// it), unreachable — `ResolveRouting` reads only `_routing` — and
+			// declaring it at the root is no fix.
+			name:        "routing-key",
+			files:       subtreeTree(plainRoot, "defaults:\n  _routing_bogus: 5\n"),
+			wantUnreach: []string{"_routing_bogus"},
 		},
 		{
 			name:  "schedule-then-scalar-state",
@@ -272,13 +277,11 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 		{
 			// A `_` key the registry does not list is no threshold to the
 			// exporter in any layer (#3045: the root's `_myth` serves no
-			// row), so declaring `_myth2` at the root is no fix: it is
-			// unreachable but not reported here — subtreeReservedKeys
-			// (#2388) reports it, as `_silent_bogus`. Before #3045 it was
-			// reported.
-			name:        "unrecognised-underscore-key",
-			files:       subtreeTree(plainRoot+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
-			wantUnreach: []string{"_myth2"},
+			// row), and a subtree does not carry it (#3341): in no
+			// unreachable set — subtreeReservedKeys (#2388) reports it, as
+			// `_silent_bogus`. Before #3045 it was reported here.
+			name:  "unrecognised-underscore-key",
+			files: subtreeTree(plainRoot+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
 		},
 		{
 			// The finding's fix applied: declared at the root, nothing is
@@ -291,7 +294,7 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			// A threshold key beside the `_` ones: the filter is per key.
 			name:         "mixed",
 			files:        subtreeTree(reservedOnlyRoot, reservedOnlySubtree+"  redis_evicted_keys: 100\n"),
-			wantUnreach:  []string{"_profile", "_silent_bogus", "redis_evicted_keys"},
+			wantUnreach:  []string{"redis_evicted_keys"},
 			wantReported: []string{"redis_evicted_keys"},
 		},
 	} {

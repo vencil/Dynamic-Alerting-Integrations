@@ -99,14 +99,15 @@ def test_profiles_row_matches_effective(where, tmp_path):
     conf_d = _tree(tmp_path, POSITIONS[where])
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.WARN, row
-    assert _named(row) == _want_from_effective(conf_d) == {"tenant-a", "tenant-b"}, (where, row)
+    # 子樹 `_defaults.yaml` 不帶保留鍵（#3341）：effective 不顯示它，這一列也就不點名
+    # tenant-a（改由 da-guard 的 subtree_default_reserved_key error 報）。#3341 以前
+    # effective 顯示它，這一列點名「來自 team/_defaults.yaml、exporter 不從 defaults 檔綁」。
+    want = {"tenant-b"} if where == "subtree" else {"tenant-a", "tenant-b"}
+    assert _named(row) == _want_from_effective(conf_d) == want, (where, row)
     assert _UNKNOWN_B in row["details"], row   # 對照組三格不變
     a = [d for d in row["details"] if d.startswith("tenant=tenant-a:")]
     if where == "subtree":
-        # exporter 不從 defaults 檔綁 profile：點名寫的檔，不說成「沒有這個 profile」
-        assert a == ['tenant=tenant-a: _profile "nope" comes from team/_defaults.yaml, and the '
-                     "exporter binds no profile from a defaults file (only from the tenant's own "
-                     "entry or a root platform file's `tenants:` entry)"], row
+        assert a == [], row
     else:
         assert a == ['tenant=tenant-a: _profile references unknown profile "nope"'], row
 

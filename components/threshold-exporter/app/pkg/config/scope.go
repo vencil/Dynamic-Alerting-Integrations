@@ -161,30 +161,22 @@ type ScopedTenants struct {
 
 	// SubtreeReserved is, for each tenant in Tenants, the keys of its
 	// defaults chain that a SUBTREE `_defaults.yaml` (not the conf.d root's)
-	// writes and that subtreeDefaultsRefusedKey refuses (reserved keys such
-	// as `_state_*`, `_silent_mode`, `_metadata`, and the keys
+	// writes and does not carry (subtreeReservedUnsupported: reserved keys
+	// such as `_state_*`, `_silent_mode`, `_metadata`, and the keys
 	// resolveBaseRows never turns into a row; not the routing keys
-	// (IsRoutingKey), which the route generator's checks own), whatever their
-	// non-null value and
-	// whether or not the exporter applies it: key → the root-relative slash
-	// paths of the subtree defaults files writing it, root-first. Read off
-	// the chain the exporter's own build of this tree is given
+	// (IsRoutingKey), which the route generator's checks own), whatever
+	// their non-null value — the exporter applies none of them (#3341): key
+	// → each subtree defaults file writing it with its value, root-first.
+	// Read off the chain the exporter's own build of this tree is given
 	// (subtreeReservedKeys). Only in-scope tenants are listed; nil when there
 	// is none (#2388).
-	SubtreeReserved map[string]map[string][]string
+	SubtreeReserved map[string]map[string][]SubtreeReservedWrite
 
 	// DeclaredStateFilters is the set of filter names the conf.d root
 	// declares under `state_filters:`, as the exporter's own build of this
 	// tree reads them (ThresholdConfig.StateFilters): `_state_<f>` is read
 	// by nobody unless f is in it (#2388 r2). nil when none is declared.
 	DeclaredStateFilters map[string]bool
-
-	// SubtreeRefusedVerdicts is FlatBuild.SubtreeRefusedVerdicts for EVERY
-	// tenant of the tree, not only the in-scope ones: a subtree file is
-	// shared, so whether deleting a key from it changes what is served
-	// depends on tenants a `--scope` may not list (#2388 A r2). The load is
-	// the whole tree either way.
-	SubtreeRefusedVerdicts map[string]map[string]SubtreeRefusedVerdict
 
 	// RootNullUndeclared is, for each tenant in Tenants, the sorted
 	// threshold keys its config sets that /metrics does not serve because
@@ -450,7 +442,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 			}
 		}
 	}
-	parseFailed, unreachable, reserved, stateFilters, applied, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger)
+	parseFailed, unreachable, reserved, stateFilters, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger)
 	if err != nil {
 		return nil, err
 	}
@@ -499,15 +491,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		resolver.served.gate = !wholeTree
 	}
 	out := &ScopedTenants{
-		Tenants:                make([]*EffectiveConfig, 0, len(tenantIDs)),
-		ParseFailed:            parseFailed,
-		DefaultsFiles:          defaultsFiles,
-		Unreadable:             unreadable,
-		NoTenant:               noTenant,
-		DeclaredStateFilters:   stateFilters,
-		SubtreeRefusedVerdicts: applied,
-		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
-		Duplicated:             duplicated,
+		Tenants:              make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed:          parseFailed,
+		DefaultsFiles:        defaultsFiles,
+		Unreadable:           unreadable,
+		NoTenant:             noTenant,
+		DeclaredStateFilters: stateFilters,
+		ScheduleNulls:        scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
+		Duplicated:           duplicated,
 	}
 	if built != nil {
 		out.Config, out.scan, out.built = &built.Config, scan, built
@@ -523,7 +514,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		}
 		if keys := reserved[id]; len(keys) > 0 {
 			if out.SubtreeReserved == nil {
-				out.SubtreeReserved = map[string]map[string][]string{}
+				out.SubtreeReserved = map[string]map[string][]SubtreeReservedWrite{}
 			}
 			out.SubtreeReserved[id] = keys
 		}
@@ -603,7 +594,7 @@ func anyDuplicated(scan *TreeScan, ids map[string]struct{}) bool {
 // answers both, so the two cannot come from different readings of the tree.
 //
 // reserved is subtreeReservedKeys over the chain that same build was given
-// (tenantID → reserved key → the subtree defaults files writing it), over the
+// (tenantID → reserved key → the subtree defaults files writing it, with their values), over the
 // whole tree; the caller keeps the in-scope tenants
 // (ScopedTenants.SubtreeReserved, #2388). stateFilters is the same build's
 // root `state_filters:` names (ScopedTenants.DeclaredStateFilters). built is
@@ -611,12 +602,11 @@ func anyDuplicated(scan *TreeScan, ids map[string]struct{}) bool {
 // takes the build's log lines — among them why a file is dropped
 // (EffectiveTreeLogged); discardLogger for none.
 func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger) (
-	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string,
-	stateFilters map[string]bool, applied map[string]map[string]SubtreeRefusedVerdict,
-	rootNull map[string][]RootNullKey, built *FlatBuild, err error,
+	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]SubtreeReservedWrite,
+	stateFilters map[string]bool, rootNull map[string][]RootNullKey, built *FlatBuild, err error,
 ) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil, nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -625,12 +615,9 @@ func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger) (
 	in := loadDirBuildInput(scan, scan.AbsRoot, logger, log.Printf)
 	b, err := BuildFlatConfig(scan, in)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	built = &b
-	// Where a tenant-set key is set: da-guard's message only, so here and not
-	// in BuildFlatConfig (the exporter's reload path; #2388 A r4).
-	markTenantSetSources(built.SubtreeRefusedVerdicts, built.FileConfigs, &built.Config)
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
 			parseFailed = append(parseFailed, key)
@@ -645,7 +632,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger) (
 	}
 	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
 		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters,
-		built.SubtreeRefusedVerdicts, built.RootNullUndeclared, built, nil
+		built.RootNullUndeclared, built, nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

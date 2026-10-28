@@ -238,9 +238,11 @@
   },
   {
     "defaults_chain": [
-      "reserved-nested-null/_defaults.yaml"
+      "_defaults.yaml"
     ],
     "effective_config": {
+      "_severity_dedup": "disable",
+      "_silent_mode": "warning",
       "_x": {
         "added": {
           "type": "webhook",
@@ -252,26 +254,31 @@
         "inherited_str": "30s"
       }
     },
-    "fixture_dir": "mixed-mode",
-    "merged_hash": "7f30b0042d53e9d4",
+    "fixture_dir": "reserved-null",
+    "merged_hash": "339185b9e5179569",
     "scenario": "reserved-nested-null",
-    "source_file": "reserved-nested-null/tenants.yaml",
+    "source_file": "nested/tenants.yaml",
     "source_hash": "45e36c5a758a9a94",
     "tenant_id": "tenant-nested"
   },
   {
     "defaults_chain": [
-      "reserved-null/_defaults.yaml",
-      "reserved-null/child/_defaults.yaml"
+      "_defaults.yaml"
     ],
     "effective_config": {
-      "_silent_mode": "warning"
+      "_silent_mode": "warning",
+      "_x": {
+        "inherited_list": [
+          "alertname"
+        ],
+        "inherited_str": "30s"
+      }
     },
-    "fixture_dir": "mixed-mode",
-    "merged_hash": "9998c1033c4d2c19",
+    "fixture_dir": "reserved-null",
+    "merged_hash": "c6353e0b1ceb0ab0",
     "scenario": "reserved-null-delete",
-    "source_file": "reserved-null/child/tenants.yaml",
-    "source_hash": "8a3e644e7b760369",
+    "source_file": "child/tenants.yaml",
+    "source_hash": "dd3254cba933947c",
     "tenant_id": "tenant-reserved"
   },
   {
@@ -330,9 +337,7 @@
     ],
     "effective_config": {
       "_silent_mode": {
-        "expires": "2026-12-31T00:00:00Z",
-        "reason": "inherits an unquoted date",
-        "target": "warning"
+        "reason": "inherits an unquoted date"
       },
       "_state_maintenance": {
         "expires": "2026-12-31T23:59:59.5+08:00",
@@ -355,11 +360,9 @@
         "010": "quoted",
         "1": "float",
         "2026-12-31 00:00:00 +0000 UTC": {
-          "from_defaults": 1,
           "from_tenant": 2
         },
         "2026-12-31 10:20:30.5 +0800 +0800": "zoned",
-        "31": "hex",
         "true": "bool"
       }
     },

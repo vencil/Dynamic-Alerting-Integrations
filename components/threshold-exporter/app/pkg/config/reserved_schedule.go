@@ -177,9 +177,9 @@ func sameSchedule(a, b ScheduledValue) bool {
 //   - defaultOnly: applied to the tenants that do not set the key, as its
 //     `default` alone (servedValue);
 //   - notApplied: not applied at all — exactly as its `default` written
-//     alone would not be (#3295): a default the overlay refuses (not
-//     threshold-shaped: `_silent_mode: {default: warning, …}`), or a key no
-//     resolver would read from the tenant's map (`_state_<undeclared>`).
+//     alone would not be (#3295): every reserved key but a routing key,
+//     which a subtree does not carry (subtreeReservedUnsupported, #3341),
+//     and a routing key's default the overlay refuses or no resolver reads.
 //
 // parsed is the defaults-chain cache (absolute path → the file's defaults
 // level, as applySubtreeDefaults reads it); the conf.d root's own

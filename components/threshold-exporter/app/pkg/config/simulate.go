@@ -182,9 +182,15 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 	// the same tree. The merge succeeded over these bytes, so every chain
 	// entry parses here.
 	blocks := make([]map[string]any, len(chainBytes))
+	rootLevel := -1
 	for i, b := range chainBytes {
 		blocks[i] = ParseChainDefaults(b).block
+		if path.Dir(chain[i]) == SimRoot {
+			rootLevel = i
+		}
 	}
+	// #3341: a subtree level's reserved keys are not laid, as /effective.
+	blocks, _ = withoutSubtreeReserved(blocks, rootLevel)
 
 	return &SimulateResponse{
 		TenantID:      req.TenantID,

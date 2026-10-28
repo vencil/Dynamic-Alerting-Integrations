@@ -955,10 +955,11 @@ class TestCustomAlertsAsTheExporterServes:
         # #1822: da-guard's own lines are passed on whole.
         assert any(line.startswith(dt.DA_GUARD_PREFIX) and "boom" in line for line in err.splitlines()), err
 
-    def test_declared_but_none_served_is_an_empty_list(self, tmp_path):
-        """`_custom_alerts` the effective config carries but the exporter takes
-        nothing from (under a subdirectory `defaults:`) reads as `[]`, apart
-        from a tenant that declares none (the field omitted)."""
+    def test_a_subtree_list_is_in_neither_field(self, tmp_path):
+        """A `_custom_alerts` under a subdirectory `defaults:` is not carried
+        (#3341): the effective config does not lay it — until then it showed
+        it and `custom_alerts` read `[]` — so the tenant reads like one that
+        declares none (both fields without it), as a tenant outside it."""
         conf_d = _write(tmp_path, {
             "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
             "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n  _custom_alerts:\n"
@@ -967,8 +968,8 @@ class TestCustomAlertsAsTheExporterServes:
             "team/a.yaml": "tenants:\n  tq:\n    redis_memory: '50'\n",
             "b.yaml": "tenants:\n  tn:\n    redis_memory: '50'\n"})
         tq = json.loads(self._run(conf_d, "tq").stdout)
-        assert tq["effective_config"].get("_custom_alerts"), tq
-        assert tq["custom_alerts"] == []
+        assert "_custom_alerts" not in tq["effective_config"], tq
+        assert "custom_alerts" not in tq, tq
         assert "custom_alerts" not in json.loads(self._run(conf_d, "tn").stdout)
 
     def test_a_defaults_carrier_no_plane_reads_is_named_once_by_both_tools(self, tmp_path, monkeypatch, capsys):

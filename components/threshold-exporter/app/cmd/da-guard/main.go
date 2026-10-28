@@ -581,9 +581,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// tenants only (ScopeEffective filters it).
 		SubtreeReservedKeys:  scoped.SubtreeReserved,
 		DeclaredStateFilters: scoped.DeclaredStateFilters,
-		// #2388 A: the overlay's own verdict on each such key.
-		SubtreeRefusedVerdicts: scoped.SubtreeRefusedVerdicts,
-		RootNullUndeclared:     scoped.RootNullUndeclared,
+		RootNullUndeclared:   scoped.RootNullUndeclared,
 		// #2708: nulls inside a schedule with windows, in-scope only.
 		ScheduleNulls: scoped.ScheduleNulls,
 		// #2065: the effective configs' not_served, in-scope tenants only.

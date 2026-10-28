@@ -73,8 +73,8 @@ func TestRun_DefaultsWrapper(t *testing.T) {
 		{
 			name:     "subtree-unwrapped-is-merged-whole",
 			files:    map[string]string{"_defaults.yaml": root, "team/_defaults.yaml": top, "team/tx.yaml": tenant},
-			wantCode: exitOK, want: []string{"warn subtree_default_reserved_key tx _severity_dedup"},
-			wantConn: 70.0, wantDedup: "disable",
+			wantCode: exitFindings, want: []string{"error subtree_default_reserved_key tx _severity_dedup"},
+			wantConn: 70.0, wantDedup: "enable",
 		},
 		{
 			name:     "subtree-empty-mapping-leaves-the-top-level-out",
@@ -87,18 +87,19 @@ func TestRun_DefaultsWrapper(t *testing.T) {
 			// value is not a mapping, and the merge still reads the whole file.
 			name:     "subtree-null-defaults-is-merged-whole",
 			files:    map[string]string{"_defaults.yaml": root, "team/_defaults.yaml": "defaults:\n" + top, "team/tx.yaml": tenant},
-			wantCode: exitOK, want: []string{"warn subtree_default_reserved_key tx _severity_dedup"},
-			wantConn: 70.0, wantDedup: "disable",
+			wantCode: exitFindings, want: []string{"error subtree_default_reserved_key tx _severity_dedup"},
+			wantConn: 70.0, wantDedup: "enable",
 		},
 		{
-			// The two merged-whole subtree cases above and this one still serve the
-			// subtree's `_severity_dedup: disable` (#2388 changes no exporter
-			// behaviour) and are reported as subtree_default_reserved_key.
+			// The two merged-whole subtree cases above and this one serve the
+			// subtree's threshold but not its `_severity_dedup: disable` — a
+			// subtree carries no reserved key (#3341; it was served until then)
+			// — and are reported as the error subtree_default_reserved_key.
 			name: "subtree-keys-under-defaults",
 			files: map[string]string{"_defaults.yaml": root,
 				"team/_defaults.yaml": "defaults:\n  _severity_dedup: disable\n  mysql_connections: 70\n", "team/tx.yaml": tenant},
-			wantCode: exitOK, want: []string{"warn subtree_default_reserved_key tx _severity_dedup"},
-			wantConn: 70.0, wantDedup: "disable",
+			wantCode: exitFindings, want: []string{"error subtree_default_reserved_key tx _severity_dedup"},
+			wantConn: 70.0, wantDedup: "enable",
 		},
 	}
 	for _, tc := range cases {

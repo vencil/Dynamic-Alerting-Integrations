@@ -197,13 +197,13 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 		},
 		{
 			// The review's t7 without tenant-b. Declared at the root, `_myth2`
-			// and `_silent_bogus` both land in the tenant's map (the
-			// subtree's 7) but serve no row (#3045 for `_myth2`; before it,
-			// the root declaration served `_myth2`'s 7), so both are in
-			// `unserved` through the merged-map path that predates #1976.
+			// and `_silent_bogus` serve no row (#3045 for `_myth2`; before it,
+			// the root declaration served `_myth2`'s 7), so the root's values
+			// are in `unserved`; the subtree's 7s are not carried (#3341 —
+			// until then they landed in the tenant's map).
 			name:         "unrecognised-underscore-key-declared",
 			files:        subtree(root+"  _myth2: 1\n  _silent_bogus: 1\n", "defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
-			wantUnserved: map[string]any{"_myth2": "7", "_silent_bogus": "7"},
+			wantUnserved: map[string]any{"_myth2": 1.0, "_silent_bogus": 1.0},
 			wantReserved: []string{"_myth2", "_silent_bogus"},
 		},
 		{
@@ -312,15 +312,12 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 	}
 }
 
-// A RESERVED key listed in optional_overrides keeps counting as declared
-// (#2707 gates non-reserved `_` keys only): this key's consumer
-// is not resolveDeclaredRows but ResolveStateFiltersAt, which reads the
-// tenant map directly. So a subtree `_state_maintenance` schedule whose
-// default is disable is applied and served as false at 12:00; the control
-// with no subtree value serves true. Pinned so a later change to the gate
-// cannot flip a maintenance filter silently — stopping reserved subtree
-// keys is #2388's, behind a warning first.
-func TestServedValues_ReservedKeyListedInOptionalOverridesKeepsSubtreeValue(t *testing.T) {
+// A RESERVED key listed in optional_overrides does not make a subtree's
+// value of it served: a subtree carries no reserved key (#3341), so the
+// subtree `_state_maintenance` schedule whose default is disable serves true
+// at 12:00, as the control with no subtree value. Until #3341 the listing
+// kept the subtree value applied (false); this pins the sunset.
+func TestServedValues_ReservedKeyListedInOptionalOverridesDoesNotCarrySubtreeValue(t *testing.T) {
 	t.Parallel()
 	root := "defaults:\n  mysql_connections: 80\n" +
 		"state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n" +
@@ -330,7 +327,7 @@ func TestServedValues_ReservedKeyListedInOptionalOverridesKeepsSubtreeValue(t *t
 		want          bool
 	}{
 		{"subtree schedule, default disable", "defaults:\n  _state_maintenance:\n    default: disable\n" +
-			"    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", false},
+			"    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", true},
 		{"control: no subtree value", "defaults: {}\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

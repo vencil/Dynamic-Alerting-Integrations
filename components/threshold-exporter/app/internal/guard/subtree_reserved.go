@@ -1,26 +1,23 @@
 package guard
 
-// Reserved keys in subtree defaults (#2388).
+// Reserved keys in subtree defaults (#2388, #3341).
 //
 // A subtree `_defaults.yaml` (not the conf.d root's) whose defaults carry a
 // reserved key — `_state_*`, `_silent_mode`, `_severity_dedup`, `_metadata`,
 // … (not the routing keys `_routing` / `_routing_<…>`, which the routing
-// checks report) — or a `_silent_*` / `_state_*` key nothing reads is an operator
-// configuration error: subtree defaults do
-// not support these keys. Today the exporter's subtree overlay applies some
-// values of them (a `disable`, a number) and drops the rest, so for example a
-// subtree can switch a state filter off but not on. From the next minor
-// release the exporter stops applying them, and this warning becomes an
-// error; until then the exporter's behaviour is unchanged.
+// checks report) — or a `_silent_*` / `_state_*` key nothing reads is an
+// operator configuration error: subtree defaults do not carry these keys, and
+// the exporter's subtree overlay applies none of them, whatever the value
+// (#3341; until then it applied a `disable` or a number of some of them and
+// dropped the rest). An error: the value the file asks for is not in effect.
 //
 // ⛔ NO VERDICT OF ITS OWN, as checkSubtreeUndeliverable: which keys count is
-// pkg/config's subtreeDefaultsRefusedKey — the same predicate #1976's report
-// leaves out — over the defaults chain the exporter's build reads
+// pkg/config's subtreeReservedUnsupported — the predicate the overlay skips
+// them by — over the defaults chain the exporter's build reads
 // (subtreeReservedKeys), handed in as CheckInput.SubtreeReservedKeys.
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 
@@ -28,8 +25,8 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// checkSubtreeReservedKeys reports one findingkind.FindingSubtreeDefaultReservedKey per
-// (tenant, key) of input.SubtreeReservedKeys, for the tenants in
+// checkSubtreeReservedKeys reports one findingkind.FindingSubtreeDefaultReservedKey
+// error per (tenant, key) of input.SubtreeReservedKeys, for the tenants in
 // input.EffectiveConfigs only (the caller's scope).
 func checkSubtreeReservedKeys(input CheckInput) []Finding {
 	if len(input.SubtreeReservedKeys) == 0 {
@@ -47,7 +44,6 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		failed[pf] = true
 	}
 	unwrapped := unwrappedDefaultsFiles(input, failed)
-	applied := indexAppliedBySource(input.SubtreeRefusedVerdicts)
 	var out []Finding
 	for _, id := range tenants {
 		byKey := input.SubtreeReservedKeys[id]
@@ -60,22 +56,22 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 			// A file the exporter drops (ParseFailed — since ADR-036 step 6,
 			// #3206, every file parse-tree refuses) applies nothing, so it
 			// writes no reserved key: skipped, as checkDefaultsWrapper does.
-			files := withoutFailed(byKey[k], failed)
-			if len(files) == 0 {
+			writes := withoutFailed(byKey[k], failed)
+			if len(writes) == 0 {
 				continue
 			}
 			if readElsewhere[k] {
-				files = writtenInsideDefaults(files, unwrapped)
-				if len(files) == 0 {
+				writes = writtenInsideDefaults(writes, unwrapped)
+				if len(writes) == 0 {
 					continue
 				}
 			}
 			out = append(out, Finding{
-				Severity: SeverityWarn,
+				Severity: SeverityError,
 				Kind:     findingkind.FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message:  subtreeReservedMessage(input, applied, id, k, files),
+				Message:  subtreeReservedMessage(input.DeclaredStateFilters, k, writes),
 			})
 		}
 	}
@@ -100,21 +96,22 @@ func unwrappedDefaultsFiles(input CheckInput, failed map[string]bool) map[string
 	return out
 }
 
-// withoutFailed is files minus the ones in failed; files itself when none is.
-func withoutFailed(files []string, failed map[string]bool) []string {
+// withoutFailed is writes minus the ones whose file is in failed; writes
+// itself when none is.
+func withoutFailed(writes []config.SubtreeReservedWrite, failed map[string]bool) []config.SubtreeReservedWrite {
 	if len(failed) == 0 {
-		return files
+		return writes
 	}
-	var out []string
-	for _, f := range files {
-		if !failed[f] {
-			out = append(out, f)
+	var out []config.SubtreeReservedWrite
+	for _, w := range writes {
+		if !failed[w.File] {
+			out = append(out, w)
 		}
 	}
 	return out
 }
 
-// writtenInsideDefaults drops from files the unwrapped ones.
+// writtenInsideDefaults drops from writes the ones of an unwrapped file.
 //
 // ⛔ ONLY FOR TopLevelReadElsewhere KEYS (#2388 r1b): another reader takes
 // such a key from the TOP level of a defaults file, so only a copy under a
@@ -126,17 +123,18 @@ func withoutFailed(files []string, failed map[string]bool) []string {
 // the compiler, now pkg/config's (#3229), compiles what the exporter serves,
 // so both places are reported.)
 // A file not in DefaultsFiles is kept (reported), not guessed.
-func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
-	var out []string
-	for _, f := range files {
-		if !unwrapped[f] {
-			out = append(out, f)
+func writtenInsideDefaults(writes []config.SubtreeReservedWrite, unwrapped map[string]bool) []config.SubtreeReservedWrite {
+	var out []config.SubtreeReservedWrite
+	for _, w := range writes {
+		if !unwrapped[w.File] {
+			out = append(out, w)
 		}
 	}
 	return out
 }
 
-// subtreeReservedMessage is the finding's message for key k written by files.
+// subtreeReservedMessage is the finding's message for key k written by
+// writes (each file with its value, root-first).
 //
 // ⛔ THREE SHAPES, because "set it in each tenant's own entry" is only a fix
 // where a tenant's own entry is read (#2388 r2, measured): a `_state_<f>` whose
@@ -148,144 +146,54 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 // away while the value was still not served, and nothing said so. Those get
 // "declare the filter or delete it" / "delete it" instead.
 //
-// A recognised key's fix follows the exporter overlay's own verdict
-// (input.SubtreeRefusedVerdicts, #2388 A): applied for this tenant → move the
-// value it gets; ignored → delete, unless another tenant gets its value from
-// one of these files (sharedApplied).
-func subtreeReservedMessage(input CheckInput, applied appliedBySource, tenant, k string, files []string) string {
-	declared := input.DeclaredStateFilters
+// ⚠️ THE VALUE IS NAMED, per file (#2388 A r2): the exporter applies none of
+// them (#3341), so an operator who wants a value for the tenant moves it into
+// the tenant's own entry — and with several levels, "move it" has to say
+// which value. Deleting the key changes nothing that is served.
+func subtreeReservedMessage(declared map[string]bool, k string, writes []config.SubtreeReservedWrite) string {
+	files := make([]string, len(writes))
+	for i, w := range writes {
+		files[i] = w.File
+	}
 	if k == "_custom_alerts" {
 		// #3042: no reader takes a custom-alert list from a `_defaults.yaml`,
 		// at its top level or under `defaults:` — the exporter has never
-		// served one, and the compiler compiles what the exporter serves. Not
-		// a key the exporter stops applying: it never did.
+		// served one, and the compiler compiles what the exporter serves.
 		return fmt.Sprintf("`_custom_alerts` is written in a subtree `_defaults.yaml` (%s) that this tenant "+
 			"inherits from; no reader takes custom alerts from a `_defaults.yaml`: the exporter serves none of "+
 			"them and the custom-alert compiler compiles none (#3042). Write the list in each tenant's own entry "+
 			"under `tenants:`, in a root platform file's `tenants:`, or in a profile its tenants select.", quoteJoin(files))
 	}
-	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
-	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
-		"`_defaults.yaml`, and this warning becomes an error (#2388)."
+	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from",
+		writtenValues(k, writes))
+	const unsupported = "subtree defaults do not carry reserved keys, and the exporter does not apply it " +
+		"from there, whatever its value (#3341)."
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
-		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
-			k, where, subtreeRefusedKeyFix(k, declared), tail)
+		return fmt.Sprintf("Reserved key `%s` %s; %s %s", k, where, unsupported, subtreeRefusedKeyFix(k, declared))
 	case shapeUnrecognised:
-		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
+		return fmt.Sprintf("Key `%s` %s. %s", k, where, subtreeRefusedKeyFix(k, declared))
 	}
-	v := input.SubtreeRefusedVerdicts[tenant][k]
-	others := sharedApplied(applied, tenant, k, files)
-	var fix string
-	switch {
-	case v.Applied:
-		fix = reservedKeyMove(k, v, files, others)
-	case others.total > 0:
-		fix = reservedKeyIgnoredShared(k, v, others)
-	default:
-		fix = reservedKeyIgnoredFix(k, v)
+	del := "Delete it from this file"
+	if len(writes) > 1 {
+		del = fmt.Sprintf("Delete `%s` from every subtree file listed above", k)
 	}
-	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
-		k, where, fix, tail)
+	return fmt.Sprintf("Reserved key `%s` %s; %s %s: what the exporter serves stays the same. %s",
+		k, where, unsupported, del, reservedKeyFix(k))
 }
 
-// appliedBySource indexes the whole tree's applied verdicts: key → the
-// subtree file the value comes from → the tenants getting it, sorted.
-type appliedBySource map[string]map[string][]string
-
-// indexAppliedBySource builds appliedBySource once per check.
-//
-// ⛔ ONCE, NOT PER FINDING (#2388 A r4). The first sharedApplied walked every
-// tenant's verdicts for every finding — O(findings × tenants): measured on
-// 8000 tenants with three such keys, the default check went from 1.6s
-// (main) to 18.8s. With this index a finding costs its files' lists.
-func indexAppliedBySource(verdicts map[string]map[string]config.SubtreeRefusedVerdict) appliedBySource {
-	idx := appliedBySource{}
-	for id, byKey := range verdicts {
-		for k, v := range byKey {
-			if !v.Applied {
-				continue
-			}
-			if idx[k] == nil {
-				idx[k] = map[string][]string{}
-			}
-			idx[k][v.Source] = append(idx[k][v.Source], id)
+// writtenValues renders writes as "`a/_defaults.yaml`: `k: v`, …" — each
+// file and the value it writes; the value is left out where it does not fit
+// one pasteable line (config.RenderYAMLFlow).
+func writtenValues(k string, writes []config.SubtreeReservedWrite) string {
+	q := make([]string, len(writes))
+	for i, w := range writes {
+		q[i] = "`" + w.File + "`"
+		if r, ok := config.RenderYAMLFlow(w.Value); ok {
+			q[i] += fmt.Sprintf(": `%s: %s`", k, r)
 		}
 	}
-	for _, bySource := range idx {
-		for _, ids := range bySource {
-			sort.Strings(ids)
-		}
-	}
-	return idx
-}
-
-// sharedTenants is the other tenants a finding names: at most
-// sharedTenantsShown of them (sorted) and how many there are in all.
-type sharedTenants struct {
-	names []string
-	total int
-}
-
-const sharedTenantsShown = 5
-
-// sharedApplied is every OTHER tenant of the whole tree that gets its value
-// of k from one of files (config.SubtreeRefusedVerdict.Source): deleting k
-// from those files changes what is served for them.
-//
-// ⛔ WHOLE TREE, NOT --scope (#2388 A r2). A subtree file is shared: measured,
-// a/_defaults.yaml `_state_maintenance: disable` is applied for t1 and
-// ignored for t2 (which sets the key itself). t2's finding said "delete it
-// … to keep things as they are"; deleting it turned t1's filter on, and with
-// `--scope a/x` only t2's finding was shown at all. The verdicts are the
-// exporter's whole-tree load (ScopedTenants.SubtreeRefusedVerdicts).
-//
-// ⛔ O(files × log n) PER FINDING, not O(tenants) (#2388 A r5): the count is
-// each list's length minus this tenant (binary search; the lists are sorted),
-// and names stop at sharedTenantsShown per list — the sorted first names of
-// each list contain the overall first ones. Walking every list in full made
-// 16000 tenants sharing one file 7.5s against 4.7s. A tenant has ONE source
-// file per key (SubtreeRefusedVerdict.Source), so no id is in two lists and
-// the per-list counts add up without double counting.
-func sharedApplied(applied appliedBySource, tenant, k string, files []string) sharedTenants {
-	var out sharedTenants
-	for _, f := range files {
-		ids := applied[k][f]
-		n := len(ids)
-		if _, found := slices.BinarySearch(ids, tenant); found {
-			n--
-		}
-		out.total += n
-		taken := 0
-		for _, id := range ids {
-			if taken == sharedTenantsShown {
-				break
-			}
-			if id == tenant {
-				continue
-			}
-			out.names = append(out.names, id)
-			taken++
-		}
-	}
-	sort.Strings(out.names)
-	if len(out.names) > sharedTenantsShown {
-		out.names = out.names[:sharedTenantsShown]
-	}
-	return out
-}
-
-// tenantList renders s as "`a`, `b`, `c` and 4 more" (at most 5 named).
-func tenantList(s sharedTenants) string {
-	q := make([]string, 0, len(s.names))
-	for _, id := range s.names {
-		q = append(q, "`"+id+"`")
-	}
-	out := strings.Join(q, ", ")
-	if s.total > len(s.names) {
-		out += fmt.Sprintf(" and %d more", s.total-len(s.names))
-	}
-	return out
+	return strings.Join(q, ", ")
 }
 
 // The three fix shapes of a key subtree defaults refuse.
@@ -313,11 +221,10 @@ func reservedKeyShape(k string, declared map[string]bool) int {
 // (#2388 r4), whose generic "move it under `defaults:`" would trade one
 // finding for the other.
 //
-// It is defaults_toplevel_ignored's fix: the key sits beside a `defaults:`
-// mapping, so the merge leaves it out and it has no effect today — a
-// recognised key gets reservedKeyIgnoredFix. subtree_default_reserved_key
-// routes a recognised key itself (subtreeReservedMessage), by whether the
-// overlay applies it (#2388 A).
+// For a recognised key it is defaults_toplevel_ignored's fix: the key sits
+// beside a `defaults:` mapping, so the merge leaves it out and it has no
+// effect; subtree_default_reserved_key words a recognised key itself
+// (subtreeReservedMessage).
 func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
@@ -331,111 +238,6 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 	}
 	return "Today it has no effect here (the defaults merge leaves it out, so it is in neither /effective " +
 		"nor what the exporter serves); delete it from this file to keep things as they are. " + reservedKeyFix(k)
-}
-
-// reservedKeyIgnoredFix is the fix for a recognised key whose subtree value
-// has no effect today, for this tenant AND every other tenant that inherits
-// these files: deleting it keeps what the exporter serves; setting it in the
-// tenant's entry would START applying it.
-//
-// ⚠️ "What the exporter serves", not "things": /effective does show the
-// ignored subtree value, and deleting it removes it from there (#2388 A r2).
-// When the tenant sets the key itself, its own entry is what is served and
-// there is nothing to "have take effect".
-//
-// ⛔ #2388 A. r5 told every such key "delete it" (wrong for an applied
-// `disable`: deleting it turned the filter back on); r6 told every one "move
-// it" (wrong for an ignored `enable` / severity name: moving it turned them
-// ON — measured, served `{_silent_mode: [], _state_offd: false}` became
-// `{[warning], true}` with no finding left). Which one is right is the
-// overlay's own verdict, handed in as `applied`; neither text guesses.
-func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
-	if v.TenantSets {
-		return fmt.Sprintf("%s, and that is what the exporter serves; the subtree "+
-			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", setBy(v, k))
-	}
-	return "Today the exporter ignores this value; delete it from this file: what the exporter serves stays the " +
-		"same, and /effective stops showing the ignored value. " + reservedKeyFix(k)
-}
-
-// reservedKeyIgnoredShared is the fix for a recognised key ignored for this
-// tenant but applied, from one of the same files, to other tenants: the file
-// must not just be deleted (sharedApplied says why).
-func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others sharedTenants) string {
-	own := "Today the exporter ignores this value for this tenant"
-	if v.TenantSets {
-		own = fmt.Sprintf("%s, and that is what the exporter serves for it; "+
-			"the subtree value is ignored for this tenant", setBy(v, k))
-	}
-	return fmt.Sprintf("%s — but other tenants get their value from one of these files: %s. Do not just "+
-		"delete it from the file: that changes what is served for them. Follow their findings (move the value "+
-		"into their own entries) first; then delete it.", own, tenantList(others))
-}
-
-// setBy names what sets the key for a TenantSets tenant: its `tenants:`
-// entry, or its `_profile` (config.SubtreeRefusedVerdict.Profile, #2388 A r3).
-func setBy(v config.SubtreeRefusedVerdict, k string) string {
-	if v.Profile != "" {
-		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets `%s`", v.Profile, k)
-	}
-	if n := len(v.EntryFiles); n > 0 {
-		// Named, not "own entry": a root platform file's `tenants:` block sets
-		// it as well as a tenant file (#2388 A r4). With several, EntryFiles
-		// is in the flat merge's order and the LAST one's value is served
-		// (config.markTenantSetSources) — the winner is named, the others are
-		// what it overrides; "the merged result" was wrong for a scalar
-		// (#2388 A r6).
-		s := fmt.Sprintf("This tenant's `tenants:` entry in `%s` sets `%s`", v.EntryFiles[n-1], k)
-		if n > 1 {
-			s += fmt.Sprintf(" (it overrides the entry in %s)", quoteJoin(v.EntryFiles[:n-1]))
-		}
-		return s
-	}
-	return fmt.Sprintf("This tenant's own entry sets `%s`", k)
-}
-
-// reservedKeyMove is the fix for a recognised key the overlay APPLIES for this
-// tenant today: ONE action, moving it — deleting it alone can change what is
-// served (measured: subtree `_state_maintenance: disable` under a root
-// default_state enable; deleted, the filter came back on).
-//
-// ⛔ IT NAMES THE VALUE (#2388 A r2). With several subtree levels writing the
-// key, "move it" did not say which: measured, a/ `_silent_mode: disable`
-// (applied) and a/us/ `warning` (dropped) served `[]`, and moving `warning`
-// served `["warning"]`. The value named is the one the tenant gets today
-// (SubtreeRefusedVerdict.Value, from .Source), and the key is to be deleted
-// from every listed file.
-//
-// ⚠️ "Can change", not "changes" (#2388 A r2, F3): Applied means the exporter
-// uses the subtree's value for this tenant; it is not judged whether that
-// value differs from what the tenant would get without it (a subtree
-// `disable` under a root default_state disable is applied and a no-op).
-// Judging that would need every reserved key's resolver re-run without the
-// value — a second model of those resolvers, which this check does not keep.
-func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files []string, others sharedTenants) string {
-	val := fmt.Sprintf("`%s`", k)
-	if r, ok := config.RenderYAMLFlow(v.Value); ok {
-		val = fmt.Sprintf("`%s: %s`", k, r)
-	}
-	from := fmt.Sprintf("the value this tenant gets today, from `%s`", v.Source)
-	del := "delete it from this file"
-	if len(files) > 1 {
-		del = fmt.Sprintf("delete `%s` from every subtree file listed above", k)
-	}
-	var b strings.Builder
-	if f, isState := strings.CutPrefix(k, "_state_"); isState {
-		fmt.Fprintf(&b, "Move it: set %s (%s) in this tenant's own entry under `tenants:` and %s — or instead "+
-			"set `state_filters.%s.default_state` in the conf.d root `_defaults.yaml`, which affects every tenant "+
-			"in the tree.", val, from, del, filterPath(f))
-	} else {
-		fmt.Fprintf(&b, "Move it: set %s (%s) in this tenant's own entry under `tenants:` and %s.", val, from, del)
-	}
-	b.WriteString(" (Deleting it alone can change what is served: the exporter uses this value for this tenant now.)")
-	if others.total > 0 {
-		fmt.Fprintf(&b, " Other tenants get their value from one of these files too: %s — move it into their "+
-			"entries as well before deleting it.", tenantList(others))
-	}
-	return b.String()
 }
 
 // filterName renders a state filter's name for a message; the empty name,

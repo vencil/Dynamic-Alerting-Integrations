@@ -230,19 +230,20 @@ def test_a_rule_credits_no_tenant_it_excludes_and_no_unregistered_reserved_key(t
     assert _by_key(t, "ta")["_typo_reserved"].verdict == "unread"
 
 
-def test_a_reserved_key_inherited_from_a_layer_the_exporter_reads_is_read(tmp_path):
-    """子目錄 `_defaults.yaml` 的 `_state_<f>`、`_severity_dedup`：登錄表說 exporter 讀這一層，
-    不論值是什麼。"""
+def test_a_reserved_key_a_subtree_writes_is_not_judged_here(tmp_path):
+    """子目錄 `_defaults.yaml` 不帶保留鍵（#3341）：exporter 不套用、effective 不顯示，所以共用
+    判決看不到它，改由 da-guard 的 subtree_default_reserved_key error 報。#3341 以前登錄表說
+    exporter 讀這一層的 `_state_<f>`、`_severity_dedup`，這裡判成 read。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
                           "state_filters:\n  maint: {reasons: [X], severity: critical}\n",
-        "team/_defaults.yaml": "defaults:\n  _state_maint: enable\n  _severity_dedup: enable\n",
+        "team/_defaults.yaml": "defaults:\n  _state_maint: enable\n  _severity_dedup: enable\n"
+                               "  _silent_mode: warning\n",
         "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
     keys = _by_key(t, "ta")
-    for k in ("_state_maint", "_severity_dedup"):
-        if k in keys:
-            assert keys[k].verdict == "read", (k, keys[k])
-    assert "_state_maint" in keys  # 不是恆真：至少一個真的被判了
+    assert "mysql_connections" in keys  # 不是恆真：這個租戶真的被判了
+    for k in ("_state_maint", "_severity_dedup", "_silent_mode"):
+        assert k not in keys, (k, keys[k])
 
 
 def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):
@@ -258,14 +259,15 @@ def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):
 
 
 def test_a_declared_reader_counts_only_in_its_layer(tmp_path):
-    """`_severity_dedup` 寫在子目錄 `_defaults.yaml`：exporter 讀、路由產生器不讀
-    （登錄表的層）；寫在租戶檔兩者都讀。"""
+    """`_severity_dedup` 寫在租戶檔：exporter 與路由產生器都讀（登錄表的層）。寫在沒有
+    `defaults:` 的子目錄 `_defaults.yaml` 頂層的那份不進 effective（#3341；之前判成只有
+    exporter 讀），一層一讀取端的對應由下方的合成輸入釘住。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
         "team/_defaults.yaml": "_severity_dedup: enable\n",
         "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n",
         "tb.yaml": "tenants:\n  tb:\n    _severity_dedup: enable\n"}))
-    assert _by_key(t, "ta")["_severity_dedup"].read_by == ("exporter",)
+    assert "_severity_dedup" not in _by_key(t, "ta")
     assert _by_key(t, "tb")["_severity_dedup"].read_by == ("exporter", "generator")
 
 
@@ -283,15 +285,19 @@ def test_custom_alerts_have_the_same_readers_in_every_layer(tmp_path):
         assert _by_key(t, tenant)["_custom_alerts"].read_by == ("custom_alert_compiler", "exporter")
 
 
-def test_a_reserved_key_in_a_layer_the_exporter_does_not_read_is_unread(tmp_path):
-    """子目錄 `_defaults.yaml` 的 `_silent_mode`：effective 顯示它，但 exporter 不讀那一層。
-    served-values 的 `values` 一律列出 `_silent_mode`，不能拿來當讀過的證據。"""
-    t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "team/_defaults.yaml": "defaults:\n  _silent_mode: warning\n",
-        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
-    v = _by_key(t, "ta")["_silent_mode"]
-    assert (v.read_by, v.verdict, v.severity, v.file) == ((), "unread", "notice", "team/_defaults.yaml")
+def test_a_reserved_key_in_a_layer_the_exporter_does_not_read_is_unread():
+    """effective 顯示、exporter 卻不讀那一層的 `_silent_mode`（合成輸入：#3341 起子目錄
+    `_defaults.yaml` 的那份連 effective 都不顯示，真實的樹裡只剩根目錄沒有 `defaults:`
+    的頂層這種形狀）。served-values 的 `values` 一律列出 `_silent_mode`，不能拿來當讀過的證據。"""
+    import _lib_tenant_values as tv
+    sk = tv.ServedKey(False, "reserved", True, {"exporter": ("tenant", "platform_tenants", "profile")})
+    served = {"ta": tv.TenantValues("ta", {}, {}, {}, {}, None, {}, {}, {}, None, {"_silent_mode": sk})}
+    eff = {"ta": tv.TenantEffective("ta", {"_silent_mode": "warning"},
+                                    {"_silent_mode": tv.KeySource("defaults", "_defaults.yaml", 0)},
+                                    None, "", "", "", ["_defaults.yaml"], [], [], [], {})}
+    v = kv.judge(served, eff, [], undecidable=False).keys["ta"][0]
+    assert (v.key, v.read_by, v.verdict, v.severity, v.file) == (
+        "_silent_mode", (), "unread", "notice", "_defaults.yaml")
 
 
 def test_without_disable_effects_a_switched_off_key_is_taken_as_read(tmp_path):
@@ -349,9 +355,11 @@ def test_a_rule_names_a_key_in_either_alias_spelling(tmp_path, rule_key, written
 
 
 def test_an_inherited_undeclared_state_filter_is_the_root_files_notice(tmp_path):
+    """平台檔 `tenants:` 給的 `_state_ghost`（#3341 以前用子目錄 `_defaults.yaml`，那一層
+    已不帶保留鍵）：缺的是根目錄的宣告。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "team/_defaults.yaml": "defaults:\n  _state_ghost: enable\n",
+        "_platform.yaml": "tenants:\n  ta:\n    _state_ghost: enable\n",
         "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
     v = _by_key(t, "ta")["_state_ghost"]
     assert (v.verdict, v.severity, v.reason) == ("unread", "notice", "state_filter_undeclared")

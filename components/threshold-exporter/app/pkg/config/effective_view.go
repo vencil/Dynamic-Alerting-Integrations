@@ -52,6 +52,13 @@ import "strings"
 // (`{default: null}`, nullThreshold), writes nothing here either, as in
 // deepMerge: the value below shows through.
 //
+// A reserved key a subtree `_defaults.yaml` does not carry
+// (subtreeReservedUnsupported) is not laid from that level at all
+// (withoutSubtreeReserved, #3341): /metrics applies none of them, so neither
+// does the view. A reserved key the tenant side writes as null
+// (reservedNull — `~`, a bare `key:`, `{default: null}`) deletes the value
+// below, as on /metrics (reservedNullMarker).
+//
 // A reserved key written with a schedule (#3269) is shown as the `default`
 // it wrote — what every reader of it reads (withRawServedValues, the
 // walker's form of servedValue) — once the layers are laid, so a schedule
@@ -78,6 +85,9 @@ func layerPerThreshold(base, over map[string]any) map[string]any {
 		if strings.HasPrefix(k, "_") || mappingNotSchedule(v) {
 			if leafMerged == nil {
 				leafMerged = make(map[string]any)
+			}
+			if reservedNull(k, v) {
+				v = nil // deepMerge's delete: `{default: null}` is a null too
 			}
 			leafMerged[k] = v
 			continue
@@ -128,4 +138,51 @@ func shadowedInLayer(layer map[string]any, k string) bool {
 	}
 	v, in := layer[canon]
 	return in && writesThreshold(canon, v)
+}
+
+// withoutSubtreeReserved is blocks (a tenant's chain, root first) with every
+// subtreeReservedUnsupported key taken out of each SUBTREE level — every
+// level but rootLevel (-1: none is the root's) — and, per such key a subtree
+// level writes (subtreeLevelRead; a null writes nothing), the index of the
+// deepest level writing it (#3341). A level holding none is not copied; nil
+// when no level holds one.
+func withoutSubtreeReserved(blocks []map[string]any, rootLevel int) ([]map[string]any, map[string]int) {
+	var out []map[string]any
+	var written map[string]int
+	for i, block := range blocks {
+		if i == rootLevel {
+			continue
+		}
+		var kept map[string]any
+		for k, v := range block {
+			if !subtreeReservedUnsupported(k) {
+				continue
+			}
+			if kept == nil {
+				kept = make(map[string]any, len(block))
+				for k2, v2 := range block {
+					if !subtreeReservedUnsupported(k2) {
+						kept[k2] = v2
+					}
+				}
+			}
+			if _, w, _ := subtreeLevelRead(k, v); w {
+				if written == nil {
+					written = map[string]int{}
+				}
+				written[k] = i // root first: a deeper level overwrites
+			}
+		}
+		if kept == nil {
+			continue
+		}
+		if out == nil {
+			out = append([]map[string]any(nil), blocks...)
+		}
+		out[i] = kept
+	}
+	if out == nil {
+		return blocks, written
+	}
+	return out, written
 }

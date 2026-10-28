@@ -210,9 +210,9 @@ def test_profile_refs_strip_the_name(tmp_path, da_guard, ref):
 
 def test_config_diff_profile_change_reaches_the_tenants_go_binds(tmp_path):
     """#2115 / #2120: a profile change is reported for the tenants the exporter
-    binds to it. A `_profile` inherited from a sub-directory `_defaults.yaml`
-    shows in effective_config but binds nothing (Go `profile` None): not
-    reached. One written in the root platform file's `tenants:` entry binds:
+    binds to it. A `_profile` written in a sub-directory `_defaults.yaml`
+    binds nothing (Go `profile` None) and, since #3341, is not shown in
+    effective_config either (named in not_served): not reached. One written in the root platform file's `tenants:` entry binds:
     reached (the YAML file walk before never saw it)."""
     def tree(d: Path, cpu: int) -> Path:
         (d / "sub").mkdir(parents=True)
@@ -227,8 +227,10 @@ def test_config_diff_profile_change_reaches_the_tenants_go_binds(tmp_path):
         return d
     old, new = tree(tmp_path / "old", 55), tree(tmp_path / "new", 60)
     eff = _lib_tenant_values.load_effective(old)
-    # The oracle: tx carries `_profile` from the chain, unbound; tp is bound.
-    assert eff["tx"].effective_config.get("_profile") == "std" and eff["tx"].profile is None
+    # The oracle: tx gets no `_profile` from the chain (#3341: not carried,
+    # named in not_served), and binds none; tp is bound.
+    assert "_profile" not in eff["tx"].effective_config and eff["tx"].profile is None
+    assert eff["tx"].not_served["_profile"].reason == "value_rejected"
     assert eff["tp"].profile == "std"
     doc = _config_diff(old, new)
     assert [(c["key"], c["old"], c["new"], c["tenants"]) for c in doc["threshold_changes"]] == \

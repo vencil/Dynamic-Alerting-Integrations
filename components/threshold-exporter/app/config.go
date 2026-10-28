@@ -1878,6 +1878,11 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 	stateCount := 0
 	for _, overrides := range cfg.Tenants {
 		for key := range overrides {
+			// A tenant-side null of a reserved key is no entry (#3341):
+			// the readers take their no-key branch for it.
+			if _, live := config.TenantReserved(overrides, key); !live {
+				continue
+			}
 			switch {
 			case key == "_silent_mode":
 				silentCount++

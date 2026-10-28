@@ -41,10 +41,13 @@ What the fixtures cover (NOT every ADR-017 clause; see "Known gaps" below):
                      reserved key (`_x.*`): an inherited value is retained,
                      an uninherited null is dropped (#1550; was `_routing`
                      until #2417, which da-guard rejects in `defaults:`)
-- reserved-null-delete: a `_` key inherited from L0 and nulled in an L1
-                     `_defaults.yaml` is deleted; a sibling `_` key survives
+- reserved-null-delete: a `_` key inherited from L0 and nulled in the
+                     tenant file is deleted; a sibling `_` key survives
                      (#1550)
-The last three are subtrees of the mixed-mode tree, like carrier-selection.
+The last two are the reserved-null tree: its root is the only level that hands
+a `_` key down (#3341), and the exporter drops it (not_served.json).
+canonical-json-escaping is a subtree of the mixed-mode tree, like
+carrier-selection.
 - served-chain:      numeric L0 -> L1 -> L2 chain in the shipped shape; a
                      tenant override, an L2 override of L0 and an L0 value
                      through two levels, plus a root-level sibling tenant
