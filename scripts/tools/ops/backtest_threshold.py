@@ -301,10 +301,10 @@ def _served_rows(tenant_values, side):
 
 
 # served-values' `keys[].reason` for a key left with no row all day because
-# a non-finite value is refused (#3140): the tenant's own
-# ("value_non_finite"), or the root `defaults:` value of a key the tenant
-# does not write ("root_default_non_finite").
-_NON_FINITE_NO_ROW_REASONS = frozenset({"value_non_finite", "root_default_non_finite"})
+# a value is refused: the tenant's own non-finite one ("value_non_finite",
+# #3140), or the root `defaults:` value of a key the tenant does not write,
+# whatever the resolver refused it for ("root_default_refused", #3250).
+_NO_ROW_REFUSAL_REASONS = frozenset({"value_non_finite", "root_default_refused"})
 
 
 def _refused_parts(tenant_values):
@@ -313,7 +313,7 @@ def _refused_parts(tenant_values):
     non-finite value (#3140) — served-values' answer, not a reading of the
     value here: a schedule segment's `reason` "value_non_finite", and for a
     key with no schedule (no row in any part of the day) its `keys[].reason`
-    in `_NON_FINITE_NO_ROW_REASONS`, the whole day."""
+    in `_NO_ROW_REFUSAL_REASONS`, the whole day."""
     out = {}
     if tenant_values is None:
         return out
@@ -323,7 +323,7 @@ def _refused_parts(tenant_values):
             if seg.value is None and seg.reason == "value_non_finite":
                 out.setdefault(key, []).append((_minute(seg.start), _minute(seg.end)))
     for key, entry in (tenant_values.keys or {}).items():
-        if key not in schedules and entry.reason in _NON_FINITE_NO_ROW_REASONS:
+        if key not in schedules and entry.reason in _NO_ROW_REFUSAL_REASONS:
             out[key] = [(0, _DAY_MINUTES)]
     return out
 

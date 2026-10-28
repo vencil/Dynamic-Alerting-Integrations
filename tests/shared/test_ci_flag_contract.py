@@ -333,7 +333,7 @@ RECIPES: list[Recipe] = [
     # HONEST BOUNDARIES §2: the guaranteed finding is the threshold miss
     # (overall_score <= 100 < 101), driving the same gate line as bad_count.
     R("alert_quality",
-      lambda t, s: ["--prometheus", s, "--alertmanager", s, "--min-score", "101"],
+      lambda t, s: ["--prometheus", s, "--min-score", "101"],  # #3212: no --alertmanager
       note="score < --min-score 101 is guaranteed; 0 -> 1"),
 
     # /rich matrix puts tenant cardinality at 12; --limit 5 => already over

@@ -112,16 +112,21 @@ def test_profiles_row_matches_effective(where, tmp_path):
         assert a == ['tenant=tenant-a: _profile references unknown profile "nope"'], row
 
 
-def test_profile_in_root_defaults_drops_the_file_and_fails_closed(tmp_path):
-    """根 `defaults:` 裡的 `_profile`：exporter 整份 `_defaults.yaml` 丟掉（所有租戶失去根
-    預設值）。列 FAIL、指名該檔與 exporter 的原因，不評估、不回報 WARN 了事。"""
+def test_profile_in_root_defaults_is_named_like_a_subtree_one(tmp_path):
+    """根 `defaults:` 裡的 `_profile`：#3250 起 exporter 不再整份丟掉 `_defaults.yaml`（其他
+    閾值照送），也不從根套用這個保留鍵——與子目錄 defaults 同一個結論。列 WARN、點名寫的檔，
+    不說成「沒有這個 profile」；與 da-guard effective 的結論一致。"""
     conf_d = _tree(tmp_path, POSITIONS["defaults"])
-    with pytest.raises(tv.ParseFailedError):   # 前提：Go 丟掉這個檔
-        tv.load_effective(conf_d)
+    got = tv.load_effective(conf_d)                       # 前提：Go 不再丟掉這個檔
+    assert got["tenant-a"].not_served["_profile"] == tv.NotServedKey("root_defaults_reserved", "_defaults.yaml")
     row = vc.check_profiles(str(conf_d))
-    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
-    assert row["hint"] == vc._PROFILES_TREE_UNREADABLE_HINT, row
-    assert any("_defaults.yaml" in d and "do not decode" in d for d in row["details"]), row
+    assert row["status"] == vc.WARN and row["caller_error"] is False, row
+    assert _named(row) == _want_from_effective(conf_d) == {"tenant-a", "tenant-b"}, row
+    assert _UNKNOWN_B in row["details"], row
+    a = [d for d in row["details"] if d.startswith("tenant=tenant-a:")]
+    assert a == ['tenant=tenant-a: _profile "nope" comes from _defaults.yaml, and the exporter binds no '
+                 "profile from a defaults file (only from the tenant's own entry or a root platform "
+                 "file's `tenants:` entry)"], row
 
 
 # ── profile 的定義：exporter 讀所有根平台檔的 `profiles:`，不只 `_profiles.yaml` ──
@@ -289,9 +294,11 @@ def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
 # ── 被丟掉的檔：原因取自 effective 自己的 stderr，不再補跑 served-values（#2115 F4）──
 
 @pytest.mark.parametrize("files,reason", [
-    pytest.param({"_defaults.yaml": 'defaults:\n  mysql_threads_running: "abc"\n',
+    # #3250: a scalar the root decode does not read is refused for that key
+    # alone; a list value still drops the file.
+    pytest.param({"_defaults.yaml": "defaults:\n  mysql_threads_running: [1]\n",
                   "tx.yaml": "tenants:\n  tx: {}\n"},
-                 "cannot unmarshal !!str `abc` into float64", id="root-defaults-type"),
+                 "cannot unmarshal !!seq into float64", id="root-defaults-type"),
     pytest.param({"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
                   "tx.yaml": "tenants:\n  tx: [a]\n", "ty.yaml": "tenants:\n  ty: {}\n"},
                  "cannot unmarshal !!seq into map[string]config.ScheduledValue",

@@ -55,14 +55,22 @@ var (
 	// `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
 	FindingRootDefaultsCriticalKey = register("root_defaults_critical_key",
 		"judges a `<metric>_critical` key in the conf.d root defaults")
-	// FindingRootDefaultNonFinite (error, TenantID ""; #3140): a threshold
-	// under the conf.d root carrier's `defaults:` mapping written as a
-	// non-finite number (`.nan`, `.inf`, `-.inf`). The exporter serves no
-	// default row for it — the key is served like an `optional_overrides:`
-	// one, a tenant's own value only (config.NonFiniteDefaultKeys). Field is
-	// `<file>:defaults.<key>`.
-	FindingRootDefaultNonFinite = register("root_default_non_finite",
-		"judges a non-finite number in the conf.d root defaults")
+	// FindingRootDefaultRefused (error, TenantID ""; #3140, #3250): a
+	// threshold under the conf.d root carrier's `defaults:` mapping whose
+	// value parseThresholdNumber refuses (`.nan`, `NaN`, `abc`, `0x1F`,
+	// `1e999`). The exporter serves no default row for it — the key is served
+	// like an `optional_overrides:` one, a tenant's own value only
+	// (config.RootDefaultRefusals). Field is `<file>:defaults.<key>`.
+	FindingRootDefaultRefused = register("root_default_refused",
+		"judges a value the exporter refuses in the conf.d root defaults")
+	// FindingRootDefaultsReservedKey (error, TenantID ""; #3250): a `_` key
+	// under the conf.d root carrier's `defaults:` mapping
+	// (config.RootDefaultsReservedKey; a routing key is the route generator's
+	// routing_in_unread_location). The root decode reads that mapping for
+	// thresholds only, so no tenant gets it, while /effective shows it as
+	// inherited. Field is `<file>:defaults.<key>`.
+	FindingRootDefaultsReservedKey = register("root_defaults_reserved_key",
+		"judges a `_` key in the conf.d root defaults")
 	// FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
 	// Field, which the conf.d root `_defaults.yaml` writes as null — not
 	// declared — so the exporter serves no series for it. Field may also be a

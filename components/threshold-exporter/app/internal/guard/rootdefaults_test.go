@@ -254,31 +254,34 @@ func TestDefaultsWrapperRootCustomAlertsFix(t *testing.T) {
 	}
 }
 
-// #3140: a root threshold yaml.v3 decodes to NaN / ±Inf is an error finding,
-// one per key, named by the exporter's predicate (config.NonFiniteDefaultKeys);
-// a subtree carrier, a `_` key, a finite value and a dropped file are not.
-func TestCheckRootDefaultsNonFinite(t *testing.T) {
+// #3140, #3250: a root threshold whose value the exporter refuses is an error
+// finding, one per key, named by the exporter's own decode
+// (config.RootDefaultRefusals) with the text written and why; a subtree
+// carrier, a `_` key, a read value and a dropped file are not.
+func TestCheckRootDefaultsRefused(t *testing.T) {
 	t.Parallel()
-	got := checkRootDefaultsNonFinite(CheckInput{
+	got := checkRootDefaultsRefused(CheckInput{
 		DefaultsFiles: []config.DefaultsFile{
-			{Name: "_defaults.yaml", Data: []byte("defaults:\n  b: -.inf\n  a: .nan\n  c: 80\n  _x: .inf\n")},
+			{Name: "_defaults.yaml", Data: []byte("defaults:\n  b: abc\n  a: NaN\n  c: 80\n  d: \"70\"\n  _x: .inf\n")},
 			{Name: "sub/_defaults.yaml", Data: []byte("defaults:\n  a: .nan\n")},
 		},
 	})
 	var fields []string
 	for _, f := range got {
-		if f.Severity != SeverityError || f.Kind != findingkind.FindingRootDefaultNonFinite {
-			t.Errorf("finding %+v, want an error root_default_non_finite", f)
+		if f.Severity != SeverityError || f.Kind != findingkind.FindingRootDefaultRefused {
+			t.Errorf("finding %+v, want an error root_default_refused", f)
 		}
-		if !strings.Contains(f.Message, "not a finite number") || !strings.Contains(f.Message, "optional_overrides:") {
-			t.Errorf("message %q", f.Message)
+		why := map[string]string{"_defaults.yaml:defaults.a": "`a: NaN` under the conf.d root `defaults:` is not a finite number",
+			"_defaults.yaml:defaults.b": "`b: abc` under the conf.d root `defaults:` is not a number the exporter reads"}[f.Field]
+		if why == "" || !strings.Contains(f.Message, why) || !strings.Contains(f.Message, "optional_overrides:") {
+			t.Errorf("message %q, want it to say %q", f.Message, why)
 		}
 		fields = append(fields, f.Field)
 	}
 	if want := []string{"_defaults.yaml:defaults.a", "_defaults.yaml:defaults.b"}; strings.Join(fields, ",") != strings.Join(want, ",") {
 		t.Errorf("fields = %v, want %v", fields, want)
 	}
-	if n := len(checkRootDefaultsNonFinite(CheckInput{
+	if n := len(checkRootDefaultsRefused(CheckInput{
 		DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml", Data: []byte("defaults:\n  a: .nan\n")}},
 		ParseFailed:   []string{"_defaults.yaml"},
 	})); n != 0 {

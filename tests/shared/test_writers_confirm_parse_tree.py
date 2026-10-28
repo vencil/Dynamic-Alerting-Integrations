@@ -358,11 +358,10 @@ def test_da_assembler_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
 
 
 def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
-    # The exporter decodes `defaults:` into float64. A number is written as
-    # one (an int past 18 digits as the float it is); a JSON string is
-    # refused whatever its text — Go writes it as a string, which the
-    # exporter cannot decode (#3206: "1e3" and "0o17" alike, once written
-    # plain and read as numbers).
+    # A number is written as one (an int past 18 digits as the float it is).
+    # A JSON string is written as a string (Go writes it quoted): since
+    # #3250 the exporter reads a root default's text as a tenant's value and
+    # refuses that key alone when it is no number, so the file still loads.
     import da_assembler
     da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": 10**20, "mem": 0.5}),
                                tmp_path, cli=True)
@@ -373,11 +372,10 @@ def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
                         timeout=120, check=False)
     assert sv.returncode == 0, sv.stdout + sv.stderr  # the exporter reads the file
     assert json.loads(sv.stdout)["parse_failed"] == [], sv.stderr
-    for text in ("1e3", "0o17", "80"):
-        with pytest.raises(ValueError, match="must be a number, not the string"):
-            da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": text}, name="ok2"),
-                                       tmp_path, cli=True)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["ok.yaml"]
+    da_assembler.reconcile_one(_cr({"tenant-b": {}}, {"cpu": "0o17", "mem": "80"}, name="ok2"),
+                               tmp_path, cli=True)
+    text = (tmp_path / "ok2.yaml").read_text(encoding="utf-8")
+    assert 'cpu: "0o17"\n' in text and 'mem: "80"\n' in text, text
 
 
 def test_da_assembler_refuses_a_tenant_id_and_a_name_before_any_write(tmp_path):
@@ -1154,10 +1152,11 @@ def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
 
 def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
         tmp_path, monkeypatch):
-    # A registry value of +inf renders `inf`, a string to yaml.v3 — not the
-    # number the exporter's `defaults` takes: da-guard write's validation
-    # names the file. Neither file is written (the seed's change alone would
-    # pass: all or none).
+    # A registry value of +inf renders `inf`. The exporter reads that text as
+    # +Inf, a value the root `defaults:` refuses for its key (#3250: no
+    # longer a string yaml.v3 refuses the file for): the tree gains a
+    # root_default_refused finding, and da-guard write refuses it. Neither
+    # file is written (the seed's change alone would pass: all or none).
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                   _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
@@ -1165,7 +1164,7 @@ def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
     doc["keys"]["container_cpu"]["value"] = float("inf")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(doc)
-    assert f"{dev}: read_back_mismatch: validation would name" in str(exc.value)
+    assert f"{dev.parent}/(the tree): worsens_tree: finding: _defaults.yaml: `container_cpu: inf`" in str(exc.value)
     assert str(seed) not in str(exc.value)
     assert _bytes(tmp_path / "repo") == before
 

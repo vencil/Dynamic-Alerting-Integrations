@@ -108,7 +108,13 @@ func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 	var doc yaml.Node
 	err := yaml.Unmarshal(data, &doc)
 	if err == nil && doc.Kind != 0 {
-		err = doc.Decode(&cfg)
+		// #3250: `defaults:` is read value by value as text
+		// (readRootDefaults), not by the typed decode into float64.
+		rest, defaults := splitRootDefaults(&doc)
+		err = rest.Decode(&cfg)
+		if err == nil && defaults != nil {
+			cfg.Defaults, _, err = readRootDefaults(defaults)
+		}
 		if err == nil && generic {
 			// The typed decode's error, when there is one, is the message:
 			// this runs only on a node the typed decode accepted.

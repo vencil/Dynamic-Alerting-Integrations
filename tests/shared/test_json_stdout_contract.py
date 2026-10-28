@@ -925,7 +925,7 @@ RECIPES: list[Recipe] = [
 
     # ── alert_quality ──────────────────────────────────────────────────────
     R("alert_quality", "prometheus",
-      lambda t, s: ["--prometheus", s, "--alertmanager", s, "--json"]),
+      lambda t, s: ["--prometheus", s, "--json"]),  # #3212: no --alertmanager
     # #3065: a failed ALERTS query used to read as "nothing fired" (rc 0
     # under --ci). It is a caller error now, and still one document.
     R("alert_quality", "prometheus-query-error",

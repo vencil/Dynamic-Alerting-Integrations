@@ -31,7 +31,8 @@ type servedOut struct {
 		File   string `json:"file"`
 		Reason string `json:"reason"`
 	} `json:"unreadable"`
-	Tenants map[string]struct {
+	RootDefaultsRefused []rootDefaultRefused `json:"root_defaults_refused"`
+	Tenants             map[string]struct {
 		Values     map[string]any      `json:"values"`
 		Severities map[string]string   `json:"severities"`
 		Unserved   map[string]any      `json:"unserved"`
@@ -273,7 +274,7 @@ func TestServedValues_ParseFailedFile_ExitsThreeAndNamesIt(t *testing.T) {
 		// An explicit tag the text does not satisfy: the typed decode never
 		// resolved it, the generic one refuses it (#3063).
 		"tenant file, mismatched explicit tag": {"tenant-b.yaml", "tenants:\n  tenant-b:\n    mysql_connections: !!int abc\n"},
-		"root defaults (typed decode)":         {"_defaults.yaml", "defaults:\n  mysql_connections: abc\n"},
+		"root defaults (typed decode)":         {"_defaults.yaml", "defaults:\n  mysql_connections: [1]\n"},
 		"root profiles (typed decode)":         {"_profiles.yaml", "profiles: [1, 2]\n"},
 		"nested defaults (syntax)":             {"sub/_defaults.yaml", "defaults: [oops\n"},
 	} {
@@ -905,17 +906,19 @@ func TestServedValues_NonFiniteThresholds(t *testing.T) {
 	}
 }
 
-// #3140: a threshold key the root `defaults:` writes as a non-finite number
-// gives a tenant that does not write it no row, and keys[] says why —
-// root_default_non_finite, refused non_finite — rather than leaving the key
-// out (a reader then took the lost row for a removal or a switch-off). A
-// dimensional one is not shown in unserved: JSON has no NaN, and served-values
-// failed to encode the document (exit 2). A tenant writing the key is read
-// as any key it writes.
+// #3140, #3250: a threshold key whose root `defaults:` value the resolver
+// refuses gives a tenant that does not write it no row, and keys[] says why —
+// root_default_refused, with refused the tenant values' own reason — rather
+// than leaving the key out (a reader then took the lost row for a removal or
+// a switch-off). `NaN` is non_finite; YAML's `.nan` / `.inf` are text
+// ParseFloat does not read, unparsed, as in a tenant's file. A dimensional one
+// is not shown in unserved: its value is no number, and served-values failed
+// to encode the document (exit 2). A tenant writing the key is read as any key
+// it writes.
 func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
-		"_defaults.yaml": defaultsOnly + "  redis_memory: .nan\n  mysql_connections_critical: .inf\n" +
+		"_defaults.yaml": defaultsOnly + "  redis_memory: NaN\n  mysql_connections_critical: .inf\n" +
 			"  mysql_threads_running: .nan\n" +
 			"  \"mysql_connections{db=\\\"a\\\"}\": -.inf\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
@@ -924,9 +927,10 @@ func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 	}, "", "--schedules")
 	mustOK(t, code, stderr)
 	a, b := doc.Tenants["tenant-a"], doc.Tenants["tenant-b"]
-	for _, k := range []string{"redis_memory", "mysql_connections_critical", `mysql_connections{db="a"}`} {
-		if got, ok := a.Keys[k]; !ok || got.Exporter || got.Reason != keyReasonRootDefaultNonFinite || got.Refused != "non_finite" {
-			t.Errorf("tenant-a keys[%q] = %+v (present=%v), want root_default_non_finite, refused non_finite", k, got, ok)
+	for k, refused := range map[string]string{"redis_memory": "non_finite", "mysql_connections_critical": "unparsed",
+		`mysql_connections{db="a"}`: "unparsed"} {
+		if got, ok := a.Keys[k]; !ok || got.Exporter || got.Reason != keyReasonRootDefaultRefused || got.Refused != refused {
+			t.Errorf("tenant-a keys[%q] = %+v (present=%v), want root_default_refused, refused %s", k, got, ok, refused)
 		}
 		if _, ok := a.Unserved[k]; ok {
 			t.Errorf("tenant-a unserved[%q] = %#v, want none", k, a.Unserved[k])
@@ -943,7 +947,7 @@ func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 		t.Errorf("tenant-b keys[mysql_connections_critical] = %+v, want value_non_finite", got)
 	}
 	// Written under its retired spelling, the key is the tenant's: its entry
-	// is that spelling's, not a root_default_non_finite one.
+	// is that spelling's, not a root_default_refused one.
 	if got, ok := b.Keys["mysql_threads_running"]; ok {
 		t.Errorf("tenant-b keys[mysql_threads_running] = %+v: the tenant writes it as mysql_cpu", got)
 	}
@@ -952,21 +956,49 @@ func TestServedValues_RootNonFiniteDefaultIsNamed(t *testing.T) {
 	}
 }
 
-// The root still writes a retired alias (mysql_cpu) as non-finite: the entry
+// The root still writes a retired alias (mysql_cpu) as a refused value: the entry
 // is under the canonical key, the one values and every reader use (#3140).
 func TestServedValues_RootNonFiniteAliasIsNamedCanonically(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": defaultsOnly + "  mysql_cpu: .nan\n",
+		"_defaults.yaml": defaultsOnly + "  mysql_cpu: NaN\n",
 		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
 	}, "")
 	mustOK(t, code, stderr)
 	tv := doc.Tenants["tenant-a"]
-	if got, ok := tv.Keys["mysql_threads_running"]; !ok || got.Reason != keyReasonRootDefaultNonFinite || got.Refused != "non_finite" {
-		t.Errorf("keys[mysql_threads_running] = %+v (present=%v), want root_default_non_finite under the canonical key", got, ok)
+	if got, ok := tv.Keys["mysql_threads_running"]; !ok || got.Reason != keyReasonRootDefaultRefused || got.Refused != "non_finite" {
+		t.Errorf("keys[mysql_threads_running] = %+v (present=%v), want root_default_refused under the canonical key", got, ok)
 	}
 	if got, ok := tv.Keys["mysql_cpu"]; ok {
 		t.Errorf("keys[mysql_cpu] = %+v: the retired spelling is no key a reader joins on", got)
+	}
+}
+
+// #3250: a root `defaults:` value the resolver refuses is named once for the
+// tree (root_defaults_refused, with the text written), and one under an
+// unregistered `_` key — no threshold, so no keys[] entry — is that tenant's
+// unserved value as written. The `.nan` there failed the JSON encode (exit 2);
+// `"70"` and `0x1p4` are read as the tenant path reads them; `abc` refuses
+// that key alone, not the file.
+func TestServedValues_RootRefusedDefaultsAreNamed(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: \"70\"\n  redis_memory: 0x1p4\n  pg_connections: abc\n" +
+			"  container_cpu: 0x1F\n  _zz_unknown: .nan\n",
+		"tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
+	}, "")
+	mustOK(t, code, stderr)
+	want := []rootDefaultRefused{{Key: "container_cpu", Text: "0x1F", Refused: "unparsed"},
+		{Key: "pg_connections", Text: "abc", Refused: "unparsed"}}
+	if !reflect.DeepEqual(doc.RootDefaultsRefused, want) {
+		t.Errorf("root_defaults_refused = %+v, want %+v", doc.RootDefaultsRefused, want)
+	}
+	tv := doc.Tenants["tenant-a"]
+	if tv.Values["mysql_connections"] != float64(70) || tv.Values["redis_memory"] != float64(16) {
+		t.Errorf("values = %v, want mysql_connections 70 and redis_memory 16", tv.Values)
+	}
+	if got := tv.Unserved["_zz_unknown"]; got != ".nan" {
+		t.Errorf("unserved[_zz_unknown] = %#v, want the text written, \".nan\"", got)
 	}
 }
 

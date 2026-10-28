@@ -2200,7 +2200,7 @@ class TestRefusedRowsFromTwoTrees:
     def test_a_row_lost_to_a_non_finite_root_default_is_high(
             self, tmp_path, cli_argv, capsys, fake_prom, root):
         """根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列，served-values
-        標 `root_default_non_finite`，判 HIGH（不是「Metric disabled」MEDIUM）。"""
+        標 `root_default_refused`，判 HIGH（不是「Metric disabled」MEDIUM）。"""
         p = fake_prom(values=(60, 80, 90, 100))
         tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
         cur, base = _dirs(tmp_path, {**_D, **tenant},
@@ -2216,7 +2216,7 @@ class TestRefusedRowsFromTwoTrees:
     def test_a_non_finite_root_default_under_a_retired_alias_is_high(
             self, tmp_path, cli_argv, capsys, fake_prom):
         """根檔仍寫退役別名（`mysql_cpu`，正名 `mysql_threads_running`）：served-values
-        以正名標 `root_default_non_finite`，所以照樣判 HIGH（審查 Finding A）。"""
+        以正名標 `root_default_refused`，所以照樣判 HIGH（審查 Finding A）。"""
         p = fake_prom(values=(60, 80, 90, 100))
         tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
         cur, base = _dirs(tmp_path,

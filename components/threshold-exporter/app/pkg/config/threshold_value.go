@@ -88,7 +88,7 @@ func parseThresholdValue(raw string) (v float64, severity string, ok bool) {
 // threshold value calls it: parseThresholdValue (the base / declared /
 // dimensional rows, the subtree overlay's thresholdScalar),
 // resolveCriticalRows, custom alerts (resolveOneCustomAlert) and the root
-// `defaults:` decode's non-finite report (rootNonFiniteDefaults).
+// `defaults:` decode (readRootDefault, #3250).
 // tests/shared/threshold_value_matrix.json's `float_ok` column is it, and
 // carries it to the Python mirror (_lib_validation.parse_threshold_number).
 func parseThresholdNumber(s string) (float64, bool) {
@@ -100,39 +100,9 @@ func parseThresholdNumber(s string) (float64, bool) {
 }
 
 // finiteThreshold is parseThresholdNumber's finiteness half, for a value
-// already decoded as a float64 (the root `defaults:` map).
+// already in Defaults: a root default the decode refused is a NaN there
+// (refusedDefault).
 func finiteThreshold(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-
-// NonFiniteDefaultKeys is the keys of a `defaults:` block (a generic YAML
-// decode, ExtractDefaultsBlock) written as a non-finite number — `.nan`,
-// `.inf`, `-.inf` — sorted (#3140). At the root those keys get no default
-// row (resolveBaseRows, resolveDimensionalRows: finiteThreshold on the
-// decoded value) and da-guard reports each (root_default_non_finite).
-func NonFiniteDefaultKeys(block map[string]any) []string {
-	var out []string
-	for k, v := range block {
-		if f, ok := v.(float64); ok && !finiteThreshold(f) && !baseRowsSkipKey(k) {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// NonFiniteRootDefaults is the root `defaults:` keys of c (c.Defaults, as
-// the resolver reads them) whose value is a non-finite number: the keys
-// NonFiniteDefaultKeys names, which no tenant gets a default row for
-// (#3140). da-guard served-values names each, for a tenant that does not
-// write it, with keys[].reason root_default_non_finite.
-func (c *ThresholdConfig) NonFiniteRootDefaults() map[string]bool {
-	out := map[string]bool{}
-	for k, v := range c.Defaults {
-		if !finiteThreshold(v) && !baseRowsSkipKey(k) {
-			out[k] = true
-		}
-	}
-	return out
-}
 
 // NonFiniteThresholdWrites is, sorted, one message per threshold key of a
 // tenant's map (not `_`-prefixed) whose value — its `default` or a window's

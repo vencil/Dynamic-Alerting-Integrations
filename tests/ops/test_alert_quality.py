@@ -5,7 +5,7 @@
   1. compute_noise_score() — 震盪分數計算
   2. compute_stale_score() — 閒置分數計算
   3. compute_resolution_latency() — 解決延遲計算
-  4. compute_suppression_ratio() — 壓制比例計算
+  4. （#3212：suppression 這一維已移除，見 TestSuppressionIsGone）
   5. compute_overall_grade() — 綜合評級
   6. compute_tenant_score() — 租戶綜合分數
   7. generate_report() — 報告生成
@@ -111,41 +111,16 @@ class TestComputeResolutionLatency:
         assert abs(avg - 200.0) < 0.01
 
 
-# ── compute_suppression_ratio ──────────────────────────────────
-
-class TestComputeSuppressionRatio:
-    """壓制比例計算測試。"""
-
-    @pytest.mark.parametrize("total,suppressed,expected_grade", [
-        (0, 0, "GOOD"),
-        (100, 10, "GOOD"),
-        (100, 50, "WARN"),
-        (100, 80, "WARN"),
-        (10, 0, "GOOD"),
-    ], ids=["no-alerts", "low-ratio", "boundary-50pct", "high-ratio", "zero-suppressed"])
-    def test_grades(self, total, suppressed, expected_grade):
-        """各種壓制比例正確評級。"""
-        _, grade = aq.compute_suppression_ratio(total, suppressed)
-        assert grade == expected_grade
-
-    def test_ratio_value(self):
-        """比例值正確計算。"""
-        ratio, _ = aq.compute_suppression_ratio(100, 25)
-        assert abs(ratio - 0.25) < 0.01
-
-
 # ── compute_overall_grade ──────────────────────────────────────
 
 class TestComputeOverallGrade:
     """綜合評級測試。"""
 
-    def _make_metrics(self, noise="GOOD", stale="GOOD",
-                      resolution="GOOD", suppression="GOOD"):
+    def _make_metrics(self, noise="GOOD", stale="GOOD", resolution="GOOD"):
         m = aq.AlertQualityMetrics(alertname="test", tenant="t")
         m.noise_grade = noise
         m.stale_grade = stale
         m.resolution_grade = resolution
-        m.suppression_grade = suppression
         return m
 
     def test_all_good(self):
@@ -326,8 +301,7 @@ class TestPrintTextReport:
 # ── Prometheus query mock ──────────────────────────────────────
 # W1: query_prometheus_alerts 的 fetch core 收斂進
 # _lib_prometheus.prometheus_range，HTTP seam 改 patch
-# _lib_prometheus.http_get_json。#3133 起 Alertmanager 路徑也走 lib
-# （_lib_prometheus.alertmanager_alerts），同一個 seam。
+# _lib_prometheus.http_get_json。
 
 class TestQueryPrometheusAlerts:
     """Prometheus 查詢 mock 測試。"""
@@ -357,42 +331,6 @@ class TestQueryPrometheusAlerts:
                                                       "error": "bad query"}, None))
         with pytest.raises(aq.QueryError, match="bad query"):
             aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
-
-
-# ── Alertmanager query mock ────────────────────────────────────
-
-class TestQueryAlertmanagerAlerts:
-    """Alertmanager 查詢 mock 測試。"""
-
-    def test_success(self, monkeypatch):
-        """成功查詢回傳清單；state／tenant 各成一個 filter 參數。"""
-        seen = []
-        monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=15: (seen.append(url) or
-                                                     ([{"labels": {"alertname": "X"}}], None)))
-        result = aq.query_alertmanager_alerts("http://am", tenant="db-x", state="suppressed")
-        assert len(result) == 1
-        assert seen == ["http://am/api/v2/alerts"
-                        "?filter=alertstate%3Dsuppressed&filter=tenant%3Ddb-x"]
-
-    def test_empty_list_is_empty(self, monkeypatch):
-        """control：Alertmanager 回空 list 才是「沒有告警」。"""
-        monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=15: ([], None))
-        assert aq.query_alertmanager_alerts("http://am") == []
-
-    @pytest.mark.parametrize("answer", [
-        (None, "refused"), ({}, None), ({"alerts": []}, None), (["x"], None),
-    ], ids=["error", "empty-body", "object-body", "item-not-object"])
-    def test_not_answered_raises(self, monkeypatch, answer):
-        """#3073：錯誤或不是 alert 物件的 list → QueryError（以前回 []，
-        讀成「沒有被抑制的告警」）。"""
-        monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=15: answer)
-        with pytest.raises(aq.QueryError) as exc:
-            aq.query_alertmanager_alerts("http://am")
-        assert (exc.value.source, exc.value.reason) == ("Alertmanager",
-                                                         "alertmanager_query_error")
 
 
 # ── analyze_from_prometheus ────────────────────────────────────
@@ -458,19 +396,54 @@ class TestCLI:
         parser = aq.build_parser()
         args = parser.parse_args([
             "--prometheus", "http://prom",
-            "--alertmanager", "http://am",
             "--period", "7d",
             "--tenant", "db-a",
             "--json",
             "--ci",
             "--min-score", "80",
         ])
-        assert args.alertmanager == "http://am"
         assert args.period == "7d"
         assert args.tenant == "db-a"
         assert args.json_output is True
         assert args.ci is True
         assert args.min_score == 80
+
+
+# ── #3212：suppression 這一維移除 ─────────────────────────────
+
+class TestSuppressionIsGone:
+    """#3212：suppression 從來沒量對過（AM v2 的 filter 比對 label，
+    `alertstate=suppressed` 恆回空；分子是當下告警筆數、分母是期間樣本點數），
+    整維移除：`--alertmanager` 是未知旗標（argparse，結束碼 2），報告不再有
+    suppression 欄位，overall grade 只看三項。"""
+
+    def test_alertmanager_flag_is_an_argparse_caller_error(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            aq.build_parser().parse_args(["--prometheus", "http://prom", "--alertmanager", "http://am"])
+        assert exc.value.code == 2
+        assert "--alertmanager" in capsys.readouterr().err
+
+    def test_no_suppression_field_in_the_metrics(self):
+        fields = set(aq.AlertQualityMetrics.__dataclass_fields__)
+        assert not {f for f in fields if f.startswith("suppress")}, fields
+        assert not hasattr(aq, "compute_suppression_ratio")
+        assert not hasattr(aq, "query_alertmanager_alerts")
+
+    def test_the_overall_grade_reads_three_dimensions(self):
+        m = aq.AlertQualityMetrics(alertname="a", tenant="t")
+        m.noise_grade = m.stale_grade = m.resolution_grade = "GOOD"
+        m.suppression_grade = "WARN"  # not a field any more: must not count
+        assert aq.compute_overall_grade(m) == "GOOD"
+
+    def test_no_request_reaches_alertmanager(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=30: (seen.append(url) or (
+                                {"status": "success", "data": {"resultType": "matrix", "result": [
+                                    {"metric": {"alertname": "X", "tenant": "t"},
+                                     "values": [[1, "1"], [2, "1"]]}]}}, None)))
+        aq.analyze_from_prometheus("http://prom", 86400)
+        assert seen and all("/api/v2/" not in u for u in seen), seen
 
 
 # ── main() CLI entry ───────────────────────────────────────────
@@ -591,14 +564,6 @@ class TestTenantWhitelistRejectsTrailingNewline:
                                                      ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)))
         ran = self._call(lambda t: aq.query_prometheus_alerts(
             "http://prom", "ALERTS", 3600, tenant=t), tenant)
-        assert ran is accepted and bool(seen) is accepted, seen
-
-    @pytest.mark.parametrize("tenant,accepted", [("alpha", True), ("alpha\n", False)])
-    def test_alertmanager_query_gate(self, monkeypatch, tenant, accepted):
-        seen = []
-        monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=30: (seen.append(url) or ([], None)))
-        ran = self._call(lambda t: aq.query_alertmanager_alerts("http://am", tenant=t), tenant)
         assert ran is accepted and bool(seen) is accepted, seen
 
     # ADR-035: the whitelist is the one tenant-id rule now. `Team_A` passed

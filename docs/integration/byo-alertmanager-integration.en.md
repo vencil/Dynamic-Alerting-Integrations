@@ -473,7 +473,7 @@ Mode A creates a single shared platform route; Mode B creates N per-tenant route
 
 ## 9. One-Shot Configuration Validation
 
-v1.7.0 introduces `validate_config.py`, which validates YAML syntax, schema, routes, policy, custom rules, and version consistency in one check:
+`validate_config.py` runs the config checks in one pass; the checks and what each decides are in [the CLI reference for validate-config](../cli-reference.en.md#validate-config):
 
 ```bash
 # One-shot validation

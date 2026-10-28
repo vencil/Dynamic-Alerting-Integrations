@@ -216,7 +216,7 @@ def test_the_corpus_exercises_every_row(tmp_path, cli_argv, capsys):
 def test_the_skipped_file_is_named_in_json(tmp_path, cli_argv, capsys):
     """The skipped path reaches --json, not only stderr.
 
-    #2326: the routing rows (schema / routes / policy) read the whole tree
+    #2326: the routing rows (schema / routes) read the whole tree
     now, so the flat reader left to exercise is `policy_dsl`'s root-carrier
     lookup — the corpus entry whose `_policies` live in `prod/_defaults.yaml`.
     """
@@ -260,22 +260,16 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts)
     """The exception is structural, not a list: a check that returns before
     reaching a tenant reader was never told anything by one.
 
-    ``check_policy`` with a policy holding no allowlist and
-    ``check_policy_dsl`` with no policies both return before loading tenants;
+    ``check_policy_dsl`` with no policies returns before loading tenants;
     on a tree whose only nested file is a TENANT they must stay PASS, and
     so does ``check_routes`` since #2326 (it reads the tree). ⚠️ Not "on any hierarchical tree": ``check_policy_dsl`` locates the
     root ``_defaults.yaml`` first, so a nested ``_defaults.yaml`` makes it
     WARN — see ``test_a_nested_defaults_carrier_is_what_the_lookup_reports``.
     """
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, "prod")
-    empty_policy = tmp_path / "empty-policy.yaml"
-    empty_policy.write_text("allowed_domains: []\n", encoding="utf-8")
-    policy = vc._run_check("policy", vc.check_policy, d, str(empty_policy),
-                           _config_dir=d)
     dsl = vc._run_check("policy_dsl", vc.check_policy_dsl, d, None,
                         _config_dir=d)
     routes = vc._run_check("routes", vc.check_routes, d, None, _config_dir=d)
-    assert policy["status"] == vc.PASS, policy
     assert dsl["status"] == vc.PASS, dsl
     # #2326: `check_routes` reads the tree, so it has nothing to admit — it
     # routes the nested tenant (before, it was the flat row that WARNed).

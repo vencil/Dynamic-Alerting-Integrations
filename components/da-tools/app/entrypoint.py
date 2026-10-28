@@ -34,7 +34,7 @@ def _build_help_text(lang):
     cutover           一鍵影子監控轉換 (§7.1 所有步驟)
     blind-spot        掃描叢集目標並查找未監控實例
     maintenance-scheduler  評估週期性維護並建立 AM 靜默規則
-    alert-quality     警報品質評估 (震盪/閒置/延遲/壓制分析)
+    alert-quality     警報品質評估 (震盪/閒置/延遲分析)
     alert-correlate   告警關聯分析 (時間窗口聚類 + 根因推斷)
 
 命令 (配置生成 — 讀取租戶 YAML):
@@ -125,7 +125,7 @@ Commands (Prometheus API — portable):
     cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
     blind-spot        Scan cluster targets and find unmonitored instances
     maintenance-scheduler  Evaluate recurring maintenance and create AM silences
-    alert-quality     Alert quality scoring (noise/stale/latency/suppression)
+    alert-quality     Alert quality scoring (noise/stale/latency)
     alert-correlate   Alert correlation analysis (time-window clustering + root cause)
 
 Commands (Config Generation — reads tenant YAML):

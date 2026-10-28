@@ -333,27 +333,14 @@ _POLICY_DSL_INPUT_HINT = (
     "evaluates only the `_policies` block in _defaults.yaml, which is what "
     "you already had before you passed the flag.")
 
-# ⛔ TWO constants, because `--policy` fails two rows whose "what happens if I
-# just drop the flag" answers are OPPOSITE, and one shared sentence was wrong
-# on one of them. Measured: `validate-config --config-dir <ok>` reports five
-# rows (yaml_syntax / schema / routes / profiles / policy_dsl); adding a valid
-# `--policy` makes it six. So `routes` survives the flag being dropped and does
-# go back to PASS, while `policy` DISAPPEARS — the sibling `--rule-packs` hint
-# had already been corrected to say exactly that, three lines up, and this one
-# was left behind saying "makes this row PASS again" for both.
+# `--policy` is judged by the routes row only (#3303: the `policy` row, which
+# re-read the same generator warnings by substring, is gone). Dropping the flag
+# makes that row PASS again by switching the allowlist off — hence the ⛔.
 _POLICY_ROUTES_ROW_HINT = (
     "Point --policy at a policy YAML holding an `allowed_domains:` list "
     "(see docs/cli-reference.md § validate-config). ⛔ Dropping the "
     "flag makes this row PASS again by switching the webhook domain "
     "allowlist off — that is the failure this check exists to stop.")
-
-_POLICY_ROW_HINT = (
-    "Point --policy at a policy YAML holding an `allowed_domains:` list "
-    "(see docs/cli-reference.md § validate-config). ⛔ Dropping the flag "
-    "does not make this row pass — the row DISAPPEARS (it is only appended "
-    "when --policy is given) and the webhook domain allowlist is not checked "
-    "at all, which is the failure this check exists to stop.")
-
 
 def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
     """A FAIL caused by the operator's argv, not by anything under --config-dir.
@@ -923,20 +910,10 @@ def check_routes(
     import generate_alertmanager_routes as gen
 
     tree = gen.load_tenant_tree(config_dir)
-    # #3284: `--validate` refuses the whole tree on a field-type finding (a
-    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
-    # has `--validate` semantics, does not report routes such a run never
-    # generates as WARN / PASS. The schema row lists the same lines.
-    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
-    if refusal:
-        return _make_result("routes", FAIL, [line.strip() for line in refusal],
-                            hint=FIELD_TYPE_HINT)
-    routing = tree.routing_configs
-    dedup = tree.dedup_configs
-    enforced_routing = tree.enforced_routing
-
     # Load allowed_domains from policy (#1556: unusable value is a caller
-    # error, not "no policy" — see check_policy)
+    # error, not "no policy"). Before the field-type refusal below (#3303):
+    # since this row is the only one that reads `--policy`, an unusable path
+    # must not hide behind a config finding — it is exit 2 either way.
     allowed_domains = None
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         # #3142: the generator's own resolver — the min_generator_version
@@ -952,6 +929,18 @@ def check_routes(
                                    POLICY_VERSION_REMEDY
                                    if isinstance(exc, gen.PolicyVersionError)
                                    else _POLICY_ROUTES_ROW_HINT)
+
+    # #3284: `--validate` refuses the whole tree on a field-type finding (a
+    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
+    # has `--validate` semantics, does not report routes such a run never
+    # generates as WARN / PASS. The schema row lists the same lines.
+    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
+    if refusal:
+        return _make_result("routes", FAIL, [line.strip() for line in refusal],
+                            hint=FIELD_TYPE_HINT)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     # Capture stderr for warnings
     import io
@@ -983,8 +972,7 @@ def check_routes(
         # as is: turning it into FAIL would change an existing exit code.
         errors = gen.blocking_generation_errors(all_issues)
         if errors:
-            return _make_result("routes", FAIL, all_issues,
-                                hint=_collision_hint(gen, errors))
+            return _routes_fail(gen, all_issues, errors)
         if all_issues:
             return _make_result("routes", WARN, all_issues)
         return _make_result("routes", PASS, [summary])
@@ -1009,8 +997,7 @@ def check_routes(
         details.extend(ln for ln in amtool.message.splitlines() if ln.strip())
 
     if verdict.errors:
-        return _make_result("routes", FAIL, details,
-                            hint=_collision_hint(gen, verdict.errors))
+        return _routes_fail(gen, details, verdict.errors)
     if verdict.assembly_error is not None:
         return _make_result("routes", FAIL, details, hint=ROUTES_INVARIANT_HINT)
     if amtool.status == gen.AMTOOL_REJECTED:
@@ -1040,80 +1027,26 @@ def check_routes(
     return _make_result("routes", WARN if has_findings else PASS, details)
 
 
+def _routes_fail(gen, details: list[str], errors: list[str]) -> dict[str, object]:
+    """The routes FAIL row for blocking *errors*, with the hint they call for
+    (``_collision_hint``); the allowlist advice points at `--policy`'s docs."""
+    hint = _collision_hint(gen, errors)
+    row = _make_result("routes", FAIL, details, hint=hint)
+    if hint == POLICY_REFUSAL_REMEDY:
+        row["hint_docs"] = "docs/cli-reference.md#validate-config"
+    return row
+
+
 def _collision_hint(gen, errors: list[str]) -> str | None:
     """#2279: the collision-specific hint when every blocking line is a
-    duplicate receiver name; otherwise the generic routes advice."""
+    duplicate receiver name; #3303: the allowlist advice when every one is a
+    `--policy` allowed_domains refusal (by the generator's kind,
+    `is_policy_refusal`); otherwise the generic routes advice."""
     if all(gen.is_receiver_name_collision(e) for e in errors):
         return RECEIVER_COLLISION_ROUTES_HINT
+    if all(gen.is_policy_refusal(e) for e in errors):
+        return POLICY_REFUSAL_REMEDY
     return None
-
-
-# ============================================================
-# Check 4: Policy (webhook domain allowlist)
-# ============================================================
-def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
-    """Check webhook URLs against domain allowlist.
-
-    ⛔ #1556: the previous single condition collapsed "operator did not ask
-    for a policy" and "operator asked but the value is unusable" into one
-    ``PASS … skipped`` row at exit 0. The documented example passes a
-    comma-separated domain list, which is not a file, so every customer who
-    copied it read ``[PASS] policy`` while the allowlist was off. Only the
-    first of those two is a legitimate skip.
-    """
-    if policy_file is None:   # ⛔ not truthiness: "" is supplied (#1616)
-        return _make_result("policy", PASS, ["No policy file — skipped"])
-
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import generate_alertmanager_routes as gen
-
-    try:
-        allowed_domains = gen.resolve_policy(policy_file).allowed_domains
-    except gen.PolicyInputError as exc:
-        return _argv_error_row("policy", str(exc),
-                               POLICY_VERSION_REMEDY
-                               if isinstance(exc, gen.PolicyVersionError)
-                               else _POLICY_ROW_HINT)
-    if not allowed_domains:
-        return _make_result("policy", PASS,
-                            ["No allowed_domains in policy — no restrictions"])
-
-    tree = gen.load_tenant_tree(config_dir)
-    routing = tree.routing_configs
-    dedup = tree.dedup_configs
-    enforced_routing = tree.enforced_routing
-
-    import io
-    old_stderr = sys.stderr
-    sys.stderr = captured = io.StringIO()
-
-    try:
-        _r, _recv, warnings = gen.generate_routes(
-            routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing, tenants=dedup)
-    finally:
-        sys.stderr = old_stderr
-
-    domain_issues = [w for w in warnings if "domain" in w.lower() or
-                     "allowlist" in w.lower() or "blocked" in w.lower() or
-                     "not in allowed_domains" in w]
-
-    if domain_issues:
-        # #3208: the allowlist advice only when the allowlist is what refused
-        # (the finding's kind); the substring filter above also picks up
-        # routing lines that merely mention "domain" — those carry the
-        # routes advice, which is what they are about.
-        if any(gen.is_policy_refusal(w) for w in domain_issues):
-            return _make_result("policy", FAIL, domain_issues)
-        row = _make_result("policy", FAIL, domain_issues,
-                           hint=_CHECK_HINTS["routes"][0])
-        row["hint_docs"] = _CHECK_HINTS["routes"][1]
-        return row
-    return _make_result("policy", PASS,
-                        [f"All webhook URLs comply with "
-                         f"{len(allowed_domains)} allowed domain(s)"])
 
 
 # ============================================================
@@ -1124,7 +1057,8 @@ def check_custom_rules(
 ) -> dict[str, object]:
     """Run lint_custom_rules.py on rule packs directory.
 
-    ⛔ #1556, same shape as check_policy: ``--rule-packs`` pointing at a path
+    ⛔ #1556, the shape the removed `policy` row had (#3303): ``--rule-packs``
+    pointing at a path
     that is not a directory used to produce the same ``PASS … skipped`` row as
     omitting it, so a typo or a renamed directory silently removed the custom
     rule lint from the run.
@@ -2096,15 +2030,15 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
-def _root_defaults_non_finite_detail(rel: str, key: str, raw: str) -> str:
-    """One FAIL line for a root threshold written as a non-finite number
-    (#3140; da-guard's root_default_non_finite says the same)."""
-    return (f"{rel}: `defaults.{key}` is `{raw}`, not a finite number — an alert "
-            f"compared against it never fires (NaN, or the infinity on the side the "
-            f"alert compares) or always fires. threshold-exporter serves no default "
-            f"row for `{key}`; only a tenant's own value is served, as for an "
-            f"`optional_overrides:` key. Write a finite number, or list `{key}` under "
-            f"`optional_overrides:` instead.")
+def _root_defaults_refused_detail(rel: str, key: str, text: str, refused: str) -> str:
+    """One FAIL line for a root threshold whose value threshold-exporter
+    refuses (#3140, #3250): an entry of da-guard effective's
+    `root_defaults_refused`, `refused` its reason. What to write instead is
+    da-guard's root_default_refused finding; this line names it rather than
+    carry a second copy of that sentence."""
+    return (f"{rel}: `defaults.{key}` is `{text}`, which threshold-exporter refuses "
+            f"({refused}) and serves no default row for; `da-guard` (root_default_refused) "
+            f"says what to write instead")
 
 
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
@@ -2171,7 +2105,8 @@ def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
 
 _ROOT_NUMBERS_ONLY = (
     "A threshold among them goes under `defaults:`; the root `defaults:` "
-    "holds numbers only (a non-numeric value there drops the whole block), "
+    "holds numbers only (a mapping or a list there drops the whole block; a "
+    "scalar that is no number is refused for that key alone), "
     "so another key has no place in this file.")
 
 # #3042: no reader takes custom alerts from a `_defaults.yaml` (the exporter
@@ -2592,20 +2527,20 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
 
 
 def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
-    """How the exporter decodes the root carrier's `defaults:` into
-    `map[string]float64`, read off the file's parse-tree nodes (yaml.v3's
-    tags, aliases and `<<` merges expanded): `[(key, source text, kind), …]`
+    """What of the root carrier's `defaults:` makes the exporter drop the
+    file or leave a key unwritten, read off the file's parse-tree nodes
+    (aliases and `<<` merges expanded): `[(key, source text, kind), …]`
     with *dr*'s kinds (``deprecate_rule``), key None for the whole block.
 
-    yaml.v3 decodes a scalar into a float64 when its tag is `!!int` or
-    `!!float`; `!!null` leaves the key unwritten (#2518,
-    ``NULL_NOT_DECLARED``); any other scalar (`"70"`, `disable`, `yes`, a
-    timestamp, `!!bool`), a mapping or a list fails the decode and the
-    exporter drops the whole block (``UNPARSEABLE``). A file parse-tree
-    cannot read (a repeated key, several documents …) never gets here: its
-    read fails first. The truth table is
-    ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the Go test
-    ``TestDefaultsCarrierOracle`` judges against the exporter."""
+    A null leaves the key unwritten (#2518, ``NULL_NOT_DECLARED``); a
+    mapping or a list fails the decode and the exporter drops the whole
+    file (``UNPARSEABLE``). A scalar is never judged here: since #3250 the
+    exporter reads its text through parseThresholdNumber and refuses that key
+    alone — da-guard effective's `root_defaults_refused`, which `check_root_defaults`
+    reads, is that verdict. A file parse-tree cannot read (a repeated key,
+    several documents …) never gets here: its read fails first. The truth
+    table is ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the
+    Go test ``TestDefaultsCarrierOracle`` judges against the exporter."""
     block = root.get("defaults")
     if block is None or (_lib_parse_tree.is_scalar(block) and block["tag"] == "!!null"):
         return []                              # absent, or `defaults:` with no value
@@ -2618,24 +2553,7 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
                         dr.UNPARSEABLE))
         elif node["tag"] == "!!null":
             out.append((key, node["text"], dr.NULL_NOT_DECLARED))
-        elif node["tag"] == "!!str":
-            # Shown as the string it is: `"70"` (quoted or not in the file).
-            out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
-        elif node["tag"] not in ("!!int", "!!float"):
-            out.append((key, node["text"], dr.UNPARSEABLE))
-        elif node["tag"] == "!!float" and "value" not in node:
-            # #3140: parse-tree gives a `!!float` no value exactly when
-            # yaml.v3 decodes it to NaN or ±Inf (`.nan`, `.inf`, `-.inf`).
-            # The file loads; the exporter serves no default row for the key.
-            out.append((key, node["text"], _NON_FINITE))
     return out
-
-
-#: `_root_defaults_verdicts`' kind for a root threshold yaml.v3 decodes to a
-#: non-finite number (#3140): not one of deprecate_rule's kinds (the carrier
-#: loads), but a FAIL of this row, as da-guard's root_default_non_finite is an
-#: error. The oracle's `default_row: false` rows are these.
-_NON_FINITE = "non_finite"
 
 
 _CUSTOM_ALERT_CAP_HINT = (
@@ -2698,16 +2616,18 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
 
     Three rules, one row:
 
-    * #1414 — every value must decode as a number. The exporter decodes the
-      root ``defaults:`` as ``map[string]float64`` with yaml.v3: a value it
-      cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
-      the exporter drops the root file's whole ``defaults:`` — every platform
-      threshold, while the load is reported as successful; a null / empty
+    * #1414, #3250 — every value must be a number the exporter reads. A
+      mapping or a list fails the exporter's decode and it drops the root
+      file's whole ``defaults:`` — every platform threshold, while the load
+      is reported as successful; a scalar it does not read (``abc``,
+      ``0x10``, ``.nan``, ``disable``) refuses that key alone — no default
+      row, da-guard effective's ``root_defaults_refused`` — and a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
-      not judged here. Both FAIL. The verdict is ``_root_defaults_verdicts``
-      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906:
-      yaml.v3's own tags), checked against the truth table
+      not judged here. All FAIL. The structure is ``_root_defaults_verdicts``
+      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906);
+      a scalar's verdict is the exporter's own, read from da-guard effective;
+      both are checked against the truth table
       ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
       ``TestDefaultsCarrierOracle`` judges. Every kind in
       ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
@@ -2790,9 +2710,6 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
-    details += [_root_defaults_non_finite_detail(rel, k, r)
-                for k, r, kind in verdicts
-                if kind == _NON_FINITE and k is not None and not k.startswith("_")]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
@@ -2805,6 +2722,38 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                                               dropped.get(str(k)))
                 for k, v in block.items()
                 if isinstance(k, str) and k.startswith("_routing")]
+    if details:
+        return _make_result("root_defaults", FAIL, details)
+    # #3250: which scalar the exporter refuses is its own verdict — the
+    # build's `root_defaults_refused`, read off the run's one `da-guard
+    # effective` (#2740, #2115 F4: no second subcommand), for the keys this
+    # carrier writes — never a reading of the text here.
+    # Another file the load drops (exit 3) leaves this carrier judged: the
+    # verdicts stand in the document beside it (ParseFailedError).
+    try:
+        tree = _effective_tree(config_dir)
+        refused, reserved_keys = tree.root_defaults_refused, tree.root_defaults_reserved
+    except ParseFailedError as exc:
+        refused, reserved_keys, why = exc.root_defaults_refused, exc.root_defaults_reserved, exc
+    except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
+        refused = reserved_keys = None
+        why = exc
+    if refused is None or reserved_keys is None:
+        return _make_result("root_defaults", WARN, [
+            f"{rel}: which `defaults:` values threshold-exporter refuses was not judged: "
+            f"da-guard effective failed ({type(why).__name__}: {' '.join(str(why).split())})"])
+    written = {str(k) for k in block}
+    details = [_root_defaults_refused_detail(rel, e.key, e.text, e.refused)
+               for e in refused if e.key in written]
+    # #3250: a registered `_` key reaches no tenant from here — the build's
+    # own verdict (da-guard's root_defaults_reserved_key, an error); a
+    # `_routing*` one is FAILed above already.
+    reserved = {k for k in reserved_keys if k in written and not k.startswith("_routing")}
+    details += [f"{rel}: `defaults.{k}` reaches no tenant — threshold-exporter reads the root "
+                f"`defaults:` for thresholds only, while /effective shows the value as inherited "
+                f"(not_served: root_defaults_reserved); `da-guard` (root_defaults_reserved_key) "
+                f"says where `{k}` is read"
+                for k in sorted(reserved)]
     if details:
         return _make_result("root_defaults", FAIL, details)
     dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
@@ -2901,12 +2850,6 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "group_by, or timing values. "
         "Run: da-tools explain-route --config-dir <dir> --tenant <id>",
         "docs/scenarios/alert-routing-split.md",
-    ),
-    # #3208: this row judges the --policy file's allowed_domains, not the
-    # conf.d `_domain_policy.yaml`; the advice is the resolver's own (#3142).
-    "policy": (
-        POLICY_REFUSAL_REMEDY,
-        "docs/cli-reference.md#validate-config",
     ),
     "custom_rules": (
         "Validate rule pack YAML syntax and ensure referenced profiles exist. "
@@ -3433,8 +3376,8 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     except SystemExit as exc:
         # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
         # see it — and `_parse_config_files` calls `sys.exit()` when the
-        # config directory has gone, which `check_schema` / `check_routes` /
-        # `check_policy` all reach. `main()` checks `isdir` first, so this
+        # config directory has gone, which `check_schema` and `check_routes`
+        # reach. `main()` checks `isdir` first, so this
         # needs a TOCTOU to fire (a GitOps ConfigMap projected volume swaps
         # `..data` atomically), and then the process dies before
         # `print_report`: #1448's own symptom, through the wrapper written
@@ -3577,24 +3520,12 @@ def _main() -> None:
     results.append(_run_check("routes", check_routes, args.config_dir,
                               args.policy, _config_dir=args.config_dir))
 
-    # 4. Policy check (if policy provided)
-    # ⛔ `is not None`, not truthiness. The flags' argparse defaults are None,
-    # so only an explicitly supplied empty string reaches the falsy branch.
-    #
-    # ⚠️ What THIS line (`--policy`) controls is the REPORT, not the verdict:
-    # `check_routes` above takes `args.policy` unconditionally, so `--policy ""`
-    # exits 2 from that row even with this line reverted to truthiness — what
-    # gets lost is the `[FAIL] policy` row itself. MEASURED both ways.
-    # ⛔ Do NOT generalise that to the `--rule-packs` dispatcher below: see the
-    # comment there. Two earlier revisions of this comment were wrong in
-    # opposite directions, and the second one was wrong because it stated a
-    # result measured on `--policy` as if it covered both flags.
-    if args.policy is not None:
-        results.append(_run_check("policy", check_policy, args.config_dir,
-                                  args.policy, _config_dir=args.config_dir))
+    # 4. (#3303) No `policy` row: the routes row above runs the generator
+    # with `--policy`'s allowed_domains and is the one verdict on it; a
+    # second row re-reading the same warnings by substring is gone.
 
     # 5. Custom rule lint (if rule-packs dir provided)
-    # ⛔ Unlike the `--policy` line above, THIS dispatcher IS the verdict site.
+    # ⛔ THIS dispatcher IS the verdict site.
     # `check_custom_rules` has exactly one call site — this one — so there is no
     # unconditional second path to catch an unusable value. MEASURED: reverting
     # this line to truthiness takes `--rule-packs ""` from rc=2 to rc=0 with the

@@ -42,7 +42,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
 | `analyze-gaps` | 比對 custom rule 與 Rule Pack，找出重複/缺口 | --tenant-config <PATH>, --output <FILE>, --json | `da-tools analyze-gaps --help` |
 | `config-diff` | 比較兩個配置目錄（GitOps PR review） | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
-| `alert-quality` | 警報品質評估：4 指標、三級評分、CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `alert-quality` | 警報品質評估：Noise / Stale / Latency、三級評分、CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
 | `alert-correlate` | 告警關聯分析：時間窗口聚類 + 根因推斷 | --prometheus <URL>, --input <FILE>, --window <MIN>, --min-score <N> | `da-tools alert-correlate --help` |
 | `drift-detect` | 跨叢集配置漂移偵測：目錄級 SHA-256 比對 | --dirs <LIST>, --labels <LIST>, --ci | `da-tools drift-detect --help` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
@@ -80,7 +80,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `validate` — Shadow Monitoring 雙軌比對
   - `cutover` — 一鍵切換（遷移最後一步）
   - 其他：`blind-spot`、`maintenance-scheduler`、`backtest`
-  - `alert-quality` — 警報品質評估（noise, stale, latency, suppression）
+  - `alert-quality` — 警報品質評估（noise, stale, latency）
   - `alert-correlate` — 告警關聯分析（時間窗口聚類 + 根因推斷）
   - `cardinality-forecast` — Per-tenant 基數趨勢預測
   - `threshold-recommend` — 閾值推薦（P50/P95/P99）

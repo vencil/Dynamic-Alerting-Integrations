@@ -108,17 +108,44 @@ def test_sample_value_refuses_what_is_not_a_sample(raw):
         lp.sample_value(raw)
 
 
-@pytest.mark.parametrize("raw,want", [(1, 1.0), (1.5, 1.5)])
-def test_sample_value_reads_a_json_number_as_before(raw, want):
-    """The API sends strings; a JSON number is read as the tools read it
-    before #3213 — refusing it would be an exit-code change not decided."""
-    assert lp.sample_value(raw) == want
+@pytest.mark.parametrize("raw", [1, 1.5, 0])
+def test_sample_value_refuses_a_json_number(raw):
+    """#3304: every server writes a sample value as a JSON string; a JSON
+    number is not one, and is refused like any other unreadable sample."""
+    with pytest.raises(ValueError, match="not a sample value"):
+        lp.sample_value(raw)
 
 
-def test_matrix_rows_does_not_check_timestamps():
-    """An unreadable timestamp is left to the reader (backtest never reads
-    it): refusing it here would change backtest's exit code."""
-    lp._matrix_rows(_ok([{"values": [["abc", "1"], [None, "2"]]}]))
+@pytest.mark.parametrize("raw,want", [(1, 1.0), (1700000000.123, 1700000000.123)])
+def test_sample_timestamp_reads_a_json_number(raw, want):
+    assert lp.sample_timestamp(raw) == want
+
+
+@pytest.mark.parametrize("raw", ["1700000000", True, None, [1]])
+def test_sample_timestamp_refuses_anything_else(raw):
+    with pytest.raises(ValueError, match="not a sample timestamp"):
+        lp.sample_timestamp(raw)
+
+
+@pytest.mark.parametrize("key, sample", [
+    ("values", ["abc", "1"]), ("values", [None, "2"]), ("values", ["1", "2"]), ("values", [1, 2]),
+    ("histograms", ["1", {"count": "1"}]),
+])
+def test_matrix_rows_refuses_a_sample_not_of_the_wire_shape(key, sample):
+    """#3304: a timestamp that is not a number, or a float sample that is not
+    a string, is a malformed answer (it used to pass: the timestamp was not
+    read and a numeric value was accepted)."""
+    with pytest.raises(lp.QueryError, match=rf"result\[0\]\.{key}\[0\] is "):
+        lp._matrix_rows(_ok([{"metric": {}, key: [sample]}]))
+
+
+@pytest.mark.parametrize("key, sample", [
+    ("value", ["1", "1"]), ("value", [1, 1]), ("histogram", [None, {"count": "1"}]),
+])
+def test_vector_rows_refuses_a_sample_not_of_the_wire_shape(key, sample):
+    with pytest.raises(lp.QueryError, match=rf"result\[0\]\.{key} is "):
+        lp._vector_rows({"status": "success", "data": {"resultType": "vector",
+                                                       "result": [{"metric": {}, key: sample}]}})
 
 
 @pytest.mark.parametrize("value", ["abc", True, None])
@@ -410,16 +437,38 @@ def test_prometheus_series_and_label_values_return_the_data(monkeypatch):
                     ("http://p/api/v1/label/job/values", 10)]
 
 
+def test_rules_groups_reads_rules_null_as_an_empty_group():
+    """#3331: a Go server that builds the slice as nil (Thanos has no
+    omitempty either) writes an empty group as `rules: null` — an answer,
+    returned with `rules` a list and the body left as it was."""
+    body = {"status": "success", "data": {"groups": [{"name": "g", "rules": None}]}}
+    assert lp.rules_groups(body) == [{"name": "g", "rules": []}]
+    assert body["data"]["groups"][0]["rules"] is None
+
+
 @pytest.mark.parametrize("body,defect", [
     ([], "body is not a JSON object"),
     ({"status": "error", "error": "bad_data"}, "bad_data"),
     ({"status": "success", "data": None}, "'data' is missing or not an object"),
     ({"status": "success", "data": {}}, "'data.groups' is missing or not a list"),
     ({"status": "success", "data": {"groups": ["x"]}}, "group[0] is not an object"),
-    ({"status": "success", "data": {"groups": [{"rules": None}]}}, "group[0].rules is not a list"),
-    ({"status": "success", "data": {"groups": [{"rules": [{}, 1]}]}},
+    ({"status": "success", "data": {"groups": [{"name": "g", "rules": "x"}]}}, "group[0].rules is not a list"),
+    ({"status": "success", "data": {"groups": [{"name": "g", "rules": [{}, 1]}]}},
      "group[0].rules[1] is not an object"),
-], ids=["list", "error", "data-null", "no-groups", "group-string", "rules-null", "rule-int"])
+    # #3331: Prometheus always writes `rules`; a group without it is malformed
+    ({"status": "success", "data": {"groups": [{"name": "g"}]}}, "group[0] has no 'rules'"),
+    # #3331: the fields a reader calls string / list methods on
+    ({"status": "success", "data": {"groups": [{"rules": []}]}}, "group[0].name is missing or not a string"),
+    ({"status": "success", "data": {"groups": [{"name": None, "rules": []}]}},
+     "group[0].name is missing or not a string"),
+    ({"status": "success", "data": {"groups": [{"name": "g", "rules": [{"lastError": 1}]}]}},
+     "group[0].rules[0].lastError is not a string"),
+    ({"status": "success", "data": {"groups": [{"name": "g", "rules": [{"alerts": None}]}]}},
+     "group[0].rules[0].alerts is not a list"),
+    ({"status": "success", "data": {"groups": [{"name": "g", "rules": [{"name": "A"}, {"name": 5}]}]}},
+     "group[0].rules[1].name is not a string"),
+], ids=["list", "error", "data-null", "no-groups", "group-string", "rules-string", "rule-int",
+        "no-rules", "no-name", "name-null", "lastError-int", "alerts-null", "rule-name-int"])
 def test_rules_groups_raises(body, defect):
     with pytest.raises(lp.QueryError) as exc:
         lp.rules_groups(body)
@@ -427,7 +476,7 @@ def test_rules_groups_raises(body, defect):
 
 
 def test_prometheus_rules_returns_the_groups(monkeypatch):
-    groups = [{"name": "g", "rules": [{"name": "A"}]}, {"name": "empty"}]
+    groups = [{"name": "g", "rules": [{"name": "A"}]}, {"name": "empty", "rules": []}]
     seen = []
     monkeypatch.setattr(lp, "http_get_json", lambda url, timeout=15: (
         seen.append((url, timeout)) or {"status": "success", "data": {"groups": groups}}, None))
@@ -656,3 +705,11 @@ def test_tuple_helper_users_only_shrink():
 def test_gate_predicate(src, want):
     """The predicate itself: each spelling is seen; the raising API is not."""
     assert _uses(ast.parse(src)) == want
+
+
+def test_row_samples_reads_the_timestamp_through_the_lib():
+    """#3304: `row_samples` reads each timestamp with `sample_timestamp`, not
+    `float()` — a row that skipped `_matrix_rows` still refuses a string one."""
+    assert lp.row_samples({"values": [[1, "2"]]}) == [(1.0, 2.0)]
+    with pytest.raises(ValueError, match="not a sample timestamp"):
+        lp.row_samples({"values": [["1", "2"]]})

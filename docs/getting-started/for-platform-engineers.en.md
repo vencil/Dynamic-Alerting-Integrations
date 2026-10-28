@@ -49,7 +49,7 @@ Minimal viable platform config:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64
+  # ⚠️ Values are NUMBERS (a quoted "80" reads as 80 too; one that is no number is refused for its key alone, #3250)
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
   mysql_replication_lag: 30  # seconds — async replication lag
@@ -127,9 +127,10 @@ Requires:
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ Values are NUMBERS, unquoted — the Go type is map[string]float64. Writing
-  #    "80" fails the unmarshal for the WHOLE file, dropping every default in it
-  #    (the exporter logs one ERROR; the tenant-api validation path swallows it).
+  # ⚠️ Values are NUMBERS — one that does not read as a number (e.g. disable,
+  #    abc) gets no default row for its key, and da-guard reports
+  #    root_default_refused; a mapping or a list drops the WHOLE file and
+  #    every default in it (#3250).
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80
@@ -310,7 +311,7 @@ Schema validation runs by default, no flag needed; some checks only appear with 
 ### Alert Quality Scoring (v2.1.0)
 
 ```bash
-# Scan all tenants for alert quality (Noise / Stale / Latency / Suppression)
+# Scan all tenants for alert quality (Noise / Stale / Latency)
 da-tools alert-quality --prometheus http://localhost:9090
 
 # CI gate: exit 1 if score below 60

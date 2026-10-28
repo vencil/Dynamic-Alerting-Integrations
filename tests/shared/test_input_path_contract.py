@@ -145,11 +145,10 @@ _CASES = [
 
 
 # Which per-check rows must carry the failure. `validate-config --policy`
-# reaches TWO independent loaders (check_routes and check_policy); both are
-# named so neither can quietly revert behind the other's exit code.
+# reaches one loader, check_routes (#3303 removed the `policy` row).
 _EXPECTED_FAIL_ROWS = {
-    "validate-config --policy": ("routes", "policy"),
-    "validate-config --policy missing-file": ("routes", "policy"),
+    "validate-config --policy": ("routes",),
+    "validate-config --policy missing-file": ("routes",),
     "validate-config --rule-packs": ("custom_rules",),
     "validate-config --policy-dsl": ("policy_dsl",),
 }
@@ -460,8 +459,9 @@ def _fail_row_actions(stdout: str) -> dict[str, str]:
 
     ⛔ Per row, not joined. The first cut of the test below searched the whole
     report for the flag name and SURVIVED the mutation it existed to catch:
-    `validate-config --policy` fails TWO rows, so `check_routes` keeping its
-    hint satisfied the assertion while `check_policy` lost hers. That is the
+    `validate-config --policy` failed TWO rows then (the `policy` row was
+    removed in #3303), so `check_routes` keeping its hint satisfied the
+    assertion while `check_policy` lost hers. That is the
     same aggregate-vacuity CodeRabbit found in the exit-code assertion one
     round earlier, rebuilt by hand in the fix for it.
     """
@@ -479,7 +479,7 @@ def _fail_row_actions(stdout: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("argv,marker,rows", [
-    (["--policy", _MISSING], "--policy", ("policy", "routes")),
+    (["--policy", _MISSING], "--policy", ("routes",)),
     (["--rule-packs", _MISSING], "--rule-packs", ("custom_rules",)),
     (["--policy-dsl", _MISSING], "--policy-dsl", ("policy_dsl",)),
 ], ids=["policy", "rule-packs", "policy-dsl"])

@@ -158,9 +158,9 @@ def test_parse_runtime_non_dict_raises():
     {"status": "success", "data": {}},
     {"status": "success", "data": {"groups": None}},
     {"status": "success", "data": {"groups": ["not-a-dict"]}},
-    {"status": "success", "data": {"groups": [{"name": "g", "rules": None}]}},
+    {"status": "success", "data": {"groups": [{"name": "g"}]}},
     {"status": "success", "data": {"groups": [{"name": "g", "rules": ["x", {"name": "A"}]}]}},
-], ids=["data-null", "no-groups", "groups-null", "group-not-object", "rules-null",
+], ids=["data-null", "no-groups", "groups-null", "group-not-object", "no-rules",
         "rule-not-object"])
 def test_parse_runtime_malformed_is_value_error(body):
     """#3133: an answer that is not a rules list used to read as "no rule
@@ -169,8 +169,10 @@ def test_parse_runtime_malformed_is_value_error(body):
         ra.parse_runtime_rules(body)
 
 
-def test_parse_runtime_group_without_rules_is_empty():
-    rt = ra.parse_runtime_rules({"status": "success", "data": {"groups": [{"name": "g"}]}})
+def test_parse_runtime_group_with_rules_null_is_empty():
+    """#3331: `rules: null` is an empty group (a Go nil slice), not a
+    malformed answer; a group without `rules` is malformed (above)."""
+    rt = ra.parse_runtime_rules({"status": "success", "data": {"groups": [{"name": "g", "rules": None}]}})
     assert rt == {}
 
 

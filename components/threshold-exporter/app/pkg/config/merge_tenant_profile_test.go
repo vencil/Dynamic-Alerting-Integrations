@@ -79,7 +79,7 @@ func profileMergeTrees() []struct {
 		{"an unselected root carrier's profiles are not read", with(map[string]string{
 			"_defaults.yml": profileMergeProfiles, "tx.yaml": elects}), false},
 		{"a profile file the flat decode rejects contributes nothing", with(map[string]string{
-			"_profiles.yaml": profileMergeProfiles + "defaults:\n  x: abc\n", "tx.yaml": elects}), false},
+			"_profiles.yaml": profileMergeProfiles + "defaults:\n  x: [1]\n", "tx.yaml": elects}), false},
 		{"a profile may not fill a declared key", with(map[string]string{
 			"_profiles.yaml": "profiles:\n  strict:\n    oracle_wait: \"5\"\n    mysql_connections: \"55\"\n",
 			"tx.yaml":        elects}), true},
