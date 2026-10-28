@@ -30,7 +30,7 @@ lang: zh
 
 | 階段 | 工作量 | 風險 | 時間 |
 |------|--------|------|------|
-| 階段 0：審計與評估 | 1 人日 | 零 | 1 天 |
+| 階段 0：審計與評估 | 1 人日 | 唯讀，不改動既有系統 | 1 天 |
 | 階段 1：試點域部署 | 2 人日 | 低 | 3-5 天 |
 | 階段 2：雙軌並行驗證 | 1 人日（監控）| 低 | 1-2 週 |
 | 階段 3：切換 | 0.5 人日 | 低 | 4 小時 |
@@ -39,9 +39,9 @@ lang: zh
 
 ---
 
-## 階段 0：審計與評估（零風險評估）
+## 階段 0：審計與評估
 
-**目標**：在不改變任何現存配置的情況下，理解你目前的監控體系。本階段是**唯讀**的，完全無風險。
+**目標**：在不改變任何現存配置的情況下，理解你目前的監控體系。本階段是**唯讀**的：只讀你的設定檔、查詢 Prometheus，不改動既有系統。
 
 ### Step 0.1: Analyze Existing Alertmanager Configuration
 
@@ -645,13 +645,13 @@ Rehearsal 內容：
 
 **第 6 項是核心**：checksum 必須回到 Base PR merge 前的 `merged_hash`，若不一致即代表 drift（可能某個 tenant PR 被部分退版、或某 cascading defaults 漏退）；先把 pre-Base-PR snapshot 用 `da-tools tenant-verify --all --json > pre-base.json` 存起來，rollback 後再跑同樣指令對照即可定位漂移 tenant。exit 2 且該 tenant 標成 duplicate（`--json` 是 `"error": "duplicate"` 加 `files` 清單；不帶 `--json` 是 `status: ERROR — duplicate` 加 `declared in:` 各行）時不是 hash 漂移，而是**重複宣告**：該 tenant 同時出現在列出的多個檔裡（例如 rollback 漏刪的檔），工具因此拒絕算 hash——從多餘的檔移除這個 tenant 的宣告、讓它只留在一個檔後重跑第 6 項（同一檔可能還宣告了其他 tenant，只有該檔沒有其他要保留的內容時才整個刪掉）。`--all` 遇到重複宣告同樣 exit 2（其餘 tenant 照常列出，但 da-guard 對這種樹整棵拒收，所以都沒有 `merged_hash`），拍快照前先處理掉。
 
-### 工具層 follow-up（未實裝，列入 v2.8.x backlog）
+### 尚未實作的工具（沒有排期）
 
 - `make rollback-dryrun` Makefile target —— 客戶 staging 環境一鍵跑 staging rehearsal，自動填上方時間預算表
 - `da-tools batch-pr rollback --plan` —— 從 Base PR # 反推完整退版順序，產出 markdown plan 給 ops review
 - `da-tools batch-pr rollback --execute` —— 自動執行反序 revert，每步等 git-sync apply + reload 收斂後才前進
 
-這些工具不在本文件 PR 範圍，但本節定義的程序為其 specification。
+在它們出現之前，照本節的程序手動執行；本節也是它們的規格。
 
 ---
 

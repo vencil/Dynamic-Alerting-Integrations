@@ -35,7 +35,7 @@ The platform **supports both layouts coexisting** (mixed mode), but this is inte
 | **< 50 tenants, no organizational segmentation needs** | ⏸️ **Don't migrate** | Cascading defaults / blast-radius scope benefits < cognitive cost of maintaining two layouts |
 | **50-200 tenants, single BU/team management** | 🟡 **Either way** | Tipping point — depends whether you anticipate cross-region growth next quarter. If yes, migrate now |
 | **200+ tenants, multi-BU/region/env segmentation** | 🟢 **Migrate** | YAML line savings via cascading defaults + blast-radius scope signal are hard wins |
-| **GitOps PR flow on customer side** (da-batchpr in plan) | 🟢 **Migrate** | Hierarchy-aware chunking defaults to per-domain PR slicing; flat layout forces a single mega-PR |
+| **GitOps PR flow on customer side** (opening PRs in batches with `da-tools batch-pr`) | 🟢 **Migrate** | PRs are split per domain (first directory level) by default; in a flat layout every tenant sits in the root directory and lands in one bucket, so it is only cut by tenant count (25 per PR by default). ⚠️ `da-tools batch-pr` has no `plan` subcommand; the Plan JSON that `apply` requires has to be supplied separately ([#3367](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3367)) |
 | **Anticipating cross-region/env defaults next quarter** (region-specific thresholds) | 🟢 **Migrate** | Flat has no place for region-level `_defaults.yaml`; migration cost only grows over time |
 | **Customer's `_defaults.yaml` rarely changes** (pure flat with hardcoded thresholds) | ⏸️ **Don't migrate** | Hierarchical's core benefit is cascading mutations — without them, only the maintenance cost remains |
 
@@ -45,7 +45,7 @@ The platform **fully supports** flat layout (since v2.7.0; no EOL planned), but 
 
 - **Cascading defaults**: change a threshold once → all dependent tenants in that region/env update automatically; flat requires per-tenant edits
 - **Blast-radius scope signal**: in flat mode the `scope` of `da_config_blast_radius_tenants_affected` is only ever `tenant` (a tenant file changed) or `global` (the root `_defaults.yaml` changed), never `domain` / `region` — you cannot see which layer a change landed in
-- **Natural GitOps PR chunking**: large flat changes go as a single PR; hierarchy-aware chunking auto-slices into per-domain PRs
+- **Per-domain GitOps PR chunking**: in a flat layout every tenant sits in the root directory and lands in one bucket, so large changes can only be cut by tenant count, never into one PR per domain
 - **Hierarchy-aware rollback during migration**: the incremental migration playbook's reverse-order rollback assumes hierarchy; flat can only revert PR-by-PR
 
 ### 2.2 Cost of migrating
