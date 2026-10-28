@@ -18,13 +18,10 @@ exit codes on both runs would mean the flag changed nothing.
 Exit expectations are pinned per tool from its CURRENT documented semantics
 (read from the source before pinning, not assumed):
 
-* 12 of the 14 in-scope tools: finding => exit 0 without ``--ci``, exit 1
-  (EXIT_VIOLATION) with it — the canonical fail-on-finding upgrade.
-* ``gitops_check`` documents the INVERSE: without ``--ci`` anything other
-  than "pass" exits 1; with ``--ci`` warnings exit 0 and only "fail" exits 1
-  (help text: 「CI 模式（警告也退出碼 0，僅失敗退出碼 1）」).  Its recipe drives a
-  deterministic WARN and asserted 1 -> 0 — until #3210 left no subcommand
-  that yields a warn; it is now a known no-op (``KNOWN_CI_NOOP``, #3348).
+* Every in-scope tool: finding => exit 0 without ``--ci``, exit 1
+  (EXIT_VIOLATION) with it — the canonical fail-on-finding upgrade
+  (``state_reconcile`` under ``--dry-run`` only, below). (``gitops_check`` documented the inverse until its ``--ci`` was
+  removed with the GitOps Native Mode subcommands, #3376 / #3348.)
 * ``state_reconcile``'s ``--ci`` only gates in ``--dry-run`` mode (pending
   migrations / manifest changes are "would-do" items; in apply mode they are
   applied, so nothing is pending).  Its recipe therefore carries
@@ -60,8 +57,8 @@ One file MENTIONS ``--ci`` without declaring it (``MENTION_ONLY_ALLOWLIST``):
 
 SCOPE — HONEST BOUNDARIES
 -------------------------
-1. **One finding-fixture per tool, 2 subprocesses per tool** (28 launches
-   total) — runtime discipline per the sibling gates.  The finding *class*
+1. **One finding-fixture per tool, 2 subprocesses per tool** — runtime
+   discipline per the sibling gates.  The finding *class*
    driven is one of possibly several the tool gates on (e.g. runtime_audit
    is driven via MISSING, not UNHEALTHY/ORPHAN; silencer_drift_check via
    orphans, not malformed) — the gate proves the flag flips, not that every
@@ -71,19 +68,15 @@ SCOPE — HONEST BOUNDARIES
    not a BAD-rated alert: rating an alert BAD needs a crafted Prometheus
    rules payload for marginal extra signal over the same gate line
    (``bad_count > 0 or score < args.min_score``).
-3. **gitops_check** is asserted on the warn->0 side of its inverse contract
-   only; the fail->1 side shares the same exit expression
-   (``EXIT_OK if overall_status != "fail" else EXIT_VIOLATION``) and is not
-   separately driven (would cost a third subprocess).
-4. **operator_check** rides the fake-kubectl shim (empty resource lists =>
+3. **operator_check** rides the fake-kubectl shim (empty resource lists =>
    genuine "fail" findings with ``caller_error=False``) and therefore skips
    on Windows, where CreateProcess resolves ``kubectl`` to ``kubectl.exe``
    only and bypasses the shim — same rationale, wording and authority
    (POSIX CI) as the sibling gates.
-5. **No tool source is modified.**  A --ci found to no-op is a REAL BUG
+4. **No tool source is modified.**  A --ci found to no-op is a REAL BUG
    (fail-open); it is listed in ``KNOWN_CI_NOOP`` and xfail(strict=True),
    never fixed here.
-6. **Scope is ops/ only** — tools under dx/ and lint/ also declare ``--ci``
+5. **Scope is ops/ only** — tools under dx/ and lint/ also declare ``--ci``
    and are NOT covered here (W6b blind-review F1; same ops-only line as the
    --json / dry-run / bilingual-help siblings).  The customer-CI-pipeline
    consumption this contract protects is the ops surface; dx/lint are
@@ -198,7 +191,6 @@ CI_TOOLS = collect_ci_tools()
 KNOWN_CI_NOOP: dict[str, str] = {
     # EMPTY at gate-landing time (2026-07-18): all 14 in-scope fail-on-finding
     # tools flipped their exit code on the first full run.
-    "gitops_check": "#3348 — since #3210 no subcommand yields a warn, so --ci flips nothing",
 }
 
 
@@ -313,11 +305,6 @@ def _empty_dir(tmp: Path, name: str) -> str:
     return str(d)
 
 
-def _kubectl_free_path(tmp: Path) -> str:
-    """A PATH value guaranteed to contain no kubectl (one empty dir)."""
-    return _empty_dir(tmp, "no-kubectl-on-path")
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Recipes — one finding-fixture per in-scope tool; the test runs each argv
 # twice (with/without --ci appended).
@@ -330,7 +317,6 @@ class Recipe:
     no_ci_exit: int = EXIT_OK
     ci_exit: int = EXIT_VIOLATION
     needs_kubectl: bool = False               # fake-kubectl shim (POSIX-only)
-    strip_kubectl_path: bool = False          # gitops_check sidecar: force warn
     note: str = ""                            # semantics note for the reader
 
     @property
@@ -360,16 +346,6 @@ RECIPES: list[Recipe] = [
       lambda t, s: (lambda pair: ["--dirs", f"{pair[0]},{pair[1]}",
                                   "--mode", "configmap"])(_drifting_dir_pair(t)),
       note="modified tenant yaml = unexpected drift; 0 -> 1"),
-
-    # INVERSE contract (module docstring): warn exits 1 WITHOUT --ci and 0
-    # WITH it. Since #3210 no subcommand yields a warn (a missing part is a
-    # fail, kubectl not answering is rc 2), so the flag flips nothing: the
-    # fake kubectl's empty answers make a sidecar fail, 1 with or without
-    # --ci. Known no-op, #3348 (KNOWN_CI_NOOP).
-    R("gitops_check",
-      lambda t, s: ["sidecar"],
-      no_ci_exit=EXIT_VIOLATION, ci_exit=EXIT_OK, needs_kubectl=True,
-      note="documented inverse: warn => 1 -> 0 (only 'fail' exits 1 in CI mode)"),
 
     R("lint_custom_rules",
       lambda t, s: [_denied_function_rules_dir(t)],
@@ -445,11 +421,8 @@ def test_recipe_table_covers_every_ci_tool():
         f"an allowlist entry: {uncovered}"
     )
     assert not stale, f"RECIPES/allowlist names tool(s) out of scope: {stale}"
-    assert len(CI_TOOLS) == 15, (
-        f"expected 15 argparse-declared --ci ops tools "
-        f"(14 fail-on-finding + init_project), "
-        f"found {len(CI_TOOLS)}: {sorted(CI_TOOLS)}"
-    )
+    # No pinned count: the two checks above already turn red when a tool
+    # gains or loses --ci (a hard-coded 15 only had to be bumped by hand).
 
 
 def test_one_recipe_per_tool():
@@ -562,8 +535,6 @@ def test_ci_flag_flips_exit_code_on_a_finding(recipe: Recipe, tmp_path: Path,
     env.pop("ALERTMANAGER_URL", None)
     if recipe.needs_kubectl:
         env["PATH"] = str(fake_kubectl_dir) + os.pathsep + env.get("PATH", "")
-    if recipe.strip_kubectl_path:
-        env["PATH"] = _kubectl_free_path(tmp_path)
 
     without_ci = _run(argv, recipe.tool, cwd, env)
     with_ci = _run(argv, recipe.tool, cwd, env, extra_flag="--ci")

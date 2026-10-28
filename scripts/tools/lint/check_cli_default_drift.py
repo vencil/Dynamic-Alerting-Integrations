@@ -133,8 +133,8 @@ def _parser_defaults(parser: argparse.ArgumentParser) -> dict[str, Any]:
     """{option string: default} over the parser AND every sub-parser below it.
 
     ⛔ #3139: reading only ``parser._actions`` missed every option declared on
-    an ``add_subparsers`` child — gitops-check's options all live on
-    repo/local/sidecar, so changing its documented ``--branch`` default from
+    an ``add_subparsers`` child — gitops-check's options all lived on
+    repo/local/sidecar then, so changing its documented ``--branch`` default from
     ``main`` to ``master`` stayed green. The walk is recursive (a sub-parser
     can have its own sub-parsers) and visits each parser once (an alias maps
     to the same parser object). The same option on several parsers with the

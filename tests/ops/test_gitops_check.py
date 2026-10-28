@@ -2,47 +2,13 @@
 """test_gitops_check.py — gitops_check.py pytest comprehensive test suite.
 
 Validates:
-  1. check_repo() — Git repository accessibility via git ls-remote
-     - Successful repo check with branch verification
-     - Branch not found → fail
-     - Repository access failure → fail
-     - Timeout handling
-     - Command not found (git missing)
-
-  2. check_local() — Local configuration structure validation
-     - Directory exists with _defaults.yaml and valid YAML files
-     - Missing directory → fail
-     - Missing _defaults.yaml → fail
-     - Invalid YAML in _defaults.yaml → fail
-     - Invalid YAML in tenant files → fail with parse error details
-     - Empty directory (only _defaults.yaml) → pass
-     - Multiple tenant files with rule counting
-     - Directory scan with OSError → fail
-
-  3. check_sidecar() — K8s git-sync sidecar deployment (#3210)
-     - every read is `_lib_kubectl.kubectl_list`; one with no answer raises
-       KubectlError (main: exit 2), never "not deployed"
-     - Secret present + sidecar present → pass
-     - anything missing → fail
-
-  4. Main entry points
-     - repo subcommand with JSON output
-     - local subcommand with JSON output
-     - sidecar subcommand with JSON output
-     - --ci mode: warn → exit 0, fail → exit 1
-     - normal mode: warn/fail → exit 1
-     - No action specified → exit 1
-
-  5. BilingualText & Output
-     - Human-readable output with symbols (✓, ⚠, ✗)
-     - JSON format with format_json_report
-     - Language detection (_h() selector)
-
-  6. Edge cases
-     - Empty YAML file
-     - YAML with syntax error
-     - Large tenant configurations
-     - Multiple parse errors
+  1. check_local() — local conf.d structure: _defaults.yaml presence, every
+     file read through `da-guard parse-tree`, metric / tenant counts; a
+     `--dir` that is no readable directory is a caller error (exit 2).
+  2. main() — `local` human / JSON output and exit codes; the removed
+     `repo` / `sidecar` subcommands and `--ci` (#3376, #3348) are argparse
+     errors (exit 2).
+  3. Data models, the bilingual selector, timestamps.
 """
 
 import errno
@@ -113,148 +79,6 @@ def valid_config_dir():
             yaml.dump(db_b, f)
 
         yield tmpdir
-
-
-# ── 1. _run_cmd Tests ──────────────────────────────────────────────────────
-
-class TestRunCmd:
-    """Test _run_cmd() subprocess execution."""
-
-    def test_successful_command(self):
-        """Successful command execution."""
-        success, stdout, stderr = gc._run_cmd(["echo", "hello"])
-        assert success is True
-        assert "hello" in stdout
-        assert stderr == ""
-
-    def test_failed_command(self):
-        """Failed command (non-zero exit)."""
-        success, stdout, stderr = gc._run_cmd(["sh", "-c", "exit 42"])
-        assert success is False
-
-    def test_command_not_found(self):
-        """Command not found → FileNotFoundError."""
-        success, stdout, stderr = gc._run_cmd(["nonexistent_binary_xyz"])
-        assert success is False
-        assert "not found" in stderr or "Command not found" in stderr
-
-    def test_timeout(self):
-        """Command timeout."""
-        success, stdout, stderr = gc._run_cmd(
-            ["sleep", "100"],
-            timeout=1
-        )
-        assert success is False
-        assert "timeout" in stderr or "TimeoutExpired" in str(stderr)
-
-    def test_stderr_capture(self):
-        """Capture stderr from failed command."""
-        success, stdout, stderr = gc._run_cmd(
-            ["sh", "-c", "echo 'error message' >&2; exit 1"]
-        )
-        assert success is False
-        assert "error message" in stderr
-
-
-class TestRepoPathAgainstRealGit:
-    """check_repo's path step against a real local repository (#1374).
-
-    `git archive` writes a tar to stdout. Read as locale text, bytes the codec
-    rejects made the path check fail on a zh-TW Windows host (cp950) while
-    the path existed. The tracked file carries a byte no text codec accepts,
-    so the check only passes if stdout is not decoded. On a UTF-8 host the
-    old code passed too: this test discriminates on Windows only.
-    """
-
-    def test_existing_path_is_verified(self, tmp_path):
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git not installed")
-        repo = tmp_path / "repo"
-        (repo / "conf").mkdir(parents=True)
-        (repo / "conf" / "_defaults.yaml").write_bytes(b"# \xff\xfe\x80 \xe4\xb8\xad\n")
-
-        def _git(*args):
-            subprocess.run([git, *args], cwd=repo, check=True, capture_output=True,
-                           timeout=60)
-
-        _git("init", "-q", "-b", "main")
-        _git("-c", "user.name=t", "-c", "user.email=t@example.invalid",
-             "-c", "commit.gpgsign=false", "add", "-A")
-        _git("-c", "user.name=t", "-c", "user.email=t@example.invalid",
-             "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init")
-
-        result = gc.check_repo(repo.as_posix(), "main", "conf/_defaults.yaml")
-
-        assert result.details["branch_found"] is True
-        assert result.details["config_path_verified"] is True, result.details
-
-
-class TestRepoVerdictsAgainstRealGit:
-    """#3211: the branch is matched exactly, and a path the server says the
-    branch does not have is a fail — against a real repository whose only
-    branch is `feature/main`."""
-
-    @pytest.fixture
-    def repo(self, tmp_path):
-        git = shutil.which("git")
-        if git is None:
-            pytest.skip("git not installed")
-        repo = tmp_path / "repo"
-        (repo / "conf.d").mkdir(parents=True)
-        (repo / "conf.d" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
-        ident = ["-c", "user.name=t", "-c", "user.email=t@example.invalid",
-                 "-c", "commit.gpgsign=false"]
-        for args in (["init", "-q", "-b", "feature/main"], [*ident, "add", "-A"],
-                     [*ident, "commit", "-q", "-m", "init"], ["branch", "x"],
-                     ["branch", "y/feature/main"]):
-            subprocess.run([git, *args], cwd=repo, check=True, capture_output=True,
-                           timeout=60)
-        return repo.as_posix()
-
-    def test_a_branch_is_not_matched_by_its_suffix(self, repo):
-        result = gc.check_repo(repo, "main", "conf.d")
-        assert result.status == "fail", result.details
-        assert "Branch not found" in result.message or "分支不存在" in result.message
-
-    @pytest.mark.parametrize("branch", ["x", "heads/x", "refs/heads/x"])
-    def test_the_spellings_git_resolves_to_a_branch_pass(self, repo, branch):
-        """`heads/x` and `refs/heads/x` name refs/heads/x, as git resolves them."""
-        result = gc.check_repo(repo, branch, "conf.d")
-        assert result.status == "pass", (branch, result.details)
-
-    def test_a_multi_segment_branch_is_not_matched_by_a_longer_one(self, tmp_path, repo):
-        """`feature/main` exists; `y/feature/main` too. Asking for a third
-        branch that only ENDS like them must not pass: drop feature/main and
-        ask for it — only y/feature/main is left, which merely ends in it."""
-        git = shutil.which("git")
-        subprocess.run([git, "-C", repo, "checkout", "-q", "-b", "tmp"], check=True,
-                       capture_output=True, timeout=60)
-        subprocess.run([git, "-C", repo, "branch", "-D", "feature/main"], check=True,
-                       capture_output=True, timeout=60)
-        result = gc.check_repo(repo, "feature/main", "conf.d")
-        assert result.status == "fail", result.details
-
-    def test_a_full_ref_is_taken_as_given(self, repo):
-        result = gc.check_repo(repo, "refs/heads/feature/main", "conf.d")
-        assert result.status == "pass", result.details
-        assert result.details["config_path_verified"] is True
-
-    def test_a_path_the_branch_does_not_have_is_a_fail(self, repo):
-        result = gc.check_repo(repo, "feature/main", "nope/")
-        assert result.status == "fail", result.details
-        assert result.details["config_path_verified"] is False
-
-    def test_the_cli_exit_codes(self, repo):
-        script = Path(gc.__file__)
-        codes = {}
-        for name, args in {"suffix": ["--branch", "main"],
-                           "missing-path": ["--branch", "feature/main", "--path", "nope/"],
-                           "ok": ["--branch", "feature/main", "--path", "conf.d"]}.items():
-            proc = subprocess.run([sys.executable, str(script), "repo", "--url", repo, *args],
-                                  capture_output=True, text=True, encoding="utf-8", timeout=120)
-            codes[name] = proc.returncode
-        assert codes == {"suffix": 1, "missing-path": 1, "ok": 0}
 
 
 class TestLocalDirMissingIsCallerError:
@@ -373,116 +197,6 @@ class TestLocalDirNotAccessibleIsCallerError:
         assert "Traceback" not in proc.stderr, proc.stderr
         doc = json.loads(proc.stdout)
         assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_accessible"), doc
-
-
-# ── 2. check_repo() Tests ──────────────────────────────────────────────────
-
-class TestCheckRepo:
-    """Test check_repo() Git repository validation."""
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_success(self, mock_run_cmd):
-        """Successful repo check with branch found."""
-        mock_run_cmd.side_effect = [
-            (True, "abc123\trefs/heads/main\nxyz789\trefs/heads/develop", ""),  # ls-remote
-            (True, "", ""),  # git archive (path verified)
-        ]
-
-        result = gc.check_repo("https://github.com/test/repo.git", "main")
-
-        assert result.check == "repo"
-        assert result.status == "pass"
-        assert "accessible" in result.message.lower()
-        assert result.details["url"] == "https://github.com/test/repo.git"
-        assert result.details["branch"] == "main"
-        assert result.details["branch_found"] is True
-        assert result.details["branch_count"] == 2
-        assert result.details["config_path_verified"] is True
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_branch_not_found(self, mock_run_cmd):
-        """Branch doesn't exist in repo."""
-        mock_run_cmd.return_value = (True, "abc123\trefs/heads/main\nxyz789\trefs/heads/develop", "")
-
-        result = gc.check_repo("https://github.com/test/repo.git", "nonexistent")
-
-        assert result.check == "repo"
-        assert result.status == "fail"
-        assert "not found" in result.message.lower()
-        assert result.details["url"] == "https://github.com/test/repo.git"
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_access_failure(self, mock_run_cmd):
-        """Repository not accessible."""
-        mock_run_cmd.return_value = (False, "", "Connection refused")
-
-        result = gc.check_repo("https://github.com/test/repo.git", "main")
-
-        assert result.check == "repo"
-        assert result.status == "fail"
-        assert "cannot access" in result.message.lower()
-        assert "Connection refused" in result.message
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_with_custom_branch_and_path(self, mock_run_cmd):
-        """Custom branch and path parameters."""
-        mock_run_cmd.side_effect = [
-            (True, "abc123\trefs/heads/develop\n", ""),  # ls-remote
-            (False, "", "not supported"),  # git archive fails (best-effort)
-        ]
-
-        result = gc.check_repo(
-            "git@github.com:test/repo.git",
-            branch="develop",
-            path="config/"
-        )
-
-        assert result.status == "pass"
-        assert result.details["branch"] == "develop"
-        assert result.details["config_path"] == "config/"
-        assert result.details["config_path_verified"] is False
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_git_command_failure(self, mock_run_cmd):
-        """git ls-remote command not available."""
-        mock_run_cmd.return_value = (False, "", "git: command not found")
-
-        result = gc.check_repo("https://github.com/test/repo.git")
-
-        assert result.status == "fail"
-        assert result.details["url"] == "https://github.com/test/repo.git"
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_empty_output(self, mock_run_cmd):
-        """Empty output from git ls-remote."""
-        mock_run_cmd.return_value = (True, "", "")  # single return ok: fails at branch check before archive call
-
-        result = gc.check_repo("https://github.com/test/repo.git", "main")
-
-        assert result.status == "fail"
-        assert "not found" in result.message.lower()
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_path_verified(self, mock_run_cmd):
-        """Path verification succeeds via git archive."""
-        mock_run_cmd.side_effect = [
-            (True, "abc123\trefs/heads/main\n", ""),  # ls-remote
-            (True, "", ""),  # git archive succeeds
-        ]
-        result = gc.check_repo("https://github.com/test/repo.git", "main", "conf.d")
-        assert result.details["config_path_verified"] is True
-        assert "verified" in result.message.lower()
-
-    @patch("gitops_check._run_cmd")
-    def test_repo_path_not_verifiable(self, mock_run_cmd):
-        """Path verification fails gracefully (server doesn't support git archive)."""
-        mock_run_cmd.side_effect = [
-            (True, "abc123\trefs/heads/main\n", ""),  # ls-remote
-            (False, "", "remote does not support archive"),  # git archive fails
-        ]
-        result = gc.check_repo("https://github.com/test/repo.git", "main", "conf.d")
-        assert result.status == "pass"  # not a hard failure
-        assert result.details["config_path_verified"] is False
 
 
 # ── 3. check_local() Tests ──────────────────────────────────────────────────
@@ -864,7 +578,6 @@ class TestCheckLocalExtensionSpelling:
         )
 
 
-
 class TestCheckLocalHiddenEntries:
     """#2055: `.`-prefixed names are skipped by the exporter's walker, so
     `check_local` must neither count them nor fail on them.
@@ -913,55 +626,6 @@ class TestCheckLocalHiddenEntries:
             gc.check_local(str(root))
 
 
-# ── 4. check_sidecar() Tests ───────────────────────────────────────────────
-
-def _stub_cluster(monkeypatch, secret=True, containers=("exporter", "git-sync"), deployment=True, fail=None):
-    """An in-memory cluster behind `kubectl_list` (#3210). Returns the calls."""
-    calls = []
-
-    def fake(kind, name, **kw):
-        calls.append((kind, name, kw))
-        if fail is not None:
-            raise gc.KubectlError(fail)
-        if kind == "secret":
-            return {"metadata": {"name": name}} if secret else None
-        if kind == "deployment":
-            spec = {"template": {"spec": {"containers": [{"name": c} for c in containers]}}}
-            return {"metadata": {"name": name}, "spec": spec} if deployment else None
-        raise AssertionError(kind)
-
-    monkeypatch.setattr(gc, "kubectl_get", fake)
-    return calls
-
-
-class TestCheckSidecar:
-    """Test check_sidecar() K8s deployment validation (#3210)."""
-
-    def test_full_pass_reads_each_object_by_name(self, monkeypatch):
-        calls = _stub_cluster(monkeypatch)
-        result = gc.check_sidecar(namespace="custom-ns")
-        assert result.status == "pass" and result.details["sidecar_present"] is True
-        assert calls == [("secret", "git-sync-credentials", {"namespace": "custom-ns"}),
-                         ("deployment", "threshold-exporter", {"namespace": "custom-ns"})]
-
-    @pytest.mark.parametrize("kw, missing", [
-        ({"secret": False}, ["Secret git-sync-credentials"]),
-        ({"containers": ("exporter",)}, ["git-sync container"]),
-        ({"deployment": False}, ["git-sync container"]),
-        ({"secret": False, "deployment": False}, ["Secret git-sync-credentials", "git-sync container"]),
-    ], ids=["no-secret", "no-sidecar", "no-deployment", "nothing"])
-    def test_anything_missing_is_a_fail(self, monkeypatch, kw, missing):
-        _stub_cluster(monkeypatch, **kw)
-        result = gc.check_sidecar()
-        assert result.status == "fail", result
-        assert all(m in result.message for m in missing), result.message
-
-    def test_a_read_with_no_answer_raises(self, monkeypatch):
-        _stub_cluster(monkeypatch, fail="`kubectl get secret` failed (exit 1): connection refused")
-        with pytest.raises(gc.KubectlError):
-            gc.check_sidecar()
-
-
 # ── 5. CheckResult & GitOpsReport Tests ────────────────────────────────────
 
 class TestDataModels:
@@ -970,13 +634,13 @@ class TestDataModels:
     def test_check_result_creation(self):
         """CheckResult dataclass initialization."""
         result = gc.CheckResult(
-            check="repo",
+            check="local",
             status="pass",
             message="Test message",
             details={"url": "https://github.com/test/repo.git"}
         )
 
-        assert result.check == "repo"
+        assert result.check == "local"
         assert result.status == "pass"
         assert result.message == "Test message"
         assert result.details["url"] == "https://github.com/test/repo.git"
@@ -984,7 +648,7 @@ class TestDataModels:
     def test_gitops_report_to_dict(self):
         """GitOpsReport.to_dict() serialization."""
         check = gc.CheckResult(
-            check="repo",
+            check="local",
             status="pass",
             message="OK",
             details={"url": "test"}
@@ -999,7 +663,7 @@ class TestDataModels:
 
         assert data["overall_status"] == "pass"
         assert len(data["checks"]) == 1
-        assert data["checks"][0]["check"] == "repo"
+        assert data["checks"][0]["check"] == "local"
         assert data["checks"][0]["details"]["url"] == "test"
         assert data["timestamp"] == "2024-01-01T00:00:00Z"
 
@@ -1040,104 +704,6 @@ class TestBilingualText:
 
 
 # ── 7. Main CLI Tests ──────────────────────────────────────────────────────
-
-class TestMainRepo:
-    """Test main() with repo subcommand."""
-
-    @patch("gitops_check.check_repo")
-    def test_repo_subcommand_human_output(self, mock_check_repo, capsys):
-        """repo subcommand with human-readable output."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="pass",
-            message="Git repository accessible, branch main exists",
-            details={
-                "url": "https://github.com/test/repo.git",
-                "branch": "main",
-                "config_path": "configs/",
-            }
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        assert "✓" in captured.out
-        assert "accessible" in captured.out.lower()
-
-    @patch("gitops_check.check_repo")
-    def test_repo_subcommand_json_output(self, mock_check_repo, capsys):
-        """repo subcommand with --json output."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="pass",
-            message="OK",
-            details={"url": "https://github.com/test/repo.git"}
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--json"])
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["overall_status"] == "pass"
-        assert data["checks"][0]["check"] == "repo"
-
-    @patch("gitops_check.check_repo")
-    def test_repo_fail_exit_code(self, mock_check_repo):
-        """repo subcommand with fail status → exit 1."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="fail",
-            message="Cannot access repo",
-            details={}
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
-
-        assert exc_info.value.code == 1
-
-    @patch("gitops_check.check_repo")
-    def test_repo_warn_normal_mode_exit_1(self, mock_check_repo):
-        """repo subcommand with warn status in normal mode → exit 1."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="warn",
-            message="Warning",
-            details={}
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git"])
-
-        assert exc_info.value.code == 1
-
-    @patch("gitops_check.check_repo")
-    def test_repo_warn_ci_mode_exit_0(self, mock_check_repo):
-        """repo subcommand with warn status in --ci mode → exit 0."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="warn",
-            message="Warning",
-            details={}
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"])
-
-        assert exc_info.value.code == 0
-
-    @patch("gitops_check.check_repo")
-    def test_repo_fail_ci_mode_exit_1(self, mock_check_repo):
-        """repo subcommand with fail status in --ci mode → exit 1."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="fail",
-            message="Failure",
-            details={}
-        )
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "https://github.com/test/repo.git", "--ci"])
-
-        assert exc_info.value.code == 1
 
 
 class TestMainLocal:
@@ -1204,63 +770,6 @@ class TestMainLocal:
         assert "✗" in captured.out
 
 
-class TestMainSidecar:
-    """Test main() with sidecar subcommand."""
-
-    @pytest.mark.parametrize("ci", [False, True])
-    def test_a_cluster_with_no_answer_exits_2_with_a_report(self, monkeypatch, capsys, ci):
-        """#3210: kubectl not answering is a caller error — exit 2 with or
-        without --ci, the reason in the JSON report — never "not deployed"."""
-        _stub_cluster(monkeypatch, fail="`kubectl get secret` failed (exit 1): connection refused")
-        exc_info = run_main(["gitops-check", "sidecar", "--json"] + (["--ci"] if ci else []))
-        assert exc_info.value.code == 2
-        captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["checks"][0]["details"]["reason"] == "kubectl_error"
-        assert "connection refused" in captured.err
-
-    def test_missing_parts_fail_under_ci(self, monkeypatch, capsys):
-        """#3210: a missing Secret is a fail, so --ci exits 1 (it used to be a
-        warn, exit 0)."""
-        _stub_cluster(monkeypatch, secret=False)
-        assert run_main(["gitops-check", "sidecar", "--ci"]).value.code == 1
-
-    @patch("gitops_check.check_sidecar")
-    def test_sidecar_subcommand_pass(self, mock_check_sidecar, capsys):
-        """sidecar subcommand with pass status."""
-        mock_check_sidecar.return_value = gc.CheckResult(
-            check="sidecar",
-            status="pass",
-            message="git-sync sidecar deployed, secret exists",
-            details={
-                "namespace": "monitoring",
-                "git_sync_secret": "present",
-                "sidecar_present": True,
-            }
-        )
-
-        exc_info = run_main(["gitops-check", "sidecar"])
-
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        assert "✓" in captured.out
-
-    @patch("gitops_check.check_sidecar")
-    def test_sidecar_custom_namespace(self, mock_check_sidecar, capsys):
-        """sidecar subcommand with custom namespace."""
-        mock_check_sidecar.return_value = gc.CheckResult(
-            check="sidecar",
-            status="warn",
-            message="kubectl not available",
-            details={"namespace": "custom-ns"}
-        )
-
-        exc_info = run_main(["gitops-check", "sidecar", "--namespace", "custom-ns"])
-
-        # Verify check_sidecar was called with custom namespace
-        mock_check_sidecar.assert_called_once_with("custom-ns")
-
-
 class TestMainEdgeCases:
     """Test main() edge cases and error handling."""
 
@@ -1274,9 +783,18 @@ class TestMainEdgeCases:
         """Invalid subcommand → argparse error."""
         run_main(["gitops-check", "invalid"])
 
-    def test_repo_missing_required_url(self):
-        """repo subcommand without --url → error."""
-        run_main(["gitops-check", "repo"])
+
+    @pytest.mark.parametrize("argv", [
+        ["repo", "--url", "https://example.com/r.git"],
+        ["sidecar"],
+        ["local", "--dir", ".", "--ci"],
+    ], ids=["repo", "sidecar", "local --ci"])
+    def test_removed_subcommands_and_ci_are_caller_errors(self, argv):
+        """#3376, #3348: `repo`, `sidecar` and `--ci` checked GitOps Native
+        Mode, refused since #1349; they are gone, so argparse refuses them
+        (exit 2) rather than run a check that could only fail."""
+        exc_info = run_main(["gitops-check", *argv])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_local_missing_required_dir(self):
         """local subcommand without --dir → error."""
@@ -1288,50 +806,6 @@ class TestMainEdgeCases:
 class TestOutputFormatting:
     """Test output formatting and symbols."""
 
-    @patch("gitops_check.check_repo")
-    def test_pass_symbol_in_output(self, mock_check_repo, capsys):
-        """Pass status displays ✓ symbol."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="pass",
-            message="OK",
-            details={}
-        )
-
-        run_main(["gitops-check", "repo", "--url", "test"])
-
-        captured = capsys.readouterr()
-        assert "✓" in captured.out
-
-    @patch("gitops_check.check_repo")
-    def test_warn_symbol_in_output(self, mock_check_repo, capsys):
-        """Warn status displays ⚠ symbol."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="warn",
-            message="Warning",
-            details={}
-        )
-
-        run_main(["gitops-check", "repo", "--url", "test"])
-
-        captured = capsys.readouterr()
-        assert "⚠" in captured.out
-
-    @patch("gitops_check.check_repo")
-    def test_fail_symbol_in_output(self, mock_check_repo, capsys):
-        """Fail status displays ✗ symbol."""
-        mock_check_repo.return_value = gc.CheckResult(
-            check="repo",
-            status="fail",
-            message="Failed",
-            details={}
-        )
-
-        run_main(["gitops-check", "repo", "--url", "test"])
-
-        captured = capsys.readouterr()
-        assert "✗" in captured.out
 
     @patch("gitops_check.check_local")
     def test_details_in_output(self, mock_check_local, capsys):
@@ -1382,15 +856,6 @@ class TestIntegration:
         assert data["checks"][0]["check"] == "local"
         assert data["checks"][0]["details"]["tenant_files"] == 2
 
-    @patch("gitops_check._run_cmd")
-    def test_repo_check_with_custom_parameters(self, mock_run_cmd, capsys):
-        """Repo check with custom branch and path."""
-        mock_run_cmd.return_value = (True, "abc\trefs/heads/develop\n", "")
-
-        exc_info = run_main(["gitops-check", "repo", "--url", "git@github.com:test/repo.git", "--branch", "develop", "--path", "config/"])
-
-        assert exc_info.value.code == 0
-
 
 # ── 10. Error Recovery Tests ───────────────────────────────────────────────
 
@@ -1435,15 +900,6 @@ class TestErrorRecovery:
         with refuses("team/bad.yaml") as err:
             gc.check_local(config_dir)
         assert "invalid_utf8: not valid UTF-8 at byte 12" in err.getvalue()
-
-    def test_run_cmd_with_unicode_error(self):
-        """_run_cmd handles unicode in error messages."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = Exception("錯誤信息")
-            success, stdout, stderr = gc._run_cmd(["test"])
-
-        assert success is False
-        assert "錯誤" in stderr or "error" in stderr.lower()
 
 
 # ── 11. Timestamp Tests ────────────────────────────────────────────────────

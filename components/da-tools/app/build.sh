@@ -210,7 +210,7 @@ TOOL_FILES=(
     _lib_compat.py
     _lib_prometheus.py
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
-    # ops/operator_check.py + ops/gitops_check.py. Stdlib + _lib_exitcodes.
+    # ops/operator_check.py. Stdlib + _lib_exitcodes.
     _lib_kubectl.py
     _lib_io.py
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by

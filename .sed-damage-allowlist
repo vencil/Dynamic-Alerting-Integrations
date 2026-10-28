@@ -217,3 +217,8 @@ tests/shared/http_config_exclusive_pairs.json
 # pre-write confirmation is deleted, only require_output_tree (and its tests) stays.
 scripts/tools/_lib_write_check.py
 tests/ops/test_lib_write_check.py
+
+# #3376/#3348: gitops-check keeps `local` only — the `repo` and `sidecar`
+# subcommands (GitOps Native Mode, refused since #1349) and `--ci` are
+# removed, not truncated.
+scripts/tools/ops/gitops_check.py

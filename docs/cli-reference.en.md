@@ -142,7 +142,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--tenants <list>` with any of `--ci` / `--rule-packs` / `--deploy`, or interactive mode (no flags) |
-| `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
+| `gitops-check` | Local conf.d structure check | `local --dir <path>` |
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump) | `--silences-file <json> --rule-source <path>` |
@@ -1342,59 +1342,38 @@ da-tools init --ci both --tenants db-a --dry-run
 
 #### gitops-check
 
-GitOps Native Mode readiness validation — checks Git repo accessibility, local config structure, and git-sync sidecar deployment status.
+Local conf.d structure check: whether the root defaults carrier is there, whether every file reads through `da-guard parse-tree`, and the threshold and tenant-file counts.
 
 When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 ```bash
-da-tools gitops-check <subcommand> [options]
+da-tools gitops-check local --dir <path> [--json]
 ```
-
-**Subcommands**
-
-| Subcommand | Purpose | Parameters |
-|------------|---------|------------|
-| `repo` | Validate Git repo accessibility, branch existence, and that `--path` is in that branch | `--url <git-url> [--branch main] [--path configs/]` |
-| `local` | Validate local clone's conf.d/ structure | `--dir <path>` |
-| `sidecar` | Check K8s git-sync sidecar deployment readiness | `[--namespace monitoring]` |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--url <GIT-URL>` | `repo`: the Git repository URL (required) | (none) |
-| `--branch <BRANCH>` | `repo`: the branch to check | `main` |
-| `--path <PATH>` | `repo`: the config path inside the repository | `configs/` |
-| `--dir <PATH>` | `local`: the local config directory (required) | (none) |
-| `--namespace <NS>` | `sidecar`: K8s namespace | `monitoring` |
-| `--json` | Accepted by all three subcommands: JSON output | false |
-| `--ci` | Accepted by all three subcommands: only a failure exits 1, a warning exits 0 (without it a warning exits 1 too) | false |
+| `--dir <PATH>` | Local config directory (required) | (none) |
+| `--json` | JSON output | false |
 
 **How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and every file the exporter reads (`_` platform files included) that cannot be read is listed in `parse_errors` and fails the check. It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
 
-**Exit Codes**
+**Exit codes**
 
-| Code | Description |
-|------|-------------|
-| `0` | Passed; with `--ci` a warning is 0 too (no subcommand gives one today); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
-| `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`); `sidecar` finds no git-sync Secret (`git-sync-credentials`) or no `git-sync` container in Deployment `threshold-exporter`. Without `--ci` a warning is 1 too |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; `sidecar`'s kubectl gives no answer (cluster unreachable, forbidden, kubectl not on PATH or timed out; `reason: kubectl_error`); an unexpected exception in the tool |
+| Code | Meaning |
+|------|---------|
+| `0` | Passed |
+| `1` | A failure: the root defaults carrier is missing, or a file cannot be read (`parse_errors`) |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--dir`, unknown flag); `--dir` naming no directory (`reason: dir_not_found`), or whether it is one cannot be told, e.g. a parent directory the caller cannot enter (`reason: dir_not_accessible`); no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it failed; an unexpected exception in the tool |
 
-`sidecar` needs `get` on Secret `git-sync-credentials` and Deployment `threshold-exporter` in the namespace (read by name, so a Role restricted by `resourceNames` is enough; no `list`).
-
-⚠️ **Behaviour change (`sidecar`, [#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210))**: it reads the Secret and the Deployment by name through `_lib_kubectl.kubectl_get` and no longer runs `kubectl version --short` (current kubectl dropped `--short`, so it always reported "kubectl not available"). Exit codes: everything present `1` → `0`; a missing part is a fail instead of a warn, `--ci` `0` → `1`; an unreachable or forbidden cluster, or no kubectl, `1` (`--ci` `0`) → `2`.
+⚠️ **Behaviour change ([#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376), [#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348))**: the `repo` and `sidecar` subcommands and `--ci` are removed. They checked GitOps Native Mode, unsupported since [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349): the chart deploys no git-sync container, so `sidecar` could only fail, and `repo` cannot verify `--path` on GitHub (no `git archive --remote` there). A call with them exits `0` / `1` → `2`.
 
 **Examples**
 
 ```bash
-# Validate Git repo
-da-tools gitops-check repo --url git@github.com:example/configs.git
-
-# Validate local config structure
 da-tools gitops-check local --dir conf.d
-
-# Check sidecar deployment
-da-tools gitops-check sidecar --namespace monitoring --json
+da-tools gitops-check local --dir conf.d --json
 ```
 
 ---

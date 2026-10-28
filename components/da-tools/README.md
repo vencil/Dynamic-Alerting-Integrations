@@ -172,7 +172,7 @@ docker run --rm \
 | `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 `generate-routes --validate --strict`（ADR-036 §3） | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
 | `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`） | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `--config-dir <dir> snapshot` |
-| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar 三模式） | `local --dir <dir>`（或 `repo --url <url>`、`sidecar`） |
+| `gitops-check` | conf.d 本機結構檢查 | `local --dir <dir>` |
 | `tenant-verify` ✨v2.8.0 | 印 tenant effective config + merged_hash；`--expect-merged-hash` 比對快照（rollback 驗證） | `<tenant> --conf-d <dir>` |
 | `state-reconcile` ✨v2.8.0 | 遷移狀態目錄聲明式一致化（`.da/state/*.json` schema 驗證 + `.da/manifest.json` 重建），取代手動 jq 校正流程 | `--state-dir <dir>`（預設 `.da/state`） |
 

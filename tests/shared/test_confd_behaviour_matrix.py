@@ -301,7 +301,7 @@ TOOLS: dict[str, Tool] = {
     "policy_engine": Tool((_PY, _T + "ops/policy_engine.py", "--config-dir", "{conf}", "--ci")),
     "policy_opa_bridge": Tool((_PY, _T + "ops/policy_opa_bridge.py", "--config-dir", "{conf}",
                                "--dry-run")),
-    "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}", "--ci")),
+    "gitops_check": Tool((_PY, _T + "ops/gitops_check.py", "local", "--dir", "{conf}")),
     "guard_dispatch": Tool((_PY, _T + "ops/guard_dispatch.py", "defaults-impact", "--config-dir", "{conf}")),
     # The three writers below write conf.d files into an output directory;
     # here that directory is the tree under test (an EXISTING conf.d), which
