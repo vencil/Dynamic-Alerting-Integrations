@@ -774,7 +774,7 @@ func refusedRootThresholds(block map[string]any) map[string]bool {
 // override map. s stays nil until one is seen.
 func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any, rootRefused map[string]bool) map[string]bool {
 	for k := range block {
-		if !(tenantMapOnlyKey(k) || rootRefused[k]) || !levelWritesSpelling(block, k) {
+		if (!tenantMapOnlyKey(k) && !rootRefused[k]) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
