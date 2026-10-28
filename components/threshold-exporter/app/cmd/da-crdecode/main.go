@@ -11,24 +11,34 @@
 // checks (the CRD's OpenAPI schema, name / namespace validation). The Python
 // caller makes its own checks on the decoded JSON.
 //
+// It also says where that reading is not the text the file was written with
+// (ADR-036 §7 step 11, #3206; aswritten.go): a key `010:` the conversion
+// reads as "8", a string it reads as other text. A caller that takes names
+// from the JSON reads that report; it does not read the YAML a second time.
+//
 // Usage:
 //
 //	da-crdecode <file>
 //
 // Output (stdout, on exit 0): one JSON object,
 //
-//	{"documents": [<the document, as JSON>]}
+//	{"documents": [<the document, as JSON>],
+//	 "differs_from_text": [[<difference>, ...]]}
 //
 // `documents` is a list so that a later version can return every document of
 // a multi-document file (#2529) without changing the shape; today a file with
 // more than one document is refused (exit 2), as the PyYAML reader refused it.
+// Each document's objects carry their keys in the order the file writes them.
+// `differs_from_text` holds one list per document; aswritten.go describes
+// its entries.
 //
 // Exit codes:
 //
 //	0  decoded; JSON on stdout
 //	2  caller error: bad arguments, the file cannot be read, the conversion
-//	   refuses it (the reason is on stderr), or it holds more than one
-//	   document
+//	   refuses it (the reason is on stderr), it holds more than one
+//	   document, or it cannot be read as written to compare with the
+//	   conversion
 package main
 
 import (
@@ -53,7 +63,8 @@ const (
 
 // output is the stdout contract.
 type output struct {
-	Documents []json.RawMessage `json:"documents"`
+	Documents       []json.RawMessage `json:"documents"`
+	DiffersFromText [][]difference    `json:"differs_from_text"`
 }
 
 func main() {
@@ -78,7 +89,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, path, err)
 		return exitCallerErr
 	}
-	out, err := json.Marshal(output{Documents: []json.RawMessage{doc}})
+	doc, differs, err := compareAsWritten(data, doc)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, path, err)
+		return exitCallerErr
+	}
+	out, err := json.Marshal(output{Documents: []json.RawMessage{doc},
+		DiffersFromText: [][]difference{differs}})
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, path, err)
 		return exitCallerErr

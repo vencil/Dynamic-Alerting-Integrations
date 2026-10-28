@@ -31,14 +31,15 @@ func TestDecodesAsKubernetesClientsDo(t *testing.T) {
 	}{
 		// YAML 1.1 (PyYAML) reads these names as strings; the Kubernetes
 		// client conversion does not (#2476).
-		{"octal-0o", "name: 0o17\n", `{"documents":[{"name":15}]}` + "\n"},
-		{"exponent", "name: 1e3\n", `{"documents":[{"name":1000}]}` + "\n"},
-		{"leading-zero", "name: 08\n", `{"documents":[{"name":8}]}` + "\n"},
-		{"y-is-bool", "name: y\n", `{"documents":[{"name":true}]}` + "\n"},
-		// Keys become strings; JSON objects come out with sorted keys.
-		{"keys", "b: 1\n010: 2\n", `{"documents":[{"8":2,"b":1}]}` + "\n"},
-		{"empty-file", "", `{"documents":[null]}` + "\n"},
-		{"leading-separator", "---\na: 1\n", `{"documents":[{"a":1}]}` + "\n"},
+		{"octal-0o", "name: 0o17\n", `{"documents":[{"name":15}],"differs_from_text":[[]]}` + "\n"},
+		{"exponent", "name: 1e3\n", `{"documents":[{"name":1000}],"differs_from_text":[[]]}` + "\n"},
+		{"leading-zero", "name: 08\n", `{"documents":[{"name":8}],"differs_from_text":[[]]}` + "\n"},
+		{"y-is-bool", "name: y\n", `{"documents":[{"name":true}],"differs_from_text":[[]]}` + "\n"},
+		// Keys become strings, in the order written; `010` is read as "8".
+		{"keys", "b: 1\n010: 2\n", `{"documents":[{"b":1,"8":2}],"differs_from_text":[[` +
+			`{"kind":"keys","path":[],"read_keys":["8"],"written_keys":["010"]}]]}` + "\n"},
+		{"empty-file", "", `{"documents":[null],"differs_from_text":[[]]}` + "\n"},
+		{"leading-separator", "---\na: 1\n", `{"documents":[{"a":1}],"differs_from_text":[[]]}` + "\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,9 +149,10 @@ func TestMapDecodeAppliesMerge(t *testing.T) {
 func TestSameValueKeysStillDecode(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{
-		"t1: 1\nt1: 2\n":   `{"documents":[{"t1":2}]}` + "\n",
-		"8: a\n010: b\n":   `{"documents":[{"8":"b"}]}` + "\n",
-		"- {a: 1, a: 2}\n": `{"documents":[[{"a":2}]]}` + "\n",
+		"t1: 1\nt1: 2\n": `{"documents":[{"t1":2}],"differs_from_text":[[]]}` + "\n",
+		"8: a\n010: b\n": `{"documents":[{"8":"b"}],"differs_from_text":[[` +
+			`{"kind":"keys","path":[],"read_keys":[],"written_keys":["010"]}]]}` + "\n",
+		"- {a: 1, a: 2}\n": `{"documents":[[{"a":2}]],"differs_from_text":[[]]}` + "\n",
 	} {
 		rc, out, errOut := runOn(t, in)
 		if rc != exitOK || out != want {

@@ -21,8 +21,7 @@ import yaml
 
 from _lib_constants import ONBOARD_HINTS_FILENAME
 # Leaf module (yaml + stdlib only), so no import cycle (#2114).
-from _lib_yaml_keys import (ExporterKeyLoader, KeepPlainScalarText,
-                            load_exporter_keys, load_for_rewrite)
+from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 from _lib_exitcodes import EXIT_CALLER_ERROR, die_caller_error
 
@@ -178,34 +177,6 @@ def load_yaml_file_exporter_keys(
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return default if data is None else data
-
-
-def load_yaml_file_for_rewrite(path: Optional[str], default: Any = None) -> Any:
-    """:func:`load_yaml_file_exporter_keys` for a file the caller will WRITE
-    BACK: plain scalar values are ``_lib_yaml_keys.RawPlain`` (their source
-    text), so dumping with ``dump_for_rewrite`` does not retype them (#2220).
-
-    Same missing / empty contract and the same pure parser; not strict.
-    ⚠️ Only for the rewrite path: the values are text, not numbers.
-
-    ⛔ *default* only for a path that does not exist (#3206): a file whose
-    stat or read is refused, or a directory, raises the ``OSError`` — never
-    the default, which would read an existing file as empty (``isfile``
-    answers False for a file it may not stat).
-    """
-    if not path:
-        return default
-    try:
-        raw = Path(path).read_bytes()
-    except FileNotFoundError:
-        return default
-    try:
-        text_stream = io.StringIO(raw.decode("utf-8"))
-        text_stream.name = str(path)   # marks name the real file
-        loaded = load_for_rewrite(text_stream)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
-    return loaded if loaded is not None else default
 
 
 # ── Strict reading: a duplicate mapping key is an error (#2123) ─────────────
@@ -388,11 +359,6 @@ class StrictExporterKeyLoader(RejectDuplicateKeys, ExporterKeyLoader):
     """
 
 
-class StrictRewriteLoader(KeepPlainScalarText, StrictExporterKeyLoader):
-    """``StrictExporterKeyLoader`` for a document that will be dumped back:
-    plain scalars are ``RawPlain`` (``_lib_yaml_keys``, #2220)."""
-
-
 @functools.lru_cache(maxsize=None)
 def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]",
                                raw_text_scalars: "frozenset[str]" = frozenset()
@@ -525,13 +491,6 @@ def strict_load_exporter_keys(stream: Any, *,
     that names a key (``_profile: 010``, #2216/#2237); a null stays None."""
     return strict_safe_load(stream, loader=_strict_exporter_key_class(
         frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
-
-
-def strict_load_for_rewrite(stream: Any) -> Any:
-    """:func:`strict_load_exporter_keys` for a document the caller will dump
-    back with ``_lib_yaml_keys.dump_for_rewrite`` (#2220): plain scalars —
-    ``_profile: 010`` included — come back as their source text."""
-    return strict_safe_load(stream, loader=StrictRewriteLoader)
 
 
 # ── #2164 → ADR-036 step 4 (#2906): a scalar in a STRING field that yaml.v3

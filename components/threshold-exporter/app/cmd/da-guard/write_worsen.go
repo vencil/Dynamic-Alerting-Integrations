@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -171,11 +172,22 @@ func treeValidation(root string, opts config.ScanOptions, limits *config.TreeSca
 		return nil, nil, err
 	}
 	spellFindingsAsWritten(report, scoped)
+	// A `_custom_alerts[i]` finding is keyed by its ordinal among the
+	// tenant's findings of that kind, not by i (#3235): deleting or adding an
+	// entry before an entry the exporter already rejected shifts its index,
+	// and the tree is no worse. One more such finding still is.
+	ordinal := map[string]int{}
 	for _, fd := range report.Findings {
 		if fd.Severity != guard.SeverityError {
 			continue
 		}
-		out["finding\x00"+fd.Kind.String()+"\x00"+fd.TenantID+"\x00"+fd.Field] = writeWorsened{
+		field := fd.Field
+		if strings.HasPrefix(field, "_custom_alerts[") {
+			k := fd.Kind.String() + "\x00" + fd.TenantID
+			field = fmt.Sprintf("_custom_alerts#%d", ordinal[k])
+			ordinal[k]++
+		}
+		out["finding\x00"+fd.Kind.String()+"\x00"+fd.TenantID+"\x00"+field] = writeWorsened{
 			Kind: worsenFinding, Tenant: fd.TenantID, Finding: fd.Kind.String(), Message: fd.Message}
 	}
 	return out, duplicated, nil

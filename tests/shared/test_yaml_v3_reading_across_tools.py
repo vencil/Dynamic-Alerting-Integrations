@@ -227,7 +227,11 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
-    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB, "_lib_confedit.py": _LIB,
+    "_lib_yaml_keys.py": (_LIB + "; read by no conf.d reader since ADR-036 step 11 — its "
+                          "PyYAML rewrite layer is deleted "
+                          "(tests/shared/test_rewrite_layer_is_gone.py) and its loader "
+                          "serves only YAML that is not conf.d until step 12"),
+    "_lib_write_check.py": _LIB, "_lib_confedit.py": _LIB,
     "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
@@ -242,7 +246,10 @@ _NOT_PROBED: dict[str, str] = {
     "dx/sync_schema.py": _NAMES, "lint/check_cli_contract.py": _NAMES,
     "lint/check_cli_default_drift.py": _NAMES, "lint/check_doc_datools_cmds.py": _NAMES,
     "lint/check_structure.py": _NAMES,
-    "lint/check_md_yaml_drift.py": "reads YAML fences / CRDs quoted in docs, not a tenant conf.d",
+    "lint/check_md_yaml_drift.py": (_GO + "; the conf.d examples quoted in docs/**/*.md, each "
+                                    "written into a scratch tree it makes itself (ADR-036 step "
+                                    "11), no conf.d argument to probe — "
+                                    "tests/lint/test_check_md_yaml_drift.py"),
     "ops/config_diff.py": ("renders both trees through da-guard and the route generator "
                            "(subprocess): its routing half is the generator's probe"),
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
