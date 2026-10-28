@@ -209,3 +209,69 @@ def test_profile_tenant_without_a_k8s_target_is_a_violation(tmp_path: Path) -> N
     helm.mkdir()
     result = crd.evaluate(root, helm, tmp_path / "no-namespaces.yaml")
     assert len(result["violations"]) == 1 and "'alpha'" in result["violations"][0], result
+
+
+# ── #3206 (ADR-036 §12): the namespaces manifest, read as kubectl reads it ──
+
+def _ns(name: str, instance: str) -> str:
+    return (f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {name}\n"
+            f"  labels:\n    instance: {instance}\n")
+
+
+def test_every_namespace_document_is_read(tmp_path: Path) -> None:
+    """da-crdecode returns every document `kubectl apply -f` would apply:
+    several Namespaces, separators with nothing between them, a comment-only
+    document, and a document that is not a Namespace."""
+    f = tmp_path / "ns.yaml"
+    f.write_text("---\n" + _ns("db-a", "db-a") + "---\n---\n# nothing here\n---\n"
+                 + "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x, labels: {instance: other}}\n"
+                 + "---\n" + _ns("db-b", '"010"'), encoding="utf-8")
+    assert crd.namespace_declared_targets(f) == {"db-a", "010"}
+
+
+@pytest.mark.parametrize("value,read", [("010", "8"), ("yes", "true"), ("1e3", "1000")])
+def test_a_label_kubectl_refuses_is_an_error_naming_the_document(
+        tmp_path: Path, value: str, read: str) -> None:
+    """`instance: 010` is the number 8 to kubectl, which refuses a label that
+    is not a string: the Namespace is never created. Reported with the file
+    and the document's position; neither the text nor the number is taken."""
+    f = tmp_path / "ns.yaml"
+    f.write_text(_ns("db-a", "db-a") + "---\n" + _ns("db-b", value), encoding="utf-8")
+    with pytest.raises(crd.NamespacesFileError) as exc_info:
+        crd.namespace_declared_targets(f)
+    msg = str(exc_info.value)
+    assert f"ns.yaml: document 2 (Namespace 'db-b'): label `instance` is {read} " in msg, msg
+
+
+def test_main_exits_2_on_a_label_kubectl_refuses(tmp_path: Path, monkeypatch, capsys) -> None:
+    root = _tree(tmp_path / "conf.d", "alpha.yaml")
+    helm = tmp_path / "helm"
+    helm.mkdir()
+    (helm / "values-alpha.yaml").write_text("{}\n", encoding="utf-8")
+    ns = tmp_path / "ns.yaml"
+    ns.write_text(_ns("db-x", "010"), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["check_retire_drift.py", "--config-dir", str(root),
+                                      "--helm-dir", str(helm), "--namespaces-file", str(ns)])
+    assert crd.main() == 2
+    err = capsys.readouterr().err
+    assert "document 1 (Namespace 'db-x'): label `instance` is 8" in err, err
+
+
+def test_a_manifest_kubectl_cannot_read_is_an_error(tmp_path: Path) -> None:
+    """A `---` line carrying content is refused by kubectl's splitter; the
+    reason is da-crdecode's, passed on, not a silent empty set."""
+    f = tmp_path / "ns.yaml"
+    f.write_text(_ns("db-a", "db-a") + "--- kind: Namespace\n", encoding="utf-8")
+    with pytest.raises(crd.NamespacesFileError) as exc_info:
+        crd.namespace_declared_targets(f)
+    assert any("invalid YAML document separator" in ln for ln in exc_info.value.detail_lines), (
+        exc_info.value.detail_lines)
+
+
+def test_no_da_crdecode_is_an_error_not_an_empty_set(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("DA_CRDECODE_BINARY", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    f = tmp_path / "ns.yaml"
+    f.write_text(_ns("db-a", "db-a"), encoding="utf-8")
+    with pytest.raises(crd.NamespacesFileError, match="da-crdecode was not found"):
+        crd.namespace_declared_targets(f)

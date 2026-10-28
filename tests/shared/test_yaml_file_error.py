@@ -403,6 +403,11 @@ _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
                     "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
                     # #2906 F2: the single file through parse-tree's file mode
                     "analyze_gaps --tenant-config"}
+#: #3206 (ADR-036 §12): the Alertmanager config is read by its consumer's
+#: loader (da-crdecode, then `da-read alertmanager`), not by Python: no Python
+#: cause class, but the reader's own reason — the byte that is not UTF-8 —
+#: reaches the operator.
+_CONSUMER_READ_ROWS = {"onboard --alertmanager-config"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
@@ -458,6 +463,8 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         # ADR-036 step 4 (#2906): read through `da-guard parse-tree`, whose
         # kind tells bad bytes from bad syntax.
         assert "invalid_utf8" in p.stderr, p.stderr[-500:]
+    elif label in _CONSUMER_READ_ROWS:
+        assert "invalid leading UTF-8 octet" in p.stderr, "the reader's reason must reach the operator"
     elif label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
         # parse_failed): no Python cause class, but the exporter's own parse

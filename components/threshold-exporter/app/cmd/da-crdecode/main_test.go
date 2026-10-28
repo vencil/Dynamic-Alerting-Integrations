@@ -20,7 +20,7 @@ func runOn(t *testing.T, content string) (int, string, string) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	rc := run([]string{path}, &stdout, &stderr)
+	rc := run([]string{path}, strings.NewReader(""), &stdout, &stderr)
 	return rc, stdout.String(), stderr.String()
 }
 
@@ -38,7 +38,8 @@ func TestDecodesAsKubernetesClientsDo(t *testing.T) {
 		// Keys become strings, in the order written; `010` is read as "8".
 		{"keys", "b: 1\n010: 2\n", `{"documents":[{"b":1,"8":2}],"differs_from_text":[[` +
 			`{"kind":"keys","path":[],"read_keys":["8"],"written_keys":["010"]}]]}` + "\n"},
-		{"empty-file", "", `{"documents":[null],"differs_from_text":[[]]}` + "\n"},
+		// kubectl applies nothing from an empty file: no document.
+		{"empty-file", "", `{"documents":[],"differs_from_text":[]}` + "\n"},
 		{"leading-separator", "---\na: 1\n", `{"documents":[{"a":1}],"differs_from_text":[[]]}` + "\n"},
 	}
 	for _, tc := range cases {
@@ -62,9 +63,16 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		{"not-utf8", "a: \xff\n", "invalid leading UTF-8"},
 		{"self-referencing-anchor", "a: &a [1, *a]\n", "contains itself"},
 		{"inf-has-no-json", "a: .inf\n", "unsupported value"},
-		// YAMLToJSON alone would read only the first document.
-		{"two-documents", "a: 1\n---\nb: 2\n", "more than one YAML document"},
-		{"trailing-separator", "a: 1\n---\n", "more than one YAML document"},
+		// `...` does not separate documents for kubectl: the piece goes to
+		// the conversion whole, which refuses the text after it.
+		{"text-after-document-end", "a: 1\n...\nb: 2\n", "did not find expected <document start>"},
+		// kubectl's YAMLReader refuses content after `---` on its line.
+		{"content-after-separator", "a: 1\n--- b: 2\n", "line 2: invalid YAML document separator: b: 2"},
+		{"glued-separator", "---x\n", "invalid YAML document separator: x"},
+		// The document a refusal is in is named by its first line, and the
+		// parser's line numbers are the file's.
+		{"refused-second-document", "a: 1\n---\nb: .inf\n", "the document starting at line 3"},
+		{"line-numbers-are-the-files", "a: 1\n---\nb: 1\nc: [\n", "the document starting at line 3: yaml: line 4:"},
 		// #2476 F1: the int 8 and the string "8" are one JSON key; which one
 		// YAMLToJSON keeps depends on Go's map iteration order.
 		{"int-and-string-collide", "010: a\n\"8\": b\n\"010\": c\n", `the same JSON key "8"`},
@@ -200,9 +208,95 @@ func TestCallerErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var stdout, stderr bytes.Buffer
-			if rc := run(args, &stdout, &stderr); rc != exitCallerErr || stdout.Len() != 0 || stderr.Len() == 0 {
+			if rc := run(args, strings.NewReader(""), &stdout, &stderr); rc != exitCallerErr || stdout.Len() != 0 || stderr.Len() == 0 {
 				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, a message, no stdout", rc, stdout.String(), stderr.String())
 			}
 		})
+	}
+}
+
+// #3206 (ADR-036 §12): a file of several documents is split as `kubectl
+// apply -f` splits it (YAMLReader + StreamVisitor): one entry per document
+// kubectl applies, in file order. A piece that converts to nothing or to null
+// — only `---`, blank lines, comments, an explicit null — is skipped, as
+// kubectl skips it; `--- # note` is a separator.
+func TestSeveralDocumentsAsKubectlSplitsThem(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, in, want string
+	}{
+		{"two", "a: 1\n---\nb: 2\n",
+			`{"documents":[{"a":1},{"b":2}],"differs_from_text":[[],[]]}`},
+		{"trailing-separator", "a: 1\n---\n",
+			`{"documents":[{"a":1}],"differs_from_text":[[]]}`},
+		{"empty-between", "---\n---\na: 1\n---\n\n---\n# only a comment\n---\nnull\n---\nb: 010\n",
+			`{"documents":[{"a":1},{"b":8}],"differs_from_text":[[],[]]}`},
+		{"separator-with-comment", "a: 1\n--- # next\nb: 2\n",
+			`{"documents":[{"a":1},{"b":2}],"differs_from_text":[[],[]]}`},
+		{"only-separators", "---\n---\n", `{"documents":[],"differs_from_text":[]}`},
+		{"only-comments", "# nothing\n", `{"documents":[],"differs_from_text":[]}`},
+		// Each document's differences are its own.
+		{"differs-per-document", "x: {010: a}\n---\nw: {b: c}\n---\nz: {yes: d}\n",
+			`{"documents":[{"x":{"8":"a"}},{"w":{"b":"c"}},{"z":{"true":"d"}}],"differs_from_text":[` +
+				`[{"kind":"keys","path":["x"],"read_keys":["8"],"written_keys":["010"]}],[],` +
+				`[{"kind":"keys","path":["z"],"read_keys":["true"],"written_keys":["yes"]}]]}`},
+		// Several Namespaces with an unquoted label: Kubernetes reads 8.
+		{"namespaces", "apiVersion: v1\nkind: Namespace\nmetadata: {name: a, labels: {instance: 010}}\n" +
+			"---\napiVersion: v1\nkind: Namespace\nmetadata: {name: b, labels: {instance: \"010\"}}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"a","labels":{"instance":8}}},` +
+				`{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"b","labels":{"instance":"010"}}}],` +
+				`"differs_from_text":[[],[]]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rc, out, errOut := runOn(t, tc.in)
+			if rc != exitOK || out != tc.want+"\n" || errOut != "" {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 0 stdout %q", rc, out, errOut, tc.want)
+			}
+		})
+	}
+}
+
+// `-` reads standard input: the inner layer of a ConfigMap is handed over
+// that way, with no temporary file.
+func TestReadsStandardInput(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	rc := run([]string{"-"}, strings.NewReader("a: 1\n---\nb: [x]\n"), &stdout, &stderr)
+	if want := `{"documents":[{"a":1},{"b":["x"]}],"differs_from_text":[[],[]]}` + "\n"; rc != exitOK ||
+		stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want %q", rc, stdout.String(), stderr.String(), want)
+	}
+	stdout.Reset()
+	rc = run([]string{"-"}, strings.NewReader("a: .inf\n"), &stdout, &stderr)
+	if rc != exitCallerErr || stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), programName+": "+stdinName+": ") {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming %s", rc, stdout.String(), stderr.String(), stdinName)
+	}
+}
+
+// The two layers of a ConfigMap: the outer document is read the Kubernetes
+// way, and the string it holds is read again from standard input.
+func TestConfigMapInnerLayerThroughStandardInput(t *testing.T) {
+	t.Parallel()
+	cm := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: am}\ndata:\n  alertmanager.yml: |\n" +
+		"    route: {receiver: r}\n    x: 010\n"
+	rc, out, errOut := runOn(t, cm)
+	if rc != exitOK {
+		t.Fatalf("outer: rc=%d stderr=%q", rc, errOut)
+	}
+	var outer struct {
+		Documents []struct {
+			Data map[string]string `json:"data"`
+		} `json:"documents"`
+	}
+	if err := json.Unmarshal([]byte(out), &outer); err != nil || len(outer.Documents) != 1 {
+		t.Fatalf("outer: %v %s", err, out)
+	}
+	inner := outer.Documents[0].Data["alertmanager.yml"]
+	var stdout, stderr bytes.Buffer
+	if rc := run([]string{"-"}, strings.NewReader(inner), &stdout, &stderr); rc != exitOK ||
+		stdout.String() != `{"documents":[{"route":{"receiver":"r"},"x":8}],"differs_from_text":[[]]}`+"\n" {
+		t.Fatalf("inner: rc=%d stdout=%q stderr=%q", rc, stdout.String(), stderr.String())
 	}
 }

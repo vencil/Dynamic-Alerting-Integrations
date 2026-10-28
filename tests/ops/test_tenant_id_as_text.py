@@ -1065,17 +1065,9 @@ def _ids_custom_groups(d, spell):
     return set(m._load_custom_groups(lts.load_state(d), d / "conf.d")["g1"]["members"])
 
 
-def _ids_retire_namespaces(d, spell):
-    import check_retire_drift as m
-    _tree(d, {"ns.yaml": ("apiVersion: v1\nkind: Namespace\nmetadata:\n"
-                          f"  name: db-x\n  labels:\n    instance: {spell}\n")})
-    return m.namespace_declared_targets(d / "ns.yaml")
-
-
 _VALUE_READERS_2216 = {
     "mapping_file_tenant": _ids_mapping_file,
     "groups_members": _ids_custom_groups,
-    "retire_drift_namespace_instance": _ids_retire_namespaces,
 }
 
 
@@ -1085,6 +1077,32 @@ def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader,
     """Before (#2216): UNQ gave {8} / {"8"}, and parse_mapping_file raised
     AttributeError (`.strip()` on the int)."""
     assert _VALUE_READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
+
+
+def _retire_namespaces(d, spell):
+    import check_retire_drift as m
+    _tree(d, {"ns.yaml": ("apiVersion: v1\nkind: Namespace\nmetadata:\n"
+                          f"  name: db-x\n  labels:\n    instance: {spell}\n")})
+    return m.namespace_declared_targets(d / "ns.yaml")
+
+
+def test_retire_drift_reads_a_quoted_namespace_label_as_its_text(tmp_path):
+    """The namespaces manifest is read as kubectl reads it (da-crdecode,
+    ADR-036 §12, #3206): a quoted `instance: '010'` is the tenant "010"."""
+    assert _retire_namespaces(tmp_path, _ID_SPELLINGS["QUOTED"]) == {"010"}
+
+
+def test_retire_drift_refuses_an_unquoted_numeric_namespace_label(tmp_path):
+    """#3206: `instance: 010` is the number 8 to kubectl, and a label takes
+    only strings, so kubectl refuses the Namespace. Until #3206 the lint took
+    the text ("010", #2216); now it names the file and the document and says
+    to quote it — neither the text nor 8 is taken, and it is not skipped."""
+    import check_retire_drift as m
+    with pytest.raises(m.NamespacesFileError) as exc_info:
+        _retire_namespaces(tmp_path, _ID_SPELLINGS["UNQ"])
+    msg = str(exc_info.value)
+    assert "ns.yaml: document 1 (Namespace 'db-x'): label `instance` is 8" in msg, msg
+    assert "kubectl refuses" in msg and 'instance: "010"' in msg, msg
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

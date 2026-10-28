@@ -112,6 +112,8 @@ jobs:
               # are cheap to run and the symmetry with threshold-exporter
               # PRs is the cleanest fix.
               - "components/tenant-api/**"
+              # #3206: the da-read module, which Go Lint lints (its own step).
+              - "components/da-read/**"
               - "rule-packs/**"
               - "scripts/tools/**"
               # `scripts/tools/**` above does NOT reach scripts/ops/. Go Lint
@@ -478,6 +480,11 @@ jobs:
         run: golangci-lint run ./...
       - name: Lint alertmanager-inhibit
         working-directory: tests/alertmanager-inhibit
+        run: golangci-lint run ./...
+      # #3206: da-read, the module that keeps the alertmanager dependency out
+      # of the exporter module; it ships in the da-tools image.
+      - name: Lint da-read
+        working-directory: components/da-read
         run: golangci-lint run ./...
       - name: Lint e2e-bench receiver
         working-directory: tests/e2e-bench/receiver

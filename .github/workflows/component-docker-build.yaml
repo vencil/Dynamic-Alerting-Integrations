@@ -170,7 +170,7 @@ jobs:
         run: |
           mkdir -p components/da-tools/app/tools
           # #463 multi-arch: Dockerfile now COPYs da-<tool>.${TARGETARCH}.
-          for b in da-guard da-batchpr da-parser; do
+          for b in da-guard da-batchpr da-parser da-crdecode da-read; do
             for a in amd64 arm64; do
               touch "components/da-tools/app/$b.$a"
             done

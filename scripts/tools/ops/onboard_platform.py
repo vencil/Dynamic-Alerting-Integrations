@@ -79,8 +79,7 @@ from _lib_python import (  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
     disarm_crash_envelope)
-from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config as its consumers read it)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 
@@ -123,36 +122,113 @@ for _rtype, _spec in RECEIVER_TYPES.items():
 # Phase 1: Alertmanager Config Reverse Analysis
 # ============================================================
 
-def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL):
-    """Load and parse an Alertmanager configuration file.
+class AlertmanagerConfigError(Exception):
+    """The Alertmanager config cannot be read. ``detail_lines`` is the
+    reader's own reason (its stderr), and ``str()`` is one line that carries
+    it. ``refused_by_reader`` is true when a reader looked at the file and
+    refused it, false when there was no reader to ask (no binary) or the file
+    could not be opened."""
 
-    Handles both raw alertmanager.yml and ConfigMap-wrapped YAML.
-    Returns the parsed Alertmanager config dict, or None on error.
+    def __init__(self, message, detail_lines=None, refused_by_reader=False):
+        self.detail_lines = list(detail_lines or [])
+        self.refused_by_reader = refused_by_reader
+        if self.detail_lines:
+            message = f"{message}: " + " | ".join(self.detail_lines)
+        super().__init__(message)
 
-    #2216: a ``match:`` / ``match_re:`` value under *tenant_label* is a
-    tenant id, read as its source text — ``tenant: 010`` is tenant "010",
-    not 8. Keys are source text too.
+
+#: The ConfigMap key Alertmanager's config is mounted from.
+_AM_CONFIGMAP_KEY = "alertmanager.yml"
+
+
+def _configmap_inner(documents, path):
+    """The ``alertmanager.yml`` string of the ConfigMap among *documents*
+    (Kubernetes' reading of the file), or None when no document is a
+    ConfigMap — then the file is the Alertmanager config itself."""
+    holders = []
+    configmaps = 0
+    for doc in documents:
+        if not isinstance(doc, dict):
+            continue
+        data = doc.get("data")
+        if doc.get("kind") == "ConfigMap":
+            configmaps += 1
+        if isinstance(data, dict) and _AM_CONFIGMAP_KEY in data:
+            holders.append(data[_AM_CONFIGMAP_KEY])
+    if len(holders) > 1:
+        raise AlertmanagerConfigError(
+            f"{path}: {len(holders)} documents hold `data.{_AM_CONFIGMAP_KEY}`; "
+            "pass the one Alertmanager mounts", refused_by_reader=True)
+    if holders:
+        inner = holders[0]
+        if not isinstance(inner, str):
+            # kubectl refuses a ConfigMap whose data value is not a string.
+            raise AlertmanagerConfigError(
+                f"{path}: `data.{_AM_CONFIGMAP_KEY}` is not a string in "
+                "Kubernetes' reading of the file (kubectl refuses such a ConfigMap); "
+                "write it as a block string (`alertmanager.yml: |`)", refused_by_reader=True)
+        return inner
+    if configmaps:
+        raise AlertmanagerConfigError(
+            f"{path}: the ConfigMap has no `data.{_AM_CONFIGMAP_KEY}` key", refused_by_reader=True)
+    return None
+
+
+def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
+                              crdecode_binary=None, da_read_binary=None):
+    """The Alertmanager config at *path* as Alertmanager loads it.
+
+    ADR-036 §12 (#3206): the file is first read the way Kubernetes reads a
+    manifest (``da-crdecode``) to tell whether it is a ConfigMap; if it is,
+    its ``data["alertmanager.yml"]`` string is the config, otherwise the whole
+    file is. The config goes to ``da-read alertmanager`` — Alertmanager's own
+    loader — which returns only the keys the text writes, each value as
+    Alertmanager reads it: ``match: {tenant: 010}`` is tenant "010" (the field
+    is a string to Alertmanager), a duration is Alertmanager's spelling of it,
+    a secret is its value. A config Alertmanager refuses (no ``route``, an
+    undefined receiver, an unknown key) is refused here.
+
+    *tenant_label* is not used to read the file (every matcher value is
+    Alertmanager's reading, whatever the label); it is kept for callers.
+
+    Raises :class:`AlertmanagerConfigError` when the config cannot be read —
+    never returns "nothing" for it.
     """
-    raw_text = (tenant_label,)
-    data = load_yaml_file_exporter_keys(path, raw_text_scalars=raw_text)
-    if data is None:
-        return None
-
-    # ConfigMap wrapper: extract data.alertmanager.yml
-    if "data" in data and isinstance(data["data"], dict):
-        am_yml = data["data"].get("alertmanager.yml")
-        if am_yml and isinstance(am_yml, str):
-            data = load_exporter_keys(am_yml, raw_text_scalars=raw_text)
-        elif am_yml and isinstance(am_yml, dict):
-            data = am_yml
-
-    # Validate basic structure
-    if not isinstance(data, dict):
-        return None
-    if "route" not in data and "receivers" not in data:
-        return None
-
-    return data
+    del tenant_label  # the reading does not depend on it
+    path = str(path)
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as e:
+        raise AlertmanagerConfigError(f"cannot read {path}: {e}") from e
+    inner = None
+    k8s_refusal = None
+    try:
+        documents = _lib_consumer_read.kubernetes_documents(path, binary=crdecode_binary)
+    except _lib_consumer_read.ConsumerReadError as e:
+        if not e.stderr_lines:
+            # The binary is missing or broken — not an answer about the file.
+            raise AlertmanagerConfigError(str(e)) from e
+        # Kubernetes' reading refuses the file. A ConfigMap it refuses is
+        # refused by kubectl too; a plain alertmanager.yml is not Kubernetes'
+        # to read, and Alertmanager's loader (below) gives the verdict. A
+        # ConfigMap never passes that loader (apiVersion / kind / data are
+        # not Alertmanager fields), so nothing is taken that should not be.
+        k8s_refusal = e
+    else:
+        inner = _configmap_inner(documents, path)
+    text = raw if inner is None else inner
+    try:
+        return _lib_consumer_read.alertmanager_config(text, binary=da_read_binary)
+    except _lib_consumer_read.ConsumerReadError as e:
+        where = f"{path} (data.{_AM_CONFIGMAP_KEY})" if inner is not None else path
+        detail = list(e.stderr_lines)
+        if k8s_refusal is not None:
+            detail += [f"(read as a Kubernetes manifest it was refused too: {k8s_refusal})",
+                       *k8s_refusal.stderr_lines]
+        raise AlertmanagerConfigError(
+            f"Alertmanager's config loader cannot read {where}: {e}", detail,
+            refused_by_reader=bool(e.stderr_lines)) from e
 
 
 def _extract_tenant_from_matchers(matchers, tenant_label):
@@ -1429,6 +1505,12 @@ def main():
                         help="Phase 2: Prometheus rule files glob pattern")
     parser.add_argument("--scrape-config",
                         help="Phase 3: Prometheus scrape config file")
+    parser.add_argument("--da-crdecode-binary", default=None,
+                        help="Phase 1: da-crdecode, which reads a ConfigMap the way "
+                             "kubectl does (default: $DA_CRDECODE_BINARY, else PATH)")
+    parser.add_argument("--da-read-binary", default=None,
+                        help="Phase 1: da-read, which reads the config with "
+                             "Alertmanager's own loader (default: $DA_READ_BINARY, else PATH)")
     parser.add_argument("--tenant-label", default=DEFAULT_TENANT_LABEL,
                         help=f"Custom tenant label name (default: {DEFAULT_TENANT_LABEL})")
     parser.add_argument("-o", "--output-dir", default="onboard_output",
@@ -1458,11 +1540,19 @@ def main():
     if args.alertmanager_config:
         print(f"Phase 1: Analyzing Alertmanager config: {args.alertmanager_config}",
               file=sys.stderr)
-        am_config = parse_alertmanager_config(args.alertmanager_config,
-                                              args.tenant_label)
-        if am_config is None:
-            print(f"ERROR: Failed to parse Alertmanager config: {args.alertmanager_config}",
-                  file=sys.stderr)
+        try:
+            am_config = parse_alertmanager_config(
+                args.alertmanager_config, args.tenant_label,
+                crdecode_binary=args.da_crdecode_binary,
+                da_read_binary=args.da_read_binary)
+        except AlertmanagerConfigError as e:
+            if e.refused_by_reader:
+                # The file is there and a reader refused it: the same
+                # "cannot read <file>" exit as an unreadable rule or scrape
+                # file (#1654; `yaml_file_unreadable` under --json), with the
+                # reader's own reason in the message.
+                raise YamlFileError(args.alertmanager_config, e) from e
+            print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
         tenant_routings, summary = analyze_alertmanager(am_config, args.tenant_label)
