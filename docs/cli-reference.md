@@ -154,7 +154,7 @@ da-tools <command> --help
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
-| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | `[--namespace <ns>]` |
+| `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | `[--namespace <ns>]` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING / UNHEALTHY / ORPHAN） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | 產生 / 輪替 federation JWT 簽章金鑰（ADR-020 IV-2l）：私鑰 Secret manifest → stdout、公鑰 JWKS → 檔案 | （無，bootstrap 預設）/ `--rotate --existing-jwks <file>` |
@@ -1811,7 +1811,7 @@ da-tools operator-check [options]
 
 **檢查項目**
 
-1. Operator 偵測：叢集的 CRD 清單裡有沒有 `prometheusrules.monitoring.coreos.com`（沒有則 fail）。
+1. Operator 偵測：以名稱 `get` CRD `prometheusrules.monitoring.coreos.com`，叢集沒有這個 CRD 則 fail。
 2. PrometheusRule：`--namespace` 裡帶 `app.kubernetes.io/part-of=dynamic-alerting` 的數量，與 `--rule-packs-dir` 的 `rule-pack-*.yaml` 數比（相等 pass、少於但大於 0 warn、0 fail）；CRD 沒裝時為 0、fail，並註明 CRD 沒裝。
 3. ServiceMonitor：同一 namespace、同一 label 至少一個（否則 fail；CRD 沒裝時註明）。
 4. AlertmanagerConfig：同一 namespace、同一 label 的數量（0 為 warn；CRD 沒裝時 warn 並註明）。

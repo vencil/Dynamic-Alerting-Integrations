@@ -153,7 +153,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
 | `operator-generate` | Rule Packs + Tenant config → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
-| `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | `[--namespace <ns>]` |
+| `operator-check` | Operator CRD deployment status verification (checks + diagnostic report) | `[--namespace <ns>]` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING / UNHEALTHY / ORPHAN) | `--prometheus <url>` or `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
 | `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
@@ -1814,7 +1814,7 @@ da-tools operator-check [options]
 
 **Checks Performed**
 
-1. Operator detection: whether the cluster's CRD list has `prometheusrules.monitoring.coreos.com` (fail if not).
+1. Operator detection: `get` the CRD `prometheusrules.monitoring.coreos.com` by name; fail if the cluster has no such CRD.
 2. PrometheusRule: how many in `--namespace` carry `app.kubernetes.io/part-of=dynamic-alerting`, against the number of `rule-pack-*.yaml` in `--rule-packs-dir` (equal passes, fewer but more than 0 warns, 0 fails); with the CRD not installed it is 0, a fail saying so.
 3. ServiceMonitor: at least one in that namespace with that label (else fail; says so when the CRD is not installed).
 4. AlertmanagerConfig: how many in that namespace with that label (0 warns; with the CRD not installed it warns and says so).
