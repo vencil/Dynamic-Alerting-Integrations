@@ -269,10 +269,10 @@ func TestOneTenantSet_IncrementalDropsABrokenFileLikeTheStatelessReaders(t *test
 				t.Errorf("the committed hierarchy still holds t-x after its file stopped parsing (#1980)")
 			}
 			// Stateless readers: not found — the same answer.
-			if _, err := config.ResolveEffective(dir, "t-x"); !errors.Is(err, config.ErrTenantNotFound) {
+			if _, err := config.ResolveEffective(dir, "t-x", fixedNow); !errors.Is(err, config.ErrTenantNotFound) {
 				t.Errorf("ResolveEffective(t-x) err = %v, want ErrTenantNotFound", err)
 			}
-			scoped, err := config.ScopeEffective(dir, dir)
+			scoped, err := config.ScopeEffective(dir, dir, fixedNow)
 			if err != nil {
 				t.Fatalf("ScopeEffective: %v", err)
 			}

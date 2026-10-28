@@ -57,14 +57,14 @@ func TestErrNoYAMLFiles_WrappedByEveryRefusal(t *testing.T) {
 	if _, _, err := LoadDirReport(dir, nil); !errors.Is(err, ErrNoYAMLFiles) {
 		t.Errorf("LoadDirReport: err = %v, want ErrNoYAMLFiles", err)
 	}
-	if _, err := EffectiveTree(dir); !errors.Is(err, ErrNoYAMLFiles) {
+	if _, err := EffectiveTree(dir, fixedNow); !errors.Is(err, ErrNoYAMLFiles) {
 		t.Errorf("EffectiveTree: err = %v, want ErrNoYAMLFiles", err)
 	}
 	if _, err := BuildFlatConfig(&TreeScan{}, FlatBuildInput{Root: dir}); !errors.Is(err, ErrNoYAMLFiles) {
 		t.Errorf("BuildFlatConfig: err = %v, want ErrNoYAMLFiles", err)
 	}
 	// The message is the one operators know.
-	if _, err := EffectiveTree(dir); err == nil || !strings.HasPrefix(err.Error(), "no .yaml files found in ") {
+	if _, err := EffectiveTree(dir, fixedNow); err == nil || !strings.HasPrefix(err.Error(), "no .yaml files found in ") {
 		t.Errorf("EffectiveTree message = %v", err)
 	}
 }
@@ -106,9 +106,9 @@ func TestRootUnlistable_NamedAsRootUnreadable(t *testing.T) {
 	chmodRestore(t, dir, 0, 0o755)
 
 	for name, f := range map[string]func() (*ScopedTenants, error){
-		"ScopeEffective":       func() (*ScopedTenants, error) { return ScopeEffective(dir, "") },
-		"ScopeEffective scope": func() (*ScopedTenants, error) { return ScopeEffective(dir, "sub") },
-		"EffectiveTree":        func() (*ScopedTenants, error) { return EffectiveTree(dir) },
+		"ScopeEffective":       func() (*ScopedTenants, error) { return ScopeEffective(dir, "", fixedNow) },
+		"ScopeEffective scope": func() (*ScopedTenants, error) { return ScopeEffective(dir, "sub", fixedNow) },
+		"EffectiveTree":        func() (*ScopedTenants, error) { return EffectiveTree(dir, fixedNow) },
 	} {
 		st, err := f()
 		if err != nil {
@@ -147,8 +147,8 @@ func TestRootStatDenied_NamedAsRootStatUnreadable(t *testing.T) {
 	chmodRestore(t, parent, 0, 0o755)
 
 	for name, f := range map[string]func() (*ScopedTenants, error){
-		"ScopeEffective": func() (*ScopedTenants, error) { return ScopeEffective(dir, "") },
-		"EffectiveTree":  func() (*ScopedTenants, error) { return EffectiveTree(dir) },
+		"ScopeEffective": func() (*ScopedTenants, error) { return ScopeEffective(dir, "", fixedNow) },
+		"EffectiveTree":  func() (*ScopedTenants, error) { return EffectiveTree(dir, fixedNow) },
 	} {
 		st, err := f()
 		if err != nil {
@@ -164,7 +164,7 @@ func TestRootStatDenied_NamedAsRootStatUnreadable(t *testing.T) {
 		t.Errorf("LoadDirReport: err = %v report = %+v", err, rep)
 	}
 	// A configDir that does not exist stays an error.
-	if _, err := ScopeEffective(filepath.Join(t.TempDir(), "nope"), ""); err == nil {
+	if _, err := ScopeEffective(filepath.Join(t.TempDir(), "nope"), "", fixedNow); err == nil {
 		t.Error("ScopeEffective on a missing configDir: no error")
 	}
 }
@@ -179,7 +179,7 @@ func TestScopeStatDenied_Unreadable(t *testing.T) {
 	writeFileT(t, filepath.Join(dir, "locked", "inner", "t.yaml"), "tenants:\n  tenant-l: {}\n")
 	chmodRestore(t, filepath.Join(dir, "locked"), 0, 0o755)
 
-	st, err := ScopeEffective(dir, "locked/inner")
+	st, err := ScopeEffective(dir, "locked/inner", fixedNow)
 	if err != nil {
 		t.Fatalf("err = %v, want a result", err)
 	}
@@ -187,7 +187,7 @@ func TestScopeStatDenied_Unreadable(t *testing.T) {
 	if !reflect.DeepEqual(st.Unreadable, want) || len(st.Tenants) != 0 {
 		t.Errorf("unreadable = %v tenants = %d, want %v and none", st.Unreadable, len(st.Tenants), want)
 	}
-	if _, err := ScopeEffective(dir, "nope"); err == nil || !strings.Contains(err.Error(), "stat scopeDir") {
+	if _, err := ScopeEffective(dir, "nope", fixedNow); err == nil || !strings.Contains(err.Error(), "stat scopeDir") {
 		t.Errorf("missing scope: err = %v, want stat scopeDir", err)
 	}
 }
@@ -210,7 +210,7 @@ func TestScopeThroughSymlink_OutsideStaysOutside(t *testing.T) {
 	chmodRestore(t, filepath.Join(dir, "locked"), 0, 0o755)
 
 	for _, scope := range []string{"a", "a/b"} {
-		if _, err := ScopeEffective(dir, scope); err == nil || !strings.Contains(err.Error(), "is outside configDir") {
+		if _, err := ScopeEffective(dir, scope, fixedNow); err == nil || !strings.Contains(err.Error(), "is outside configDir") {
 			t.Errorf("--scope %s: err = %v, want outside configDir", scope, err)
 		}
 	}
@@ -218,7 +218,7 @@ func TestScopeThroughSymlink_OutsideStaysOutside(t *testing.T) {
 		"in":   {{RelKey: "locked", Reason: UnreadableWalkError}},
 		"in/b": {{RelKey: "locked", Reason: UnreadableWalkError}, {RelKey: "locked/b", Reason: UnreadableStatError}},
 	} {
-		st, err := ScopeEffective(dir, scope)
+		st, err := ScopeEffective(dir, scope, fixedNow)
 		if err != nil {
 			t.Errorf("--scope %s: err = %v, want a result", scope, err)
 			continue

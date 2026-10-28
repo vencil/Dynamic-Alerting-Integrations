@@ -263,7 +263,7 @@ func loadReachTree(t *testing.T, root, line, key string) (cfg *ThresholdConfig, 
 			}
 		}
 	}
-	scoped, err := config.ScopeEffective(dir, "")
+	scoped, err := config.ScopeEffective(dir, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}

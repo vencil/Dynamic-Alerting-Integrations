@@ -238,7 +238,7 @@ func observeParity(t *testing.T, root string, queries []string, scopeRel string,
 
 	// RESOLVE.
 	for _, q := range queries {
-		ec, rerr := ResolveEffective(root, q)
+		ec, rerr := ResolveEffective(root, q, fixedNow)
 		switch {
 		case errors.Is(rerr, ErrTenantNotFound):
 			obs.resolve[q] = "NOTFOUND"
@@ -258,7 +258,7 @@ func observeParity(t *testing.T, root string, queries []string, scopeRel string,
 	if scopeSpelling != nil {
 		scopeDir = scopeSpelling(root)
 	}
-	st, serr := ScopeEffective(root, scopeDir)
+	st, serr := ScopeEffective(root, scopeDir, fixedNow)
 	if serr != nil {
 		obs.scope = norm(serr)
 	} else {

@@ -30,11 +30,11 @@ const overlayGuardPlatform = "defaults:\n  mysql_connections: 80\n" +
 
 func redundantFields(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	scoped, err := config.ScopeEffective(dir, dir)
+	scoped, err := config.ScopeEffective(dir, dir, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}))
+	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func effectiveWith(t *testing.T, dir, tenantFile string) map[string]any {
 	if err := os.WriteFile(filepath.Join(dir, "tx.yaml"), []byte(tenantFile), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ec, err := config.ResolveEffective(dir, "tx")
+	ec, err := config.ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}

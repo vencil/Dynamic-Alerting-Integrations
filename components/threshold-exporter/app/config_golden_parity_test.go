@@ -426,7 +426,7 @@ func TestGoldenParity_ResolveEffective(t *testing.T) {
 		g := g
 		t.Run(fmt.Sprintf("%s_%s", g.Scenario, g.TenantID), func(t *testing.T) {
 			confD := filepath.Join(root, "tests", "golden", "fixtures", g.FixtureDir, "conf.d")
-			got, err := config.ResolveEffective(confD, g.TenantID)
+			got, err := config.ResolveEffective(confD, g.TenantID, fixedNow)
 			if err != nil {
 				t.Fatalf("ResolveEffective(%s, %s): %v", confD, g.TenantID, err)
 			}

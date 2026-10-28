@@ -66,7 +66,7 @@ func aliasServed(t *testing.T, dir, body string) string {
 		t.Fatalf("LoadDir: %v", err)
 	}
 	var out []string
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == "tx" && r.Component == "mysql" && (r.Metric == "threads_running" || r.Metric == "cpu") {
 			out = append(out, fmt.Sprintf("%s/%s=%v", r.Metric, r.Severity, r.Value))
 		}
@@ -79,11 +79,11 @@ func aliasServed(t *testing.T, dir, body string) string {
 // same scope + input builder the CLI uses.
 func aliasRedundant(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	scoped, err := config.ScopeEffective(dir, dir)
+	scoped, err := config.ScopeEffective(dir, dir, fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}))
+	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

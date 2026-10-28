@@ -160,7 +160,7 @@ func TestReload_ProfileEdit_MovesMergedHash(t *testing.T) {
 				if moved := after != before[tid]; moved != wantMove {
 					t.Errorf("%s merged_hash moved=%v (%s → %s), want moved=%v", tid, moved, before[tid], after, wantMove)
 				}
-				pe, err := config.ResolveEffective(dir, tid)
+				pe, err := config.ResolveEffective(dir, tid, fixedNow)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", tid, err)
 				}
@@ -237,7 +237,7 @@ func TestReload_ProfileEdit_BareScalarTenantKey(t *testing.T) {
 			if after == before {
 				t.Errorf("%s merged_hash did not move (%s) though its profile's value changed", key, after)
 			}
-			pe, err := config.ResolveEffective(dir, key)
+			pe, err := config.ResolveEffective(dir, key, fixedNow)
 			if err != nil {
 				t.Fatalf("ResolveEffective(%s): %v", key, err)
 			}

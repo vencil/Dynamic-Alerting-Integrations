@@ -36,7 +36,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 		"ops/tenant-b.yaml":         "tenants:\n  tenant-b: {}\n",
 	})
 
-	scoped, err := ScopeEffective(dir, "")
+	scoped, err := ScopeEffective(dir, "", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 	}
 
 	// Scope: tenant-a is outside ops/.
-	ops, err := ScopeEffective(dir, "ops")
+	ops, err := ScopeEffective(dir, "ops", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestScopeEffective_SubtreeReservedNullIsNotWritten(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			scoped, err := ScopeEffective(writeUndeliverableTree(t, tc.files), "")
+			scoped, err := ScopeEffective(writeUndeliverableTree(t, tc.files), "", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -28,7 +28,7 @@ import (
 // TestBothScannersSeeTheSameFiles is the invariant whose violation IS #1521.
 //
 // `scanDirFileHashes` feeds `GetConfig()` → the collector → `/metrics`.
-// `scanDirHierarchical` feeds `Resolve()` → `/effective`. `fullDirLoad` calls
+// `scanDirHierarchical` feeds `ResolveAt` → `/effective`. `fullDirLoad` calls
 // both and, before this PR, never compared them: a tenant one directory down
 // was in the second and not the first, so `/effective` answered and no series
 // existed — with no error, no WARN and no metric to notice it by.

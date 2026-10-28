@@ -594,6 +594,19 @@ def test_tests_tree_is_out_of_renovates_reach():
     assert anchors, "no Dockerfile / compose under tests/ — re-derive what this guards"
 
 
+def test_vendored_third_party_tree_is_out_of_renovates_reach():
+    """The vendored yaml.v3 tree carries upstream's own workflow, which the
+    github-actions manager picks up; any edit there changes the directory's h1:
+    hash that test_vendored_yaml_v3.py pins to upstream v3.0.5, so Renovate's own
+    "GitHub Actions" PR turned Python Tests red (#3345). The vendored tree is
+    refreshed only by re-vendoring upstream, never by a per-file bump."""
+    ignored = set(_load_config().get("ignorePaths", []))
+    assert "**/third_party/**" in ignored, sorted(ignored)
+    anchor = (REPO / "components/threshold-exporter/app/third_party/yaml.v3"
+              / ".github/workflows/codeql.yaml")
+    assert anchor.is_file(), f"{anchor} gone — re-derive what this guards"
+
+
 def test_da_read_alertmanager_requirement_moves_with_the_image_refs():
     """#3206: components/da-read/go.mod links the Alertmanager amtool is
     (test_da_tools_amtool_pin_parity.py holds the version equal to the

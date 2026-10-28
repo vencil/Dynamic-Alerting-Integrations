@@ -53,7 +53,7 @@ func TestProfileRoutingLayerKeys_NotFilledOnEitherPlane(t *testing.T) {
 	}
 
 	// /effective (the walker plane).
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestProfileRoutingKeys_EveryProfileSourceTheExporterReads(t *testing.T) {
 				files[k] = v
 			}
 			dir := writeSimProfileTree(t, files)
-			scoped, err := EffectiveTree(dir)
+			scoped, err := EffectiveTree(dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

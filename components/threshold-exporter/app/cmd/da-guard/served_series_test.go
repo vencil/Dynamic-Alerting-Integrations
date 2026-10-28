@@ -4,7 +4,7 @@ package main
 // series each threshold key is.
 //
 // The oracle is production /metrics itself: the exporter's collector
-// (scrape.NewCollectorWithHooks with only the clock set, so it resolves with
+// (scrape.NewCollectorWithHooks with no hook, its source's clock at `at`, so it resolves with
 // ResolveAtWithStats and builds with thresholdmetric.Emit, unreported),
 // registered by scrape.Register and gathered. TestServedSeries_AreTheGather
 // holds served-values' identities to that Gather in both directions;
@@ -95,7 +95,7 @@ func gatheredThresholds(t *testing.T, dir string, at time.Time) map[string]map[s
 		t.Fatal(err)
 	}
 	reg := prometheus.NewRegistry()
-	scrape.Register(reg, scrape.NewCollectorWithHooks(staticSource{cfg}, scrape.Hooks{Now: func() time.Time { return at }}),
+	scrape.Register(reg, scrape.NewCollectorWithHooks(staticSource{cfg, at}, scrape.Hooks{}),
 		scrape.NewConfigMetrics())
 	mfs, err := reg.Gather()
 	if err != nil {

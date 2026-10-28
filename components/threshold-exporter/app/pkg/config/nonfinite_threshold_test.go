@@ -116,7 +116,7 @@ func TestNonFiniteThreshold_SubtreeDefaultsRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got []float64
-		for _, r := range cfg.Resolve() {
+		for _, r := range cfg.ResolveAt(fixedNow) {
 			if r.Tenant == "tx" && r.Metric == "connections" {
 				got = append(got, r.Value)
 			}
@@ -224,7 +224,7 @@ func TestDisableWithSeverity_IsNotARowDisable(t *testing.T) {
 	var logs []string
 	logf := func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
 	c := &ThresholdConfig{}
-	now := time.Now()
+	now := fixedNow
 	rows := c.resolveBaseRows("t", map[string]float64{"mysql_connections": 80},
 		map[string]ScheduledValue{"mysql_connections": {Default: "disable:critical"}}, now, nil, logf, nil)
 	if len(rows) != 1 || rows[0].Value != 80 || rows[0].Severity != "warning" {

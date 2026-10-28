@@ -123,7 +123,7 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 				t.Errorf("tenant-api merge core serves %v, want %v", api, tc.rows)
 			}
 
-			ec, err := ResolveEffective(dir, "tx")
+			ec, err := ResolveEffective(dir, "tx", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

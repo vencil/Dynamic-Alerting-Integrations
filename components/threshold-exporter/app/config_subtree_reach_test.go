@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gopkg.in/yaml.v3"
 )
@@ -311,7 +312,7 @@ func TestTheUndeliverableAuditRunsOnEveryCommit(t *testing.T) {
 // ⛔ MEASURED: reverting `lower := strings.ToLower(name)` to `lower := name`
 // left the package GREEN — no fixture anywhere used `.YAML` or `.YML`. The
 // defect it silently restores needs no nesting at all: a `UPPER.YAML` at the
-// conf.d ROOT resolves through `Resolve()` and emits nothing, because the two
+// conf.d ROOT resolves through `ResolveAt` and emits nothing, because the two
 // enumerators over one tree disagreed on which extensions count.
 func TestAnUppercaseExtensionAtTheRootStillEmits(t *testing.T) {
 	dir := t.TempDir()
@@ -710,6 +711,9 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 
 	m := NewConfigManager(dir)
 	defer m.Close()
+	// The scrape resolves at the manager's clock: pinned inside the window
+	// (#3368 — "00:00-23:59" is end-exclusive, shut for the 23:59 minute).
+	m.SetClock(clockwork.NewFakeClockAt(fixedNow))
 	captureLoad(t, m)
 	cfg := m.GetConfig()
 
@@ -823,7 +827,7 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 		if err := m.Load(); err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if filters := m.GetConfig().ResolveStateFilters(); len(filters) != 1 || filters[0].Tenant != "t1" {
+		if filters := m.GetConfig().ResolveStateFiltersAt(fixedNow); len(filters) != 1 || filters[0].Tenant != "t1" {
 			t.Errorf("the subtree's `disable` was applied, or the filter is off: %v "+
 				"(want t1's maintenance filter on, the root's default_state)", filters)
 		}

@@ -23,6 +23,10 @@ import (
 
 const effDefaults = "defaults:\n  mysql_connections: 80\n"
 
+// effAt is the instant these resolves are handed (#3368: the library reads
+// no wall clock); nothing here depends on which instant it is.
+var effAt = time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
 func effTenant(id, v string) string {
 	return "tenants:\n  " + id + ":\n    mysql_connections: \"" + v + "\"\n"
 }
@@ -41,7 +45,7 @@ func effJSON(ec *cfg.EffectiveConfig, err error) string {
 
 func effValue(t *testing.T, w *Writer, id string) any {
 	t.Helper()
-	ec, err := w.ResolveEffective(id)
+	ec, err := w.ResolveEffective(id, effAt)
 	if err != nil {
 		t.Fatalf("ResolveEffective(%s): %v", id, err)
 	}
@@ -61,9 +65,9 @@ func TestResolveEffective_WarmEqualsColdAndReusesThePrior(t *testing.T) {
 	ageTree(t, dir)
 	w := &Writer{configDir: dir, treeScanTimeout: time.Minute}
 	for _, id := range []string{"t1", "t2", "t-absent"} {
-		want := effJSON(cfg.ResolveEffective(dir, id))
+		want := effJSON(cfg.ResolveEffective(dir, id, effAt))
 		for i := 0; i < 2; i++ {
-			if got := effJSON(w.ResolveEffective(id)); got != want {
+			if got := effJSON(w.ResolveEffective(id, effAt)); got != want {
 				t.Errorf("%s call %d:\n got  %s\n want %s", id, i+1, got, want)
 			}
 		}
@@ -114,10 +118,10 @@ func TestResolveEffective_DoesNotJoinAReadWalkInFlight(t *testing.T) {
 	awaitSignal(t, entered, "the read walk to start")
 
 	answer := make(chan string, 1)
-	go func() { answer <- effJSON(w.ResolveEffective("t1")) }()
+	go func() { answer <- effJSON(w.ResolveEffective("t1", effAt)) }()
 	select {
 	case got := <-answer:
-		if want := effJSON(cfg.ResolveEffective(dir, "t1")); got != want {
+		if want := effJSON(cfg.ResolveEffective(dir, "t1", effAt)); got != want {
 			t.Fatalf("answer:\n got  %s\n want %s", got, want)
 		}
 	case <-joined:
@@ -141,10 +145,10 @@ func TestResolveEffective_StuckWalkFailsReadsNotWrites(t *testing.T) {
 	w.treeScanTimeout = 100 * time.Millisecond
 	walks, _, release := holdFirstWalk(t, w)
 
-	if _, err := w.ResolveEffective("t1"); !errors.Is(err, errTreeScanTimeout) {
+	if _, err := w.ResolveEffective("t1", effAt); !errors.Is(err, errTreeScanTimeout) {
 		t.Fatalf("resolve over a held walk: err = %v, want the walk timeout", err)
 	}
-	if _, err := w.ResolveEffective("t1"); !errors.Is(err, errTreeScanStuck) {
+	if _, err := w.ResolveEffective("t1", effAt); !errors.Is(err, errTreeScanStuck) {
 		t.Fatalf("resolve while the walk is stuck: err = %v, want the breaker", err)
 	}
 	if n := w.stuckReadTreeScans.Load(); n != 1 {
@@ -220,7 +224,7 @@ func TestResolveEffective_StaleRetriesAreBounded(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := w.ResolveEffective("t1")
+		_, err := w.ResolveEffective("t1", effAt)
 		done <- err
 	}()
 	select {

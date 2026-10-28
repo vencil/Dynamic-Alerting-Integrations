@@ -168,7 +168,7 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	if flatScan != nil {
 		rejected = flatScan.rejected
 	}
-	vs := collectValuesNotServed(cfg, m.valuesNotServedCache.verdicts(cfg, m.now()), rejected)
+	vs := collectValuesNotServed(cfg, m.valuesNotServedCache.verdicts(cfg, m.Now()), rejected)
 	metrics := m.getMetrics()
 	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
@@ -176,8 +176,10 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	return vs
 }
 
-// now is the manager's clock (a test's fake one when set), else time.Now.
-func (m *ConfigManager) now() time.Time {
+// Now is the manager's clock (a test's fake one when set), else time.Now —
+// the one instant this manager's schedule resolves read (#3368): the
+// values-not-served audit, every /metrics scrape (scrape.Source) and /config.
+func (m *ConfigManager) Now() time.Time {
 	m.mu.RLock()
 	c := m.clock
 	m.mu.RUnlock()

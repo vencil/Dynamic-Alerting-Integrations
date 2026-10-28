@@ -85,7 +85,7 @@ func TestScopeEffective_RoutingOverrideInf_ResolvesWithPythonHash(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	scoped, err := ScopeEffective(dir, "")
+	scoped, err := ScopeEffective(dir, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}

@@ -52,7 +52,7 @@ func TestScopeEffectiveKeepsProfileWarnsOnTheProcessLog(t *testing.T) {
 	dir := t.TempDir()
 	writeMergeTree(t, dir, profileLogTree)
 	global := captureGlobalLog(t)
-	if _, err := ScopeEffective(dir, dir); err != nil {
+	if _, err := ScopeEffective(dir, dir, fixedNow); err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(global.String(), `WARN: tenant=tx references unknown profile "nosuch", ignoring`); n != 1 {

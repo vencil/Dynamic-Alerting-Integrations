@@ -395,7 +395,7 @@ func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
 			for _, v := range m.auditValuesNotServed(m.GetConfig(), &flat, "probe") {
 				got[v.Tenant+"/"+v.Key] = v.Reason
 			}
-			tree, err := config.EffectiveTree(dir)
+			tree, err := config.EffectiveTree(dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -458,7 +458,7 @@ func TestValuesNotServed_RejectedIsTheEffectiveVerdictAndStable(t *testing.T) {
 				}
 				writeTestYAML(t, filepath.Join(dir, rel), body)
 			}
-			tree, err := config.EffectiveTree(dir)
+			tree, err := config.EffectiveTree(dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

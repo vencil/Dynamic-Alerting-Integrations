@@ -1,8 +1,7 @@
 package scrape
 
-// With Hooks.Now set (da-guard served-values' --at), every family resolves at
-// that instant — including the maintenance expiry event, which the exporter
-// (Now nil) resolves at the wall clock.
+// Every family resolves at the source's Now — including the maintenance
+// expiry event, which until #3368 re-read the wall clock on the exporter.
 
 import (
 	"testing"
@@ -13,19 +12,25 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-type staticSource struct{ cfg *config.ThresholdConfig }
+type staticSource struct {
+	cfg *config.ThresholdConfig
+	at  time.Time
+}
 
 func (s staticSource) GetConfig() *config.ThresholdConfig { return s.cfg }
 func (s staticSource) GetConfigInfo() config.ConfigInfo   { return config.ConfigInfo{} }
+func (s staticSource) Now() time.Time                     { return s.at }
+
+// scrapeAt is an instant inside every "always on" window and before every
+// `expires:` these tests write; a test about an instant pins its own.
+var scrapeAt = time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 
 // maintenanceExpiredEvents gathers the registry served-values builds, at `at`,
 // and counts da_config_event{event="maintenance_expired"} series.
 func maintenanceExpiredEvents(t *testing.T, cfg *config.ThresholdConfig, at time.Time) int {
 	t.Helper()
 	metrics := NewConfigMetrics()
-	c := NewCollectorWithHooks(staticSource{cfg}, Hooks{
-		Now: func() time.Time { return at },
-	})
+	c := NewCollectorWithHooks(staticSource{cfg, at}, Hooks{})
 	reg := prometheus.NewRegistry()
 	Register(reg, c, metrics)
 	mfs, err := reg.Gather()
@@ -48,7 +53,7 @@ func maintenanceExpiredEvents(t *testing.T, cfg *config.ThresholdConfig, at time
 	return n
 }
 
-func TestCollector_MaintenanceExpiryFollowsHooksNow(t *testing.T) {
+func TestCollector_MaintenanceExpiryFollowsSourceNow(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -83,7 +88,7 @@ func TestCollector_ObserveOncePerScrape(t *testing.T) {
 		},
 	}
 	var got []Reserved
-	c := NewCollectorWithHooks(staticSource{cfg}, Hooks{Observe: func(r Reserved) { got = append(got, r) }})
+	c := NewCollectorWithHooks(staticSource{cfg, scrapeAt}, Hooks{Observe: func(r Reserved) { got = append(got, r) }})
 	reg := prometheus.NewRegistry()
 	Register(reg, c, NewConfigMetrics())
 	if _, err := reg.Gather(); err != nil {
@@ -104,9 +109,9 @@ func TestCollector_ObserveOncePerScrape(t *testing.T) {
 	}
 }
 
-// The readings Observe hands over are resolved at Hooks.Now, not the wall
-// clock: served-values' --at moves a silence across its expires with them.
-func TestCollector_ObserveFollowsHooksNow(t *testing.T) {
+// The readings Observe hands over are resolved at the source's Now:
+// served-values' --at moves a silence across its expires with them.
+func TestCollector_ObserveFollowsSourceNow(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
@@ -117,8 +122,7 @@ func TestCollector_ObserveFollowsHooksNow(t *testing.T) {
 	observe := func(at time.Time) Reserved {
 		t.Helper()
 		var got []Reserved
-		c := NewCollectorWithHooks(staticSource{cfg}, Hooks{
-			Now:     func() time.Time { return at },
+		c := NewCollectorWithHooks(staticSource{cfg, at}, Hooks{
 			Observe: func(r Reserved) { got = append(got, r) },
 		})
 		reg := prometheus.NewRegistry()

@@ -91,7 +91,7 @@ func assertMatchesResolveEffective(t *testing.T, dir string, doc effectiveOut) {
 		t.Fatal("no tenants in the output — nothing compared")
 	}
 	for id, raw := range doc.Tenants {
-		ec, err := config.ResolveEffective(dir, id)
+		ec, err := config.ResolveEffective(dir, id, fixedNow)
 		if err != nil {
 			t.Fatalf("ResolveEffective(%q): %v", id, err)
 		}
