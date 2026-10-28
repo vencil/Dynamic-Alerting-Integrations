@@ -363,6 +363,8 @@ def test_a_dropped_root_carrier_is_not_judged(tmp_path, da_guard):
         tv.load_effective_tree(conf_d, binary=da_guard)
     assert ei.value.parse_failed == ["_defaults.yaml"]
     assert ei.value.root_defaults_refused is None and ei.value.root_defaults_reserved is None
+    # served-values, from the same build, says the same: null (#3250 round 4).
+    assert tv.load_served_tree(conf_d, binary=da_guard, partial=True).root_defaults_refused is None
 
 
 def test_effective_root_defaults_refused_matches_served_tree(tmp_path, da_guard):

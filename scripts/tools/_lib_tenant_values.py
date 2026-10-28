@@ -494,8 +494,9 @@ class ServedTree(NamedTuple):
     absent: "tuple[str, ...]" = ()
     # #3250: the root `defaults:` thresholds whose value the exporter refuses
     # (served-values' `root_defaults_refused`), sorted by key: the tree's
-    # verdict, for every tenant that does not write the key.
-    root_defaults_refused: "tuple[RootDefaultRefused, ...]" = ()
+    # verdict, for every tenant that does not write the key. None when the
+    # exporter dropped the root carrier itself (no verdict).
+    root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
 
 
 class RootDefaultRefused(NamedTuple):
@@ -1017,7 +1018,7 @@ def load_served_tree(
                           doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested), doc.get("root_defaults_refused")),
+                          _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
@@ -1128,11 +1129,12 @@ def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcomman
                            error: type) -> "tuple[RootDefaultRefused, ...]":
     """served-values' / effective's `root_defaults_refused` (one build, one
     shape), checked; a da-guard without it is named as older than this tool,
-    with `error` (the subcommand's error class). effective writes null when
-    its resolve stopped (not judged): None."""
-    if entries is None and subcommand == EFFECTIVE_SUBCOMMAND:
+    with `error` (the subcommand's error class). Null — effective's when its
+    resolve stopped, either's when the exporter dropped the root carrier
+    itself — is no verdict: None."""
+    if entries is None:
         return None
-    if entries is None or entries is _MISSING:
+    if entries is _MISSING:
         raise error(
             f"da-guard {subcommand} exited {returncode} without the expected JSON ('root_defaults_refused') — "
             "this da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)

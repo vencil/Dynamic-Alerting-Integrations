@@ -2097,7 +2097,8 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 def _root_defaults_refused_detail(rel: str, key: str, text: str, refused: str) -> str:
     """One FAIL line for a root threshold whose value threshold-exporter
     refuses (#3140, #3250; da-guard's root_default_refused says the same):
-    served-values' `root_defaults_refused` entry, `refused` its reason."""
+    an entry of da-guard effective's `root_defaults_refused`, `refused` its
+    reason."""
     why = ("not a finite number — an alert compared against NaN or an infinity never "
            "fires or always fires" if refused == "non_finite"
            else "not a number threshold-exporter reads")
@@ -2602,7 +2603,7 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
     mapping or a list fails the decode and the exporter drops the whole
     file (``UNPARSEABLE``). A scalar is never judged here: since #3250 the
     exporter reads its text through parseThresholdNumber and refuses that key
-    alone — served-values' `root_defaults_refused`, which `check_root_defaults`
+    alone — da-guard effective's `root_defaults_refused`, which `check_root_defaults`
     reads, is that verdict. A file parse-tree cannot read (a repeated key,
     several documents …) never gets here: its read fails first. The truth
     table is ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the
@@ -2687,12 +2688,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       file's whole ``defaults:`` — every platform threshold, while the load
       is reported as successful; a scalar it does not read (``abc``,
       ``0x10``, ``.nan``, ``disable``) refuses that key alone — no default
-      row, served-values' ``root_defaults_refused`` — and a null / empty
+      row, da-guard effective's ``root_defaults_refused`` — and a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
       not judged here. All FAIL. The structure is ``_root_defaults_verdicts``
       over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906);
-      a scalar's verdict is the exporter's own, read from served-values;
+      a scalar's verdict is the exporter's own, read from da-guard effective;
       both are checked against the truth table
       ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
       ``TestDefaultsCarrierOracle`` judges. Every kind in

@@ -100,8 +100,9 @@ type servedValuesDoc struct {
 	// text as written, config.RootDefaultRefusals' verdict), each {key, text,
 	// refused}, sorted by key: no tenant gets a default row for one. The
 	// tree's verdict, not a tenant's — a tenant that does not write the key
-	// also names it in keys[] (root_default_refused). Always present ([]
-	// when none).
+	// also names it in keys[] (root_default_refused). Always present: []
+	// when none, null when the exporter dropped the root carrier itself (no
+	// verdict), as effective's.
 	RootDefaultsRefused []rootDefaultRefused `json:"root_defaults_refused"`
 	// tenants_requested / tenants_absent, with --tenant only
 	// (tenant_subset.go): Tenants then holds those of the requested
@@ -135,6 +136,15 @@ func rootDefaultsRefused(refused []config.RootDefaultRefusal) []rootDefaultRefus
 		out = append(out, rootDefaultRefused{Key: r.Key, Text: r.Text, Refused: r.Reason})
 	}
 	return out
+}
+
+// rootDefaultsRefusedOf is the document's `root_defaults_refused`: null when
+// the root carrier itself is dropped (no verdict, as effective writes it).
+func rootDefaultsRefusedOf(rep config.LoadReport) []rootDefaultRefused {
+	if rep.RootDefaultsUnjudged {
+		return nil
+	}
+	return rootDefaultsRefused(rep.RootDefaultsRefused)
 }
 
 // refusedTextsOf is the text each refused root `defaults:` key was written
@@ -603,7 +613,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Tenants:             tenants,
 		Aliases:             config.DeprecatedKeyAliases(),
 		UnreadKeys:          unreadKeys,
-		RootDefaultsRefused: rootDefaultsRefused(rep.RootDefaultsRefused),
+		RootDefaultsRefused: rootDefaultsRefusedOf(rep),
 		tenantSubset: subset(requested, func(t string) bool {
 			_, ok := tenants[t]
 			return ok

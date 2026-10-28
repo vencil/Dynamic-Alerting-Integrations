@@ -108,7 +108,7 @@ func quoteKeys(keys []string) string { return "`" + strings.Join(keys, "`, `") +
 // numbers only.
 const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root `defaults:` holds numbers only " +
 	"(a mapping or a list there drops the whole block; a scalar that is no number is refused for that key " +
-	"alone, #3250), so another key has no place in this file."
+	"alone), so another key has no place in this file."
 
 // customAlertsRootFix: no reader takes custom alerts from a `_defaults.yaml`
 // (the exporter never served them; the compiler compiles what it serves,

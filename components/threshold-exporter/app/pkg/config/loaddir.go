@@ -118,6 +118,9 @@ type LoadReport struct {
 	// root `defaults:` keys whose value the root decode refuses, with the
 	// text the file wrote (#3250).
 	RootDefaultsRefused []RootDefaultRefusal
+	// RootDefaultsUnjudged is the build's FlatBuild.RootDefaultsUnjudged: the
+	// root carrier is in ParseFailed, so RootDefaultsRefused is no verdict.
+	RootDefaultsUnjudged bool
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -193,6 +196,7 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
 	rep.RootDefaultsUnread = built.RootDefaultsUnread
 	rep.RootDefaultsRefused = built.RootDefaultsRefused
+	rep.RootDefaultsUnjudged = built.RootDefaultsUnjudged
 	rep.NoTenant = noTenantKeys(scan)
 	return &built.Config, rep, scan, built, nil
 }
