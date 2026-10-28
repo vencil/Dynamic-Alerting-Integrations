@@ -648,19 +648,6 @@ tenant-api-build: ## 從本 repo Go 原始碼建 tenant-api 到 .build/tenant-ap
 	@mkdir -p "$(dir $(TENANT_API_BUILD))"
 	@cd components/tenant-api && CGO_ENABLED=0 go build -buildvcs=false -o "$(TENANT_API_BUILD)" ./cmd/server
 
-# da-crdecode（#2476；ADR-036 §12 起 check_admin_config_schema 也以它讀 Helm values）。
-DA_CRDECODE_BUILD := $(CURDIR)/.build/da-crdecode
-
-.PHONY: da-crdecode-build
-da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crdecode（--render-cr 與 check_admin_config_schema 讀 Helm values 需要）
-	@command -v go >/dev/null 2>&1 || { \
-		echo "ERROR: go is not on PATH, so da-crdecode cannot be built from this checkout." >&2; \
-		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
-		echo "       DA_CRDECODE_BINARY to a da-crdecode binary." >&2; \
-		exit 2; }
-	@mkdir -p "$(dir $(DA_CRDECODE_BUILD))"
-	@cd components/threshold-exporter/app && go build -buildvcs=false -o "$(DA_CRDECODE_BUILD)" ./cmd/da-crdecode
-
 # 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印
 # ERROR、非零退出）。用 prerequisite 而不是在 recipe 裡呼叫 $(MAKE)，`make -n`
@@ -673,7 +660,8 @@ DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINA
 
 # da-read／da-crdecode（#3206，ADR-036 §12）：onboard-analyze 讀 Alertmanager 設定，
 # 外層 ConfigMap 交給 da-crdecode（kubectl 的讀法）、設定本身交給 `da-read
-# alertmanager`（Alertmanager 自己的載入函式）。與 da-guard 同一套：環境變數
+# alertmanager`（Alertmanager 自己的載入函式）；check_admin_config_schema 也以
+# da-crdecode 讀 Helm values。與 da-guard 同一套：環境變數
 # 已設就用它、不建；否則從本 checkout 建到 .build/。da-read 是獨立的 Go module
 # （components/da-read），不在 exporter module 裡。
 DA_READ_BUILD := $(CURDIR)/.build/da-read
@@ -690,7 +678,7 @@ da-read-build: ## 從本 repo Go 原始碼建 da-read 到 .build/da-read（onboa
 	@cd components/da-read && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_READ_BUILD)" .
 
 .PHONY: da-crdecode-build
-da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crdecode（onboard-analyze 需要；da-tools 映像已內建）
+da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crdecode（--render-cr、onboard-analyze 與 check_admin_config_schema 讀 Helm values 需要；da-tools 映像已內建）
 	@command -v go >/dev/null 2>&1 || { \
 		echo "ERROR: go is not on PATH, so da-crdecode cannot be built from this checkout." >&2; \
 		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
