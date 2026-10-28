@@ -31,7 +31,7 @@ updated_at: 2026-10-27
 | 2026-10-10 | `describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 改讀 da-guard 的值；爆炸半徑報告另比對自訂告警 | 決策 2 |
 | 2026-10-17 | 自訂告警編譯器改照 exporter 送出的編譯，`_defaults.yaml` 裡的 `_custom_alerts` 不再產生規則 | 決策 5、6 |
 | 2026-10-21 | `describe_tenant` 改為只顯示 exporter 送出的自訂告警清單，爆炸半徑報告退役 | 決策 2 |
-| 2026-10-27 | 根目錄 `defaults:` 的值改與租戶值同一種讀法：讀不了的純量只拒收那個鍵，不再丟掉整份檔 | 決策 4、6 |
+| 2026-10-27 | 閾值在每一層同一種讀法（原文讀成數字）：根目錄 `defaults:` 讀不了的純量只拒收那個鍵、不再丟掉整份檔；最終設定與 `merged_hash` 讀到的與 exporter 相同；根目錄 `defaults:` 裡的保留鍵不傳給任何租戶 | 決策 4、6、10 |
 
 ## 名詞
 
@@ -183,7 +183,8 @@ tenants:
 想讓頂層鍵「出現在最終設定裡」而把它縮排進 `defaults:`，結果依值的型別而定，schema 檢查（`check_confd_schema.py`）對每一種都回 `OK`：
 
 - **值是對照表或清單**：exporter 丟掉**整份檔**，log 一行 `ERROR: skip unparseable defaults/profiles file …`，`da_config_defaults_unusable{reason="parse_failure"}` 變 1，同檔的其他閾值一起消失。
-- **值是讀不成數字的字串**（例如 `_severity_dedup: disable`）：只拒收那個鍵，同檔的其他閾值照送。不以 `_` 開頭的鍵 da-guard 報 `root_default_refused`；以 `_` 開頭的鍵不是閾值，什麼都不會發生，`validate-config` 以 WARN 指出沒有讀取端讀它。
+- **值是讀不成數字的純量**（例如 `mysql_connections: abc`）：只拒收那個鍵，同檔的其他閾值照送，da-guard 報 `root_default_refused`。
+- **鍵是保留鍵**（例如 `_severity_dedup: disable`、`_silent_mode: warning`，不論值為何）：exporter 只從根目錄 `defaults:` 讀閾值，這個值不傳給任何租戶，最終設定卻顯示它是繼承來的（`not_served` 標 `root_defaults_reserved`）。da-guard 報 `root_defaults_reserved_key`（error），`validate-config` 失敗，訊息寫出這個鍵該寫在哪裡。登錄表沒有的 `_` 鍵（例如 `_myth: 5`）什麼都不會發生，`validate-config` 以 WARN 指出沒有讀取端讀它。
 - **值是數字**：它變成每個租戶的一條閾值 series，沒有任何警告。例如縮排 `max_metrics_per_tenant: 100` 之後，`/metrics` 多出 `user_threshold{component="max",metric="metrics_per_tenant"} 100`。
 
 讀取者只看文件頂層的鍵，縮排後對它們等於沒寫：
@@ -273,7 +274,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 同一棵樹上，`/effective` 與 `/metrics` 可能給出不同的值，例如子目錄的值根目錄沒宣告、某個檔語法壞掉。決定如下：
 
-1. **最終設定逐字顯示每一層寫下的值，不刪、不改。** `/metrics` 不送的值，在每個租戶的 `not_served` 逐鍵標出原因與所顯示那個值的來源檔。原因是封閉集合，完整清單見 [CLI 參考的 `da-guard effective`](../cli-reference.md#guard)。
+1. **最終設定逐字顯示每一層寫下的值，不刪、不改。** 閾值若被 YAML 的型別讀成另一個數，顯示原文，因為 exporter 讀的就是原文：子目錄寫 `017`，最終設定顯示 `"017"`、`/metrics` 送 17；寫 `0x1F`，最終設定顯示 `"0x1F"` 並標 `value_rejected`，`/metrics` 改送上一層的值。`/metrics` 不送的值，在每個租戶的 `not_served` 逐鍵標出原因與所顯示那個值的來源檔。原因是封閉集合，完整清單見 [CLI 參考的 `da-guard effective`](../cli-reference.md#guard)。
 2. **原因取自 exporter 載入與解析時自己的判定，不靠比對兩份輸出。** 合法寫法的原文與送出值本來就可能不同（例如 `"60:critical"`），用值比對會誤判。
 3. **`not_served` 為空不代表 `/metrics` 送的就是最終設定顯示的值。** 例如租戶覆寫已經過期（`expires:`）時，最終設定顯示原文，`/metrics` 送平台預設，`not_served` 仍是空的。
 4. **鏈上語法壞掉的 `_defaults.yaml` 不讓租戶消失。** exporter 不讀那個檔；`/effective` 把它當成空檔，租戶照常回傳並列在 `chain_parse_failed`，`merged_hash` 以略過該檔後的鏈計算。tenant-api 回 HTTP 200，`da-guard effective` 結束碼 3，da-guard 的主檢查也以結束碼 3 停下。

@@ -26,7 +26,7 @@ lang: en
 | 2026-10-10 | The `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is read from da-guard; the blast-radius report compares custom alerts separately | Decision 2 |
 | 2026-10-17 | The custom-alert compiler compiles what the exporter serves, so `_custom_alerts` in a `_defaults.yaml` no longer produces rules | Decisions 5, 6 |
 | 2026-10-21 | `describe_tenant` moves to showing only the custom-alert list the exporter serves, and the blast-radius report is retired | Decision 2 |
-| 2026-10-27 | Root `defaults:` values are read the way a tenant's value is: a scalar the exporter cannot read refuses that key alone, and no longer drops the whole file | Decisions 4, 6 |
+| 2026-10-27 | A threshold is read one way at every level (its text, as a number): a scalar the exporter cannot read in the root `defaults:` refuses that key alone and no longer drops the whole file; the effective config and `merged_hash` read what the exporter reads; a reserved key in the root `defaults:` reaches no tenant | Decisions 4, 6, 10 |
 
 ## Terms
 
@@ -178,7 +178,8 @@ This table is not complete. For a key that is not in it, find the code that read
 Indenting a top-level key into `defaults:` to make it "appear in the effective config" has an outcome that depends on the value's type, and the schema check (`check_confd_schema.py`) answers `OK` to each:
 
 - **The value is a mapping or a list**: the exporter drops the **whole file**, logs `ERROR: skip unparseable defaults/profiles file …`, sets `da_config_defaults_unusable{reason="parse_failure"}` to 1, and the file's other thresholds disappear with it.
-- **The value is a string that does not read as a number** (e.g. `_severity_dedup: disable`): that key alone is refused, and the file's other thresholds are served. For a key without the `_` prefix da-guard reports `root_default_refused`; a `_` key is no threshold, so nothing happens, and `validate-config` WARNs that no reader reads it.
+- **The value is a scalar that does not read as a number** (e.g. `mysql_connections: abc`): that key alone is refused, the file's other thresholds are served, and da-guard reports `root_default_refused`.
+- **The key is a reserved key** (e.g. `_severity_dedup: disable`, `_silent_mode: warning`, whatever the value): the exporter reads the root `defaults:` for thresholds only, so the value reaches no tenant, while the effective config shows it as inherited (`not_served`: `root_defaults_reserved`). da-guard reports `root_defaults_reserved_key` (error) and `validate-config` fails, with a message that says where the key belongs. A `_` key the registry does not list (e.g. `_myth: 5`) does nothing, and `validate-config` WARNs that no reader reads it.
 - **The value is a number**: it becomes one threshold series per tenant, with no warning. Indenting `max_metrics_per_tenant: 100`, for example, adds `user_threshold{component="max",metric="metrics_per_tenant"} 100` to `/metrics`.
 
 The readers of these keys look only at the document's top level, so an indented key is not there for them:
@@ -268,7 +269,7 @@ For example, when the root supplies `receiver` and `group_wait: 60s` and `a/_def
 
 On the same tree, `/effective` and `/metrics` can give different values — for example a subdirectory value the root does not declare, or a file with broken syntax. The decisions:
 
-1. **The effective config shows the value each level wrote, verbatim, deleting and changing nothing.** A value `/metrics` does not serve is named key by key in each tenant's `not_served`, with the reason and the file of the value shown. The reasons are a closed set; the full list is in [the CLI reference for `da-guard effective`](../cli-reference.en.md#guard).
+1. **The effective config shows the value each level wrote, verbatim, deleting and changing nothing.** A threshold YAML would type as another number is shown as its text, which is what the exporter reads: a subdirectory writing `017` shows `"017"` and `/metrics` serves 17; writing `0x1F` shows `"0x1F"`, named `value_rejected`, and `/metrics` serves the level above's value. A value `/metrics` does not serve is named key by key in each tenant's `not_served`, with the reason and the file of the value shown. The reasons are a closed set; the full list is in [the CLI reference for `da-guard effective`](../cli-reference.en.md#guard).
 2. **Reasons come from the exporter's own verdicts while loading and resolving, never from comparing the two outputs.** A legal spelling's text and the served value can differ by design (for example `"60:critical"`), so comparing values would misjudge.
 3. **An empty `not_served` does not mean `/metrics` serves what the effective config shows.** For example, when a tenant override has expired (`expires:`), the effective config shows the text as written, `/metrics` serves the platform default, and `not_served` is still empty.
 4. **A `_defaults.yaml` on the chain with broken syntax does not make the tenant disappear.** The exporter does not read that file; `/effective` reads it as empty, still returns the tenant and lists the file in `chain_parse_failed`, and `merged_hash` is computed over the chain without it. tenant-api answers HTTP 200, `da-guard effective` exits 3, and da-guard's main check also stops with exit 3.
