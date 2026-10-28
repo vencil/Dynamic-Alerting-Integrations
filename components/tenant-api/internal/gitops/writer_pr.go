@@ -339,9 +339,10 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
 	// judges the branch point — the feature branch's HEAD, nothing committed
 	// on it yet — with the body written over the file.
+	var verdict []string
 	judged, jerr := w.sampleJudgedBase()
 	if jerr == nil {
-		jerr = w.validateTenantFile(ctx, judged, filePath, tenantID, []byte(content))
+		verdict, jerr = w.validateTenantFile(ctx, judged, filePath, tenantID, []byte(content))
 	}
 	if err := jerr; err != nil {
 		w.abortFeatureBranch(base, branchName)
@@ -430,7 +431,9 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	return &PRWriteResult{
 		BranchName: branchName,
 		FilePath:   filePath,
-		Notices:    notices,
+		// The key verdict only for a write that commits: a body that
+		// changes nothing (ErrNoChanges above) judged the base's own tree.
+		Notices: append(notices, verdict...),
 	}, nil
 }
 
@@ -748,7 +751,8 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	}
 	// #2903 (ADR-036 §4): the generator judges the branch point with every
 	// file the batch changed written over it, once for the whole batch.
-	if err := w.validateStaging(ctx, st, strings.TrimSpace(string(before))); err != nil {
+	verdict, err := w.validateStaging(ctx, st, strings.TrimSpace(string(before)))
+	if err != nil {
 		return nil, err
 	}
 	commit, err := w.commitStaging(st, strings.TrimSpace(string(before)), authorEmail)
@@ -778,7 +782,9 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 
 	return &PRWriteResult{
 		BranchName: branchName,
-		Notices:    notices,
+		// One list (PR-mode results are batch-level): each line of the key
+		// verdict names its tenants.
+		Notices: append(notices, verdict.lines()...),
 	}, nil
 }
 

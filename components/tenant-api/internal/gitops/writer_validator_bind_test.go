@@ -38,7 +38,7 @@ type externalCommitValidator struct {
 	made []string
 }
 
-func (v *externalCommitValidator) ValidateWrites(_ context.Context, base string, _ []ProposedFile) error {
+func (v *externalCommitValidator) ValidateWrites(_ context.Context, base string, _ []ProposedFile) (*KeyVerdict, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if err := os.WriteFile(filepath.Join(v.dir, "outside.txt"), []byte(base), 0o644); err != nil {
@@ -50,7 +50,7 @@ func (v *externalCommitValidator) ValidateWrites(_ context.Context, base string,
 		}
 	}
 	v.made = append(v.made, gitRevParse(v.t, v.dir, "HEAD"))
-	return nil
+	return nil, nil
 }
 
 func gitLog(t *testing.T, dir string) string {

@@ -17,8 +17,10 @@ import (
 // Permissive is a gitops.WriteValidator that passes every write.
 type Permissive struct{}
 
-// ValidateWrites passes.
-func (Permissive) ValidateWrites(context.Context, string, []gitops.ProposedFile) error { return nil }
+// ValidateWrites passes, with no key verdict.
+func (Permissive) ValidateWrites(context.Context, string, []gitops.ProposedFile) (*gitops.KeyVerdict, error) {
+	return nil, nil
+}
 
 // NewWriter is gitops.NewWriter with Permissive installed. A test that is
 // about the verdict installs its own validator over it (SetValidator).

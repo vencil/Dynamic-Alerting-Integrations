@@ -82,14 +82,15 @@ func (g *Gate) RefuseNormalized(paths []string) error {
 		strings.Join(paths, ", ")+"; nothing was written — send the content as git stores it, or change the attributes")
 }
 
-// ValidateWrites asks the service about files over base and returns nil only
-// for a `pass` whose `validated` names exactly base, every file's bytes and
-// the deployment policy file tenant-api reads (ADR-036 §4 "驗的和寫的必須是
-// 同一份"). A pass that does not match is judged once more; a second
-// mismatch, or too little time to ask again, is a retryable refusal.
+// ValidateWrites asks the service about files over base and returns a nil
+// error only for a `pass` whose `validated` names exactly base, every file's
+// bytes and the deployment policy file tenant-api reads (ADR-036 §4 "驗的和
+// 寫的必須是同一份"), with that pass's key verdict (keyVerdict). A pass that
+// does not match is judged once more; a second mismatch, or too little time
+// to ask again, is a retryable refusal.
 //
 // The time given to the service is what is left of ctx's deadline.
-func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.ProposedFile) error {
+func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.ProposedFile) (*gitops.KeyVerdict, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(FallbackDeadline)
@@ -101,7 +102,7 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 	for attempt := 1; ; attempt++ {
 		policy, err := g.policyHash()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		remaining := time.Until(deadline)
 		if remaining < g.minJudge {
@@ -109,30 +110,61 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 			if attempt > 1 {
 				what = "judge the write again after the generator judged other content than tenant-api would write"
 			}
-			return g.reject(ReasonNoTime, fmt.Sprintf("%v of the request's time is left, too little to %s (at least %v is needed); retry", remaining.Round(time.Millisecond), what, g.minJudge))
+			return nil, g.reject(ReasonNoTime, fmt.Sprintf("%v of the request's time is left, too little to %s (at least %v is needed); retry", remaining.Round(time.Millisecond), what, g.minJudge))
 		}
 		v, err := g.client.Validate(ctx, base, writes, remaining)
 		if err != nil {
-			return g.fromCallError(ctx, err)
+			return nil, g.fromCallError(ctx, err)
 		}
 		switch v.Result {
 		case ResultRejected:
-			return g.reject(v.Reason, v.Message)
+			return nil, g.reject(v.Reason, v.Message)
 		case ResultFindings:
 			if v.StderrTail != "" {
 				slog.Info("generator: write refused with findings", "base", base, "files", len(files), "stderr_tail", v.StderrTail)
 			}
-			return g.findings(ctx, deadline, base, files, v)
+			return nil, g.findings(ctx, deadline, base, files, v)
 		}
 		problem := mismatch(v.Validated, base, files, policy)
 		if problem == "" {
-			return nil
+			// Only this pass's key verdict: an earlier pass judged other
+			// content.
+			return keyVerdict(v.KeyVerdict, base, len(files)), nil
 		}
 		slog.Warn("generator: the judged content is not what would be written", "attempt", attempt, "problem", problem)
 		if attempt >= 2 {
-			return g.reject(ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
+			return nil, g.reject(ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
 		}
 	}
+}
+
+// keyVerdict is a pass's key verdict for the Writer (ADR-038 decision 5):
+// kv as gitops has it, or a not_completed one with reason not_reported when
+// the service sent none — "not judged" is said, never left to look like
+// "nothing found". The service's message is logged, not passed on.
+func keyVerdict(kv *KeyVerdict, base string, files int) *gitops.KeyVerdict {
+	if kv == nil {
+		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: gitops.KeyVerdictNotReported}
+	}
+	if kv.Status != gitops.KeyVerdictComplete {
+		slog.Info("generator: key verdict not completed", "base", base, "files", files,
+			"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
+		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: kv.Reason}
+	}
+	out := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: kv.Truncated,
+		Findings: make([]gitops.KeyFinding, len(kv.Findings))}
+	for i, f := range kv.Findings {
+		out.Findings[i] = gitops.KeyFinding{Severity: f.Severity, Kind: f.Kind, Key: f.Key,
+			File: deref(f.File), Tenants: f.Tenants, Reason: deref(f.Reason)}
+	}
+	return out
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // fromCallError is ValidateWrites' answer to a failed call: an
