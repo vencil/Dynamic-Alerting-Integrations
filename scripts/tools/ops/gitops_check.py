@@ -241,7 +241,7 @@ def main() -> None:
             for key, value in check.details.items():
                 if key == "directory":
                     print(f"  {key}: {value}")
-                elif isinstance(value, (int, str)) and key != "parse_errors":
+                elif isinstance(value, (int, str)):
                     print(f"  {key}: {value}")
 
     sys.exit(EXIT_OK if check.status == "pass" else EXIT_VIOLATION)
