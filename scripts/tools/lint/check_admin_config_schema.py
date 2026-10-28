@@ -52,7 +52,8 @@ any of them with PyYAML:
 
 BINARIES (all fail-closed: one that cannot be found or run is exit 2, never a skip):
   tenant-api   --tenant-api-binary, else $TENANT_API_BINARY, else `tenant-api` on $PATH
-  da-crdecode  $DA_CRDECODE_BINARY, else `da-crdecode` on $PATH
+  da-crdecode  $DA_CRDECODE_BINARY, else `da-crdecode` on $PATH (run through
+               _lib_consumer_read.kubernetes_documents, the tools' one da-crdecode caller)
   da-guard     $DA_GUARD_BINARY, else `da-guard` on $PATH
   In a checkout, scripts/ops/with_admin_config_tools.sh builds the unset ones
   (`make tenant-api-build`, `da-crdecode-build`, `da-guard-build`). A tenant-api
@@ -82,7 +83,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -92,6 +92,11 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_parse_tree  # noqa: E402  (ADR-036 §12: _domain_policy.yaml is a conf.d file)
+from _lib_consumer_read import (  # noqa: E402  (ADR-036 §12: the one way to run da-crdecode)
+    ConsumerReadError,
+    kubernetes_documents,
+    resolve_binary,
+)
 
 _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
@@ -182,14 +187,13 @@ class _CallerError(Exception):
 #: The document `tenant-api config check` prints.
 CONFIG_CHECK_SCHEMA = "tenant-api.config-check/v1"
 TENANT_API_ENV = "TENANT_API_BINARY"
-CRDECODE_ENV = "DA_CRDECODE_BINARY"
 #: A tenant-api older than `config check` reads `config` as the server's
 #: first positional argument and may start serving: bounded, then named.
 _TIMEOUT_SECONDS = 120
 
 
 def _resolve_tenant_api(explicit: str | None) -> str:
-    binary = explicit or os.environ.get(TENANT_API_ENV) or shutil.which("tenant-api")
+    binary = resolve_binary(explicit, TENANT_API_ENV, "tenant-api")
     if not binary:
         raise _CallerError(
             "tenant-api was not found: _rbac / _tenant_orgs are judged by "
@@ -199,50 +203,32 @@ def _resolve_tenant_api(explicit: str | None) -> str:
     return binary
 
 
-def _resolve_crdecode() -> str:
-    binary = os.environ.get(CRDECODE_ENV) or shutil.which("da-crdecode")
-    if not binary:
-        raise _CallerError(
-            "da-crdecode was not found: the Helm values are read with it, as Helm "
-            f"reads them (ADR-036 §12). Set ${CRDECODE_ENV}, put da-crdecode on $PATH, "
-            "or in a checkout run this through scripts/ops/with_admin_config_tools.sh "
-            "(make da-crdecode-build)")
-    return binary
-
-
 def _stderr_text(raw: bytes | None) -> str:
     return (raw or b"").decode("utf-8", errors="backslashreplace").strip()
 
 
-def crdecode_documents(binary: str, path: str) -> list:
+def crdecode_documents(path: str) -> list:
     """The documents of *path* as Kubernetes / Helm read them (sigs.k8s.io/yaml),
-    via `da-crdecode`. A file it refuses, or output that is not its JSON, is a
-    caller error: a registered source must be readable the way Helm reads it."""
+    through `_lib_consumer_read.kubernetes_documents` — the one way the tools
+    run `da-crdecode`. Anything it cannot give (the binary missing or failing,
+    a file Helm cannot read as plain YAML, output that is not its JSON) is a
+    caller error, exit 2: a registered source must be readable the way Helm
+    reads it."""
     try:
-        proc = subprocess.run([binary, os.path.abspath(path)], capture_output=True,
-                              check=False, timeout=_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as exc:
-        raise _CallerError(f"{path}: da-crdecode did not finish within {_TIMEOUT_SECONDS}s") from exc
-    except OSError as exc:
-        raise _CallerError(f"cannot run {binary}: {exc}") from exc
-    if proc.returncode != 0:
-        raise _CallerError(f"{path}: da-crdecode exited {proc.returncode} (Helm cannot read "
-                           f"this file as plain YAML): {_stderr_text(proc.stderr)}")
-    try:
-        out = json.loads(proc.stdout)
-    except ValueError as exc:
-        raise _CallerError(f"{path}: da-crdecode printed output that is not JSON: {exc}") from exc
-    docs = out.get("documents") if isinstance(out, dict) else None
-    if not isinstance(docs, list):
-        raise _CallerError(f"{path}: da-crdecode printed JSON without a \"documents\" list")
-    return docs
+        return kubernetes_documents(path)
+    except ConsumerReadError as exc:
+        reason = "; ".join(exc.stderr_lines)
+        raise _CallerError(
+            f"{path}: {exc}{': ' + reason if reason else ''} — the Helm values are read with "
+            "da-crdecode, as Helm reads them (ADR-036 §12); in a checkout run this through "
+            "scripts/ops/with_admin_config_tools.sh (make da-crdecode-build)") from exc
 
 
-def claim_declaration(crdecode: str, values_path: str) -> str:
+def claim_declaration(values_path: str) -> str:
     """`--identity-claim-headers` as the chart renders it from *values_path*'s
     `identity.claimHeaders`: `key=Header` pairs, keys sorted, joined by `,`
     (helm/tenant-api/templates/deployment.yaml). Empty when none is declared."""
-    docs = crdecode_documents(crdecode, values_path)
+    docs = crdecode_documents(values_path)
     claims = None
     for doc in docs:
         if isinstance(doc, dict):
@@ -304,7 +290,6 @@ class _Readers:
         self._tenant_api_arg = tenant_api
         self._helm_values = helm_values
         self._tenant_api: str | None = None
-        self._crdecode: str | None = None
         self._claims: str | None = None
 
     def tenant_api(self) -> str:
@@ -312,14 +297,9 @@ class _Readers:
             self._tenant_api = _resolve_tenant_api(self._tenant_api_arg)
         return self._tenant_api
 
-    def crdecode(self) -> str:
-        if self._crdecode is None:
-            self._crdecode = _resolve_crdecode()
-        return self._crdecode
-
     def claims(self) -> str:
         if self._claims is None:
-            self._claims = claim_declaration(self.crdecode(), self._helm_values)
+            self._claims = claim_declaration(self._helm_values)
         return self._claims
 
 
@@ -418,7 +398,7 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator,
     its decoded config. An outer document da-crdecode refuses raises
     _CallerError (exit 2) — a REGISTERED source is never deferred."""
     dotted = ".".join(key_path)
-    docs = crdecode_documents(readers.crdecode(), path)
+    docs = crdecode_documents(path)
     violations: list[str] = []
     found = False
     for doc in docs:

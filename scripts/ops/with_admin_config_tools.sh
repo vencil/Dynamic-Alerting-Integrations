@@ -6,16 +6,14 @@
 #   $DA_CRDECODE_BINARY  reads the Helm values (embedded RBAC, identity claims)
 #   $DA_GUARD_BINARY     `da-guard parse-tree` reads _domain_policy.yaml
 #
-# Each, as in scripts/ops/with_da_guard.sh:
+# Each follows the contract of scripts/ops/with_da_guard.sh: set (non-blank)
+# -> used as it is; otherwise `make <name>-build` builds .build/<name> from
+# this checkout's Go source and that path is exported; without go the make
+# target prints an ERROR naming the two ways out and this exits non-zero.
 #
-#   set (non-blank)  -> used as it is; nothing is built.
-#   otherwise        -> `make <name>-build` builds .build/<name> from this
-#                       checkout's Go source, and that path is exported.
-#
-# No fallback past that: without go the make target prints an ERROR naming the
-# two ways out and exits non-zero, and so does this script. It rebuilds every
-# run for the reason the Makefile gives: reusing an earlier build would check
-# against the old Go semantics after the source changed.
+# Only tenant-api is handled here: da-crdecode and da-guard go through their
+# own wrappers (with_da_crdecode.sh, with_da_guard.sh), so each "ensure a
+# binary" rule exists once.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -24,17 +22,10 @@ if [ "$#" -eq 0 ]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-ensure() {
-    local var="$1" target="$2" out="$3"
-    local set_to="${!var:-}"
-    if [ -z "${set_to//[[:space:]]/}" ]; then
-        make -s -C "$repo_root" "$target"
-        export "$var=$repo_root/.build/$out"
-    fi
-}
-
-ensure TENANT_API_BINARY tenant-api-build tenant-api
-ensure DA_CRDECODE_BINARY da-crdecode-build da-crdecode
-ensure DA_GUARD_BINARY da-guard-build da-guard
-exec "$@"
+set_to="${TENANT_API_BINARY:-}"
+if [ -z "${set_to//[[:space:]]/}" ]; then
+    make -s -C "$repo_root" tenant-api-build
+    export TENANT_API_BINARY="$repo_root/.build/tenant-api"
+fi
+exec bash "$repo_root/scripts/ops/with_da_crdecode.sh" \
+    bash "$repo_root/scripts/ops/with_da_guard.sh" "$@"

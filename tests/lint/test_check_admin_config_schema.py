@@ -268,16 +268,16 @@ class TestRealFiles:
 class TestClaimDeclaration:
     def test_rendered_like_the_deployment_template(self, tmp):
         values = _values_declaring(tmp, {"region": "X-R", "org": "X-Auth-Request-Org"})
-        assert claim_declaration(os.environ["DA_CRDECODE_BINARY"], values) == \
+        assert claim_declaration(values) == \
             "org=X-Auth-Request-Org,region=X-R"
 
     def test_repo_values_declare_none(self):
-        assert claim_declaration(os.environ["DA_CRDECODE_BINARY"], _REAL_HELM_VALUES) == ""
+        assert claim_declaration(_REAL_HELM_VALUES) == ""
 
     def test_not_a_map_is_a_caller_error(self, tmp):
         values = _write(tmp, "v.yaml", "identity:\n  claimHeaders: [org]\n")
         with pytest.raises(_CallerError):
-            claim_declaration(os.environ["DA_CRDECODE_BINARY"], values)
+            claim_declaration(values)
 
 
 # --- embedded RBAC (production authz shipped as a block-scalar string) -------
