@@ -814,7 +814,7 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": true, "refused": "nan"}}',
     '{"k": {"exporter": false, "reason": "value_non_finite"}}',
     '{"k": {"exporter": false, "reason": "no_row", "refused": "non_finite"}}',
-    '{"k": {"exporter": false, "reason": "root_default_non_finite"}}',
+    '{"k": {"exporter": false, "reason": "root_default_refused"}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
         "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial",
         "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason",
@@ -963,23 +963,64 @@ def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da
     assert [(e.status, e.refused) for e in ta] == [
         ("rejected", "non_finite"), ("rejected", "unparsed"), ("rejected", None),
         ("disabled", None), ("served", None)]
+    # #3234、#3235：Go 的判定逐筆帶著——門檻值拒收是 value_not_served、其他欄位拒收是
+    # custom_alert_rejected；停用與送出的沒有。
+    assert [e.finding for e in ta] == ["value_not_served", "value_not_served", "custom_alert_rejected",
+                                       None, None]
+
+
+def _custom_alerts_doc(entry: str) -> str:
+    return ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
+            '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
+            '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
+            f'"keys": {{}}, "custom_alerts": [{entry}], "custom_alerts_finding": null}}}}}}')
 
 
 @pytest.mark.parametrize("entry, why", [
-    ('{"index": 0, "spec": {}, "status": "bogus"}', "status"),
-    ('{"index": 0, "spec": {}, "status": "served"}', "recipe_id"),
-    ('{"index": 0, "spec": {}, "status": "rejected", "refused": "bogus"}', "refused"),
+    ('{"index": 0, "spec": {}, "status": "bogus", "finding": null}', "status"),
+    ('{"index": 0, "spec": {}, "status": "served", "finding": null}', "recipe_id"),
+    ('{"index": 0, "spec": {}, "status": "rejected", "refused": "bogus", "finding": "value_not_served"}', "refused"),
     ('{"index": 0, "spec": {}, "status": "disabled", "recipe_id": "r", "severities": ["warning"], '
-     '"refused": "unparsed"}', "refused"),
-], ids=["unknown-status", "served-without-recipe-id", "unknown-refused", "refused-not-rejected"])
+     '"refused": "unparsed", "finding": null}', "refused"),
+    ('{"index": 0, "spec": {}, "status": "served", "recipe_id": "r", "severities": ["warning"], '
+     '"finding": "custom_alert_rejected"}', "finding"),
+    ('{"index": 0, "spec": {}, "status": "rejected", "finding": 1}', "finding"),
+], ids=["unknown-status", "served-without-recipe-id", "unknown-refused", "refused-not-rejected",
+        "finding-on-served", "finding-not-a-string"])
 def test_a_custom_alert_entry_not_of_its_shape_is_refused(tmp_path, entry, why):
-    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
-                                   '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
-                                   f'"keys": {{}}, "custom_alerts": [{entry}]}}}}}}')
+    fake = _old_da_guard(tmp_path, _custom_alerts_doc(entry))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "custom alerts that are not of their shape" in str(ei.value) and why in str(ei.value)
+    assert not ei.value.stale
+
+
+def test_custom_alerts_without_a_finding_are_refused_as_older(tmp_path):
+    """#3234、#3235：沒有 `finding` 的條目來自早於這個欄位的 da-guard——當成舊版拒讀，
+    不靜默讀成「沒有 finding」（那會讓 validate-config 對不送的告警 PASS）。"""
+    fake = _old_da_guard(tmp_path, _custom_alerts_doc('{"index": 0, "spec": {}, "status": "rejected"}'))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "finding" in str(ei.value) and ei.value.stale
+
+
+def test_a_tenant_without_custom_alerts_finding_is_refused_as_older(tmp_path):
+    """#3235：tenant 有 `custom_alerts` 卻沒有 `custom_alerts_finding`（舊版 da-guard）。"""
+    doc = _custom_alerts_doc('{"index": 0, "spec": {}, "status": "rejected", "finding": "custom_alert_rejected"}')
+    doc = doc.replace(', "custom_alerts_finding": null', '')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "finding" in str(ei.value) and ei.value.stale
+
+
+@pytest.mark.parametrize("extra", ['"custom_alerts_finding": 1', '"custom_alerts_finding": "custom_alert_rejected"'],
+                         ids=["not-a-string", "without-an-error"])
+def test_custom_alerts_finding_not_of_its_shape_is_refused(tmp_path, extra):
+    doc = _custom_alerts_doc('{"index": 0, "spec": {}, "status": "rejected", "finding": "custom_alert_rejected"}')
+    doc = doc.replace('"custom_alerts_finding": null', extra)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "custom_alerts_finding" in str(ei.value) and not ei.value.stale
 
 
 def test_partial_reads_the_rest_of_a_tree_with_a_file_that_does_not_decode(tmp_path, da_guard):

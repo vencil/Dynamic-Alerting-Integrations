@@ -394,6 +394,10 @@ class TenantValues(NamedTuple):
     # Why the tenant's `_custom_alerts` does not decode (no entry, nothing
     # served); None when it does.
     custom_alerts_error: str | None = None
+    # #3235: the kind of the error da-guard reports for a block that does
+    # not decode (Go's `guard.CustomAlertBlockFindingKind`); None when it
+    # decodes. Go's verdict — a reader lists it.
+    custom_alerts_finding: str | None = None
 
 
 class CustomAlertEntry(NamedTuple):
@@ -405,7 +409,11 @@ class CustomAlertEntry(NamedTuple):
     `reason` for a rejected or duplicate one. `refused` (#3209) is set only
     on a rejected entry the exporter rejects for its `threshold:` — one of
     `SERVED_KEY_REFUSALS`, as Go wrote it; da-guard reports that entry as
-    `value_not_served`."""
+    `value_not_served`. `finding` (#3234, #3235) is the kind of the error
+    da-guard reports for the entry (Go's `guard.CustomAlertFindingKind`):
+    set on every entry the exporter does not serve except a switched-off
+    one, None on a served or disabled entry. It is Go's verdict — a reader
+    lists it and judges nothing."""
     index: int
     spec: dict[str, Any]
     status: str
@@ -413,6 +421,7 @@ class CustomAlertEntry(NamedTuple):
     recipe_id: str | None = None
     severities: tuple[str, ...] = ()
     refused: str | None = None
+    finding: str | None = None
 
 
 #: The closed set of served-values' `custom_alerts[*].status`.
@@ -1068,6 +1077,11 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no keys — this da-guard is "
                 "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        if ("custom_alerts" in tv and "custom_alerts_finding" not in tv) or any(
+                isinstance(e, dict) and "finding" not in e for e in tv.get("custom_alerts") or ()):
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has custom alerts without a finding — this "
+                "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
         try:
             keys = {str(k): _served_key(e) for k, e in tv["keys"].items()}
             routing = tv.get("routing")
@@ -1081,6 +1095,11 @@ def load_served_tree(
             custom_alerts_error = tv.get("custom_alerts_error")
             if custom_alerts_error is not None and not isinstance(custom_alerts_error, str):
                 raise TypeError(f"custom_alerts_error is a {type(custom_alerts_error).__name__}")
+            custom_alerts_finding = tv.get("custom_alerts_finding")
+            if custom_alerts_finding is not None and (not isinstance(custom_alerts_finding, str)
+                                                      or custom_alerts_error is None):
+                raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
+                                 f"with custom_alerts_error {custom_alerts_error!r}")
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
@@ -1100,7 +1119,7 @@ def load_served_tree(
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
-                                     custom_alerts, custom_alerts_error)
+                                     custom_alerts, custom_alerts_error, custom_alerts_finding)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 
@@ -1131,8 +1150,9 @@ def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcomman
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
     """One `custom_alerts` entry, checked: a status from the closed set, a
-    recipe_id with severities exactly when it is served or disabled, and a
-    `refused` from the closed set only on a rejected entry."""
+    recipe_id with severities exactly when it is served or disabled, a
+    `refused` from the closed set only on a rejected entry, and a `finding`
+    only on an entry that is neither served nor disabled."""
     status = e["status"]
     if status not in CUSTOM_ALERT_STATUSES:
         raise ValueError(f"custom_alerts status {status!r}")
@@ -1145,8 +1165,11 @@ def _custom_alert_entry(e: Any) -> CustomAlertEntry:
     refused = e.get("refused")
     if refused is not None and (refused not in SERVED_KEY_REFUSALS or status != "rejected"):
         raise ValueError(f"custom_alerts entry {index} is {status} with refused {refused!r}")
+    finding = e["finding"]
+    if finding is not None and (not isinstance(finding, str) or status in ("served", "disabled")):
+        raise ValueError(f"custom_alerts entry {index} is {status} with finding {finding!r}")
     return CustomAlertEntry(index, dict(spec), status, e.get("reason"), rid, tuple(str(s) for s in sevs),
-                            refused)
+                            refused, finding)
 
 
 def _served_key(e: Any) -> ServedKey:

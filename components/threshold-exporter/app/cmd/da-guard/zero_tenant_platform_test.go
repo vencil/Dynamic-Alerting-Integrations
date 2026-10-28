@@ -184,6 +184,7 @@ var zeroTenantKindClass = map[string]string{
 	"schedule_null_value":           kindNeedsTenant,
 	"value_not_served":              kindNeedsTenant,
 	"custom_alert_duplicate_series": kindNeedsTenant,
+	"custom_alert_rejected":         kindNeedsTenant,
 	"custom_alert_over_cap":         kindNeedsTenant,
 
 	// The defaults carriers (DefaultsFiles).

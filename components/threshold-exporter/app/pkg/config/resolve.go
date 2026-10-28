@@ -530,10 +530,11 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			}
 		}
 
-		// State 2: use default — unless the root writes it as a non-finite
-		// number (#3140): the key is then served like an `optional_overrides:`
-		// one, the tenant's own value only, and da-guard reports the root
-		// value (root_default_non_finite).
+		// State 2: use default — unless the root writes it as a value the
+		// root decode refuses (#3140, #3250: refusedDefault, a NaN): the key
+		// is then served like an `optional_overrides:` one, the tenant's own
+		// value only, and da-guard reports the root value
+		// (root_default_refused).
 		if !finiteThreshold(defaultValue) {
 			continue
 		}

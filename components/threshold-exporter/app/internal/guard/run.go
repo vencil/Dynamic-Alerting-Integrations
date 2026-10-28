@@ -49,6 +49,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkScheduleNullValues(input)...)
 	findings = append(findings, checkValuesNotServed(input)...)
 	findings = append(findings, checkCustomAlertDuplicates(input)...)
+	findings = append(findings, checkCustomAlertsRejected(input)...)
 	findings = append(findings, checkCustomAlertsOverCap(input)...)
 	findings = append(findings, checkMetricsNotGatherable(input)...)
 

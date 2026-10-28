@@ -214,3 +214,44 @@ func TestEmit_RollBackLeavesAPathAnotherWriterReplaced(t *testing.T) {
 		t.Fatalf("the other writer's file: %q", got)
 	}
 }
+
+// #3235: a `_custom_alerts` entry the exporter rejects is an error finding,
+// so a call that writes one more is refused — and a call that only moves an
+// entry already rejected (deleting a served one before it shifts its index)
+// does not worsen the tree and is written.
+func TestWrite_ARejectedCustomAlertCountsNotItsIndex(t *testing.T) {
+	const served = `{recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "80"}`
+	const bad = `{recipe: threshold, name: w, metric: m2, op: ">", window: 5x, threshold: "80"}`
+	list := func(entries ...string) string {
+		return "tenants:\n  t1:\n    _custom_alerts:\n      - " + strings.Join(entries, "\n      - ") + "\n"
+	}
+	seq := func(names ...string) string {
+		items := []string{}
+		for _, n := range names {
+			window := "5m"
+			if n == "w" || n == "w2" {
+				window = "5x"
+			}
+			metric := map[string]string{"a": "m1", "w": "m2", "w2": "m3"}[n]
+			items = append(items, `{"map":[["recipe",{"str":"threshold"}],["name",{"str":"`+n+`"}],["metric",{"str":"`+
+				metric+`"}],["op",{"str":">"}],["window",{"str":"`+window+`"}],["threshold",{"str":"80"}]]}`)
+		}
+		return `{"files":[{"path":"t.yaml","ops":[{"op":"set","path":["tenants","t1","_custom_alerts"],"value":{"seq":[` +
+			strings.Join(items, ",") + `]}}]}]}`
+	}
+	t.Run("the rejected entry moves", func(t *testing.T) {
+		root := writeTree(t, map[string]string{"_defaults.yaml": "defaults:\n  cpu: 5\n", "t.yaml": list(served, bad)})
+		if code, res := runBatch(t, writeCmd, seq("w"), "--config-dir", root); code != exitOK || res.Status != writeStatusWritten {
+			t.Fatalf("exit %d %s %v (%v)", code, res.Status, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("one more rejected entry", func(t *testing.T) {
+		root := writeTree(t, map[string]string{"_defaults.yaml": "defaults:\n  cpu: 5\n", "t.yaml": list(served, bad)})
+		before := snapshot(t, root)
+		code, res := runBatch(t, writeCmd, seq("a", "w", "w2"), "--config-dir", root)
+		if code != exitFindings || callReason(res) != writeReasonWorsensTree {
+			t.Fatalf("exit %d reason %q %v", code, callReason(res), worsenedOf(res))
+		}
+		sameTree(t, before, snapshot(t, root))
+	})
+}

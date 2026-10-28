@@ -386,7 +386,9 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	root := writeTree(t, map[string]string{})
 	in := `{"create":{"map":[["tenants",{"map":[["t9",{"map":[
 		["zeta",{"str":"1"}],["alpha",{"str":"yes"}],["mid",{"int":"10"}],
-		["_custom_alerts",{"seq":[{"map":[["name",{"str":"x"}],["expr",{"str":"up\n== 0\n"}]]}]}]]}]]}],
+		["_custom_alerts",{"seq":[{"map":[["name",{"str":"x"}],["expr",{"str":"up\n== 0\n"}],
+			["recipe",{"str":"threshold"}],["metric",{"str":"qd"}],["op",{"str":">"}],["window",{"str":"5m"}],
+			["threshold",{"str":"80"}]]}]}]]}]]}],
 		["defaults",{"map":[]}]]}}`
 	code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "team/t9.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
@@ -394,7 +396,8 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	}
 	got := snapshot(t, root)
 	want := "tenants:\n  t9:\n    zeta: \"1\"\n    alpha: \"yes\"\n    mid: 10\n    _custom_alerts:\n" +
-		"      - name: \"x\"\n        expr: |\n          up\n          == 0\ndefaults: {}\n"
+		"      - name: \"x\"\n        expr: |\n          up\n          == 0\n        recipe: \"threshold\"\n" +
+		"        metric: \"qd\"\n        op: \">\"\n        window: \"5m\"\n        threshold: \"80\"\ndefaults: {}\n"
 	if len(got) != 1 || got["team/t9.yaml"] != want {
 		t.Fatalf("got %v\nwant\n%s", got, want)
 	}

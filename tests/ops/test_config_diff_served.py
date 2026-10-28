@@ -458,7 +458,7 @@ def test_a_change_on_a_key_served_on_neither_side_is_marked_on_both(tmp_path, da
 @pytest.mark.parametrize("root", [".nan", ".inf", "-.inf"])
 def test_a_row_lost_to_a_non_finite_root_default_is_marked_not_served(tmp_path, da_guard, root):
     """#3140：根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列。
-    served-values 標 `root_default_non_finite`，所以標 not served，不是單純的移除。"""
+    served-values 標 `root_default_refused`，所以標 not served，不是單純的移除。"""
     tenants = {"t": {"container_memory": "70"}}
     b, p = _served(tmp_path, da_guard, tenants, tenants,
                    pr_defaults=_DEFAULTS.replace("mysql_connections: 80", f"mysql_connections: {root}"))
