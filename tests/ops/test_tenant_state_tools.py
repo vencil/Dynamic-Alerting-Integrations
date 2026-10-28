@@ -338,3 +338,32 @@ def test_metadata_old_input_exits_nonzero(tmp_path, monkeypatch, capsys):
         _metadata_main(monkeypatch, ["--config-dir", str(conf), "--state", str(_cm_yaml(tmp_path))])
     assert e.value.code == 2
     _assert_names_the_commands(capsys.readouterr().err)
+
+
+def _empty_state_json(tmp_path, tenant_api_binary) -> Path:
+    store = tmp_path / "empty-store"
+    store.mkdir()
+    proc = subprocess.run([tenant_api_binary, "state", "show", "--state-store", "dir",
+                           "--state-dir", str(store), "--config-dir", str(tmp_path / "nowhere")],
+                          capture_output=True, check=False, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    p = tmp_path / "empty.json"
+    p.write_bytes(proc.stdout)
+    return p
+
+
+def test_empty_state_hint_is_each_tools_own(tmp_path, monkeypatch, capsys, tenant_api_binary):
+    # Only offboard_tenant has --skip-state-check; generate_tenant_metadata must
+    # not suggest a flag it does not have.
+    state = str(_empty_state_json(tmp_path, tenant_api_binary))
+    conf = _confd(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        _metadata_main(monkeypatch, ["--config-dir", str(conf), "--state", state, "--dry-run"])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "no records" in err and "--skip-state-check" not in err, err
+    with pytest.raises(SystemExit) as e:
+        _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--state", state])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "no records" in err and "--skip-state-check" in err, err

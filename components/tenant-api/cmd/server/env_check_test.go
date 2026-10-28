@@ -70,10 +70,21 @@ func TestCheckTAEnv(t *testing.T) {
 		t.Fatalf("every known variable must be accepted:\n%s", errb.String())
 	}
 	// Kubernetes service links of a Service named ta-x are not settings.
-	for _, n := range []string{"TA_X_SERVICE_HOST", "TA_X_SERVICE_PORT", "TA_X_SERVICE_PORT_HTTP",
-		"TA_X_PORT", "TA_X_PORT_8080_TCP", "TA_X_PORT_8080_TCP_ADDR"} {
-		if u := unknownTAEnv([]string{n + "=1"}); len(u) != 0 {
-			t.Errorf("%s refused: %v", n, u)
+	for _, kv := range []string{"TA_X_SERVICE_HOST=10.0.0.1", "TA_X_SERVICE_PORT=8080",
+		"TA_X_SERVICE_PORT_HTTP=8080", "TA_X_PORT=tcp://10.0.0.1:8080", "TA_X_PORT=udp://10.0.0.1:53",
+		"TA_X_PORT_8080_TCP=tcp://10.0.0.1:8080", "TA_X_PORT_8080_TCP_ADDR=10.0.0.1",
+		"TA_X_PORT_8080_TCP_PORT=8080", "TA_X_PORT_53_UDP_PROTO=udp"} {
+		if u := unknownTAEnv([]string{kv}); len(u) != 0 {
+			t.Errorf("%s refused: %v", kv, u)
+		}
+	}
+	// Settings that only look like a port are refused: the shapes are exact,
+	// and a bare _PORT passes only with the tcp:// value Kubernetes writes.
+	for _, kv := range []string{"TA_LISTEN_PORT=8080", "TA_METRICS_PORT=9090", "TA_X_PORT=",
+		"TA_X_PORT_HTTP=8080", "TA_X_PORT_8080=1", "TA_X_PORT_8080_TCP_HOST=x", "TA_X_SERVICE_HOSTNAME=x"} {
+		name, _, _ := strings.Cut(kv, "=")
+		if u := unknownTAEnv([]string{kv}); len(u) != 1 || u[0] != name {
+			t.Errorf("%s accepted: %v", kv, u)
 		}
 	}
 	errb.Reset()

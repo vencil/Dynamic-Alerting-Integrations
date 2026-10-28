@@ -227,9 +227,17 @@ class TestValidateFile:
         p = _write(tmp, "_tenant_orgs.yaml", "tenant_orgs:\n  db-a: [123]\n")
         assert validate_file(p, tenant_orgs_schema, jsonschema, _readers()) == []
 
-    def test_empty_or_comment_file_tolerated(self, tmp, rbac_schema):
-        p = _write(tmp, "_rbac.yaml", "# no rules yet\n")
-        assert validate_file(p, rbac_schema, jsonschema, _readers()) == []
+    @pytest.mark.parametrize("text", ["", "# no rules yet\n", "groups:\n", "groups: []\n"])
+    def test_zero_group_rbac_is_a_violation(self, tmp, rbac_schema, text):
+        # tenant-api reads it (config check exits 0), but a server started with
+        # --rbac fails closed on zero groups and denies every request.
+        p = _write(tmp, "_rbac.yaml", text)
+        viol = validate_file(p, rbac_schema, jsonschema, _readers())
+        assert len(viol) == 1 and "zero groups" in viol[0] and "denies every request" in viol[0], viol
+
+    def test_empty_tenant_orgs_is_tolerated(self, tmp, tenant_orgs_schema):
+        p = _write(tmp, "_tenant_orgs.yaml", "# none yet\n")
+        assert validate_file(p, tenant_orgs_schema, jsonschema, _readers()) == []
 
     def test_list_top_doc_flagged(self, tmp, tenant_orgs_schema):
         p = _write(tmp, "_tenant_orgs.yaml", "- db-a\n- db-b\n")
@@ -331,9 +339,13 @@ class TestEmbeddedRbac:
         viol = validate_embedded_file(p, ("data", "_rbac.yaml"), rbac_schema, jsonschema, _readers())
         assert any("block-scalar" in v for v in viol), viol
 
-    def test_embedded_null_block_tolerated(self, tmp, rbac_schema):
-        p = _write(tmp, "values.yaml", "rbac:\n  _rbacYaml:\n")
-        assert validate_embedded_file(p, ("rbac", "_rbacYaml"), rbac_schema, jsonschema, _readers()) == []
+    @pytest.mark.parametrize("value", ["", " |\n    groups: []\n", " |\n    # nothing\n"])
+    def test_embedded_zero_group_rbac_is_a_violation(self, tmp, rbac_schema, value):
+        # A null or group-less block: the chart mounts it as the --rbac file,
+        # and zero groups deny every request.
+        p = _write(tmp, "values.yaml", "rbac:\n  _rbacYaml:" + value + "\n")
+        viol = validate_embedded_file(p, ("rbac", "_rbacYaml"), rbac_schema, jsonschema, _readers())
+        assert len(viol) == 1 and "zero groups" in viol[0], viol
 
     def test_embedded_duplicate_key_rejected(self, tmp, rbac_schema):
         # Duplicate key INSIDE the block scalar: parse-tree's verdict in tenant-api.
@@ -565,11 +577,8 @@ class TestParserParity:
     the domain-policy reader is LENIENT. A schema that rejected any of these
     (on what the parser decoded) would block a legitimate commit."""
 
-    def test_rbac_bare_groups_null(self, tmp, rbac_schema):
-        p = _write(tmp, "_rbac.yaml", "groups:\n")
-        assert validate_file(p, rbac_schema, jsonschema, _readers()) == []
-
     def test_rbac_rule_null_lists(self, tmp, rbac_schema):
+        # (A config with zero groups is refused on purpose: TestValidateFile.)
         p = _write(tmp, "_rbac.yaml", "groups:\n  - name: x\n    tenants:\n    permissions:\n")
         assert validate_file(p, rbac_schema, jsonschema, _readers()) == []
 

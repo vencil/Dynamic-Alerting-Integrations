@@ -62,7 +62,13 @@ def subset_key(tenant: str) -> str:
 
 
 class StateInputError(ValueError):
-    """The --state input is not a `tenant-api state show` document this module reads."""
+    """The --state input is not a `tenant-api state show` document this module
+    reads. ``empty`` is True for a document with no records (each tool says
+    what it can do instead: `offboard_tenant` has --skip-state-check)."""
+
+    def __init__(self, message: str, *, empty: bool = False) -> None:
+        super().__init__(message)
+        self.empty = empty
 
 
 @dataclass(frozen=True)
@@ -174,8 +180,8 @@ def load_state(path: str | os.PathLike[str]) -> TenantState:
         _add(st, r, i, source)
     if not st.keys:
         raise StateInputError(
-            f"--state {source}: holds no records — the state store is empty "
-            "(if it really is, use --skip-state-check)")
+            f"--state {source}: holds no records — the state store is empty, so nothing "
+            "can be read from it", empty=True)
     return st
 
 

@@ -149,3 +149,27 @@ def test_a_malformed_token_ttl_refuses_the_render():
     res = _render("everything-on", "federation.tokenTTL=4hours")
     assert res.returncode != 0 and "federation.tokenTTL" in res.stderr, res.stderr
     assert _render("everything-on", "federation.tokenTTL=1h30m").returncode == 0
+
+
+#: (render, the value set empty): tenant-api reads an empty TA_* as unset and
+#: falls back to its default, where the old empty flag was an explicit value —
+#: so the chart refuses the empty value at render time.
+_EMPTY_REFUSED = [
+    ("pr-github", "writeBack.baseBranch"),
+    ("pr-gitlab", "writeBack.baseBranch"),
+    ("pr-github", "writeBack.github.targetBranch"),
+    ("pr-gitlab", "writeBack.gitlab.targetBranch"),
+    ("default", "state.configMapName"),
+    ("pr-github", "state.configMapName"),
+]
+
+
+@pytest.mark.parametrize("render,key", _EMPTY_REFUSED, ids=[f"{r}:{k}" for r, k in _EMPTY_REFUSED])
+def test_an_empty_value_refuses_the_render(render, key):
+    res = _render(render, f"{key}=")
+    assert res.returncode != 0 and key in res.stderr, (res.returncode, res.stderr)
+
+
+def test_direct_mode_does_not_need_a_base_branch():
+    # writeBack.baseBranch is read only by the PR modes.
+    assert _render("default", "writeBack.baseBranch=").returncode == 0

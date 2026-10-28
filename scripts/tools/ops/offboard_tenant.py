@@ -568,7 +568,9 @@ def main():
         try:
             state = load_state(args.state)
         except StateInputError as e:
-            print(f"ERROR: {safe_label(e)}", file=sys.stderr)
+            hint = ("（state store 若確實是空的，不給 --state、改加 --skip-state-check）"
+                    if e.empty else "")
+            print(f"ERROR: {safe_label(e)}{hint}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
     with _lib_parse_cache.session():  # one parse-tree document for the run

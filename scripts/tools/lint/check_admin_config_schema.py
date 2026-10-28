@@ -19,7 +19,12 @@ any of them with PyYAML:
   * The JSON Schemas stay as the AUTHORING checks stricter than the parser (a
     permission value must be one of the known ones; list items non-blank), run on
     the `config` that `config check` decoded — never on a second reading of the
-    file. A bad permission VALUE (`permissions: [readonly]`) is not a load error
+    file. One more such check is this lint's own: an RBAC config with ZERO
+    groups (an empty or comment-only file, `groups:` null or `[]`, a null
+    embedded block) is a violation. The parser reads it (`config check` exits
+    0), but a server started with `--rbac` (the Helm chart always passes it)
+    fails CLOSED on it (MED-8): every request is denied, unless the server runs
+    with --rbac-empty-open, which the chart never sets. A bad permission VALUE (`permissions: [readonly]`) is not a load error
     (Permission is an unconstrained string) and silently grants nothing; the
     schema's enum can only reject a typo, never a real permission.
   * `_domain_policy.yaml` is a conf.d file: read, like every other conf.d reader,
@@ -58,8 +63,9 @@ SCOPE:
   Validates each argument file whose basename stem is a known admin meta-config
   (SCHEMA_MAP) with a `.yaml`/`.yml` extension, and each registered embedded
   source (EMBEDDED_RBAC_SOURCES, by repo-relative path). Other files are SKIPPED
-  (listed, never silently capped). An empty / comment-only file is the empty
-  config to the parser and is not flagged.
+  (listed, never silently capped). An empty / comment-only `_tenant_orgs.yaml`
+  or `_domain_policy.yaml` is the empty config and is not flagged; an RBAC
+  config with zero groups is (above).
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all checked files valid (or no admin files among the arguments)
@@ -353,6 +359,17 @@ def _problem_line(path: str, problem: dict, where: str = "") -> str:
             f"{problem['message']}")
 
 
+def _zero_groups(config: dict | None, path: str, where: str = "") -> list[str]:
+    """The authoring check stricter than the parser: an RBAC config with no
+    group denies every request once the server loads it with --rbac."""
+    if config is not None and config.get("groups"):
+        return []
+    return [f"ERROR: {path}: {where}the RBAC config has zero groups: tenant-api reads it, but a "
+            "server started with --rbac (the Helm chart always passes it) fails closed on it "
+            "and denies every request (MED-8; only --rbac-empty-open, which the chart never "
+            "sets, opens it). Add the groups, or remove the file."]
+
+
 def validate_file(path: str, schema: dict, validator, readers: _Readers) -> list[str]:
     """Validate one whole-file admin config. Returns violation messages."""
     stem = _stem(path)
@@ -364,6 +381,10 @@ def validate_file(path: str, schema: dict, validator, readers: _Readers) -> list
         config, problem = config_check(readers.tenant_api(), kind, path, path=path, claims=claims)
         if problem is not None:
             return [_problem_line(path, problem)]
+        if kind == "rbac":
+            empty = _zero_groups(config, path)
+            if empty:
+                return empty
         return _validate_doc(config, path, schema, validator)
     return _validate_domain_policy(path, schema, validator)
 
@@ -408,7 +429,9 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator,
             continue  # this document does not carry the key; another might
         found = True
         if embedded is None:
-            # present-but-null: the empty RBAC; loader-legal, not a violation.
+            # present-but-null: the empty RBAC — loader-legal, but the chart
+            # mounts it as the --rbac file, and zero groups deny everything.
+            violations.extend(_zero_groups(None, path, f"embedded '{dotted}': "))
             continue
         if not isinstance(embedded, str):
             violations.append(
@@ -426,6 +449,10 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator,
                                        data=embedded.encode("utf-8"), claims=readers.claims())
         if problem is not None:
             violations.append(_problem_line(path, problem, where))
+            continue
+        empty = _zero_groups(config, path, where)
+        if empty:
+            violations.extend(empty)
             continue
         violations.extend(_validate_doc(config, path, schema, validator, where=where))
 

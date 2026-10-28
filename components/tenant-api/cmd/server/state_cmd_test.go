@@ -502,3 +502,74 @@ func TestConfigCheck_Usage(t *testing.T) {
 		}
 	}
 }
+
+// The store is read as the server reads it (dirStore.Get follows a symlink):
+// a record that is a symlink — every file of a ConfigMap volume is one, into
+// `..data/` — is a record, not an absent one.
+func TestStateShow_DirStore_Symlinks(t *testing.T) {
+	root := t.TempDir()
+	conf := filepath.Join(root, "conf.d")
+
+	plain := filepath.Join(root, "plain")
+	writeFiles(t, filepath.Join(root, "elsewhere"), map[string]string{"g.yaml": goodState["_groups.yaml"]})
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "elsewhere", "g.yaml"), filepath.Join(plain, "_groups.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A ConfigMap volume: the files are symlinks to ..data/<key>, ..data a
+	// symlink to the timestamped directory holding the real files.
+	cmv := filepath.Join(root, "cmvolume")
+	writeFiles(t, filepath.Join(cmv, "..2026_10_28_00_00_00.1"), map[string]string{
+		"_groups.yaml": goodState["_groups.yaml"], "_views.yaml": goodState["_views.yaml"]})
+	if err := os.Symlink("..2026_10_28_00_00_00.1", filepath.Join(cmv, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"_groups.yaml", "_views.yaml"} {
+		if err := os.Symlink(filepath.Join("..data", k), filepath.Join(cmv, k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name, c := range map[string]struct {
+		dir  string
+		keys []string
+	}{
+		"symlinked record": {plain, []string{"_groups.yaml"}},
+		"configmap volume": {cmv, []string{"_groups.yaml", "_views.yaml"}},
+	} {
+		code, doc, errOut := runShow(t, "", "--state-store", "dir", "--state-dir", c.dir, "--config-dir", conf)
+		if code != 0 {
+			t.Fatalf("%s: code %d: %s", name, code, errOut)
+		}
+		var got []string
+		for _, r := range doc.Records {
+			got = append(got, r.Key)
+			if r.Problem != nil {
+				t.Errorf("%s: %s: %+v", name, r.Key, r.Problem)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(c.keys, ",") {
+			t.Errorf("%s: keys %v, want %v", name, got, c.keys)
+		}
+	}
+}
+
+// A record that exists but cannot be read is not an absent record: the store
+// cannot be read (exit 1). A directory where a record should be stands for
+// any read error other than "does not exist" (a permission error would not
+// stop a test running as root).
+func TestStateShow_DirStore_UnreadableRecordIsExit1(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	writeFiles(t, stateDir, map[string]string{"_views.yaml": goodState["_views.yaml"]})
+	if err := os.MkdirAll(filepath.Join(stateDir, "_groups.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runShow(t, "", "--state-store", "dir", "--state-dir", stateDir, "--config-dir", filepath.Join(root, "conf.d"))
+	if code != 1 || !strings.Contains(errOut, "_groups.yaml") {
+		t.Fatalf("code %d, want 1 naming _groups.yaml: %s", code, errOut)
+	}
+}

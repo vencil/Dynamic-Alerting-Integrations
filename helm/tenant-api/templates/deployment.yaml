@@ -175,14 +175,17 @@ spec:
             - name: TA_WRITE_MODE
               value: {{ .Values.writeBack.mode | quote }}
             {{- if ne .Values.writeBack.mode "direct" }}
+            {{- /* tenant-api reads an empty TA_* as unset (its default),
+                 where the old empty flag was an explicit value: refuse an
+                 empty one here rather than let it fall back silently. */}}
             - name: TA_GIT_BASE_BRANCH
-              value: {{ .Values.writeBack.baseBranch | quote }}
+              value: {{ required "writeBack.baseBranch must not be empty in a PR mode (an empty TA_GIT_BASE_BRANCH would silently mean main)" .Values.writeBack.baseBranch | quote }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
             - name: TA_GITHUB_REPO
               value: {{ .Values.writeBack.github.repo | quote }}
             - name: TA_GITHUB_BASE_BRANCH
-              value: {{ .Values.writeBack.github.targetBranch | quote }}
+              value: {{ required "writeBack.github.targetBranch must not be empty (an empty TA_GITHUB_BASE_BRANCH would silently mean main)" .Values.writeBack.github.targetBranch | quote }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
             {{- /* A numeric project id written in a values file is a float64
@@ -192,7 +195,7 @@ spec:
             - name: TA_GITLAB_PROJECT
               value: {{ ternary (toString ($project | int64)) (toString $project) (kindIs "float64" $project) | quote }}
             - name: TA_GITLAB_TARGET_BRANCH
-              value: {{ .Values.writeBack.gitlab.targetBranch | quote }}
+              value: {{ required "writeBack.gitlab.targetBranch must not be empty (an empty TA_GITLAB_TARGET_BRANCH would silently mean main)" .Values.writeBack.gitlab.targetBranch | quote }}
             {{- end }}
             {{- if .Values.rbac.metadataScopeEnforce }}
             # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
@@ -289,7 +292,7 @@ spec:
             - name: TA_STATE_STORE
               value: "configmap"
             - name: TA_STATE_CONFIGMAP
-              value: {{ .Values.state.configMapName | quote }}
+              value: {{ required "state.configMapName must not be empty (an empty TA_STATE_CONFIGMAP would silently mean tenant-api-state)" .Values.state.configMapName | quote }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
             # (identity.claimHeaders). Rendered as ONE value, keys sorted (helm

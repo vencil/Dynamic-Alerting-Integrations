@@ -242,7 +242,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 預設欄寫的是**沒設這個變數時的實際值**;`(空)` = 空字串,意義寫在說明欄。表格由 `cmd/server/env_readme_parity_test.go` 對原始碼比對:變數名單兩向一致,預設值能從原始碼推得的逐一比對(推不出的幾個在測試裡列明原因)。
 
-⛔ **不認得的 `TA_*` 變數拒絕啟動**([ADR-036 §12](../../docs/adr/036-single-parser-effective-config.md)):server 與 `state`／`config` 子命令解析完旗標後檢查環境,`TA_` 開頭卻不是本版會讀的變數(清單 `cmd/server/known_env.go`,由讀取點產生、`TestKnownTAEnv_IsTheSourceList` 守住)時點名並以結束碼 2 退出,與不認得的旗標相同。這通常表示映像比 Helm chart 舊。Kubernetes 為 Service 注入的 `*_SERVICE_HOST`／`*_PORT*` 不在此限。
+⛔ **不認得的 `TA_*` 變數拒絕啟動**([ADR-036 §12](../../docs/adr/036-single-parser-effective-config.md)):server 與 `state`／`config` 子命令解析完旗標後檢查環境,`TA_` 開頭卻不是本版會讀的變數(清單 `cmd/server/known_env.go`,由讀取點產生、`TestKnownTAEnv_IsTheSourceList` 守住)時點名並以結束碼 2 退出,與不認得的旗標相同。這通常表示映像比 Helm chart 舊。Kubernetes 為 Service 注入的變數不在此限，只放行這幾種確切形狀：`*_SERVICE_HOST`、`*_SERVICE_PORT[_<名稱>]`、`*_PORT_<n>_<TCP|UDP|SCTP>[_ADDR|_PORT|_PROTO]`，以及值是 `tcp://…` 這類的單獨 `*_PORT`（所以 `TA_METRICS_PORT=9090` 這種設定名照樣拒收）。
 
 **基本**
 

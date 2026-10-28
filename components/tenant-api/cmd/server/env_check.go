@@ -29,11 +29,26 @@ import (
 // later (on a write, on a forge call) and those of the server's flags, which a
 // subcommand never defines.
 
-// serviceLinkRe matches the variables Kubernetes injects for every Service in
-// the namespace (enableServiceLinks): a Service named `ta-x` yields
-// TA_X_SERVICE_HOST, TA_X_PORT_8080_TCP and the like. They are not settings,
-// and refusing them would make tenant-api fail on an unrelated Service name.
-var serviceLinkRe = regexp.MustCompile(`_(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9_]+)?|PORT(_[0-9]+_(TCP|UDP|SCTP)(_(ADDR|PORT|PROTO))?)?)$`)
+// The variables Kubernetes injects for every Service in the namespace
+// (enableServiceLinks) are not settings: a Service named `ta-x` yields
+// TA_X_SERVICE_HOST, TA_X_SERVICE_PORT[_<port name>], TA_X_PORT_<n>_<PROTO>
+// [_ADDR|_PORT|_PROTO] and TA_X_PORT=tcp://<ip>:<port>. Refusing them would
+// make tenant-api fail on an unrelated Service name. Only those exact shapes
+// pass: a setting such as TA_LISTEN_PORT does not, and a bare `_PORT` passes
+// only with the `<proto>://` value Kubernetes writes, so TA_METRICS_PORT=9090
+// is refused.
+var (
+	serviceLinkNameRe = regexp.MustCompile(`_(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9_]+)?|PORT_[0-9]+_(TCP|UDP|SCTP)(_(ADDR|PORT|PROTO))?)$`)
+	serviceLinkPortRe = regexp.MustCompile(`^(tcp|udp|sctp)://`)
+)
+
+// isServiceLink reports whether name=value is a Kubernetes service link.
+func isServiceLink(name, value string) bool {
+	if serviceLinkNameRe.MatchString(name) {
+		return true
+	}
+	return strings.HasSuffix(name, "_PORT") && serviceLinkPortRe.MatchString(value)
+}
 
 // unknownTAEnv returns the TA_* names in environ (KEY=VALUE entries) that
 // this build does not read, sorted and without duplicates.
@@ -45,8 +60,8 @@ func unknownTAEnv(environ []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(name, "TA_") || known[name] || seen[name] || serviceLinkRe.MatchString(name) {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, "TA_") || known[name] || seen[name] || isServiceLink(name, value) {
 			continue
 		}
 		seen[name] = true

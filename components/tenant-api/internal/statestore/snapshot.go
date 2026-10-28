@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,12 +13,18 @@ import (
 // Snapshot is every record of a store as key → bytes, read once.
 type Snapshot map[string][]byte
 
-// ReadDirSnapshot reads every record of the directory store at dir without
-// opening it as a Store: NewDir creates a missing directory, and a reader that
-// only looks (`tenant-api state show`, ADR-036 §12) must not. A directory that
-// does not exist, or is not a directory, cannot be read — it is not an empty
-// store. Dot files are the store's own (the lock, writeAtomic's temp files),
-// as for Keys.
+// ReadDirSnapshot reads every record of the directory store at dir the way
+// the server reads them, without opening it as a Store: NewDir creates a
+// missing directory, and a reader that only looks (`tenant-api state show`,
+// ADR-036 §12) must not. A directory that does not exist, or is not a
+// directory, cannot be read — it is not an empty store.
+//
+// The records are read through the server's own dirStore methods, so the
+// two cannot disagree: each fixed key with Get (os.ReadFile, which follows a
+// symlink — a ConfigMap volume's files are symlinks into `..data/`; only
+// "does not exist" is an absent record, any other read error fails the
+// whole snapshot), and the per-tenant subsets as Keys lists them, each then
+// read with Get.
 func ReadDirSnapshot(dir string) (Snapshot, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("statestore: state directory is empty")
@@ -32,21 +36,21 @@ func ReadDirSnapshot(dir string) (Snapshot, error) {
 	if !fi.IsDir() {
 		return nil, fmt.Errorf("%w: %s is not a directory", ErrUnavailable, dir)
 	}
-	ents, err := os.ReadDir(dir)
+	s := &dirStore{dir: dir}
+	ctx := context.Background()
+	subsets, err := s.Keys(ctx, SubsetPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("%w: list %s: %v", ErrUnavailable, dir, err)
+		return nil, err
 	}
 	snap := Snapshot{}
-	for _, e := range ents {
-		n := e.Name()
-		if !e.Type().IsRegular() || strings.HasPrefix(n, ".") {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(dir, n))
+	for _, k := range append([]string{KeyGroups, KeyViews, KeyFederationPolicy, KeyAccountRegistry}, subsets...) {
+		b, ok, err := s.Get(ctx, k)
 		if err != nil {
-			return nil, fmt.Errorf("%w: read %s: %v", ErrUnavailable, filepath.Join(dir, n), err)
+			return nil, err
 		}
-		snap[n] = b
+		if ok {
+			snap[k] = b
+		}
 	}
 	return snap, nil
 }
