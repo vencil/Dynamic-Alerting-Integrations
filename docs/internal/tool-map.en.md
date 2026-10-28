@@ -253,6 +253,7 @@ lang: en
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_key_verdict.py`: The one verdict on "does any reader read this key" (ADR-038 decisions 4–7).
+- `scripts/tools/_lib_kubectl.py`: Read Kubernetes resources through ``kubectl get -o json`` (#3207, #3210).
 - `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.

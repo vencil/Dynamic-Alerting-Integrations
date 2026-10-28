@@ -13,8 +13,9 @@ Validates GitOps readiness for the Dynamic Alerting platform by checking:
    - Counts metrics and tenant configurations
 
 3. **sidecar** — K8s git-sync deployment readiness
-   - Verifies git-sync secret existence (optional)
-   - Checks threshold-exporter sidecar presence
+   - Verifies the git-sync Secret and the threshold-exporter git-sync
+     container; either missing is a fail, and a cluster kubectl cannot
+     read is a caller error (exit 2; #3210)
 
 Supports --json output and --ci exit code mode for CI/CD integration.
 
@@ -46,6 +47,7 @@ from _lib_exitcodes import (  # noqa: E402
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
+from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3210)
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -320,69 +322,36 @@ def check_local(dir_path: str) -> CheckResult:
 def check_sidecar(namespace: str = "monitoring") -> CheckResult:
     """Check K8s git-sync sidecar deployment readiness.
 
-    This is a best-effort check; missing kubectl is not a failure.
+    Both reads are ``_lib_kubectl.kubectl_get`` by name (#3210; needs only
+    ``get``): a read kubectl does not answer (cluster unreachable, forbidden,
+    kubectl missing or timed out) raises ``KubectlError`` — a caller error,
+    never "not deployed". None is the answer "absent", and anything absent
+    is a fail.
     """
-    details = {"namespace": namespace}
-
-    # Check if kubectl is available
-    success, _, _ = _run_cmd(["kubectl", "version", "--short"], timeout=5)
-    if not success:
-        return CheckResult(
-            check="sidecar",
-            status="warn",
-            message=_h(
-                "kubectl 不可用，跳過 K8s 檢查",
-                "kubectl not available, skipping K8s checks"
-            ),
-            details=details,
-        )
-
-    # Check if git-sync secret exists
-    secret_cmd = ["kubectl", "get", "secret", "git-sync-credentials",
-                  "-n", namespace, "--no-headers"]
-    secret_exists, _, _ = _run_cmd(secret_cmd, timeout=10)
+    details: dict[str, Any] = {"namespace": namespace}
+    secret_exists = kubectl_get("secret", "git-sync-credentials", namespace=namespace) is not None
     details["git_sync_secret"] = "present" if secret_exists else "missing"
 
-    # Check if threshold-exporter deployment has git-sync sidecar
-    deploy_cmd = [
-        "kubectl", "get", "deployment", "threshold-exporter",
-        "-n", namespace, "-o", "jsonpath={.spec.template.spec.containers[*].name}",
-    ]
-    success, stdout, _ = _run_cmd(deploy_cmd, timeout=10)
+    deployment = kubectl_get("deployment", "threshold-exporter", namespace=namespace)
+    deployments = [deployment] if deployment is not None else []
+    containers = [str(c.get("name")) for d in deployments
+                  for c in (((d.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or ()
+                  if isinstance(c, dict)]
+    has_sidecar = "git-sync" in containers
+    details["deployment"] = "present" if deployments else "missing"
+    details["sidecar_present"] = has_sidecar
+    details["containers"] = containers
 
-    has_sidecar = False
-    if success and stdout:
-        containers = stdout.split()
-        has_sidecar = "git-sync" in containers
-        details["sidecar_present"] = has_sidecar
-        details["containers"] = containers
-
-    # Determine status
     if secret_exists and has_sidecar:
-        status = "pass"
-        message = _h(
+        return CheckResult(check="sidecar", status="pass", message=_h(
             "git-sync 邊車已部署，Secret 存在",
-            "git-sync sidecar deployed, secret exists"
-        )
-    elif secret_exists or has_sidecar:
-        status = "warn"
-        message = _h(
-            "部分 git-sync 配置缺失",
-            "Partial git-sync configuration"
-        )
-    else:
-        status = "warn"
-        message = _h(
-            "git-sync 邊車未部署或未配置",
-            "git-sync sidecar not deployed or not configured"
-        )
-
-    return CheckResult(
-        check="sidecar",
-        status=status,
-        message=message,
-        details=details,
-    )
+            "git-sync sidecar deployed, secret exists"), details=details)
+    missing = [what for what, ok in (("Secret git-sync-credentials", secret_exists),
+                                     ("git-sync container in Deployment threshold-exporter", has_sidecar))
+               if not ok]
+    return CheckResult(check="sidecar", status="fail", message=_h(
+        "git-sync 配置缺件：" + "、".join(missing),
+        "git-sync configuration missing: " + ", ".join(missing)), details=details)
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +484,20 @@ def main() -> None:
                 ).to_dict()))
             sys.exit(EXIT_CALLER_ERROR)
     elif args.action == "sidecar":
-        checks.append(check_sidecar(args.namespace))
+        try:
+            checks.append(check_sidecar(args.namespace))
+        except KubectlError as exc:
+            # #3210: kubectl gave no answer — no verdict: a caller error.
+            text = " ".join(str(exc).split())
+            print(f"ERROR: cannot read the cluster: {text}", file=sys.stderr)
+            if args.json:
+                print(format_json_report(GitOpsReport(
+                    overall_status="fail", timestamp=timestamp,
+                    checks=[CheckResult(check="sidecar", status="fail", message=text,
+                                        details={"namespace": args.namespace,
+                                                 "reason": KubectlError.reason})],
+                ).to_dict()))
+            sys.exit(EXIT_CALLER_ERROR)
 
     # Determine overall status
     statuses = [c.status for c in checks]

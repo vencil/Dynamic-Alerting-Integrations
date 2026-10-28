@@ -23,9 +23,8 @@ Exit expectations are pinned per tool from its CURRENT documented semantics
 * ``gitops_check`` documents the INVERSE: without ``--ci`` anything other
   than "pass" exits 1; with ``--ci`` warnings exit 0 and only "fail" exits 1
   (help text: 「CI 模式（警告也退出碼 0，僅失敗退出碼 1）」).  Its recipe drives a
-  deterministic WARN (sidecar check with kubectl guaranteed absent via a
-  stripped PATH) and asserts 1 -> 0.  Still a flip; still proves the flag is
-  live.
+  deterministic WARN and asserted 1 -> 0 — until #3210 left no subcommand
+  that yields a warn; it is now a known no-op (``KNOWN_CI_NOOP``, #3348).
 * ``state_reconcile``'s ``--ci`` only gates in ``--dry-run`` mode (pending
   migrations / manifest changes are "would-do" items; in apply mode they are
   applied, so nothing is pending).  Its recipe therefore carries
@@ -199,6 +198,7 @@ CI_TOOLS = collect_ci_tools()
 KNOWN_CI_NOOP: dict[str, str] = {
     # EMPTY at gate-landing time (2026-07-18): all 14 in-scope fail-on-finding
     # tools flipped their exit code on the first full run.
+    "gitops_check": "#3348 — since #3210 no subcommand yields a warn, so --ci flips nothing",
 }
 
 
@@ -362,11 +362,13 @@ RECIPES: list[Recipe] = [
       note="modified tenant yaml = unexpected drift; 0 -> 1"),
 
     # INVERSE contract (module docstring): warn exits 1 WITHOUT --ci and 0
-    # WITH it. The warn is deterministic: PATH holds one empty dir, kubectl
-    # cannot resolve, check_sidecar() returns status="warn".
+    # WITH it. Since #3210 no subcommand yields a warn (a missing part is a
+    # fail, kubectl not answering is rc 2), so the flag flips nothing: the
+    # fake kubectl's empty answers make a sidecar fail, 1 with or without
+    # --ci. Known no-op, #3348 (KNOWN_CI_NOOP).
     R("gitops_check",
       lambda t, s: ["sidecar"],
-      no_ci_exit=EXIT_VIOLATION, ci_exit=EXIT_OK, strip_kubectl_path=True,
+      no_ci_exit=EXIT_VIOLATION, ci_exit=EXIT_OK, needs_kubectl=True,
       note="documented inverse: warn => 1 -> 0 (only 'fail' exits 1 in CI mode)"),
 
     R("lint_custom_rules",
