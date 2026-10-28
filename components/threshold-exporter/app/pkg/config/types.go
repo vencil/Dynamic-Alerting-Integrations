@@ -171,6 +171,12 @@ type ScheduledValue struct {
 	// MergePartialConfigs (bench-gate #871). Honored only on base standard metrics
 	// (those in _defaults.yaml); ignored elsewhere (v1).
 	Expiry *ExpiryMeta
+	// deleted marks a reserved (`_`) key a `tenants:` / `profiles:` body
+	// wrote as null: "delete the inherited value" (#3341,
+	// reservedNullMarker). Its Default is "", so a reader that does not ask
+	// reads what it always read; the readers for which "" and "no key" part
+	// ask through tenantReserved.
+	deleted bool
 }
 
 // ExpiryMeta carries a ScheduledValue's optional time-box (PREVENT #656).

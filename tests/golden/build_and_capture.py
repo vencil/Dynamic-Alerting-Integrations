@@ -440,6 +440,13 @@ def s_canonical_json_escaping():
 # pkg/config) starts treating a nested null as a deletion, or copies it
 # through as a JSON null.
 #
+# The inherited `_x` is in the conf.d ROOT `_defaults.yaml` of its own tree
+# (reserved-null/, shared with scenario 13): a subtree `_defaults.yaml` does
+# not carry `_` keys (#3341), so only the root level can hand one down for
+# the tenant's nested nulls to be merged against. A root `defaults:` holding a
+# mapping is dropped by the exporter (not_served.json), the same trade the
+# other merge-core trees make.
+#
 # ⛔ The key is a deliberately meaningless `_x`, not `_routing` (#2417). This
 # row used `_routing` until #2362 (#2291) made da-guard reject `_routing`
 # inside a `defaults:` block (`routing_in_unread_location`: the route
@@ -453,13 +460,8 @@ def s_canonical_json_escaping():
 # route is the route generator's plane (_grar_merge.py), which neither merge
 # runs and this oracle does not cover.
 def s_reserved_nested_null():
-    d = reset("mixed-mode") / "reserved-nested-null"
-    write(d / "_defaults.yaml", """defaults:
-  _x:
-    inherited_list: ["alertname"]
-    inherited_str: "30s"
-""")
-    write(d / "tenants.yaml", """tenants:
+    d = reset("reserved-null")
+    write(d / "nested" / "tenants.yaml", """tenants:
   tenant-nested:
     _x:
       added:
@@ -472,24 +474,28 @@ def s_reserved_nested_null():
 """)
 
 
-# Scenario 13: a RESERVED (`_`-prefixed) key deleted by an explicit null in
-# a child after it was inherited. Before this row no scenario's
-# effective_config held a `_` key at all, so removing the deletion branch on
-# either side left the oracle green (#1550 item 5). Written defaults ->
-# defaults, the path ADR-017 names as the reachable one (a tenant file's null
-# on these keys is rejected by check_confd_schema.py). `_silent_mode` is the
-# control: inherited and not nulled, so it must survive.
+# Scenario 13: a RESERVED (`_`-prefixed) key deleted by an explicit null
+# after it was inherited. Before this row no scenario's effective_config held
+# a `_` key at all, so removing the deletion branch on either side left the
+# oracle green (#1550 item 5). Written root defaults -> tenant file: a subtree
+# `_defaults.yaml` does not carry `_` keys (#3341), so the root level is the
+# one that hands them down, and the tenant's null is the deletion
+# (tenant-config.schema.json allows `_severity_dedup: ~`: the default,
+# enable). `_silent_mode` is the control: inherited and not nulled, so it
+# survives. The root also carries scenario 12's `_x`; its `defaults:` holds
+# strings and a mapping, so the exporter drops it (not_served.json).
 def s_reserved_null_delete():
-    d = reset("mixed-mode") / "reserved-null"
+    d = reset("reserved-null")
     write(d / "_defaults.yaml", """defaults:
   _severity_dedup: "disable"
   _silent_mode: "warning"
-""")
-    write(d / "child" / "_defaults.yaml", """defaults:
-  _severity_dedup: ~
+  _x:
+    inherited_list: ["alertname"]
+    inherited_str: "30s"
 """)
     write(d / "child" / "tenants.yaml", """tenants:
-  tenant-reserved: {}
+  tenant-reserved:
+    _severity_dedup: ~
 """)
 
 
@@ -758,8 +764,8 @@ def main() -> int:
         "carrier-selection-pair": "mixed-mode",
         "carrier-selection-sub": "mixed-mode",
         "canonical-json-escaping": "mixed-mode",
-        "reserved-nested-null": "mixed-mode",
-        "reserved-null-delete": "mixed-mode",
+        "reserved-nested-null": "reserved-null",
+        "reserved-null-delete": "reserved-null",
         "served-chain": "served-chain",
         "served-root": "served-chain",
         "served-disable": "served-disable",

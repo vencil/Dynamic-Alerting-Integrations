@@ -1263,7 +1263,7 @@
       "properties": {
         "_metadata": {
           "$ref": "#/definitions/metadata",
-          "description": "Default metadata inherited by all tenants under this directory. Individual tenant _metadata fields override these defaults."
+          "description": "Not inherited from a _defaults.yaml: the merge skips _metadata at every level, and below the conf.d root a non-null value is a da-guard subtree_default_reserved_key error (#3341; the full condition table is ADR-017 Decision 4). Write it in each tenant's own entry, or in a root platform file's `tenants:` entry."
         },
         "_routing": {
           "$ref": "#/definitions/routing",
@@ -1276,11 +1276,11 @@
         },
         "_silent_mode": {
           "$ref": "#/definitions/silentMode",
-          "description": "Default silent mode inherited by all tenants under this directory."
+          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it, and a non-null value there is a da-guard subtree_default_reserved_key error (#3341; the full condition table is ADR-017 Decision 4). Write it in each tenant's own entry."
         },
         "_severity_dedup": {
           "$ref": "#/definitions/severityDedup",
-          "description": "Default severity dedup mode for tenants under this directory. Same vocabulary as the tenant-level key (definitions.severityDedup)."
+          "description": "Not inherited from a subtree _defaults.yaml (below the conf.d root): the exporter does not apply it, and a non-null value there is a da-guard subtree_default_reserved_key error (#3341; the full condition table is ADR-017 Decision 4). Write it in each tenant's own entry; same vocabulary as the tenant-level key (definitions.severityDedup)."
         },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",

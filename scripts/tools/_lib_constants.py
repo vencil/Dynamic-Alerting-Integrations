@@ -124,7 +124,7 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "generator": ("tenant", "platform_tenants"),
     },
     "_severity_dedup": {
-        "exporter": ("tenant", "platform_tenants", "subtree_defaults"),
+        "exporter": ("tenant", "platform_tenants"),
         "generator": ("tenant", "platform_tenants"),
     },
     "_silent_mode": {
@@ -133,7 +133,7 @@ RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
 }
 RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...]] = (
     ("_state_", {
-        "exporter": ("tenant", "platform_tenants", "profile", "subtree_defaults"),
+        "exporter": ("tenant", "platform_tenants", "profile"),
     }),
     ("_routing", {}),
 )

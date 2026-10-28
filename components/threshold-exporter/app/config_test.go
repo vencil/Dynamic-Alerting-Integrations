@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // SV is a test helper to create a scalar ScheduledValue.
@@ -149,6 +150,23 @@ func TestLogConfigStats_Format(t *testing.T) {
 	}
 	if !strings.Contains(output, "Test prefix") {
 		t.Errorf("expected prefix 'Test prefix', got: %s", output)
+	}
+}
+
+// A tenant's null on a reserved key is no entry (#3341): the resolvers take
+// their no-key branch for it, so the log does not count it as a state entry
+// or a silent mode either. The null comes from the one decode (ParseConfigFile).
+func TestLogConfigStats_TenantReservedNullIsNoEntry(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseConfigFile([]byte("tenants:\n  db-a:\n    _silent_mode: warning\n" +
+		"  db-c:\n    _silent_mode: ~\n    _state_maintenance:\n    _severity_dedup: {default: null}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testLogger, buf := newTestLogger()
+	logConfigStats(testLogger, &cfg, "p")
+	if out := buf.String(); !strings.Contains(out, "0 state entries, 1 silent modes") {
+		t.Errorf("want 0 state entries / 1 silent mode (db-c's nulls are no entries), got: %s", out)
 	}
 }
 

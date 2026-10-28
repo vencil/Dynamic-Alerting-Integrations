@@ -22,7 +22,9 @@ import (
 // layer: the root `defaults:` (base, `_critical`, dimensional), a profile,
 // a root platform `tenants:` entry, a subtree `_defaults.yaml` and the
 // tenant's own file. The root declares each, which before #3045 is what made
-// it a threshold. tb writes none of them.
+// it a threshold. tb writes none of them. The subtree's `_msub` is laid on
+// neither plane (#3341: a subtree carries no `_` key but a routing key), so
+// ta has the root's.
 func unregisteredTree() map[string]string {
 	return map[string]string{
 		"_defaults.yaml": "defaults:\n  cpu: 80\n  _myth: 5\n  _myth_critical: 9\n" +
@@ -63,7 +65,8 @@ func TestServedValues_UnregisteredUnderscoreKeyIsServedInNoLayer(t *testing.T) {
 	ta := doc.Tenants["ta"]
 	wantTA := map[string]any{
 		"_myth": "7", "_myth_critical": "8", `_myth{y="b"}`: "6", // the tenant's own
-		"_mprof": "2", "_mplat": "3", "_msub": "7", // profile, platform entry, subtree
+		"_mprof": "2", "_mplat": "3", // profile, platform entry
+		"_msub":        1.0, // the root's: the subtree's 7 is not carried (#3341)
 		`_myth{x="a"}`: 4.0, // the root's, which ta does not write
 	}
 	if !reflect.DeepEqual(ta.Unserved, merged(wantTA, map[string]any{"_profile": "p1"})) {
@@ -113,7 +116,7 @@ func TestEffective_UnregisteredUnderscoreKeyIsNotServed(t *testing.T) {
 		`_myth{x="a"}`: un("_defaults.yaml"),
 		"_mprof":       un("_profiles.yaml"),
 		"_mplat":       un("_platform.yaml"),
-		"_msub":        un("team/_defaults.yaml"),
+		"_msub":        un("_defaults.yaml"), // the root's value shown (#3341)
 	}
 	if !reflect.DeepEqual(ta.NotServed, want) {
 		t.Errorf("ta not_served = %v, want %v", ta.NotServed, want)

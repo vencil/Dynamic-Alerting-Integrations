@@ -92,8 +92,9 @@ var configFileCorpus = map[string]string{
 	"defaults null alone":          "defaults:\n  cpu: ~\n  mem: 80\ntenants:\n  tx: {}\n",
 	"tenant threshold null":        "tenants:\n  tx:\n    cpu: null\n    cpu{env=\"a\"}: ~\n    cpu_critical:\n    mem: \"80\"\n",
 	"profile threshold null":       "profiles:\n  std:\n    cpu: null\n    mem: \"70\"\ntenants:\n  tx: {}\n",
-	// Not exceptions: a reserved key's null deletes an inherited value
-	// (ADR-017), and an empty string is a written value.
+	// A reserved key's null deletes an inherited value (ADR-017): kept, as
+	// reservedNullMarker (decodeNullMarks, #3341). Not an exception: an
+	// empty string is a written value.
 	"tenant reserved key null":   "tenants:\n  tx:\n    _state_maintenance: null\n    cpu: \"80\"\n",
 	"tenant threshold empty str": "tenants:\n  tx:\n    cpu: \"\"\n",
 }
@@ -111,6 +112,13 @@ var decodeDrops = map[string][]string{
 	"defaults null alone":                         {"defaults/cpu"},
 	"tenant threshold null":                       {"tenants/tx/cpu", "tenants/tx/cpu{env=\"a\"}", "tenants/tx/cpu_critical"},
 	"profile threshold null":                      {"profiles/std/cpu"},
+}
+
+// decodeNullMarks is the other place the oracle departs from yaml.Unmarshal:
+// per corpus row, the reserved entries written as null that ParseConfigFile
+// keeps as reservedNullMarker (#3341), in decodeDrops' notation.
+var decodeNullMarks = map[string][]string{
+	"tenant reserved key null": {"tenants/tx/_state_maintenance"},
 }
 
 // dropRef applies (drop=true) or checks the presence of one decodeDrops
@@ -181,6 +189,10 @@ func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	}
 	for _, ref := range decodeDrops[name] {
 		dropRef(&cfg, ref, true)
+	}
+	for _, ref := range decodeNullMarks[name] {
+		parts := strings.SplitN(ref, "/", 3)
+		cfg.Tenants[parts[1]][parts[2]] = reservedNullMarker
 	}
 	return cfg, nil
 }
@@ -269,11 +281,19 @@ func sameConfig(a, b ThresholdConfig) bool {
 }
 
 // TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode keeps the
-// exceptions honest: every decodeDrops row names an entry the plain decode
-// DOES produce, so the list cannot hide a row where nothing is dropped.
+// exceptions honest: every decodeDrops / decodeNullMarks row names an entry
+// the plain decode DOES produce, so the lists cannot hide a row where
+// nothing is dropped or marked.
 func TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode(t *testing.T) {
 	t.Parallel()
+	exceptions := map[string][]string{}
 	for name, refs := range decodeDrops {
+		exceptions[name] = append(exceptions[name], refs...)
+	}
+	for name, refs := range decodeNullMarks {
+		exceptions[name] = append(exceptions[name], refs...)
+	}
+	for name, refs := range exceptions {
 		body, ok := configFileCorpus[name]
 		if !ok {
 			t.Fatalf("decodeDrops row %q is not in the corpus", name)

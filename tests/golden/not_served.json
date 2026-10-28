@@ -23,6 +23,7 @@
     "full-l0-l3": "root defaults hold a string `level`, a nested `threshold:` map and a `pages:` array: 4-level nested-map merge and array replace",
     "array-replace": "root defaults hold a `receivers:` array and a nested `threshold:` map: arrays replace, not concat",
     "opt-out-null": "root defaults hold a nested `threshold:` map and a string `alert_group`: null on a nested non-reserved key keeps the inherited value",
-    "metadata-skipped": "root defaults hold a `_metadata:` map and a nested `threshold:` map: `_metadata` is never inherited"
+    "metadata-skipped": "root defaults hold a `_metadata:` map and a nested `threshold:` map: `_metadata` is never inherited",
+    "reserved-null": "root defaults hold string `_severity_dedup` / `_silent_mode` and an `_x:` map: a tenant's null deletes an inherited `_` key, and nested nulls under it keep the inherited values (only the root level hands a `_` key down, #3341)"
   }
 }

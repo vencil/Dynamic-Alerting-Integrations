@@ -5,7 +5,10 @@ package config
 // exactly its `default` written alone at the same level. The overlay strips
 // the schedule (servedValue) BEFORE judging the value (subtreeLevelRead),
 // so no window decides what is handed down, while the readers read the
-// `default` alone (#3269).
+// `default` alone (#3269). Since #3341 a subtree hands none of these keys
+// down at all; the property still holds (both are not applied), and the
+// accounting — the #3269 WARN, da-guard's subtree_default_reserved_key —
+// still names the windowed value exactly as its default alone.
 //
 // Seams: none — t.TempDir() trees, loaded by LoadDir (the exporter's flat
 // plane) and ResolveEffective (/effective).
@@ -95,15 +98,13 @@ func swServed(t *testing.T, dir string) (map[string]ScheduledValue, string) {
 }
 
 // swBuildView is the build's own account of the overlay: which keys it
-// refused per file, which it found unreachable, which it applied, and the
-// #3269 WARN's split of the scheduled entries (SubtreeScheduledReserved).
+// refused per file, which it found unreachable, and the #3269 WARN's split
+// of the scheduled entries (SubtreeScheduledReserved).
 type swBuildView struct {
 	rejected     map[string]map[string]bool
 	tenantSets   map[string]map[string]map[string]bool
 	unreachable  map[string][]string
-	applied      map[string]bool
-	appliedTSet  map[string]bool
-	reservedKeys map[string]map[string][]string // subtreeReservedKeys (da-guard subtree_default_reserved_key)
+	reservedKeys map[string]map[string][]string // subtreeReservedKeys' files (da-guard subtree_default_reserved_key)
 	defaultOnly  []string
 	notApplied   []string
 }
@@ -123,14 +124,20 @@ func swBuild(t *testing.T, dir string) swBuildView {
 	}
 	v := swBuildView{
 		rejected: built.RejectedChainValues, tenantSets: built.rejectedTenantSets,
-		unreachable:  built.Unreachable,
-		reservedKeys: subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults),
+		unreachable: built.Unreachable,
 	}
-	for k, verdict := range built.SubtreeRefusedVerdicts["t1"] {
-		if v.applied == nil {
-			v.applied, v.appliedTSet = map[string]bool{}, map[string]bool{}
+	// The files only: the value each names is the file's own text, which
+	// differs between the windowed and the scalar form by construction.
+	for id, byKey := range subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults) {
+		if v.reservedKeys == nil {
+			v.reservedKeys = map[string]map[string][]string{}
 		}
-		v.applied[k], v.appliedTSet[k] = verdict.Applied, verdict.TenantSets
+		v.reservedKeys[id] = map[string][]string{}
+		for k, ws := range byKey {
+			for _, w := range ws {
+				v.reservedKeys[id][k] = append(v.reservedKeys[id][k], w.File)
+			}
+		}
 	}
 	v.defaultOnly, v.notApplied = SubtreeScheduledReserved(dir, in.ParsedDefaults, &built.Config)
 	return v
@@ -140,7 +147,7 @@ func swBuild(t *testing.T, dir string) swBuildView {
 // reserved key × default (null included) × window value (and the
 // `expires:`-only form), a subtree level writing the schedule serves, row for
 // row, what the same level writing the default alone serves, and the build
-// accounts for it identically (refused / unreachable / applied / named) —
+// accounts for it identically (refused / unreachable / named) —
 // on its own, under a shallower level writing `disable`, with the key listed
 // in the root `optional_overrides:`, and with the tenant setting it itself.
 func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
@@ -182,21 +189,17 @@ func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 						if !reflect.DeepEqual(wb.rejected, sb.rejected) ||
 							!reflect.DeepEqual(wb.tenantSets, sb.tenantSets) ||
 							!reflect.DeepEqual(wb.unreachable, sb.unreachable) ||
-							!reflect.DeepEqual(wb.applied, sb.applied) ||
-							!reflect.DeepEqual(wb.appliedTSet, sb.appliedTSet) ||
 							!reflect.DeepEqual(wb.reservedKeys, sb.reservedKeys) {
 							t.Errorf("%s: build verdicts:\n windowed %+v\n scalar   %+v", p.name, wb, sb)
 						}
 						if p.shallow != "" || p.tenant != "" {
 							continue
 						}
-						// The #3269 WARN's split says what the overlay did
-						// with the scalar at this level.
+						// The #3269 WARN's split: a subtree applies none of
+						// these keys (#3341), so every schedule is named as
+						// not applied at all.
 						entry := "finance/us/_defaults.yaml: defaults." + key
 						wantOnly, wantNot := []string(nil), []string{entry}
-						if sb.applied[key] {
-							wantOnly, wantNot = []string{entry}, nil
-						}
 						if !reflect.DeepEqual(wb.defaultOnly, wantOnly) || !reflect.DeepEqual(wb.notApplied, wantNot) {
 							t.Errorf("%s: SubtreeScheduledReserved = %v / %v, want %v / %v",
 								p.name, wb.defaultOnly, wb.notApplied, wantOnly, wantNot)
@@ -214,7 +217,8 @@ func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 // TestSubtreeScheduledReserved_PredicatesAgree pins that every "does this
 // level write the key" question asks the overlay's one reading: refusedKeys
 // and levelWritesSpelling answer for a windowed value exactly what they
-// answer for its default alone, and what subtreeLevelValue's verdict says.
+// answer for its default alone, and subtreeLevelValue's verdict on these
+// keys is subtreeNotCarried whatever the value (#3341).
 func TestSubtreeScheduledReserved_PredicatesAgree(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{StateFilters: map[string]StateFilter{"maintenance": {}}}
@@ -234,18 +238,19 @@ func TestSubtreeScheduledReserved_PredicatesAgree(t *testing.T) {
 			w, s := map[string]any{key: c.windowed}, map[string]any{key: c.scalar}
 			_, verdict := subtreeLevelValue(cfg, key, c.windowed)
 			_, sVerdict := subtreeLevelValue(cfg, key, c.scalar)
-			if verdict != sVerdict {
-				t.Errorf("%s %v: subtreeLevelValue verdict %v, scalar %v", key, c.windowed, verdict, sVerdict)
+			if verdict != subtreeNotCarried || sVerdict != subtreeNotCarried {
+				t.Errorf("%s %v: subtreeLevelValue verdict %v, scalar %v, want subtreeNotCarried", key, c.windowed, verdict, sVerdict)
 			}
 			_, written, _ := subtreeLevelRead(key, c.windowed)
 			if _, sWritten, _ := subtreeLevelRead(key, c.scalar); written != sWritten {
 				t.Errorf("%s %v: written %v, scalar %v", key, c.windowed, written, sWritten)
 			}
-			if got, want := refusedKeys(w)[key], written && verdict == subtreeRefused; got != want || got != refusedKeys(s)[key] {
-				t.Errorf("%s %v: refusedKeys = %v, verdict says %v, scalar %v", key, c.windowed, got, want, refusedKeys(s)[key])
+			// Not judged: no value of a key a subtree does not carry is refused.
+			if refusedKeys(w)[key] || refusedKeys(s)[key] {
+				t.Errorf("%s %v: refusedKeys names a key a subtree does not carry", key, c.windowed)
 			}
-			if got, want := levelWritesSpelling(w, key), verdict != subtreeRefused; got != want || got != levelWritesSpelling(s, key) {
-				t.Errorf("%s %v: levelWritesSpelling = %v, verdict says %v", key, c.windowed, got, want)
+			if got := levelWritesSpelling(w, key); got != levelWritesSpelling(s, key) {
+				t.Errorf("%s %v: levelWritesSpelling = %v, scalar %v", key, c.windowed, got, levelWritesSpelling(s, key))
 			}
 		}
 	}
@@ -279,19 +284,27 @@ func TestSubtreeScheduledReserved_IssueRows(t *testing.T) {
 		return false
 	}
 
-	t.Run("crashloop default disable with an enable window: filter off, as /effective says", func(t *testing.T) {
+	// #3341 changed this row: before, the subtree's `disable` default was
+	// handed down and the filter was off; a subtree now hands down no
+	// reserved key, so the filter follows the root (on), and /effective
+	// shows no subtree value either — it names the file in not_served.
+	t.Run("crashloop default disable with an enable window: not applied, filter on, as /effective says", func(t *testing.T) {
 		cfg, dir := served(t, `  _state_container_crashloop: {default: disable, overrides: [{window: "03:00-04:00", value: enable}]}`+"\n")
 		for _, at := range []time.Time{swInWindow, swOutWindow} {
-			if active(cfg, "container_crashloop", at) {
-				t.Errorf("%s: crashloop filter active, want off (the default, disable)", at.Format("15:04"))
+			if !active(cfg, "container_crashloop", at) {
+				t.Errorf("%s: crashloop filter off, want on (the root's default; a subtree does not carry it)", at.Format("15:04"))
 			}
 		}
 		ec, err := ResolveEffective(dir, "t1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := ec.EffectiveConfig["_state_container_crashloop"]; got != "disable" {
-			t.Errorf("/effective _state_container_crashloop = %#v, want \"disable\" (what is served)", got)
+		if got, shown := ec.EffectiveConfig["_state_container_crashloop"]; shown {
+			t.Errorf("/effective _state_container_crashloop = %#v, want absent (what is served)", got)
+		}
+		want := NotServedKey{Reason: NotServedValueRejected, File: "finance/us/_defaults.yaml"}
+		if got := ec.NotServed["_state_container_crashloop"]; got != want {
+			t.Errorf("not_served = %+v, want %+v", got, want)
 		}
 	})
 	t.Run("maintenance default enable with a disable window: maintenance off", func(t *testing.T) {

@@ -84,14 +84,12 @@ var (
 	// it. Planned to become an error in the next minor release.
 	FindingSubtreeDefaultUndeliverable = register("subtree_default_undeliverable",
 		"judges a threshold key a subtree defaults file names and the root does not declare")
-	// FindingSubtreeDefaultReservedKey (warn; #2388): a subtree `_defaults.yaml`
-	// in the tenant's defaults chain carries Field, a reserved key, in its
-	// defaults, whatever its non-null value and whether or not the exporter
-	// applies it.
-	// Planned to become an error in the next minor release, when the exporter
-	// stops applying such keys.
+	// FindingSubtreeDefaultReservedKey (error; #2388, #3341): a subtree
+	// `_defaults.yaml` in the tenant's defaults chain carries Field, a
+	// reserved key, in its defaults, whatever its non-null value. The exporter
+	// applies none of them.
 	FindingSubtreeDefaultReservedKey = register("subtree_default_reserved_key",
-		"judges a reserved key in a subtree defaults file (pkg/config subtreeDefaultsRefusedKey)")
+		"judges a reserved key in a subtree defaults file (pkg/config subtreeReservedUnsupported)")
 	// FindingScheduleNullValue (error; #2708): a threshold is written as a
 	// schedule with override windows and a null in it. Field is
 	// `<file>:<section>.[<owner>.]<key>`; TenantID is the tenant for a

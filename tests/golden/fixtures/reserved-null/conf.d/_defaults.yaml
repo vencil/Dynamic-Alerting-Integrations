@@ -1,3 +1,6 @@
 defaults:
   _severity_dedup: "disable"
   _silent_mode: "warning"
+  _x:
+    inherited_list: ["alertname"]
+    inherited_str: "30s"

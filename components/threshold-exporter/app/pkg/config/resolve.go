@@ -988,7 +988,9 @@ func (c *ThresholdConfig) resolveStateFiltersAt(now time.Time, logf func(format 
 
 		for tenant, overrides := range c.Tenants {
 			stateKey := "_state_" + filterName
-			if sv, exists := overrides[stateKey]; exists {
+			// A tenant-side null is no key (tenantReserved, #3341): the
+			// filter follows default_state.
+			if sv, exists := tenantReserved(overrides, stateKey); exists {
 				val := strings.TrimSpace(sv.Default)
 				lower := strings.TrimSpace(strings.ToLower(val))
 
@@ -1078,7 +1080,7 @@ func (c *ThresholdConfig) resolveSilentModesAt(now time.Time, logf func(format s
 	var result []ResolvedSilentMode
 
 	for tenant, overrides := range c.Tenants {
-		sv, exists := overrides["_silent_mode"]
+		sv, exists := tenantReserved(overrides, "_silent_mode")
 		if !exists {
 			continue // Normal mode (default) — no silent entries
 		}
@@ -1279,9 +1281,10 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 	var result []ResolvedSeverityDedup
 
 	for tenant, overrides := range c.Tenants {
-		sv, exists := overrides["_severity_dedup"]
+		sv, exists := tenantReserved(overrides, "_severity_dedup")
 		if !exists {
-			// Default: enable (backward compatible)
+			// Default: enable (backward compatible); a tenant-side null too
+			// (tenantReserved, #3341) — no "unknown value" WARN.
 			result = append(result, ResolvedSeverityDedup{Tenant: tenant, Mode: "enable"})
 			continue
 		}
