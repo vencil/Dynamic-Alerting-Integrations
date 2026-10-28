@@ -675,13 +675,16 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 	// #2903 (ADR-036 §4): the generator judges HEAD with every file the
 	// batch changed written over it, once for the whole batch; the staging
 	// tree is thrown away on a refusal.
-	if err := w.validateStaging(ctx, st, headBefore); err != nil {
+	verdict, err := w.validateStaging(ctx, st, headBefore)
+	if err != nil {
 		return nil, err
 	}
 	commit, err := w.commitStaging(st, headBefore, authorEmail)
 	if err != nil || commit == "" {
 		return outcomes, err
 	}
+	// Committed: the key verdict joins the ops' notices (adviseBatch).
+	verdict.adviseBatch(ops, outcomes)
 	// Last point of no return: cancelled now, nothing is published.
 	if err := ctx.Err(); err != nil {
 		return nil, err

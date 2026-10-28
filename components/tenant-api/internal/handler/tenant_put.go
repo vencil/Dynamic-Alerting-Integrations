@@ -27,7 +27,10 @@ type PutTenantResponse struct {
 	// currently the #1231 deprecated-key alias notices (e.g. a body still
 	// spelling mysql_threads_running as mysql_cpu). The write went through;
 	// these tell the author what to migrate before the transition window
-	// closes. Never populated on error responses.
+	// closes. Also the key verdict on the write (ADR-038 decision 5): lines
+	// starting "key verdict:" — keys no reader reads, or that the verdict
+	// did not complete; they never refuse the write. Never populated on
+	// error responses.
 	Warnings []string `json:"warnings,omitempty"`
 }
 

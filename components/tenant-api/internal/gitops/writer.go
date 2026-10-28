@@ -908,10 +908,12 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 
 	// #2903 (ADR-036 §4): the generator judges the judged base with this
 	// content written over the file, still under the lock — nothing is
-	// written before it passes.
-	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
+	// written before it passes. Its key verdict joins the notices.
+	verdict, err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content))
+	if err != nil {
 		return nil, err
 	}
+	notices = append(notices, verdict...)
 
 	if err := w.commitFileChange(
 		filePath,
@@ -1507,10 +1509,13 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
-	// #2903: the generator's verdict, under the lock, before the commit.
-	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
+	// #2903: the generator's verdict, under the lock, before the commit;
+	// its key verdict joins the notices.
+	verdict, err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content))
+	if err != nil {
 		return nil, err
 	}
+	notices = append(notices, verdict...)
 	if err := w.commitFileChange(
 		filePath,
 		tenantID,

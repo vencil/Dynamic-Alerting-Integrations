@@ -62,6 +62,8 @@ type PutCustomAlertsResponse struct {
 	// re-validates the whole merged document), not the recipes being saved:
 	// this endpoint is the portal's only tenant-file write path, so it is
 	// where a mysql_cpu-era file gets its author-facing migration signal.
+	// Also the key verdict on the write ("key verdict:" lines, ADR-038
+	// decision 5), which never refuses it.
 	Warnings []string `json:"warnings,omitempty"`
 }
 

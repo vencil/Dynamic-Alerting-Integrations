@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestValidateWrites_PassSendsBaseWritesAndRemainingTime(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
 	g := fastGate(t, fake, "")
-	if err := g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()); err != nil {
+	if err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
 	reqs := fake.Requests()
@@ -91,7 +92,7 @@ func TestValidateWrites_MismatchJudgedAgainOnce(t *testing.T) {
 				return 200, v
 			})
 			g := fastGate(t, fake, "")
-			if err := g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()); err != nil {
+			if err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())); err != nil {
 				t.Fatalf("second answer right: %v", err)
 			}
 			if n := len(fake.Requests()); n != 2 {
@@ -107,7 +108,7 @@ func TestValidateWrites_MismatchJudgedAgainOnce(t *testing.T) {
 				return 200, v
 			})
 			g := fastGate(t, fake, "")
-			err := g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+			err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 			var rej *RejectedError
 			if !errors.As(err, &rej) || rej.Reason != ReasonMismatch || !Retryable(rej.Reason) {
 				t.Fatalf("err = %v, want a retryable mismatch rejection", err)
@@ -134,7 +135,7 @@ func TestValidateWrites_NoTimeToJudgeAgain(t *testing.T) {
 		return 200, v
 	})
 	g := fastGate(t, fake, "")
-	err := g.ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles())
+	err := errOf(g.ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles()))
 	var rej *RejectedError
 	if !errors.As(err, &rej) || rej.Reason != ReasonNoTime {
 		t.Fatalf("err = %v, want no_time", err)
@@ -148,7 +149,7 @@ func TestValidateWrites_NoTimeAtAll(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
 	g := fastGate(t, fake, "")
-	err := g.ValidateWrites(ctxFor(t, 100*time.Millisecond), testBase, testFiles())
+	err := errOf(g.ValidateWrites(ctxFor(t, 100*time.Millisecond), testBase, testFiles()))
 	var rej *RejectedError
 	if !errors.As(err, &rej) || rej.Reason != ReasonNoTime || !Retryable(ReasonNoTime) {
 		t.Fatalf("err = %v, want no_time", err)
@@ -186,7 +187,7 @@ func TestValidateWrites_DeploymentPolicyHash(t *testing.T) {
 			fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
 				return 200, testutil.PassVerdict(req, tc.answer)
 			})
-			err := fastGate(t, fake, tc.path).ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+			err := errOf(fastGate(t, fake, tc.path).ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 			var rej *RejectedError
 			if tc.wantErr != (err != nil) || (err != nil && (!errors.As(err, &rej) || rej.Reason != ReasonMismatch)) {
 				t.Errorf("err = %v, want mismatch: %v", err, tc.wantErr)
@@ -196,7 +197,7 @@ func TestValidateWrites_DeploymentPolicyHash(t *testing.T) {
 	t.Run("unreadable copy", func(t *testing.T) {
 		t.Parallel()
 		fake := testutil.StartFakeGenerator(t)
-		err := fastGate(t, fake, filepath.Join(dir, "missing.yaml")).ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+		err := errOf(fastGate(t, fake, filepath.Join(dir, "missing.yaml")).ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 		var un *UnavailableError
 		if !errors.As(err, &un) || un.Code != CodePolicyUnavailable || un.Reason != ReasonPolicyUnreadable {
 			t.Fatalf("err = %v, want POLICY_UNAVAILABLE policy_unreadable", err)
@@ -226,7 +227,7 @@ func TestValidateWrites_FindingsOrderedAndCompared(t *testing.T) {
 		return 200, testutil.FindingsVerdict(req, "/work/job-2/conf.d",
 			testutil.Finding("policy_violation", "db-z", "db-z.yaml", "/work/job-2/conf.d/db-z.yaml: old problem"))
 	})
-	err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 	var fe *FindingsError
 	if !errors.As(err, &fe) {
 		t.Fatalf("err = %v, want *FindingsError", err)
@@ -260,7 +261,7 @@ func TestValidateWrites_FindingsNotCompared(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("x", "db-a", "", "m"))
 	})
-	err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles())
+	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles()))
 	var fe *FindingsError
 	if !errors.As(err, &fe) || fe.ComparedWithBase || fe.Findings[0].PreExisting != nil || !fe.Findings[0].Related {
 		t.Fatalf("err = %v (%+v)", err, fe)
@@ -280,7 +281,7 @@ func TestValidateWrites_FindingsBasePasses(t *testing.T) {
 		}
 		return 200, testutil.PassVerdict(req, nil)
 	})
-	err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 	var fe *FindingsError
 	if !errors.As(err, &fe) || !fe.ComparedWithBase || fe.Findings[0].PreExisting == nil || *fe.Findings[0].PreExisting || fe.Findings[0].Related {
 		t.Fatalf("err = %v (%+v)", err, fe)
@@ -298,7 +299,7 @@ func TestValidateWrites_RejectedReasons(t *testing.T) {
 			fake := testutil.StartFakeGenerator(t)
 			fake.SetValidate(func(int, testutil.FakeValidateRequest) (int, any) { return 200, testutil.RejectedVerdict(reason) })
 			g := fastGate(t, fake, "")
-			err := g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+			err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 			var rej *RejectedError
 			if !errors.As(err, &rej) || rej.Reason != reason || Retryable(reason) != retry {
 				t.Fatalf("err = %v", err)
@@ -363,7 +364,7 @@ func TestValidateWrites_HTTPStatuses(t *testing.T) {
 			t.Parallel()
 			fake := testutil.StartFakeGenerator(t)
 			fake.SetValidate(func(int, testutil.FakeValidateRequest) (int, any) { return tc.status, tc.body })
-			if err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()); !tc.check(err) {
+			if err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())); !tc.check(err) {
 				t.Errorf("err = %v", err)
 			}
 		})
@@ -373,7 +374,7 @@ func TestValidateWrites_HTTPStatuses(t *testing.T) {
 func TestValidateWrites_Unreachable(t *testing.T) {
 	t.Parallel()
 	g := NewGate(NewClient(filepath.Join(t.TempDir(), "none.sock")), "")
-	err := g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+	err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles()))
 	var u *UnavailableError
 	if !errors.As(err, &u) || u.Code != CodeValidatorUnavailable || u.Reason != ReasonUnreachable {
 		t.Fatalf("err = %v, want VALIDATOR_UNAVAILABLE unreachable", err)
@@ -390,7 +391,7 @@ func TestValidateWrites_NoAnswerBeforeDeadline(t *testing.T) {
 		time.Sleep(time.Second)
 		return 200, map[string]any{}
 	})
-	err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 400*time.Millisecond), testBase, testFiles())
+	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 400*time.Millisecond), testBase, testFiles()))
 	var u *UnavailableError
 	if !errors.As(err, &u) || u.Reason != ReasonUnreachable {
 		t.Fatalf("err = %v, want VALIDATOR_UNAVAILABLE unreachable", err)
@@ -409,7 +410,7 @@ func TestValidateWrites_Cancelled(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		return 200, map[string]any{}
 	})
-	err := fastGate(t, fake, "").ValidateWrites(ctx, testBase, testFiles())
+	err := errOf(fastGate(t, fake, "").ValidateWrites(ctx, testBase, testFiles()))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -418,7 +419,7 @@ func TestValidateWrites_Cancelled(t *testing.T) {
 func TestValidateWrites_NoDeadlineUsesFallback(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
-	if err := fastGate(t, fake, "").ValidateWrites(context.Background(), testBase, testFiles()); err != nil {
+	if err := errOf(fastGate(t, fake, "").ValidateWrites(context.Background(), testBase, testFiles())); err != nil {
 		t.Fatal(err)
 	}
 	if ms := fake.Requests()[0].DeadlineMS; ms > FallbackDeadline.Milliseconds() || ms < FallbackDeadline.Milliseconds()-1000 {
@@ -444,5 +445,81 @@ func TestRefuseNormalized(t *testing.T) {
 	}
 	if len(fake.Requests()) != 0 {
 		t.Error("refusing asked the generator")
+	}
+}
+
+// errOf is a ValidateWrites answer's error.
+func errOf(_ *gitops.KeyVerdict, err error) error { return err }
+
+// ADR-038 decision 5: a pass's key verdict reaches the Writer — only the
+// matching pass's: a first pass that judged other content judged another
+// tree, and its findings are not this write's.
+func TestValidateWrites_KeyVerdictOfTheMatchingPassOnly(t *testing.T) {
+	t.Parallel()
+	fake := testutil.StartFakeGenerator(t)
+	fake.SetValidate(func(n int, req testutil.FakeValidateRequest) (int, any) {
+		v := testutil.PassVerdict(req, nil)
+		key := "_first_pass_key"
+		if n == 1 {
+			v["validated"].(map[string]any)["base_commit"] = strings.Repeat("cd", 20)
+		} else {
+			key = "_second_pass_key"
+		}
+		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 1, "seconds": 0.1, "truncated": 3,
+			"findings": []map[string]any{{"severity": "error", "kind": "unread", "key": key,
+				"file": "db-a.yaml", "tenants": []string{"db-a"}, "reason": "unregistered"},
+				{"severity": "notice", "kind": "unread", "key": "_p", "file": nil, "tenants": []string{}, "reason": nil}}}
+		return 200, v
+	})
+	kv, err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	want := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: 3, Findings: []gitops.KeyFinding{
+		{Severity: "error", Kind: "unread", Key: "_second_pass_key", File: "db-a.yaml", Tenants: []string{"db-a"}, Reason: "unregistered"},
+		{Severity: "notice", Kind: "unread", Key: "_p", Tenants: []string{}},
+	}}
+	if !reflect.DeepEqual(kv, want) {
+		t.Fatalf("key verdict = %+v, want %+v", kv, want)
+	}
+}
+
+// A verdict that did not complete keeps its reason, never the service's
+// message (it can carry a platform path or stderr); a pass without one
+// (an older service) is "not reported", never an empty complete verdict.
+func TestValidateWrites_KeyVerdictNotCompletedOrNotReported(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		kv   any
+		want *gitops.KeyVerdict
+	}{
+		"not completed": {map[string]any{"status": "not_completed", "reason": "memory", "tenants": 4,
+			"seconds": 1.5, "message": "da-guard: /srv/conf.d/_defaults.yaml killed"},
+			&gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: "memory"}},
+		"absent": {nil, &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: gitops.KeyVerdictNotReported}},
+		// A status this tenant-api does not know is no complete verdict.
+		"unknown status": {map[string]any{"status": "partial", "reason": "x"},
+			&gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: "x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := testutil.StartFakeGenerator(t)
+			fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
+				v := testutil.PassVerdict(req, nil)
+				if tc.kv == nil {
+					delete(v, "key_verdict")
+				} else {
+					v["key_verdict"] = tc.kv
+				}
+				return 200, v
+			})
+			kv, err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+			if err != nil {
+				t.Fatalf("pass: %v", err)
+			}
+			if !reflect.DeepEqual(kv, tc.want) {
+				t.Fatalf("key verdict = %+v, want %+v", kv, tc.want)
+			}
+		})
 	}
 }

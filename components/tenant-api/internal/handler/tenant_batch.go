@@ -90,7 +90,10 @@ type BatchResult struct {
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// in direct mode: #1231 deprecated-key alias notices, and #3227 notices
 	// for an invalid reserved value the tenant file already held and the op
-	// left unchanged. PR mode puts them in BatchResponse.Warnings instead.
+	// left unchanged; and the key verdict ("key verdict:" lines, ADR-038
+	// decision 5): this tenant's findings on its first op that changed
+	// something, the lines about the whole batch on the batch's first such
+	// op only. PR mode puts them in BatchResponse.Warnings instead.
 	// Error results never carry warnings — Message owns the failure text.
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -105,7 +108,8 @@ type BatchResponse struct {
 	Summary  string        `json:"summary"`           // e.g., "5 succeeded"; a rejected batch: "1 failed, 4 not applied"
 	Message  string        `json:"message,omitempty"` // v2.6.0: human-readable message
 	// Warnings is the batch-level advisory list for PR mode (#1231): the
-	// per-op notices aggregated by WritePRBatch. Batch-level (not per-result)
+	// per-op notices aggregated by WritePRBatch, then the key verdict on the
+	// batch ("key verdict:" lines, ADR-038 decision 5). Batch-level (not per-result)
 	// because PR-mode Results are frozen at "included" BEFORE the write runs;
 	// each notice self-identifies its tenant (`tenant=<id>` in the wording).
 	Warnings []string `json:"warnings,omitempty"`
@@ -637,14 +641,15 @@ type directBatchRun struct {
 //
 // The same split decides which other tenants a validation message or a
 // partial-write refusal may name (#3039): an answer, those the caller may
-// read (tenantNamesFor); stored results, none.
+// read (tenantNamesFor); stored results, none — and whether the key
+// verdict's platform findings are shown (treeVisible, ADR-038 decision 5).
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, results batchResultsUse) directBatchRun {
 	treeVisible := results == batchResultsAnswer && treePathsVisible(rbacMgr, p)
 	var names gitops.TenantNames
 	if results == batchResultsAnswer {
 		names = tenantNamesFor(rbacMgr, tenantOrg, p)
 	}
-	ctx = gitops.WithTenantNames(ctx, names)
+	ctx = gitops.WithTreeVisible(gitops.WithTenantNames(ctx, names), treeVisible)
 	return executeBatchOpsShown(ctx, w, configDir, ops, email, p, rbacMgr, tenantOrg, treeVisible)
 }
 

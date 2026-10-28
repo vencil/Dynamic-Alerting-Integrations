@@ -41,13 +41,13 @@ type parkingValidator struct {
 	release chan struct{}
 }
 
-func (v *parkingValidator) ValidateWrites(context.Context, string, []gitops.ProposedFile) error {
+func (v *parkingValidator) ValidateWrites(context.Context, string, []gitops.ProposedFile) (*gitops.KeyVerdict, error) {
 	first := false
 	v.once.Do(func() { first = true; close(v.entered) })
 	if first {
 		<-v.release
 	}
-	return nil
+	return nil, nil
 }
 
 // waitForGoroutine waits until some goroutine's stack holds every frame in

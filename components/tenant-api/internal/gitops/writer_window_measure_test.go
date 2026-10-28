@@ -103,12 +103,12 @@ func winOnce(fn func()) func() {
 // sampled), then passes.
 type winHookValidator struct{ fn func() }
 
-func (v *winHookValidator) ValidateWrites(context.Context, string, []ProposedFile) error {
+func (v *winHookValidator) ValidateWrites(context.Context, string, []ProposedFile) (*KeyVerdict, error) {
 	if v.fn != nil {
 		v.fn()
 		v.fn = nil
 	}
-	return nil
+	return nil, nil
 }
 
 // --- the window: read → HEAD sample ------------------------------------
