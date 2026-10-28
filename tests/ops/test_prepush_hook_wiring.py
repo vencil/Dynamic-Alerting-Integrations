@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _child_signals import signals_to_default  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1880,11 +1881,12 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     env.pop("MKDOCS_STRICT_BYPASS", None)
 
     # A session of its own, so the signal reaches the whole group like a
-    # terminal's Ctrl-C does; SIGINT back to default, or a pytest run as a
-    # background job starts every child with it ignored.
+    # terminal's Ctrl-C does; SIGINT and SIGTERM back to default, or a pytest
+    # run as a background job (or under a wrapper that ignores SIGTERM) starts
+    # every child with it ignored (#3297).
     proc = subprocess.Popen(  # subprocess-timeout: ignore
         ["git", "push", "--dry-run", "origin", *refs], cwd=work, env=env,
-        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        start_new_session=True, preexec_fn=signals_to_default,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
     )
     try:
@@ -1945,7 +1947,7 @@ def test_a_sigterm_to_the_guard_alone_during_the_build_leaves_nothing_behind(
     proc = subprocess.Popen(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"], cwd=work, env=env,
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        start_new_session=True, preexec_fn=signals_to_default,
     )
     try:
         proc.stdin.write(f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n".encode())
@@ -2008,7 +2010,7 @@ def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
     proc = subprocess.Popen(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"], cwd=work, env=env,
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+        start_new_session=True, preexec_fn=signals_to_default,
     )
     try:
         proc.stdin.write(f"refs/heads/topic {sha_c} refs/heads/topic {sha_a}\n".encode())

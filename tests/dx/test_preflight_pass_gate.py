@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _child_signals import signals_to_default  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 # Every test in this module invokes require_preflight_pass.sh via
@@ -57,13 +58,6 @@ ZERO_SHA = "0" * 40
 # Helpers: init ephemeral repo + build a fake `gh` on PATH
 # ---------------------------------------------------------------------------
 
-
-
-def _signals_to_default() -> None:
-    """preexec_fn: the child starts with SIGINT and SIGTERM at their
-    defaults, whatever this process inherited or was left with (#3249)."""
-    for s in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(s, signal.SIG_DFL)
 
 def _init_git(repo: Path) -> str:
     env = {
@@ -832,7 +826,7 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     # pytest runs as a background job, SIGTERM when an earlier in-process
     # caller in the same worker left SIG_IGN behind (#3249).
     proc = subprocess.Popen([_BASH, "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
-                            preexec_fn=_signals_to_default,
+                            preexec_fn=signals_to_default,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     try:
         deadline = time.monotonic() + 20
