@@ -35,7 +35,7 @@ func TestScopeEffective_ListsParseFailedFilesInScope(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 
-	got, err := ScopeEffective(root, filepath.Join(root, "a"))
+	got, err := ScopeEffective(root, filepath.Join(root, "a"), fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective err = %v, want nil (a broken file is skipped, not fatal)", err)
 	}
@@ -47,7 +47,7 @@ func TestScopeEffective_ListsParseFailedFilesInScope(t *testing.T) {
 		t.Errorf("Tenants = %v, want only tenant-a", got.Tenants)
 	}
 
-	whole, err := ScopeEffective(root, "")
+	whole, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatalf("whole tree err = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestScopeEffective_ParseFailedIsTheExportersVerdict(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 
-	got, err := ScopeEffective(root, filepath.Join(root, "a"))
+	got, err := ScopeEffective(root, filepath.Join(root, "a"), fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective err = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestScopeEffective_ResolveDecodeFailureIsADecodeError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
 			testutil.WriteTree(t, tmp, tc.tree)
-			_, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+			_, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "", fixedNow)
 			if err == nil {
 				t.Fatal("want an error")
 			}
@@ -136,7 +136,7 @@ func TestEffectiveTree_ResolveDecodeFailure(t *testing.T) {
 		"conf.d/sub/_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
 		"conf.d/sub/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
 	})
-	got, err := EffectiveTree(filepath.Join(tmp, "conf.d"))
+	got, err := EffectiveTree(filepath.Join(tmp, "conf.d"), fixedNow)
 	if err != nil {
 		t.Fatalf("EffectiveTree err = %v, want the tenant answered", err)
 	}
@@ -160,7 +160,7 @@ func TestEffectiveTree_ResolveDecodeFailure(t *testing.T) {
 	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/tenant-b.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
 	})
-	got, err = EffectiveTree(filepath.Join(tmp, "conf.d"))
+	got, err = EffectiveTree(filepath.Join(tmp, "conf.d"), fixedNow)
 	if err != nil {
 		t.Fatalf("EffectiveTree err = %v, want the file reported as ParseFailed", err)
 	}
@@ -180,7 +180,7 @@ func TestScopeEffective_TenantFileOnlyTheMergeRefusedIsParseFailed(t *testing.T)
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
 		"conf.d/tenant-b.yaml":  "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
 	})
-	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective err = %v", err)
 	}
@@ -213,7 +213,7 @@ func TestScopeEffective_WholeTree(t *testing.T) {
 		"conf.d/web/tenant-c.yaml":     "tenants:\n  tenant-c:\n    cpu: 95\n",
 	})
 	root := filepath.Join(tmp, "conf.d")
-	got, err := ScopeEffective(root, "")
+	got, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestScopeEffective_ExposesPreMergeSnapshots(t *testing.T) {
 		"conf.d/web/tenant-c.yaml": "tenants:\n  tenant-c:\n    cpu: 80\n", // NOT redundant — web inherits L0 (cpu=70)
 	})
 	root := filepath.Join(tmp, "conf.d")
-	got, err := ScopeEffective(root, "")
+	got, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestScopeEffective_MergedDefaultsIsIndependentSnapshot(t *testing.T) {
 		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 99\n",
 	})
 	root := filepath.Join(tmp, "conf.d")
-	got, err := ScopeEffective(root, "")
+	got, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestScopeEffective_SubScope(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 	scope := filepath.Join(root, "db")
-	got, err := ScopeEffective(root, scope)
+	got, err := ScopeEffective(root, scope, fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestScopeEffective_ScopeOutsideRoot(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 	scope := filepath.Join(tmp, "other")
-	_, err := ScopeEffective(root, scope)
+	_, err := ScopeEffective(root, scope, fixedNow)
 	if err == nil {
 		t.Fatal("expected containment error, got nil")
 	}
@@ -376,7 +376,7 @@ func TestScopeEffective_DuplicateTenant(t *testing.T) {
 		"conf.d/b/tenant-x-copy.yaml": "tenants:\n  tenant-x:\n    cpu: 2\n",
 	})
 	root := filepath.Join(tmp, "conf.d")
-	_, err := ScopeEffective(root, "")
+	_, err := ScopeEffective(root, "", fixedNow)
 	if err == nil {
 		t.Fatal("expected duplicate-tenant error, got nil")
 	}
@@ -407,7 +407,7 @@ func TestScopeEffective_EmptyScopeReturnsEmptySet(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 	scope := filepath.Join(root, "empty")
-	got, err := ScopeEffective(root, scope)
+	got, err := ScopeEffective(root, scope, fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestScopeEffective_EmptyScopeReturnsEmptySet(t *testing.T) {
 }
 
 func TestScopeEffective_ConfigDirMissing(t *testing.T) {
-	_, err := ScopeEffective(filepath.Join(t.TempDir(), "nope"), "")
+	_, err := ScopeEffective(filepath.Join(t.TempDir(), "nope"), "", fixedNow)
 	if err == nil {
 		t.Fatal("expected stat error, got nil")
 	}
@@ -438,7 +438,7 @@ func TestScopeEffective_SkipsHiddenAndUnderscoredFiles(t *testing.T) {
 		"conf.d/tenant-real.yaml": "tenants:\n  real:\n    cpu: 1\n",
 	})
 	root := filepath.Join(tmp, "conf.d")
-	got, err := ScopeEffective(root, "")
+	got, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestScopeEffective_DeterministicAcrossRuns(t *testing.T) {
 	})
 	root := filepath.Join(tmp, "conf.d")
 	for i := 0; i < 3; i++ {
-		got, err := ScopeEffective(root, "")
+		got, err := ScopeEffective(root, "", fixedNow)
 		if err != nil {
 			t.Fatalf("ScopeEffective run %d: %v", i, err)
 		}
@@ -492,7 +492,7 @@ func TestScopeEffective_FileSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unsupported on this filesystem: %v", err)
 	}
-	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "", fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v", err)
 	}

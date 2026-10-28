@@ -48,7 +48,7 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 	judged := 0
 	for _, name := range names {
 		dir := trees[name]
-		scoped, err := config.ScopeEffective(dir, dir)
+		scoped, err := config.ScopeEffective(dir, dir, fixedNow)
 		if err != nil {
 			// A tree the exporter refuses before any check (a duplicate
 			// tenant id, a decode stop) produces no findings to look at.
@@ -60,7 +60,7 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			requiredFields:       "mysql_connections",
 			cardinalityLimit:     1,
 			cardinalityWarnRatio: 0.5,
-		})
+		}, fixedNow)
 		report, err := guard.CheckDefaultsImpact(input)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

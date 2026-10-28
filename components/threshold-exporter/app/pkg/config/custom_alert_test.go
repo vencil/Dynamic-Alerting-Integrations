@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -270,7 +269,7 @@ func TestCustomAlert_OverflowDeterministic(t *testing.T) {
 
 	run := func() ([]string, ResolveStats) {
 		// custom-alert resolution is time-independent (no scheduled overrides)
-		resolved, stats := cfg.ResolveAtWithStats(time.Now())
+		resolved, stats := cfg.ResolveAtWithStats(fixedNow)
 		var names []string
 		for _, r := range resolved {
 			names = append(names, r.CustomLabels["name"])
@@ -684,7 +683,7 @@ func TestSloBurnRate_ObjectiveGaugeFollowsTruncation(t *testing.T) {
 
 	cfg := customAlertsConfig(t, "t1", list)
 	cfg.MaxMetricsPerTenant = 1 // 3 rows resolved → keep 1 (the threshold row)
-	resolved, stats := cfg.ResolveAtWithStats(time.Now())
+	resolved, stats := cfg.ResolveAtWithStats(fixedNow)
 	if len(resolved) != 1 || resolved[0].CustomLabels["name"] != "keepme" {
 		t.Fatalf("expected truncation to keep only the threshold row, got %+v", resolved)
 	}
@@ -694,7 +693,7 @@ func TestSloBurnRate_ObjectiveGaugeFollowsTruncation(t *testing.T) {
 
 	cfg = customAlertsConfig(t, "t1", list)
 	cfg.MaxMetricsPerTenant = 3 // everything fits → gauge stays
-	resolved, stats = cfg.ResolveAtWithStats(time.Now())
+	resolved, stats = cfg.ResolveAtWithStats(fixedNow)
 	if len(resolved) != 3 {
 		t.Fatalf("expected all 3 rows under the cap, got %d", len(resolved))
 	}

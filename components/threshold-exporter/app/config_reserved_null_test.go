@@ -37,7 +37,7 @@ func TestReload_TenantReservedNullKeepsTheProfileOut(t *testing.T) {
 		t.Helper()
 		cfg := m.GetConfig()
 		silenced := map[string]bool{}
-		for _, s := range cfg.ResolveSilentModes() {
+		for _, s := range cfg.ResolveSilentModesAt(fixedNow) {
 			silenced[s.Tenant] = true
 		}
 		dedup := map[string]bool{}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // RejectedShownCache keeps Shown's answer across commits: a candidate tenant
@@ -105,7 +106,8 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		e, ok := c.entries[id]
 		if !ok || e.input != in {
 			if !served {
-				r.served = newServedVerdicts(built, false)
+				// No instant: noUnparsed skips ValuesNotServed, the one reader of it.
+				r.served = newServedVerdicts(built, false, time.Time{})
 				r.served.noUnparsed = true
 				served = true
 			}

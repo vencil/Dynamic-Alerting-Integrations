@@ -38,7 +38,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 // aliasUnderTest returns the one deprecated spelling currently inside its
@@ -243,7 +242,7 @@ func TestDeclaredKey_ExpiryRefusalAndEventSuppressionAgree(t *testing.T) {
 	if len(cfg.ValidateTenantKeys().Errors) == 0 {
 		t.Fatal("validator must refuse expires on a declared key")
 	}
-	if got := cfg.ResolveThresholdExpiriesAt(time.Now()); len(got) != 0 {
+	if got := cfg.ResolveThresholdExpiriesAt(fixedNow); len(got) != 0 {
 		t.Fatalf("no expiry event may be emitted for a key the validator refuses, got %+v", got)
 	}
 }
@@ -275,7 +274,7 @@ func TestDeclaredKey_AlsoValuedKeepsExpiryWorkingAndEmitting(t *testing.T) {
 	if errs := cfg.ValidateTenantKeys().Errors; len(errs) != 0 {
 		t.Fatalf("a key that also has a platform value must keep its time-box: %v", errs)
 	}
-	if got := cfg.ResolveThresholdExpiriesAt(time.Now()); len(got) != 1 {
+	if got := cfg.ResolveThresholdExpiriesAt(fixedNow); len(got) != 1 {
 		t.Fatalf("the expiry event must still fire for a valued key, got %+v", got)
 	}
 }

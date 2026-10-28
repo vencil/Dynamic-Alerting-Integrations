@@ -164,7 +164,7 @@ func TestUndeliverableAudit_GaugeRecoversToZero(t *testing.T) {
 // TestUndeliverableAudit_HotReload_HierarchicalPath drives the real
 // detect→debounce→diffAndReload chain via tickOnce (debounce window 0 = the
 // synchronous seam config_debounce.go documents): a nested tenant added to a
-// RUNNING exporter reaches m.config, not just Resolve(), and is not reported.
+// RUNNING exporter reaches m.config, not just ResolveAt, and is not reported.
 func TestUndeliverableAudit_HotReload_HierarchicalPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

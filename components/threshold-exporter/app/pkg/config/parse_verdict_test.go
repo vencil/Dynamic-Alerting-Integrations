@@ -129,7 +129,7 @@ func TestParseVerdictMatrix_TheExporterServesWhatParseTreeReads(t *testing.T) {
 						tenants, parseFailed, cpu, wantTenants, wantFailed, wantCPU)
 				}
 
-				ec, rerr := ResolveEffective(dir, "t1")
+				ec, rerr := ResolveEffective(dir, "t1", fixedNow)
 				switch {
 				case s.kind != "" && !inDefaults:
 					if !errors.Is(rerr, ErrTenantNotFound) {
@@ -223,7 +223,7 @@ func TestResolveEffective_NoFileTheBuildReadsFailsTheMerge(t *testing.T) {
 	}
 	for name, extra := range extras {
 		dir := writePlatformTree(t, map[string]string{"_defaults.yaml": pvDefaults + extra, "t1.yaml": pvTenant1})
-		ec, err := ResolveEffective(dir, "t1")
+		ec, err := ResolveEffective(dir, "t1", fixedNow)
 		var de *DecodeError
 		if errors.As(err, &de) || err != nil {
 			t.Errorf("%s: ResolveEffective err = %v, want the chain to read the file as empty", name, err)

@@ -135,7 +135,7 @@ func TestScopeEffective_UndeliverableKeepsInScopeTenants(t *testing.T) {
 		{scope: "finance", want: want},
 		{scope: "ops", want: nil}, // tenant-a is outside the scope
 	} {
-		scoped, err := ScopeEffective(dir, tc.scope)
+		scoped, err := ScopeEffective(dir, tc.scope, fixedNow)
 		if err != nil {
 			t.Fatalf("scope %q: %v", tc.scope, err)
 		}
@@ -143,7 +143,7 @@ func TestScopeEffective_UndeliverableKeepsInScopeTenants(t *testing.T) {
 			t.Errorf("scope %q: Undeliverable = %#v, want %#v", tc.scope, scoped.Undeliverable, tc.want)
 		}
 	}
-	scoped, err := ScopeEffective(undeliverableTree(t, true), "")
+	scoped, err := ScopeEffective(undeliverableTree(t, true), "", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			if got := unreachableKeys(rep.Undeliverable); !reflect.DeepEqual(got, want) {
 				t.Errorf("LoadReport.Undeliverable keys = %v, want %v", got, want)
 			}
-			scoped, err := ScopeEffective(dir, "")
+			scoped, err := ScopeEffective(dir, "", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

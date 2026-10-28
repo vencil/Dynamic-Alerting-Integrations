@@ -295,7 +295,7 @@ func TestSubtreeScheduledReserved_IssueRows(t *testing.T) {
 				t.Errorf("%s: crashloop filter off, want on (the root's default; a subtree does not carry it)", at.Format("15:04"))
 			}
 		}
-		ec, err := ResolveEffective(dir, "t1")
+		ec, err := ResolveEffective(dir, "t1", fixedNow)
 		if err != nil {
 			t.Fatal(err)
 		}

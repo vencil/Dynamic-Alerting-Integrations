@@ -229,7 +229,7 @@ func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string)
 	if hash != scan.Composite {
 		t.Fatalf("%s: the commit is not of the tree on disk (a reload was missed)", step)
 	}
-	tree, err := config.EffectiveTree(dir)
+	tree, err := config.EffectiveTree(dir, fixedNow)
 	if err != nil {
 		t.Fatalf("%s: EffectiveTree: %v", step, err)
 	}

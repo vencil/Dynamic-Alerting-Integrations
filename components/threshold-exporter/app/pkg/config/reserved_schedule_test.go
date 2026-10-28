@@ -375,7 +375,7 @@ func TestResolveEffective_ScheduledReservedShowsDefault(t *testing.T) {
 			"    _state_crashloop: {default: enable, expires: \"2020-01-01T00:00:00Z\"}\n" +
 			"    _routing: {default: x, receiver: {type: webhook, url: \"https://e.example/h\"}}\n",
 	})
-	ec, err := ResolveEffective(dir, "t1")
+	ec, err := ResolveEffective(dir, "t1", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}

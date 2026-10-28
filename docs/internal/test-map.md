@@ -47,6 +47,9 @@ v2.7.0 將 98 個 `test_*.py` 從 `tests/` 根目錄搬入 `ops/` / `dx/` / `lin
 | log 輸出 | `log.New(&buf, "", 0)` + `m.SetLogger(testLogger)` | ~~`log.SetOutput(&buf)`~~（PR #368 移除） |
 | WatchLoop / 計時 | `startWatchLoopWithFakeClock(t, m, interval)` + `Advance` + `waitFor(state)` | ~~`time.Sleep` 等 ticker / debounce~~（PR #369 移除 WatchLoop tests） |
 | Scanner 直接呼叫 | `scanDirHierarchicalWithMetrics(dir, nil, fresh, nil)` | (legacy `scanDirHierarchical(dir, nil)` 仍 OK) |
+| 排程解析（`window:`／`expires:`） | `m.SetClock(clockwork.NewFakeClockAt(fixedNow))`（`/metrics`、`/config`、values-not-served 都讀 `m.Now()`）；直接解析時傳 `fixedNow` | ~~`time.Now()` 當解析時間點~~（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)） |
+
+⛔ **排程解析一律帶明確時間點，測試不讀牆鐘**（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)）：`pkg/config` 沒有讀 `time.Now()` 的解析入口；`window:` 是左閉右開 `[start, end)`，`"00:00-23:59"` 在 23:59 那一分鐘關閉，讀牆鐘的測試每 1440 次紅一次。
 
 ⛔ **seam 的另一半在 production 端**：新增 metric 寫入時走既有的 DI 路徑（`m.getMetrics().Foo()`／`c.manager.getMetrics().Foo()`，見 `collector.go`），不要呼叫 package-level 的全域 helper——後者繞過 `SetMetrics(fresh)`，注入 fresh metrics 的測試會看不到那次寫入而假綠。
 

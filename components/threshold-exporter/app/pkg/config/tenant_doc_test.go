@@ -65,14 +65,14 @@ func TestScopeEffectiveSharedParseMatchesPerTenantResolve(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := writePlatformTree(t, files)
-			scoped, err := ScopeEffective(dir, dir)
+			scoped, err := ScopeEffective(dir, dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(scoped.Tenants) < 4 {
 				t.Fatalf("only %d tenants in scope — the comparison would be near-vacuous", len(scoped.Tenants))
 			}
-			tree, err := EffectiveTree(dir)
+			tree, err := EffectiveTree(dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,7 +81,7 @@ func TestScopeEffectiveSharedParseMatchesPerTenantResolve(t *testing.T) {
 				whole[ec.TenantID] = ec
 			}
 			for _, got := range scoped.Tenants {
-				want, err := ResolveEffective(dir, got.TenantID)
+				want, err := ResolveEffective(dir, got.TenantID, fixedNow)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", got.TenantID, err)
 				}

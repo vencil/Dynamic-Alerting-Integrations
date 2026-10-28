@@ -32,7 +32,7 @@ func resolveEffectiveWholeBuild(configDir, tenantID string) (*EffectiveConfig, e
 		if berr != nil {
 			return nil, berr
 		}
-		r.served = newServedVerdicts(&built, false)
+		r.served = newServedVerdicts(&built, false, fixedNow)
 	}
 	ec, err := r.resolve(tenantID)
 	return ec.AsWritten(), err
@@ -289,8 +289,8 @@ func TestResolveEffectiveFromScan_MatchesWholeTreeBuild(t *testing.T) {
 			warm := warmScanOf(t, root)
 			for _, id := range tenantsOf(t, root) {
 				want := effectiveAnswer(resolveEffectiveWholeBuild(root, id))
-				cold := effectiveAnswer(ResolveEffective(root, id))
-				got := effectiveAnswer(ResolveEffectiveFromScan(warm, id))
+				cold := effectiveAnswer(ResolveEffective(root, id, fixedNow))
+				got := effectiveAnswer(ResolveEffectiveFromScan(warm, id, fixedNow))
 				if cold != want {
 					t.Errorf("%s cold:\n got  %s\n want %s", id, cold, want)
 				}
@@ -313,7 +313,7 @@ func TestResolveEffectiveFromScan_CorpusCoversEveryField(t *testing.T) {
 		dir := t.TempDir()
 		testutil.WriteTree(t, dir, files)
 		for _, id := range tenantsOf(t, dir) {
-			ec, err := ResolveEffective(dir, id)
+			ec, err := ResolveEffective(dir, id, fixedNow)
 			var dup *DuplicateTenantError
 			switch {
 			case errors.Is(err, ErrTenantNotFound):
@@ -370,7 +370,7 @@ func TestResolveEffectiveFromScan_StaleBytesAreRefused(t *testing.T) {
 			if err := mutate(filepath.Join(dir, "t1.yaml")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ResolveEffectiveFromScan(warm, "t1"); !errors.Is(err, ErrScanStale) {
+			if _, err := ResolveEffectiveFromScan(warm, "t1", fixedNow); !errors.Is(err, ErrScanStale) {
 				t.Fatalf("err = %v, want ErrScanStale", err)
 			}
 		})
@@ -385,7 +385,7 @@ func TestResolveEffectiveFromScan_LeavesTheScanUntouched(t *testing.T) {
 	testutil.WriteTree(t, dir, effectiveScanCorpus()["platform tenants and profiles"])
 	ageTree(t, dir)
 	warm := warmScanOf(t, dir)
-	if _, err := ResolveEffectiveFromScan(warm, "t1"); err != nil {
+	if _, err := ResolveEffectiveFromScan(warm, "t1", fixedNow); err != nil {
 		t.Fatal(err)
 	}
 	if warm.Partials != nil {

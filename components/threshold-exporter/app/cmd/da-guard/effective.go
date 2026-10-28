@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -222,7 +223,8 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			opts.Tenants[t] = true
 		}
 	}
-	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), opts)
+	// The run's one instant (#3368): not_served reads `expires:` at it.
+	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), opts, time.Now().UTC())
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)

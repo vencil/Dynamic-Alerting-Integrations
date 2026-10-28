@@ -41,6 +41,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/threshold-exporter/pkg/confdname"
@@ -126,10 +127,12 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 		// *DuplicateTenantError turns a request into a 409.
 		var ec *cfg.EffectiveConfig
 		var err error
+		// The request's one instant (#3368): not_served reads `expires:` at it.
+		now := time.Now()
 		if d.Writer != nil {
-			ec, err = d.Writer.ResolveEffective(tenantID)
+			ec, err = d.Writer.ResolveEffective(tenantID, now)
 		} else {
-			ec, err = cfg.ResolveEffective(d.ConfigDir, tenantID)
+			ec, err = cfg.ResolveEffective(d.ConfigDir, tenantID, now)
 		}
 		if err != nil {
 			var dup *cfg.DuplicateTenantError

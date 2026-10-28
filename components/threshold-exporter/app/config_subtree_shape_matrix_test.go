@@ -119,7 +119,7 @@ func assertPlanesAgreeOrReported(
 ) {
 	t.Helper()
 
-	eff, err := config.ResolveEffective(dir, tenant)
+	eff, err := config.ResolveEffective(dir, tenant, fixedNow)
 	if err != nil {
 		t.Fatalf("tenant %s: ResolveEffective: %v", tenant, err)
 	}

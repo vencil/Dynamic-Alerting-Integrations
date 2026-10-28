@@ -122,7 +122,7 @@ func TestThresholdLeaf_EffectiveShowsWhatMetricsServes(t *testing.T) {
 					t.Fatalf("LoadDir: %v", err)
 				}
 				served, isServed := servedWarningRow(cfg, "t1", "mysql", "connections", now)
-				ec, err := ResolveEffective(dir, "t1")
+				ec, err := ResolveEffective(dir, "t1", now)
 				if err != nil {
 					t.Fatalf("ResolveEffective: %v", err)
 				}

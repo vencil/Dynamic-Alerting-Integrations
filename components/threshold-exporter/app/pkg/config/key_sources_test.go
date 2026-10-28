@@ -30,21 +30,21 @@ func TestKeySources_OnlyEffectiveTreeFillsThem(t *testing.T) {
 	})
 	dir := filepath.Join(tmp, "conf.d")
 
-	ec, err := ResolveEffective(dir, "t")
+	ec, err := ResolveEffective(dir, "t", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ec.KeySources != nil || ec.BoundProfile != "p" {
 		t.Errorf("ResolveEffective: KeySources = %v, BoundProfile = %q", ec.KeySources, ec.BoundProfile)
 	}
-	sc, err := ScopeEffective(dir, "")
+	sc, err := ScopeEffective(dir, "", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sc.Tenants[0].KeySources != nil || sc.Tenants[0].BoundProfile != "p" {
 		t.Errorf("ScopeEffective: KeySources = %v, BoundProfile = %q", sc.Tenants[0].KeySources, sc.Tenants[0].BoundProfile)
 	}
-	tr, err := EffectiveTree(dir)
+	tr, err := EffectiveTree(dir, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}

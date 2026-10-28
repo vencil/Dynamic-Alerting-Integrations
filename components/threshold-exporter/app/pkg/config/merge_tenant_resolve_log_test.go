@@ -83,14 +83,10 @@ func TestTenantMergeResolveWritesNoLog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Resolve() reads the wall clock, so it is checked for writing no
-			// log (and for the cut, which does not depend on the time) only —
-			// its rows are not compared with a fixed-time resolve.
-			nowRows := m.Resolve()
 			// Precondition: the cut ran on this merge (the root cap reached it).
-			if len(rows) != 2 || len(keyed) != 2 || len(nowRows) != 2 || stats.PerTenantOverLimit[id] == 0 {
-				t.Fatalf("%s precondition: rows=%d keyed=%d nowRows=%d over=%d, want the cut to 2 rows",
-					id, len(rows), len(keyed), len(nowRows), stats.PerTenantOverLimit[id])
+			if len(rows) != 2 || len(keyed) != 2 || stats.PerTenantOverLimit[id] == 0 {
+				t.Fatalf("%s precondition: rows=%d keyed=%d over=%d, want the cut to 2 rows",
+					id, len(rows), len(keyed), stats.PerTenantOverLimit[id])
 			}
 			if buf.Len() != 0 {
 				t.Fatalf("%s GET %d: TenantMerge resolve wrote to the global log:\n%s", id, i+1, buf.String())

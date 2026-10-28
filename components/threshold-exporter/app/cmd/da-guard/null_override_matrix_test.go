@@ -119,7 +119,7 @@ func nullMatrixObserve(t *testing.T, dir, tenantKey string) nullMatrixObs {
 		}
 	}
 
-	tree, err := config.EffectiveTree(dir)
+	tree, err := config.EffectiveTree(dir, fixedNow)
 	if err != nil {
 		t.Fatalf("EffectiveTree: %v", err)
 	}
@@ -145,7 +145,7 @@ func nullMatrixObserve(t *testing.T, dir, tenantKey string) nullMatrixObs {
 		}
 	}
 
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(tree, &flags{}))
+	report, err := guard.CheckDefaultsImpact(buildCheckInput(tree, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

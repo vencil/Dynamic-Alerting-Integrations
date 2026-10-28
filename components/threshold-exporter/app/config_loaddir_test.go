@@ -49,7 +49,7 @@ tenants:
 		t.Errorf("expected 2 state filters, got %d", len(cfg.StateFilters))
 	}
 
-	resolved := cfg.ResolveStateFilters()
+	resolved := cfg.ResolveStateFiltersAt(fixedNow)
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Tenant != resolved[j].Tenant {
 			return resolved[i].Tenant < resolved[j].Tenant
@@ -128,7 +128,7 @@ tenants:
 	// db-a: 3 metrics, db-b: 3 metrics = 6; #1231 adds one legacy
 	// metric="cpu" twin per tenant for the mysql_threads_running alias
 	// window (retired spelling: mysql_threads_running) = 8.
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 8 {
 		t.Errorf("expected 8 resolved thresholds, got %d: %+v", len(resolved), resolved)
 	}
@@ -346,7 +346,7 @@ tenants:
 		t.Errorf("expected 80 (hidden file ignored), got %.0f", cfg.Defaults["mysql_connections"])
 	}
 	// ⛔ CONTRACT CHANGED BY #1521: a tenant in a subdirectory now reaches the
-	// merged config. It always resolved through `Resolve()` / `/effective`;
+	// merged config. It always resolved through `ResolveAt` / `/effective`;
 	// what it never reached was `GetConfig()`, and therefore the collector —
 	// so its alerts could not fire.
 	if _, ok := cfg.Tenants["db-c"]; !ok {
@@ -389,7 +389,7 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().Resolve()
+	resolved := mgr.GetConfig().ResolveAt(fixedNow)
 	sort.Slice(resolved, func(i, j int) bool {
 		return resolved[i].Severity < resolved[j].Severity
 	})

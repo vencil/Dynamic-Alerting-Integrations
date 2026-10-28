@@ -15,11 +15,16 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// Source is what the collector reads on each scrape: the committed config
-// and its source metadata. The exporter's ConfigManager is one.
+// Source is what the collector reads on each scrape: the committed config,
+// its source metadata, and the clock the scrape resolves at. The exporter's
+// ConfigManager is one — its clock is the one /metrics, /config and the
+// values-not-served audit read (#3368), so a test that sets it pins every
+// family of a scrape; da-guard served-values' source returns its --at.
 type Source interface {
 	GetConfig() *config.ThresholdConfig
 	GetConfigInfo() config.ConfigInfo
+	// Now is the scrape instant, read once per Collect.
+	Now() time.Time
 }
 
 // Collector implements prometheus.Collector.
@@ -34,9 +39,8 @@ type Collector struct {
 	src Source
 
 	// Set only by a reader outside the exporter (served-values); nil on the
-	// exporter, which resolves at time.Now() with ResolveAtWithStats and logs
-	// a dropped user_threshold row.
-	now     func() time.Time
+	// exporter, which resolves with ResolveAtWithStats and logs a dropped
+	// user_threshold row.
 	resolve func(cfg *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats)
 	report  func(i int, m prometheus.Metric, err error)
 	observe func(Reserved)
@@ -64,8 +68,6 @@ func NewCollector(src Source) *Collector {
 // Hooks are the seams a reader outside the exporter sets. All nil is the
 // exporter's collector.
 type Hooks struct {
-	// Now replaces time.Now() as the scrape instant.
-	Now func() time.Time
 	// Resolve replaces cfg.ResolveAtWithStats; it must return the same rows
 	// and stats (da-guard uses ResolveAtWithKeys to keep each row's key).
 	Resolve func(cfg *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats)
@@ -80,7 +82,7 @@ type Hooks struct {
 
 // NewCollectorWithHooks is NewCollector with the Hooks set.
 func NewCollectorWithHooks(src Source, h Hooks) *Collector {
-	return &Collector{src: src, now: h.Now, resolve: h.Resolve, report: h.Report, observe: h.Observe}
+	return &Collector{src: src, resolve: h.Resolve, report: h.Report, observe: h.Observe}
 }
 
 // Describe sends no descriptors — opts into unchecked collector mode.
@@ -100,15 +102,13 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	// Scenario A + Phase 2B: numeric thresholds (with optional dimensional labels).
 	// ResolveAtWithStats (#652) returns the same resolved-thresholds slice as
-	// the legacy Resolve(), plus per-tenant cap-hit magnitudes that
+	// ResolveAt, plus per-tenant cap-hit magnitudes that
 	// collectTenantMetricsOverLimit emits as da_tenant_metrics_over_limit.
 	// One timestamp for the whole scrape so threshold values and expiry events
-	// resolve consistently — a separate time.Now() per resolver could straddle an
-	// `expires:` boundary and emit a one-scrape value/event mismatch (CodeRabbit).
-	now := time.Now()
-	if c.now != nil {
-		now = c.now()
-	}
+	// resolve consistently — a separate clock read per resolver could straddle
+	// an `expires:` boundary and emit a one-scrape value/event mismatch
+	// (CodeRabbit). The source's clock, not the wall clock (#3368).
+	now := c.src.Now()
 	var resolved []config.ResolvedThreshold
 	var stats config.ResolveStats
 	if c.resolve != nil {
@@ -362,9 +362,8 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 // has auto-deactivated (v1.7.0). Active windows need no event (their state
 // filter simply keeps emitting).
 //
-// The exporter (c.now nil) resolves at the wall clock, as it always has; a
-// reader that set Hooks.Now resolves at the scrape's `now` (that hook's
-// instant), like every other family.
+// It resolves at the scrape's `now`, like every other family (#3368: it used
+// to re-read the wall clock on the exporter).
 //
 // Collect has already resolved the state filters (OperationalStatesAt), which
 // log the _state_maintenance parse WARNs when the maintenance filter is
@@ -372,9 +371,6 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 //
 // It returns the reading it emitted from, for Hooks.Observe.
 func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) []config.ResolvedMaintenanceExpiry {
-	if c.now == nil {
-		now = time.Now()
-	}
 	expiries := cfg.ResolveMaintenanceExpiriesAfterStateFiltersAt(now)
 	for _, me := range expiries {
 		if !me.Expired {

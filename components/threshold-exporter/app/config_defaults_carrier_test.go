@@ -144,7 +144,7 @@ func TestRootCarrierPairIsOneFileOnEveryPlane(t *testing.T) {
 	if got := chainBases(ec.DefaultsChain); !reflect.DeepEqual(got, []string{"_defaults.yaml"}) {
 		t.Errorf("exporter chain = %v, want [_defaults.yaml]", got)
 	}
-	pe, err := config.ResolveEffective(dir, "t-b")
+	pe, err := config.ResolveEffective(dir, "t-b", fixedNow)
 	if err != nil {
 		t.Fatalf("ResolveEffective: %v", err)
 	}

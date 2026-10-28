@@ -50,7 +50,9 @@ func readyHandler(manager *ConfigManager) http.HandlerFunc {
 // machine-consumable shape lives at /api/v1/tenants/simulate (POST).
 //
 // `?at=<RFC3339>` overrides the resolve clock for inspecting future
-// scheduled-override windows without waiting wall-clock time.
+// scheduled-override windows without waiting wall-clock time. Without it
+// the page resolves at the manager's clock, the one /metrics reads (#3368).
+// Both the silent modes and the thresholds are read at that one instant.
 func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -65,7 +67,7 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 		}
 
 		// Determine resolve time: ?at=2006-01-02T15:04:05Z for debugging scheduled overrides
-		resolveTime := time.Now()
+		resolveTime := manager.Now()
 		if atParam := r.URL.Query().Get("at"); atParam != "" {
 			if parsed, err := time.Parse(time.RFC3339, atParam); err == nil {
 				resolveTime = parsed
@@ -93,7 +95,7 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 		}
 
 		// Show silent mode status
-		silentModes := cfg.ResolveSilentModes()
+		silentModes := cfg.ResolveSilentModesAt(resolveTime)
 		if len(silentModes) > 0 {
 			fmt.Fprintf(w, "\nSilent modes (%d):\n", len(silentModes))
 			for _, sm := range silentModes {

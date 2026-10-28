@@ -38,7 +38,7 @@ func servedMySQL(t *testing.T, dir string) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == "tx" && r.Severity == "warning" && r.Component == "mysql" && r.Metric == "connections" {
 			return r.Value
 		}
@@ -59,7 +59,7 @@ func TestSimulate_ExpandsProfilesCarriedByTheChainRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestSimulate_IgnoresProfilesInANestedChainEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestSimulate_ProfilesFileIsNotPartOfTheRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}

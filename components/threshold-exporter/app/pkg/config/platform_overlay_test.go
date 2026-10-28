@@ -40,7 +40,7 @@ func TestScopeEffective_AppliesPlatformOverlay(t *testing.T) {
 		"tx.yaml":        "tenants:\n  tx:\n    redis_x: \"7\"\n",
 		"ty.yaml":        "tenants:\n  ty: {}\n",
 	})
-	scoped, err := ScopeEffective(dir, dir)
+	scoped, err := ScopeEffective(dir, dir, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestScopeEffective_AppliesPlatformOverlay(t *testing.T) {
 	if !reflect.DeepEqual(tx.TenantOverridesRaw, map[string]any{"redis_x": "7"}) {
 		t.Errorf("tx TenantOverridesRaw = %v, want the tenant file's block only", tx.TenantOverridesRaw)
 	}
-	one, err := ResolveEffective(dir, "tx")
+	one, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestPlatformOverlay_FileTheFlatDecodeRejectsSuppliesNothing(t *testing.T) {
 	if _, err := ParseConfigFile([]byte("tenants:\n  tx:\n    mysql_connections: \"60\"\n  ty: 5\n")); err == nil {
 		t.Fatal("premise: the flat decode accepts the file")
 	}
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
