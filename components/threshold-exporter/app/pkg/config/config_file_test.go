@@ -15,7 +15,7 @@ package config
 //     write (±Inf, NaN) beside another spelling of the same threshold that
 //     it does write is dropped (#2418). And one rule for every row (#3250):
 //     a `defaults:` value is its text through parseThresholdNumber, not
-//     yaml.v3's float64 — a value it refuses is refusedDefault(text), and no
+//     yaml.v3's float64 — a value it refuses is refusedDefault(its reason), and no
 //     longer the whole file's error (oracleDefaults). The oracle is written out here rather
 //     than calling ParseConfigFile twice, so the SSOT cannot drift from it
 //     quietly; the exceptions are the explicit per-row list decodeDrops, not
@@ -197,7 +197,7 @@ type oracleShape struct {
 }
 
 // oracleDefaults is #3250's reading of a `defaults:` node, spelled out: each
-// scalar's text through parseThresholdNumber, refusedDefault(text) when it
+// scalar's text through parseThresholdNumber, refusedDefault(its reason) when it
 // refuses, a null a present 0 (decodeDrops takes it out); anything else is
 // yaml.v3's error for decoding it into a float64, as before.
 func oracleDefaults(n *yaml.Node) (map[string]float64, error) {
@@ -224,7 +224,7 @@ func oracleDefaults(n *yaml.Node) (map[string]float64, error) {
 			if f, ok := parseThresholdNumber(strings.TrimSpace(v.Value)); ok {
 				out[k] = f
 			} else {
-				out[k] = refusedDefault(v.Value)
+				out[k] = refusedDefault(refusedReason(v.Value))
 			}
 		}
 	}

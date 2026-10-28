@@ -37,10 +37,18 @@ func TestNotServed_Table(t *testing.T) {
 		// the key is refused alone and served like an optional_overrides one
 		// (no default row, nothing for a tenant that does not write it — as a
 		// root `.nan` since #3140), and the file's other keys are served.
+		// /effective shows the text and names it root_default_refused.
 		{name: "L0 root value not a number", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: abc\n  " + retiredCPU + ": 5\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
-		}},
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedRootDefaultRefused, "_defaults.yaml")}},
+		// #3250: a registered `_` key under the root `defaults:` reaches no
+		// tenant; an unregistered one is `unregistered` in every layer.
+		{name: "L0 root reserved key", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n  _myth: 1\n",
+			"tx.yaml":        "tenants:\n  tx: {}\n",
+		}, want: map[string]NotServedKey{"_silent_mode": ns(NotServedRootDefaultsReserved, "_defaults.yaml"),
+			"_myth": ns(NotServedUnregistered, "_defaults.yaml")}},
 		{name: "root defaults a list", files: map[string]string{
 			"_defaults.yaml": "defaults: [1, 2]\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",

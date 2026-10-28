@@ -124,7 +124,13 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 				return
 			}
 			if a.refused != "" {
-				text, _, refused := config.RefusedDefault(cfg.Defaults[a.refused])
+				_, refused := config.RefusedDefault(cfg.Defaults[a.refused])
+				text := ""
+				for _, r := range config.RootDefaultRefusals(a.doc) {
+					if r.Key == a.refused {
+						text = r.Text
+					}
+				}
 				if !refused || text != "disable" {
 					t.Errorf("%s = %v, want refused with its text \"disable\" (got %q, %v)",
 						a.refused, cfg.Defaults[a.refused], text, refused)

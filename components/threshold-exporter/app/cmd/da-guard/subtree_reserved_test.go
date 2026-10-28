@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -171,7 +172,9 @@ func TestGuard_SubtreeReservedKeyFix(t *testing.T) {
 	}
 }
 
-// Root defaults are not a subtree level: a reserved key there is not reported.
+// Root defaults are not a subtree level: a reserved key there is not reported
+// as subtree_default_reserved_key. It is root_defaults_reserved_key (#3250):
+// the root hands no tenant a reserved key.
 func TestGuard_RootReservedKeyIsNotSubtreeReserved(t *testing.T) {
 	t.Parallel()
 	files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
@@ -179,8 +182,12 @@ func TestGuard_RootReservedKeyIsNotSubtreeReserved(t *testing.T) {
 		"mysql_connections: 80\n", "mysql_connections: 80\n  _state_maintenance: 0\n", 1)
 	dir := writeReservedConfD(t, files)
 	code, got := reservedFindings(t, "--config-dir", dir, "--warn-as-error")
-	if code != exitOK || len(got) != 0 {
-		t.Errorf("exit = %d, findings = %+v; want exit 0 and none (root defaults are out of scope)", code, got)
+	if code != exitFindings || len(got) != 0 {
+		t.Errorf("exit = %d, findings = %+v; want exit 1 and no subtree_default_reserved_key", code, got)
+	}
+	want := "error root_defaults_reserved_key  _defaults.yaml:defaults._state_maintenance"
+	if all := allFindings(t, "--config-dir", dir); !slices.Contains(all, want) {
+		t.Errorf("findings = %q, want %q among them", all, want)
 	}
 }
 
@@ -628,15 +635,27 @@ func TestGuard_RedundantOverrideSkipsRefusedSubtreeKey(t *testing.T) {
 		t.Errorf("m2: served _silent_mode = %#v, want [warning]", v)
 	}
 
-	// Root control: `_severity_dedup` (a refused key) inherited from the ROOT
-	// defaults as a number, overridden by the tenant with the same number.
+	// From the ROOT defaults no reserved key reaches the tenant either (#3250):
+	// the root decode reads `defaults:` for thresholds only. A tenant writing
+	// the root's own `_severity_dedup: disable` is not told to drop it —
+	// dropping it moves /metrics from disable to enable — and the root key
+	// is root_defaults_reserved_key.
 	root := map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _severity_dedup: 1\n",
-		"a/t.yaml":       "tenants:\n  t1:\n    _severity_dedup: 1\n",
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _severity_dedup: disable\n",
+		"a/t.yaml":       "tenants:\n  t1:\n    _severity_dedup: disable\n",
 	}
-	want := "warn redundant_override t1 _severity_dedup"
-	if got := allFindings(t, "--config-dir", writeReservedConfD(t, root)); !slices.Contains(got, want) {
-		t.Errorf("root control: findings = %q, want %q among them", got, want)
+	got := allFindings(t, "--config-dir", writeReservedConfD(t, root))
+	if slices.Contains(got, "warn redundant_override t1 _severity_dedup") ||
+		!slices.Contains(got, "error root_defaults_reserved_key  _defaults.yaml:defaults._severity_dedup") {
+		t.Errorf("root: findings = %q, want root_defaults_reserved_key and no redundant_override", got)
+	}
+	_, with, _, _ := served(t, root, "2026-10-01T00:00:00Z")
+	without := maps.Clone(root)
+	without["a/t.yaml"] = "tenants:\n  t1:\n    _metadata:\n      owner: x\n"
+	_, dropped, _, _ := served(t, without, "2026-10-01T00:00:00Z")
+	if with.Tenants["t1"].Values["_severity_dedup"] != "disable" || dropped.Tenants["t1"].Values["_severity_dedup"] != "enable" {
+		t.Errorf("served _severity_dedup: %v with the tenant's key, %v without; want disable, enable",
+			with.Tenants["t1"].Values["_severity_dedup"], dropped.Tenants["t1"].Values["_severity_dedup"])
 	}
 }
 

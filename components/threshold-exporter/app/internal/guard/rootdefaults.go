@@ -298,6 +298,9 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 			continue
 		}
 		for _, r := range config.RootDefaultRefusals(f.Data) {
+			if config.BaseRowsSkipKey(r.Key) {
+				continue
+			}
 			why := "is not a number the exporter reads"
 			if r.Reason == config.RefusedNonFinite {
 				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
@@ -310,6 +313,48 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 					"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
 					"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
 					"`optional_overrides:` instead.", f.Name, r.Key, r.Text, why, r.Key, r.Key),
+			})
+		}
+	}
+	return out
+}
+
+// checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
+// each `_` key under the root carrier's `defaults:` mapping that reaches no
+// tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
+// routing key is the route generator's to judge; a file in ParseFailed is
+// skipped, as checkRootCriticalKeys does.
+func checkRootReservedKeys(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		block := config.ExtractDefaultsBlock(doc)
+		keys := make([]string, 0, len(block))
+		for k, v := range block {
+			if v != nil && config.RootDefaultsReservedKey(k) && !config.IsRoutingKey(k) {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDefaultsReservedKey,
+				Field:    f.Name + ":defaults." + k,
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` reaches no tenant: the exporter "+
+					"reads the root `defaults:` for thresholds only, while /effective shows the value as inherited "+
+					"(not_served root_defaults_reserved). Write `%s` in the tenant's own entry, a root platform "+
+					"`tenants:` entry or a profile.", f.Name, k, k),
 			})
 		}
 	}

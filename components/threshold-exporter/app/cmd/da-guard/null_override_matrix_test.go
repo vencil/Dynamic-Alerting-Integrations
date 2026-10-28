@@ -105,7 +105,7 @@ func nullMatrixObserve(t *testing.T, dir, tenantKey string) nullMatrixObs {
 	if err != nil {
 		t.Fatalf("LoadDirReport: %v", err)
 	}
-	sv, err := servedValues(cfg, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC), rep.Undeliverable, false, nil)
+	sv, err := servedValues(cfg, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC), rep.Undeliverable, false, nil, nil)
 	if err != nil {
 		t.Fatalf("servedValues: %v", err)
 	}

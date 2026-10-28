@@ -513,11 +513,18 @@ class ParseFailedError(YamlFileError):
 
     def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
                  unreadable: list[UnreadableFile] | None = None,
-                 parse_failed: list[str] | None = None) -> None:
+                 parse_failed: list[str] | None = None,
+                 document: "dict[str, Any] | None" = None) -> None:
         super().__init__(path, cause)
         self.stderr_lines = stderr_lines
         self.unreadable = list(unreadable or [])
         self.parse_failed = list(parse_failed or [])
+        # The JSON da-guard wrote beside the exit 3, for a reader that can
+        # use what the load did judge (#3250: effective's root_defaults_*).
+        self.document = document
+        # load_effective_tree fills these from `document` (None: not judged).
+        self.root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = None
+        self.root_defaults_reserved: "tuple[str, ...] | None" = None
 
 
 class KeySource(NamedTuple):
@@ -565,6 +572,12 @@ class EffectiveTree(NamedTuple):
     tenants: dict[str, TenantEffective]
     skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
     absent: "tuple[str, ...]" = ()  # as ServedTree.absent
+    # as ServedTree.root_defaults_refused, from the same build (#3250); None
+    # when the resolve stopped on a file it cannot decode (not judged)
+    root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
+    # the registered `_` keys of the root `defaults:`, which reach no tenant
+    # (da-guard's root_defaults_reserved_key, #3250), sorted; None as above
+    root_defaults_reserved: "tuple[str, ...] | None" = ()
 
 
 class EffectiveRun(NamedTuple):
@@ -833,7 +846,7 @@ def _run_da_guard(
         first = parse_failed[0] if parse_failed else unreadable[0].file
         raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
                                _nonempty_lines(stderr), unreadable,
-                               [str(f) for f in parse_failed])
+                               [str(f) for f in parse_failed], doc)
     if proc.returncode != _EXIT_OK and not (parse_failed or unreadable):
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
@@ -1089,15 +1102,20 @@ def load_served_tree(
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
-                      _root_defaults_refused(root_refused, returncode, stderr))
+                      _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 
 
-def _root_defaults_refused(entries: Any, returncode: int, stderr: str) -> "tuple[RootDefaultRefused, ...]":
-    """served-values' `root_defaults_refused`, checked; a da-guard without it
-    is named as older than this tool."""
-    if entries is None:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('root_defaults_refused') — "
+def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,
+                           error: type) -> "tuple[RootDefaultRefused, ...]":
+    """served-values' / effective's `root_defaults_refused` (one build, one
+    shape), checked; a da-guard without it is named as older than this tool,
+    with `error` (the subcommand's error class). effective writes null when
+    its resolve stopped (not judged): None."""
+    if entries is None and subcommand == EFFECTIVE_SUBCOMMAND:
+        return None
+    if entries is None or entries is _MISSING:
+        raise error(
+            f"da-guard {subcommand} exited {returncode} without the expected JSON ('root_defaults_refused') — "
             "this da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
     try:
         out = tuple(RootDefaultRefused(str(e["key"]), str(e["text"]), str(e["refused"])) for e in entries)
@@ -1105,8 +1123,8 @@ def _root_defaults_refused(entries: Any, returncode: int, stderr: str) -> "tuple
         if bad:
             raise ValueError(f"refused {bad[0]!r}")
     except (ValueError, KeyError, TypeError) as e:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND}: root_defaults_refused is not of its shape ({e!r})",
+        raise error(
+            f"da-guard {subcommand}: root_defaults_refused is not of its shape ({e!r})",
             returncode, stderr, broken=True) from e
     return out
 
@@ -1376,14 +1394,55 @@ def run_effective(
 def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     reads_skipped: bool, tenants: "Iterable[str] | None" = None) -> EffectiveTree:
     subset, requested = _subset_args(tenants)
-    (got, skipped, absent), returncode, stderr = _run_da_guard(
-        EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
-        read=lambda doc: (doc["tenants"],
-                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
-                          if reads_skipped else [],
-                          _subset_absent(doc, requested)),
-        reads_unreadable=True)
-    return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent)
+    try:
+        (got, skipped, absent, root_refused, root_reserved), returncode, stderr = _run_da_guard(
+            EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+            read=lambda doc: (doc["tenants"],
+                              [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
+                              if reads_skipped else [],
+                              _subset_absent(doc, requested),
+                              doc.get("root_defaults_refused", _MISSING) if reads_skipped else [],
+                              doc.get("root_defaults_reserved", _MISSING) if reads_skipped else []),
+            reads_unreadable=True)
+    except ParseFailedError as exc:
+        # The build's root verdicts stand beside the dropped file (#3250);
+        # a reader that cannot use them simply does not read them.
+        if reads_skipped and isinstance(exc.document, dict):
+            try:
+                exc.root_defaults_refused = _root_defaults_refused(
+                    exc.document.get("root_defaults_refused", _MISSING), 3, "",
+                    EFFECTIVE_SUBCOMMAND, EffectiveError)
+                exc.root_defaults_reserved = _root_defaults_reserved(
+                    exc.document.get("root_defaults_reserved", _MISSING), 3, "")
+            except EffectiveError:
+                pass  # left None: not judged
+        raise
+    return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent,
+                         _root_defaults_refused(root_refused, returncode, stderr,
+                                                EFFECTIVE_SUBCOMMAND, EffectiveError),
+                         _root_defaults_reserved(root_reserved, returncode, stderr))
+
+
+#: A field a da-guard document does not carry (an older binary), unlike one it
+#: carries as null (not judged).
+_MISSING = object()
+
+
+def _root_defaults_reserved(entries: Any, returncode: int, stderr: str) -> "tuple[str, ...] | None":
+    """effective's `root_defaults_reserved`, checked: None when da-guard wrote
+    null (the resolve stopped: not judged); a da-guard without the field is
+    named as older than this tool."""
+    if entries is _MISSING:
+        raise EffectiveError(
+            f"da-guard {EFFECTIVE_SUBCOMMAND} exited {returncode} without the expected JSON "
+            "('root_defaults_reserved') — this da-guard is older than this tool: upgrade or rebuild it",
+            returncode, stderr, stale=True)
+    if entries is None:
+        return None
+    if not isinstance(entries, list) or not all(isinstance(k, str) for k in entries):
+        raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: root_defaults_reserved is not of its shape "
+                             f"({entries!r})", returncode, stderr, broken=True)
+    return tuple(entries)
 
 
 def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:

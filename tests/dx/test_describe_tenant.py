@@ -1513,8 +1513,11 @@ DEFAULTS_DOCUMENTS = {
     'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
     'defaults-null': ('defaults: ~\n', 'dc8202dfc4683b17'),
     'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '664e2553d242d345'),
-    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '01fde994832c3568'),
-    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '01fde994832c3568'),
+    # #3250: a threshold YAML types as a bool is its text in the merge (the
+    # exporter reads the text and refuses it), so the two spellings, one
+    # hash before, are two now.
+    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '1ec35adf03530953'),
+    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '6212cbcfd717bd09'),
     'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', 'dc8202dfc4683b17'),
 }
 NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}

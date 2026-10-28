@@ -30,7 +30,8 @@ func TestRootDefaults_ReadLikeATenantValue(t *testing.T) {
 			continue
 		}
 		n++
-		cfg, err := parseConfigFile([]byte("defaults:\n  k: '"+row.Value+"'\n  other: 5\n"), false)
+		data := []byte("defaults:\n  k: '" + row.Value + "'\n  other: 5\n")
+		cfg, err := parseConfigFile(data, false)
 		if err != nil {
 			t.Errorf("%q: the file is refused (%v); one value must not drop the file", row.Value, err)
 			continue
@@ -39,7 +40,8 @@ func TestRootDefaults_ReadLikeATenantValue(t *testing.T) {
 			t.Errorf("%q: other = %v, want 5", row.Value, cfg.Defaults["other"])
 		}
 		v := cfg.Defaults["k"]
-		text, reason, refused := RefusedDefault(v)
+		reason, refused := RefusedDefault(v)
+		text := refusalText(data, "k")
 		if *row.FloatOK {
 			want, _ := parseThresholdNumber(strings.TrimSpace(row.Value))
 			if refused || v != want {
@@ -67,8 +69,9 @@ func TestRootDefaults_ReadLikeATenantValue(t *testing.T) {
 // could not put in a float64 no longer drops the file.
 func TestRootDefaults_YAMLSpellings(t *testing.T) {
 	t.Parallel()
-	cfg, err := parseConfigFile([]byte("defaults:\n  hex: 0x1F\n  hexfloat: 0x1p4\n  under: 1_000\n  sci: 7e1\n"+
-		"  quoted: \"70\"\n  ynan: .nan\n  pinf: .inf\n  word: abc\n  big: 1e999\n  yes: true\n  gone: ~\n"), false)
+	spellings := []byte("defaults:\n  hex: 0x1F\n  hexfloat: 0x1p4\n  under: 1_000\n  sci: 7e1\n" +
+		"  quoted: \"70\"\n  ynan: .nan\n  pinf: .inf\n  word: abc\n  big: 1e999\n  yes: true\n  gone: ~\n")
+	cfg, err := parseConfigFile(spellings, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +86,8 @@ func TestRootDefaults_YAMLSpellings(t *testing.T) {
 		"word": {"abc", RefusedUnparsed}, "big": {"1e999", RefusedUnparsed}, "yes": {"true", RefusedUnparsed},
 	}
 	for k, want := range refusedWant {
-		text, reason, refused := RefusedDefault(cfg.Defaults[k])
-		if !refused || text != want[0] || reason != want[1] {
+		reason, refused := RefusedDefault(cfg.Defaults[k])
+		if text := refusalText(spellings, k); !refused || text != want[0] || reason != want[1] {
 			t.Errorf("%s: RefusedDefault = (%q, %q, %v), want (%q, %q, true)", k, text, reason, refused, want[0], want[1])
 		}
 	}
@@ -95,10 +98,23 @@ func TestRootDefaults_YAMLSpellings(t *testing.T) {
 	if len(got) != len(refusedWant) {
 		t.Errorf("RefusedRootDefaults = %v, want the %d refused keys", got, len(refusedWant))
 	}
+	if n := len(RootDefaultRefusals(spellings)); n != len(refusedWant) {
+		t.Errorf("RootDefaultRefusals has %d entries, want the %d refused keys", n, len(refusedWant))
+	}
+}
+
+// refusalText is RootDefaultRefusals(data)'s text for key ("" when absent).
+func refusalText(data []byte, key string) string {
+	for _, r := range RootDefaultRefusals(data) {
+		if r.Key == key {
+			return r.Text
+		}
+	}
+	return ""
 }
 
 // The verdict travels with the value: a merge (mergePartialInto, the flat
-// plane's) is a plain map copy and must not lose the text or the reason.
+// plane's) is a plain map copy and must not lose the reason.
 func TestRootDefaults_VerdictSurvivesAMerge(t *testing.T) {
 	t.Parallel()
 	partial, err := parseConfigFile([]byte("defaults:\n  a: NaN\n  b: zz9\n"), false)
@@ -108,10 +124,9 @@ func TestRootDefaults_VerdictSurvivesAMerge(t *testing.T) {
 	merged := ThresholdConfig{Defaults: map[string]float64{}, StateFilters: map[string]StateFilter{},
 		Tenants: map[string]map[string]ScheduledValue{}, Profiles: map[string]map[string]ScheduledValue{}}
 	mergePartialInto(&merged, partial)
-	for k, want := range map[string][2]string{"a": {"NaN", RefusedNonFinite}, "b": {"zz9", RefusedUnparsed}} {
-		text, reason, refused := RefusedDefault(merged.Defaults[k])
-		if !refused || text != want[0] || reason != want[1] {
-			t.Errorf("%s after merge: (%q, %q, %v), want (%q, %q, true)", k, text, reason, refused, want[0], want[1])
+	for k, want := range map[string]string{"a": RefusedNonFinite, "b": RefusedUnparsed} {
+		if reason, refused := RefusedDefault(merged.Defaults[k]); !refused || reason != want {
+			t.Errorf("%s after merge: (%q, %v), want (%q, true)", k, reason, refused, want)
 		}
 	}
 }
@@ -119,16 +134,15 @@ func TestRootDefaults_VerdictSurvivesAMerge(t *testing.T) {
 // yamlCannotQuote: a rune a single-quoted YAML scalar cannot carry as is.
 func yamlCannotQuote(r rune) bool { return r == '\'' || r < 0x20 || r == 0x7f }
 
-// A NaN or ±Inf that no file wrote (set by code) is refused with no text.
+// A NaN or ±Inf that no file wrote (set by code) is refused as non-finite.
 func TestRefusedDefault_PlainNonFinite(t *testing.T) {
 	t.Parallel()
 	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		text, reason, refused := RefusedDefault(v)
-		if !refused || text != "" || reason != RefusedNonFinite {
-			t.Errorf("%v: (%q, %q, %v), want (\"\", non_finite, true)", v, text, reason, refused)
+		if reason, refused := RefusedDefault(v); !refused || reason != RefusedNonFinite {
+			t.Errorf("%v: (%q, %v), want (non_finite, true)", v, reason, refused)
 		}
 	}
-	if _, _, refused := RefusedDefault(70); refused {
+	if _, refused := RefusedDefault(70); refused {
 		t.Error("70 must not be refused")
 	}
 }

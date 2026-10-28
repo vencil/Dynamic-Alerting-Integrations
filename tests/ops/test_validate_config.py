@@ -3053,7 +3053,7 @@ class TestRootDefaultsUnderscoreKeys:
                                          encoding="utf-8")
         return d
 
-    @pytest.mark.parametrize("key", ["_metadata", "_namespaces", "_myth", "_state_maintenance"])
+    @pytest.mark.parametrize("key", ["_metadata", "_myth"])
     def test_a_number_under_an_underscore_key_warns(self, tmp_path, key):
         r = vc.check_root_defaults(str(self._tree(tmp_path, f"  {key}: 1\n")))
         assert r["status"] == vc.WARN, r
@@ -3061,6 +3061,23 @@ class TestRootDefaultsUnderscoreKeys:
                                 "is a threshold (threshold-exporter makes no row of one, #3045) and "
                                 "no other reader reads `_` keys under `defaults:`; delete it, or drop "
                                 "the `_` to make it a threshold"]
+
+    @pytest.mark.parametrize("body", ["  _namespaces: 1\n", "  _state_maintenance: 1\n",
+                                      "  _silent_mode: warning\n", "  _severity_dedup: disable\n"])
+    def test_a_registered_reserved_key_fails(self, tmp_path, body):
+        """#3250: a key the reserved-key registry lists reaches no tenant from the
+        root `defaults:` while /effective shows it as inherited — da-guard's
+        root_defaults_reserved_key (an error), read off effective's
+        `root_defaults_reserved`, so this row FAILs with it (it WARNed as dead
+        config, and a non-numeric value dropped the file before #3250)."""
+        key = body.split(":")[0].strip()
+        r = vc.check_root_defaults(str(self._tree(tmp_path, body)))
+        assert r["status"] == vc.FAIL, r
+        assert r["details"] == [f"_defaults.yaml: `defaults.{key}` reaches no tenant — threshold-exporter "
+                                "reads the root `defaults:` for thresholds only, while /effective shows the "
+                                "value as inherited (not_served: root_defaults_reserved); write "
+                                f"`{key}` in the tenant's own entry, a root platform file's `tenants:` "
+                                "entry or a profile"], r
 
     def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata:\n    owner: dba\n")))

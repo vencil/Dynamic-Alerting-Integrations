@@ -113,7 +113,7 @@ func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 		rest, defaults := splitRootDefaults(&doc)
 		err = rest.Decode(&cfg)
 		if err == nil && defaults != nil {
-			cfg.Defaults, err = readRootDefaults(defaults)
+			cfg.Defaults, _, err = readRootDefaults(defaults)
 		}
 		if err == nil && generic {
 			// The typed decode's error, when there is one, is the message:

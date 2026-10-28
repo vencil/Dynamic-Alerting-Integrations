@@ -517,6 +517,8 @@ func TestEffective_CallerErrors(t *testing.T) {
 	}
 }
 
+// A threshold YAML types as a non-finite float (`.inf`, `.nan`) is shown as
+// the text the file wrote (#3250: the exporter reads the text and refuses it).
 func TestEffective_NonFiniteSentAsText(t *testing.T) {
 	t.Parallel()
 	dir := writeParityTree(t, map[string]string{
@@ -531,8 +533,8 @@ func TestEffective_NonFiniteSentAsText(t *testing.T) {
 	if err := json.Unmarshal(doc.Tenants["tenant-a"], &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.EffectiveConfig["a"] != "Infinity" || got.EffectiveConfig["b"] != "NaN" {
-		t.Errorf("effective_config = %v, want a=Infinity b=NaN as text", got.EffectiveConfig)
+	if got.EffectiveConfig["a"] != ".inf" || got.EffectiveConfig["b"] != ".nan" {
+		t.Errorf("effective_config = %v, want a=.inf b=.nan as written", got.EffectiveConfig)
 	}
 }
 

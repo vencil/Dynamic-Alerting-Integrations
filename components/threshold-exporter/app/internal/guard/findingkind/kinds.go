@@ -63,6 +63,14 @@ var (
 	// (config.RootDefaultRefusals). Field is `<file>:defaults.<key>`.
 	FindingRootDefaultRefused = register("root_default_refused",
 		"judges a value the exporter refuses in the conf.d root defaults")
+	// FindingRootDefaultsReservedKey (error, TenantID ""; #3250): a `_` key
+	// under the conf.d root carrier's `defaults:` mapping
+	// (config.RootDefaultsReservedKey; a routing key is the route generator's
+	// routing_in_unread_location). The root decode reads that mapping for
+	// thresholds only, so no tenant gets it, while /effective shows it as
+	// inherited. Field is `<file>:defaults.<key>`.
+	FindingRootDefaultsReservedKey = register("root_defaults_reserved_key",
+		"judges a `_` key in the conf.d root defaults")
 	// FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
 	// Field, which the conf.d root `_defaults.yaml` writes as null — not
 	// declared — so the exporter serves no series for it. Field may also be a

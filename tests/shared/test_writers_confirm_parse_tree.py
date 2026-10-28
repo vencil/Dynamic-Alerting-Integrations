@@ -1152,10 +1152,11 @@ def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
 
 def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
         tmp_path, monkeypatch):
-    # A registry value of +inf renders `inf`, a string to yaml.v3 — not the
-    # number the exporter's `defaults` takes: da-guard write's validation
-    # names the file. Neither file is written (the seed's change alone would
-    # pass: all or none).
+    # A registry value of +inf renders `inf`. The exporter reads that text as
+    # +Inf, a value the root `defaults:` refuses for its key (#3250: no
+    # longer a string yaml.v3 refuses the file for): the tree gains a
+    # root_default_refused finding, and da-guard write refuses it. Neither
+    # file is written (the seed's change alone would pass: all or none).
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                   _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
@@ -1163,7 +1164,7 @@ def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
     doc["keys"]["container_cpu"]["value"] = float("inf")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(doc)
-    assert f"{dev}: read_back_mismatch: validation would name" in str(exc.value)
+    assert f"{dev.parent}/(the tree): worsens_tree: finding: _defaults.yaml: `container_cpu: inf`" in str(exc.value)
     assert str(seed) not in str(exc.value)
     assert _bytes(tmp_path / "repo") == before
 

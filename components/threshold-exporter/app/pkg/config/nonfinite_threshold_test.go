@@ -159,7 +159,8 @@ func TestNonFiniteThreshold_RootDefaultServesNoDefaultRow(t *testing.T) {
 		}
 	}
 	got := RootDefaultRefusals([]byte("defaults:\n  a: .nan\n  b: -.inf\n  c: 80\n  _x: .nan\n  d: NaN\n"))
-	want := []RootDefaultRefusal{{"a", ".nan", RefusedUnparsed}, {"b", "-.inf", RefusedUnparsed}, {"d", "NaN", RefusedNonFinite}}
+	want := []RootDefaultRefusal{{"_x", ".nan", RefusedUnparsed}, {"a", ".nan", RefusedUnparsed},
+		{"b", "-.inf", RefusedUnparsed}, {"d", "NaN", RefusedNonFinite}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("RootDefaultRefusals = %+v, want %+v", got, want)
 	}

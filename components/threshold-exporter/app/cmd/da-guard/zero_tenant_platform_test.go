@@ -134,6 +134,11 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: .nan\n"},
 		finding: findingkind.FindingRootDefaultRefused,
 	},
+	// #3250: a reserved key in the root defaults is judged in the carrier.
+	"reserved key in the root defaults": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  _silent_mode: warning\n"},
+		finding: findingkind.FindingRootDefaultsReservedKey,
+	},
 	// #2031: one series two keys share fails the whole tree's scrape,
 	// whatever the scope; the tenant is outside it.
 	"/metrics not gatherable": {
@@ -186,6 +191,7 @@ var zeroTenantKindClass = map[string]string{
 	"defaults_toplevel_ignored":  kindTreeLevel,
 	"root_defaults_critical_key": kindTreeLevel,
 	"root_default_refused":       kindTreeLevel,
+	"root_defaults_reserved_key": kindTreeLevel,
 	// The whole tree's /metrics.
 	"metrics_not_gatherable": kindTreeLevel,
 }

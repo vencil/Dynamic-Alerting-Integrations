@@ -121,17 +121,27 @@ type rootDefaultRefused struct {
 	Refused string `json:"refused"`
 }
 
-// rootDefaultsRefused is cfg's refused root thresholds, sorted by key.
-func rootDefaultsRefused(cfg *config.ThresholdConfig) []rootDefaultRefused {
+// rootDefaultsRefused is the build's refused root thresholds (not `_` keys:
+// LoadReport.RootDefaultsRefused, which refused is, holds those too), sorted
+// by key — served-values' and effective's `root_defaults_refused` alike.
+func rootDefaultsRefused(refused []config.RootDefaultRefusal) []rootDefaultRefused {
 	out := []rootDefaultRefused{}
-	if cfg == nil {
-		return out
+	for _, r := range refused {
+		if config.BaseRowsSkipKey(r.Key) {
+			continue
+		}
+		out = append(out, rootDefaultRefused{Key: r.Key, Text: r.Text, Refused: r.Reason})
 	}
-	for k, reason := range cfg.RefusedRootDefaults() {
-		text, _, _ := config.RefusedDefault(cfg.Defaults[k])
-		out = append(out, rootDefaultRefused{Key: k, Text: text, Refused: reason})
+	return out
+}
+
+// refusedTextsOf is the text each refused root `defaults:` key was written
+// as (LoadReport.RootDefaultsRefused), keyed by key.
+func refusedTextsOf(rep config.LoadReport) map[string]string {
+	out := make(map[string]string, len(rep.RootDefaultsRefused))
+	for _, r := range rep.RootDefaultsRefused {
+		out[r.Key] = r.Text
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
@@ -533,7 +543,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	requested := f.tenants.requested()
 	if !allUnreadable {
 		sub := subsetConfig(cfg, requested)
-		tenants, err = servedValues(sub, at, rep.Undeliverable, f.schedules, written)
+		tenants, err = servedValues(sub, at, rep.Undeliverable, f.schedules, written, refusedTextsOf(rep))
 		if err == nil && f.disableEffects {
 			err = addDisableEffects(sub, at, tenants, written)
 		}
@@ -565,7 +575,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Tenants:             tenants,
 		Aliases:             config.DeprecatedKeyAliases(),
 		UnreadKeys:          unreadKeys,
-		RootDefaultsRefused: rootDefaultsRefused(cfg),
+		RootDefaultsRefused: rootDefaultsRefused(rep.RootDefaultsRefused),
 		tenantSubset: subset(requested, func(t string) bool {
 			_, ok := tenants[t]
 			return ok
@@ -733,10 +743,11 @@ func joinPath(path, name string) string {
 
 // servedValues reads every tenant of cfg at `at`. undeliverable is the same
 // load's LoadReport.Undeliverable; its keys go to Unserved. withSchedules
-// also fills Schedules (--schedules).
+// also fills Schedules (--schedules). refusedTexts is the same load's
+// refusedTextsOf: the text a refused root default shows in Unserved.
 func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
-	written map[string]map[string]string,
+	written map[string]map[string]string, refusedTexts map[string]string,
 ) (map[string]servedTenantValues, error) {
 	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
 	ownedBy, droppedBy, seriesBy, res, err := keyedRows(cfg, at, name)
@@ -927,8 +938,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			}
 			// #3250: a refused `_` key's value is the text the file wrote,
 			// as for a tenant's (rawScheduledValue): JSON has no NaN.
-			if text, _, refused := config.RefusedDefault(v); refused {
-				tv.Unserved[k] = text
+			if _, refused := config.RefusedDefault(v); refused {
+				tv.Unserved[k] = refusedTexts[k]
 				continue
 			}
 			tv.Unserved[k] = v

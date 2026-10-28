@@ -2773,17 +2773,35 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     if details:
         return _make_result("root_defaults", FAIL, details)
     # #3250: which scalar the exporter refuses is its own verdict — the
-    # tree's root `defaults:` as served-values reads it, for the keys this
+    # build's `root_defaults_refused`, read off the run's one `da-guard
+    # effective` (#2740, #2115 F4: no second subcommand), for the keys this
     # carrier writes — never a reading of the text here.
+    # Another file the load drops (exit 3) leaves this carrier judged: the
+    # verdicts stand in the document beside it (ParseFailedError).
     try:
-        refused = load_served_tree(config_dir, partial=True).root_defaults_refused
+        tree = _effective_tree(config_dir)
+        refused, reserved_keys = tree.root_defaults_refused, tree.root_defaults_reserved
+    except ParseFailedError as exc:
+        refused, reserved_keys, why = exc.root_defaults_refused, exc.root_defaults_reserved, exc
     except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
+        refused = reserved_keys = None
+        why = exc
+    if refused is None or reserved_keys is None:
         return _make_result("root_defaults", WARN, [
             f"{rel}: which `defaults:` values threshold-exporter refuses was not judged: "
-            f"da-guard served-values failed ({type(exc).__name__}: {' '.join(str(exc).split())})"])
+            f"da-guard effective failed ({type(why).__name__}: {' '.join(str(why).split())})"])
     written = {str(k) for k in block}
     details = [_root_defaults_refused_detail(rel, e.key, e.text, e.refused)
                for e in refused if e.key in written]
+    # #3250: a registered `_` key reaches no tenant from here — the build's
+    # own verdict (da-guard's root_defaults_reserved_key, an error); a
+    # `_routing*` one is FAILed above already.
+    reserved = {k for k in reserved_keys if k in written and not k.startswith("_routing")}
+    details += [f"{rel}: `defaults.{k}` reaches no tenant — threshold-exporter reads the root "
+                f"`defaults:` for thresholds only, while /effective shows the value as inherited "
+                f"(not_served: root_defaults_reserved); write `{k}` in the tenant's own entry, a "
+                f"root platform file's `tenants:` entry or a profile"
+                for k in sorted(reserved)]
     if details:
         return _make_result("root_defaults", FAIL, details)
     dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "

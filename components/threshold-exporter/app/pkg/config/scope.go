@@ -300,6 +300,27 @@ func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, 
 	return scopeEffective(configDir, "", true, logger, ScanOptions{})
 }
 
+// RootDefaultsRefused is the build's FlatBuild.RootDefaultsRefused (#3250):
+// every key of the root carrier's `defaults:` whose value the root decode
+// refuses, with the text the file wrote. nil when there is none or no build
+// ran.
+func (s *ScopedTenants) RootDefaultsRefused() []RootDefaultRefusal {
+	if s == nil || s.built == nil {
+		return nil
+	}
+	return s.built.RootDefaultsRefused
+}
+
+// RootDefaultsReserved is the build's ThresholdConfig.ReservedRootDefaults
+// (#3250): the registered `_` keys of the root `defaults:`, which reach no
+// tenant. nil when there is none or no build ran.
+func (s *ScopedTenants) RootDefaultsReserved() []string {
+	if s == nil || s.built == nil {
+		return nil
+	}
+	return s.built.Config.ReservedRootDefaults()
+}
+
 // EffectiveTreeWith is EffectiveTreeLogged over the tree as opts makes it
 // read (ScanOptions; `da-guard effective --overlay`, #2906): the one walk
 // reads the overlay's bytes at its path, and every product — tenants,

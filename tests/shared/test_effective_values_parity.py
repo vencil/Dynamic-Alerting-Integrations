@@ -143,16 +143,21 @@ def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard)
     assert ei.value.path == str(conf_d / "tenant-b.yaml")
 
 
-def test_root_defaults_the_exporter_drops_raises_yaml_file_error(tmp_path, da_guard):
-    """exporter 因內容型別錯整份丟掉根 `_defaults.yaml` 時，walker 的寬鬆 chain 解析仍讀得到
-    它的值；load_effective 不可把這些 /metrics 不會用的值當答案交出去。"""
+def test_root_defaults_reserved_key_is_shown_as_not_served(tmp_path, da_guard):
+    """根 `defaults:` 裡的保留鍵（`_silent_mode: warning`）：exporter 不從根套用它（#3250）。
+    整份檔不再被丟（其他閾值照送），但 load_effective 交出的值必須標明 /metrics 不用它——
+    沒有自己寫的租戶看到的是 not_served root_defaults_reserved，自己寫了的租戶不受影響。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n",
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: critical\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 70\n",
     })
-    with pytest.raises(YamlFileError) as ei:
-        tv.load_effective(conf_d, binary=da_guard)
-    assert ei.value.path == str(conf_d / "_defaults.yaml")
+    got = tv.load_effective(conf_d, binary=da_guard)
+    a, b = got["tenant-a"], got["tenant-b"]
+    assert a.effective_config["_silent_mode"] == "critical" and "_silent_mode" not in a.not_served
+    assert b.effective_config["_silent_mode"] == "warning"
+    assert b.not_served["_silent_mode"] == tv.NotServedKey("root_defaults_reserved", "_defaults.yaml")
+    assert a.effective_config["mysql_connections"] == 80 and "mysql_connections" not in a.not_served
 
 
 def test_chain_file_the_resolve_rejects_raises_yaml_file_error(tmp_path, da_guard):
@@ -295,7 +300,8 @@ def test_effective_tree_reads_skipped_and_refuses_output_without_it(tmp_path):
     """`load_effective_tree` 讀 effective 的 `skipped`（#2115 F2：profiles 列不再跑
     served-values 取它）；沒有這個欄位的 da-guard 點名為比本工具舊，不當成「沒有檔被跳過」。
     `load_effective` 不讀它，所以不要求它（舊 da-guard 對那些讀取端照常可用）。"""
-    with_skipped = {**_doc(), "skipped": [{"file": "flat.yaml", "reason": "declares no tenant"}]}
+    with_skipped = {**_doc(), "skipped": [{"file": "flat.yaml", "reason": "declares no tenant"}],
+                    "root_defaults_refused": [], "root_defaults_reserved": []}
     got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(with_skipped)))
     assert got.skipped == [tv.SkippedFile("flat.yaml", "declares no tenant")]
     assert set(got.tenants) == {"t"}
@@ -303,6 +309,64 @@ def test_effective_tree_reads_skipped_and_refuses_output_without_it(tmp_path):
         tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(_doc())))
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
     assert set(tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(_doc())))) == {"t"}
+
+
+def test_effective_tree_reads_root_defaults_refused_and_refuses_output_without_it(tmp_path):
+    """`load_effective_tree` 讀 effective 的 `root_defaults_refused` 與 `root_defaults_reserved`
+    （#3250：validate-config 的 root_defaults 列由同一次 effective 讀它們，不另跑 served-values）；
+    少了任一欄位的 da-guard 點名為比本工具舊，不當成「根 defaults 沒有被拒的值」。"""
+    base = {**_doc(), "skipped": []}
+    doc = {**base, "root_defaults_refused": [{"key": "cpu", "text": "0x1F", "refused": "unparsed"}],
+           "root_defaults_reserved": ["_silent_mode"]}
+    got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert got.root_defaults_refused == (tv.RootDefaultRefused("cpu", "0x1F", "unparsed"),)
+    assert got.root_defaults_reserved == ("_silent_mode",)
+    for field in ("root_defaults_refused", "root_defaults_reserved"):
+        without = {k: v for k, v in doc.items() if k != field}
+        with pytest.raises(tv.EffectiveError) as ei:
+            tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(without)))
+        assert "older than this tool: upgrade or rebuild it" in str(ei.value) and field in str(ei.value)
+
+
+def test_effective_root_defaults_null_is_not_judged(tmp_path):
+    """effective 在 resolve 中止時把兩欄寫成 null（沒有 build 的判定可給）：讀成 None，
+    不可讀成「根 defaults 沒有被拒的值」的空 tuple。"""
+    doc = {**_doc(), "skipped": [], "root_defaults_refused": None, "root_defaults_reserved": None}
+    got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert got.root_defaults_refused is None and got.root_defaults_reserved is None
+
+
+def test_parse_failed_error_keeps_the_root_verdicts(tmp_path, da_guard):
+    """真 da-guard：另一個檔被 exporter 丟掉（exit 3）時，根 carrier 照樣被判定，
+    ParseFailedError 帶著同一份 root_defaults_refused／reserved。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 0x1F\n  _silent_mode: warning\n",
+        "a.yaml": "tenants:\n  a:\n    mysql_connections: 70\n",
+        "b.yaml": "tenants:\n  b: [1]\n",
+    })
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_effective_tree(conf_d, binary=da_guard)
+    assert ei.value.parse_failed == ["b.yaml"]
+    assert ei.value.root_defaults_refused == (tv.RootDefaultRefused("mysql_connections", "0x1F", "unparsed"),)
+    assert ei.value.root_defaults_reserved == ("_silent_mode",)
+
+
+def test_effective_root_defaults_refused_matches_served_tree(tmp_path, da_guard):
+    """真 da-guard：effective 的 root_defaults_refused 與 served-values 的一致（Go 端同一個 build、
+    同一個函式），`_` 鍵不列；root_defaults_reserved 列登錄表有的 `_` 鍵。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 0x1F\n  redis_cpu: .nan\n  pg_x: 017\n"
+                          "  _zz: abc\n  redis_x: 5\n  _silent_mode: warning\n  _severity_dedup: 1\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connections: 70\n",
+    })
+    tree = tv.load_effective_tree(conf_d, binary=da_guard)
+    eff = tree.root_defaults_refused
+    assert eff == (tv.RootDefaultRefused("mysql_connections", "0x1F", "unparsed"),
+                   tv.RootDefaultRefused("redis_cpu", ".nan", "unparsed"))
+    assert eff == tv.load_served_tree(conf_d, binary=da_guard).root_defaults_refused
+    # 登錄表有的 `_` 鍵（不論值）；未登錄的 `_zz` 不列（它在任何一層都不送，not_served unregistered）
+    assert tree.root_defaults_reserved == ("_severity_dedup", "_silent_mode")
+    assert tree.tenants["t"].not_served["_silent_mode"].reason == "root_defaults_reserved"
 
 
 def test_effective_tree_skipped_matches_served_tree(tmp_path, da_guard):
