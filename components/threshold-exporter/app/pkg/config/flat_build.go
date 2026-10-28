@@ -24,6 +24,7 @@ import (
 	"log"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -125,6 +126,10 @@ type FlatBuild struct {
 	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
 	// RootNullUndeclared.
 	RootDefaultsRefused []RootDefaultRefusal
+	// RootDefaultsUnjudged: the root carrier is in ParseFailed, so its
+	// `defaults:` was never decoded — RootDefaultsRefused and the root's
+	// reserved keys are no verdict then, not "none" (#3250 review N1).
+	RootDefaultsUnjudged bool
 	// RejectedChainValues is, per subtree defaults file of some tenant's
 	// chain (root-relative slash path), the keys whose value
 	// applySubtreeDefaults refuses as not threshold-shaped, so a tenant under
@@ -288,6 +293,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 		RootDefaultsUnread:     rootUnread,
 		RootDefaultsRefused:    rootRefused,
+		RootDefaultsUnjudged:   rootCarrier != "" && slices.Contains(parseFailed, rootCarrier),
 		RejectedChainValues:    rejected.byFile,
 		rejectedTenantSets:     rejected.tenantSets,
 		respelledChain:         respelledChainFiles(in.ParsedDefaults),

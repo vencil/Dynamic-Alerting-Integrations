@@ -351,6 +351,20 @@ def test_parse_failed_error_keeps_the_root_verdicts(tmp_path, da_guard):
     assert ei.value.root_defaults_reserved == ("_silent_mode",)
 
 
+def test_a_dropped_root_carrier_is_not_judged(tmp_path, da_guard):
+    """真 da-guard：根 carrier 自己被 exporter 丟掉（同檔 `state_filters: 5`）時，它的
+    `defaults:` 從沒被解碼——兩欄是 null（ParseFailedError 上為 None），不是空集合；
+    validate-config 的 root_defaults 列因此是「未判定」，不是 PASS（#3250 審查 N1）。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: abc\nstate_filters: 5\n",
+        "t1.yaml": "tenants:\n  t1:\n    mysql_connections: 70\n",
+    })
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_effective_tree(conf_d, binary=da_guard)
+    assert ei.value.parse_failed == ["_defaults.yaml"]
+    assert ei.value.root_defaults_refused is None and ei.value.root_defaults_reserved is None
+
+
 def test_effective_root_defaults_refused_matches_served_tree(tmp_path, da_guard):
     """真 da-guard：effective 的 root_defaults_refused 與 served-values 的一致（Go 端同一個 build、
     同一個函式），`_` 鍵不列；root_defaults_reserved 列登錄表有的 `_` 鍵。"""

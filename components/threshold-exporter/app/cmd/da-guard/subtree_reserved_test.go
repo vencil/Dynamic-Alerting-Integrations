@@ -1131,3 +1131,17 @@ func TestGuard_RootReservedKeyFixNamesWhereItIsRead(t *testing.T) {
 		t.Errorf("_severity_dedup fix = %q; want the tenant's own entry, no profile", m)
 	}
 }
+
+// #3250 review N3: at the root there is no subtree to scope a change to, so
+// the `_state_` fix does not offer one.
+func TestGuard_RootReservedStateKeyFixHasNoSubtreeClause(t *testing.T) {
+	t.Parallel()
+	dir := writeReservedConfD(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _state_maintenance: disable\n",
+		"t.yaml":         "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
+	})
+	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", dir)
+	if !strings.Contains(stdout, "state_filters.maintenance.default_state") || strings.Contains(stdout, "this subtree") {
+		t.Errorf("root _state_ fix: %s", stdout)
+	}
+}

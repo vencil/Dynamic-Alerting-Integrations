@@ -171,6 +171,13 @@ func TestRootDefaults_Shapes(t *testing.T) {
 	if reason, refused := RefusedDefault(merged.Defaults["a"]); !refused || reason != RefusedUnparsed || merged.Defaults["b"] != 17 {
 		t.Errorf("merged defaults = %v (a refused %v %q), want a refused, b 17", merged.Defaults, refused, reason)
 	}
+	// A written `defaults:` beside a `<<` that brings another one wins, as
+	// yaml.v3 resolves the merge; the overridden one is not decoded at all
+	// (#3250 review N2: its `abc` dropped the file).
+	both, err := parseConfigFile([]byte("x-base: &d {defaults: {a: abc}}\n<<: *d\ndefaults: {a: 60}\n"), false)
+	if err != nil || both.Defaults["a"] != 60 {
+		t.Errorf("written defaults beside a merged one = %v, %v; want a 60", both.Defaults, err)
+	}
 	for name, doc := range map[string]string{
 		"not a mapping":  "defaults: [1, 2]\n",
 		"mapping value":  "defaults:\n  a:\n    b: 1\n",

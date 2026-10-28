@@ -160,6 +160,13 @@ func splitRootDefaults(doc *yaml.Node) (rest, defaults *yaml.Node) {
 	if top.Kind != yaml.MappingNode {
 		return doc, nil
 	}
+	// A top-level `<<` merge: the mapping as yaml.v3 resolves it, so a
+	// `defaults` the merge brings — the only one, or one a written
+	// `defaults:` overrides — is never left for the typed decode of the rest
+	// (#3250 review N2).
+	if _, merges := mergedPairs(top); merges {
+		return splitMergedRootDefaults(doc, top)
+	}
 	at := -1
 	for i := 0; i+1 < len(top.Content); i += 2 {
 		if k := top.Content[i]; k.Kind == yaml.ScalarNode && k.Value == "defaults" {
@@ -170,15 +177,15 @@ func splitRootDefaults(doc *yaml.Node) (rest, defaults *yaml.Node) {
 		}
 	}
 	if at < 0 {
-		return splitMergedRootDefaults(doc, top)
+		return doc, nil
 	}
 	cp := *top
 	cp.Content = append(append(make([]*yaml.Node, 0, len(top.Content)-2), top.Content[:at]...), top.Content[at+2:]...)
 	return &cp, top.Content[at+1]
 }
 
-// splitMergedRootDefaults is splitRootDefaults for a document whose
-// `defaults` comes only through a top-level `<<` merge (#3250 review): the
+// splitMergedRootDefaults is splitRootDefaults for a document whose top
+// level writes a `<<` merge (#3250 review): the
 // mapping as yaml.v3 resolves it (mergedPairs), rebuilt without `defaults`
 // in key order, and the `defaults` value. doc and no pair when there is no
 // such `defaults`.

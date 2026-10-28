@@ -302,23 +302,25 @@ func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, 
 
 // RootDefaultsRefused is the build's FlatBuild.RootDefaultsRefused (#3250):
 // every key of the root carrier's `defaults:` whose value the root decode
-// refuses, with the text the file wrote. nil when there is none or no build
-// ran.
-func (s *ScopedTenants) RootDefaultsRefused() []RootDefaultRefusal {
-	if s == nil || s.built == nil {
-		return nil
+// refuses, with the text the file wrote.
+//
+// judged is false when no build ran or the root carrier is in ParseFailed
+// (FlatBuild.RootDefaultsUnjudged): the list is then no verdict.
+func (s *ScopedTenants) RootDefaultsRefused() (refused []RootDefaultRefusal, judged bool) {
+	if s == nil || s.built == nil || s.built.RootDefaultsUnjudged {
+		return nil, false
 	}
-	return s.built.RootDefaultsRefused
+	return s.built.RootDefaultsRefused, true
 }
 
 // RootDefaultsReserved is the build's ThresholdConfig.ReservedRootDefaults
 // (#3250): the registered `_` keys of the root `defaults:`, which reach no
-// tenant. nil when there is none or no build ran.
-func (s *ScopedTenants) RootDefaultsReserved() []string {
-	if s == nil || s.built == nil {
-		return nil
+// tenant; judged as for RootDefaultsRefused.
+func (s *ScopedTenants) RootDefaultsReserved() (reserved []string, judged bool) {
+	if s == nil || s.built == nil || s.built.RootDefaultsUnjudged {
+		return nil, false
 	}
-	return s.built.Config.ReservedRootDefaults()
+	return s.built.Config.ReservedRootDefaults(), true
 }
 
 // EffectiveTreeWith is EffectiveTreeLogged over the tree as opts makes it

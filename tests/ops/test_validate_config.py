@@ -2789,6 +2789,15 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
 
+    def test_a_dropped_carrier_is_not_judged_as_passing(self, tmp_path):
+        """#3250 review N1: the carrier itself dropped (a top-level key its
+        decode refuses): which `defaults:` values the exporter refuses was
+        never judged — WARN, never "every value a number" PASS."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: abc\nstate_filters: 5\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.WARN, r
+        assert "was not judged" in r["details"][0], r
+
     def test_other_defaults_documents_are_not_the_carrier(self, tmp_path):
         """`_defaults-multidb.yaml` is not merged as the root defaults, so its
         `defaults:` is not what the exporter decodes."""

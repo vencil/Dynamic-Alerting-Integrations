@@ -69,8 +69,9 @@ type effectiveDoc struct {
 	// same build (#3250): the root `defaults:` thresholds whose value the
 	// exporter refuses, each {key, text, refused}. A tenant that does not
 	// write such a key also names it in not_served (root_default_refused).
-	// Always present: [] when none, null when the resolve stopped on a file
-	// it cannot decode (no build verdict to give).
+	// Always present: [] when none, null when there is no verdict — the
+	// resolve stopped on a file it cannot decode, or the exporter dropped the
+	// root carrier itself.
 	RootDefaultsRefused []rootDefaultRefused `json:"root_defaults_refused"`
 	// RootDefaultsReserved: the registered `_` keys of the root `defaults:`
 	// (config.RootDefaultsReservedKey), sorted (#3250): the root hands no
@@ -249,8 +250,15 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		if tree.ParseFailed != nil {
 			doc.ParseFailed = tree.ParseFailed
 		}
-		doc.RootDefaultsRefused = rootDefaultsRefused(tree.RootDefaultsRefused())
-		if reserved := tree.RootDefaultsReserved(); reserved != nil {
+		// Unjudged (the root carrier itself is dropped): null, never [].
+		if refused, judged := tree.RootDefaultsRefused(); judged {
+			doc.RootDefaultsRefused = rootDefaultsRefused(refused)
+		} else {
+			doc.RootDefaultsRefused = nil
+		}
+		if reserved, judged := tree.RootDefaultsReserved(); !judged {
+			doc.RootDefaultsReserved = nil
+		} else if reserved != nil {
 			doc.RootDefaultsReserved = reserved
 		}
 		for _, name := range tree.NoTenant {

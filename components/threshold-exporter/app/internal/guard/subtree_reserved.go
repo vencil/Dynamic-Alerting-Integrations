@@ -455,12 +455,20 @@ func filterPath(f string) string { return filterName(f) }
 // k, `_state_<f>` with f declared (subtreeReservedMessage routes the rest).
 // (No routing key reaches here: subtreeReservedKeys leaves those to the
 // route generator's checks.)
-func reservedKeyFix(k string) string {
+func reservedKeyFix(k string) string { return reservedKeyFixAt(k, false) }
+
+// reservedKeyFixAt is reservedKeyFix, worded for the conf.d root's own
+// `defaults:` when atRoot (root_defaults_reserved_key, #3250): there is no
+// subtree to scope a change to there.
+func reservedKeyFixAt(k string, atRoot bool) string {
 	if strings.HasPrefix(k, "_state_") {
+		scope := "; to change only this subtree's tenants, set the key in each tenant's own entry."
+		if atRoot {
+			scope = "."
+		}
 		return fmt.Sprintf("To have it take effect, set `%s` in each tenant's own entry under `tenants:`, or set "+
 			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml` — that affects every "+
-			"tenant in the tree; to change only this subtree's tenants, set the key in each tenant's own entry.",
-			k, filterPath(strings.TrimPrefix(k, "_state_")))
+			"tenant in the tree%s", k, filterPath(strings.TrimPrefix(k, "_state_")), scope)
 	}
 	if readElsewhere[k] { // a TopLevelReadElsewhere key: its reader takes it from the top level
 		// A tenant's own entry reads it only when the registry says a tenant

@@ -107,7 +107,8 @@ func quoteKeys(keys []string) string { return "`" + strings.Join(keys, "`, `") +
 // rootNumbersOnly is the remedy at the root, where `defaults:` is decoded as
 // numbers only.
 const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root `defaults:` holds numbers only " +
-	"(a non-numeric value there drops the whole block), so another key has no place in this file."
+	"(a mapping or a list there drops the whole block; a scalar that is no number is refused for that key " +
+	"alone, #3250), so another key has no place in this file."
 
 // customAlertsRootFix: no reader takes custom alerts from a `_defaults.yaml`
 // (the exporter never served them; the compiler compiles what it serves,
@@ -324,7 +325,7 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 // tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
 // routing key is the route generator's to judge; a file in ParseFailed is
 // skipped, as checkRootCriticalKeys does. The fix is subtree_default_reserved_key's
-// (reservedKeyFix): where the key's reader reads it.
+// (reservedKeyFixAt, worded for the root): where the key's reader reads it.
 func checkRootReservedKeys(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
 	for _, pf := range input.ParseFailed {
@@ -354,7 +355,7 @@ func checkRootReservedKeys(input CheckInput) []Finding {
 				Field:    f.Name + ":defaults." + k,
 				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` reaches no tenant: the exporter "+
 					"reads the root `defaults:` for thresholds only, while /effective shows the value as inherited "+
-					"(not_served root_defaults_reserved). %s", f.Name, k, reservedKeyFix(k)),
+					"(not_served root_defaults_reserved). %s", f.Name, k, reservedKeyFixAt(k, true)),
 			})
 		}
 	}
