@@ -74,7 +74,7 @@ const undeliverableLogSampleLimit = 10
 // undeliverableDocPointer is where operators are pointed: the da-guard
 // finding that rejects such a key when it is written (#1976), documented
 // under the guard subcommand.
-const undeliverableDocPointer = "da-guard's subtree_default_undeliverable in docs/cli-reference.md#guard"
+const undeliverableDocPointer = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#guard (finding subtree_default_undeliverable)"
 
 // subtreeUndeliverableTenants returns the sorted tenant IDs, among those the
 // committed hierarchy knows (`tenantSources`), that
@@ -113,7 +113,7 @@ func formatUndeliverableLog(
 		"ERROR: conf.d subtree default undeliverable (%s): %d tenant(s) under %s inherit a key that exists "+
 			"ONLY in a subtree `_defaults.yaml`. /effective reports its value, but the collector cannot emit it "+
 			"(it walks the ROOT defaults and the declared surface, and a nested `_` file feeds neither), so "+
-			"those alerts can never fire. Workaround: declare the key in the conf.d ROOT `_defaults.yaml` or in "+
+			"those alerts can never fire. Fix: declare the key in the conf.d ROOT `_defaults.yaml` or in "+
 			"`optional_overrides:`. See %s. Affected:",
 		context, len(affected), root, undeliverableDocPointer)
 
