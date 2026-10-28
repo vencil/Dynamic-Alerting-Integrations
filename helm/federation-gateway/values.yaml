@@ -242,11 +242,11 @@ preflight:
     # smallest thing that can run it (~2.2 MB).
     # renovate: datasource=docker depName=busybox
     repository: busybox
-    tag: "1.36"
+    tag: "1.38"
     # Pinned by digest, same supply-chain convention as the Envoy and
     # alpine/git images. Bump via `docker buildx imagetools inspect
     # busybox:<tag> --format '{{"{{"}}.Manifest.Digest{{"}}"}}'`.
-    digest: "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+    digest: "sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -423,8 +423,8 @@ auditLog:
       # (tests/shared/test_federation_audit_metrics.py binds the two).
       # renovate: datasource=docker depName=timberio/vector
       repository: timberio/vector
-      tag: "0.57.0-distroless-libc"
-      digest: "sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
+      tag: "0.60.0-distroless-libc"
+      digest: "sha256:a9ed9a4710bdc2efa66e94c1e8edc7b439709e6e50079f1e1b2b1bf479d387da"
       pullPolicy: IfNotPresent
     port: 3903
     resources:
