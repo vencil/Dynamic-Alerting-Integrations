@@ -311,7 +311,7 @@ schema 驗證預設就跑，不用加旗標；有些檢查要帶旗標才出現�
 ### Alert Quality Scoring (v2.1.0)
 
 ```bash
-# 掃描所有 tenant 的告警品質（Noise / Stale / Latency / Suppression）
+# 掃描所有 tenant 的告警品質（Noise / Stale / Latency）
 da-tools alert-quality --prometheus http://localhost:9090
 
 # CI gate：低於 60 分 exit 1

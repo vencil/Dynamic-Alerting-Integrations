@@ -17,13 +17,15 @@ This guide covers the end-to-end workflow from alert quality assessment through 
 
 Before deciding to migrate, use `da-tools alert-quality` to quantify your existing alert health. This tool connects directly to your existing Prometheus — no Dynamic Alerting components need to be deployed.
 
-### Three Quality Metrics
+### Quality Metrics
 
-| Metric | Measures | Threshold |
-|--------|----------|-----------|
-| **Noise Score** | Firings per time unit | >20 = BAD, >10 = WARN |
-| **Stale Score** | Days since last fire | >14 days = WARN |
-| **Resolution Latency** | Average firing → resolved time | <5 min = flapping (BAD) |
+| Metric | Measures |
+|--------|----------|
+| **Noise Score** | Firings per time unit |
+| **Stale Score** | Days since last fire |
+| **Resolution Latency** | Average firing → resolved time |
+
+The report marks each alert GOOD / WARN / BAD; the thresholds are constants in `alert_quality.py` and are not copied here.
 
 ### Run Quality Scan
 

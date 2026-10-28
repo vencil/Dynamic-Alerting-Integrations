@@ -30,7 +30,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `federation-check` | Multi-cluster Federation integration verification | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
 | `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest + public JWKS | --rotate, --existing-jwks <FILE>, --jwks-out <FILE>, --namespace <NS> | `da-tools fed-key --help` |
 | `grafana-import` | Grafana Dashboard import via ConfigMap sidecar auto-mount | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
-| `alert-quality` | Alert quality scoring: 4 metrics, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `alert-quality` | Alert quality scoring: Noise / Stale / Latency, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
 | `alert-correlate` | Alert correlation analysis: time-window clustering + root cause inference | --prometheus <URL>, --input <FILE>, --window <MIN>, --min-score <N> | `da-tools alert-correlate --help` |
 | `drift-detect` | Cross-cluster config drift detection: directory-level SHA-256 comparison | --dirs <LIST>, --labels <LIST>, --ci | `da-tools drift-detect --help` |
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |

@@ -132,7 +132,7 @@ da-tools <command> --help
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
 | `grafana-import` | Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載） | `--dashboard <file>` 或 `--verify` |
-| `alert-quality` | 警報品質評估（4 指標、三級評分、CI gate） | `--prometheus <url>` |
+| `alert-quality` | 警報品質評估（Noise / Stale / Latency、三級評分、CI gate） | `--prometheus <url>` |
 | `alert-correlate` | 告警關聯分析（時間窗口聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
 | `drift-detect` | 跨叢集配置漂移偵測（目錄級 SHA-256 比對） | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | `--prometheus <url>` |
@@ -1053,7 +1053,7 @@ da-tools grafana-import --dashboard overview.json --dry-run
 
 #### alert-quality
 
-分析 Prometheus 的 `ALERTS` 歷史，識別問題告警。3 項品質指標（Noise / Stale / Latency）、三級評分（GOOD / WARN / BAD）、per-tenant 加權分數。⚠️ **行為變更（[#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212)）**：Suppression 這一維與 `--alertmanager` 旗標移除——它從來沒量對過（Alertmanager v2 的 `filter` 比對 label，`alertstate=suppressed` 永遠回空；分子是當下告警筆數、分母是 `--period` 的樣本點數），沒有任何來源能回答期間內、分租戶的抑制比例。帶 `--alertmanager` 的呼叫結束碼 `0` → `2`（argparse 未知旗標）；JSON 每筆告警少 `suppressed_count`、`suppression_ratio`、`suppression_grade`；分數不變（對真的 Alertmanager 這一維本來恆為 GOOD）。
+分析 Prometheus 的 `ALERTS` 歷史，識別問題告警。品質指標 Noise / Stale / Latency、三級評分（GOOD / WARN / BAD）、per-tenant 加權分數。⚠️ **行為變更（[#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212)）**：Suppression 這一維與 `--alertmanager` 旗標移除——它從來沒量對過（Alertmanager v2 的 `filter` 比對 label，`alertstate=suppressed` 永遠回空；分子是當下告警筆數、分母是 `--period` 的樣本點數），沒有任何來源能回答期間內、分租戶的抑制比例。帶 `--alertmanager` 的呼叫結束碼 `0` → `2`（argparse 未知旗標）；JSON 每筆告警少 `suppressed_count`、`suppression_ratio`、`suppression_grade`；分數不變（對真的 Alertmanager 這一維本來恆為 GOOD）。
 
 **用法**
 

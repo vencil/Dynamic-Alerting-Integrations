@@ -131,7 +131,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `byo-check` | BYO Prometheus & Alertmanager integration verification | `<target>` |
 | `federation-check` | Multi-cluster federation integration verification (edge / central / e2e) | `<target>` |
 | `grafana-import` | Grafana dashboard ConfigMap import (sidecar auto-mount) | `--dashboard <file>` or `--verify` |
-| `alert-quality` | Alert quality scoring (4 metrics, 3 grades, CI gate) | `--prometheus <url>` |
+| `alert-quality` | Alert quality scoring (Noise / Stale / Latency, 3 grades, CI gate) | `--prometheus <url>` |
 | `alert-correlate` | Alert correlation analysis (time-window clustering + root cause inference) | `--prometheus <url>` or `--input <file>` |
 | `drift-detect` | Cross-cluster config drift detection (directory-level SHA-256) | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | `--prometheus <url>` |
@@ -1056,7 +1056,7 @@ da-tools grafana-import --dashboard overview.json --dry-run
 
 #### alert-quality
 
-Analyze the Prometheus `ALERTS` history to identify problem alerts. 3 quality metrics (Noise / Stale / Latency), 3 grades (GOOD / WARN / BAD), per-tenant weighted scoring. ⚠️ **Behaviour change ([#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212))**: the Suppression dimension and the `--alertmanager` flag are gone — it was never measured right (Alertmanager v2's `filter` matches labels, so `alertstate=suppressed` always answered empty; the numerator was a count of current alerts, the denominator the number of samples over `--period`), and no source answers a per-tenant suppression ratio over a period. A call with `--alertmanager` now exits `2` instead of `0` (an unknown flag to argparse); each alert in the JSON loses `suppressed_count`, `suppression_ratio` and `suppression_grade`; scores do not change (against a real Alertmanager the dimension was always GOOD).
+Analyze the Prometheus `ALERTS` history to identify problem alerts. Quality metrics Noise / Stale / Latency, 3 grades (GOOD / WARN / BAD), per-tenant weighted scoring. ⚠️ **Behaviour change ([#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212))**: the Suppression dimension and the `--alertmanager` flag are gone — it was never measured right (Alertmanager v2's `filter` matches labels, so `alertstate=suppressed` always answered empty; the numerator was a count of current alerts, the denominator the number of samples over `--period`), and no source answers a per-tenant suppression ratio over a period. A call with `--alertmanager` now exits `2` instead of `0` (an unknown flag to argparse); each alert in the JSON loses `suppressed_count`, `suppression_ratio` and `suppression_grade`; scores do not change (against a real Alertmanager the dimension was always GOOD).
 
 **Usage**
 
