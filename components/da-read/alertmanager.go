@@ -184,21 +184,60 @@ var jsonMarshaler = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 
 // typed is *rv* with pointers and interfaces followed, or the zero Value when
 // there is nothing to follow or its JSON is its own (a json.Marshaler): then
-// the JSON's shape is not the type's.
+// the JSON's shape is not the type's — except for a struct that is only an
+// inline map (inlineMap), whose JSON is that map.
 func typed(rv reflect.Value) reflect.Value {
 	for rv.IsValid() && (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) {
-		if rv.Kind() == reflect.Pointer && rv.Type().Implements(jsonMarshaler) {
-			return reflect.Value{}
-		}
 		if rv.IsNil() {
 			return reflect.Value{}
 		}
 		rv = rv.Elem()
 	}
-	if !rv.IsValid() || rv.Type().Implements(jsonMarshaler) || reflect.PointerTo(rv.Type()).Implements(jsonMarshaler) {
+	if !rv.IsValid() {
+		return reflect.Value{}
+	}
+	if marshalsItself(rv.Type()) {
+		if m, ok := inlineMap(rv); ok {
+			return m
+		}
 		return reflect.Value{}
 	}
 	return rv
+}
+
+func marshalsItself(t reflect.Type) bool {
+	return t.Implements(jsonMarshaler) || reflect.PointerTo(t).Implements(jsonMarshaler)
+}
+
+// inlineMap is the map of a struct whose one exported field is a `,inline`
+// map: the text writes that map's keys directly under the struct's key, and
+// the type marshals itself as that map (prometheus/common's Headers,
+// `http_headers`: "the json encoder doesn't support inline"), so text and
+// reading pair as the map does.
+func inlineMap(sv reflect.Value) (reflect.Value, bool) {
+	if sv.Kind() != reflect.Struct {
+		return reflect.Value{}, false
+	}
+	t := sv.Type()
+	found := -1
+	for i := 0; i < t.NumField(); i++ {
+		if !t.Field(i).IsExported() {
+			continue
+		}
+		if found >= 0 {
+			return reflect.Value{}, false
+		}
+		found = i
+	}
+	if found < 0 {
+		return reflect.Value{}, false
+	}
+	f := t.Field(found)
+	_, opts := tagParts(f.Tag.Get("yaml"))
+	if f.Type.Kind() != reflect.Map || !has(opts, "inline") {
+		return reflect.Value{}, false
+	}
+	return sv.Field(found), true
 }
 
 // field is a struct field found by its yaml key.
@@ -352,25 +391,34 @@ func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []i
 	return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
 }
 
+// isStruct reports whether *t* (or what it points to) is a struct whose JSON
+// is encoding/json's.
+func isStruct(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Kind() == reflect.Struct && !marshalsItself(t)
+}
+
 // isStructList reports whether *t* is a slice or array of structs (or of
 // pointers to them) whose JSON is encoding/json's: routes, receivers, the
 // *_configs lists, inhibit_rules.
 func isStructList(t reflect.Type) bool {
-	if t.Kind() != reflect.Slice && t.Kind() != reflect.Array {
-		return false
-	}
-	e := t.Elem()
-	for e.Kind() == reflect.Pointer {
-		e = e.Elem()
-	}
-	return e.Kind() == reflect.Struct && !e.Implements(jsonMarshaler) &&
-		!reflect.PointerTo(e).Implements(jsonMarshaler)
+	return (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) && isStruct(t.Elem())
+}
+
+// isStructMap reports whether *t* is a map from strings to structs (or
+// pointers to them): `http_headers`' header name → values / secrets / files.
+func isStructMap(t reflect.Type) bool {
+	return t.Kind() == reflect.Map && t.Key().Kind() == reflect.String && isStruct(t.Elem())
 }
 
 // walk prints the reading *read* of the written node *node*, whose Go value
 // is *rv*. The Go type decides how far the text is followed: a struct keeps
 // only the fields the text writes; a list of structs is paired with the
-// written list by index; anything else — a map (`match`, email `headers`),
+// written list by index, a map of structs by key (a written key the reading
+// lacks is refused); anything else — a map of non-structs (`match`, email
+// `headers`),
 // a list of strings or scalars, a type that marshals itself (Matchers,
 // Regexp, a URL, a duration), a scalar — is printed whole, as read.
 func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path []interface{}) error {
@@ -403,6 +451,38 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			val, child, err := valueOf(key, v, sv, p)
 			if err != nil {
 				return err
+			}
+			if i > 0 {
+				w.out.WriteByte(',')
+			}
+			kb, err := json.Marshal(key)
+			if err != nil {
+				return err
+			}
+			w.out.Write(kb)
+			w.out.WriteByte(':')
+			if err := w.walk(wm.value[key], val, child, p); err != nil {
+				return err
+			}
+		}
+		w.out.WriteByte('}')
+		return nil
+	case isStructMap(sv.Type()):
+		v, ok := read.(map[string]interface{})
+		if !ok || n == nil || n.Kind != yaml.MappingNode {
+			return w.plain(read)
+		}
+		wm, err := w.c.entries(n)
+		if err != nil {
+			return err
+		}
+		w.out.WriteByte('{')
+		for i, key := range wm.order {
+			p := extend(path, key)
+			val, ok := v[key]
+			child := sv.MapIndex(reflect.ValueOf(key).Convert(sv.Type().Key()))
+			if !ok || !child.IsValid() {
+				return fmt.Errorf("%s: %w", pathString(p), errNotInReading)
 			}
 			if i > 0 {
 				w.out.WriteByte(',')

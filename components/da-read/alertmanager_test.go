@@ -404,3 +404,62 @@ func TestLaterDocumentsMustBeEmpty(t *testing.T) {
 		})
 	}
 }
+
+// A map whose values are structs is paired with the text key by key, and each
+// value follows the struct rule. `http_headers` (prometheus/common Headers,
+// which marshals itself as its inline map): a header whose lists are written
+// empty keeps them — encoding/json's omitempty would print `{"X-A":{}}`.
+func TestAMapOfStructsIsPairedByKey(t *testing.T) {
+	t.Parallel()
+	in := "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+		"  - url: 'https://example.com/'\n" +
+		"    http_config: {http_headers: {X-A: {values: [], secrets: [], files: []}, X-B: {values: [v]}}}\n"
+	want := `{"route":{"receiver":"r"},"receivers":[{"name":"r","webhook_configs":[` +
+		`{"url":"https://example.com/","http_config":{"http_headers":{` +
+		`"X-A":{"values":[],"secrets":[],"files":[]},"X-B":{"values":["v"]}}}}]}]}`
+	if got := document(t, in); got != want {
+		t.Fatalf("document %s\nwant     %s", got, want)
+	}
+}
+
+type mapped struct {
+	Name  string `yaml:"name,omitempty" json:"name,omitempty"`
+	Count int    `yaml:"count,omitempty" json:"count,omitempty"`
+}
+
+type withMaps struct {
+	ByPointer map[string]*mapped `yaml:"by_pointer" json:"by_pointer"`
+	ByValue   map[string]mapped  `yaml:"by_value" json:"by_value"`
+}
+
+// The same rule on map values that are struct pointers, driven directly on a
+// type of this test: a written zero field comes back, an unwritten one stays
+// out, and a written key the reading lacks is refused.
+func TestAMapOfStructPointersIsPairedByKey(t *testing.T) {
+	t.Parallel()
+	walkOn := func(in string, read interface{}, v withMaps) (string, error) {
+		var root yaml.Node
+		if err := yaml.Unmarshal([]byte(in), &root); err != nil {
+			t.Fatal(err)
+		}
+		w := &walker{c: newComposed()}
+		err := w.walk(root.Content[0], read, reflect.ValueOf(v), nil)
+		return w.out.String(), err
+	}
+	v := withMaps{
+		ByPointer: map[string]*mapped{"a": {Name: "x"}},
+		ByValue:   map[string]mapped{"b": {Count: 2}},
+	}
+	read := map[string]interface{}{
+		"by_pointer": map[string]interface{}{"a": map[string]interface{}{"name": "x"}},
+		"by_value":   map[string]interface{}{"b": map[string]interface{}{"count": 2}},
+	}
+	got, err := walkOn("by_pointer: {a: {name: x, count: 0}}\nby_value: {b: {count: 2}}\n", read, v)
+	if err != nil || got != `{"by_pointer":{"a":{"name":"x","count":0}},"by_value":{"b":{"count":2}}}` {
+		t.Fatalf("got %s, %v", got, err)
+	}
+	_, err = walkOn("by_pointer: {a: {name: x}, z: {name: y}}\n", read, v)
+	if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), "by_pointer.z:") {
+		t.Fatalf("err = %v; want errNotInReading naming by_pointer.z", err)
+	}
+}
