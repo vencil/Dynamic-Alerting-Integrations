@@ -3480,6 +3480,24 @@ class TestJsonSchemaRow:
                    for x in row["details"]), row
         assert rc == 1
 
+    def test_an_unusable_policy_is_a_caller_error_beside_a_field_type_finding(
+            self, tmp_path, capsys, cli_argv):
+        """#3303: the routes row is the only reader of `--policy`, so its
+        field-type refusal must not return before the policy is resolved —
+        a missing policy file is exit 2, as the removed policy row made it."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+                        + self._RECEIVER + "      group_by: alertname\n"),
+        })
+        cli_argv("validate_config", "--config-dir", d, "--policy",
+                 str(tmp_path / "missing-policy.yaml"), "--json")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
+        assert rows["routes"]["caller_error"] is True, rows["routes"]
+        assert exc.value.code == 2
+
     def test_group_by_string_in_a_root_platform_tenants_block_fails(
             self, tmp_path, capsys, cli_argv):
         """#2743: the same entry in the ROOT `_defaults.yaml`'s `tenants:`

@@ -910,20 +910,10 @@ def check_routes(
     import generate_alertmanager_routes as gen
 
     tree = gen.load_tenant_tree(config_dir)
-    # #3284: `--validate` refuses the whole tree on a field-type finding (a
-    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
-    # has `--validate` semantics, does not report routes such a run never
-    # generates as WARN / PASS. The schema row lists the same lines.
-    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
-    if refusal:
-        return _make_result("routes", FAIL, [line.strip() for line in refusal],
-                            hint=FIELD_TYPE_HINT)
-    routing = tree.routing_configs
-    dedup = tree.dedup_configs
-    enforced_routing = tree.enforced_routing
-
     # Load allowed_domains from policy (#1556: unusable value is a caller
-    # error, not "no policy")
+    # error, not "no policy"). Before the field-type refusal below (#3303):
+    # since this row is the only one that reads `--policy`, an unusable path
+    # must not hide behind a config finding — it is exit 2 either way.
     allowed_domains = None
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         # #3142: the generator's own resolver — the min_generator_version
@@ -939,6 +929,18 @@ def check_routes(
                                    POLICY_VERSION_REMEDY
                                    if isinstance(exc, gen.PolicyVersionError)
                                    else _POLICY_ROUTES_ROW_HINT)
+
+    # #3284: `--validate` refuses the whole tree on a field-type finding (a
+    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
+    # has `--validate` semantics, does not report routes such a run never
+    # generates as WARN / PASS. The schema row lists the same lines.
+    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
+    if refusal:
+        return _make_result("routes", FAIL, [line.strip() for line in refusal],
+                            hint=FIELD_TYPE_HINT)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     # Capture stderr for warnings
     import io
