@@ -46,6 +46,7 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+from _ast_refs import refs  # noqa: E402
 from _confd_population import parse  # noqa: E402
 
 REPO = HERE.parents[1]
@@ -118,28 +119,9 @@ def uses(tree: ast.AST, names: "frozenset[str]") -> "set[str]":
     an attribute of any binding (`import _lib_yaml_keys as k`, then
     `k.load_for_rewrite`; `wc.keep_null_spelling`), or fetched by a constant
     string (`getattr(k, "dump_for_rewrite")`). Reported by the CANONICAL name,
-    never the alias."""
-    aliases: "dict[str, str]" = {}   # local binding -> canonical name
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            for a in node.names:
-                if a.name in names:
-                    aliases[a.asname or a.name] = a.name
-    out = set(aliases.values())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            if node.id in names:
-                out.add(node.id)
-            elif node.id in aliases:
-                out.add(aliases[node.id])
-        elif isinstance(node, ast.Attribute) and node.attr in names:
-            out.add(node.attr)
-        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-              and node.func.id in ("getattr", "hasattr") and len(node.args) >= 2
-              and isinstance(node.args[1], ast.Constant)
-              and node.args[1].value in names):
-            out.add(node.args[1].value)
-    return out
+    never the alias. Whatever module it is reached through counts: the layer's
+    names are its own (`_ast_refs`, shared with `test_yaml_reader_boundary.py`)."""
+    return {r.name for r in refs(tree) if r.name in names}
 
 
 def _read(p: pathlib.Path) -> ast.AST:
