@@ -39,8 +39,10 @@ package main
 // file's bytes no longer get two verdicts, and cause (a) was removed rather
 // than kept as an alarm for a state one decode cannot produce (the two
 // remaining exceptions above are not scanner disagreements). What remains is a
-// known, tracked delivery gap (#1976: deliver per-subtree scope, or reject such
-// a key at validation time), not a divergence between scanners.
+// known delivery gap, not a divergence between scanners. #1976 settled it at
+// validation time: da-guard reports such a key as subtree_default_undeliverable,
+// an error (exit 1). The exporter still does not deliver it; this audit is
+// what a tree that reached the exporter without da-guard gets.
 //
 // ⛔ WHY THIS IS NOT FAIL-CLOSED (rejecting the load when the set is non-empty)
 //
@@ -52,8 +54,9 @@ package main
 //     stale thresholds indefinitely, silently.
 //
 // So: loud, precise, and non-blocking. ERROR log + gauge, load proceeds.
-// Rejecting such a key belongs at VALIDATION time (the write gate), which is
-// one of #1976's two options — not a side effect of this observability.
+// Rejecting such a key belongs at VALIDATION time (the write gate), and that
+// is where it is rejected (da-guard's subtree_default_undeliverable, #1976) —
+// not a side effect of this observability.
 
 import (
 	"fmt"
@@ -68,10 +71,10 @@ import (
 // directory without producing an unreadable log record.
 const undeliverableLogSampleLimit = 10
 
-// undeliverableIssueURL is the tracking issue operators are pointed at: the
-// fix is to deliver per-subtree scope, or to refuse such a key when it is
-// written (#1976).
-const undeliverableIssueURL = "https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976"
+// undeliverableDocPointer is where operators are pointed: the da-guard
+// finding that rejects such a key when it is written (#1976), documented
+// under the guard subcommand.
+const undeliverableDocPointer = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#guard (finding subtree_default_undeliverable)"
 
 // subtreeUndeliverableTenants returns the sorted tenant IDs, among those the
 // committed hierarchy knows (`tenantSources`), that
@@ -110,9 +113,9 @@ func formatUndeliverableLog(
 		"ERROR: conf.d subtree default undeliverable (%s): %d tenant(s) under %s inherit a key that exists "+
 			"ONLY in a subtree `_defaults.yaml`. /effective reports its value, but the collector cannot emit it "+
 			"(it walks the ROOT defaults and the declared surface, and a nested `_` file feeds neither), so "+
-			"those alerts can never fire. Workaround: declare the key in the conf.d ROOT `_defaults.yaml` or in "+
-			"`optional_overrides:`. Tracking: %s. Affected:",
-		context, len(affected), root, undeliverableIssueURL)
+			"those alerts can never fire. Fix: declare the key in the conf.d ROOT `_defaults.yaml` or in "+
+			"`optional_overrides:`. See %s. Affected:",
+		context, len(affected), root, undeliverableDocPointer)
 
 	shown := affected
 	if len(shown) > undeliverableLogSampleLimit {

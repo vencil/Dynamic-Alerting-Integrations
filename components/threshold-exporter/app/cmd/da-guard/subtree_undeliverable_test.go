@@ -3,7 +3,7 @@ package main
 // subtree_undeliverable_test.go — #1976: a key only a subtree `_defaults.yaml`
 // names is one the exporter serves no series for (it logs an ERROR and counts
 // the tenant on da_config_subtree_undeliverable_tenants). da-guard reports it
-// as a subtree_default_undeliverable warning (exit 1 under --warn-as-error)
+// as a subtree_default_undeliverable error (exit 1, no flag needed)
 // and `served-values` lists it in `unserved`. The control is the same tree
 // with the key declared at the root: it is served, and nothing is reported.
 //
@@ -67,24 +67,20 @@ func undeliverableFindings(t *testing.T, args ...string) (int, []reportedFinding
 	return code, out
 }
 
-func TestGuard_SubtreeOnlyKeyIsUndeliverableWarning(t *testing.T) {
+func TestGuard_SubtreeOnlyKeyIsUndeliverableError(t *testing.T) {
 	t.Parallel()
 	dir := writeUndeliverableConfD(t, false)
 
 	code, got := undeliverableFindings(t, "--config-dir", dir)
-	if code != exitOK {
-		t.Errorf("exit = %d, want %d (a warning does not fail the run)", code, exitOK)
+	if code != exitFindings {
+		t.Errorf("exit = %d, want %d (an error fails the run without --warn-as-error)", code, exitFindings)
 	}
 	if len(got) != 1 {
 		t.Fatalf("subtree_default_undeliverable findings = %+v, want exactly one", got)
 	}
 	f := got[0]
-	if f.Severity != guard.SeverityWarn || f.TenantID != "tenant-a" || f.Field != "redis_evicted_keys" {
-		t.Errorf("finding = %+v, want warn / tenant-a / redis_evicted_keys", f)
-	}
-
-	if code, _ := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error"); code != exitFindings {
-		t.Errorf("--warn-as-error: exit = %d, want %d", code, exitFindings)
+	if f.Severity != guard.SeverityError || f.TenantID != "tenant-a" || f.Field != "redis_evicted_keys" {
+		t.Errorf("finding = %+v, want error / tenant-a / redis_evicted_keys", f)
 	}
 }
 
@@ -109,7 +105,7 @@ func TestGuard_UndeliverableFollowsScope(t *testing.T) {
 	} {
 		t.Run(tc.scope, func(t *testing.T) {
 			t.Parallel()
-			code, got := undeliverableFindings(t, "--config-dir", dir, "--scope", tc.scope, "--warn-as-error")
+			code, got := undeliverableFindings(t, "--config-dir", dir, "--scope", tc.scope)
 			if len(got) != tc.want {
 				t.Errorf("--scope %s: findings = %+v, want %d", tc.scope, got, tc.want)
 			}
@@ -118,7 +114,7 @@ func TestGuard_UndeliverableFollowsScope(t *testing.T) {
 				wantCode = exitFindings
 			}
 			if code != wantCode {
-				t.Errorf("--scope %s --warn-as-error: exit = %d, want %d", tc.scope, code, wantCode)
+				t.Errorf("--scope %s: exit = %d, want %d", tc.scope, code, wantCode)
 			}
 		})
 	}
@@ -264,7 +260,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			testutil.WriteTree(t, tmp, tree)
 			dir := filepath.Join(tmp, "conf.d")
 
-			code, got := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error")
+			code, got := undeliverableFindings(t, "--config-dir", dir)
 			_, reserved := reservedFindings(t, "--config-dir", dir)
 			var reservedFields []string
 			for _, f := range reserved {
@@ -288,7 +284,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				wantCode = exitFindings
 			}
 			if code != wantCode {
-				t.Errorf("--warn-as-error: exit = %d, want %d", code, wantCode)
+				t.Errorf("exit = %d, want %d", code, wantCode)
 			}
 
 			code, doc, _, stderr := served(t, tc.files, "2026-10-01T00:00:00Z")

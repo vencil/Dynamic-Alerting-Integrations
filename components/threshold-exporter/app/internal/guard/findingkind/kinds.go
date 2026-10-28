@@ -78,10 +78,10 @@ var (
 	// needs the base in the root defaults.
 	FindingRootDefaultNullUndeclared = register("root_default_null_undeclared",
 		"judges a tenant threshold the conf.d root defaults write as null")
-	// FindingSubtreeDefaultUndeliverable (warn; #1976): the tenant inherits Field,
+	// FindingSubtreeDefaultUndeliverable (error; #1976): the tenant inherits Field,
 	// a threshold key (see undeliverableThresholds) a subtree `_defaults.yaml` names and the conf.d root `_defaults.yaml`
 	// and `optional_overrides:` do not declare. The exporter serves no series for
-	// it. Planned to become an error in the next minor release.
+	// it.
 	FindingSubtreeDefaultUndeliverable = register("subtree_default_undeliverable",
 		"judges a threshold key a subtree defaults file names and the root does not declare")
 	// FindingSubtreeDefaultReservedKey (error; #2388, #3341): a subtree
