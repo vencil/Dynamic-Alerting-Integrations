@@ -271,6 +271,11 @@ func main() {
 		"#2903 (ADR-036 §4/§5): read-only path of the deployment policy file the generator container judges with (its --policy). tenant-api hashes it to check that the generator judged with the same file. Empty = the generator runs without one (both sides must agree)")
 
 	flag.Parse()
+	// ADR-036 §12: an unknown TA_* variable is a usage error, like an unknown
+	// flag (env_check.go).
+	if !checkTAEnv(os.Environ(), os.Stderr) {
+		os.Exit(2)
+	}
 	if err := checkRBACFlag(flagExplicit(flag.CommandLine, "rbac"), *rbacPath); err != nil {
 		log.Fatalf("FATAL: %v (#2491)", err)
 	}

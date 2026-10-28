@@ -13,6 +13,11 @@ The flag → variable list is derived from the Go source
 (`_render_baseline.tenant_api_flag_envs`: `"flag", envOrDefault("TA_…"` and the
 other env* helpers), never written by hand: a flag that gains a TA_* variable
 joins the check by itself.
+
+The other half: tenant-api refuses (exit 2) a TA_* variable it does not read
+(cmd/server/env_check.go), so every TA_* the chart renders must be in the list
+the build accepts (cmd/server/known_env.go) — else the chart would stop its
+own image.
 """
 from __future__ import annotations
 
@@ -23,7 +28,9 @@ from pathlib import Path
 import pytest
 import yaml
 from _helm_gate import helm_required
-from _render_baseline import baseline_args, tenant_api_flag_envs
+import re
+
+from _render_baseline import baseline_args, tenant_api_flag_envs, tenant_api_known_envs
 
 _REPO = Path(__file__).resolve().parents[2]
 _CHART = "helm/tenant-api"
@@ -50,6 +57,18 @@ _RENDERS = {
 _STATE_SUBCOMMAND_FLAGS = ("config-dir", "state-store", "state-configmap", "state-namespace",
                            "state-dir", "federation-key", "federation-store",
                            "federation-namespace")
+
+
+def _render(name: str, *extra: str) -> subprocess.CompletedProcess:
+    if not _HAS_HELM:
+        if _REQUIRE_HELM:
+            pytest.fail(f"{_REQUIRE_HELM}: but no `helm` on PATH")
+        pytest.skip("helm CLI not on PATH")
+    cmd = ["helm", "template", "t", str(_REPO / _CHART), *baseline_args(_CHART)]
+    for kv in [*_RENDERS[name], *extra]:
+        cmd += ["--set", kv]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=60)
 
 
 def _tenant_api(name: str) -> dict:
@@ -103,3 +122,30 @@ def test_the_settings_reach_the_env():
                  "rbac-org-scope-enforce", "identity-claim-headers", "state-store",
                  "state-configmap"):
         assert envs[flag] in env, f"--{flag} ({envs[flag]}) is not in the tenant-api env"
+
+
+@pytest.mark.parametrize("render", sorted(_RENDERS))
+def test_every_rendered_ta_variable_is_one_tenant_api_reads(render):
+    known = tenant_api_known_envs()
+    env = {e["name"] for e in _tenant_api(render).get("env") or []}
+    unknown = sorted(n for n in env if n.startswith("TA_") and n not in known)
+    assert not unknown, (f"{render}: the chart sets TA_* variables tenant-api does not read: "
+                         f"{unknown} — the image would refuse to start (env_check.go)")
+
+
+def test_every_ta_variable_the_template_can_set_is_known():
+    # Statically, so a variable behind a values switch no render above turns
+    # on is checked too.
+    raw = (_REPO / _CHART / "templates" / "deployment.yaml").read_text(encoding="utf-8")
+    names = set(re.findall(r"-\s+name:\s+(TA_[A-Z0-9_]+)", raw))
+    assert len(names) > 20, names
+    unknown = sorted(names - tenant_api_known_envs())
+    assert not unknown, f"deployment.yaml can set TA_* variables tenant-api does not read: {unknown}"
+
+
+def test_a_malformed_token_ttl_refuses_the_render():
+    # As a flag a malformed TTL stopped the start; the env is read leniently,
+    # so the render refuses it instead.
+    res = _render("everything-on", "federation.tokenTTL=4hours")
+    assert res.returncode != 0 and "federation.tokenTTL" in res.stderr, res.stderr
+    assert _render("everything-on", "federation.tokenTTL=1h30m").returncode == 0

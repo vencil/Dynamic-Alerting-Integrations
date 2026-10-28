@@ -154,11 +154,12 @@ spec:
           # with no TA_* counterpart stay args. tests/helm/
           # test_tenant_api_settings_are_env.py derives the TA_* flag list from
           # the Go source and fails on any such flag here.
+          # A TA_* variable this image does not read stops it (exit 2, the
+          # name printed: cmd/server/env_check.go), as an unknown flag does —
+          # so a chart newer than its image fails loudly instead of having a
+          # setting ignored. An image older than that check still ignores it.
           args:
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
-            {{- if .Values.federation.enabled }}
-            - --federation-token-ttl={{ .Values.federation.tokenTTL }}
-            {{- end }}
           env:
             - name: TA_ADDR
               value: {{ .Values.tenantApi.listenAddr | quote }}
@@ -252,6 +253,14 @@ spec:
             # ConfigMap the chart just created whenever the two differ (#1313).
             - name: TA_FEDERATION_NAMESPACE
               value: {{ include "tenant-api.federationStoreNamespace" . | quote }}
+            {{- /* As a flag, a malformed TTL stopped the start; tenant-api
+                 reads TA_FEDERATION_TOKEN_TTL leniently (warn + the 4h
+                 default), so the render refuses one Go cannot parse. */}}
+            {{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" (toString .Values.federation.tokenTTL)) }}
+            {{- fail (printf "federation.tokenTTL %q is not a Go duration (e.g. 4h, 90m)" (toString .Values.federation.tokenTTL)) }}
+            {{- end }}
+            - name: TA_FEDERATION_TOKEN_TTL
+              value: {{ .Values.federation.tokenTTL | quote }}
             {{- end }}
             {{- if .Values.machineIdentity.enabled }}
             # ADR-027 machine-identity audit baseline — verify machine callers'

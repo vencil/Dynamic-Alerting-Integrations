@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -98,6 +99,9 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	sf := registerStateFlags(fs)
 	ff := registerFederationStoreFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if !checkTAEnv(os.Environ(), stderr) {
 		return 2
 	}
 	if (*from == "") == !*noBackup || fs.NArg() > 0 {
@@ -328,6 +332,9 @@ func runStateShow(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	from := fs.String("from", "", "Backup to read instead of the store: a ConfigMap YAML/JSON file, a state directory, or - for stdin")
 	sf := registerStateFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !checkTAEnv(os.Environ(), stderr) {
 		return 2
 	}
 	if fs.NArg() > 0 {

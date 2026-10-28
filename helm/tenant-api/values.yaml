@@ -462,9 +462,11 @@ federation:
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the audit
 # code (the --machine-identity-* flags). The image tag derives from appVersion;
-# an image that predates them ignores the TA_* variables and silently runs no
-# audit (they are env since ADR-036 §12, no longer args an old image would
-# refuse). Enable only once the deployed image supports it.
+# the settings are TA_* variables (ADR-036 §12). An image from this chart's
+# release on refuses a TA_* variable it does not read (exit 2, the name
+# printed: "the image may be older than the Helm chart"); an image older than
+# that check still ignores it and silently runs no audit. Enable only once the
+# deployed image supports it.
 # ⚠ Do NOT enable via `helm upgrade --reuse-values`: it can carry a stale
 # audience past the required-gate. Pass machineIdentity values explicitly.
 machineIdentity:
@@ -513,9 +515,10 @@ identity:
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the
 # --human-socket setting (TA_HUMAN_SOCKET; image tag derives from appVersion). An
-# image that predates it ignores the variable and never opens the socket, so
-# oauth2-proxy has no upstream — enable only once the deployed image supports
-# it (same discipline as machineIdentity).
+# image from this chart's release on refuses a TA_* variable it does not read
+# (exit 2, named); an image older than that check still ignores it and never
+# opens the socket, so oauth2-proxy has no upstream — enable only once the
+# deployed image supports it (same discipline as machineIdentity).
 # ⚠ Do NOT enable via `helm upgrade --reuse-values` — pass humanSocket values
 # explicitly, matching the machineIdentity guidance above.
 #

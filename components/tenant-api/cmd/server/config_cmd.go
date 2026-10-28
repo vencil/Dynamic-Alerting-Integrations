@@ -54,6 +54,9 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	if !checkTAEnv(os.Environ(), stderr) {
+		return 2
+	}
 	if fs.NArg() != 1 || (*kind != "rbac" && *kind != "tenant-orgs") {
 		fmt.Fprintln(stderr, configCmdUsage)
 		return 2

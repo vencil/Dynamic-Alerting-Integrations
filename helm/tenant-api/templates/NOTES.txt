@@ -18,7 +18,8 @@ HUMAN SOCKET (ADR-027 D2-B) — ENABLED. The oauth2-proxy sidecar forwards human
   not the network 8080 plane. That human traffic is excluded from the machine-
   identity audit denominator. Requires a tenant-api image that supports the
   human socket (TA_HUMAN_SOCKET; image tag derives from appVersion {{ .Chart.AppVersion }}); an
-  older image ignores the variable and never opens the socket. Do NOT flip this via
+  image from this release on refuses a TA_* variable it does not read (exit 2, named);
+  an image older than that check ignores it and never opens the socket. Do NOT flip this via
   `helm upgrade --reuse-values` — pass humanSocket values explicitly.
 {{- else }}
 

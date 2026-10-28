@@ -25,8 +25,21 @@ import re  # noqa: E402
 _TENANT_API_GO = Path(__file__).resolve().parents[2] / "components" / "tenant-api"
 #: A flag registered with a TA_* variable as its default: `"flag-name",
 #: envOrDefault("TA_X"` (also envBool / envNonEmptyOrDefault — every env*
-#: helper cmd/server reads a flag's default with).
-_FLAG_ENV = re.compile(r'"([a-z][a-z0-9-]*)",\s*env[A-Za-z]*\(\s*"(TA_[A-Z0-9_]+)"')
+#: helper cmd/server reads a flag's default with — and the duration flags'
+#: `parseDurationOrDefault(os.Getenv("TA_X"), …)`).
+_FLAG_ENV = re.compile(r'"([a-z][a-z0-9-]*)",\s*(?:env[A-Za-z]*|parseDurationOrDefault\(\s*os\.Getenv)'
+                       r'\(\s*"(TA_[A-Z0-9_]+)"')
+#: Every TA_* variable the tenant-api build reads — the list its startup check
+#: accepts (cmd/server/known_env.go, generated from the reading sites and held
+#: to them by TestKnownTAEnv_IsTheSourceList).
+_KNOWN_ENV_GO = _TENANT_API_GO / "cmd" / "server" / "known_env.go"
+
+
+def tenant_api_known_envs() -> frozenset[str]:
+    """The TA_* names tenant-api accepts in its environment (known_env.go)."""
+    names = frozenset(re.findall(r'"(TA_[A-Z0-9_]+)"', _KNOWN_ENV_GO.read_text(encoding="utf-8")))
+    assert len(names) >= 20, f"{_KNOWN_ENV_GO}: only {len(names)} names"
+    return names
 
 
 def tenant_api_flag_envs() -> dict[str, str]:
