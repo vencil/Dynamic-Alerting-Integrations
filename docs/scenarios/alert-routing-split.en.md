@@ -24,7 +24,7 @@ A single `summary` annotation is either too vague for Platform or too technical 
 
 ## Solution: Dual-Perspective Annotation
 
-Each threshold alert in Rule Packs carries two annotation sets:
+Each built-in threshold alert in the Rule Packs carries two annotation sets:
 
 ```yaml
 annotations:
@@ -47,7 +47,7 @@ Dual-Perspective Annotation puts both wordings in the Prometheus rule's annotati
 
 ### Step 1: Verify Rule Packs include platform_summary
 
-The Rule Packs' built-in threshold alerts (those with `group_left(runbook_url, owner, tier)`) all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` do not, so a NOC template referencing it needs a fallback (e.g. `{{ or .CommonAnnotations.platform_summary .CommonAnnotations.summary }}`). Verify with:
+The Rule Packs' built-in threshold alerts all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` into `rule-pack-custom-alerts.yaml` do not (they also have the `group_left` join, so the join does not tell them apart); the examples below therefore use `{{ or .Annotations.platform_summary .Annotations.summary }}` inside `range .Alerts`, and keep the title independent of it. Verify with:
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -66,13 +66,13 @@ _routing_enforced:
     api_url: "https://hooks.slack.com/services/T/B/x"
     channel: "#noc-alerts"
     # Platform perspective: reference platform_summary
-    title: '{{ .Status | toUpper }}: {{ .CommonAnnotations.platform_summary }}'
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
     text: >-
       *Alert*: {{ .CommonLabels.alertname }}
       *Severity*: {{ .CommonLabels.severity }}
       *Owner*: {{ .CommonAnnotations.owner }}
       {{ range .Alerts }}
-        - {{ .Annotations.platform_summary }}
+        - {{ or .Annotations.platform_summary .Annotations.summary }}
       {{ end }}
   match:
     - 'severity=~"warning|critical"'
@@ -110,7 +110,7 @@ _routing_enforced:
     type: "slack"
     api_url: "https://hooks.slack.com/services/T/B/x"
     channel: "#noc-{{tenant}}"
-    title: '{{ .CommonAnnotations.platform_summary }}'
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
 ```
 
 The system auto-expands to individual `platform-enforced-<tenant>` receivers per tenant.

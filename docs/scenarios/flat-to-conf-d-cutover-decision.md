@@ -35,7 +35,7 @@ verified-at-version: v2.8.0
 | **< 50 tenant，無組織分群需求** | ⏸️ **不遷** | hierarchical 帶來的 cascading defaults / blast-radius scope 收益 < 你維護兩種 layout 認知成本 |
 | **50-200 tenant，單一 BU/team 管理** | 🟡 **可遷可不遷** | tipping point — 看你是否預期下個季度跨 region 擴。若是，先遷 |
 | **200+ tenant，多 BU/region/env 分群** | 🟢 **遷** | cascading defaults 省的 YAML 行數 + blast-radius 的 scope 訊號是 hard wins |
-| **客戶端有 GitOps PR 流程**（用 `da-tools batch-pr` 分批開 PR）| 🟢 **遷** | 預設按 domain（第一層目錄）分 PR；扁平 layout 沒有目錄可分，只會按租戶數切（預設每支 25 個）。⚠️ `apply` 必填的 Plan JSON 目前沒有指令會產生（[#3367](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3367)） |
+| **客戶端有 GitOps PR 流程**（用 `da-tools batch-pr` 分批開 PR）| 🟢 **遷** | 預設按 domain（第一層目錄）分 PR；扁平 layout 的租戶都在根目錄、落在同一組，只會按租戶數切（預設每支 25 個）。⚠️ `da-tools batch-pr` 沒有 `plan` 子命令，`apply` 必填的 Plan JSON 要另外準備（[#3367](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3367)） |
 | **預期下個 quarter 引入跨 region/env defaults**（threshold 因 region 不同）| 🟢 **遷** | flat 沒地方放 region 級 `_defaults.yaml`；遷 cost 只增不減，越早越好 |
 | **客戶端 `_defaults.yaml` 一年內幾乎不動**（純 flat 寫死 thresholds）| ⏸️ **不遷** | hierarchical 的核心收益是 cascading 改動 — 用不到就沒收益，只剩維護成本 |
 
@@ -45,7 +45,7 @@ verified-at-version: v2.8.0
 
 - **Cascading defaults**：threshold 改一處 → 整個 region/env 受影響的 tenants 全部更新；扁平要逐 tenant 改
 - **Blast-radius scope 訊號**：alerts dashboard 上 `da_config_blast_radius_tenants_affected` 的 `scope` 在扁平 mode 只會是 `tenant`（改租戶檔）或 `global`（改根目錄 `_defaults.yaml`），不會出現 `domain`／`region`，看不出改動落在哪一層
-- **GitOps PR 按 domain 分塊**：扁平大型變更只能按租戶數切，切不出「一個 domain 一支」的 PR
+- **GitOps PR 按 domain 分塊**：扁平 layout 的租戶都在根目錄、落在同一組，大型變更只能按租戶數切，切不出「一個 domain 一支」的 PR
 - **遷移時的 hierarchy-aware rollback**：incremental migration playbook 的反序退版表預設 hierarchy；扁平只能逐 PR revert
 
 ### 2.2 遷的代價

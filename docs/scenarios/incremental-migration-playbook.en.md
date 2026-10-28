@@ -30,7 +30,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 
 | Phase | Effort | Risk | Duration |
 |-------|--------|------|----------|
-| Phase 0: Audit & Assessment | 1 person-day | None | 1 day |
+| Phase 0: Audit & Assessment | 1 person-day | Read-only, no change to the existing system | 1 day |
 | Phase 1: Pilot Domain Deployment | 2 person-days | Low | 3-5 days |
 | Phase 2: Dual-Run Validation | 1 person-day (monitoring) | Low | 1-2 weeks |
 | Phase 3: Cutover | 0.5 person-day | Low | 4 hours |

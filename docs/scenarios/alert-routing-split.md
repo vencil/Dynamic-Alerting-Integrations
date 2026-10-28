@@ -24,7 +24,7 @@ lang: zh
 
 ## 解決方案：Dual-Perspective Annotation
 
-在 Rule Pack 層級為每個 alert 預埋兩組 annotation：
+在 Rule Pack 層級為內建的閾值告警預埋兩組 annotation：
 
 ```yaml
 annotations:
@@ -47,7 +47,7 @@ Dual-Perspective Annotation 把兩種措辭都寫在 Prometheus rule 的 annotat
 
 ### 步驟 1：確認 Rule Pack 已有 platform_summary
 
-Rule Pack 內建的閾值告警（帶 `group_left(runbook_url, owner, tier)` 的）都帶 `platform_summary`。⚠️ 由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶，NOC 模板引用它時要準備替代值（例如 `{{ or .CommonAnnotations.platform_summary .CommonAnnotations.summary }}`）。可以用以下命令確認：
+Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 `group_left` join，不能拿 join 來分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary .Annotations.summary }}` 補上，標題也不依賴它。可以用以下命令確認：
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -66,13 +66,13 @@ _routing_enforced:
     api_url: "https://hooks.slack.com/services/T/B/x"
     channel: "#noc-alerts"
     # Platform 視角：引用 platform_summary
-    title: '{{ .Status | toUpper }}: {{ .CommonAnnotations.platform_summary }}'
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
     text: >-
       *Alert*: {{ .CommonLabels.alertname }}
       *Severity*: {{ .CommonLabels.severity }}
       *Owner*: {{ .CommonAnnotations.owner }}
       {{ range .Alerts }}
-        - {{ .Annotations.platform_summary }}
+        - {{ or .Annotations.platform_summary .Annotations.summary }}
       {{ end }}
   match:
     - 'severity=~"warning|critical"'
@@ -110,7 +110,7 @@ _routing_enforced:
     type: "slack"
     api_url: "https://hooks.slack.com/services/T/B/x"
     channel: "#noc-{{tenant}}"
-    title: '{{ .CommonAnnotations.platform_summary }}'
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
 ```
 
 系統會自動為每個 tenant 展開成獨立的 `platform-enforced-<tenant>` receiver。
