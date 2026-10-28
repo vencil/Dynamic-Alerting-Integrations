@@ -57,9 +57,9 @@ func captureLoad(t *testing.T, m *ConfigManager) string {
 // itself meant it was never declared, so its OWN value stopped emitting; and
 // an `expires:` in a subtree defaults file was charged to every tenant under
 // it, blocking their writes. All four share one root cause — that field is a
-// flat global list with no subtree scope. Fixing it properly needs per-subtree
-// scope in `ThresholdConfig` (or refusing such a key at validation time),
-// i.e. #1976.
+// flat global list with no subtree scope. Delivering it would need per-subtree
+// scope in `ThresholdConfig`; #1976 refuses such a key at validation time
+// instead (da-guard's subtree_default_undeliverable, an error).
 //
 // So the contract asserted here is: the value does NOT reach the output plane,
 // nothing is silently written anywhere, and the undeliverable audit NAMES the
@@ -88,8 +88,8 @@ func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 
 	// The half that is NOT delivered — and must not pretend to be.
 	if _, present := seriesFor(t, m, "t1", "evicted_keys"); present {
-		t.Errorf("a subtree-only key emitted a series; either #1976 landed or the " +
-			"global declared surface was widened again")
+		t.Errorf("a subtree-only key emitted a series; either per-subtree delivery " +
+			"landed or the global declared surface was widened again")
 	}
 	if _, leaked := m.GetConfig().Defaults["redis_evicted_keys"]; leaked {
 		t.Errorf("the subtree's key leaked into the global Defaults map; every tenant " +

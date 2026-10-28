@@ -24,10 +24,14 @@ func TestCheckSubtreeUndeliverable_FixNamesRootAndOptionalOverrides(t *testing.T
 	if len(report.Findings) != 1 || !strings.Contains(report.Findings[0].Message, both) {
 		t.Errorf("findings = %+v; want one whose message contains %q", report.Findings, both)
 	}
+	// #1976: an error from the start, so the message announces no change.
+	if len(report.Findings) == 1 && strings.Contains(report.Findings[0].Message, "next minor release") {
+		t.Errorf("message still announces a severity change: %q", report.Findings[0].Message)
+	}
 }
 
-// #1976: one warn finding per (tenant, key) of UndeliverableInherited, only for
-// tenants in EffectiveConfigs, sorted; never an error, so no tenant fails.
+// #1976: one error finding per (tenant, key) of UndeliverableInherited, only for
+// tenants in EffectiveConfigs, sorted; the tenant that has one fails.
 func TestCheckSubtreeUndeliverable(t *testing.T) {
 	t.Parallel()
 	report, err := CheckDefaultsImpact(CheckInput{
@@ -42,17 +46,17 @@ func TestCheckSubtreeUndeliverable(t *testing.T) {
 	}
 	var got [][3]string
 	for _, f := range report.Findings {
-		if f.Kind != findingkind.FindingSubtreeDefaultUndeliverable || f.Severity != SeverityWarn {
+		if f.Kind != findingkind.FindingSubtreeDefaultUndeliverable || f.Severity != SeverityError {
 			t.Errorf("unexpected finding %+v", f)
 			continue
 		}
 		got = append(got, [3]string{f.TenantID, f.Field, string(f.Severity)})
 	}
-	want := [][3]string{{"tenant-b", "k1", "warn"}, {"tenant-b", "k2", "warn"}}
+	want := [][3]string{{"tenant-b", "k1", "error"}, {"tenant-b", "k2", "error"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v", got, want)
 	}
-	if report.Summary.Warnings != 2 || report.Summary.Errors != 0 || report.Summary.PassedTenantCount != 2 {
-		t.Errorf("summary = %+v, want 2 warnings, 0 errors, 2 passing", report.Summary)
+	if report.Summary.Warnings != 0 || report.Summary.Errors != 2 || report.Summary.PassedTenantCount != 1 {
+		t.Errorf("summary = %+v, want 0 warnings, 2 errors, 1 passing", report.Summary)
 	}
 }

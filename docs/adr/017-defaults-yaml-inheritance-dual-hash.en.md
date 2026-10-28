@@ -28,6 +28,7 @@ lang: en
 | 2026-10-21 | `describe_tenant` moves to showing only the custom-alert list the exporter serves, and the blast-radius report is retired | Decision 2 |
 | 2026-10-27 | A subdirectory `_defaults.yaml` no longer carries keys starting with `_` (da-guard reports an error); a tenant-side `null` on such a key always means the platform default | Decisions 2, 4, 10 |
 | 2026-10-27 | A threshold is read one way at every level (its text, as a number): a scalar the exporter cannot read in the root `defaults:` refuses that key alone and no longer drops the whole file; the effective config and `merged_hash` read what the exporter reads; a reserved key in the root `defaults:` reaches no tenant | Decisions 4, 6, 10 |
+| 2026-10-28 | A threshold only a subdirectory writes and the root does not declare: da-guard reports an error (exit 1) | Decision 3 |
 
 ## Terms
 
@@ -128,7 +129,7 @@ Output of `da-guard effective --config-dir conf.d` (excerpt):
 Two things to notice in this example:
 
 - **The tenant's value is quoted; the values under `defaults:` are not.** A tenant threshold is a string or an object with a schedule, and an unquoted number is rejected by `check_confd_schema.py`; platform defaults take numbers only.
-- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard's check reports `subtree_default_undeliverable`.
+- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard reports `subtree_default_undeliverable` and exits 1. The fix is to declare the threshold in the root `_defaults.yaml` or under `optional_overrides:`.
 
 ### 4. A threshold written as `null` is the same as not writing it at that level
 

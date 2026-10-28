@@ -20,7 +20,8 @@ package guard
 // undeliverableThresholds), handed in by the caller as
 // CheckInput.UndeliverableInherited; nothing here re-derives it.
 //
-// Warn for now; planned to become an error in the next minor release.
+// Error: the alert this key configures can never fire, and nothing at
+// runtime says so short of the exporter's log and gauge.
 
 import (
 	"fmt"
@@ -49,7 +50,7 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 		sort.Strings(keys)
 		for _, k := range keys {
 			out = append(out, Finding{
-				Severity: SeverityWarn,
+				Severity: SeverityError,
 				Kind:     findingkind.FindingSubtreeDefaultUndeliverable,
 				TenantID: id,
 				Field:    k,
@@ -57,8 +58,7 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 					"`_defaults.yaml` nor `optional_overrides:` declares it, so the exporter serves no series for it "+
 					"and that alert can never fire (the tenant's effective config still shows a value for it; the "+
 					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). %s "+
-					"This warning becomes an "+
-					"error in the next minor release (#1976). Not reported here: reserved keys and keys the exporter "+
+					"Not reported here: reserved keys and keys the exporter "+
 					"never serves as a threshold row (`_silent_*`, `_state_*`, …; reported as subtree_default_reserved_key, #2388), "+
 					"and keys the subtree "+
 					"switches off.", k, undeliverableFix(k)),

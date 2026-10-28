@@ -65,7 +65,7 @@
 //     no fallback for that row and check 2 does not judge a tenant's key
 //     against it (config.EffectiveConfig.MergedDefaults leaves it out).
 //
-//  7. Undeliverable subtree defaults (#1976; see subtree.go), warn for now:
+//  7. Undeliverable subtree defaults (#1976; see subtree.go), error:
 //     a tenant inherits a threshold key only a subtree `_defaults.yaml`
 //     names, which the exporter serves no series for. The set is the
 //     exporter's build's own (CheckInput.UndeliverableInherited), filtered
@@ -300,7 +300,7 @@ type CheckInput struct {
 	// UndeliverableInherited maps tenant ID → the threshold keys it inherits from a
 	// subtree `_defaults.yaml` that the exporter's build cannot deliver
 	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Unreachable). Each
-	// becomes a subtree_default_undeliverable warning for a tenant in
+	// becomes a subtree_default_undeliverable error for a tenant in
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`
 
