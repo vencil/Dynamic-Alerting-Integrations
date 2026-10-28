@@ -2,10 +2,12 @@ package main
 
 // Where the exporter's own loader meets `deprecate_rule --execute` (#1787).
 //
-// `ThresholdConfig.Defaults` (pkg/config/types.go) is `map[string]float64`:
-// a string under a root `defaults:` does not disable one metric — `yaml.Unmarshal`
-// fails and `parsePartialConfig` drops the WHOLE carrier, `state_filters:` and
-// all. The tool therefore deletes keys, and two fixtures under
+// A string under a root `defaults:` does not disable one metric. Before #3250
+// it failed the decode and `parsePartialConfig` dropped the WHOLE carrier,
+// `state_filters:` and all; since, the value is refused alone (readRootDefaults:
+// no default row for the key, da-guard's root_default_refused error) and the
+// rest of the carrier loads. Either way it is not the tool's output: the tool
+// deletes keys, and two fixtures under
 // tests/golden/fixtures link the two sides byte for byte:
 //
 //   - deprecate-rule/{before,after}.yaml — one `_defaults.yaml` carrier before
@@ -23,10 +25,12 @@ package main
 //     must reach the same verdict from the same bytes. A verdict in that file
 //     changes only when this test proves it.
 //
-// ⚠️ The `disable-sentinel` arm of each terminal-shape test is a CONTROL and is
-// expected to FAIL to load. If it ever starts loading, the loader was widened to
-// accept string sentinels under `defaults:` — ADR-017's defaults/tenants type
-// boundary, not this test, is the thing to revisit.
+// ⚠️ The `disable-sentinel` arm of each terminal-shape test is a CONTROL. Since
+// #3250 it loads with `cpu_usage` refused: the same series as the delete-key
+// arm, the deprecated key still written and reported. If `cpu_usage` ever
+// resolves to a row, or the carrier is dropped again, the root `defaults:`
+// reading moved — ADR-017's defaults/tenants type boundary, not this test, is
+// the thing to revisit.
 
 import (
 	"bytes"
@@ -37,6 +41,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // goldenFixture reads one file under tests/golden/fixtures. Missing is a
@@ -77,6 +83,8 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 		doc     []byte
 		wantOK  bool
 		wantLog string // substring the loader must log when it rejects the file
+		// refused: the root key the carrier still writes, refused alone (#3250).
+		refused string
 	}{
 		{
 			name:   "delete-key (deprecate-rule/after.yaml golden)",
@@ -86,8 +94,8 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 		{
 			name:    "disable-sentinel (pre-#1787 output — control)",
 			doc:     []byte(deprecatedDisableCarrier),
-			wantOK:  false,
-			wantLog: "entire block dropped",
+			wantOK:  true,
+			refused: "cpu_usage",
 		},
 	}
 
@@ -111,6 +119,28 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 				if !strings.Contains(logBuf.String(), a.wantLog) {
 					t.Errorf("expected the drop to be logged with %q, got: %s",
 						a.wantLog, logBuf.String())
+				}
+				return
+			}
+			if a.refused != "" {
+				_, refused := config.RefusedDefault(cfg.Defaults[a.refused])
+				text := ""
+				for _, r := range config.RootDefaultRefusals(a.doc) {
+					if r.Key == a.refused {
+						text = r.Text
+					}
+				}
+				if !refused || text != "disable" {
+					t.Errorf("%s = %v, want refused with its text \"disable\" (got %q, %v)",
+						a.refused, cfg.Defaults[a.refused], text, refused)
+				}
+				for k, want := range deprecationSurvivors {
+					if got := cfg.Defaults[k]; got != want {
+						t.Errorf("defaults[%q] = %v, want %v", k, got, want)
+					}
+				}
+				if _, present := cfg.StateFilters["container_crashloop"]; !present {
+					t.Errorf("state_filters lost the carrier's own block: %v", cfg.StateFilters)
 				}
 				return
 			}
@@ -170,8 +200,8 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 // TestDeprecatedMetricTerminalShape_WholeTreeReload measures the same two
 // shapes where an operator would notice: the series the exporter resolves for
 // a whole conf.d. Deleting the key costs exactly the deprecated metric's rows;
-// the `disable` sentinel costs the entire tree that carrier fed, state
-// filters included.
+// since #3250 so does the `disable` sentinel (before, it cost the entire tree
+// that carrier fed, state filters included).
 func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 	arms := []struct {
 		name             string
@@ -188,8 +218,8 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 		{
 			name:             "disable-sentinel (pre-#1787 output — control)",
 			carrier:          []byte(deprecatedDisableCarrier),
-			wantMetrics:      nil,
-			wantStateFilters: 0,
+			wantMetrics:      []string{"mem_usage", "disk_usage"},
+			wantStateFilters: 1,
 		},
 	}
 

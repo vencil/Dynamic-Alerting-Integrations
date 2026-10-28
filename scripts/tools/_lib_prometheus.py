@@ -354,15 +354,24 @@ def _malformed(source: str, defect: str) -> QueryError:
 
 def sample_value(raw: Any) -> float:
     """The float a Prometheus sample holds — ``+Inf`` / ``-Inf`` / ``NaN``
-    included. The API writes every sample value as a JSON string; a JSON
-    number is read too, as the tools read it before (refusing it would
-    change their exit code, which is not decided). Anything ``float()``
-    cannot read — and a boolean — raises ``ValueError``, which
-    ``_matrix_rows`` turns into a ``QueryError`` naming the sample. The one
-    reading of a sample (#3213): tools do not call ``float()`` / ``int()`` on
-    one themselves."""
-    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
-        raise ValueError(f"{raw!r:.40} is not a sample value")
+    included. The API writes every sample value as a JSON **string**
+    (Prometheus ``util/jsonutil``, VictoriaMetrics, Mimir alike), and only a
+    string is read (#3304): a JSON number is not what any of them sends, so
+    it is refused like anything else ``float()`` cannot read, with
+    ``ValueError`` — which ``_matrix_rows`` / ``_vector_rows`` turn into a
+    ``QueryError`` naming the sample. The one reading of a sample (#3213):
+    tools do not call ``float()`` / ``int()`` on one themselves."""
+    if not isinstance(raw, str):
+        raise ValueError(f"{raw!r:.40} is not a sample value (a JSON string)")
+    return float(raw)
+
+
+def sample_timestamp(raw: Any) -> float:
+    """The Unix time of a Prometheus sample: a JSON **number** (seconds, a
+    fraction allowed), as every server writes it (#3304). A string, a
+    boolean or anything else raises ``ValueError``."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"{raw!r:.40} is not a sample timestamp (a JSON number)")
     return float(raw)
 
 
@@ -370,7 +379,7 @@ def row_samples(row: dict[str, Any]) -> list[tuple[float, float]]:
     """``(timestamp, value)`` of every float sample of a ``_matrix_rows``
     row, parsed once here (non-finite values kept: whether ``+Inf`` is a
     sample or a gap is the tool's question). A histogram-only row has none."""
-    return [(float(ts), sample_value(val)) for ts, val in row.get("values", [])]
+    return [(sample_timestamp(ts), sample_value(val)) for ts, val in row.get("values", [])]
 
 
 def finite_row_samples(row: dict[str, Any]) -> tuple[list[tuple[float, float]], int]:
@@ -403,10 +412,11 @@ def _vector_rows(body: Any) -> list[dict[str, Any]]:
     """The rows of an instant ``query`` answer, or ``QueryError``.
 
     ``resultType: vector`` and ``result`` a list whose every row is an
-    object with ``value`` (a ``[timestamp, sample]`` pair ``sample_value``
-    reads) and/or ``histogram`` (a native-histogram sample, not read as a
-    float), and, when present, a ``metric`` object (#3133). One row that is
-    not counts for the whole answer, as in ``_matrix_rows``.
+    object with ``value`` (a ``[timestamp, sample]`` pair ``sample_timestamp``
+    and ``sample_value`` read) and/or ``histogram`` (a native-histogram
+    sample: its timestamp is read, its body is not read as a float), and,
+    when present, a ``metric`` object (#3133, #3304). One row that is not
+    counts for the whole answer, as in ``_matrix_rows``.
     """
     rows = _success_result(body, "vector")
     if not isinstance(rows, list):
@@ -419,16 +429,20 @@ def _vector_rows(body: Any) -> list[dict[str, Any]]:
         if "value" not in row and "histogram" not in row:
             raise _malformed("Prometheus",
                              f"result[{i}] has neither 'value' nor 'histogram'")
-        if "value" in row:
-            sample = row["value"]
+        for key in ("value", "histogram"):
+            if key not in row:
+                continue
+            sample = row[key]
             try:
                 if not (isinstance(sample, list) and len(sample) == 2):
                     raise ValueError
-                sample_value(sample[1])  # the value only, as _matrix_rows
+                sample_timestamp(sample[0])
+                if key == "value":
+                    sample_value(sample[1])
             except (TypeError, ValueError):
                 raise _malformed("Prometheus",
-                                 f"result[{i}].value is {sample!r:.40}, "
-                                 "expected [timestamp, number]") from None
+                                 f"result[{i}].{key} is {sample!r:.40}, "
+                                 "expected [<number> timestamp, <string> sample]") from None
     return rows
 
 
@@ -462,8 +476,9 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
     A ``success`` body must hold ``data`` (an object) with ``resultType:
     matrix`` and ``result`` a list whose every row is an object with a
     ``values`` and/or ``histograms`` list of ``[timestamp, sample]`` pairs
-    (and, when present, a ``metric`` object); every float sample (``values``)
-    is a number ``sample_value`` reads (#3213). One row that is not counts for the whole answer:
+    (and, when present, a ``metric`` object); every timestamp is a number
+    ``sample_timestamp`` reads and every float sample (``values``) a string
+    ``sample_value`` reads (#3213, #3304). One row that is not counts for the whole answer:
     a tool reading the rows that are fine would report the others as
     absent (#3074).
     """
@@ -492,16 +507,14 @@ def _matrix_rows(body: Any) -> list[dict[str, Any]]:
                     raise _malformed("Prometheus",
                                      f"result[{i}].{key} holds {sample!r:.40}, "
                                      "expected [timestamp, sample]")
-                if key != "values":
-                    continue
-                # Only the value: an unreadable timestamp is not refused here
-                # (backtest never reads it; refusing would change its rc).
                 try:
-                    sample_value(sample[1])
+                    sample_timestamp(sample[0])
+                    if key == "values":
+                        sample_value(sample[1])
                 except (TypeError, ValueError):
                     raise _malformed("Prometheus",
-                                     f"result[{i}].values[{j}] is {sample!r:.40}, "
-                                     "expected [timestamp, number]") from None
+                                     f"result[{i}].{key}[{j}] is {sample!r:.40}, "
+                                     "expected [<number> timestamp, <string> sample]") from None
     return rows
 
 
@@ -820,10 +833,23 @@ def prometheus_label_values(prom_url: str, label: str, *,
 def rules_groups(body: Any) -> list[dict[str, Any]]:
     """``data.groups`` of a ``/api/v1/rules`` answer, or ``QueryError``.
 
-    A ``success`` body whose ``data.groups`` is a list of objects, each
-    with ``rules`` (when present) a list of objects (#3133: ``data: null``
-    used to read as "no rule loaded"). The one reading of that answer —
-    whether it came from Prometheus or from a file holding it.
+    A ``success`` body whose ``data.groups`` is a list of objects (#3133:
+    ``data: null`` used to read as "no rule loaded"). Each group (#3331):
+
+    * has ``name``, a string, and ``rules`` — the key is required: Prometheus
+      always writes it (``RuleGroup.Rules``, no ``omitempty``, built as
+      ``[]Rule{}``), so a group without it is a malformed answer, not an
+      empty group. ``rules: null`` is read as ``[]``: a Go server that builds
+      the slice as nil (Thanos ``RuleGroup.Rules`` has no ``omitempty``
+      either) writes an empty group that way, and it is an answer;
+    * holds in ``rules`` objects whose ``name`` and ``lastError`` are
+      strings and ``alerts`` a list when present — the fields a reader
+      sorts, slices or counts (a wrong type there used to crash it, an
+      ``internal_error``).
+
+    The groups are returned with ``rules`` always a list. The one reading
+    of that answer — whether it came from Prometheus or from a file holding
+    it.
     """
     if not isinstance(body, dict):
         raise _malformed("Prometheus", "body is not a JSON object")
@@ -835,16 +861,33 @@ def rules_groups(body: Any) -> list[dict[str, Any]]:
     groups = data.get("groups")
     if not isinstance(groups, list):
         raise _malformed("Prometheus", "'data.groups' is missing or not a list")
+    out: list[dict[str, Any]] = []
     for i, group in enumerate(groups):
         if not isinstance(group, dict):
             raise _malformed("Prometheus", f"group[{i}] is not an object")
-        rules = group.get("rules", [])
+        if not isinstance(group.get("name"), str):
+            raise _malformed("Prometheus", f"group[{i}].name is missing or not a string")
+        if "rules" not in group:
+            raise _malformed("Prometheus", f"group[{i}] has no 'rules'")
+        rules = group["rules"]
+        if rules is None:
+            group = {**group, "rules": []}
+            rules = []
         if not isinstance(rules, list):
             raise _malformed("Prometheus", f"group[{i}].rules is not a list")
-        bad = next((j for j, r in enumerate(rules) if not isinstance(r, dict)), None)
-        if bad is not None:
-            raise _malformed("Prometheus", f"group[{i}].rules[{bad}] is not an object")
-    return groups
+        for j, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                raise _malformed("Prometheus", f"group[{i}].rules[{j}] is not an object")
+            for key, kind, what in _RULE_FIELDS:
+                if key in rule and not isinstance(rule[key], kind):
+                    raise _malformed("Prometheus", f"group[{i}].rules[{j}].{key} is not {what}")
+        out.append(group)
+    return out
+
+
+# The rule fields a reader of rules_groups sorts, slices or counts, and their
+# type (#3331).
+_RULE_FIELDS = (("name", str, "a string"), ("lastError", str, "a string"), ("alerts", list, "a list"))
 
 
 def prometheus_rules(prom_url: str, *, rule_type: Optional[str] = None,

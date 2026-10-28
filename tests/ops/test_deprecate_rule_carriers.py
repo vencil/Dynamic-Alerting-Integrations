@@ -615,7 +615,8 @@ def test_carrier_health_invalid_utf8_bytes():
 
 def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path):
     """執行後 root `_defaults.yaml` 餵產線的 `carrier_health` → 無項，並附一支
-    合成負向控制（`disable` 哨兵餵同一支 → 紅）。"""
+    合成負向控制（mapping 值餵同一支 → 紅；#3250 起 `disable` 這類純量只拒收那個
+    key、載體照樣載入，不再是負向控制）。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml",
@@ -630,12 +631,12 @@ def test_the_written_root_defaults_still_decodes_as_map_string_float64(tmp_path)
     assert yaml.safe_load(written)["defaults"] == {"mem_usage": 90,
                                                    "disk_usage": 85}, written
 
-    old_behaviour = (b"defaults:\n  cpu_usage: disable\n"
-                     b"  cpu_usage_critical: 95\n  mem_usage: 90\n"
-                     b"  disk_usage: 85\n")
-    assert deprecate_rule.carrier_health(old_behaviour) == [
-        ("cpu_usage", "disable", deprecate_rule.UNPARSEABLE)], (
-        "the same checker must call the old shape out")
+    dropped = (b"defaults:\n  cpu_usage: {default: 80}\n"
+               b"  cpu_usage_critical: 95\n  mem_usage: 90\n"
+               b"  disk_usage: 85\n")
+    assert deprecate_rule.carrier_health(dropped) == [
+        ("cpu_usage", "<mapping>", deprecate_rule.UNPARSEABLE)], (
+        "the same checker must call a dropped carrier out")
 
 
 # ===================================================================
@@ -672,14 +673,14 @@ def test_a_neighbouring_metric_sharing_the_prefix_is_not_this_metrics_key(
 
 
 def test_a_carrier_the_exporter_drops_is_not_repaired(tmp_path):
-    """`old_metric: disable` in `defaults:` makes the exporter drop the whole
-    carrier, so it is a path da-guard validation names: the run is refused
-    before any write (#3206), the carrier named — this tool no longer repairs
-    a tree with such a file (fix it, then run again)."""
+    """`old_metric: {default: 30}` in `defaults:` makes the exporter drop the
+    whole carrier, so it is a path da-guard validation names: the run is
+    refused before any write (#3206), the carrier named — this tool no longer
+    repairs a tree with such a file (fix it, then run again)."""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml",
-           "defaults:\n  cpu_usage: 80\n  old_metric: disable\n  mem_usage: 90\n")
+           "defaults:\n  cpu_usage: 80\n  old_metric: {default: 30}\n  mem_usage: 90\n")
     _write(root, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\n")
 
     _assert_refused_unchanged(root, ["_defaults.yaml"], "--execute",
@@ -708,24 +709,37 @@ def test_a_plain_batch_of_two_live_metrics_stays_clean(tmp_path):
 # ===================================================================
 
 
-def test_a_non_numeric_default_refuses_the_run_whichever_metric_it_is(tmp_path):
-    """A non-numeric `defaults:` value — another metric's or the one being
-    deprecated — makes the exporter drop the carrier: refused, named, no
-    write (#3206), where this tool used to degrade to preview or repair it."""
-    for i, body in enumerate(("defaults:\n  cpu_usage: 80\n  old_metric: disable\n  mem_usage: 90\n",
-                              "defaults:\n  cpu_usage: disable\n  mem_usage: 90\n")):
+def test_a_non_scalar_default_refuses_the_run_whichever_metric_it_is(tmp_path):
+    """A `defaults:` value that is no scalar — another metric's or the one
+    being deprecated — makes the exporter drop the carrier: refused, named,
+    no write (#3206), where this tool used to degrade to preview or repair it."""
+    for i, body in enumerate(("defaults:\n  cpu_usage: 80\n  old_metric: [1]\n  mem_usage: 90\n",
+                              "defaults:\n  cpu_usage: [1]\n  mem_usage: 90\n")):
         root = tmp_path / f"conf.d{i}"
         root.mkdir()
         _write(root, "_defaults.yaml", body)
         _assert_refused_unchanged(root, ["_defaults.yaml"], "--execute")
 
+
+def test_a_non_numeric_scalar_default_no_longer_refuses_the_run(tmp_path):
+    """#3250: `old_metric: disable` refuses that key alone — the carrier
+    loads, so it is no path da-guard validation names and the run writes;
+    the deprecated key goes, the refused one stays for its own fix."""
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  old_metric: disable\n  mem_usage: 90\n")
+    r = _run(root, "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    defaults = yaml.safe_load((root / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
+    assert defaults == {"old_metric": "disable", "mem_usage": 90}, defaults
+
 def test_a_refused_execute_run_is_identical_to_preview(tmp_path):
-    """A carrier the exporter drops (`neighbour: 1:30` is no number) refuses
+    """A carrier the exporter drops (`neighbour: [1]` is no scalar) refuses
     preview and `--execute` alike (#3206): same rc, same refusal, every byte
     of the tree unchanged."""
     root = tmp_path / "conf.d"
     root.mkdir()
-    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  neighbour: 1:30\n")
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  neighbour: [1]\n")
     _write(root, "alpha.yaml",
            "tenants:\n  alpha:\n    cpu_usage: \"85\"\n    window: 1:30\n")
     refused = go_refused(root)
@@ -761,14 +775,14 @@ def test_every_underscore_file_the_exporter_drops_refuses_the_run(tmp_path):
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root, "_shared.yaml", "defaults:\n  x: disable\n")
+    _write(root, "_shared.yaml", "defaults:\n  x: [1]\n")
     _assert_refused_unchanged(root, ["_shared.yaml"], "--execute")
 
 def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
     """租戶檔 exporter 讀不進去（`defaults:` 值型別、重複 key）⇒ 警告、Step 2 不碰
     它、它的殘留具名 rc 1（理由與警告同一句）；兩個 plane 一樣。重複 key 不再被
     safe_dump 靜默折疊。成對反例：乾淨的租戶檔照舊刪 key、rc 0、沒有任何 ⚠️。"""
-    bad_value = "defaults:\n  x: disable\ntenants:\n  alpha:\n    cpu_usage: '85'\n"
+    bad_value = "defaults:\n  x: [1]\ntenants:\n  alpha:\n    cpu_usage: '85'\n"
     dup_key = ("tenants:\n  alpha:\n    mem: '1'\n    mem: '2'\n"
                "    cpu_usage: '85'\n")
     # #3206: on the root plane such a file refuses the run before any write.
@@ -917,7 +931,7 @@ def test_an_unreadable_carrier_is_the_tools_problem_in_the_banner_too(
     # A value the exporter cannot read is no longer a banner: the shared
     # refusal names the carrier before anything runs (#3206).
     monkeypatch.setattr(deprecate_rule, "carrier_health_at", real)
-    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  old: disable\n")
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  old: [1]\n")
     _assert_refused_unchanged(root, ["_defaults.yaml"], "--execute")
 
 
@@ -953,7 +967,8 @@ def test_under_plane_subtree_a_refused_file_degrades_the_run(tmp_path):
 
 def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
     """`key:`（空值）不是 exporter 讀不進去：只警告（講沒宣告，#2518），照寫、rc 0。
-    成對反例：同一位置換成字串就是 blocking——整輪降級、零寫入、rc 1。"""
+    成對反例：同一位置換成 list 就是 blocking——整輪降級、零寫入、rc 1（#3250 起換成
+    字串不是：只拒收那個 key）。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  legacy_key:\n")
@@ -971,7 +986,7 @@ def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
 
     root2 = tmp_path / "conf.d2"
     root2.mkdir()
-    _write(root2, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  legacy_key: x\n")
+    _write(root2, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  legacy_key: [x]\n")
     _write(root2, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: '85'\n")
     _assert_refused_unchanged(root2, ["_defaults.yaml"], "--execute")  # #3206
 
@@ -1125,7 +1140,7 @@ def test_the_default_plane_is_root_and_it_names_the_escape_hatch(tmp_path):
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml",
-           'defaults:\n  _state_maintenance: "disable"\n  cpu_usage: 80\n')
+           'defaults:\n  _state_maintenance: {a: 1}\n  cpu_usage: 80\n')
 
     r = _assert_refused_unchanged(root, ["_defaults.yaml"], "--execute")
     assert "子樹載體不做型別體檢" not in r.stdout, r.stdout

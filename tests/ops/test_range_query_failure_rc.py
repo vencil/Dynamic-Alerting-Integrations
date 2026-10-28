@@ -240,51 +240,24 @@ def test_backtest_malformed_success_is_query_error(shape, tmp_path):
     assert "Traceback" not in proc.stderr, proc.stderr
 
 
-# ── alert_quality: Alertmanager (#3073) ──────────────────────────────
+# ── alert_quality: no Alertmanager (#3212) ───────────────────────────
+# The suppression dimension, and with it `--alertmanager` and the #3073
+# Alertmanager-not-answering cases, are gone: it was never measured right.
 
-def _aq(url, am_url, *extra):
-    return _run("alert_quality", "--prometheus", url, "--alertmanager", am_url,
-                "--json", "--ci", *extra)
-
-
-def test_alertmanager_answered_is_measured():
-    """Control: 30 suppressed alerts are counted (ratio 0.6 → WARN), rc 0."""
-    with _fake(_good("alert_quality"), am=("ok", 30)) as url:
-        proc = _aq(url, url)
-    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
-    doc = json.loads(proc.stdout)
-    alert = doc["tenants"][0]["alerts"][0]
-    assert alert["suppressed_count"] == 30 and alert["suppression_grade"] == "WARN", alert
-
-
-@pytest.mark.parametrize("am", [
-    ("refused",), ("500",), ("body", {"alerts": []}), ("body", ["x"]),
-    ("body", [{"labels": "x"}]), ("body", [{"labels": {"tenant": 1}}]),
-], ids=["refused", "http-500", "object-body", "item-not-object", "labels-not-object",
-        "label-value-not-string"])
-@pytest.mark.parametrize("extra", [[], ["--min-score", "75"]], ids=["ci", "ci-min-score"])
-def test_alertmanager_not_measured_is_rc2(am, extra):
-    """#3073: an asked-for Alertmanager that did not answer is not "0
-    suppressed" — rc 2 with ``reason: alertmanager_query_error``, also
-    where ``--min-score`` used to let the run through (rc 0)."""
-    with _fake(_good("alert_quality"), am=am if am[0] != "refused" else None) as url:
-        am_url = "http://127.0.0.1:1" if am[0] == "refused" else url
-        proc = _aq(url, am_url, *extra)
-    assert proc.returncode == 2, (am, proc.returncode, proc.stdout, proc.stderr)
-    doc = json.loads(proc.stdout)
-    assert (doc["status"], doc["reason"]) == ("caller_error", "alertmanager_query_error"), doc
-    assert doc["tenants"] == [], doc
-    assert "Alertmanager query failed" in proc.stderr, proc.stderr
-
-
-@pytest.mark.parametrize("extra", [[], ["--markdown"]], ids=["text", "markdown"])
-def test_alertmanager_not_measured_text_modes_print_no_report(extra):
+@pytest.mark.parametrize("extra", [["--json", "--ci"], ["--markdown"]], ids=["json-ci", "markdown"])
+def test_alertmanager_flag_is_a_usage_error(extra):
     with _fake(_good("alert_quality")) as url:
-        proc = _run("alert_quality", "--prometheus", url,
-                    "--alertmanager", "http://127.0.0.1:1", *extra)
+        proc = _run("alert_quality", "--prometheus", url, "--alertmanager", url, *extra)
     assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
-    assert proc.stdout == "", proc.stdout
-    assert "Alertmanager query failed" in proc.stderr, proc.stderr
+    assert "--alertmanager" in proc.stderr and proc.stdout == "", (proc.stdout, proc.stderr)
+
+
+def test_the_report_has_no_suppression_fields():
+    with _fake(_good("alert_quality")) as url:
+        proc = _run("alert_quality", "--prometheus", url, "--json")
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+    alert = json.loads(proc.stdout)["tenants"][0]["alerts"][0]
+    assert not [k for k in alert if k.startswith("suppress")], alert
 
 
 # ── non-finite samples (#3213) ───────────────────────────────────────

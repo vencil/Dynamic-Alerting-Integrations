@@ -727,7 +727,7 @@ RECIPES: list[Recipe] = [
     # alerts). The stub's tenant scores 75 with no BAD alert: 80 fails it,
     # 70 does not.
     R("alert_quality", "--min-score",
-      lambda t, s: ["--prometheus", s, "--alertmanager", s, "--ci"],
+      lambda t, s: ["--prometheus", s, "--ci"],  # #3212: no --alertmanager
       flip=("--min-score", "80"), boundary=("--min-score", "70"),
       note="score 75, no BAD alert: min 80 fails, min 70 and the 0 default pass"),
 

@@ -23,6 +23,7 @@ from _lib_constants import ONBOARD_HINTS_FILENAME
 # Leaf module (yaml + stdlib only), so no import cycle (#2114).
 from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
+import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, die_caller_error
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -1038,6 +1039,228 @@ def write_json_or_die(
         write_json_secure(path, data, indent=indent, ensure_ascii=ensure_ascii, flag=flag)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
+
+
+# ---------------------------------------------------------------------------
+# #3107 v2: the two output entry points.
+#
+# OPERATOR OUTPUT — a path the operator named on a flag (``--findings-json``,
+# ``--jwks-out``, ``-o``…). The kernel opens it, the way ``>`` and GNU tools
+# do: no userspace path walk, no temp file, no rename. ``-`` is stdout.
+# REPO ARTIFACT — a committed file a regen tool rewrites (doc maps, index
+# tables, state manifests). Atomic replace, the ``_atomic_write`` contract.
+# ---------------------------------------------------------------------------
+
+STDOUT_PATH = "-"
+
+
+def claim_stdout(owner: str) -> None:
+    """Record that *owner* (a flag, or ``"report"`` for the tool's own stdout
+    report) writes to stdout this run. A second claimant is a caller error:
+    two documents on one stream cannot be told apart by a consumer. The
+    record is the run's exit state (``_lib_exitcodes.claim_stdout_owner``:
+    ``run()`` starts each run without one)."""
+    other = _lib_exitcodes.claim_stdout_owner(owner)
+    if other is not None:
+        raise OutputWriteError(
+            STDOUT_PATH, OSError(None, f"standard output is already used by {other}"), flag=owner)
+
+
+def _is_our_stdout(pre: Optional[os.stat_result]) -> bool:
+    """Is *pre* (the kernel's stat of the target) the file, pipe or socket
+    our fd 1 already writes to?  Reopening a regular file with O_TRUNC wipes
+    what the shell redirect already holds; reopening a pipe interleaves two
+    documents. Either way it is treated as ``-``. A character device (tty,
+    /dev/null) is not: reopening one is harmless."""
+    if pre is None or not (stat.S_ISREG(pre.st_mode) or stat.S_ISFIFO(pre.st_mode)
+                           or stat.S_ISSOCK(pre.st_mode)):
+        return False
+    try:
+        out = os.fstat(sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        return False
+    return (out.st_dev, out.st_ino) == (pre.st_dev, pre.st_ino)
+
+
+def targets_stdout(path: str) -> bool:
+    """Will an operator output at *path* be written through stdout (``-``,
+    or the file / pipe / socket fd 1 already is)?  A tool that also prints a
+    receipt to stdout moves it to stderr when this is true."""
+    if path == STDOUT_PATH:
+        return True
+    try:
+        return _is_our_stdout(os.stat(path))
+    except OSError:
+        return False
+
+
+class _StdoutSink(io.TextIOBase):
+    """Text sink over ``sys.stdout`` that never closes it."""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, s: str) -> int:  # type: ignore[override]
+        return sys.stdout.write(s)
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+
+
+_O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+               | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+
+
+def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[int, bool]:
+    """``open(2)`` *path* for writing; return ``(fd, created)``.
+
+    O_NONBLOCK only for the open itself: a FIFO with no reader fails with
+    ENXIO instead of blocking forever; it is cleared before any write. A
+    socket fails the open (ENXIO) on its own.
+    """
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    flags = _O_OPERATOR | (os.O_APPEND if append else os.O_TRUNC) | nonblock
+    fd = os.open(path, flags, mode)
+    try:
+        # Only where O_NONBLOCK was set: on Windows (3.12+) set_blocking
+        # works on pipes only and fails on a regular file's fd.
+        if nonblock:
+            os.set_blocking(fd, True)
+        st = os.fstat(fd)
+        try:
+            # The name as it is NOW (after the open): a symlink swapped in
+            # before the open, or after, is not this euid's file to chmod.
+            now = os.lstat(path)
+            via_link = (not stat.S_ISREG(now.st_mode)
+                        or (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino))
+        except OSError:
+            via_link = True
+        # R2 + V15 (#3107 risk 2, owner 2026-10-24): a regular file this euid
+        # owns gets *mode* before any byte is written — created by this call
+        # or already there (an operator-made 0644 file would leave a findings
+        # file world-readable). Not someone else's file (V2: no chmod, the
+        # write succeeds), not a device, and not a file reached through a
+        # symlink (its target is the link owner's business). A failed fchmod
+        # is the write's failure (rc 2).
+        own = (stat.S_ISREG(st.st_mode) and not via_link
+               and st.st_uid == getattr(os, "geteuid", lambda: st.st_uid)())
+        if own and stat.S_IMODE(st.st_mode) != mode:
+            os.fchmod(fd, mode) if hasattr(os, "fchmod") else os.chmod(path, mode)
+        return fd, stat.S_ISREG(st.st_mode)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@contextlib.contextmanager
+def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
+                         append: bool = False) -> Iterator[io.TextIOBase]:
+    """Open an operator-named output path for UTF-8/LF text writing.
+
+    * ``-`` ⇒ stdout (claimed for *flag*; never closed).
+    * the regular file stdout already writes to ⇒ same as ``-``.
+    * anything else ⇒ ``open(2)`` by the kernel (``O_CREAT|O_TRUNC``, or
+      ``O_APPEND``); *mode* applies to a regular file this euid owns and did
+      not reach through a symlink — created now or already there (V15).
+    * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
+      A write into a regular file that raises leaves it empty, not a prefix
+      (a process killed mid-write can still leave one).
+    """
+    try:
+        try:
+            pre = os.stat(path) if path != STDOUT_PATH else None
+        except OSError:
+            pre = None
+        if path == STDOUT_PATH or _is_our_stdout(pre):
+            claim_stdout(flag or path)
+            sink = _StdoutSink()
+            yield sink
+            sink.flush()
+            return
+        fd, regular = _kernel_open_operator_output(path, mode, append)
+        fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
+        try:
+            yield fh
+            fh.flush()
+        except BaseException:
+            if regular and not append:
+                with contextlib.suppress(OSError, ValueError):
+                    fh.flush()
+                with contextlib.suppress(OSError, ValueError):
+                    os.ftruncate(fh.fileno(), 0)
+            raise
+        finally:
+            with contextlib.suppress(OSError, ValueError):
+                fh.close()
+    except OutputWriteError:
+        raise
+    except OSError as exc:
+        raise OutputWriteError(path, exc, flag=flag) from exc
+
+
+def write_operator_output(path: str, content: str, *, flag: Optional[str],
+                          mode: int = 0o600, append: bool = False) -> None:
+    """Write *content* to an operator-named path; see :func:`open_operator_output`."""
+    with open_operator_output(path, flag=flag, mode=mode, append=append) as fh:
+        fh.write(content)
+
+
+def write_operator_output_or_die(path: str, content: str, *, flag: Optional[str],
+                                 mode: int = 0o600, append: bool = False,
+                                 exit_code: Optional[int] = None) -> None:
+    """:func:`write_operator_output`; an unusable path exits (rc 2, one line)."""
+    try:
+        write_operator_output(path, content, flag=flag, mode=mode, append=append)
+    except OutputWriteError as exc:
+        _die_on_write_error(exc, exit_code)
+
+
+def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:
+    """The preconditions of :func:`write_repo_artifact`, callable before a
+    tool READS the artifact it will rewrite (a FIFO or ``/dev/stdout`` would
+    otherwise block the read). Returns ``os.fspath(path)``."""
+    p = os.fspath(path)
+    if p == STDOUT_PATH:
+        raise OutputWriteError(p, OSError(None, "an artifact cannot be standard output"), flag=flag)
+    try:
+        st = os.stat(p)
+    except FileNotFoundError:
+        # Absent — or a dangling link the kernel let us follow (it refuses
+        # the sticky-directory case with EACCES above): the _atomic_write
+        # contract decides, as before.
+        st = None
+    except OSError as exc:
+        raise OutputWriteError(p, exc, flag=flag) from exc
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        raise OutputWriteError(p, OSError(None, "not a regular file"), flag=flag)
+    if st is not None:
+        # /dev/stdout, /proc/self/fd/N … resolve (in userspace) to the file
+        # the shell redirected; replacing it would discard that stream.
+        for fd in (0, 1, 2):
+            try:
+                o = os.fstat(fd)
+            except OSError:
+                continue
+            if (o.st_dev, o.st_ino) == (st.st_dev, st.st_ino):
+                raise OutputWriteError(p, OSError(None, "is this process's standard stream"), flag=flag)
+    return p
+
+
+def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
+                        mode: int = 0o644, atomic_only: bool = False) -> None:
+    """Atomically rewrite a committed artifact a regen tool owns.
+
+    The ``_atomic_write`` contract, behind two kernel-side preconditions:
+    the target (or, when absent, its directory) must ``stat`` through the
+    kernel — so ``fs.protected_symlinks`` and directory permissions answer
+    before any userspace ``realpath`` runs — and an existing target must be
+    a regular file. ``-``, devices, FIFOs and sockets are
+    refused with :class:`OutputWriteError`.
+    """
+    p = check_repo_artifact(path, flag=flag)
+    # Imported here: _lib_atomic_write imports this module (OutputWriteError).
+    from _lib_atomic_write import atomic_write_text  # noqa: E402  (implementation)
+    atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)
 
 
 def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:

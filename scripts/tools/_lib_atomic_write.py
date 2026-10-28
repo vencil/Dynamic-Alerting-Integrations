@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
 
+#3107: the one atomic writer. It moved here from ``scripts/tools/dx/`` so
+the da-tools image ships it (``state-reconcile`` rewrites its manifest
+atomically there; ``configmap-assemble``, run from the repo, does too);
+``_lib_io.write_repo_artifact`` is its entry point.
+
 Long-running regen tools (``generate_doc_map.py``, ``generate_tool_map.py``,
 …) that write their output directly on top of the target can leave a
 half-written file if the write is interrupted — ENOSPC, a kill, or on FUSE
@@ -67,12 +72,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional, Union
 
-# `_lib_io` (OutputWriteError, safe_label) lives one level up in
-# scripts/tools/. Callers outside scripts/tools/dx/ put only this directory on
-# sys.path, so the helper makes its own dependency importable.
-_TOOLS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-if _TOOLS_DIR not in sys.path:
-    sys.path.insert(0, _TOOLS_DIR)
+# #3107: shipped beside `_lib_io` in scripts/tools/ (and flat in the da-tools
+# image), so its one dependency is a sibling import.
 from _lib_io import OutputWriteError, safe_label  # noqa: E402
 
 _DEFAULT_MODE = 0o644
@@ -146,14 +147,15 @@ class OutputNoSpaceError(OutputWriteError):
 class _Opts:
     """What one call asked for, handed to the internals as one value."""
 
-    __slots__ = ("encoding", "newline", "mode", "flag")
+    __slots__ = ("encoding", "newline", "mode", "flag", "atomic_only")
 
     def __init__(self, encoding: str, newline: Optional[str], mode: int,
-                 flag: Optional[str]) -> None:
+                 flag: Optional[str], atomic_only: bool = False) -> None:
         self.encoding = encoding
         self.newline = newline
         self.mode = mode
         self.flag = flag
+        self.atomic_only = atomic_only
 
 
 def _output_error(out: Path, exc: OSError, opts: _Opts, *,
@@ -284,8 +286,17 @@ def atomic_write_text(
     newline: Optional[str] = "\n",
     mode: int = _DEFAULT_MODE,
     flag: Optional[str] = None,
+    atomic_only: bool = False,
 ) -> None:
     """Write *content* to *path* so an interrupted run keeps the old file.
+
+    *atomic_only* (#3107, for an artifact a consumer must never see half of —
+    configmap-assemble's manifest, state-reconcile's): never fall back to
+    the in-place write. A hard-linked file or one owned by someone else is
+    replaced anyway (the name gets a new inode, as the tools' own
+    tmp+replace did before the shared writer); a directory that cannot take
+    the tmp, or a target that cannot be renamed over, is an error naming
+    *path*. A read-only file is still refused.
 
     See the module docstring for the contract (symlinks written through,
     hard links / unwritable directory → in place + WARN, private tmp, errors
@@ -324,7 +335,7 @@ def atomic_write_text(
             ``main`` with ``exit_on_output_write_error`` to end at rc 2.
     """
     out = Path(path)
-    opts = _Opts(encoding, newline, mode, flag)
+    opts = _Opts(encoding, newline, mode, flag, atomic_only)
     try:
         st = os.stat(out)  # follows symlinks, /proc magic links included
     except FileNotFoundError:
@@ -340,8 +351,13 @@ def atomic_write_text(
         # to avoid (#2128 S2).
         regular and st.st_nlink <= 1 and os.access(out, os.W_OK)
     )
+    if atomic_only and regular and not eligible and (st is None or os.access(out, os.W_OK)):
+        eligible = True  # a hard link: replaced, never rewritten in place
     if eligible:
         done, why = _try_atomic(out, content, st, opts)
+        if not done and atomic_only:
+            raise _output_error(out, OSError(errno.EPERM, f"cannot be replaced atomically: {why or 'no reason given'}"),
+                                opts, previous_kept=True)
         if done:
             return
         # No file yet ⇒ nothing to truncate, and the in-place write reports
@@ -419,7 +435,7 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
             try:
                 os.fchown(fd, st.st_uid, st.st_gid)
             except OSError as exc:
-                if st.st_uid != os.geteuid():
+                if st.st_uid != os.geteuid() and not opts.atomic_only:
                     return False, (f"it belongs to uid {st.st_uid} and a replacement "
                                    f"could not keep that owner ({exc.strerror})")
         if hasattr(os, "fchmod"):
@@ -434,7 +450,7 @@ def _try_atomic(out: Path, content: str, st: Optional[os.stat_result],
                 return False, f"cannot set the temporary file's mode ({exc.strerror})"
         else:  # Windows before 3.13: only the read-only bit exists anyway
             os.chmod(tmp_name, opts.mode)
-        if st is not None:
+        if st is not None and not opts.atomic_only:
             why = _xattr_mismatch(target, fd)
             if why is not None:
                 return False, why

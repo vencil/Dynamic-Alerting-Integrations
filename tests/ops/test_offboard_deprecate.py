@@ -249,13 +249,27 @@ def test_remove_from_defaults_execute_mode():
         # 只刪目標，鄰居留著。
         assert data["defaults"]["mem_usage"] == 90
 
-def test_a_carrier_already_written_as_disable_refuses_the_run(capsys):
-    """舊行為留下的 `defaults: <m>: disable`：exporter 不服務這份載體（da-guard
-    驗證點名它），所以本工具在寫入之前就拒絕整次執行、點名它、rc 2（#3206），
-    不再替它修——要先手動修好。"""
+def test_a_carrier_already_written_as_disable_is_cleaned(capsys):
+    """舊行為留下的 `defaults: <m>: disable`：#3250 起 exporter 只拒收那一個
+    key、載體照樣載入，所以不是 da-guard 驗證點名的檔——本工具照常刪掉該 key。"""
     with tempfile.TemporaryDirectory() as d:
         make_confdir(d, {
             "_defaults.yaml": {"defaults": {"mysql_connections": "disable",
+                                            "mem_usage": 90}},
+        })
+        ok, _msg = _only_carrier(deprecate_rule.remove_from_all_defaults(
+            "mysql_connections", d, execute=True))
+        assert ok is True, _msg
+        text = open(os.path.join(d, "_defaults.yaml"), encoding="utf-8").read()
+        assert "mysql_connections" not in text and "mem_usage: 90" in text, text
+
+
+def test_a_carrier_the_exporter_drops_refuses_the_run(capsys):
+    """exporter 不服務的載體（`defaults:` 值是 mapping，da-guard 驗證點名它）：
+    本工具在寫入之前就拒絕整次執行、點名它、rc 2（#3206），不替它修。"""
+    with tempfile.TemporaryDirectory() as d:
+        make_confdir(d, {
+            "_defaults.yaml": {"defaults": {"mysql_connections": {"default": 30},
                                             "mem_usage": 90}},
         })
         before = open(os.path.join(d, "_defaults.yaml"), "rb").read()
@@ -326,9 +340,9 @@ def test_carrier_health_separates_the_three_ways_a_carrier_goes_wrong():
     UNP, NULL = deprecate_rule.UNPARSEABLE, deprecate_rule.NULL_NOT_DECLARED
 
     assert fn(b"defaults:\n  a: 80\n  b: 1.5\n  c: -3\n") == []
+    # #3250：純量（數字或不是）不讓載體被丟，exporter 只拒收那個 key。
+    assert fn(b"defaults:\n  a: 80\n  old: disable\n  h: 0x10\n") == []
     # 整份載體被丟的那一類，key 具名。
-    assert fn(b"defaults:\n  a: 80\n  old: disable\n") == [
-        ("old", "disable", UNP)]
     assert fn(b"defaults:\n  m:\n    x: 1\n") == [("m", "<mapping>", UNP)]
     assert fn(b"defaults:\n  l:\n  - 1\n") == [("l", "<list>", UNP)]
     # 寫成 null、exporter 當作沒宣告的那一類（#2518；之前是 0 閾值）。

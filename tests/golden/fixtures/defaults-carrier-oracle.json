@@ -1,5 +1,5 @@
 {
-  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `absent` = it loads and `key` is not in its defaults: a value written as null is no write (#2518; before it, such a key decoded to 0). `default_row: false` (absent = true) = `key` decodes but the resolver serves no default row for it: a non-finite number (#3140), which validate-config's root_defaults row FAILs and da-guard reports as root_default_non_finite.",
+  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `absent` = it loads and `key` is not in its defaults: a value written as null is no write (#2518; before it, such a key decoded to 0). `default_row: false` (absent = true) = `key` is read but the resolver serves no default row for it: since #3250 a root value is its text through parseThresholdNumber, as a tenant's is, and a scalar it refuses (`abc`, `0x10`, `.nan`, `2026-01-01`) refuses that key alone, which validate-config's root_defaults row FAILs and da-guard reports as root_default_refused. Only a value that is not a scalar (a mapping, a list) still drops the file.",
   "cases": [
     {
       "name": "plain-int",
@@ -41,27 +41,28 @@
       "doc": "defaults:\n  k: 5_\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 5
+      "default_row": false
     },
     {
       "name": "leading-underscore",
       "doc": "defaults:\n  k: _5\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "octal-0o",
       "doc": "defaults:\n  k: 0o17\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 15
+      "default_row": false
     },
     {
       "name": "legacy-octal",
       "doc": "defaults:\n  k: 017\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 15
+      "value": 17
     },
     {
       "name": "zero-eight",
@@ -75,35 +76,35 @@
       "doc": "defaults:\n  k: 0x10\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 16
+      "default_row": false
     },
     {
       "name": "negative-hex",
       "doc": "defaults:\n  k: -0x10\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": -16
+      "default_row": false
     },
     {
       "name": "plus-hex",
       "doc": "defaults:\n  k: +0x10\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 16
+      "default_row": false
     },
     {
       "name": "binary",
       "doc": "defaults:\n  k: 0b101\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 5
+      "default_row": false
     },
     {
       "name": "negative-binary",
       "doc": "defaults:\n  k: -0b101\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": -5
+      "default_row": false
     },
     {
       "name": "float",
@@ -143,8 +144,9 @@
     {
       "name": "exponent-overflow",
       "doc": "defaults:\n  k: 1e999\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "dot-inf",
@@ -172,43 +174,49 @@
       "doc": "defaults:\n  k: 99999999999999999999\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 1e+20
+      "value": 100000000000000000000
     },
     {
       "name": "word",
       "doc": "defaults:\n  k: disable\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "yes",
       "doc": "defaults:\n  k: yes\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "on",
       "doc": "defaults:\n  k: on\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "true",
       "doc": "defaults:\n  k: true\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "bare-inf",
       "doc": "defaults:\n  k: inf\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "bare-nan",
       "doc": "defaults:\n  k: NaN\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "merge-token-as-value",
@@ -219,20 +227,23 @@
     {
       "name": "double-quoted",
       "doc": "defaults:\n  k: \"80\"\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     },
     {
       "name": "single-quoted",
       "doc": "defaults:\n  k: '80'\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     },
     {
       "name": "tagged-str",
       "doc": "defaults:\n  k: !!str 80\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     },
     {
       "name": "tagged-float",
@@ -253,7 +264,7 @@
       "doc": "defaults:\n  k: !!int 0x10\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 16
+      "default_row": false
     },
     {
       "name": "tagged-int-on-float",
@@ -282,8 +293,9 @@
     {
       "name": "tagged-bool",
       "doc": "defaults:\n  k: !!bool true\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "tagged-binary",
@@ -300,38 +312,44 @@
     {
       "name": "block-literal",
       "doc": "defaults:\n  k: |\n    80\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     },
     {
       "name": "block-folded",
       "doc": "defaults:\n  k: >\n    80\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "value": 80
     },
     {
       "name": "date",
       "doc": "defaults:\n  k: 2026-01-01\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "datetime",
       "doc": "defaults:\n  k: 2026-01-01T00:00:00Z\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "sexagesimal",
       "doc": "defaults:\n  k: 1:30\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "sexagesimal-long",
       "doc": "defaults:\n  k: 190:20:30\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "mapping-value",
@@ -385,8 +403,9 @@
     {
       "name": "alias-string-scalar",
       "doc": "base: &v disable\ndefaults:\n  k: *v\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "merge-numeric-anchor",
@@ -405,8 +424,9 @@
     {
       "name": "merge-string",
       "doc": "base: &b\n  k: disable\ndefaults:\n  <<: *b\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "merge-sequence-first-wins",
@@ -418,8 +438,9 @@
     {
       "name": "merge-sequence-second-decoded",
       "doc": "a: &a\n  j: 1\nb: &b\n  k: disable\ndefaults:\n  <<: [*a, *b]\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "merge-scalar",
@@ -430,8 +451,9 @@
     {
       "name": "merge-nested-anchor",
       "doc": "a: &a\n  k: disable\nb: &b\n  <<: *a\n  j: 1\ndefaults:\n  <<: *b\n  neighbour: 90\n",
-      "exporter": "dropped",
-      "key": "k"
+      "exporter": "accepted",
+      "key": "k",
+      "default_row": false
     },
     {
       "name": "quoted-merge-key-is-a-key",

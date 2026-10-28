@@ -662,9 +662,12 @@ class TestJudgeStep3RulePacksLoaded:
         {"status": "error", "error": "bad_data"},
         {"status": "success", "data": {}},
         {"status": "success", "data": None},
-        {"status": "success", "data": {"groups": [{"name": "mariadb-alerts", "rules": None}]}},
+        # #3331: Prometheus always writes `rules`; a group without it is malformed
+        {"status": "success", "data": {"groups": [{"name": "mariadb-alerts"}]}},
+        {"status": "success", "data": {"groups": [{"name": None, "rules": []}]}},
+        {"status": "success", "data": {"groups": [{"name": "mariadb-alerts", "rules": [{"lastError": 1}]}]}},
         [],
-    ], ids=["status-error", "no-groups", "data-null", "rules-null", "list-body"])
+    ], ids=["status-error", "no-groups", "data-null", "no-rules", "name-null", "lastError-int", "list-body"])
     def test_rules_not_read_are_a_caller_error(self, answer):
         """#3133 batch 4: check_prometheus reads the rules through
         prometheus_rules. An error status or no groups used to read as "No
@@ -1224,11 +1227,14 @@ class TestAnswersReadByTheLib:
         assert c["detail"].startswith(
             "Query failed: malformed Prometheus response: result[0] has neither")
 
-    def test_a_number_sample_counts_as_up(self):
-        """A target is UP when its sample reads as 1, string or number."""
+    def test_a_number_sample_is_a_malformed_answer(self):
+        """#3304: a sample value written as a JSON number is not what any
+        server sends — the query was not answered (it used to count as UP)."""
         checks = self._prometheus(
             lambda q: _vector("1", 1) if q.startswith("up{") else _vector())
-        assert checks["step2_threshold_exporter_scrape"]["status"] == "pass"
+        c = checks["step2_threshold_exporter_scrape"]
+        assert c["status"] == "fail" and c.get("caller_error"), c
+        assert "malformed Prometheus response" in c["detail"], c
 
     def _alertmanager(self, alerts, silences):
         mapping = {"status": ({"config": {"original": "route: {}"}}, None),

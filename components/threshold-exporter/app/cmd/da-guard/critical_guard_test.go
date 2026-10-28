@@ -74,8 +74,11 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		keep      string            // tx lines on both sides of the oracle
 		line      string            // the override under test
 		redundant bool
-		rootWarn  []string // root_defaults_critical_key Fields expected
-		symlink   bool     // read the tree through a symlink to its real root
+		// inert: /metrics is the same with or without the tenant's line, but
+		// nothing is inherited to rely on, so it is not reported redundant.
+		inert    bool
+		rootWarn []string // root_defaults_critical_key Fields expected
+		symlink  bool     // read the tree through a symlink to its real root
 	}{
 		// The measured false advice (redundant before the fix), each spelling.
 		{name: "root-only-critical-key-is-not-redundant",
@@ -132,13 +135,17 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 			tfile: "tx.yaml", keep: "    _profile: std\n", line: conn + ": 60", redundant: true},
 		// Controls: `_critical`-suffixed keys under the `_state_` / `_silent_`
 		// reserved prefixes are not critical-row keys (resolveCriticalRows
-		// skips them; resolveBaseRows serves no row for them either). The
-		// root's stays an inherited value — /metrics is the same with or
-		// without the tenant's line, so it is redundant as before — and gets
-		// no root_defaults_critical_key warning.
-		{name: "root-state-prefixed-critical-key-is-redundant",
+		// skips them; resolveBaseRows serves no row for them either), and get
+		// no root_defaults_critical_key warning. /metrics is the same with or
+		// without the tenant's line. An unregistered one (`_silent_mode_critical`)
+		// stays an inherited value, so it is redundant as before; a
+		// registered `_state_` one is a reserved key the root hands no tenant
+		// (#3250, config.RootDefaultsReservedKey): there is no inheritance to
+		// rely on, so it is not reported redundant (inert), and the root line
+		// is root_defaults_reserved_key instead.
+		{name: "root-state-prefixed-critical-key-is-not-inherited",
 			files: map[string]string{"_defaults.yaml": root + "  _state_maintenance_critical: 60\n"},
-			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_state_maintenance_critical: 60", redundant: true},
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_state_maintenance_critical: 60", inert: true},
 		{name: "root-silent-prefixed-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root + "  _silent_mode_critical: 60\n"},
 			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_silent_mode_critical: 60", redundant: true},
@@ -179,8 +186,9 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 			write(without + "    " + tc.line + "\n") // leaves the tenant file WITH the override
 			withS := servedSeries(t, dir)
 			unchanged := strings.Join(withS, " ") == strings.Join(withoutS, " ")
-			if unchanged != tc.redundant {
-				t.Fatalf("premise: /metrics %v with the override, %v without — want redundant=%v", withS, withoutS, tc.redundant)
+			if unchanged != (tc.redundant || tc.inert) {
+				t.Fatalf("premise: /metrics %v with the override, %v without — want unchanged=%v", withS, withoutS,
+					tc.redundant || tc.inert)
 			}
 
 			field := strings.SplitN(tc.line, ": ", 2)[0]

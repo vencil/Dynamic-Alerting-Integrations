@@ -288,10 +288,11 @@ func TestEffective_ParseFailedIsServedValuesVerdict(t *testing.T) {
 	t.Parallel()
 	tenants := "tenants:\n  t-x:\n    mysql_connections: \"90\"\n  t-y:\n    _silent_mode: critical\n"
 	for name, files := range map[string]map[string]string{
-		"reserved key in root defaults":       {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n", "tenants.yaml": tenants},
-		"quoted number in root defaults":      {"_defaults.yaml": "defaults:\n  mysql_connections: \"80\"\n", "tenants.yaml": tenants},
+		// #3250: a root `defaults:` scalar no longer drops the file (a
+		// quoted number is read, `disable` or a reserved key's text is
+		// refused alone); only a value that is not a scalar does.
 		"_metadata in root defaults":          {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _metadata:\n    owner: dba\n", "tenants.yaml": tenants},
-		"disable in root defaults":            {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_memory: disable\n", "tenants.yaml": tenants},
+		"list in root defaults":               {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_memory: [1]\n", "tenants.yaml": tenants},
 		"scalar tenant body in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  t-x: 3\n", "tenants.yaml": tenants},
 		"tenant file body a list":             {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n", "tenants.yaml": tenants, "b.yaml": "tenants:\n  t-z: [1]\n"},
 	} {
@@ -326,12 +327,12 @@ func TestEffective_ParseFailedStderrCarriesTheReason(t *testing.T) {
 		files  map[string]string
 		reason string
 	}{
-		"string in root defaults": {
+		"list in root defaults": {
 			files: map[string]string{
-				"_defaults.yaml": "defaults:\n  mysql_threads_running: \"abc\"\n",
+				"_defaults.yaml": "defaults:\n  mysql_threads_running: [1]\n",
 				"tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
 			},
-			reason: "cannot unmarshal !!str `abc` into float64",
+			reason: "cannot unmarshal !!seq into float64",
 		},
 		"tenant file body a list": {
 			files: map[string]string{
@@ -516,6 +517,8 @@ func TestEffective_CallerErrors(t *testing.T) {
 	}
 }
 
+// A threshold YAML types as a non-finite float (`.inf`, `.nan`) is shown as
+// the text the file wrote (#3250: the exporter reads the text and refuses it).
 func TestEffective_NonFiniteSentAsText(t *testing.T) {
 	t.Parallel()
 	dir := writeParityTree(t, map[string]string{
@@ -530,8 +533,8 @@ func TestEffective_NonFiniteSentAsText(t *testing.T) {
 	if err := json.Unmarshal(doc.Tenants["tenant-a"], &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.EffectiveConfig["a"] != "Infinity" || got.EffectiveConfig["b"] != "NaN" {
-		t.Errorf("effective_config = %v, want a=Infinity b=NaN as text", got.EffectiveConfig)
+	if got.EffectiveConfig["a"] != ".inf" || got.EffectiveConfig["b"] != ".nan" {
+		t.Errorf("effective_config = %v, want a=.inf b=.nan as written", got.EffectiveConfig)
 	}
 }
 

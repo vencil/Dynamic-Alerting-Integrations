@@ -44,11 +44,19 @@ func TestSimulate_RejectsWhatTheExporterSkips(t *testing.T) {
 			wantFailed: "tx.yaml",
 		},
 		{
-			name:       "tenant file defaults value is a string",
+			name:       "tenant file defaults value is a mapping",
 			l0:         validL0,
-			tenant:     "defaults:\n  mysql_connections: abc\n" + validTenant,
-			wantErr:    []string{"tenant_yaml", "exporter would skip", "abc"},
+			tenant:     "defaults:\n  mysql_connections:\n    nested: map\n" + validTenant,
+			wantErr:    []string{"tenant_yaml", "exporter would skip", "cannot unmarshal"},
 			wantFailed: "tx.yaml",
+		},
+		{
+			// #3250: a `defaults:` value that is not a number refuses that
+			// value, not the file.
+			name:    "tenant file defaults value is a string",
+			l0:      validL0,
+			tenant:  "defaults:\n  mysql_connections: abc\n" + validTenant,
+			wantVal: "90",
 		},
 		{
 			name:       "tenant file max_metrics_per_tenant is not an int",
@@ -71,11 +79,18 @@ func TestSimulate_RejectsWhatTheExporterSkips(t *testing.T) {
 		},
 		{
 			// The exporter drops the WHOLE root file, cpu included.
-			name:       "L0 defaults value is a string",
-			l0:         "defaults:\n  mysql_connections: abc\n  cpu: 80\n",
+			name:       "L0 defaults value is a mapping",
+			l0:         "defaults:\n  mysql_connections:\n    nested: map\n  cpu: 80\n",
 			tenant:     validTenant,
-			wantErr:    []string{"defaults_chain_yaml[0]", "L0, root _defaults.yaml", "abc"},
+			wantErr:    []string{"defaults_chain_yaml[0]", "L0, root _defaults.yaml", "cannot unmarshal"},
 			wantFailed: "_defaults.yaml",
+		},
+		{
+			// #3250: the root keeps the file and refuses the value alone.
+			name:    "L0 defaults value is a string",
+			l0:      "defaults:\n  mysql_connections: abc\n  cpu: 80\n",
+			tenant:  validTenant,
+			wantVal: "90",
 		},
 		{
 			// The subtree plane decodes nested chain files into `any`, so a
@@ -202,8 +217,10 @@ func TestSimulate_RejectionMessageIsCapped(t *testing.T) {
 	t.Parallel()
 	const n = 5000
 	var tenant, l0 strings.Builder
-	tenant.WriteString("defaults:\n")
-	l0.WriteString("defaults:\n")
+	// state_filters entries, not `defaults:` values: since #3250 a
+	// `defaults:` value that is not a number refuses that value only.
+	tenant.WriteString("state_filters:\n")
+	l0.WriteString("state_filters:\n")
 	for i := 0; i < n; i++ {
 		fmt.Fprintf(&tenant, "  k%d: abc\n", i)
 		fmt.Fprintf(&l0, "  k%d: abc\n", i)
@@ -250,8 +267,8 @@ func TestSimulate_RejectionPrecedesTenantNotFound(t *testing.T) {
 		req   SimulateRequest
 		field string
 	}{
-		{"broken tenant file", SimulateRequest{TenantID: "missing", TenantYAML: []byte("defaults:\n  x: abc\ntenants:\n  tx: {}\n")}, "tenant_yaml"},
-		{"broken L0", SimulateRequest{TenantID: "missing", TenantYAML: []byte("tenants:\n  tx: {}\n"), DefaultsChainYAML: [][]byte{[]byte("defaults:\n  x: abc\n")}}, "defaults_chain_yaml[0]"},
+		{"broken tenant file", SimulateRequest{TenantID: "missing", TenantYAML: []byte("defaults:\n  x: [1]\ntenants:\n  tx: {}\n")}, "tenant_yaml"},
+		{"broken L0", SimulateRequest{TenantID: "missing", TenantYAML: []byte("tenants:\n  tx: {}\n"), DefaultsChainYAML: [][]byte{[]byte("defaults:\n  x: [1]\n")}}, "defaults_chain_yaml[0]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

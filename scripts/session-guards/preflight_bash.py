@@ -126,7 +126,7 @@ def _check_bash(command: str) -> tuple[int, str]:
         "  - Read + Write      (full-file rewrites)\n"
         "  - Pipe out-of-place: git show HEAD:<f> | sed '...' > <f>\n"
         "                      (read from HEAD avoids FUSE stale state)\n"
-        "  - Python + atomic_write: scripts/tools/dx/_atomic_write.py\n"
+        "  - Python + atomic_write: scripts/tools/_lib_atomic_write.py\n"
         "\n"
         "See docs/internal/dev-rules.md (rule 11). The regex only fires\n"
         "when both `sed -i` AND a mount-path token appear on the same\n"

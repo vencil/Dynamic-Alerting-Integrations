@@ -672,6 +672,22 @@ def disarm_crash_envelope() -> None:
     _armed_stdout = None
 
 
+# #3107 v2: who writes to stdout this run (the operator-output ``claim_stdout``). Part of
+# the run's exit state: ``run()`` starts each run without an owner and
+# ``reset_exit_state`` clears it, so in-process test runs do not inherit one.
+_stdout_owner: Optional[str] = None
+
+
+def claim_stdout_owner(owner: str) -> Optional[str]:
+    """Record *owner* as this run's stdout writer; return the other owner
+    already recorded (a conflict), or None."""
+    global _stdout_owner
+    if _stdout_owner is not None and _stdout_owner != owner:
+        return _stdout_owner
+    _stdout_owner = owner
+    return None
+
+
 def reset_exit_state() -> None:
     """Every piece of this module's process-global exit state back to its
     import-time value: the arm and its stdout, the recorded stdout failures,
@@ -679,7 +695,7 @@ def reset_exit_state() -> None:
     values they had when this module was imported). For test
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
-    global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope
+    global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope, _stdout_owner
     # A recorded failure holds its exception, whose traceback frames can be
     # in a cycle with the failing stream; an armed or tapped stream alone is
     # not (the taps are undone first), and dies by refcount right here.
@@ -689,6 +705,7 @@ def reset_exit_state() -> None:
     _stdout_failures.clear()
     _stdout_closed_reported = False
     _lost_envelope = None
+    _stdout_owner = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
     if held:
@@ -989,6 +1006,8 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     Gate: tests/shared/test_single_exit_path.py (every tool that calls
     ``arm_crash_envelope`` enters through here).
     """
+    global _stdout_owner
+    _stdout_owner = None  # #3107 v2: each run starts with stdout unclaimed
     try:
         status = entry()
     except SystemExit as exc:

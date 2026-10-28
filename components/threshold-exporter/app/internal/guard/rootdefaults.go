@@ -107,7 +107,8 @@ func quoteKeys(keys []string) string { return "`" + strings.Join(keys, "`, `") +
 // rootNumbersOnly is the remedy at the root, where `defaults:` is decoded as
 // numbers only.
 const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root `defaults:` holds numbers only " +
-	"(a non-numeric value there drops the whole block), so another key has no place in this file."
+	"(a mapping or a list there drops the whole block; a scalar that is no number is refused for that key " +
+	"alone), so another key has no place in this file."
 
 // customAlertsRootFix: no reader takes custom alerts from a `_defaults.yaml`
 // (the exporter never served them; the compiler compiles what it serves,
@@ -276,14 +277,14 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 	return out
 }
 
-// checkRootDefaultsNonFinite reports findingkind.FindingRootDefaultNonFinite
-// for each threshold under the conf.d root carrier's `defaults:` mapping
-// written as a non-finite number (#3140). The predicate is the exporter's
-// (config.NonFiniteDefaultKeys), so the keys named are the ones the resolver
-// serves no default row for. A file in ParseFailed is skipped, as
-// checkRootCriticalKeys does: a quoted `"NaN"` there is not a number at all
-// and the whole file is dropped (exit 3).
-func checkRootDefaultsNonFinite(input CheckInput) []Finding {
+// checkRootDefaultsRefused reports findingkind.FindingRootDefaultRefused for
+// each threshold under the conf.d root carrier's `defaults:` mapping whose
+// value the exporter refuses (#3140, #3250): the decode's own verdict
+// (config.RootDefaultRefusals, parseThresholdNumber on the text as written),
+// so the keys named are the ones the resolver serves no default row for. A
+// file in ParseFailed is skipped, as checkRootCriticalKeys does: it is
+// reported for that.
+func checkRootDefaultsRefused(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
 	for _, pf := range input.ParseFailed {
 		failed[pf] = true
@@ -297,16 +298,64 @@ func checkRootDefaultsNonFinite(input CheckInput) []Finding {
 		if doc == nil || !wrappedInMapping(doc) {
 			continue
 		}
-		for _, k := range config.NonFiniteDefaultKeys(config.ExtractDefaultsBlock(doc)) {
+		for _, r := range config.RootDefaultRefusals(f.Data) {
+			if config.BaseRowsSkipKey(r.Key) {
+				continue
+			}
+			why := "is not a number the exporter reads"
+			if r.Reason == config.RefusedNonFinite {
+				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
+			}
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     findingkind.FindingRootDefaultNonFinite,
+				Kind:     findingkind.FindingRootDefaultRefused,
+				Field:    f.Name + ":defaults." + r.Key,
+				Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves no "+
+					"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
+					"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
+					"`optional_overrides:` instead.", f.Name, r.Key, r.Text, why, r.Key, r.Key),
+			})
+		}
+	}
+	return out
+}
+
+// checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
+// each `_` key under the root carrier's `defaults:` mapping that reaches no
+// tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
+// routing key is the route generator's to judge; a file in ParseFailed is
+// skipped, as checkRootCriticalKeys does. The fix is subtree_default_reserved_key's
+// (reservedKeyFixAt, worded for the root): where the key's reader reads it.
+func checkRootReservedKeys(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		block := config.ExtractDefaultsBlock(doc)
+		keys := make([]string, 0, len(block))
+		for k, v := range block {
+			if v != nil && config.RootDefaultsReservedKey(k) && !config.IsRoutingKey(k) {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDefaultsReservedKey,
 				Field:    f.Name + ":defaults." + k,
-				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` is not a finite number (`.nan`, "+
-					"`.inf` or `-.inf`): an alert compared against it never fires (NaN, or the infinity on the side "+
-					"the alert compares) or always fires. The exporter serves no default row for `%s`; only a "+
-					"tenant's own value is served, as for an `optional_overrides:` key. Write a finite number, or "+
-					"list `%s` under `optional_overrides:` instead.", f.Name, k, k, k),
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` reaches no tenant: the exporter "+
+					"reads the root `defaults:` for thresholds only, while /effective shows the value as inherited "+
+					"(not_served root_defaults_reserved). %s", f.Name, k, reservedKeyFixAt(k, true)),
 			})
 		}
 	}

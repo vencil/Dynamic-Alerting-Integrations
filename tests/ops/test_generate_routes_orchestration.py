@@ -4818,3 +4818,32 @@ class TestPlatformIdentityReaderCompleteness:
             assert "tenant" not in got["NoTenantAlert"], (
                 f"{expr!r} does not group by `tenant`, but the reader claimed a "
                 f"tenant label: {got['NoTenantAlert']}")
+
+
+# ── #3107 v2: --findings-json - owns stdout ────────────────────────────────
+
+from pathlib import Path as _Path3107  # noqa: E402
+_GAR_SCRIPT_FOR_3107 = _Path3107(__file__).resolve().parents[2] / "scripts/tools/ops/generate_alertmanager_routes.py"
+_CONF_FOR_3107 = _Path3107(__file__).resolve().parents[2] / "components/threshold-exporter/config/conf.d"
+
+def test_findings_json_dash_with_o_is_the_only_thing_on_stdout(tmp_path):
+    """Review of #3107 (S1): with -o the run's own stdout lines (Config
+    files: …, Written to …) used to share stdout with the findings document."""
+    import json as _json
+    import subprocess as _sp
+    out = tmp_path / "r.yaml"
+    proc = _sp.run([sys.executable, str(_GAR_SCRIPT_FOR_3107), "--config-dir", str(_CONF_FOR_3107),
+                    "-o", str(out), "--findings-json", "-"], capture_output=True, text=True,
+                   encoding="utf-8", timeout=300, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert _json.loads(proc.stdout)["schema"] == "da-tools.findings/v1"
+    assert "Config files" in proc.stderr
+
+
+def test_findings_json_dash_without_o_is_refused_before_any_route(tmp_path):
+    import subprocess as _sp
+    proc = _sp.run([sys.executable, str(_GAR_SCRIPT_FOR_3107), "--config-dir", str(_CONF_FOR_3107),
+                    "--findings-json", "-"], capture_output=True, text=True,
+                   encoding="utf-8", timeout=300, check=False)
+    assert proc.returncode == 2 and proc.stdout == "", (proc.stdout, proc.stderr)
+    assert "standard output is already used" in proc.stderr

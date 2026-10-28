@@ -634,6 +634,7 @@ func computeEffectiveConfigDocAt(
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
 	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
+	var rootRefused map[string]bool // #3250: root thresholds the root decode refuses
 	var buf [8]ChainDefaults
 	parsed := buf[:0]
 	merged := make(map[string]any)
@@ -644,8 +645,11 @@ func computeEffectiveConfigDocAt(
 		}
 		parsed = append(parsed, pd)
 		writers = noteSpellingWriters(writers, i, pd.block)
+		if rootLevel >= 0 && i == rootLevel {
+			rootRefused = refusedRootThresholds(pd.block)
+		}
 		if rootLevel >= 0 && i != rootLevel {
-			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
+			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block, rootRefused)
 		}
 	}
 
@@ -689,13 +693,16 @@ func computeEffectiveConfigDocAt(
 	// set, so that shallower spelling is no fallback either.
 	//
 	// And a `_critical` key only the root level writes is dropped (#2544,
-	// dropRootOnlyTenantMapKeys): no critical row falls back to it. The
+	// dropRootOnlyTenantMapKeys): no critical row falls back to it. So is a
+	// `_` key only the root level writes (#3250, RootDefaultsReservedKey): the
+	// root decode hands no tenant a reserved key, so deleting the tenant's
+	// own falls back to nothing from there. The
 	// platform entry and the profile layered on below DO reach the tenant's
 	// override map, so such a key they write stays a fallback. (A root-only
 	// dimensional key, #2419, is a fallback since #2031: resolveDimensionalRows
 	// serves it as the labelled series for a tenant that does not write it.)
 	chainD := dropRootOnlyTenantMapKeys(
-		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
+		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims, rootRefused)
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chainD)
@@ -759,13 +766,49 @@ func isCriticalRowKey(k string) bool {
 		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
 }
 
-// noteTenantMapOnlyWriters records the `_critical` keys (isCriticalRowKey) one
-// non-root chain level writes — "writes" being levelWritesSpelling, the
+// tenantMapOnlyKey is a key whose value reaches a tenant only through its
+// override map, which the root level does not fill: a `_critical` key
+// (isCriticalRowKey, #2544) or a reserved one (RootDefaultsReservedKey,
+// #3250).
+func tenantMapOnlyKey(k string) bool { return isCriticalRowKey(k) || RootDefaultsReservedKey(k) }
+
+// refusedRootThresholds is the threshold keys (not baseRowsSkipKey) of the
+// root level's block whose value the root decode refuses (#3250): text
+// thresholdTextNumber does not read — withThresholdLeaves leaves such a value
+// as its text — or a non-finite number. No tenant falls back to one of them
+// (the resolver serves no default row), so, like a tenantMapOnlyKey, it is no
+// fallback unless a deeper level writes the key. nil when none.
+func refusedRootThresholds(block map[string]any) map[string]bool {
+	var out map[string]bool
+	for k, v := range block {
+		if baseRowsSkipKey(k) || v == nil {
+			continue
+		}
+		refused := false
+		switch x := v.(type) {
+		case string:
+			_, ok := thresholdTextNumber(x)
+			refused = !ok
+		case float64:
+			refused = !finiteThreshold(x)
+		}
+		if refused {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// noteTenantMapOnlyWriters records the tenantMapOnlyKey keys, and the keys
+// of rootRefused, one non-root chain level writes — "writes" being levelWritesSpelling, the
 // predicate applySubtreeDefaults uses to decide what it hands the tenant's
 // override map. s stays nil until one is seen.
-func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[string]bool {
+func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any, rootRefused map[string]bool) map[string]bool {
 	for k := range block {
-		if !isCriticalRowKey(k) || !levelWritesSpelling(block, k) {
+		if (!tenantMapOnlyKey(k) && !rootRefused[k]) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
@@ -777,17 +820,18 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[strin
 }
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
-// `_critical` keys no non-root level writes (#2544: their critical row comes
-// only from the tenant's override map, which the root does not fill; see
+// tenantMapOnlyKey keys, and the rootRefused ones, no non-root level writes
+// (#2544, #3250: their value comes only from the tenant's override map,
+// which the root does not fill, or from no layer at all; see
 // computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.
-func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
+func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites, rootRefused map[string]bool) map[string]any {
 	if rootLevel < 0 {
 		return m
 	}
 	var drop []string
 	for k := range m {
-		if isCriticalRowKey(k) && !subtreeWrites[k] {
+		if (tenantMapOnlyKey(k) || rootRefused[k]) && !subtreeWrites[k] {
 			drop = append(drop, k)
 		}
 	}
@@ -937,12 +981,31 @@ func ParseChainDefaults(b []byte) ChainDefaults {
 	if err := judgeConfFile(b); err != nil {
 		return ChainDefaults{err: err}
 	}
-	var raw any
-	if err := yaml.Unmarshal(b, &raw); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
 		return ChainDefaults{err: err}
 	}
-	block, spell := normalizeKeys(extractDefaultsBlock(normalizeYAMLToJSON(raw)))
+	var raw any
+	if doc.Kind != 0 {
+		if err := doc.Decode(&raw); err != nil {
+			return ChainDefaults{err: err}
+		}
+	}
+	block := extractDefaultsBlock(normalizeYAMLToJSON(raw))
+	withThresholdLeaves(block, defaultsBlockNode(&doc)) // #3250, #3361
+	block, spell := normalizeKeys(block)
 	return ChainDefaults{block: block, spell: spell}
+}
+
+// defaultsBlockNode is the node of the mapping extractDefaultsBlock reads:
+// the `defaults:` value when it is a mapping (defaultsWrapper), else the
+// whole document's. nil when the document is not a mapping.
+func defaultsBlockNode(doc *yaml.Node) *yaml.Node {
+	top := documentMapping(doc)
+	if inner := mappingValue(top, "defaults"); inner != nil && inner.Kind == yaml.MappingNode {
+		return inner
+	}
+	return top
 }
 
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
@@ -1092,6 +1155,9 @@ func decodeTenantFile(b []byte) (any, error) {
 	}
 	if block, ok := tenantsBlockByKeyText(&root); ok {
 		m["tenants"] = block
+	}
+	if block, ok := m["tenants"].(map[string]any); ok {
+		withTenantThresholdLeaves(block, mappingValue(documentMapping(&root), "tenants")) // #3250
 	}
 	// A scalar `_profile` is its text, as on the flat plane (#2433): bare
 	// `010` names profile "010", not int 8.

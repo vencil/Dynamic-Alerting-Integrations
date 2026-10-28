@@ -6,13 +6,20 @@ Usage:
 
 Checks: (1) Operator CRD, (2) PrometheusRule count, (3) ServiceMonitor,
 (4) AlertmanagerConfig, (5) Target Health (opt)
+
+Every cluster read goes through ``_lib_kubectl`` (``kubectl_get`` /
+``kubectl_list``, #3207): a
+read kubectl does not answer (cluster unreachable, forbidden, kubectl
+missing or timed out) is a caller error — the row is marked so and the
+exit code is 2 — never "not found". Whether a CRD is installed is a `get`
+of that CRD by name (an answer: absent is a finding, not a failed read; it
+needs only `get` on customresourcedefinitions).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,14 +35,18 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
+from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
-# #452/#737: kubectl return codes that signal a caller-error-class failure
-# (the tool could not reach/run kubectl), distinct from rc==1 which means
-# the resource is genuinely absent (a finding). 127=binary missing (mapped
-# from FileNotFoundError), 124=timeout (mapped from TimeoutExpired).
-_KUBECTL_CALLER_ERROR_RCS = frozenset({124, 127})
+# The CRDs of the kinds the checks list (#3207): whether each is installed
+# is a `kubectl_get` of the CRD by name — an answer, unlike a `kubectl get`
+# of a kind the server does not have, which exits 1 like an unreachable
+# cluster does.
+_CRD_RULES = "prometheusrules.monitoring.coreos.com"
+_CRD_MONITORS = "servicemonitors.monitoring.coreos.com"
+_CRD_AM_CONFIGS = "alertmanagerconfigs.monitoring.coreos.com"
+_PART_OF = "app.kubernetes.io/part-of=dynamic-alerting"
 
 
 # i18n strings
@@ -89,8 +100,9 @@ class CheckResult:
         self.name = name
         self.status = status  # "pass", "warn", "fail", "skip"
         self.detail = detail
-        # #452/#737: True when a "fail" was caused by a caller-error-class
-        # condition (kubectl unreachable/missing/timeout), not a finding.
+        # #452/#737, #3207: True when a "fail" was caused by a read that got
+        # no answer (kubectl: KubectlError; Prometheus: QueryError), not a
+        # finding.
         self.caller_error = caller_error
 
     def to_dict(self) -> dict:
@@ -108,49 +120,44 @@ class OperatorChecker:
         self.args = args
         self.lang = detect_cli_lang()
         self.checks: list[CheckResult] = []
+        self._crds: dict[str, bool | KubectlError] = {}
 
-    def run_kubectl(self, *cmd) -> tuple[str, str, int]:
-        """Run kubectl command. Return (stdout, stderr, returncode)."""
-        full_cmd = ["kubectl"]
-        if self.args.kubeconfig:
-            full_cmd.extend(["--kubeconfig", self.args.kubeconfig])
-        full_cmd.extend(cmd)
+    def _list(self, kind: str, **kw) -> list[dict]:
+        return kubectl_list(kind, kubeconfig=self.args.kubeconfig, **kw)
 
-        try:
-            result = subprocess.run(
-                full_cmd,
-                capture_output=True,
-                text=True, encoding="utf-8", errors="replace",
-                timeout=10,
-            )
-            return result.stdout, result.stderr, result.returncode
-        except FileNotFoundError:
-            return "", i18n("error_kubectl", self.lang), 127
-        except subprocess.TimeoutExpired:
-            return "", i18n("error_connection", self.lang), 124
+    def _installed(self, crd: str) -> bool:
+        """Whether *crd* is installed, read once per CRD; KubectlError when
+        kubectl does not answer (raised again, not re-asked)."""
+        if crd not in self._crds:
+            try:
+                self._crds[crd] = kubectl_get("crd", crd, kubeconfig=self.args.kubeconfig) is not None
+            except KubectlError as exc:
+                self._crds[crd] = exc
+        got = self._crds[crd]
+        if isinstance(got, KubectlError):
+            raise got
+        return got
+
+    def _unanswered(self, key: str, exc: KubectlError) -> CheckResult:
+        return CheckResult(i18n(key, self.lang), "fail", str(exc), caller_error=True)
 
     def check_operator_detection(self) -> CheckResult:
         """Check 1: Operator CRD exists."""
-        _, _, rc = self.run_kubectl(
-            "get", "crd", "prometheusrules.monitoring.coreos.com"
-        )
-        status = "pass" if rc == 0 else "fail"
-        detail = i18n("operator_found", self.lang) if rc == 0 else "not found"
-        # #452/#737: kubectl missing/timeout = caller-error, not "not deployed".
-        ce = rc in _KUBECTL_CALLER_ERROR_RCS
-        return CheckResult(i18n("check_operator", self.lang), status, detail,
-                           caller_error=ce)
+        try:
+            found = self._installed(_CRD_RULES)
+        except KubectlError as exc:
+            return self._unanswered("check_operator", exc)
+        return CheckResult(i18n("check_operator", self.lang), "pass" if found else "fail",
+                           i18n("operator_found", self.lang) if found else f"CRD {_CRD_RULES} not installed")
 
     def check_prometheus_rule_status(self) -> CheckResult:
         """Check 2: PrometheusRule resources loaded."""
-        stdout, stderr, rc = self.run_kubectl(
-            "get", "prometheusrule", "-n", self.args.namespace,
-            "-l", "app.kubernetes.io/part-of=dynamic-alerting", "-o", "json",
-        )
         try:
-            loaded = len(json.loads(stdout).get("items", [])) if rc == 0 else 0
-        except (json.JSONDecodeError, ValueError):
-            loaded = 0
+            installed = self._installed(_CRD_RULES)
+            loaded = len(self._list("prometheusrule", namespace=self.args.namespace,
+                                    selector=_PART_OF)) if installed else 0
+        except KubectlError as exc:
+            return self._unanswered("check_rules", exc)
 
         expected = len(list(
             Path(self.args.rule_packs_dir).glob("rule-pack-*.yaml")
@@ -158,41 +165,34 @@ class OperatorChecker:
 
         status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
         detail = f"{loaded}/{expected}" if expected > 0 else f"{loaded}"
-        # #452/#737: a kubectl env failure (missing/timeout) yields rc 127/124
-        # → loaded==0 → mislabeled "fail"; flag it as caller-error instead.
-        ce = rc in _KUBECTL_CALLER_ERROR_RCS
-        return CheckResult(i18n("check_rules", self.lang), status, detail,
-                           caller_error=ce)
+        if not installed:
+            detail += f" (CRD {_CRD_RULES} not installed)"
+        return CheckResult(i18n("check_rules", self.lang), status, detail)
 
     def check_servicemonitor_status(self) -> CheckResult:
         """Check 3: ServiceMonitor for threshold-exporter."""
-        stdout, _, rc = self.run_kubectl(
-            "get", "servicemonitor", "-n", self.args.namespace,
-            "-l", "app.kubernetes.io/part-of=dynamic-alerting", "-o", "json",
-        )
         try:
-            found = len(json.loads(stdout).get("items", [])) > 0 if rc == 0 else False
-        except (json.JSONDecodeError, ValueError):
-            found = False
-        status = "pass" if found else "fail"
+            installed = self._installed(_CRD_MONITORS)
+            found = installed and bool(self._list("servicemonitor", namespace=self.args.namespace,
+                                                  selector=_PART_OF))
+        except KubectlError as exc:
+            return self._unanswered("check_monitor", exc)
         detail = i18n("monitor_found", self.lang) if found else i18n("monitor_missing", self.lang)
-        # #452/#737: kubectl env failure → not "found" → mislabeled "fail".
-        ce = rc in _KUBECTL_CALLER_ERROR_RCS
-        return CheckResult(i18n("check_monitor", self.lang), status, detail,
-                           caller_error=ce)
+        if not installed:
+            detail += f" (CRD {_CRD_MONITORS} not installed)"
+        return CheckResult(i18n("check_monitor", self.lang), "pass" if found else "fail", detail)
 
     def check_alertmanager_config(self) -> CheckResult:
         """Check 4: AlertmanagerConfig resources."""
-        stdout, _, rc = self.run_kubectl(
-            "get", "alertmanagerconfig", "-n", self.args.namespace,
-            "-l", "app.kubernetes.io/part-of=dynamic-alerting", "-o", "json",
-        )
         try:
-            count = len(json.loads(stdout).get("items", [])) if rc == 0 else 0
-        except (json.JSONDecodeError, ValueError):
-            count = 0
+            installed = self._installed(_CRD_AM_CONFIGS)
+            count = len(self._list("alertmanagerconfig", namespace=self.args.namespace,
+                                   selector=_PART_OF)) if installed else 0
+        except KubectlError as exc:
+            return self._unanswered("check_alertconfig", exc)
         status = "pass" if count > 0 else "warn"
-        detail = f"{count} {i18n('alertconfig_found', self.lang)}" if count > 0 else "no tenants"
+        detail = f"{count} {i18n('alertconfig_found', self.lang)}" if count > 0 else (
+            "no tenants" if installed else f"CRD {_CRD_AM_CONFIGS} not installed")
         return CheckResult(i18n("check_alertconfig", self.lang), status, detail)
 
     def check_target_health(self) -> CheckResult:
@@ -294,9 +294,10 @@ class OperatorChecker:
     def exit_code(self) -> int:
         """Return exit code based on checks.
 
-        #452/#737: a caller-error-class failure (kubectl unreachable/missing/
-        timeout) maps to EXIT_CALLER_ERROR (2) even outside --ci, since the
-        tool genuinely could not do its job. Genuine "fail" findings only gate
+        #452/#737, #3207: a read that got no answer (kubectl unreachable,
+        forbidden, missing or timed out; Prometheus not answering) maps to
+        EXIT_CALLER_ERROR (2) even outside --ci, since the tool genuinely
+        could not do its job. Genuine "fail" findings only gate
         the run in --ci mode (EXIT_VIOLATION).
         """
         caller_error = any(

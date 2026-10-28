@@ -339,7 +339,7 @@ class TestSharedWriteHelpersPinLF:
     """共用 helper 的預設值本身就是契約 —— 呼叫端全靠它。"""
 
     def test_atomic_write_text_defaults_to_lf(self):
-        from _atomic_write import atomic_write_text
+        from _lib_atomic_write import atomic_write_text
 
         default = inspect.signature(atomic_write_text).parameters["newline"].default
         assert default == "\n", (
@@ -359,7 +359,7 @@ class TestSharedWriteHelpersPinLF:
         這支就是補那個洞：不傳 newline，直接驗 bytes。
         （Windows 上具鑑別力；Linux 上是 smoke test。）
         """
-        from _atomic_write import atomic_write_text
+        from _lib_atomic_write import atomic_write_text
 
         target = tmp_path / "sample.md"
         atomic_write_text(target, "alpha\nbeta\ngamma\n")

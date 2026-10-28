@@ -105,9 +105,9 @@ is what keeps either of them off column 0.
   not, why (`SERVED_KEY_REASONS`; #3140: `value_non_finite` /
   `value_unparsed` is a value the row resolver refused and served no row
   for, not a switch-off, and `refused` names such a refusal also when the
-  platform default is served instead; `root_default_non_finite` is a key
-  the tenant does not write whose root `defaults:` value is non-finite, so
-  it gets no default row — `refused` "non_finite"). A no-row schedule segment's `reason`
+  platform default is served instead; `root_default_refused` is a key
+  the tenant does not write whose root `defaults:` value the resolver
+  refuses, so it gets no default row — `refused` says why, #3250). A no-row schedule segment's `reason`
   says the same per part of the day (`SEGMENT_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
@@ -448,7 +448,7 @@ class ServedKey(NamedTuple):
     # `at` — one of `SERVED_KEY_REFUSALS` ("non_finite", "unparsed") — both
     # when it then served the platform default (`exporter` True) and when it
     # served no row (`reason` "value_non_finite" / "value_unparsed", or
-    # "root_default_non_finite": the refused value is the root default's).
+    # "root_default_refused": the refused value is the root default's).
     # None when the value is read (a number, or a disable).
     refused: str | None = None
 
@@ -467,12 +467,12 @@ DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
 SERVED_KEY_REASONS = frozenset({
     "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
     "state_filter_undeclared", "unregistered", "retired",
-    "value_non_finite", "value_unparsed", "root_default_non_finite",
+    "value_non_finite", "value_unparsed", "root_default_refused",
 })
 
 #: The `keys[*].reason` values of a refused value that leaves no row: the
 #: ones `refused` comes with when `exporter` is False.
-SERVED_KEY_REFUSED_REASONS = frozenset({"value_non_finite", "value_unparsed", "root_default_non_finite"})
+SERVED_KEY_REFUSED_REASONS = frozenset({"value_non_finite", "value_unparsed", "root_default_refused"})
 
 
 class SkippedFile(NamedTuple):
@@ -492,6 +492,17 @@ class ServedTree(NamedTuple):
     # With `tenants` only (the subset mode): the requested tenants the tree
     # has no tenant for; `tenants` then holds the others.
     absent: "tuple[str, ...]" = ()
+    # #3250: the root `defaults:` thresholds whose value the exporter refuses
+    # (served-values' `root_defaults_refused`), sorted by key: the tree's
+    # verdict, for every tenant that does not write the key. None when the
+    # exporter dropped the root carrier itself (no verdict).
+    root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
+
+
+class RootDefaultRefused(NamedTuple):
+    key: str      # the threshold key, as the root `defaults:` writes it
+    text: str     # its value, as written
+    refused: str  # one of `SERVED_KEY_REFUSALS`
 
 
 class UnreadableFile(NamedTuple):
@@ -512,11 +523,18 @@ class ParseFailedError(YamlFileError):
 
     def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
                  unreadable: list[UnreadableFile] | None = None,
-                 parse_failed: list[str] | None = None) -> None:
+                 parse_failed: list[str] | None = None,
+                 document: "dict[str, Any] | None" = None) -> None:
         super().__init__(path, cause)
         self.stderr_lines = stderr_lines
         self.unreadable = list(unreadable or [])
         self.parse_failed = list(parse_failed or [])
+        # The JSON da-guard wrote beside the exit 3, for a reader that can
+        # use what the load did judge (#3250: effective's root_defaults_*).
+        self.document = document
+        # load_effective_tree fills these from `document` (None: not judged).
+        self.root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = None
+        self.root_defaults_reserved: "tuple[str, ...] | None" = None
 
 
 class KeySource(NamedTuple):
@@ -564,6 +582,12 @@ class EffectiveTree(NamedTuple):
     tenants: dict[str, TenantEffective]
     skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
     absent: "tuple[str, ...]" = ()  # as ServedTree.absent
+    # as ServedTree.root_defaults_refused, from the same build (#3250); None
+    # when the resolve stopped on a file it cannot decode (not judged)
+    root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
+    # the registered `_` keys of the root `defaults:`, which reach no tenant
+    # (da-guard's root_defaults_reserved_key, #3250), sorted; None as above
+    root_defaults_reserved: "tuple[str, ...] | None" = ()
 
 
 class EffectiveRun(NamedTuple):
@@ -832,7 +856,7 @@ def _run_da_guard(
         first = parse_failed[0] if parse_failed else unreadable[0].file
         raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
                                _nonempty_lines(stderr), unreadable,
-                               [str(f) for f in parse_failed])
+                               [str(f) for f in parse_failed], doc)
     if proc.returncode != _EXIT_OK and not (parse_failed or unreadable):
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
@@ -987,14 +1011,14 @@ def load_served_tree(
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases, dropped, absent), returncode, stderr = _run_da_guard(
+    (tenants, skipped, aliases, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested)),
+                          _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
@@ -1097,7 +1121,33 @@ def load_served_tree(
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error, custom_alerts_finding)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent)
+    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
+                      _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
+
+
+def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,
+                           error: type) -> "tuple[RootDefaultRefused, ...]":
+    """served-values' / effective's `root_defaults_refused` (one build, one
+    shape), checked; a da-guard without it is named as older than this tool,
+    with `error` (the subcommand's error class). Null — effective's when its
+    resolve stopped, either's when the exporter dropped the root carrier
+    itself — is no verdict: None."""
+    if entries is None:
+        return None
+    if entries is _MISSING:
+        raise error(
+            f"da-guard {subcommand} exited {returncode} without the expected JSON ('root_defaults_refused') — "
+            "this da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+    try:
+        out = tuple(RootDefaultRefused(str(e["key"]), str(e["text"]), str(e["refused"])) for e in entries)
+        bad = [e.refused for e in out if e.refused not in SERVED_KEY_REFUSALS]
+        if bad:
+            raise ValueError(f"refused {bad[0]!r}")
+    except (ValueError, KeyError, TypeError) as e:
+        raise error(
+            f"da-guard {subcommand}: root_defaults_refused is not of its shape ({e!r})",
+            returncode, stderr, broken=True) from e
+    return out
 
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
@@ -1369,14 +1419,55 @@ def run_effective(
 def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     reads_skipped: bool, tenants: "Iterable[str] | None" = None) -> EffectiveTree:
     subset, requested = _subset_args(tenants)
-    (got, skipped, absent), returncode, stderr = _run_da_guard(
-        EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
-        read=lambda doc: (doc["tenants"],
-                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
-                          if reads_skipped else [],
-                          _subset_absent(doc, requested)),
-        reads_unreadable=True)
-    return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent)
+    try:
+        (got, skipped, absent, root_refused, root_reserved), returncode, stderr = _run_da_guard(
+            EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+            read=lambda doc: (doc["tenants"],
+                              [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
+                              if reads_skipped else [],
+                              _subset_absent(doc, requested),
+                              doc.get("root_defaults_refused", _MISSING) if reads_skipped else [],
+                              doc.get("root_defaults_reserved", _MISSING) if reads_skipped else []),
+            reads_unreadable=True)
+    except ParseFailedError as exc:
+        # The build's root verdicts stand beside the dropped file (#3250);
+        # a reader that cannot use them simply does not read them.
+        if reads_skipped and isinstance(exc.document, dict):
+            try:
+                exc.root_defaults_refused = _root_defaults_refused(
+                    exc.document.get("root_defaults_refused", _MISSING), 3, "",
+                    EFFECTIVE_SUBCOMMAND, EffectiveError)
+                exc.root_defaults_reserved = _root_defaults_reserved(
+                    exc.document.get("root_defaults_reserved", _MISSING), 3, "")
+            except EffectiveError:
+                pass  # left None: not judged
+        raise
+    return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent,
+                         _root_defaults_refused(root_refused, returncode, stderr,
+                                                EFFECTIVE_SUBCOMMAND, EffectiveError),
+                         _root_defaults_reserved(root_reserved, returncode, stderr))
+
+
+#: A field a da-guard document does not carry (an older binary), unlike one it
+#: carries as null (not judged).
+_MISSING = object()
+
+
+def _root_defaults_reserved(entries: Any, returncode: int, stderr: str) -> "tuple[str, ...] | None":
+    """effective's `root_defaults_reserved`, checked: None when da-guard wrote
+    null (the resolve stopped: not judged); a da-guard without the field is
+    named as older than this tool."""
+    if entries is _MISSING:
+        raise EffectiveError(
+            f"da-guard {EFFECTIVE_SUBCOMMAND} exited {returncode} without the expected JSON "
+            "('root_defaults_reserved') — this da-guard is older than this tool: upgrade or rebuild it",
+            returncode, stderr, stale=True)
+    if entries is None:
+        return None
+    if not isinstance(entries, list) or not all(isinstance(k, str) for k in entries):
+        raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: root_defaults_reserved is not of its shape "
+                             f"({entries!r})", returncode, stderr, broken=True)
+    return tuple(entries)
 
 
 def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:

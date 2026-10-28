@@ -42,7 +42,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
 | `analyze-gaps` | 比對 custom rule 與 Rule Pack，找出重複/缺口 | --tenant-config <PATH>, --output <FILE>, --json | `da-tools analyze-gaps --help` |
 | `config-diff` | 比較兩個配置目錄（GitOps PR review） | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
-| `alert-quality` | 警報品質評估：4 指標、三級評分、CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `alert-quality` | 警報品質評估：Noise / Stale / Latency、三級評分、CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
 | `alert-correlate` | 告警關聯分析：時間窗口聚類 + 根因推斷 | --prometheus <URL>, --input <FILE>, --window <MIN>, --min-score <N> | `da-tools alert-correlate --help` |
 | `drift-detect` | 跨叢集配置漂移偵測：目錄級 SHA-256 比對 | --dirs <LIST>, --labels <LIST>, --ci | `da-tools drift-detect --help` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
@@ -61,7 +61,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
 | `migration-audit` | 遷移稽核：conf.d 以 PyYAML 與 da-guard parse-tree 各讀一次，列出讀法差異（ADR-036 §8） | --config-dir <PATH>, --json, --da-guard-binary <PATH>, --timeout <SEC> | `da-tools migration-audit --help` |
 | `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
-| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
+| `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 CRD YAML + 6 階段遷移計畫 | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
@@ -80,7 +80,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `validate` — Shadow Monitoring 雙軌比對
   - `cutover` — 一鍵切換（遷移最後一步）
   - 其他：`blind-spot`、`maintenance-scheduler`、`backtest`
-  - `alert-quality` — 警報品質評估（noise, stale, latency, suppression）
+  - `alert-quality` — 警報品質評估（noise, stale, latency）
   - `alert-correlate` — 告警關聯分析（時間窗口聚類 + 根因推斷）
   - `cardinality-forecast` — Per-tenant 基數趨勢預測
   - `threshold-recommend` — 閾值推薦（P50/P95/P99）

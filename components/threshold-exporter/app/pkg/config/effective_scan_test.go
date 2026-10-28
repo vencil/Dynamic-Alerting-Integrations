@@ -81,6 +81,10 @@ func effectiveScanCorpus() map[string]map[string]string {
 			"_defaults.yaml": "defaults:\n  mysql_connections: abc\n",
 			"t1.yaml":        "tenants:\n  t1: {}\n",
 		},
+		"root value a list": {
+			"_defaults.yaml": "defaults:\n  mysql_connections: [1]\n",
+			"t1.yaml":        "tenants:\n  t1: {}\n",
+		},
 		"root unwrapped": {
 			"_defaults.yaml": "pg_connections: 100\n",
 			"t1.yaml":        "tenants:\n  t1: {}\n",

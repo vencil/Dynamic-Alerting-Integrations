@@ -307,6 +307,11 @@ class TestFileWritePermissions:
     # key = 相對於 repo root 的路徑
     # value = 豁免原因
     CHMOD_EXEMPT = {
+        "scripts/tools/_lib_io.py": (
+            "#3107 v2 operator 輸出入口：io.open 包的是 _kernel_open_operator_output"
+            " 已開好、已依 R2／V15 對 fd 做 fchmod 的檔案描述元；chmod 在另一個函式、"
+            "且是對 fd 不是對路徑，這支啟發式看不到（寫入閘門改由 audit hook，#3215）"
+        ),
         "scripts/tools/_lib_exitcodes.py": (
             "唯一的寫入 open() 開的是 os.devnull：`2>&-` 時拿它頂替不存在的"
             " stderr，不產生任何檔案，沒有權限可套（#3124；啟發式本身由 #3107 換掉）"

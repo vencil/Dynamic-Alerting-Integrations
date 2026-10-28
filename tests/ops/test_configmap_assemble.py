@@ -29,6 +29,7 @@ import contextlib
 import io
 import json
 import os
+import stat
 import re
 import shutil
 import subprocess
@@ -1468,7 +1469,8 @@ class TestTheArtifactAppearsWholeOrNotAtAll:
             return real_replace(src, dst)
 
         monkeypatch.setattr(mod.os, "replace", _spy)
-        mod._write_atomically(out, "NEW" * 1000)
+        # #3107: main writes through the lib's one atomic writer.
+        mod._lib_io.write_repo_artifact(str(out), "NEW" * 1000, flag="--output", mode=0o600)
 
         assert seen, "nothing was swapped into place — the write was direct"
         assert seen["dst_before"] == "OLD"
@@ -1492,7 +1494,7 @@ class TestTheArtifactAppearsWholeOrNotAtAll:
 
         monkeypatch.setattr(mod.os, "replace", _boom)
         with pytest.raises(OSError):
-            mod._write_atomically(out, "NEW")
+            mod._lib_io.write_repo_artifact(str(out), "NEW", flag="--output", mode=0o600)
         assert out.read_text(encoding="utf-8") == "OLD"
         assert sorted(p.name for p in out.parent.iterdir()) == [out.name], (
             "a temp file was left behind")
@@ -1529,3 +1531,27 @@ def test_end_to_end_with_a_real_kubectl(tmp_path):
     r2 = _run(weird, weird_out)
     assert r2.returncode != 0, r2.stdout + r2.stderr
     assert not weird_out.exists(), "an artifact was written from a mangled run"
+
+
+
+@pytest.mark.parametrize("target", ["-", "/dev/null"])
+def test_an_output_that_is_not_a_regular_file_is_refused(tmp_path, kubectl_shim, target):
+    """#3107 risk 1 (owner 2026-10-24, B): the manifest is replaced
+    atomically, so `--output` is an artifact — `-` or a device is a caller
+    error (rc 2; it used to write through, rc 0)."""
+    d = _tree(tmp_path, ["a.yaml"])
+    r = _run(d, target, shim=kubectl_shim)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "--output" in r.stderr, r.stderr
+
+
+def test_an_existing_manifest_ends_0600(tmp_path, kubectl_shim):
+    """#3107 risk 2: the replaced manifest is 0600 whatever the old mode."""
+    d = _tree(tmp_path, ["a.yaml"])
+    out = _out(tmp_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("old", encoding="utf-8")
+    out.chmod(0o644)
+    r = _run(d, out, shim=kubectl_shim)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600

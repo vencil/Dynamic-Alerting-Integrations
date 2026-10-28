@@ -38,12 +38,11 @@ from typing import Optional
 
 import yaml
 
-# Reuse shared atomic-write helper (LF-forcing + private tmp + os.replace).
-# Same import pattern as scripts/dx/generate_planning_index.py.
-_TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
-sys.path.insert(0, str(_TOOLS_DX))
-from _atomic_write import atomic_write_text  # noqa: E402
-# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+# Reuse shared atomic-write helper (LF-forcing + private tmp + os.replace),
+# which lives in scripts/tools/ beside _lib_io (#3107).
+_TOOLS = Path(__file__).resolve().parent.parent / "tools"
+sys.path.insert(0, str(_TOOLS))
+from _lib_atomic_write import atomic_write_text  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 
 # Make stdout tolerate non-ASCII on legacy Windows consoles.

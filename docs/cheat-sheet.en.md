@@ -30,7 +30,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `federation-check` | Multi-cluster Federation integration verification | --prometheus <URL>, --edge-urls <URLS>, --json | `da-tools federation-check --help` |
 | `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest + public JWKS | --rotate, --existing-jwks <FILE>, --jwks-out <FILE>, --namespace <NS> | `da-tools fed-key --help` |
 | `grafana-import` | Grafana Dashboard import via ConfigMap sidecar auto-mount | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
-| `alert-quality` | Alert quality scoring: 4 metrics, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
+| `alert-quality` | Alert quality scoring: Noise / Stale / Latency, 3 grades, CI gate | --prometheus <URL>, --tenant <NAME>, --ci --min-score <N> | `da-tools alert-quality --help` |
 | `alert-correlate` | Alert correlation analysis: time-window clustering + root cause inference | --prometheus <URL>, --input <FILE>, --window <MIN>, --min-score <N> | `da-tools alert-correlate --help` |
 | `drift-detect` | Cross-cluster config drift detection: directory-level SHA-256 comparison | --dirs <LIST>, --labels <LIST>, --ci | `da-tools drift-detect --help` |
 | `cardinality-forecast` | Per-tenant cardinality trend prediction with limit-breach warning | --prometheus <URL>, --limit <N>, --warn-days <N>, --ci | `da-tools cardinality-forecast --help` |
@@ -61,7 +61,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump, #405 Cat B) | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
 | `migration-audit` | Migration audit: read a conf.d with PyYAML and with da-guard parse-tree, list where they differ (ADR-036 §8) | --config-dir <PATH>, --json, --da-guard-binary <PATH>, --timeout <SEC> | `da-tools migration-audit --help` |
 | `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
-| `operator-check` | Operator CRD deployment status verification (5 checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
+| `operator-check` | Operator CRD deployment status verification (checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN, detect-only) | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
@@ -80,7 +80,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `validate` — Shadow Monitoring comparison
   - `cutover` — One-click switchover (final migration step)
   - Others: `blind-spot`, `maintenance-scheduler`, `backtest`
-  - `alert-quality` — Alert quality scoring (noise, stale, latency, suppression)
+  - `alert-quality` — Alert quality scoring (noise, stale, latency)
   - `alert-correlate` — Alert correlation analysis (time-window clustering + root cause)
   - `cardinality-forecast` — Per-tenant cardinality trend prediction
   - `threshold-recommend` — Threshold recommendation (P50/P95/P99)

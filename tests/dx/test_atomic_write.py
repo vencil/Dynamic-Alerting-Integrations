@@ -1,4 +1,4 @@
-"""Tests for scripts/tools/dx/_atomic_write.py (Trap #60, #2082, #2128).
+"""Tests for scripts/tools/_lib_atomic_write.py (Trap #60, #2082, #2128).
 
 The helper used to be a fixed ``<target>.tmp`` + ``os.replace``. Measured on
 main (#2128), that regressed four ways against a plain in-place write, and
@@ -32,7 +32,7 @@ import pytest
 from _platform_fs import require_os_attrs, symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "_atomic_write.py"
+_SCRIPT = _REPO_ROOT / "scripts" / "tools" / "_lib_atomic_write.py"  # #3107: moved from dx/
 
 import _lib_io  # noqa: E402  (tests/conftest.py puts scripts/tools on sys.path)
 
@@ -641,21 +641,21 @@ def test_generate_tenant_metadata_uses_the_shared_helper():
     generate_tenant_metadata must not come back as a second copy."""
     src = (_REPO_ROOT / "scripts" / "tools" / "dx" / "generate_tenant_metadata.py").read_text(
         encoding="utf-8")
-    assert "from _atomic_write import atomic_write_text" in src
+    assert "from _lib_atomic_write import atomic_write_text" in src
     for gone in ("def atomic_replace_output", "def _try_atomic", "def _xattr_mismatch",
                  "tempfile.mkstemp"):
         assert gone not in src, gone
 
 
 def test_the_module_is_importable_from_outside_scripts_tools():
-    """``scripts/dx`` / ``scripts/ops`` callers put only scripts/tools/dx on
-    sys.path; the helper must make its own ``_lib_io`` import work."""
+    """#3107: the helper lives beside ``_lib_io`` in scripts/tools (flat in
+    the da-tools image): with only that directory on sys.path, both import."""
     import subprocess
     code = (
         "import sys; sys.path[:] = [p for p in sys.path if 'scripts' not in p]; "
         f"sys.path.insert(0, {str(_SCRIPT.parent)!r}); "
-        "import _atomic_write, _lib_io; "
-        "assert issubclass(_atomic_write.OutputNoSpaceError, _lib_io.OutputWriteError); "
+        "import _lib_atomic_write, _lib_io; "
+        "assert issubclass(_lib_atomic_write.OutputNoSpaceError, _lib_io.OutputWriteError); "
         "print('ok')"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,

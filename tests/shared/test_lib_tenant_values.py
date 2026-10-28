@@ -494,7 +494,7 @@ def test_output_without_aliases_is_refused(tmp_path):
 
 def test_output_without_schedules_is_refused(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
-                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
@@ -505,7 +505,7 @@ def test_output_without_schedules_is_refused(tmp_path):
 def test_output_without_series_is_refused(tmp_path):
     """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
-                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
@@ -526,12 +526,12 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
-                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
-_ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
+_ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
              '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
 
@@ -666,7 +666,7 @@ def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, fi
 
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
-_SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
+_SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
 _SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}'
 
 
@@ -814,7 +814,7 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": true, "refused": "nan"}}',
     '{"k": {"exporter": false, "reason": "value_non_finite"}}',
     '{"k": {"exporter": false, "reason": "no_row", "refused": "non_finite"}}',
-    '{"k": {"exporter": false, "reason": "root_default_non_finite"}}',
+    '{"k": {"exporter": false, "reason": "root_default_refused"}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
         "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial",
         "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason",
@@ -845,18 +845,39 @@ def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_g
     assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]
 
 
-def test_real_da_guard_names_a_root_non_finite_default_the_tenant_does_not_write(tmp_path, da_guard):
-    """#3140: a root `defaults:` value that is non-finite leaves a tenant
-    that does not write the key no row; `keys[]` names it
-    (`root_default_non_finite`, refused `non_finite`) instead of leaving the
-    key out, so a reader does not take the lost row for a removal."""
+def test_real_da_guard_names_a_root_refused_default_the_tenant_does_not_write(tmp_path, da_guard):
+    """#3140, #3250: a root `defaults:` value the resolver refuses leaves a
+    tenant that does not write the key no row; `keys[]` names it
+    (`root_default_refused`, `refused` why) instead of leaving the key out,
+    so a reader does not take the lost row for a removal, and the tree names
+    it once with the text written (`root_defaults_refused`)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: .nan\n",
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: NaN\n  pg_connections: abc\n",
         "t.yaml": "tenants:\n  t:\n    mysql_connections: \"70\"\n",
     })
-    got = tv.load_served_values(conf_d, binary=da_guard)["t"]
-    assert got.keys["redis_memory"] == tv.ServedKey(False, "root_default_non_finite", refused="non_finite")
+    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    got = tree.tenants["t"]
+    assert got.keys["redis_memory"] == tv.ServedKey(False, "root_default_refused", refused="non_finite")
+    assert got.keys["pg_connections"] == tv.ServedKey(False, "root_default_refused", refused="unparsed")
     assert "redis_memory" not in got.values and "redis_memory" not in (got.unserved or {})
+    assert tree.root_defaults_refused == (tv.RootDefaultRefused("pg_connections", "abc", "unparsed"),
+                                          tv.RootDefaultRefused("redis_memory", "NaN", "non_finite"))
+
+
+def test_output_without_root_defaults_refused_is_refused_as_older(tmp_path):
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"root_defaults_refused": [], ', '', 1)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "root_defaults_refused" in str(ei.value) and ei.value.stale
+
+
+@pytest.mark.parametrize("entries", ['[{"key": "k", "text": "x"}]', '[{"key": "k", "text": "x", "refused": "typo"}]',
+                                     '{"k": 1}'])
+def test_root_defaults_refused_not_of_its_shape_is_refused(tmp_path, entries):
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"root_defaults_refused": []', '"root_defaults_refused": ' + entries, 1)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "root_defaults_refused" in str(ei.value) and ei.value.binary_fault
 
 
 @pytest.mark.parametrize("reason", ["typo", None])
@@ -950,7 +971,7 @@ def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da
 
 def _custom_alerts_doc(entry: str) -> str:
     return ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
-            '"unreadable": [], "aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+            '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
             '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
             f'"keys": {{}}, "custom_alerts": [{entry}], "custom_alerts_finding": null}}}}}}')
 

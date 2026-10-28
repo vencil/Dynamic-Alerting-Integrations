@@ -44,6 +44,16 @@ package config
 //     FlatBuild.UnreachableValues through undeliverableThresholds).
 //   - root_null_undeclared: the root writes the key as null (#2518,
 //     FlatBuild.RootNullUndeclared).
+//   - root_default_refused: the root `defaults:` writes the key as a value
+//     the root decode refuses (#3250, readRootDefault: `0x1F`, `abc`,
+//     `.nan`), so the resolver serves no default row for it
+//     (ThresholdConfig.RefusedRootDefaults).
+//   - root_defaults_reserved: the root `defaults:` writes a `_` key the
+//     registry lists (#3250). The root decode reads that mapping for
+//     thresholds only and no row phase reads a `_` key (baseRowsSkipKey), so
+//     no tenant gets it (ThresholdConfig.ReservedRootDefaults); a subtree
+//     level, a platform entry or a profile hands such a key to the tenant's
+//     own map, the root does not.
 //   - spelling_duplicate: the winning layer's map writes the threshold
 //     under another spelling too, and the decode keeps that one
 //     (normalizeKeys, #2031; keyed by the losing spelling as written).
@@ -81,6 +91,12 @@ const (
 	NotServedWindowInvalid         = "window_invalid"
 	NotServedUndeliverable         = "undeliverable"
 	NotServedRootNullUndeclared    = "root_null_undeclared"
+	// NotServedRootDefaultRefused (#3250): the root `defaults:` value is one
+	// the root decode refuses; the resolver serves no default row for it.
+	NotServedRootDefaultRefused = "root_default_refused"
+	// NotServedRootDefaultsReserved (#3250): a registered `_` key under the
+	// root `defaults:`, which reaches no tenant.
+	NotServedRootDefaultsReserved = "root_defaults_reserved"
 	// NotServedSpellingDuplicate (#2031): one layer — one file's map —
 	// writes a threshold under two spellings (two spellings of one
 	// dimensional key, or both #1231 spellings); /metrics serves one of them
@@ -376,6 +392,8 @@ type servedVerdicts struct {
 	tenantSets    map[string]map[string]map[string]bool // tenant → file → keys of rejected it sets (FlatBuild.rejectedTenantSets)
 	undeliverable map[string]map[string]bool            // tenant → keys (undeliverableThresholds)
 	rootNull      map[string]map[string]bool            // tenant → keys (FlatBuild.RootNullUndeclared)
+	rootRefused   map[string]string                     // root `defaults:` keys (ThresholdConfig.RefusedRootDefaults)
+	rootReserved  map[string]bool                       // root `defaults:` keys (ThresholdConfig.ReservedRootDefaults)
 
 	// cfg is the build's config; unparsed is ValuesNotServed over it,
 	// computed on the first tenant that asks (all, when all is set — the
@@ -402,6 +420,15 @@ type servedVerdicts struct {
 
 func newServedVerdicts(built *FlatBuild, all bool, now time.Time) *servedVerdicts {
 	v := &servedVerdicts{cfg: &built.Config, all: all, now: now}
+	if refused := built.Config.RefusedRootDefaults(); len(refused) > 0 {
+		v.rootRefused = refused
+	}
+	for _, k := range built.Config.ReservedRootDefaults() {
+		if v.rootReserved == nil {
+			v.rootReserved = map[string]bool{}
+		}
+		v.rootReserved[k] = true
+	}
 	if len(built.ParseFailed) > 0 {
 		v.parseFailed = make(map[string]bool, len(built.ParseFailed))
 		for _, k := range built.ParseFailed {
@@ -461,7 +488,8 @@ func (v *servedVerdicts) chainFileUnread(rel string) bool {
 // candidates reports whether any table could name a key of this tenant's
 // view, so a tenant with none skips the attribution (keySources) entirely.
 func (v *servedVerdicts) candidates(tenantID string, chain []string, unparsed map[string]string, view map[string]any) bool {
-	if len(v.parseFailed) > 0 || len(v.rootUnread) > 0 || len(unparsed) > 0 ||
+	if len(v.parseFailed) > 0 || len(v.rootUnread) > 0 || len(v.rootRefused) > 0 || len(v.rootReserved) > 0 ||
+		len(unparsed) > 0 ||
 		len(v.undeliverable[tenantID]) > 0 || len(v.rootNull[tenantID]) > 0 {
 		return true
 	}
@@ -501,6 +529,10 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			reason = NotServedUnregistered
 		case atRoot && v.rootUnread[k]:
 			reason = NotServedRootDefaultsUnwrapped
+		case atRoot && (v.rootRefused[k] != "" || v.rootRefused[canon] != ""):
+			reason = NotServedRootDefaultRefused
+		case atRoot && v.rootReserved[k]:
+			reason = NotServedRootDefaultsReserved
 		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[src.File][k] && !v.tenantSets[tenantID][src.File][k]:
 			reason = NotServedValueRejected
 		case unparsed[canon] == NotServedValueUnparsedDropped:

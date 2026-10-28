@@ -24,6 +24,7 @@ import (
 	"log"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -109,6 +110,19 @@ type FlatBuild struct {
 	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
 	// RootNullUndeclared.
 	RootDefaultsUnread []UnreadKey
+	// RootDefaultsRefused is the root carrier's RootDefaultRefusals: every
+	// key under its `defaults:` whose value the root decode refuses, with the
+	// text the file wrote (#3250). The value in Config.Defaults is the
+	// verdict (refusedDefault); this is the only place the text is kept. nil
+	// when there is none, and when the root carrier failed to parse.
+	//
+	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
+	// RootNullUndeclared.
+	RootDefaultsRefused []RootDefaultRefusal
+	// RootDefaultsUnjudged: the root carrier is in ParseFailed, so its
+	// `defaults:` was never decoded — RootDefaultsRefused and the root's
+	// reserved keys are no verdict then, not "none" (#3250 review N1).
+	RootDefaultsUnjudged bool
 	// RejectedChainValues is, per subtree defaults file of some tenant's
 	// chain (root-relative slash path), the keys whose value
 	// applySubtreeDefaults refuses as not threshold-shaped, so a tenant under
@@ -164,6 +178,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	var parseFailed []string
 	var rootNull []string // the root carrier's null `defaults:` keys (#2518)
 	var rootUnread []UnreadKey
+	var rootRefused []RootDefaultRefusal
 	for _, name := range scan.Keys {
 		if isUnselectedRootCarrier(name, rootCarrier) {
 			continue
@@ -240,6 +255,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 			for _, k := range rootDefaultsUnread(data, &partial) {
 				rootUnread = append(rootUnread, UnreadKey{File: name, Key: k})
 			}
+			rootRefused = RootDefaultRefusals(data)
 		}
 		applyBoundaryRules(name, &partial, logger)
 		fileConfigs[name] = partial
@@ -265,12 +281,14 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
-		ParseFailed:         parseFailed,
-		RootNullUndeclared:  rootNullUndeclared(&merged, rootNull),
-		RootDefaultsUnread:  rootUnread,
-		RejectedChainValues: rejected.byFile,
-		rejectedTenantSets:  rejected.tenantSets,
-		respelledChain:      respelledChainFiles(in.ParsedDefaults),
+		ParseFailed:          parseFailed,
+		RootNullUndeclared:   rootNullUndeclared(&merged, rootNull),
+		RootDefaultsUnread:   rootUnread,
+		RootDefaultsRefused:  rootRefused,
+		RootDefaultsUnjudged: rootCarrier != "" && slices.Contains(parseFailed, rootCarrier),
+		RejectedChainValues:  rejected.byFile,
+		rejectedTenantSets:   rejected.tenantSets,
+		respelledChain:       respelledChainFiles(in.ParsedDefaults),
 	}, nil
 }
 

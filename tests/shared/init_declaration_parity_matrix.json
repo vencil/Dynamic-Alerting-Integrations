@@ -35,7 +35,7 @@
   {"name": "tenants-is-a-list", "files": {"team.yaml": "tenants:\n  - db-c\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
   {"name": "root-is-a-scalar", "files": {"team.yaml": "just a string\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
   {"name": "syntax-error", "files": {"team.yaml": "tenants:\n  db-c: [unclosed\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
-  {"name": "another-field-of-the-wrong-type-rejects-the-whole-file", "files": {"team.yaml": "defaults:\n  mysql_connections: \"80\"\ntenants:\n  db-c: {}\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
+  {"name": "another-field-of-the-wrong-type-rejects-the-whole-file", "files": {"team.yaml": "max_metrics_per_tenant: lots\ntenants:\n  db-c: {}\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
   {"name": "duplicate-key-inside-a-tenant-body", "files": {"team.yaml": "tenants:\n  db-c:\n    mysql_connections: \"1\"\n    mysql_connections: \"2\"\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
   {"name": "duplicate-root-key", "files": {"team.yaml": "tenants:\n  db-c: {}\ntenants:\n  db-d: {}\n"}, "declarations": {}, "rejected": ["team.yaml"], "conflict": null, "files_base64": {}},
   {"name": "structured-value-with-overrides", "files": {"db-c.yaml": "tenants:\n  db-c:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n        - window: \"01:00-02:00\"\n          value: \"90\"\n"}, "declarations": {"db-c.yaml": ["db-c"]}, "rejected": [], "conflict": null, "files_base64": {}},

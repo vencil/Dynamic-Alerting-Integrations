@@ -144,11 +144,12 @@ def test_a_tree_key_refs_drops_a_file_of_is_refused_before_key_refs(tmp_path, da
 
 def test_a_carrier_this_round_would_repair_is_refused_first(tmp_path, da_guard_env):
     """The exporter drops the carrier today only because of a key this round
-    deletes (`mysql_threads_running: disable`). It is still a path Go names
+    deletes (`mysql_threads_running: [1]`; since #3250 a scalar such as
+    `disable` refuses that key alone and drops nothing). It is still a path Go names
     on the tree as it is: refused, named, unchanged (#3206) — fix it by hand
     first; the tool no longer repairs a tree the exporter cannot serve."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  disk_usage: 80\n  mysql_threads_running: disable\n",
+        "_defaults.yaml": "defaults:\n  disk_usage: 80\n  mysql_threads_running: [1]\n",
         "t2.yaml": "tenants:\n  t2:\n    disk_usage: \"70\"\n",
     })
     _assert_refused_unchanged(conf_d, ["_defaults.yaml"], "--execute")
@@ -352,11 +353,11 @@ def test_the_alias_reminder_shows_only_when_unchecked(tmp_path, da_guard_env):
 
 def test_a_carrier_with_a_value_the_exporter_drops_is_refused_beside_an_unreadable_file(
         tmp_path, da_guard_env, monkeypatch):
-    """r2's tree (`old_metric: disable`, the key this round deletes, beside a
+    """r2's tree (`old_metric: [1]`, the key this round deletes, beside a
     root `_` file this process cannot open): the carrier is a path Go names,
     so the run is refused before any file is staged or written (#3206)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  disk_usage: 80\n  old_metric: disable\n",
+        "_defaults.yaml": "defaults:\n  disk_usage: 80\n  old_metric: [1]\n",
         "_profiles.yaml": "profiles:\n  p1:\n    disk_usage: 1\n",
         "t1.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
     })
