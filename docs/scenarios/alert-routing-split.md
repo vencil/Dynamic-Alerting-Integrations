@@ -37,17 +37,17 @@ annotations:
 
 Alertmanager 的通知模板可以根據 receiver 選擇要引用哪個 annotation。
 
-### Why Not Alertmanager Global Templates?
+### 為什麼不只靠 Alertmanager 模板？
 
-Alertmanager 的 notification template 是 **per-receiver-type 全域的**，不是 per-route。也就是說，你無法讓「走 webhook_configs 的 NOC route」和「走 webhook_configs 的 tenant route」使用不同模板。
+每個 receiver 可以有自己的 `title`／`text`（下方步驟 2、3 就是這樣寫的），但模板只能排版告警本身帶來的欄位：NOC 要的措辭（例如「需升級至 DBA」）若寫在模板裡，就得替每條告警各寫一段。`webhook_configs` 更是沒有模板，接收端拿到的是原始 JSON。
 
-Dual-Perspective Annotation 把差異前推到 Prometheus rule 層，讓 receiver 透過引用不同 annotation 欄位來實現分流，完全不需要修改 Alertmanager template 架構。
+Dual-Perspective Annotation 把兩種措辭都寫在 Prometheus rule 的 annotation 裡：Slack／Teams 等 receiver 在模板裡選要引用哪一個，webhook 的接收端從 JSON 挑欄位。
 
 ## 實作步驟
 
 ### 步驟 1：確認 Rule Pack 已有 platform_summary
 
-v1.13.0 的所有 threshold alert（帶 `group_left(runbook_url, owner, tier)` 的）已預設包含 `platform_summary`。可以用以下命令確認：
+Rule Pack 內建的閾值告警（帶 `group_left(runbook_url, owner, tier)` 的）都帶 `platform_summary`。⚠️ 由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶，NOC 模板引用它時要準備替代值（例如 `{{ or .CommonAnnotations.platform_summary .CommonAnnotations.summary }}`）。可以用以下命令確認：
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -119,7 +119,7 @@ _routing_enforced:
 
 ### 方法 A：透過 `_metadata` 機制
 
-Tenant 可以透過 `_metadata` 覆寫自己的 annotation（包含 `platform_summary`），但這通常由 Platform 管理：
+`_metadata` 只設 `runbook_url`、`owner`、`tier` 三個值，經 `tenant_metadata_info` + `group_left` 帶進告警；`platform_summary` 裡引用的 `tier` 就來自這裡：
 
 ```yaml
 tenants:
@@ -131,7 +131,7 @@ tenants:
       tier: "tier-1"
 ```
 
-> 注意：`platform_summary` 不在 `_metadata` 可覆寫的欄位中（它是 Rule Pack 的 annotation，不是 label）。若需要完全自訂，可以 fork Rule Pack 或使用 custom rule 覆寫。
+> 注意：`platform_summary` 本身是 Rule Pack 的 annotation，`_metadata` 改不了它的文字。要改措辭，見方法 B。
 
 ### 方法 B：自訂 Rule Pack
 

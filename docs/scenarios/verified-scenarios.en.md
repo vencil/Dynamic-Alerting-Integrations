@@ -42,7 +42,7 @@ Composite alerts (AND logic) and multi-tier severity (Critical auto-downgrade to
 | **A — Dynamic thresholds** | Tenant threshold changes take effect immediately, no restart | Self-service tuning without an ops ticket |
 | **B — Weakest-link detection** | Alerts fire on the "worst" value across nodes / metrics | One bad node is caught, not diluted by averaging |
 | **C — Three-state control** | A metric that has a platform default can be custom / default / disable (a declared key has nothing to inherit — only "set it" or "stay silent") | Precise control over each alert's switch and threshold |
-| **D — Maintenance mode** | Auto-silence during the window, auto-recover on expiry | Planned maintenance doesn't spam, and you can't forget to re-enable |
+| **D — Maintenance mode** | During the window, alerts carrying the maintenance clause are silenced (not all of them, see [#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)); auto-recover on expiry | Planned maintenance doesn't spam, and you can't forget to re-enable |
 | **E — Multi-tenant isolation** | Changing tenant A's thresholds or switches does not affect tenant B (two exceptions: see row E below) | The foundation of multi-tenant safety |
 | **F — HA failover** | Service continues when a Pod dies; aggregate value doesn't double | High availability + data correctness |
 

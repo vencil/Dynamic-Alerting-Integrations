@@ -37,17 +37,17 @@ annotations:
 
 Alertmanager notification templates select which annotation to reference based on the receiver.
 
-### Why not Alertmanager global templates?
+### Why not rely on Alertmanager templates alone?
 
-Alertmanager notification templates are **per-receiver-type global**, not per-route. You cannot make a "webhook_configs NOC route" and a "webhook_configs tenant route" use different templates.
+Each receiver can have its own `title` / `text` (Steps 2 and 3 below do exactly that), but a template can only lay out the fields the alert carries: wording the NOC needs (e.g. "escalate to DBA") would have to be written per alert in the template. `webhook_configs` has no template at all; the receiving end gets raw JSON.
 
-Dual-Perspective Annotation pushes the differentiation up to the Prometheus rule layer, letting receivers reference different annotation fields. No Alertmanager template architecture changes needed.
+Dual-Perspective Annotation puts both wordings in the Prometheus rule's annotations: Slack / Teams receivers pick which one to reference in their template, and a webhook receiver picks the field from the JSON.
 
 ## Implementation Steps
 
 ### Step 1: Verify Rule Packs include platform_summary
 
-All threshold alerts (those with `group_left(runbook_url, owner, tier)`) include `platform_summary` by default. Verify with:
+The Rule Packs' built-in threshold alerts (those with `group_left(runbook_url, owner, tier)`) all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` do not, so a NOC template referencing it needs a fallback (e.g. `{{ or .CommonAnnotations.platform_summary .CommonAnnotations.summary }}`). Verify with:
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -119,7 +119,7 @@ The system auto-expands to individual `platform-enforced-<tenant>` receivers per
 
 ### Option A: Via `_metadata` mechanism
 
-Tenant metadata (owner, tier, runbook_url) is injected via `tenant_metadata_info` + `group_left`:
+`_metadata` sets only three values, `runbook_url`, `owner` and `tier`, carried into alerts via `tenant_metadata_info` + `group_left`; the `tier` that `platform_summary` references comes from here:
 
 ```yaml
 tenants:
@@ -130,7 +130,7 @@ tenants:
       tier: "tier-1"
 ```
 
-> Note: `platform_summary` itself is a Rule Pack annotation, not a metadata label. To fully customize it, fork the Rule Pack or use custom rules.
+> Note: `platform_summary` itself is a Rule Pack annotation; `_metadata` cannot change its text. To change the wording, see Option B.
 
 ### Option B: Custom Rule Pack
 
