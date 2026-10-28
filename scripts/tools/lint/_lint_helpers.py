@@ -79,9 +79,12 @@ BUILD_EXEMPT = frozenset({
     # #1516 (ADR-037) — renders both conf.d trees and compares the renders.
     # Library imported by config_diff.py, not a CLI command.
     "_render_diff.py",
-    # #2883 — reads a tenant-api state store copy (--state); imported by
-    # offboard_tenant. Library, not CLI.
+    # #2883 / ADR-036 §12 — reads `tenant-api state show`'s JSON (--state);
+    # imported by offboard_tenant and generate_tenant_metadata. Library, not CLI.
     "_lib_tenant_state.py",
+    # #3206 (ADR-036 §12) — runs da-crdecode / da-read for a manifest or an
+    # Alertmanager config; imported by onboard_platform. Library, not CLI.
+    "_lib_consumer_read.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.

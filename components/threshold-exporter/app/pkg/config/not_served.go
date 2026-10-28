@@ -24,7 +24,11 @@ package config
 //   - value_rejected: applySubtreeDefaults refuses a subtree level's value
 //     (not threshold-shaped) and the tenant keeps a shallower one
 //     (FlatBuild.RejectedChainValues, less the keys the tenant sets itself:
-//     FlatBuild.rejectedTenantSets).
+//     FlatBuild.rejectedTenantSets); or a subtree level writes a reserved
+//     key a subtree does not carry (subtreeReservedUnsupported, #3341) and
+//     the tenant side sets none — the one entry not shown in the effective
+//     config, since neither it nor /metrics lays that value
+//     (withNotCarried).
 //   - value_unparsed: resolveBaseRows cannot parse the tenant's value (a
 //     non-finite number included, #3140; `disable:<severity>` too, #3141) and
 //     serves the platform default instead (rejectRecorder).
@@ -93,8 +97,10 @@ type NotServedKey struct {
 	// Reason is one of the NotServed* constants.
 	Reason string `json:"reason"`
 	// File is the root-relative slash path of the file whose value the
-	// effective config shows (the key's winning layer); empty when no single
-	// file applies.
+	// effective config shows (the key's winning layer) — or, for a `_` key a
+	// subtree level writes non-null that the effective config does not show
+	// (#3341), the deepest subtree file writing it; empty when no single file
+	// applies.
 	File string `json:"file,omitempty"`
 }
 

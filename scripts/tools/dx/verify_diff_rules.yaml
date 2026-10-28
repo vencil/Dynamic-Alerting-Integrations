@@ -94,6 +94,11 @@ dir_rules:
     suite: tests/alertmanager-inhibit
     runner: "make test-am-inhibit"
     justification: "#1132 inhibit 語意 gate 為 Go-only 套件（無 test_*.py，pytest 會空收集）；Go 僅 container 內可用"
+  - name: da-read-self
+    source: "components/da-read/**"
+    suite: components/da-read
+    runner: "make dc-go-test MOD=da-read"
+    justification: "#3206 da-read 是獨立 Go module（Alertmanager 的 config.Load），Go-only 套件、無 test_*.py；Go 僅 container 內可用"
   - name: am-inhibit-input-trylocal
     source: "try-local/alertmanager.yml"
     suite: tests/alertmanager-inhibit

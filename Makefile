@@ -411,7 +411,7 @@ dc-test: ## 在 Dev Container 內跑 pytest（xdist -n auto；可選 ARGS="-k fo
 dc-go-test: ## 在 Dev Container 內跑 Go tests（預設全 CI module；MOD= / PKG= 縮小範圍；Go 僅在 container 內可用）
 	@# Root 無 go.work——go test 必須逐 module 跑；module 對照表（與 ci.yml
 	@# go-tests-* jobs 同步）維護在 scripts/ops/dc_go_test.sh。用法：
-	@#   make dc-go-test                          # exporter + tenant-api + am-inhibit + receiver + bench-filter 全跑
+	@#   make dc-go-test                          # exporter + tenant-api + am-inhibit + da-read + receiver + bench-filter 全跑
 	@#   make dc-go-test MOD=tenant-api           # 單 module
 	@#   make dc-go-test PKG=./internal/rbac/...  # 單 package（module 自動推斷，秒級）
 	@#   make dc-go-test MOD=tenant-api ARGS="-run TestX -v"
@@ -633,6 +633,21 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 	@mkdir -p "$(dir $(DA_GUARD_BUILD))"
 	@cd components/threshold-exporter/app && $(DA_GUARD_GO_ENV) go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
 
+# tenant-api（ADR-036 §12）：check_admin_config_schema 經 `tenant-api config check`
+# 以 server 的解析函式判 `_rbac.yaml`／`_tenant_orgs.yaml`。理由同 da-guard-build：
+# 每次都重建，避免沿用舊 binary 驗舊語意。
+TENANT_API_BUILD := $(CURDIR)/.build/tenant-api
+
+.PHONY: tenant-api-build
+tenant-api-build: ## 從本 repo Go 原始碼建 tenant-api 到 .build/tenant-api（check_admin_config_schema 的 config check 需要）
+	@command -v go >/dev/null 2>&1 || { \
+		echo "ERROR: go is not on PATH, so tenant-api cannot be built from this checkout." >&2; \
+		echo "       Install Go (version: components/tenant-api/go.mod), or set" >&2; \
+		echo "       TENANT_API_BINARY to a tenant-api binary (the tenant-api image ships one)." >&2; \
+		exit 2; }
+	@mkdir -p "$(dir $(TENANT_API_BUILD))"
+	@cd components/tenant-api && CGO_ENABLED=0 go build -buildvcs=false -o "$(TENANT_API_BUILD)" ./cmd/server
+
 # 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印
 # ERROR、非零退出）。用 prerequisite 而不是在 recipe 裡呼叫 $(MAKE)，`make -n`
@@ -642,6 +657,39 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 # 一律掛 $(DA_GUARD_PREREQ)、在指令前加 $(DA_GUARD_ENV)。
 DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
 DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
+
+# da-read／da-crdecode（#3206，ADR-036 §12）：onboard-analyze 讀 Alertmanager 設定，
+# 外層 ConfigMap 交給 da-crdecode（kubectl 的讀法）、設定本身交給 `da-read
+# alertmanager`（Alertmanager 自己的載入函式）；check_admin_config_schema 也以
+# da-crdecode 讀 Helm values。與 da-guard 同一套：環境變數
+# 已設就用它、不建；否則從本 checkout 建到 .build/。da-read 是獨立的 Go module
+# （components/da-read），不在 exporter module 裡。
+DA_READ_BUILD := $(CURDIR)/.build/da-read
+DA_CRDECODE_BUILD := $(CURDIR)/.build/da-crdecode
+
+.PHONY: da-read-build
+da-read-build: ## 從本 repo Go 原始碼建 da-read 到 .build/da-read（onboard-analyze 需要；da-tools 映像已內建）
+	@command -v go >/dev/null 2>&1 || { \
+		echo "ERROR: go is not on PATH, so da-read cannot be built from this checkout." >&2; \
+		echo "       Install Go (version: components/da-read/go.mod), or set" >&2; \
+		echo "       DA_READ_BINARY to a da-read binary (the da-tools image ships one)." >&2; \
+		exit 2; }
+	@mkdir -p "$(dir $(DA_READ_BUILD))"
+	@cd components/da-read && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_READ_BUILD)" .
+
+.PHONY: da-crdecode-build
+da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crdecode（--render-cr、onboard-analyze 與 check_admin_config_schema 讀 Helm values 需要；da-tools 映像已內建）
+	@command -v go >/dev/null 2>&1 || { \
+		echo "ERROR: go is not on PATH, so da-crdecode cannot be built from this checkout." >&2; \
+		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
+		echo "       DA_CRDECODE_BINARY to a da-crdecode binary (the da-tools image ships one)." >&2; \
+		exit 2; }
+	@mkdir -p "$(dir $(DA_CRDECODE_BUILD))"
+	@cd components/threshold-exporter/app && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_CRDECODE_BUILD)" ./cmd/da-crdecode
+
+DA_READ_PREREQ := $(if $(strip $(DA_READ_BINARY)),,da-read-build) $(if $(strip $(DA_CRDECODE_BINARY)),,da-crdecode-build)
+DA_READ_ENV = DA_READ_BINARY="$(if $(strip $(DA_READ_BINARY)),$$DA_READ_BINARY,$(DA_READ_BUILD))" \
+	DA_CRDECODE_BINARY="$(if $(strip $(DA_CRDECODE_BINARY)),$$DA_CRDECODE_BINARY,$(DA_CRDECODE_BUILD))"
 
 # 定義在上面、早於 DA_GUARD_PREREQ 的目標：prerequisite 在讀到規則時就展開，
 # 所以在這裡補掛（ADR-036 §2：合成 fixture 產生器寫入前經 da-guard parse-tree 確認；
@@ -677,8 +725,8 @@ validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + ro
 		--version-check
 
 .PHONY: onboard-analyze
-onboard-analyze: ## Analyze existing AM/Prometheus configs for onboarding
-	@python3 scripts/tools/ops/onboard_platform.py $(ARGS)
+onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for onboarding（Alertmanager 設定經 da-crdecode／da-read 讀：DA_CRDECODE_BINARY／DA_READ_BINARY，未設就建到 .build/）
+	@$(DA_READ_ENV) python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
 # 這個 target 是 pre-tag 唯一的版號閘門——`make pre-tag` 不跑 pytest，所以
 # 任何「只有測試抓得到」的守門員對 release 而言等於不存在（#1407 第二輪）。
@@ -816,7 +864,7 @@ docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474
 	@# Dockerfile 只 COPY+chmod 不執行 binary，故 stub 可驗 COPY 路徑 / 語法）。
 	@# #463 multi-arch：Dockerfile 改 COPY 帶 arch 後綴（da-guard.<arch>），stub 須對應。
 	@mkdir -p components/da-tools/app/tools
-	@for b in da-guard da-batchpr da-parser; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
+	@for b in da-guard da-batchpr da-parser da-crdecode da-read; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
 	@docker buildx build --load -t local-test:da-tools components/da-tools/app
 	@# 兩顆隨 chart 出貨、從不發布的自建 image（#1337）——build context 就是各自目錄。
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar

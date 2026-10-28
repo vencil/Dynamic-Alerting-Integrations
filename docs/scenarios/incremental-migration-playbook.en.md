@@ -30,7 +30,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 
 | Phase | Effort | Risk | Duration |
 |-------|--------|------|----------|
-| Phase 0: Audit & Assessment | 1 person-day | None | 1 day |
+| Phase 0: Audit & Assessment | 1 person-day | Read-only, no change to the existing system | 1 day |
 | Phase 1: Pilot Domain Deployment | 2 person-days | Low | 3-5 days |
 | Phase 2: Dual-Run Validation | 1 person-day (monitoring) | Low | 1-2 weeks |
 | Phase 3: Cutover | 0.5 person-day | Low | 4 hours |
@@ -41,7 +41,7 @@ Each phase is **independently valuable**—you can stop at any phase without sys
 
 ## Phase 0: Audit & Assessment
 
-**Goal**: Understand your current monitoring setup without changing anything. This phase is **read-only** and completely risk-free.
+**Goal**: Understand your current monitoring setup without changing anything. This phase is **read-only**: it reads your config files and queries Prometheus, and changes nothing in the existing system.
 
 ### Step 0.1: Analyze Existing Alertmanager Configuration
 
@@ -534,7 +534,7 @@ Remove any test or pilot tenants:
 ```bash
 find conf.d -name 'tenant-*.yaml'
 da-tools offboard test-domain-1 --config-dir conf.d/            # pre-check
-da-tools offboard test-domain-1 --config-dir conf.d/ --state tenant-api-state.yaml --execute  # actually offboard (--state: a saved kubectl get configmap tenant-api-state -o yaml)
+da-tools offboard test-domain-1 --config-dir conf.d/ --state state.json --execute  # actually offboard (--state: the output of kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show)
 da-tools validate-config --config-dir conf.d/
 ```
 
@@ -647,13 +647,13 @@ Rehearsal contents:
 
 **Item 6 is the core**: checksums must return to the pre-Base-PR `merged_hash`. Any mismatch = drift (some tenant PR partially reverted, or some cascading defaults missed). Capture a pre-Base-PR snapshot with `da-tools tenant-verify --all --json > pre-base.json` first, then compare after rollback to pinpoint drifted tenants. Exit 2 with the tenant marked duplicate (with `--json`: `"error": "duplicate"` plus a `files` list; without it: `status: ERROR — duplicate` plus `declared in:` lines) is not hash drift but a **duplicate declaration**: the tenant appears in every file listed (e.g. a file the rollback failed to delete), so the tool refuses to compute a hash — remove the tenant's extra declaration so it lives in exactly one file, then re-run item 6 (a file may declare other tenants too; delete the whole file only when nothing else in it must stay). `--all` also exits 2 on a duplicate declaration (other tenants are still listed, but without a `merged_hash`: da-guard refuses such a tree as a whole); resolve it before taking the snapshot.
 
-### Tooling follow-up (not yet implemented, on v2.8.x backlog)
+### Tools not yet implemented (not scheduled)
 
 - `make rollback-dryrun` Makefile target — one-command staging rehearsal in customer environment that auto-fills the time-budget table above
 - `da-tools batch-pr rollback --plan` — given a Base PR #, derive the full reverse-order plan and output a markdown plan for ops review
 - `da-tools batch-pr rollback --execute` — automated reverse-order revert; waits for git-sync apply + reload settle between steps
 
-These tools are out of scope for this doc PR but the procedures defined here are their specification.
+Until they exist, run the procedures in this section by hand; this section is also their specification.
 
 ---
 

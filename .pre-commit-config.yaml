@@ -807,12 +807,17 @@ repos:
         # it is verbose.
         verbose: true
 
-      # Gemini #1056 disposition 3b: pre-merge structural validation for the
-      # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).
-      # _rbac / _tenant_orgs parse STRICTLY (yaml KnownFields), so a typo'd key is a
-      # runtime LOAD ERROR — startup-fatal, or last-good masking on hot-reload.
-      # _domain_policy parses LENIENTLY (policy.go uses plain yaml.Unmarshal), so a
-      # typo'd constraint key is SILENTLY IGNORED and this lint is its ONLY guard.
+      # Gemini #1056 disposition 3b: pre-merge validation for the tenant-api ADMIN
+      # meta-config files (_rbac / _domain_policy / _tenant_orgs). ADR-036 §12: each
+      # is read by its consumer — _rbac / _tenant_orgs and the Helm-embedded RBAC by
+      # `tenant-api config check` (the server's parse functions; a refusal is a
+      # violation), _domain_policy by `da-guard parse-tree`, the Helm values by
+      # `da-crdecode`; the JSON schemas are the stricter authoring checks on what
+      # those decoded. The wrapper uses $TENANT_API_BINARY / $DA_CRDECODE_BINARY /
+      # $DA_GUARD_BINARY when set, else builds .build/<name> (make <name>-build);
+      # without go that build fails by name and so does this hook — a run without
+      # the readers must not pass. _domain_policy's runtime reader is LENIENT (a
+      # typo'd constraint key is SILENTLY IGNORED), so this lint is its ONLY guard.
       # Either way the failure is invisible until production; this shifts it left so
       # a broken admin config cannot merge. pass_filenames: true + a stem regex
       # matches these files ANYWHERE in the repo (try-local seed, examples, future
@@ -833,7 +838,7 @@ repos:
       # Lint job (pre-commit run admin-config-schema-check).
       - id: admin-config-schema-check
         name: admin meta-config (_rbac / _domain_policy / _tenant_orgs + embedded RBAC) ↔ JSON schemas
-        entry: python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
+        entry: bash scripts/ops/with_admin_config_tools.sh python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
         language: python
         files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$|(^|/)helm/tenant-api/values\.yaml$'
         additional_dependencies: ['pyyaml', 'jsonschema']
@@ -1346,12 +1351,14 @@ repos:
         # own reading: profile, platform file, per-key layering); the wrapper
         # builds .build/da-guard as for platform-data-check, and a run without
         # one fails by name. The Go module and the reader are in `files:` for
-        # the same reason as there: they change the answer.
-        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_retire_drift.py --ci
+        # the same reason as there: they change the answer. #3206: the
+        # namespaces manifest is read through da-crdecode (kubectl's reading),
+        # built the same way by with_da_crdecode.sh.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_retire_drift.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/conf\.d/|helm/values-.*\.yaml$|k8s/00-namespaces/namespaces\.yaml$|scripts/tools/lint/check_retire_drift\.py$|scripts/tools/_lib_(tenant_values|parse_cache|parse_tree)\.py$|scripts/ops/with_da_guard\.sh$|components/threshold-exporter/app/)
+        files: ^(components/threshold-exporter/config/conf\.d/|helm/values-.*\.yaml$|k8s/00-namespaces/namespaces\.yaml$|scripts/tools/lint/check_retire_drift\.py$|scripts/tools/_lib_(tenant_values|parse_cache|parse_tree|consumer_read)\.py$|scripts/ops/with_da_(guard|crdecode)\.sh$|components/threshold-exporter/app/)
         # A tenant that declares _metadata.db_type emits tenant_expected_exporter=1
         # (collector.go). If a PR deletes its K8s target (helm/values-<t>.yaml or its
         # db-* namespace) but leaves the conf.d _metadata, TenantExporterAbsent
@@ -1600,7 +1607,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|exitcodes|godispatch|io|parse_cache|parse_tree|prometheus|python|validation|write_check|yaml_keys)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|parse_cache|parse_tree|prometheus|python|validation|write_check|yaml_keys)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

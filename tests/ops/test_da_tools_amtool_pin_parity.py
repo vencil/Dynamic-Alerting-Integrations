@@ -26,6 +26,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO / "components" / "da-tools" / "app" / "Dockerfile"
 _AM_DEPLOYMENT = _REPO / "k8s" / "03-monitoring" / "deployment-alertmanager.yaml"
 _THIRD_PARTY = _REPO / "components" / "da-tools" / "app" / "third_party" / "alertmanager"
+_DA_READ_GOMOD = _REPO / "components" / "da-read" / "go.mod"
 
 # `COPY --from=<ref> ...` where <ref> names the Alertmanager image. Anchored to
 # the instruction (not a free-text search) so a comment quoting a ref cannot
@@ -107,3 +108,49 @@ def test_upstream_license_and_notice_ship_with_amtool() -> None:
         r"^COPY\s+third_party/alertmanager/LICENSE\s+third_party/alertmanager/NOTICE\s+"
         r"/usr/share/doc/amtool/\s*$", dockerfile, re.MULTILINE), (
         "Dockerfile must COPY the vendored LICENSE and NOTICE into /usr/share/doc/amtool/")
+
+
+def _da_read_alertmanager_version() -> str:
+    """The prometheus/alertmanager version components/da-read/go.mod requires.
+    Read from the `require` directive (single-line or block form), not by a
+    free-text search, so a comment naming a version cannot satisfy it."""
+    text = _DA_READ_GOMOD.read_text(encoding="utf-8")
+    versions = []
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.split("//", 1)[0].strip()
+        if in_block:
+            if line == ")":
+                in_block = False
+                continue
+            fields = line.split()
+        elif line.startswith("require ("):
+            in_block = True
+            continue
+        elif line.startswith("require "):
+            fields = line.split()[1:]
+        else:
+            continue
+        if len(fields) >= 2 and fields[0] == "github.com/prometheus/alertmanager":
+            versions.append(fields[1])
+    assert len(versions) == 1, (
+        f"expected exactly one github.com/prometheus/alertmanager requirement in "
+        f"{_DA_READ_GOMOD.relative_to(_REPO).as_posix()}, found {versions}")
+    return versions[0]
+
+
+def test_da_read_builds_with_the_amtool_alertmanager_version() -> None:
+    """#3206 (ADR-036 §12): `da-read alertmanager` prints the config as
+    Alertmanager's own loader reads it, for onboard_platform. It ships in the
+    same image as amtool, so it must link the Alertmanager amtool is: a
+    different loader version can read a key differently, or refuse a config
+    the other accepts. The image tag and the Go module version are the same
+    string upstream (`v0.34.1`)."""
+    ref, _src, _dst = _dockerfile_amtool_copy()
+    tag = ref.split(":", 1)[1].split("@", 1)[0]
+    gomod = _da_read_alertmanager_version()
+    assert gomod == tag, (
+        f"{_DA_READ_GOMOD.relative_to(_REPO).as_posix()} requires "
+        f"github.com/prometheus/alertmanager {gomod}, but the da-tools image "
+        f"ships amtool {tag}. Bump them together (`go get "
+        f"github.com/prometheus/alertmanager@{tag} && go mod tidy` in components/da-read).")

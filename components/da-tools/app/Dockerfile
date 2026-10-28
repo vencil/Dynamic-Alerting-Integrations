@@ -74,6 +74,18 @@ RUN chmod +x /usr/local/bin/da-batchpr
 COPY da-parser.${TARGETARCH} /usr/local/bin/da-parser
 RUN chmod +x /usr/local/bin/da-parser
 
+# #3206 (ADR-036 §12): onboard_platform reads an Alertmanager config the way
+# its consumers do. da-crdecode reads a Kubernetes manifest (the ConfigMap
+# holding alertmanager.yml) as kubectl does; da-read reads the config itself
+# with Alertmanager's loader, built from components/da-read at the amtool
+# version below. Both are found on PATH (or $DA_CRDECODE_BINARY /
+# $DA_READ_BINARY).
+COPY da-crdecode.${TARGETARCH} /usr/local/bin/da-crdecode
+RUN chmod +x /usr/local/bin/da-crdecode
+
+COPY da-read.${TARGETARCH} /usr/local/bin/da-read
+RUN chmod +x /usr/local/bin/da-read
+
 # ── Bundle amtool (issue 2294) ────────────────────────────────────
 # `generate-routes` hands the config it writes / applies / --validates to
 # `amtool check-config` when amtool is on PATH (#2219 / #2260). Every CI

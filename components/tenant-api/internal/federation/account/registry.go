@@ -65,9 +65,9 @@ const FirstTenantAccountID uint32 = 1000
 // in Allocations once any tenant has been allocated. It only ever
 // increases, even across tenant deletions (no-recycle).
 type Registry struct {
-	SchemaVersion string            `yaml:"schema_version"`
-	NextAccountID uint32            `yaml:"next_account_id"`
-	Allocations   map[string]uint32 `yaml:"allocations"`
+	SchemaVersion string            `yaml:"schema_version"  json:"schema_version"`
+	NextAccountID uint32            `yaml:"next_account_id" json:"next_account_id"`
+	Allocations   map[string]uint32 `yaml:"allocations"     json:"allocations"`
 }
 
 // newRegistry returns an empty registry primed at the reserved floor.

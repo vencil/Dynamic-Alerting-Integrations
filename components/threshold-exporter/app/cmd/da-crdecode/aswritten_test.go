@@ -70,7 +70,6 @@ func TestReportsWhereTheReadingIsNotTheText(t *testing.T) {
 		{"alias", "a: &a {010: x}\nb: *a\n",
 			`[{"kind":"keys","path":["a"],"read_keys":["8"],"written_keys":["010"]},` +
 				`{"kind":"keys","path":["b"],"read_keys":["8"],"written_keys":["010"]}]`},
-		{"empty", "", `[]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

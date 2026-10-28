@@ -1403,11 +1403,31 @@ def test_onboard_platform_writes_what_reads_back(tmp_path):
 def test_onboard_platform_writes_a_number_like_string_as_a_string(tmp_path):
     # #3206 10c: the text is Go's. The string '1e3' (once dumped plain by
     # PyYAML, read by yaml.v3 as !!float, refused) is written double-quoted:
-    # it reads back as the string it is.
-    r, out = _onb(tmp_path, "'1e3'")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert 'group_wait: "1e3"' in (out / "phase1-routing" / "tenant-a.yaml").read_text(
+    # it reads back as the string it is. It rides a field Alertmanager reads
+    # as a string (a Slack channel): as a group_wait Alertmanager's own
+    # loader refuses it, and onboard reads the config the way Alertmanager
+    # does (ADR-036 §12).
+    am = tmp_path / "am.yml"
+    am.write_text(
+        "route:\n  receiver: d\n  routes:\n"
+        "  - matchers: ['tenant=\"tenant-a\"']\n    receiver: a\n"
+        "receivers:\n- name: d\n- name: a\n  slack_configs:\n"
+        "  - api_url: https://hooks.example/a\n    channel: '1e3'\n",
         encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/onboard_platform.py", "--alertmanager-config", str(am), "-o", str(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'channel: "1e3"' in (out / "phase1-routing" / "tenant-a.yaml").read_text(
+        encoding="utf-8")
+
+
+def test_onboard_platform_refuses_what_alertmanager_refuses(tmp_path):
+    # '1e3' is not a duration to Alertmanager's loader, so the config is
+    # refused, named, and nothing is written.
+    r, out = _onb(tmp_path, "'1e3'")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert 'unknown unit "e" in duration "1e3"' in r.stdout + r.stderr
+    assert not out.exists()
 
 
 def test_onboard_platform_rerun_replaces_its_own_files(tmp_path):

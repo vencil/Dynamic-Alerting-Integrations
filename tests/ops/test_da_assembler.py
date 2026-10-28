@@ -351,7 +351,8 @@ class TestRenderCrFile:
                      id="non-empty-list"),
         pytest.param("just-a-string\n", _NOT_TC, id="scalar"),
         pytest.param("42\n", _NOT_TC, id="int"),
-        pytest.param("null\n", _NOT_TC, id="null-document"),
+        # #3206: kubectl skips a null document, so the file holds none.
+        pytest.param("null\n", "the CR file holds 0 documents", id="null-document"),
         pytest.param("[]\n", _NOT_TC, id="empty-list"),
         pytest.param("kind: Foo\n", _NOT_TC, id="wrong-kind-control"),
         pytest.param(_K + _T, _BAD_NAME, id="metadata-missing"),
@@ -1860,22 +1861,22 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert (out_dir / "ok.yaml").exists()
 
-    @pytest.mark.parametrize("tail", [
-        pytest.param("---\nkind: x\n", id="two-documents"),
-        pytest.param("---\n", id="trailing-separator"),
-    ])
-    def test_more_than_one_document_is_caller_error(
-            self, tail, tmp_path, caplog):
-        """YAMLToJSON 只讀第一份文件、靜默丟掉其餘；da-crdecode 另外數文件，
-        多於一份就拒收（與先前以 PyYAML 讀時同為 rc 2；#2529 另議）。
+    def test_more_than_one_document_is_caller_error(self, tmp_path, caplog):
+        """YAMLToJSON 只讀第一份文件、靜默丟掉其餘；da-crdecode 照 `kubectl apply -f`
+        把每份文件都交出來（#3206），一個 CR 只能是一份，多於一份就拒收（rc 2）。
 
-        會讓本測試轉紅的改動：拿掉 da-crdecode 的 countDocuments 檢查（rc 0，
-        只 render 第一份）。
+        會讓本測試轉紅的改動：decode_cr 不檢查份數、只取第一份（rc 0）。
         """
-        cr_path, out_dir = self._write(tmp_path, self._CR + tail)
+        cr_path, out_dir = self._write(tmp_path, self._CR + "---\nkind: x\n")
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "more than one YAML document" in caplog.text
+        assert "the CR file holds 2 documents" in caplog.text
         assert list(out_dir.iterdir()) == []
+
+    def test_a_trailing_separator_is_one_document(self, tmp_path):
+        """`kubectl apply -f` 對結尾的 `---` 只套用一份（空文件略過，#3206）；
+        先前 da-crdecode 把它數成第二份而拒收。"""
+        cr_path, out_dir = self._write(tmp_path, self._CR + "---\n")
+        assert render_cr_file(cr_path, out_dir) == 0
 
     def test_missing_binary_is_caller_error(self, tmp_path, monkeypatch,
                                             caplog):

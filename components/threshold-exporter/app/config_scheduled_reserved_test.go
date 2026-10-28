@@ -65,11 +65,10 @@ func TestLoad_SingleFile_WarnsScheduledReserved(t *testing.T) {
 // A subtree `_defaults.yaml` is named too — same judgement, "<file>:
 // defaults.<key>" — on the cold load and on a reload that changes only a
 // tenant file, worded by what the overlay does with the value (the verdict
-// applySubtreeDefaults acts on, judged on the `default` alone, #3295): a
-// value it hands down is used as its `default` alone — a windowed `_state_`
-// key whose default is `disable` among them, exactly as the scalar would be;
-// one whose default it refuses (`_silent_mode: warning` is no threshold) is
-// not applied at all.
+// applySubtreeDefaults acts on): since #3341 a subtree hands no reserved key
+// down, so every such entry is "not applied at all" — a windowed `_state_`
+// key whose default is `disable` among them (until #3341 that one was used
+// as its `default` alone, #3295).
 func TestLoad_DirMode_WarnsSubtreeScheduledReserved(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -91,28 +90,26 @@ func TestLoad_DirMode_WarnsSubtreeScheduledReserved(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	used := "WARN: 3 config entries write a reserved key with a time window or expires (`overrides:` / `expires:` / `reason:`, #3269): " +
-		"other/_defaults.yaml: defaults._state_maint, " +
-		"sub/_defaults.yaml: defaults._severity_dedup, sub/_defaults.yaml: defaults._silent_mode — a reserved key does not support them: " +
-		"only each value's `default` is used and the rest is ignored."
-	unapplied := "WARN: 1 subtree defaults entries write a reserved key with a time window or expires (`overrides:` / `expires:` / `reason:`, #3269): " +
-		"other/_defaults.yaml: defaults._silent_mode — not applied at all: " +
+	unapplied := "WARN: 4 subtree defaults entries write a reserved key with a time window or expires (`overrides:` / `expires:` / `reason:`, #3269): " +
+		"other/_defaults.yaml: defaults._silent_mode, other/_defaults.yaml: defaults._state_maint, " +
+		"sub/_defaults.yaml: defaults._severity_dedup, sub/_defaults.yaml: defaults._silent_mode — not applied at all: " +
 		"a subtree `_defaults.yaml` does not hand this value down to its tenants, `default` included. Remove them"
-	for _, want := range []string{used, unapplied} {
-		if got := buf.String(); !strings.Contains(got, want) {
-			t.Fatalf("log = %q, want %q", got, want)
-		}
+	if got := buf.String(); !strings.Contains(got, unapplied) {
+		t.Fatalf("log = %q, want %q", got, unapplied)
+	}
+	if got := buf.String(); strings.Contains(got, "config entries write a reserved key") {
+		t.Errorf("log names an entry as used: %q", got)
 	}
 	// What the WARN says is what was served.
 	cfg := m.GetConfig()
-	if sv := cfg.Tenants["t-a"]["_severity_dedup"]; sv.Default != "disable" || sv.Overrides != nil {
-		t.Errorf("t-a _severity_dedup = %+v, want the default alone", sv)
+	if sv, in := cfg.Tenants["t-a"]["_severity_dedup"]; in {
+		t.Errorf("t-a _severity_dedup = %+v, want not applied (#3341)", sv)
 	}
 	if sv, in := cfg.Tenants["t-b"]["_silent_mode"]; in {
 		t.Errorf("t-b _silent_mode = %+v, want not applied", sv)
 	}
-	if sv := cfg.Tenants["t-b"]["_state_maint"]; sv.Default != "disable" || sv.Overrides != nil {
-		t.Errorf("t-b _state_maint = %+v, want the default alone (#3295)", sv)
+	if sv, in := cfg.Tenants["t-b"]["_state_maint"]; in {
+		t.Errorf("t-b _state_maint = %+v, want not applied (#3341)", sv)
 	}
 
 	writeTestYAML(t, filepath.Join(dir, "sub", "t-a.yaml"), "tenants:\n  t-a:\n    key_0: \"2\"\n")
@@ -120,9 +117,7 @@ func TestLoad_DirMode_WarnsSubtreeScheduledReserved(t *testing.T) {
 	if err := watchReload(m); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	for _, want := range []string{used, unapplied} {
-		if got := buf.String()[before:]; !strings.Contains(got, want) {
-			t.Errorf("reload log = %q, want %q", got, want)
-		}
+	if got := buf.String()[before:]; !strings.Contains(got, unapplied) {
+		t.Errorf("reload log = %q, want %q", got, unapplied)
 	}
 }

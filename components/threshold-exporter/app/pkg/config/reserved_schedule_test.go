@@ -313,11 +313,12 @@ func rsTree(t *testing.T, files map[string]string) string {
 	return writeUndeliverableTree(t, all)
 }
 
-// The subtree defaults overlay hands a reserved key down as its default
-// alone, and judges it by that default alone (#3295): `_silent_mode` /
-// `_severity_dedup` / a windowed `_state_` key whose default is `disable`
-// are all applied, as the scalar `disable` would be.
-func TestLoadDir_SubtreeScheduledReservedKeepsDefaultOnly(t *testing.T) {
+// A subtree `_defaults.yaml` hands no reserved key down (#3341), windowed or
+// not: `_silent_mode` / `_severity_dedup` / a windowed `_state_` key whose
+// default is `disable` are all left out, as the scalar `disable` is. (Until
+// #3341 the overlay applied their `disable` default alone, #3295; this test
+// pinned that and now pins the sunset.)
+func TestLoadDir_SubtreeScheduledReservedIsNotApplied(t *testing.T) {
 	t.Parallel()
 	dir := rsTree(t, map[string]string{
 		"finance/_defaults.yaml": "defaults:\n" +
@@ -331,17 +332,11 @@ func TestLoadDir_SubtreeScheduledReservedKeepsDefaultOnly(t *testing.T) {
 		t.Fatalf("LoadDir: %v %v", err, failed)
 	}
 	got := cfg.Tenants["t1"]
-	// (The overlay applies only a threshold-shaped default — `disable` or a
-	// number — to these keys, #1569; unchanged.)
-	if !reflect.DeepEqual(got["_silent_mode"], ScheduledValue{Default: "disable"}) ||
-		!reflect.DeepEqual(got["_severity_dedup"], ScheduledValue{Default: "disable"}) {
-		t.Errorf("t1 = %+v, want _silent_mode / _severity_dedup as their defaults alone", got)
+	if want := map[string]ScheduledValue{"mysql_connections": {Default: "70"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("t1 = %+v, want %+v: no subtree reserved key applied (#3341)", got, want)
 	}
-	if !reflect.DeepEqual(got["_state_crashloop"], ScheduledValue{Default: "disable"}) {
-		t.Errorf("t1 = %+v: a windowed _state_ key is applied as its default alone (#3295)", got)
-	}
-	if fs := cfg.resolveStateFiltersAt(rsInWindow, nil); len(fs) != 0 {
-		t.Errorf("state filters = %+v, want crashloop off for t1 (its default, disable)", fs)
+	if fs := cfg.resolveStateFiltersAt(rsInWindow, nil); len(fs) != 1 || fs[0].Tenant != "t1" {
+		t.Errorf("state filters = %+v, want crashloop on for t1 (the root's default)", fs)
 	}
 	if cuts := cfg.ScheduleCuts(); !reflect.DeepEqual(cuts, []int{0}) {
 		t.Errorf("ScheduleCuts = %v, want [0]", cuts)
@@ -369,7 +364,8 @@ func TestLoadDir_TenantScheduledReservedIsNoCut(t *testing.T) {
 
 // The walker's reported config (/effective, `da-guard effective`) shows a
 // scheduled reserved value as its default; a mapping key keeps its mapping.
-// merged_hash still hashes the merge as written.
+// merged_hash still hashes the merge as written. A subtree's scheduled
+// reserved key is not shown at all (#3341): not_served names its file.
 func TestResolveEffective_ScheduledReservedShowsDefault(t *testing.T) {
 	t.Parallel()
 	dir := rsTree(t, map[string]string{
@@ -384,10 +380,16 @@ func TestResolveEffective_ScheduledReservedShowsDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := ec.EffectiveConfig
-	for k, want := range map[string]any{"_silent_mode": "disable", "_state_crashloop": "enable", "_severity_dedup": "disable"} {
+	for k, want := range map[string]any{"_silent_mode": "disable", "_state_crashloop": "enable"} {
 		if !reflect.DeepEqual(view[k], want) {
 			t.Errorf("effective_config[%s] = %#v, want %#v", k, view[k], want)
 		}
+	}
+	if got, shown := view["_severity_dedup"]; shown {
+		t.Errorf("effective_config[_severity_dedup] = %#v, want absent: a subtree does not carry it (#3341)", got)
+	}
+	if want := (NotServedKey{Reason: NotServedValueRejected, File: "finance/_defaults.yaml"}); ec.NotServed["_severity_dedup"] != want {
+		t.Errorf("not_served[_severity_dedup] = %+v, want %+v", ec.NotServed["_severity_dedup"], want)
 	}
 	if r, ok := view["_routing"].(map[string]any); !ok || r["default"] != "x" || r["receiver"] == nil {
 		t.Errorf("effective_config[_routing] = %#v, want the mapping whole", view["_routing"])

@@ -34,7 +34,7 @@ da-tools fed-key --namespace monitoring | kubectl apply -f -
 - 私鑰 → Secret `monitoring/tenant-federation-signing-key`(直接套用,不落地)。
 - 公鑰 JWKS → `./federation-jwks.json`。把它的內容設成 federation-gateway
   chart 的 `jwt.jwks` value 並 `helm upgrade` gateway。
-- `helm upgrade` tenant-api,讓它掛載該 Secret、設定 `--federation-key`。
+- `helm upgrade` tenant-api,讓它掛載該 Secret、設定 `--federation-key`(chart 以環境變數 `TA_FEDERATION_KEY` 傳入,`kubectl exec` 起的 `tenant-api state restore` 也讀得到)。
 
 ## 2. 計畫性輪替(grace-period overlap)
 

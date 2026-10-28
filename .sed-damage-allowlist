@@ -136,6 +136,8 @@ components/recipe-preview/promtool.openvex.json
 # (linters.default, the required linter set, issues.max-* == 0) — measured: a
 # truncated copy of either file reds that test.
 tests/alertmanager-inhibit/.golangci.yml
+# #3206: a copy of the alertmanager-inhibit config above, guarded the same way.
+components/da-read/.golangci.yml
 scripts/tools/ops/bench-canary/.golangci.yml
 
 # check_cli_contract's baseline ledger: written by `--write-baseline`, never

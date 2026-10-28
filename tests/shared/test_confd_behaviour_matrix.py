@@ -374,6 +374,8 @@ NOT_IN_MATRIX: dict[str, str] = {
     "tools/lint/check_cli_contract.py": "checks documented commands against argparse; reads no conf.d",
     "tools/lint/check_cli_default_drift.py": "checks documented defaults against argparse; reads no conf.d",
     "tools/lint/check_doc_datools_cmds.py": "checks documented commands; reads no conf.d",
+    "tools/lint/check_admin_config_schema.py": ("takes single admin files (`_domain_policy.yaml` read in "
+                                                "parse-tree's file mode, ADR-036 §12), not a conf.d tree"),
     "tools/lint/check_md_yaml_drift.py": "checks YAML examples in docs against the schema; "
                                          "reads no conf.d tree",
     "tools/lint/check_structure.py": "checks the repo layout; reads no conf.d",

@@ -26,6 +26,18 @@ import pytest
 import yaml
 from _render_baseline import baseline_args
 
+
+def _ta_env(out: str, name: str):
+    """The tenant-api container's env value *name* in a render (ADR-036 §12:
+    settings with a TA_* variable are env, not args); None when absent."""
+    for d in yaml.safe_load_all(out):
+        if d and d.get("kind") == "Deployment":
+            for c in d["spec"]["template"]["spec"]["containers"]:
+                if c["name"] == "tenant-api":
+                    vals = [e.get("value") for e in c.get("env") or [] if e["name"] == name]
+                    return vals[0] if vals else None
+    return None
+
 _CHART = "helm/tenant-api"
 _RBAC_TEMPLATE = "helm/tenant-api/templates/rbac-machine-identity.yaml"
 _VALUES = "helm/tenant-api/values.yaml"
@@ -88,8 +100,8 @@ def test_deployment_automount_gate_includes_machine_identity(repo_root: Path):
     assert "machineIdentity.enabled" in directives, (
         "deployment must reference machineIdentity.enabled (automount + args gate)"
     )
-    assert "--machine-identity-audit" in directives, (
-        "deployment must pass --machine-identity-audit when enabled"
+    assert "TA_MACHINE_IDENTITY_AUDIT" in directives and "--machine-identity" not in directives, (
+        "deployment must pass TA_MACHINE_IDENTITY_AUDIT (env, ADR-036 §12) when enabled"
     )
 
 
@@ -113,10 +125,10 @@ def test_render_enabled_emits_full_surface(repo_root: Path):
     assert "automountServiceAccountToken: true" in out, (
         "enabled render must flip automount on"
     )
-    assert "--machine-identity-audit" in out, (
-        "enabled render must pass --machine-identity-audit"
+    assert _ta_env(out, "TA_MACHINE_IDENTITY_AUDIT") == "true", (
+        "enabled render must pass TA_MACHINE_IDENTITY_AUDIT=true"
     )
-    assert "--machine-identity-audience=tenant-api" in out, (
+    assert _ta_env(out, "TA_MACHINE_IDENTITY_AUDIENCE") == "tenant-api", (
         "enabled render must pass the default audience"
     )
     # roleRef must reference the ClusterRole by the SAME dynamic (chart-ns-release)
@@ -155,8 +167,8 @@ def test_render_default_omits_everything(repo_root: Path):
     assert "kind: ClusterRoleBinding" not in out, (
         "default render must NOT emit a ClusterRoleBinding"
     )
-    assert "--machine-identity-audit" not in out, (
-        "default render must NOT pass --machine-identity-audit"
+    assert _ta_env(out, "TA_MACHINE_IDENTITY_AUDIT") is None and "machine-identity-audit" not in out, (
+        "default render must NOT turn the machine-identity audit on"
     )
     # #2856: the token is always mounted now (the state store is a ConfigMap
     # read through the API client), so what bounds a default install is the
@@ -182,8 +194,8 @@ def test_render_federation_only_keeps_automount_without_audit(repo_root: Path):
     assert "automountServiceAccountToken: true" in out, (
         "federation-only must still enable automount (OR-gate regression)"
     )
-    assert "--machine-identity-audit" not in out, (
-        "federation-only must NOT emit machine-identity flags"
+    assert _ta_env(out, "TA_MACHINE_IDENTITY_AUDIT") is None and "machine-identity-audit" not in out, (
+        "federation-only must NOT emit machine-identity settings"
     )
     assert "tokenreviews" not in out, (
         "federation-only must NOT emit the tokenreviews ClusterRole (machineIdentity-only)"

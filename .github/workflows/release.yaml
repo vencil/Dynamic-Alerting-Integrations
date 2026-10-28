@@ -945,6 +945,10 @@ jobs:
           file: components/tenant-api/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # ADR-036 §12: the version `state show` / `config check` print
+          # (Dockerfile ARG VERSION → -X main.version).
+          build-args: |
+            VERSION=v${{ steps.version.outputs.VERSION }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 

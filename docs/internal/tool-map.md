@@ -249,6 +249,7 @@ lang: zh
 - `scripts/tools/_lib_confd.py`：Single answer to "what is in a conf.d/ directory".
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
+- `scripts/tools/_lib_consumer_read.py`：A file outside conf.d, read the way its consumer reads it (ADR-036 §12, #3206).
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
@@ -258,7 +259,7 @@ lang: zh
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
-- `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state store from a backup (#2883).
+- `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`：Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`：Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
 - `scripts/tools/_lib_toolcount.py`：One scan behind the "N 個 Python 工具" sentence.

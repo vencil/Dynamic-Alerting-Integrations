@@ -175,9 +175,10 @@ def test_renovate_json_is_strict_json_and_well_formed():
     assert sorted(cfg["enabledManagers"]) == sorted(ENABLED_MANAGERS)
     assert cfg.get("pinDigests") is True
     assert len(_image_managers(cfg)) == 4
-    # TRK-2605: plus exactly one Grafana plugin manager on the catalog datasource.
+    # TRK-2605: plus exactly one Grafana plugin manager on the catalog datasource;
+    # #3206: and one Go-module manager, da-read's alertmanager requirement.
     others = [m for m in cfg["customManagers"] if m not in _image_managers(cfg)]
-    assert [m.get("datasourceTemplate") for m in others] == ["custom.grafana-plugins"], others
+    assert [m.get("datasourceTemplate") for m in others] == ["custom.grafana-plugins", "go"], others
     assert "grafana-plugins" in cfg.get("customDatasources", {})
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
 
@@ -591,3 +592,28 @@ def test_tests_tree_is_out_of_renovates_reach():
     anchors = [p for p in (REPO / "tests").rglob("*")
                if p.name == "Dockerfile" or p.name.startswith("docker-compose")]
     assert anchors, "no Dockerfile / compose under tests/ — re-derive what this guards"
+
+
+def test_da_read_alertmanager_requirement_moves_with_the_image_refs():
+    """#3206: components/da-read/go.mod links the Alertmanager amtool is
+    (test_da_tools_amtool_pin_parity.py holds the version equal to the
+    Dockerfile's amtool tag). gomod is off, so one custom manager reads that
+    require line; it must extract exactly it, at the tag the image refs carry,
+    and land in the SAME group as those refs — or every Alertmanager bump turns
+    the pin test red in Renovate's own PR."""
+    cfg = _load_config()
+    go_mgrs = [m for m in cfg["customManagers"] if m.get("datasourceTemplate") == "go"]
+    assert len(go_mgrs) == 1, go_mgrs
+    deps = _extract(go_mgrs[0])
+    assert [(d["file"], d["depName"]) for d in deps] == [
+        ("components/da-read/go.mod", "github.com/prometheus/alertmanager")], deps
+    matrix_mgr = _matrix_manager(cfg)
+    image_tags = {d["currentValue"] for m in cfg["customManagers"] if m is not matrix_mgr
+                  for d in _extract(m) if d.get("depName") == "prom/alertmanager"}
+    assert image_tags == {deps[0]["currentValue"]}, (image_tags, deps)
+    for update in ("minor", "patch"):
+        image_group = _resolve(cfg, manager="custom.regex", dep="prom/alertmanager",
+                               datasource="docker", update=update).get("groupName")
+        go_group = _resolve(cfg, manager="custom.regex", dep="github.com/prometheus/alertmanager",
+                            datasource="go", update=update).get("groupName")
+        assert image_group and go_group == image_group, (update, image_group, go_group)

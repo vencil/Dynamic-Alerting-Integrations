@@ -456,12 +456,17 @@ federation:
 # Enabling on an existing deployment:
 #   helm upgrade <release> helm/tenant-api --set machineIdentity.enabled=true
 # The chart then adds the ClusterRole/ClusterRoleBinding, enables token
-# automount, and passes --machine-identity-audit + --machine-identity-audience.
+# automount, and sets TA_MACHINE_IDENTITY_AUDIT + TA_MACHINE_IDENTITY_AUDIENCE
+# (--machine-identity-audit / --machine-identity-audience, passed as env so
+# `kubectl exec` subcommands see them too; ADR-036 §12).
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the audit
 # code (the --machine-identity-* flags). The image tag derives from appVersion;
-# enabling this against an image that predates the flags crash-loops on an
-# unknown flag. Enable only once the deployed image supports it.
+# the settings are TA_* variables (ADR-036 §12). An image from this chart's
+# release on refuses a TA_* variable it does not read (exit 2, the name
+# printed: "the image may be older than the Helm chart"); an image older than
+# that check still ignores it and silently runs no audit. Enable only once the
+# deployed image supports it.
 # ⚠ Do NOT enable via `helm upgrade --reuse-values`: it can carry a stale
 # audience past the required-gate. Pass machineIdentity values explicitly.
 machineIdentity:
@@ -482,8 +487,10 @@ machineIdentity:
 # TRUSTED-HOP HTTP HEADER carrying its value. Which header exists is decided
 # by the deployment's login entrypoint (e.g. oauth2-proxy alpha-config
 # `injectRequestHeaders`); wiring that transport side is a follow-up PR.
-# Rendered as a single `--identity-claim-headers=key=Header,...` arg with
-# keys sorted (helm map range iterates key-sorted).
+# Rendered as a single `TA_IDENTITY_CLAIM_HEADERS=key=Header,...` env value
+# (the variable --identity-claim-headers reads; env so `kubectl exec ...
+# tenant-api config check` sees it too, ADR-036 §12) with keys sorted (helm
+# map range iterates key-sorted).
 # ⚠ TRUST BOUNDARY: every header listed here MUST be injected by the trusted
 # hop and MUST NOT be client-forgeable (strip-and-set at the proxy) — the
 # same trust boundary as X-Forwarded-Groups. In-platform backstop: a claim
@@ -507,9 +514,11 @@ identity:
 # identity audit denominator, so the audit reflects the machine/relay plane only.
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the
-# --human-socket flag (image tag derives from appVersion). Enabling this against
-# an image that predates the flag crash-loops on an unknown flag — enable only
-# once the deployed image supports it (same discipline as machineIdentity).
+# --human-socket setting (TA_HUMAN_SOCKET; image tag derives from appVersion). An
+# image from this chart's release on refuses a TA_* variable it does not read
+# (exit 2, named); an image older than that check still ignores it and never
+# opens the socket, so oauth2-proxy has no upstream — enable only once the
+# deployed image supports it (same discipline as machineIdentity).
 # ⚠ Do NOT enable via `helm upgrade --reuse-values` — pass humanSocket values
 # explicitly, matching the machineIdentity guidance above.
 #
@@ -602,7 +611,7 @@ generator:
   # a user who can write to the repository cannot loosen it. The chart ships
   # no policy content: name an existing ConfigMap you manage and its key. Set,
   # it is mounted read-only into the generator (passed as --policy) and into
-  # tenant-api at the same path (passed as --deploy-policy: tenant-api checks
+  # tenant-api at the same path (passed as TA_DEPLOY_POLICY: tenant-api checks
   # that the generator judged with the same file, by its hash, #2903). The
   # ConfigMap must exist: the pod does not start without it. An unusable
   # policy file refuses every content-changing write with 503

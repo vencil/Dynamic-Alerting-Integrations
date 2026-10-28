@@ -88,7 +88,7 @@ type Manager struct {
 // is federatable yet.
 func NewManager(s statestore.Store) *Manager {
 	desc := s.Describe() + " " + statestore.KeyFederationPolicy
-	w, err := configwatcher.NewWithReader(desc, "federation-policy", statestore.ReadFunc(s, statestore.KeyFederationPolicy), parsePolicyConfig, emptyPolicyConfig)
+	w, err := configwatcher.NewWithReader(desc, "federation-policy", statestore.ReadFunc(s, statestore.KeyFederationPolicy), ParsePolicyConfig, emptyPolicyConfig)
 	if err != nil {
 		slog.Warn("federation policy: initial load failed", "error", err)
 	}
@@ -116,14 +116,14 @@ func emptyPolicyConfig() *Config {
 	return &Config{Whitelist: []WhitelistEntry{}}
 }
 
-// parsePolicyConfig decodes the whitelist record.
+// ParsePolicyConfig decodes the whitelist record.
 //
 // ⛔ parse-tree's verdict first (ADR-036 §7 step 7, #3206; confd.Judge): the
 // record came from conf.d/_federation_policy.yaml (statemigrate imports it
 // verbatim) or from tenant-api's own write, and a document parse-tree refuses
 // is a parse error (the watcher keeps its last good whitelist), never the
 // whitelist of its first document.
-func parsePolicyConfig(data []byte) (*Config, error) {
+func ParsePolicyConfig(data []byte) (*Config, error) {
 	if err := confd.Judge(data); err != nil {
 		return nil, err
 	}

@@ -13,12 +13,17 @@ Usage:
     python3 scripts/tools/dx/generate_tenant_metadata.py --output /tmp/out.json
     python3 scripts/tools/dx/generate_tenant_metadata.py --check      # CI drift 偵測
     python3 scripts/tools/dx/generate_tenant_metadata.py --dry-run    # 只印出不寫檔
-    python3 scripts/tools/dx/generate_tenant_metadata.py --state state.yaml  # custom_groups 取自 tenant-api state store
+    python3 scripts/tools/dx/generate_tenant_metadata.py --state state.json  # custom_groups 取自 tenant-api state store
 
-custom_groups come from tenant-api's state store (#2883): pass --state with
-the state directory or a saved `kubectl get configmap tenant-api-state -o yaml`
-(or -o json). Without it custom_groups is empty and stderr says why; a
-`_groups.yaml` left in conf.d is no longer read (tenant-api moved it in #2856).
+custom_groups come from tenant-api's state store (#2883), as tenant-api reads
+it (ADR-036 §12): pass --state with the JSON `tenant-api state show` prints
+(`kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show >
+state.json`; `-` reads stdin). The old inputs (a saved ConfigMap, a state
+directory) are refused, exit 2, naming that command. A groups record
+tenant-api cannot use (a `problem` in the JSON) exits 2 naming the problem —
+it is undetermined, never empty. Without --state custom_groups is empty and
+stderr says why; a `_groups.yaml` left in conf.d is no longer read
+(tenant-api moved it in #2856).
 """
 import argparse
 import json
@@ -56,7 +61,7 @@ from _lib_io import (  # noqa: E402  (#1789)
 )
 from _lib_atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
 from _lib_confd import legacy_state_files  # noqa: E402  (#2883)
-from _lib_tenant_state import StateInputError, load_state  # noqa: E402  (#2883)
+from _lib_tenant_state import KEY_GROUPS, StateInputError, load_state  # noqa: E402  (#2883)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -517,8 +522,8 @@ def main():
     )
     parser.add_argument(
         "--state",
-        help="tenant-api state store copy for custom_groups: the state directory, "
-             "or a saved `kubectl get configmap tenant-api-state -o yaml|json`",
+        help="the JSON `tenant-api state show` prints, for custom_groups "
+             "(- reads stdin)",
     )
     parser.add_argument(
         "--json",
@@ -546,6 +551,13 @@ def main():
             state = load_state(args.state)
         except StateInputError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        prob = state.problem(KEY_GROUPS)
+        if prob is not None:
+            # ADR-036 §12: undetermined, never empty custom_groups.
+            print(f"ERROR: --state {safe_label(state.source)}: tenant-api cannot use "
+                  f"{KEY_GROUPS} ({safe_label(prob.kind)}): {safe_label(prob.message)} "
+                  "— custom_groups cannot be determined", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
     data = build_tenant_metadata(args.config_dir, at=at, state=state)
 
@@ -626,7 +638,7 @@ def _note_without_state(state: Any) -> None:
     this NOTE after its ERROR line."""
     if state is None:
         print("NOTE: custom_groups is empty: no --state given "
-              "(the state directory, or a saved `kubectl get configmap tenant-api-state -o yaml`)",
+              "(the JSON `tenant-api state show` prints)",
               file=sys.stderr)
 
 

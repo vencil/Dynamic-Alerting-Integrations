@@ -246,6 +246,10 @@ _NOT_PROBED: dict[str, str] = {
     "dx/sync_schema.py": _NAMES, "lint/check_cli_contract.py": _NAMES,
     "lint/check_cli_default_drift.py": _NAMES, "lint/check_doc_datools_cmds.py": _NAMES,
     "lint/check_structure.py": _NAMES,
+    "lint/check_admin_config_schema.py": (_GO + "; one `_domain_policy.yaml` per file argument, "
+                                          "read in parse-tree's file mode (ADR-036 §12), no "
+                                          "conf.d tree to probe; `tenants: [010]` is the text "
+                                          "\"010\" — tests/lint/test_check_admin_config_schema.py"),
     "lint/check_md_yaml_drift.py": (_GO + "; the conf.d examples quoted in docs/**/*.md, each "
                                     "written into a scratch tree it makes itself (ADR-036 step "
                                     "11), no conf.d argument to probe — "
@@ -266,6 +270,8 @@ _NOT_PROBED: dict[str, str] = {
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
+    "_lib_consumer_read.py": _PROSE_ONLY + ("; reads Kubernetes manifests and Alertmanager "
+                                            "configs through da-crdecode / da-read (ADR-036 §12)"),
     "ops/generate_rule_pack_split.py": _PROSE_ONLY + "; reads rule packs",
     "ops/cutover_tenant.py": _PROSE_ONLY + "; reads a readiness JSON and drives kubectl",
     "ops/baseline_discovery.py": _PROSE_ONLY + "; reads Prometheus",

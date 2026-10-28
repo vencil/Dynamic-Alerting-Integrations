@@ -17,9 +17,9 @@ func TestSubtreeReservedKeys_SkipsAFileTheExporterDrops(t *testing.T) {
 	input := func(parseFailed []string) CheckInput {
 		return CheckInput{
 			EffectiveConfigs: map[string]map[string]any{"tx": {}, "ty": {}},
-			SubtreeReservedKeys: map[string]map[string][]string{
-				"tx": {"_silent_mode": {dropped}},
-				"ty": {"_silent_mode": {kept}},
+			SubtreeReservedKeys: map[string]map[string][]config.SubtreeReservedWrite{
+				"tx": {"_silent_mode": {{File: dropped, Value: "warning"}}},
+				"ty": {"_silent_mode": {{File: kept, Value: "warning"}}},
 			},
 			DefaultsFiles: []config.DefaultsFile{
 				{Name: dropped, Data: []byte("_silent_mode: warning\nx: !!binary aGk=\n")},

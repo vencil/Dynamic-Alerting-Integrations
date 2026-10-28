@@ -2,66 +2,77 @@
 """check_admin_config_schema.py — validate tenant-api admin meta-config YAML against JSON Schemas.
 
 Lint class & scope (lint-policy.md §3): hybrid schema lint (jsonschema engine +
-Vibe wrapper). Pre-merge structural validation for the `_`-prefixed ADMIN
-meta-config files that define tenant-api authorization / policy boundaries —
-`_rbac.yaml`, `_domain_policy.yaml`, `_tenant_orgs.yaml`.
+Vibe wrapper). Pre-merge validation for the `_`-prefixed ADMIN meta-config files
+that define tenant-api authorization / policy boundaries — `_rbac.yaml`,
+`_domain_policy.yaml`, `_tenant_orgs.yaml` — and the production RBAC embedded in
+the Helm values.
 
-WHY (the silent failures this shifts left) — the three files differ, deliberately:
-  * `_rbac.yaml` / `_tenant_orgs.yaml` are parsed STRICTLY (yaml KnownFields), so a
-    typo'd key (`permissons:` / `tenant_org:`) IS a runtime load error — but only
-    DISCOVERED in production: startup-fatal, or (on hot-reload) configwatcher keeps
-    the LAST-GOOD snapshot so the edited file silently never takes effect.
-  * `_domain_policy.yaml` is parsed LENIENTLY (policy.go uses plain yaml.Unmarshal,
-    NOT KnownFields), so a typo'd constraint key is SILENTLY IGNORED — the
-    constraint simply never applies and the runtime never complains at all. Here
-    this lint is the ONLY guard, which makes it more valuable, not less.
-  Additionally, a DUPLICATE key (writing `permissions:` twice) is silently
-  last-wins in PyYAML but a load error in the strict Go parser — so this lint uses
-  a duplicate-key-rejecting loader (below) to catch it, or it would be the reverse
-  of the intended gap: lint green, prod crash (Gemini #1061 review).
-  Note a bad permission VALUE (`permissions: [readonly]`) is likewise NOT a Go load
-  error — `Permission` is an unconstrained string and validateConfig has no enum
-  check; it just silently grants nothing. The schema's enum is a deliberately
-  stricter authoring guard: it can only reject typos, never a real permission.
-  (Gemini #1056 disposition 3b; the runtime observability half is the
-  tenant_api_config_reload_failures_total counter.)
+WHO READS EACH FILE DECIDES WHAT IT MEANS (ADR-036 §12). This lint does not read
+any of them with PyYAML:
+  * `_rbac.yaml` / `_tenant_orgs.yaml` go to `tenant-api config check`, which
+    judges them with the parse function the server reads them with (parse-tree's
+    verdict, then a strict KnownFields decode, then the config's own checks; RBAC
+    against the declared identity claims). A file it refuses is a VIOLATION, its
+    `problem` in the message: a typo'd key, a duplicate key, a second document,
+    an undeclared claim — everything the server would refuse at startup (fatal)
+    or on hot-reload (last-good masking, the edit silently never takes effect).
+  * The JSON Schemas stay as the AUTHORING checks stricter than the parser (a
+    permission value must be one of the known ones; list items non-blank), run on
+    the `config` that `config check` decoded — never on a second reading of the
+    file. One more such check is this lint's own: an RBAC config with ZERO
+    groups (an empty or comment-only file, `groups:` null or `[]`, a null
+    embedded block) is a violation. The parser reads it (`config check` exits
+    0), but a server started with `--rbac` (the Helm chart always passes it)
+    fails CLOSED on it (MED-8): every request is denied, unless the server runs
+    with --rbac-empty-open, which the chart never sets. A bad permission VALUE (`permissions: [readonly]`) is not a load error
+    (Permission is an unconstrained string) and silently grants nothing; the
+    schema's enum can only reject a typo, never a real permission.
+  * `_domain_policy.yaml` is a conf.d file: read, like every other conf.d reader,
+    through `da-guard parse-tree` (a file it refuses is a violation). Its runtime
+    reader is LENIENT (an unknown constraint key is silently ignored), so the
+    schema's additionalProperties:false is the only guard there.
+  * The Helm values (`rbac._rbacYaml` in helm/tenant-api/values.yaml, tenant-api's
+    only deployment source since #1594) hold the RBAC as a string inside a YAML
+    document Helm reads with sigs.k8s.io/yaml: `da-crdecode` takes the outer layer
+    and the string goes to `config check --kind rbac -` on standard input. A
+    registered embedded source MISSING its key is a VIOLATION (fail-loud), not a
+    skip; an embedded block that is itself a Go-template indirection (`{{`) has
+    no concrete RBAC here and is deferred. The Helm TEMPLATE configmap-rbac.yaml
+    is not selected by the hook (its rendered RBAC is the values `_rbacYaml`).
+  * The declared identity claims an RBAC config is checked against come from the
+    Helm values' `identity.claimHeaders` (read with `da-crdecode`, joined as the
+    deployment template renders them: `key=Header` pairs, keys sorted, `,`) and
+    are passed as `--identity-claim-headers` — for the embedded RBAC and for a
+    standalone `_rbac.yaml` alike: a check inside the repo has no running server.
 
-  SoT for each schema is the consumer it mirrors: the Go struct for rbac /
-  tenant-orgs, and for domain-policy the union of policy.go, ADR-007 and
-  check_routing_profiles.py. Keep docs/schemas/*.schema.json in sync, and keep
-  each schema no LOOSER than its parser (never accept a config the parser
-  load-rejects) and no stricter than the parser EXCEPT as an authoring hygiene
-  guard that can only reject a typo (enum values, non-blank list items) — else a
-  legitimate config cannot land.
+  Known loss against the PyYAML schema check this replaced: a value the decode
+  folds away is no longer seen by the schema — `org-scope: ""` decodes to the
+  empty string, which `config` omits like an absent key, so the schema's
+  minLength no longer rejects it (the parser treats both as "no org scope").
+
+BINARIES (all fail-closed: one that cannot be found or run is exit 2, never a skip):
+  tenant-api   --tenant-api-binary, else $TENANT_API_BINARY, else `tenant-api` on $PATH
+  da-crdecode  $DA_CRDECODE_BINARY, else `da-crdecode` on $PATH (run through
+               _lib_consumer_read.kubernetes_documents, the tools' one da-crdecode caller)
+  da-guard     $DA_GUARD_BINARY, else `da-guard` on $PATH
+  In a checkout, scripts/ops/with_admin_config_tools.sh builds the unset ones
+  (`make tenant-api-build`, `da-crdecode-build`, `da-guard-build`). A tenant-api
+  that does not print a `tenant-api.config-check/v1` document (one older than
+  `config check`) is named as such, exit 2.
 
 SCOPE:
   Validates each argument file whose basename stem is a known admin meta-config
-  (SCHEMA_MAP) with a `.yaml`/`.yml` extension, against its schema. Other files are
-  SKIPPED (listed, never silently capped). An empty / comment-only file is
-  loader-LEGAL (rbac / tenantorg decode io.EOF to the empty config) and is NOT
-  flagged. A list / scalar top document is malformed and IS flagged. Cross-field
-  fail-closed rules (empty `match: {}` = error, org-scope key must be declared) are
-  NOT expressible in JSON Schema and remain parser-enforced — this lint guards
-  structure only.
-
-  EMBEDDED SOURCES (production RBAC): the tenant-api RBAC config also ships EMBEDDED
-  as a YAML block-scalar string inside a larger document — `rbac._rbacYaml` in the
-  Helm chart values (helm/tenant-api/values.yaml), tenant-api's only deployment
-  source since the raw tenant-api manifests under k8s/ were removed (#1594). That
-  basename is NOT `_rbac.yaml`, so the whole-file path above never reaches the
-  production authz config. EMBEDDED_RBAC_SOURCES maps each source (by repo-relative
-  path, NOT basename — there are other values.yaml) to the key to EXTRACT → parse → validate against
-  the SAME rbac schema. The Helm TEMPLATE
-  (helm/tenant-api/templates/configmap-rbac.yaml) carries Go `{{ }}` markers and
-  cannot be parsed as plain YAML, so it is DEFERRED (skipped) — its rendered RBAC is
-  the values.yaml `_rbacYaml`, which IS validated. A registered embedded source
-  MISSING its expected key is a VIOLATION (fail-loud), not a silent skip, so a
-  renamed embedding key cannot silently re-open the fail-open hole this closes.
+  (SCHEMA_MAP) with a `.yaml`/`.yml` extension, and each registered embedded
+  source (EMBEDDED_RBAC_SOURCES, by repo-relative path). Other files are SKIPPED
+  (listed, never silently capped). An empty / comment-only `_tenant_orgs.yaml`
+  or `_domain_policy.yaml` is the empty config and is not flagged; an RBAC
+  config with zero groups is (above).
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all checked files valid (or no admin files among the arguments)
-  1  >=1 schema violation (user fixes the YAML or the schema)
-  2  bad invocation / unreadable schema / jsonschema missing / malformed YAML
+  1  >=1 violation (the parser refuses it, or a stricter authoring check does)
+  2  bad invocation / unreadable schema / jsonschema missing / a binary missing,
+     failing or older than this tool / an outer document da-crdecode refuses
 
 Usage:
   python3 check_admin_config_schema.py path/to/_rbac.yaml path/to/_tenant_orgs.yaml
@@ -72,22 +83,28 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
-
-import yaml
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import (  # noqa: E402  (#2123 shared strict loader)
-    DuplicateKeyError, StrictSafeLoader, reject_equal_constructed_keys,
-    strict_safe_load_all,
+import _lib_parse_tree  # noqa: E402  (ADR-036 §12: _domain_policy.yaml is a conf.d file)
+from _lib_consumer_read import (  # noqa: E402  (ADR-036 §12: the one way to run da-crdecode)
+    ConsumerReadError,
+    kubernetes_documents,
+    resolve_binary,
 )
 
+_REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
-_DEFAULT_SCHEMA_DIR = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas"))
+_DEFAULT_SCHEMA_DIR = os.path.join(_REPO_ROOT, "docs", "schemas")
+#: The Helm values the declared identity claims are read from (ADR-036 §12).
+_DEFAULT_HELM_VALUES = os.path.join(_REPO_ROOT, "helm", "tenant-api", "values.yaml")
+#: Where in those values the claims are declared (deployment.yaml renders it).
+CLAIMS_KEY_PATH = ("identity", "claimHeaders")
 
 # Admin meta-config basename STEM -> schema filename (under the schema dir).
 # Each schema mirrors the Go struct named in its `description`. Extend both this
@@ -96,6 +113,13 @@ SCHEMA_MAP = {
     "_rbac": "rbac.schema.json",
     "_domain_policy": "domain-policy.schema.json",
     "_tenant_orgs": "tenant-orgs.schema.json",
+}
+
+#: The stems tenant-api reads, and the `config check --kind` that judges each.
+#: `_domain_policy` is not here: it is a conf.d file (parse-tree).
+CONFIG_CHECK_KIND = {
+    "_rbac": "rbac",
+    "_tenant_orgs": "tenant-orgs",
 }
 
 # Both spellings are recognized. This MUST stay in step with the pre-commit
@@ -116,12 +140,17 @@ def schema_for(path: str) -> str | None:
     return SCHEMA_MAP.get(stem)
 
 
+def _stem(path: str) -> str:
+    return os.path.splitext(os.path.basename(path))[0]
+
+
 # Production RBAC embedded as a block-scalar string inside a larger document.
 # Keyed by repo-relative path SUFFIX (never basename — there are other
-# values.yaml and a configmap-rbac.yaml Helm template, which must NOT match). Each value = (dotted key-path to extract, schema filename). This
-# MUST stay in step with the pre-commit hook's `files:` regex, which pins these
-# exact paths; a path the hook selects but this map does not know would be
-# silently skipped (fail-open). Pinned by TestGateIntegrity.
+# values.yaml and a configmap-rbac.yaml Helm template, which must NOT match).
+# Each value = (dotted key-path to extract, schema filename). This MUST stay in
+# step with the pre-commit hook's `files:` regex, which pins these exact paths;
+# a path the hook selects but this map does not know would be silently skipped
+# (fail-open). Pinned by TestGateIntegrity.
 EMBEDDED_RBAC_SOURCES = {
     "helm/tenant-api/values.yaml": (("rbac", "_rbacYaml"), "rbac.schema.json"),
 }
@@ -149,37 +178,132 @@ def _navigate(doc: dict, key_path: tuple):
     return cur, None
 
 
-# Duplicate keys (#2123: folded into the shared strict loader). PyYAML's default
-# loader silently keeps the LAST value (`permissions: [read]` then
-# `permissions: [admin]` → just `[admin]`, no error), but the tenant-api Go
-# parser (yaml.v3, strict) REJECTS a duplicate key at load. So a duplicate key
-# this lint accepted would pass CI and then crash the manager at runtime (rbac
-# is startup-fatal) — Gemini #1061 review.
-#
-# `_lib_io.StrictSafeLoader` rejects what yaml.v3 rejects (same raw key text in
-# one mapping, anywhere in the document). This lint compared CONSTRUCTED keys
-# after merge-key flattening before #2123 (`true:` / `True:`, `1:` / `01:`, an
-# explicit key overriding a merged one), which is stricter than yaml.v3; that
-# stays too, so nothing refused before is accepted now.
-_DuplicateKeyError = DuplicateKeyError
-
-
-class _StrictSafeLoader(StrictSafeLoader):
-    """Shared strict loader + this lint's pre-#2123 constructed-key identity."""
-
-    def construct_mapping(self, node, deep=False):  # noqa: D102 — see above
-        self.flatten_mapping(node)  # keep default merge-key (<<) handling
-        reject_equal_constructed_keys(self, node.value, node, deep=deep)
-        return super().construct_mapping(node, deep=deep)
-
-
-def _load_all_strict(stream) -> list:
-    return list(strict_safe_load_all(stream, loader=_StrictSafeLoader))
-
-
 class _CallerError(Exception):
     """Environment/invocation failure -> EXIT_CALLER_ERROR (2)."""
 
+
+# ── the Go readers ──────────────────────────────────────────────────────
+
+#: The document `tenant-api config check` prints.
+CONFIG_CHECK_SCHEMA = "tenant-api.config-check/v1"
+TENANT_API_ENV = "TENANT_API_BINARY"
+#: A tenant-api older than `config check` reads `config` as the server's
+#: first positional argument and may start serving: bounded, then named.
+_TIMEOUT_SECONDS = 120
+
+
+def _resolve_tenant_api(explicit: str | None) -> str:
+    binary = resolve_binary(explicit, TENANT_API_ENV, "tenant-api")
+    if not binary:
+        raise _CallerError(
+            "tenant-api was not found: _rbac / _tenant_orgs are judged by "
+            "`tenant-api config check` (ADR-036 §12). Pass --tenant-api-binary, set "
+            f"${TENANT_API_ENV}, put tenant-api on $PATH, or in a checkout run this "
+            "through scripts/ops/with_admin_config_tools.sh (make tenant-api-build)")
+    return binary
+
+
+def _stderr_text(raw: bytes | None) -> str:
+    return (raw or b"").decode("utf-8", errors="backslashreplace").strip()
+
+
+def crdecode_documents(path: str) -> list:
+    """The documents of *path* as Kubernetes / Helm read them (sigs.k8s.io/yaml),
+    through `_lib_consumer_read.kubernetes_documents` — the one way the tools
+    run `da-crdecode`. Anything it cannot give (the binary missing or failing,
+    a file Helm cannot read as plain YAML, output that is not its JSON) is a
+    caller error, exit 2: a registered source must be readable the way Helm
+    reads it."""
+    try:
+        return kubernetes_documents(path)
+    except ConsumerReadError as exc:
+        reason = "; ".join(exc.stderr_lines)
+        raise _CallerError(
+            f"{path}: {exc}{': ' + reason if reason else ''} — the Helm values are read with "
+            "da-crdecode, as Helm reads them (ADR-036 §12); in a checkout run this through "
+            "scripts/ops/with_admin_config_tools.sh (make da-crdecode-build)") from exc
+
+
+def claim_declaration(values_path: str) -> str:
+    """`--identity-claim-headers` as the chart renders it from *values_path*'s
+    `identity.claimHeaders`: `key=Header` pairs, keys sorted, joined by `,`
+    (helm/tenant-api/templates/deployment.yaml). Empty when none is declared."""
+    docs = crdecode_documents(values_path)
+    claims = None
+    for doc in docs:
+        if isinstance(doc, dict):
+            value, missing = _navigate(doc, CLAIMS_KEY_PATH)
+            if missing is None:
+                claims = value
+    if claims is None:
+        return ""
+    if not isinstance(claims, dict) or not all(isinstance(v, str) for v in claims.values()):
+        raise _CallerError(f"{values_path}: {'.'.join(CLAIMS_KEY_PATH)} is not a map of "
+                           "claim key to header name")
+    return ",".join(f"{k}={claims[k]}" for k in sorted(claims))
+
+
+def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
+                 data: bytes | None = None, claims: str = "") -> tuple[object, dict | None]:
+    """`tenant-api config check --kind <kind>` of *path* (or *data* on stdin):
+    (config, None) when tenant-api reads it, (None, problem) when it refuses it.
+    Anything else — a failing or missing binary, a document that is not
+    `tenant-api.config-check/v1` (a tenant-api older than `config check`) — is
+    a caller error."""
+    cmd = [binary, "config", "check", "--kind", kind]
+    if kind == "rbac":
+        cmd += ["--identity-claim-headers", claims]
+    cmd.append(os.path.abspath(path) if path is not None else "-")
+    older = ("(this needs a tenant-api that has `config check`; build one from this "
+             "checkout: make tenant-api-build)")
+    try:
+        proc = subprocess.run(cmd, input=data if data is not None else b"",
+                              capture_output=True, check=False, timeout=_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise _CallerError(f"{where}: `{binary} config check` did not finish within "
+                           f"{_TIMEOUT_SECONDS}s {older}") from exc
+    except OSError as exc:
+        raise _CallerError(f"cannot run {binary}: {exc}") from exc
+    try:
+        doc = json.loads(proc.stdout) if proc.returncode in (0, 1) else None
+    except ValueError:
+        doc = None
+    if (not isinstance(doc, dict) or doc.get("schema") != CONFIG_CHECK_SCHEMA
+            or doc.get("kind") != kind):
+        raise _CallerError(f"{where}: `{binary} config check` exited {proc.returncode} without a "
+                           f"{CONFIG_CHECK_SCHEMA} document {older}: {_stderr_text(proc.stderr)}")
+    config, problem = doc.get("config"), doc.get("problem")
+    if proc.returncode == 0 and problem is None and isinstance(config, dict):
+        return config, None
+    if (proc.returncode == 1 and config is None and isinstance(problem, dict)
+            and isinstance(problem.get("kind"), str) and isinstance(problem.get("message"), str)):
+        return None, problem
+    raise _CallerError(f"{where}: `{binary} config check` exited {proc.returncode} with a "
+                       "document that breaks its contract (exactly one of config and problem)")
+
+
+class _Readers:
+    """The run's Go readers, each resolved on first use: a run that checks no
+    RBAC needs neither tenant-api nor da-crdecode."""
+
+    def __init__(self, tenant_api: str | None, helm_values: str) -> None:
+        self._tenant_api_arg = tenant_api
+        self._helm_values = helm_values
+        self._tenant_api: str | None = None
+        self._claims: str | None = None
+
+    def tenant_api(self) -> str:
+        if self._tenant_api is None:
+            self._tenant_api = _resolve_tenant_api(self._tenant_api_arg)
+        return self._tenant_api
+
+    def claims(self) -> str:
+        if self._claims is None:
+            self._claims = claim_declaration(self._helm_values)
+        return self._claims
+
+
+# ── validation ──────────────────────────────────────────────────────────
 
 def _load_schema(schema_dir: str, filename: str, cache: dict) -> dict:
     if filename in cache:
@@ -194,100 +318,90 @@ def _load_schema(schema_dir: str, filename: str, cache: dict) -> dict:
     return schema
 
 
-def validate_file(path: str, schema: dict, validator) -> list[str]:
-    """Validate one admin-config file against `schema`. Returns violation messages.
-
-    `validator` is the jsonschema module (injected so the import stays lazy — the
-    CI exit-code gate runs `--help` in an env that may not have jsonschema).
-    """
-    try:
-        with open(path, encoding="utf-8") as fh:
-            docs = _load_all_strict(fh)
-    except _DuplicateKeyError as exc:
-        # A duplicate key is a config VIOLATION the author fixes (exit 1), not an
-        # environment error — and it is invisible without this loader (PyYAML
-        # would silently keep the last value while the Go parser crashes on it).
-        loc = exc.problem_mark
-        where = f" (line {loc.line + 1})" if loc is not None else ""
-        return [f"ERROR: {path}: {exc.problem}{where}"]
-    except (OSError, yaml.YAMLError) as exc:
-        raise _CallerError(f"{path}: cannot read/parse YAML: {exc}")
-
-    return _validate_docs(docs, path, schema, validator)
-
-
-def _validate_docs(docs, path: str, schema: dict, validator, where: str = "") -> list[str]:
-    """Validate each parsed YAML document (a mapping) against `schema`. `where`
-    is an optional message prefix used to point at an EMBEDDED block-scalar
-    source (e.g. "embedded 'data._rbac.yaml': ") vs. the whole file."""
-    violations: list[str] = []
-    for doc in docs:
-        if doc is None:
-            # Empty / comment-only / explicit-`null` document: loader-LEGAL for
-            # the admin managers (rbac / tenantorg decode io.EOF to the empty
-            # config; an empty _domain_policy is likewise inert). Not a violation.
-            continue
-        if not isinstance(doc, dict):
-            violations.append(
-                f"ERROR: {path}: {where}top-level YAML document must be a mapping "
-                f"(got {type(doc).__name__})")
-            continue
-        try:
-            validator.validate(doc, schema)
-        except validator.ValidationError as exc:
-            loc = "/".join(str(p) for p in exc.absolute_path)
-            violations.append(f"ERROR: {path}: {where}{exc.message} @ /{loc}")
+def _validate_doc(doc, path: str, schema: dict, validator, where: str = "") -> list[str]:
+    """The authoring schema on one decoded document (a mapping). None is the
+    empty config, not a violation."""
+    if doc is None:
+        return []
+    if not isinstance(doc, dict):
+        return [f"ERROR: {path}: {where}top-level YAML document must be a mapping "
+                f"(got {type(doc).__name__})"]
+    violations = []
+    for exc in sorted(validator.Draft7Validator(schema).iter_errors(doc),
+                      key=lambda e: list(map(str, e.absolute_path))):
+        loc = "/".join(str(p) for p in exc.absolute_path)
+        violations.append(f"ERROR: {path}: {where}{exc.message} @ /{loc}")
     return violations
 
 
-def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
-    """Validate an RBAC config EMBEDDED as a YAML block-scalar string inside a
-    larger document (k8s ConfigMap `data._rbac.yaml` / Helm `rbac._rbacYaml`).
+def _problem_line(path: str, problem: dict, where: str = "") -> str:
+    return (f"ERROR: {path}: {where}tenant-api refuses it ({problem['kind']}): "
+            f"{problem['message']}")
 
-    Returns a list of violation messages (empty if the embedded RBAC is valid).
-    The Helm TEMPLATE configmap-rbac.yaml (Go `{{ }}`) is NOT handled here — it is
-    excluded by the hook's path-anchored files regex; its rendered RBAC is the
-    values.yaml `_rbacYaml`, validated directly as a registered embedded source.
-    An unparseable outer document raises _CallerError (exit 2) rather than being
-    silently skipped — a REGISTERED source is never deferred (fail-closed).
 
-    Uses the same duplicate-key-rejecting strict loader as validate_file, applied
-    to BOTH the outer document and the extracted block scalar, so a dup-key that
-    the Go parser would reject at load is caught in the embedded RBAC too.
-    """
-    dotted = ".".join(key_path)
+def _zero_groups(config: dict | None, path: str, where: str = "") -> list[str]:
+    """The authoring check stricter than the parser: an RBAC config with no
+    group denies every request once the server loads it with --rbac."""
+    if config is not None and config.get("groups"):
+        return []
+    return [f"ERROR: {path}: {where}the RBAC config has zero groups: tenant-api reads it, but a "
+            "server started with --rbac (the Helm chart always passes it) fails closed on it "
+            "and denies every request (MED-8; only --rbac-empty-open, which the chart never "
+            "sets, opens it). Add the groups, or remove the file."]
+
+
+def validate_file(path: str, schema: dict, validator, readers: _Readers) -> list[str]:
+    """Validate one whole-file admin config. Returns violation messages."""
+    stem = _stem(path)
+    kind = CONFIG_CHECK_KIND.get(stem)
+    if kind is not None:
+        claims = readers.claims() if kind == "rbac" else ""
+        if not os.path.isfile(path):
+            raise _CallerError(f"{path}: not a readable file")
+        config, problem = config_check(readers.tenant_api(), kind, path, path=path, claims=claims)
+        if problem is not None:
+            return [_problem_line(path, problem)]
+        if kind == "rbac":
+            empty = _zero_groups(config, path)
+            if empty:
+                return empty
+        return _validate_doc(config, path, schema, validator)
+    return _validate_domain_policy(path, schema, validator)
+
+
+def _validate_domain_policy(path: str, schema: dict, validator) -> list[str]:
+    """`_domain_policy.yaml` read through `da-guard parse-tree` (file mode, as
+    the file at its own name in its own directory)."""
+    p = Path(path)
     try:
-        with open(path, encoding="utf-8") as fh:
-            raw = fh.read()
+        raw = p.read_bytes()
     except OSError as exc:
         raise _CallerError(f"{path}: cannot read: {exc}")
-
-    # ⛔ NO whole-file `{{` defer. A REGISTERED embedded source is plain YAML by
-    # contract — the Helm TEMPLATE (which does carry Go `{{ }}`) is excluded by
-    # the hook's path-anchored files regex, NOT handled here. Scanning the whole
-    # raw file for `{{` was a FAIL-OPEN: an unrelated tpl-passthrough value
-    # (e.g. podAnnotations: "{{ .Release.Name }}") would silently defer — and so
-    # SKIP — validation of the embedded production RBAC, reopening the very hole
-    # this check closes. A legitimately quoted `{{ }}` parses fine as a YAML
-    # string below; an unparseable one raises a CallerError (exit 2, blocks)
-    # rather than passing.
     try:
-        outer_docs = _load_all_strict(raw)
-    except _DuplicateKeyError as exc:
-        loc = exc.problem_mark
-        where = f" (line {loc.line + 1})" if loc is not None else ""
-        return [f"ERROR: {path}: {exc.problem}{where}"]
-    except (yaml.YAMLError, TypeError) as exc:
-        # TypeError: an unquoted document-level `{{ }}` parses as a flow mapping
-        # with an unhashable dict key. Either way the OUTER document is not plain
-        # YAML — a registered source must be (the Helm template is excluded by the
-        # files regex). Block (exit 2) rather than silently pass.
-        raise _CallerError(f"{path}: cannot parse YAML "
-                           f"(document-level Go template markers unsupported): {exc}")
+        tree = _lib_parse_tree.load_file(p.parent, p.name, raw)
+        node = tree.node(p.name)
+    except _lib_parse_tree.FileUnreadable as exc:
+        return [f"ERROR: {path}: parse-tree refuses it ({exc.kind}): {exc.message}"]
+    except KeyError as exc:
+        raise _CallerError(f"{path}: {exc}") from exc
+    except _lib_parse_tree.ParseTreeError as exc:
+        raise _CallerError(f"{path}: {exc}") from exc
+    doc = _lib_parse_tree.to_python_text_sequences(node, ("tenants",))
+    return _validate_doc(doc, path, schema, validator)
 
+
+def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator,
+                           readers: _Readers) -> list[str]:
+    """Validate an RBAC config EMBEDDED as a string inside a larger document
+    (Helm `rbac._rbacYaml`): the outer layer read by `da-crdecode`, the string
+    judged by `tenant-api config check --kind rbac -`, the authoring schema on
+    its decoded config. An outer document da-crdecode refuses raises
+    _CallerError (exit 2) — a REGISTERED source is never deferred."""
+    dotted = ".".join(key_path)
+    docs = crdecode_documents(path)
     violations: list[str] = []
     found = False
-    for doc in outer_docs:
+    for doc in docs:
         if not isinstance(doc, dict):
             continue
         embedded, missing_at = _navigate(doc, key_path)
@@ -295,8 +409,9 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
             continue  # this document does not carry the key; another might
         found = True
         if embedded is None:
-            # present-but-null block scalar → empty RBAC (rbac decodes io.EOF to
-            # the empty config); loader-legal, not a violation.
+            # present-but-null: the empty RBAC — loader-legal, but the chart
+            # mounts it as the --rbac file, and zero groups deny everything.
+            violations.extend(_zero_groups(None, path, f"embedded '{dotted}': "))
             continue
         if not isinstance(embedded, str):
             violations.append(
@@ -304,49 +419,49 @@ def validate_embedded_file(path: str, key_path: tuple, schema: dict, validator):
                 f"block-scalar string (got {type(embedded).__name__})")
             continue
         if "{{" in embedded:
-            # The embedded RBAC block ITSELF is a Go-template indirection (its real
-            # RBAC is rendered elsewhere, e.g. `_rbacYaml: |{{ .Values.rbacBody }}`)
-            # — defer THIS block, it has no concrete RBAC to validate here. ⛔ This
-            # check is SCOPED to the extracted block, NOT the whole file: an
-            # unrelated `{{ }}` value elsewhere in the document must never suppress
-            # validation of a plain-RBAC block (that was the fail-open this closes).
+            # The block ITSELF is a Go-template indirection (its RBAC is rendered
+            # elsewhere): no concrete RBAC to judge here. ⛔ Scoped to the block,
+            # never the whole file — an unrelated `{{ }}` value elsewhere must not
+            # suppress the check of a plain-RBAC block.
             continue
-        try:
-            inner_docs = _load_all_strict(embedded)
-        except _DuplicateKeyError as exc:
-            loc = exc.problem_mark
-            at = f" line {loc.line + 1}" if loc is not None else ""
-            violations.append(
-                f"ERROR: {path}: {exc.problem} (embedded '{dotted}'{at})")
+        where = f"embedded '{dotted}': "
+        config, problem = config_check(readers.tenant_api(), "rbac", f"{path} [{dotted}]",
+                                       data=embedded.encode("utf-8"), claims=readers.claims())
+        if problem is not None:
+            violations.append(_problem_line(path, problem, where))
             continue
-        except yaml.YAMLError as exc:
-            # A malformed embedded RBAC string is an author-fixable content bug
-            # (exit 1), not an environment error.
-            violations.append(
-                f"ERROR: {path}: embedded '{dotted}' is not valid YAML: {exc}")
+        empty = _zero_groups(config, path, where)
+        if empty:
+            violations.extend(empty)
             continue
-        violations.extend(
-            _validate_docs(inner_docs, path, schema, validator,
-                           where=f"embedded '{dotted}': "))
+        violations.extend(_validate_doc(config, path, schema, validator, where=where))
 
     if not found:
         violations.append(
             f"ERROR: {path}: expected embedded RBAC key '{dotted}' not found — "
             f"this file is a registered embedded-RBAC source, so a missing or "
-            f"renamed key silently skips authz schema validation (fail-open). "
+            f"renamed key silently skips authz validation (fail-open). "
             f"Fix the key, or update EMBEDDED_RBAC_SOURCES if the embedding moved.")
     return violations
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate tenant-api admin meta-config YAML "
-                    "(_rbac / _domain_policy / _tenant_orgs) against JSON Schemas")
+        description="Validate tenant-api admin meta-config "
+                    "(_rbac / _domain_policy / _tenant_orgs + the Helm-embedded RBAC): "
+                    "tenant-api's own parse (`tenant-api config check`) plus the "
+                    "stricter JSON Schemas on what it decoded")
     parser.add_argument("files", nargs="*",
                         help="Files to check (pre-commit passes matching staged files)")
     parser.add_argument("--schema-dir", default=_DEFAULT_SCHEMA_DIR,
                         help="Directory holding the *.schema.json files "
                              "(default: docs/schemas/)")
+    parser.add_argument("--tenant-api-binary", default=None,
+                        help=f"tenant-api to run `config check` with (default: ${TENANT_API_ENV}, "
+                             "else tenant-api on $PATH)")
+    parser.add_argument("--helm-values", default=_DEFAULT_HELM_VALUES,
+                        help="Helm values whose identity.claimHeaders declare the claims an "
+                             "RBAC config is checked against (default: helm/tenant-api/values.yaml)")
     parser.add_argument("--ci", action="store_true",
                         help="CI mode (accepted for symmetry with sibling lints; no behaviour change)")
     args = parser.parse_args()
@@ -389,6 +504,7 @@ def main() -> int:
               "(pre-commit injects it via additional_dependencies).", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    readers = _Readers(args.tenant_api_binary, args.helm_values)
     schema_cache: dict = {}
     violations: list[str] = []
     checked = 0
@@ -396,15 +512,11 @@ def main() -> int:
         for path, schema_file in sorted(direct_to_check):
             schema = _load_schema(args.schema_dir, schema_file, schema_cache)
             checked += 1
-            violations.extend(validate_file(path, schema, jsonschema))
+            violations.extend(validate_file(path, schema, jsonschema, readers))
         for path, key_path, schema_file in sorted(embedded_to_check):
             schema = _load_schema(args.schema_dir, schema_file, schema_cache)
-            # A REGISTERED embedded source is ALWAYS validated, never deferred —
-            # the Helm TEMPLATE (Go `{{ }}`) is excluded by the files regex, not
-            # skipped here. An unparseable outer YAML raises _CallerError (exit 2,
-            # blocks) rather than silently passing.
             checked += 1
-            violations.extend(validate_embedded_file(path, key_path, schema, jsonschema))
+            violations.extend(validate_embedded_file(path, key_path, schema, jsonschema, readers))
     except _CallerError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -414,12 +526,13 @@ def main() -> int:
     if violations:
         for msg in violations:
             print(msg, file=sys.stderr)
-        print(f"\n{len(violations)} schema violation(s) across {checked} admin "
-              f"config file(s). Fix the YAML, or the schema in docs/schemas/ if the "
-              f"schema is wrong (SoT = the Go struct it mirrors).", file=sys.stderr)
+        print(f"\n{len(violations)} violation(s) across {checked} admin config file(s). "
+              f"Fix the YAML, or the schema in docs/schemas/ if an authoring check is "
+              f"wrong (the parse itself is tenant-api's / parse-tree's).", file=sys.stderr)
         return EXIT_VIOLATION
 
-    print(f"OK: {checked} admin meta-config file(s) valid against docs/schemas/")
+    print(f"OK: {checked} admin meta-config file(s) valid (tenant-api config check / "
+          f"parse-tree + docs/schemas/)")
     return EXIT_OK
 
 

@@ -8,8 +8,8 @@ write`, `_lib_confedit`). The PyYAML rewrite layer that once lived here
 ``tests/shared/test_rewrite_layer_is_gone.py`` keeps it gone. What is left
 is this loader for the YAML that is NOT conf.d and that some tools still read
 themselves: the Alertmanager config (``onboard_platform``), Namespace manifests
-(``check_retire_drift``), tenant-api's state store (``_lib_tenant_state``) and
-the migration audit (``migration_audit``). ADR-036 §12 moves each of those to
+(``check_retire_drift``) and the migration audit (``migration_audit``);
+tenant-api's state store left it for ``tenant-api state show``. ADR-036 §12 moves each of those to
 its consumer's reading (step 12; the audit is deleted in step 13), and this
 module goes with the last of them.
 

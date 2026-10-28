@@ -42,7 +42,7 @@ from pathlib import Path
 import pytest
 import yaml
 from _helm_gate import helm_required
-from _render_baseline import baseline_args
+from _render_baseline import baseline_args, tenant_api_setting
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ⛔ One literal path string per chart (verify_diff.py text_map, #1313).
@@ -156,9 +156,9 @@ def test_generator_always_rendered_and_wired_to_tenant_api(shape) -> None:
     exactly the socket the generator listens on."""
     pod = _pod(_render(*shape))
     gen, ta = _container(pod, "generator"), _container(pod, "tenant-api")
-    assert _flag(ta, "generator-socket") == _flag(gen, "socket")
-    assert _flag(ta, "generator-socket").startswith(_mounts(ta, "generator-sock")[0]["mountPath"] + "/")
-    assert _flag(ta, "deploy-policy") is None
+    assert tenant_api_setting(ta, "generator-socket") == _flag(gen, "socket")
+    assert tenant_api_setting(ta, "generator-socket").startswith(_mounts(ta, "generator-sock")[0]["mountPath"] + "/")
+    assert tenant_api_setting(ta, "deploy-policy") is None
     assert "--policy-unavailable-open" not in ta["args"]
 
 
@@ -166,7 +166,7 @@ def test_generator_always_rendered_and_wired_to_tenant_api(shape) -> None:
 def test_tenant_api_reads_the_policy_file_the_generator_judges_with() -> None:
     pod = _pod(_render("generator.policy.existingConfigMap=da-policy"))
     gen, ta = _container(pod, "generator"), _container(pod, "tenant-api")
-    assert _flag(ta, "deploy-policy") == _flag(gen, "policy") is not None
+    assert tenant_api_setting(ta, "deploy-policy") == _flag(gen, "policy") is not None
 
 
 @_needs_helm
@@ -241,7 +241,7 @@ def test_generator_reads_tenant_api_repository_read_only() -> None:
     flags move, this fails until the generator's follow."""
     pod = _pod(_render(*_ON))
     ta, gen = _container(pod, "tenant-api"), _container(pod, "generator")
-    git_dir, config_dir = _flag(ta, "git-dir"), _flag(ta, "config-dir")
+    git_dir, config_dir = tenant_api_setting(ta, "git-dir"), tenant_api_setting(ta, "config-dir")
     assert git_dir and config_dir
     assert _flag(gen, "repo") == git_dir
     rel = posixpath.relpath(config_dir, git_dir)

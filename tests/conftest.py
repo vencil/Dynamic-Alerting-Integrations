@@ -349,6 +349,91 @@ def da_crdecode_env(monkeypatch, da_crdecode_binary):
     return da_crdecode_binary
 
 
+@pytest.fixture(scope="session")
+def da_read_binary(tmp_path_factory):
+    """從本 repo 的 Go 原始碼（獨立 module components/da-read）建出的 da-read（#3206）。
+
+    `onboard_platform` 以 `da-read alertmanager` 讀 Alertmanager 設定；建不起來
+    （含沒有 go）一律 fail、不 skip，理由同 `da_guard_binary`。每個 xdist worker 建一次。
+    """
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: da-read cannot be built, so the readers "
+                    "that take an Alertmanager config from it cannot be measured")
+    out = tmp_path_factory.mktemp("da-read-bin") / "da-read"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "."],
+        cwd=os.path.join(REPO_ROOT, "components", "da-read"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=600)
+    if proc.returncode != 0:
+        pytest.fail(f"go build da-read failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+@pytest.fixture
+def da_read_env(monkeypatch, da_read_binary, da_crdecode_binary):
+    """`$DA_READ_BINARY` 與 `$DA_CRDECODE_BINARY` 指向本 repo 建出的兩支，只在本測試期間
+    （onboard_platform 讀 Alertmanager 設定兩支都要：外層 ConfigMap、內層設定）。"""
+    monkeypatch.setenv("DA_READ_BINARY", da_read_binary)
+    monkeypatch.setenv("DA_CRDECODE_BINARY", da_crdecode_binary)
+    return da_read_binary
+
+
+@pytest.fixture(scope="session")
+def tenant_api_binary(tmp_path_factory):
+    """從本 repo 的 Go 原始碼建出的 tenant-api（ADR-036 §12）。
+
+    `_lib_tenant_state` 讀 `tenant-api state show` 的 JSON，`check_admin_config_schema`
+    經 `tenant-api config check` 判定；建不起來（含沒有 go）一律 fail、不 skip，
+    理由同 `da_guard_binary`。每個 xdist worker 建一次。
+    """
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: tenant-api cannot be built, so `state show` / "
+                    "`config check` (the readers of tenant-api's own records) cannot be measured")
+    out = tmp_path_factory.mktemp("tenant-api-bin") / "tenant-api"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/server"],
+        cwd=os.path.join(REPO_ROOT, "components", "tenant-api"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=900, env=go_build_env())
+    if proc.returncode != 0:
+        pytest.fail(f"go build tenant-api failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+@pytest.fixture
+def tenant_api_env(monkeypatch, tenant_api_binary):
+    """`$TENANT_API_BINARY` 指向 `tenant_api_binary`，只在本測試期間。"""
+    monkeypatch.setenv("TENANT_API_BINARY", tenant_api_binary)
+    return tenant_api_binary
+
+
+@pytest.fixture
+def state_show(tenant_api_binary, tmp_path_factory):
+    """`state_show(records)`: the `tenant-api state show --from <dir>` JSON for
+    a state directory holding *records* (key → YAML text), written to a file;
+    its path is returned. The JSON is tenant-api's, never hand-written."""
+    import subprocess
+
+    def make(records: "dict[str, str]") -> str:
+        d = tmp_path_factory.mktemp("state-dir")
+        for k, v in records.items():
+            (d / k).write_text(v, encoding="utf-8")
+        proc = subprocess.run([tenant_api_binary, "state", "show", "--from", str(d)],
+                              capture_output=True, check=False, timeout=60)
+        if proc.returncode != 0:
+            pytest.fail(f"tenant-api state show exited {proc.returncode}:\n"
+                        f"{proc.stderr.decode('utf-8', 'replace')}")
+        out = tmp_path_factory.mktemp("state-json") / "state.json"
+        out.write_bytes(proc.stdout)
+        return str(out)
+    return make
+
+
 # ── Function-scoped fixtures ──────────────────────────────────────────
 
 @pytest.fixture
@@ -600,9 +685,54 @@ def _provide_session_da_guard() -> None:
     os.environ["DA_GUARD_BINARY"] = out
 
 
+#: #3206（ADR-036 §12）：conf.d 以外的檔案以消費者的讀法讀——Kubernetes manifest
+#: 經 da-crdecode、Alertmanager 設定經 da-read。讀它們的工具（onboard_platform、
+#: check_retire_drift）同樣遍布各處的測試在呼叫，理由與做法同 da-guard：
+#: (binary 名, 環境變數, 給 xdist worker 的 session 變數, 模組目錄, go build 的套件)。
+_SESSION_CONSUMER_BINARIES = (
+    ("da-crdecode", "DA_CRDECODE_BINARY", "VIBE_TEST_DA_CRDECODE_BINARY",
+     ("components", "threshold-exporter", "app"), "./cmd/da-crdecode"),
+    ("da-read", "DA_READ_BINARY", "VIBE_TEST_DA_READ_BINARY", ("components", "da-read"), "."),
+)
+_SESSION_CONSUMER_DIRS: "list[str]" = []
+
+
+def _provide_session_consumer_binaries() -> None:
+    """da-crdecode 與 da-read，比照 `_provide_session_da_guard`：從本 checkout 建一次、
+    設進環境變數（子行程與 xdist worker 繼承）；沒有 go 或建不起來就不設，要它的
+    測試照樣以缺失失敗、不 skip。要量「沒有它」的測試自己 `monkeypatch.delenv`。"""
+    import subprocess
+    go = shutil.which("go")
+    for name, env, session_env, module, pkg in _SESSION_CONSUMER_BINARIES:
+        built = os.environ.get(session_env, "")
+        if built and os.path.isfile(built):  # an xdist worker
+            os.environ[env] = built
+            continue
+        if go is None:
+            continue
+        d = tempfile.mkdtemp(prefix=f"vibe-{name}-")
+        out = os.path.join(d, name)
+        proc = subprocess.run(
+            [go, "build", "-buildvcs=false", "-o", out, pkg],
+            cwd=os.path.join(REPO_ROOT, *module),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            check=False, timeout=600)
+        if proc.returncode != 0:
+            shutil.rmtree(d, ignore_errors=True)
+            continue  # the session fixtures fail with go's message where asked for
+        # Same permissions reasoning as da-guard's (#3178).
+        os.chmod(d, 0o755)
+        os.chmod(out, 0o755)
+        _SESSION_CONSUMER_DIRS.append(d)
+        os.environ[session_env] = out
+        os.environ[env] = out
+
+
 def pytest_unconfigure(config):
     if _SESSION_DA_GUARD_DIR is not None:
         shutil.rmtree(_SESSION_DA_GUARD_DIR, ignore_errors=True)
+    for d in _SESSION_CONSUMER_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # ── A crash is not a named rc 2 (#3092) ──────────────────────────────
@@ -694,6 +824,7 @@ def pytest_configure(config):
     crash code off 2 (`_arm_test_crash_exit_code`); make subprocess-invoked
     tools visible to coverage, when coverage is on."""
     _provide_session_da_guard()
+    _provide_session_consumer_binaries()
     _arm_test_crash_exit_code()
     plugin = config.pluginmanager.get_plugin("_cov")
     if plugin is None or getattr(plugin, "_disabled", False):

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/vencil/tenant-api/internal/statestore"
 )
@@ -104,4 +107,76 @@ func within(path, dir string) bool {
 	}
 	rel, err := filepath.Rel(d, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// readStateSnapshot reads every record of the store f selects, read-only, for
+// `tenant-api state show` (ADR-036 §12). The settings are judged as
+// wireStateStore judges them, but the store is never opened for writing: a
+// state directory is not created and a missing one — like a missing
+// ConfigMap — is an error, never an empty store.
+func readStateSnapshot(f stateFlags) (map[string][]byte, error) {
+	switch f.Kind {
+	case "configmap":
+		client, err := buildInClusterClientset()
+		if err != nil {
+			return nil, fmt.Errorf("state store: %w", err)
+		}
+		ns := f.Namespace
+		if ns == "" {
+			if ns, err = inClusterNamespace(); err != nil {
+				return nil, fmt.Errorf("state store: resolve namespace (or set --state-namespace): %w", err)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return statestore.ReadConfigMapSnapshot(ctx, client, ns, f.ConfigMapName)
+	case "dir":
+		if f.Dir == "" {
+			return nil, fmt.Errorf("state store: --state-store=dir needs --state-dir")
+		}
+		if within(f.Dir, f.ConfigDir) {
+			return nil, fmt.Errorf("state store: --state-dir %q must lie outside --config-dir %q", f.Dir, f.ConfigDir)
+		}
+		return statestore.ReadDirSnapshot(f.Dir)
+	default:
+		// The server's refusal of an empty or unknown kind; wireStateStore
+		// opens nothing for these.
+		_, err := wireStateStore(stateFlags{Kind: f.Kind}, nil)
+		return nil, err
+	}
+}
+
+// registerIdentityClaimFlag registers --identity-claim-headers on fs. The
+// server and `tenant-api config check` (ADR-036 §12) both call it, so an RBAC
+// file is checked against the claims the deployment declares, read from the
+// same flag or TA_IDENTITY_CLAIM_HEADERS.
+func registerIdentityClaimFlag(fs *flag.FlagSet) *string {
+	return fs.String("identity-claim-headers", envOrDefault("TA_IDENTITY_CLAIM_HEADERS", ""),
+		"ADR-027/LD-6 P2: comma-separated claimKey=Header-Name pairs (e.g. 'org=X-Auth-Request-Org,region=X-Auth-Request-Region') declaring which trusted-hop headers load which named verified claims onto the request principal. Claims are carried only — nothing consumes them for authz until P3 match evaluation. Default empty = the seam is closed and behavior is unchanged.")
+}
+
+// version is set at build time (-ldflags "-X main.version=..."); when it is
+// empty the module's build information names the build.
+var version string
+
+// tenantAPIVersion is the version `state show` and `config check` print, so
+// a reader can tell which tenant-api judged the records.
+func tenantAPIVersion() string {
+	if version != "" {
+		return version
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	v := bi.Main.Version
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			return v + "+" + s.Value
+		}
+	}
+	if v == "" {
+		return "unknown"
+	}
+	return v
 }
