@@ -49,7 +49,7 @@ lang: zh
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64
+  # ⚠️ 值是數字（"80" 加引號也照數字讀；讀不成數字的值只拒收那個 key，#3250）
   mysql_connections: 80
   mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
   mysql_replication_lag: 30  # 秒 — 非同步複製延遲
@@ -129,9 +129,9 @@ helm install da-portal ./helm/da-portal/ -n monitoring
 ```yaml
 # conf.d/_defaults.yaml
 defaults:
-  # ⚠️ 值是數字、不加引號 —— Go 端型別為 map[string]float64。寫成 "80" 會讓
-  #    「整份檔案」unmarshal 失敗，該檔的 defaults 全數落空（exporter 會記一行
-  #    ERROR，但 tenant-api 的驗證路徑是靜默吞掉的）。
+  # ⚠️ 值是數字 —— 讀不成數字的值（例如 disable、abc）不送這個 key 的預設列，
+  #    da-guard 以 root_default_refused 報錯；寫成對照表或清單則整份檔被丟掉，
+  #    該檔的 defaults 全數落空（#3250）。
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80

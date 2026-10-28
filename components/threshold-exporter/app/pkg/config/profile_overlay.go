@@ -122,6 +122,10 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 		if len(doc.Profiles) == 0 {
 			continue
 		}
+		var nodes struct {
+			Profiles map[string]yaml.Node `yaml:"profiles"`
+		}
+		_ = yaml.Unmarshal(f.data, &nodes) // decoded above: cannot fail here
 		pp.files = append(pp.files, f.key)
 		if f.abs != "" {
 			if pp.abs == nil {
@@ -139,6 +143,9 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 			// A null body is a known, empty profile (ParseConfigFile
 			// accepted the file, so any other body is a mapping).
 			m, _ := normalizeYAMLToJSON(body).(map[string]any)
+			if n, ok := nodes.Profiles[name]; ok {
+				withThresholdLeaves(m, resolveAlias(&n)) // #3250
+			}
 			m, spell := normalizeKeys(m) // #2031
 			if spell != nil {
 				if pp.spell == nil {

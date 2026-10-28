@@ -65,6 +65,21 @@ type effectiveDoc struct {
 	// Always present ([] when none).
 	Skipped []skippedFile              `json:"skipped"`
 	Tenants map[string]effectiveTenant `json:"tenants"`
+	// RootDefaultsRefused: served-values' `root_defaults_refused`, from the
+	// same build (#3250): the root `defaults:` thresholds whose value the
+	// exporter refuses, each {key, text, refused}. A tenant that does not
+	// write such a key also names it in not_served (root_default_refused).
+	// Always present: [] when none, null when there is no verdict — the
+	// resolve stopped on a file it cannot decode, or the exporter dropped the
+	// root carrier itself.
+	RootDefaultsRefused []rootDefaultRefused `json:"root_defaults_refused"`
+	// RootDefaultsReserved: the registered `_` keys of the root `defaults:`
+	// (config.RootDefaultsReservedKey), sorted (#3250): the root hands no
+	// tenant one of them — da-guard's root_defaults_reserved_key, and a
+	// tenant that does not write the key names it in not_served
+	// (root_defaults_reserved). Always present: [] when none, null as for
+	// RootDefaultsRefused.
+	RootDefaultsReserved []string `json:"root_defaults_reserved"`
 	// tenants_requested / tenants_absent, with --tenant only
 	// (tenant_subset.go): Tenants then holds those of the requested
 	// tenants the tree has.
@@ -191,7 +206,8 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	}
 
 	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Unreadable: []skippedFile{},
-		Skipped: []skippedFile{}, Tenants: map[string]effectiveTenant{}}
+		Skipped: []skippedFile{}, Tenants: map[string]effectiveTenant{}, RootDefaultsRefused: []rootDefaultRefused{},
+		RootDefaultsReserved: []string{}}
 	// The load logs on errOut, as served-values' LoadDir does (#2115): a
 	// file in parse_failed is named with the exporter's reason, not only
 	// listed (`cannot unmarshal !!str ...`).
@@ -227,9 +243,23 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			return exitCallerErr
 		}
 		doc.ParseFailed = []string{de.Path}
+		// No build verdict to give: null, never [] (which reads as "the
+		// root refuses nothing").
+		doc.RootDefaultsRefused, doc.RootDefaultsReserved = nil, nil
 	} else {
 		if tree.ParseFailed != nil {
 			doc.ParseFailed = tree.ParseFailed
+		}
+		// Unjudged (the root carrier itself is dropped): null, never [].
+		if refused, judged := tree.RootDefaultsRefused(); judged {
+			doc.RootDefaultsRefused = rootDefaultsRefused(refused)
+		} else {
+			doc.RootDefaultsRefused = nil
+		}
+		if reserved, judged := tree.RootDefaultsReserved(); !judged {
+			doc.RootDefaultsReserved = nil
+		} else if reserved != nil {
+			doc.RootDefaultsReserved = reserved
 		}
 		for _, name := range tree.NoTenant {
 			doc.Skipped = append(doc.Skipped, skippedFile{File: name, Reason: config.NoTenantReason})

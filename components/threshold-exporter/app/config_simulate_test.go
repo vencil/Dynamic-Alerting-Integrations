@@ -303,14 +303,14 @@ func TestSimulateHandler_RejectsWhatTheExporterSkips(t *testing.T) {
 		tenantID string // "" = t1
 	}{
 		{"tenant body is a scalar", "tenants:\n  t1: 5\n", []string{l0}, "tenant_yaml", ""},
-		{"tenant file defaults value is a string", "defaults:\n  mysql_connections: abc\n" + tenant, []string{l0}, "tenant_yaml", ""},
+		{"tenant file defaults value is a mapping", "defaults:\n  mysql_connections:\n    nested: map\n" + tenant, []string{l0}, "tenant_yaml", ""},
 		{"tenant file max_metrics_per_tenant is not an int", "max_metrics_per_tenant: abc\n" + tenant, []string{l0}, "tenant_yaml", ""},
 		{"tenant file declares a non-UTF-8 tenant id", "tenants:\n  !!binary /w==: {}\n  t1: {}\n", []string{l0}, "tenant_yaml", ""},
-		{"L0 defaults value is a string", tenant, []string{"defaults:\n  mysql_connections: abc\n"}, "defaults_chain_yaml[0]", ""},
+		{"L0 defaults value is a mapping", tenant, []string{"defaults:\n  mysql_connections:\n    nested: map\n"}, "defaults_chain_yaml[0]", ""},
 		// Precedence (#1981 SF3): a file the exporter would drop is a 400
 		// even when tenant_id is also absent — before #1981 these were 404.
-		{"broken tenant file AND tenant_id absent", "defaults:\n  mysql_connections: abc\n" + tenant, []string{l0}, "tenant_yaml", "missing"},
-		{"broken L0 AND tenant_id absent", tenant, []string{"defaults:\n  mysql_connections: abc\n"}, "defaults_chain_yaml[0]", "missing"},
+		{"broken tenant file AND tenant_id absent", "defaults:\n  mysql_connections: [1]\n" + tenant, []string{l0}, "tenant_yaml", "missing"},
+		{"broken L0 AND tenant_id absent", tenant, []string{"defaults:\n  mysql_connections: [1]\n"}, "defaults_chain_yaml[0]", "missing"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

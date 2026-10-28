@@ -120,7 +120,7 @@ func platformMergeTrees() []struct {
 			"_b.yaml": "tenants:\n  tx:\n    redis_memory: \"60\"\n",
 			"tx.yaml": tenant}), true},
 		{"a platform file the flat decode rejects contributes nothing", withDefaults(map[string]string{
-			"_bad.yaml": "defaults:\n  x: abc\ntenants:\n  tx:\n    redis_memory: \"59\"\n",
+			"_bad.yaml": "defaults:\n  x: [1]\ntenants:\n  tx:\n    redis_memory: \"59\"\n",
 			"tx.yaml":   tenant}), false},
 		{"a hidden platform file is not read", withDefaults(map[string]string{
 			"._platform.yaml": "tenants:\n  tx:\n    redis_memory: \"58\"\n",

@@ -514,7 +514,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// "7O:critical" resolves exactly like the bare "7O". #3071: so does
 			// a severity no threshold rule selects ("70:high", "70:"). #3140:
 			// so does a non-finite number ("NaN", "-Inf"; parseThresholdNumber).
-			// With no finite default either (#3140, rootNonFiniteDefaults)
+			// With no finite default either (#3140, RefusedRootDefaults)
 			// there is nothing to fall back to and the row is dropped.
 			hint := suffixedHint(suffixedOff, metricKey)
 			if !finiteThreshold(defaultValue) {
@@ -530,10 +530,11 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			}
 		}
 
-		// State 2: use default — unless the root writes it as a non-finite
-		// number (#3140): the key is then served like an `optional_overrides:`
-		// one, the tenant's own value only, and da-guard reports the root
-		// value (root_default_non_finite).
+		// State 2: use default — unless the root writes it as a value the
+		// root decode refuses (#3140, #3250: refusedDefault, a NaN): the key
+		// is then served like an `optional_overrides:` one, the tenant's own
+		// value only, and da-guard reports the root value
+		// (root_default_refused).
 		if !finiteThreshold(defaultValue) {
 			continue
 		}

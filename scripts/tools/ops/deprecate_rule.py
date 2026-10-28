@@ -199,17 +199,16 @@ NULL_NOT_DECLARED = "null_not_declared"  # 這一個 key 寫成 null：exporter 
 UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
 EXPORTER_DROPPED = "exporter_dropped"  # da-guard：exporter 自己的 load 丟掉／讀不到這份檔（#1822）
 BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, EXPORTER_DROPPED})
-_NUMBER_TAGS = ("!!int", "!!float")
 
 
 def _node_verdicts(node):
     """root 層載體（parse-tree 讀得了的）的 `defaults:` exporter 讀不讀得進去:
     `[(key, 原文, kind), ...]`。
 
-    ADR-036 §2（#2906）：值是 yaml.v3 讀出的節點，判定只看它的 tag——`!!int`／
-    `!!float` 解得成 float64；`!!null` 是「沒宣告」（#2518）；其他（字串、布林、
-    日期、mapping、list）讓 exporter 整份丟掉這個載體。先前這裡是一份 yaml.v3
-    `resolve()`／`decode.go` 的 Python 仿製，已刪；真值表照舊是
+    ADR-036 §2（#2906）：值是 yaml.v3 讀出的節點，只看結構——`!!null` 是「沒宣告」
+    （#2518）；mapping、list 讓 exporter 整份丟掉這個載體。純量不在這裡判：#3250
+    起 exporter 以原文經 parseThresholdNumber 讀，讀不了的只拒收那一個 key，載體
+    照樣載入，不是本工具要擋的「整份丟掉」。真值表照舊是
     `tests/golden/fixtures/defaults-carrier-oracle.json`（Go 測試
     `TestDefaultsCarrierOracle` 是裁判）。文件層級的項目 key 為 None。
     """
@@ -226,13 +225,8 @@ def _node_verdicts(node):
     for key in sorted(defaults):
         val = defaults[key]
         if _lib_parse_tree.is_scalar(val):
-            if val["tag"] in _NUMBER_TAGS:
-                continue
-            raw = val["text"].splitlines()[0] if val["text"] else "(空)"
-            if "\n" in val["text"].rstrip("\n"):
-                raw += "…"
-            out.append((key, raw, NULL_NOT_DECLARED if val["tag"] == "!!null"
-                        else UNPARSEABLE))
+            if val["tag"] == "!!null":
+                out.append((key, val["text"] or "(空)", NULL_NOT_DECLARED))
         else:
             out.append((key, "<list>" if isinstance(val, list) else "<mapping>",
                         UNPARSEABLE))
