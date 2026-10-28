@@ -17,7 +17,7 @@ package main
 //   - `TestScanDirHierarchical_MixedMode` calls `scanDirHierarchical` DIRECTLY.
 //     It never runs `Load()` and never looks at `GetConfig()`, so the split
 //     between the two populations is invisible to it.
-//   - the golden parity suite asserts only on the `Resolve()` side
+//   - the golden parity suite asserts only on the `ResolveAt` side
 //     (`source_file` / `defaults_chain` / `merged_hash` / `effective_config`).
 //
 // So everything below goes through the REAL entry — `NewConfigManager` +

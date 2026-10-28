@@ -312,7 +312,7 @@ func TestTheUndeliverableAuditRunsOnEveryCommit(t *testing.T) {
 // ⛔ MEASURED: reverting `lower := strings.ToLower(name)` to `lower := name`
 // left the package GREEN — no fixture anywhere used `.YAML` or `.YML`. The
 // defect it silently restores needs no nesting at all: a `UPPER.YAML` at the
-// conf.d ROOT resolves through `Resolve()` and emits nothing, because the two
+// conf.d ROOT resolves through `ResolveAt` and emits nothing, because the two
 // enumerators over one tree disagreed on which extensions count.
 func TestAnUppercaseExtensionAtTheRootStillEmits(t *testing.T) {
 	dir := t.TempDir()

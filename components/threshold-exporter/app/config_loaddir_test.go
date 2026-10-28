@@ -346,7 +346,7 @@ tenants:
 		t.Errorf("expected 80 (hidden file ignored), got %.0f", cfg.Defaults["mysql_connections"])
 	}
 	// ⛔ CONTRACT CHANGED BY #1521: a tenant in a subdirectory now reaches the
-	// merged config. It always resolved through `Resolve()` / `/effective`;
+	// merged config. It always resolved through `ResolveAt` / `/effective`;
 	// what it never reached was `GetConfig()`, and therefore the collector —
 	// so its alerts could not fire.
 	if _, ok := cfg.Tenants["db-c"]; !ok {

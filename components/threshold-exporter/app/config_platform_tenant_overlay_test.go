@@ -566,7 +566,7 @@ func TestNestedPlatformFileTenantsBlockIsNamed(t *testing.T) {
 //
 // ⚠️ CARRIER LAYOUT ONLY, AND THAT IS A LOSS (#1577). This test reads what
 // /metrics serves, and a tree with no `_defaults` carrier serves no threshold
-// row at all (measured: Resolve() returns 0 rows for a tenant file setting
+// row at all (measured: ResolveAt returns 0 rows for a tenant file setting
 // mysql_connections; 1 row once a carrier exists) — every key is "not in
 // defaults" — so on the only layout where the watch path takes
 // incrementalLoadFrom there is nothing for these assertions to read. It used
