@@ -62,7 +62,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import claim_stdout, write_operator_output  # noqa: E402  (#3107)
+from _lib_io import claim_stdout, targets_stdout, write_operator_output  # noqa: E402  (#3107)
 import _lib_confedit  # noqa: E402  (#3206: da-guard write puts the files in place)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
 import _lib_tenant_uniqueness as tu  # noqa: E402
@@ -515,6 +515,13 @@ def main() -> int:
     if not args.check and not args.output:
         return reject("output_required",
                       "--output is required for assembly (or use --check)")
+    # The assembly report owns stdout, so a `--manifest` there can only fail
+    # (claim_stdout below). Known from argv: refused before `--output` is
+    # written, not after (#3107).
+    if args.manifest and targets_stdout(args.manifest):
+        return reject("manifest_is_stdout",
+                      "--manifest cannot write to standard output: the "
+                      "assembly report already uses it")
 
     sources: List[Path] = [Path(s.strip()).resolve()
                            for s in args.sources.split(",") if s.strip()]

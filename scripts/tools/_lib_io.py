@@ -1163,7 +1163,8 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
       ``O_APPEND``); *mode* applies to a regular file this euid owns and did
       not reach through a symlink — created now or already there (V15).
     * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
-      A failed write into a regular file leaves it empty, never a prefix.
+      A write into a regular file that raises leaves it empty, not a prefix
+      (a process killed mid-write can still leave one).
     """
     try:
         try:

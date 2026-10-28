@@ -111,7 +111,7 @@ da-tools <command> --help
 
 **輸出路徑：operator 輸出與生成物兩種寫法**（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：工具寫檔分兩個入口。⚠️ v2.9.0 映像仍是舊行為。 <!-- image-caveat: v2.9.0 -->
 
-- **operator 輸出**：`generate-routes --findings-json`、`fed-key --jwks-out`、`assemble_config_dir --manifest`。路徑交給 kernel 開檔，與 shell 的 `>` 相同。`-` 是 stdout；一次執行只准一個輸出寫 stdout，第二個結束碼 `2`。路徑在 kernel 解析後正是本行程的 stdout（例如 `/dev/stdout`）時，視同 `-`。沒有 reader 的 FIFO 結束碼 `2`，不會卡住。本 euid 擁有、且不經 symlink 的一般檔，寫入前設成該輸出的權限（新建與既有的都是）：`--findings-json` 為 `0600`，公開內容的 `--jwks-out` 與 `--manifest` 為 `0644`。別人的檔、裝置、symlink 的目標，權限不動。寫入失敗時，一般檔留空檔，不留前半段。
+- **operator 輸出**：`generate-routes --findings-json`、`fed-key --jwks-out`、`assemble_config_dir --manifest`。路徑交給 kernel 開檔，與 shell 的 `>` 相同。`-` 是 stdout；一次執行只准一個輸出寫 stdout，第二個結束碼 `2`。路徑正是 fd 1 已在寫的一般檔、pipe 或 socket 時（例如 `>` 或 `|` 之下的 `/dev/stdout`），視同 `-`；終端機與 `/dev/null` 不算。沒有 reader 的 FIFO 結束碼 `2`，不會卡住。本 euid 擁有、且不經 symlink 的一般檔，寫入前設成該輸出的權限（新建與既有的都是）：`--findings-json` 為 `0600`，公開內容的 `--jwks-out` 與 `--manifest` 為 `0644`。別人的檔、裝置、symlink 的目標，權限不動。寫入時出錯，一般檔留空檔，不留前半段；行程在寫入途中被殺掉時仍可能留下前半段。
 - **生成物（原子取代）**：`state-reconcile --manifest-path`、`configmap-assemble --output`。先寫暫存檔再改名，中途失敗時原檔不動。目標必須不存在或是一般檔：`-`、裝置、FIFO、socket、本行程的 stdout 都是結束碼 `2`。
 - ⚠️ **行為變更**：
   - owner 2026-10-21 核可 V1–V10：非 root 寫別人的裝置或可寫一般檔 `2` → `0`；唯讀檔、懸空 link、socket、無 reader 的 FIFO `0` → `2`；本來會卡住的寫入改為 `2`；`-` 不再建出名為 `-` 的檔。
