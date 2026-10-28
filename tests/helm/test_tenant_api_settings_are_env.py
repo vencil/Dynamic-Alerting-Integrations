@@ -138,6 +138,7 @@ def test_every_ta_variable_the_template_can_set_is_known():
     # on is checked too.
     raw = (_REPO / _CHART / "templates" / "deployment.yaml").read_text(encoding="utf-8")
     names = set(re.findall(r"-\s+name:\s+(TA_[A-Z0-9_]+)", raw))
+    names |= set(re.findall(r'include "tenant-api\.taEnv" \(list "(TA_[A-Z0-9_]+)"', raw))
     assert len(names) > 20, names
     unknown = sorted(names - tenant_api_known_envs())
     assert not unknown, f"deployment.yaml can set TA_* variables tenant-api does not read: {unknown}"
@@ -155,6 +156,14 @@ def test_a_malformed_token_ttl_refuses_the_render():
 #: falls back to its default, where the old empty flag was an explicit value —
 #: so the chart refuses the empty value at render time.
 _EMPTY_REFUSED = [
+    ("everything-on", "federation.store.configMapName"),
+    ("everything-on", "federation.signingKey.secretKey"),
+    ("everything-on", "federation.tokenTTL"),
+    ("everything-on", "humanSocket.path"),
+    ("everything-on", "machineIdentity.audience"),
+    ("default", "tenantApi.listenAddr"),
+    ("pr-github", "writeBack.github.repo"),
+    ("pr-gitlab", "writeBack.gitlab.project"),
     ("pr-github", "writeBack.baseBranch"),
     ("pr-gitlab", "writeBack.baseBranch"),
     ("pr-github", "writeBack.github.targetBranch"),
@@ -173,3 +182,34 @@ def test_an_empty_value_refuses_the_render(render, key):
 def test_direct_mode_does_not_need_a_base_branch():
     # writeBack.baseBranch is read only by the PR modes.
     assert _render("default", "writeBack.baseBranch=").returncode == 0
+
+
+_LITERAL_VALUE = re.compile(r'^\s*value:\s*"[^"{}]*"\s*$')
+_INT_ENV_VALUE = re.compile(r'^\s*value:\s*\{\{\s*include\s+"tenant-api\.intEnv"\s')
+_SECRET_REF = re.compile(r"^\s*valueFrom:\s*$")
+
+
+def test_every_ta_entry_goes_through_a_guarded_form():
+    """Every TA_* entry of deployment.yaml is one of: a literal constant value,
+    `tenant-api.intEnv`, a Secret reference, or `tenant-api.taEnv` (which
+    renders the whole entry and refuses an empty value). A new TA_* entry
+    written as `value: {{ .Values.x | quote }}` is refused here: an empty x
+    would make tenant-api silently use its default."""
+    lines = (_REPO / _CHART / "templates" / "deployment.yaml").read_text(encoding="utf-8").splitlines()
+    bad, plain = [], 0
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s*-\s+name:\s*(\S+)\s*$", line)
+        if not m or "TA_" not in m.group(1):
+            continue
+        plain += 1
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if not (_LITERAL_VALUE.match(nxt) or _INT_ENV_VALUE.match(nxt) or _SECRET_REF.match(nxt)):
+            bad.append(f"line {i + 1}: {m.group(1)}: {nxt.strip()}")
+    helper_calls = re.findall(r'include "tenant-api\.taEnv" \(list "(TA_[A-Z0-9_]+)"', "\n".join(lines))
+    assert not bad, ("TA_* entries not written as a literal, tenant-api.intEnv, a Secret reference "
+                     "or tenant-api.taEnv:\n" + "\n".join(bad))
+    assert plain >= 8 and len(helper_calls) >= 15, (plain, helper_calls)
+    # A templated `name:` could produce a TA_* name the check above never sees.
+    templated = [f"line {i + 1}: {line.strip()}" for i, line in enumerate(lines)
+                 if re.search(r"-\s+name:\s*\{\{", line)]
+    assert not templated, templated

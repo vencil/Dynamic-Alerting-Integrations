@@ -167,6 +167,29 @@ Call with (list "<values path for the error>" <value>).
 {{- end }}
 
 {{/*
+A TA_* env entry of the tenant-api container (ADR-036 §12): `- name: <NAME>`
+and `value: "<v>"`. Arguments: (list "<NAME>" <value> "<values path>").
+
+tenant-api reads an EMPTY TA_* variable as unset and silently uses its
+default (envOrDefault), where an empty command-line flag was an explicit
+value. So an empty or nil value fails the render here, naming the values
+path; a setting whose absence is meant (`with` / `if` around the entry) keeps
+that condition, only the value it renders may not be empty.
+tests/helm/test_tenant_api_settings_are_env.py requires every TA_* entry of
+deployment.yaml to be a literal constant, this helper or tenant-api.intEnv.
+*/}}
+{{- define "tenant-api.taEnv" -}}
+{{- $name := index . 0 -}}
+{{- $v := index . 1 -}}
+{{- $path := index . 2 -}}
+{{- if or (kindIs "invalid" $v) (eq (toString $v) "") -}}
+{{- fail (printf "%s must not be empty: tenant-api reads an empty %s as unset and silently uses its default" $path $name) -}}
+{{- end -}}
+- name: {{ $name }}
+  value: {{ toString $v | quote }}
+{{- end }}
+
+{{/*
 Generator container (ADR-036 §3, #2902): fixed in-pod paths. Defined once
 here; deployment.yaml and the chart tests read them from the render, never
 from a second copy.

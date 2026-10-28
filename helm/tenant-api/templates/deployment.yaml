@@ -161,8 +161,7 @@ spec:
           args:
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
           env:
-            - name: TA_ADDR
-              value: {{ .Values.tenantApi.listenAddr | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_ADDR" .Values.tenantApi.listenAddr "tenantApi.listenAddr") | nindent 12 }}
             - name: TA_CONFIG_DIR
               value: "/conf.d"
             - name: TA_GIT_DIR
@@ -172,30 +171,21 @@ spec:
             # #2855: always explicit — the chart used to pass none, so every
             # install ran direct. writeBackGuard (_helpers.tpl) rejects an
             # unset or incomplete writeBack before we get here.
-            - name: TA_WRITE_MODE
-              value: {{ .Values.writeBack.mode | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_WRITE_MODE" .Values.writeBack.mode "writeBack.mode") | nindent 12 }}
             {{- if ne .Values.writeBack.mode "direct" }}
-            {{- /* tenant-api reads an empty TA_* as unset (its default),
-                 where the old empty flag was an explicit value: refuse an
-                 empty one here rather than let it fall back silently. */}}
-            - name: TA_GIT_BASE_BRANCH
-              value: {{ required "writeBack.baseBranch must not be empty in a PR mode (an empty TA_GIT_BASE_BRANCH would silently mean main)" .Values.writeBack.baseBranch | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GIT_BASE_BRANCH" .Values.writeBack.baseBranch "writeBack.baseBranch") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
-            - name: TA_GITHUB_REPO
-              value: {{ .Values.writeBack.github.repo | quote }}
-            - name: TA_GITHUB_BASE_BRANCH
-              value: {{ required "writeBack.github.targetBranch must not be empty (an empty TA_GITHUB_BASE_BRANCH would silently mean main)" .Values.writeBack.github.targetBranch | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_REPO" .Values.writeBack.github.repo "writeBack.github.repo") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_BASE_BRANCH" .Values.writeBack.github.targetBranch "writeBack.github.targetBranch") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
             {{- /* A numeric project id written in a values file is a float64
                  to helm, printed as 4.5678901e+07 from 1e6 up; print it as an
                  integer. */}}
             {{- $project := .Values.writeBack.gitlab.project }}
-            - name: TA_GITLAB_PROJECT
-              value: {{ ternary (toString ($project | int64)) (toString $project) (kindIs "float64" $project) | quote }}
-            - name: TA_GITLAB_TARGET_BRANCH
-              value: {{ required "writeBack.gitlab.targetBranch must not be empty (an empty TA_GITLAB_TARGET_BRANCH would silently mean main)" .Values.writeBack.gitlab.targetBranch | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_PROJECT" (ternary (toString ($project | int64)) (toString $project) (kindIs "float64" $project)) "writeBack.gitlab.project") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_TARGET_BRANCH" .Values.writeBack.gitlab.targetBranch "writeBack.gitlab.targetBranch") | nindent 12 }}
             {{- end }}
             {{- if .Values.rbac.metadataScopeEnforce }}
             # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
@@ -240,30 +230,25 @@ spec:
             # deployment policy file, tenant-api reads the same file (same
             # path in both containers) to check that the generator judged
             # with it.
-            - name: TA_GENERATOR_SOCKET
-              value: {{ include "tenant-api.generatorSocketPath" . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GENERATOR_SOCKET" (include "tenant-api.generatorSocketPath" .) "tenant-api.generatorSocketPath") | nindent 12 }}
             {{- if .Values.generator.policy.existingConfigMap }}
-            - name: TA_DEPLOY_POLICY
-              value: {{ include "tenant-api.generatorPolicyPath" . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_DEPLOY_POLICY" (include "tenant-api.generatorPolicyPath" .) "generator.policy (tenant-api.generatorPolicyPath)") | nindent 12 }}
             {{- end }}
             {{- if .Values.federation.enabled }}
-            - name: TA_FEDERATION_KEY
-              value: {{ printf "/etc/federation/%s" .Values.federation.signingKey.secretKey | quote }}
-            - name: TA_FEDERATION_STORE
-              value: {{ .Values.federation.store.configMapName | quote }}
+            {{- $keyFile := .Values.federation.signingKey.secretKey }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_KEY" (ternary "" (printf "/etc/federation/%s" (toString $keyFile)) (empty $keyFile)) "federation.signingKey.secretKey") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_STORE" .Values.federation.store.configMapName "federation.store.configMapName") | nindent 12 }}
             # Always passed, never inferred. The binary would otherwise fall back
             # to the pod's own namespace, which silently disagrees with the
             # ConfigMap the chart just created whenever the two differ (#1313).
-            - name: TA_FEDERATION_NAMESPACE
-              value: {{ include "tenant-api.federationStoreNamespace" . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_NAMESPACE" (include "tenant-api.federationStoreNamespace" .) "federation.store.namespace (tenant-api.federationStoreNamespace)") | nindent 12 }}
             {{- /* As a flag, a malformed TTL stopped the start; tenant-api
                  reads TA_FEDERATION_TOKEN_TTL leniently (warn + the 4h
                  default), so the render refuses one Go cannot parse. */}}
             {{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" (toString .Values.federation.tokenTTL)) }}
             {{- fail (printf "federation.tokenTTL %q is not a Go duration (e.g. 4h, 90m)" (toString .Values.federation.tokenTTL)) }}
             {{- end }}
-            - name: TA_FEDERATION_TOKEN_TTL
-              value: {{ .Values.federation.tokenTTL | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_TOKEN_TTL" .Values.federation.tokenTTL "federation.tokenTTL") | nindent 12 }}
             {{- end }}
             {{- if .Values.machineIdentity.enabled }}
             # ADR-027 machine-identity audit baseline — verify machine callers'
@@ -276,8 +261,7 @@ spec:
             # than shipping that hole (ADR-027 G4).
             - name: TA_MACHINE_IDENTITY_AUDIT
               value: "true"
-            - name: TA_MACHINE_IDENTITY_AUDIENCE
-              value: {{ required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_MACHINE_IDENTITY_AUDIENCE" (required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience) "machineIdentity.audience") | nindent 12 }}
             {{- end }}
             {{- if .Values.humanSocket.enabled }}
             # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): serve the
@@ -286,13 +270,11 @@ spec:
             # touches the network 8080 plane. The socket lives on the human-sock
             # emptyDir mounted into both containers. audit-only impact: requests
             # over this listener are excluded from the machine-identity audit.
-            - name: TA_HUMAN_SOCKET
-              value: {{ .Values.humanSocket.path | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_HUMAN_SOCKET" .Values.humanSocket.path "humanSocket.path") | nindent 12 }}
             {{- end }}
             - name: TA_STATE_STORE
               value: "configmap"
-            - name: TA_STATE_CONFIGMAP
-              value: {{ required "state.configMapName must not be empty (an empty TA_STATE_CONFIGMAP would silently mean tenant-api-state)" .Values.state.configMapName | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_STATE_CONFIGMAP" .Values.state.configMapName "state.configMapName") | nindent 12 }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
             # (identity.claimHeaders). Rendered as ONE value, keys sorted (helm
@@ -303,8 +285,7 @@ spec:
             {{- range $k, $v := .Values.identity.claimHeaders }}
             {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
             {{- end }}
-            - name: TA_IDENTITY_CLAIM_HEADERS
-              value: {{ join "," $pairs | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_IDENTITY_CLAIM_HEADERS" (join "," $pairs) "identity.claimHeaders") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
             - name: TA_GITHUB_TOKEN
@@ -313,8 +294,7 @@ spec:
                   name: {{ .Values.writeBack.token.secretName }}
                   key: {{ .Values.writeBack.token.secretKey }}
             {{- with .Values.writeBack.github.apiUrl }}
-            - name: TA_GITHUB_API_URL
-              value: {{ . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_API_URL" . "writeBack.github.apiUrl") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
@@ -324,8 +304,7 @@ spec:
                   name: {{ .Values.writeBack.token.secretName }}
                   key: {{ .Values.writeBack.token.secretKey }}
             {{- with .Values.writeBack.gitlab.apiUrl }}
-            - name: TA_GITLAB_API_URL
-              value: {{ . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_API_URL" . "writeBack.gitlab.apiUrl") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- include "tenant-api.gitCredentialEnv" . | nindent 12 }}
@@ -346,8 +325,7 @@ spec:
             # (and more aggressive than) the regular git timeout so a degraded forge
             # fast-fails to 503 instead of pinning the write lock. Emitted only when
             # set; otherwise the binary's 5s default applies.
-            - name: TA_GIT_FETCH_TIMEOUT
-              value: {{ .Values.tenantApi.gitFetchTimeout | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GIT_FETCH_TIMEOUT" .Values.tenantApi.gitFetchTimeout "tenantApi.gitFetchTimeout") | nindent 12 }}
             {{- end }}
             {{- if ne (toString .Values.tenantApi.writeQueueDepth) "" }}
             # Write-plane load-shedding queue depth (TRK-320) — bounds writes
@@ -368,16 +346,13 @@ spec:
             {{- with .Values.tenantApi.server }}
             {{- with .timeouts }}
             {{- if .read }}
-            - name: TA_READ_TIMEOUT
-              value: {{ .read | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_READ_TIMEOUT" .read "tenantApi.server.timeouts.read") | nindent 12 }}
             {{- end }}
             {{- if .write }}
-            - name: TA_WRITE_TIMEOUT
-              value: {{ .write | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_WRITE_TIMEOUT" .write "tenantApi.server.timeouts.write") | nindent 12 }}
             {{- end }}
             {{- if .idle }}
-            - name: TA_IDLE_TIMEOUT
-              value: {{ .idle | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_IDLE_TIMEOUT" .idle "tenantApi.server.timeouts.idle") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- if .maxBodyBytes }}
@@ -395,16 +370,13 @@ spec:
             {{- end }}
             {{- with .Values.tenantApi.sse }}
             {{- if .heartbeat }}
-            - name: TA_SSE_HEARTBEAT
-              value: {{ .heartbeat | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_HEARTBEAT" .heartbeat "tenantApi.sse.heartbeat") | nindent 12 }}
             {{- end }}
             {{- if .writeTimeout }}
-            - name: TA_SSE_WRITE_TIMEOUT
-              value: {{ .writeTimeout | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_WRITE_TIMEOUT" .writeTimeout "tenantApi.sse.writeTimeout") | nindent 12 }}
             {{- end }}
             {{- if .maxLifetime }}
-            - name: TA_SSE_MAX_LIFETIME
-              value: {{ .maxLifetime | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_MAX_LIFETIME" .maxLifetime "tenantApi.sse.maxLifetime") | nindent 12 }}
             {{- end }}
             {{- end }}
           ports:
