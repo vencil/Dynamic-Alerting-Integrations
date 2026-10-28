@@ -61,7 +61,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
 | `migration-audit` | 遷移稽核：conf.d 以 PyYAML 與 da-guard parse-tree 各讀一次，列出讀法差異（ADR-036 §8） | --config-dir <PATH>, --json, --da-guard-binary <PATH>, --timeout <SEC> | `da-tools migration-audit --help` |
 | `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
-| `operator-check` | Operator CRD 部署狀態驗證（5 項檢查 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
+| `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 CRD YAML + 6 階段遷移計畫 | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |

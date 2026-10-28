@@ -209,6 +209,9 @@ TOOL_FILES=(
     # Stdlib-only by design; safe to bundle without extra deps.
     _lib_compat.py
     _lib_prometheus.py
+    # #3207/#3210 — the one cluster reader (kubectl get -o json) of
+    # ops/operator_check.py + ops/gitops_check.py. Stdlib + _lib_exitcodes.
+    _lib_kubectl.py
     _lib_io.py
     # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.
