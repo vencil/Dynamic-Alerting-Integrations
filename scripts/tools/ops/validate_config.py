@@ -2502,21 +2502,10 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
             "verdict incomplete: the keys no reader reads were not judged "
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
             hint=_UNREAD_KEYS_INCOMPLETE_HINT)
-    details = []
-    for f in verdict.findings:
-        who = ", ".join(f.tenants[:WARN_LIMIT]) + (
-            f" (+{len(f.tenants) - WARN_LIMIT} more)" if len(f.tenants) > WARN_LIMIT else "")
-        why = f" ({f.reason})" if f.reason else ""
-        fam = ("; still served: " + ", ".join(
-            f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
-            if f.served_family else "")
-        # A profile key no tenant binds names none (#3042).
-        who = f"tenant(s) {who}" if who else "no tenant"
-        details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — {who}")
-    if verdict.undecidable:
-        n = sum(v.verdict == key_verdict.UNDECIDABLE for vs in verdict.keys.values() for v in vs)
-        details.append(f"no root platform file was read: {n} threshold key(s) cannot be judged "
-                       "(undecidable)")
+    details = [key_verdict.finding_line(f, WARN_LIMIT) for f in verdict.findings]
+    undecidable = key_verdict.undecidable_line(verdict)
+    if undecidable is not None:
+        details.append(undecidable)
     if details:
         # Only an undecidable line: no key was found unread, so the advice
         # is about the root file, not about a key.

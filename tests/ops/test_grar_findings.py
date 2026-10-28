@@ -253,6 +253,7 @@ def test_skipped_entry_document(tmp_path):
     got = {(r["kind"], r["tenant"], r["field"]) for r in doc["findings"]
            if r["kind"] != "unclassified"}
     assert got == {
+        ("key_unread", "alpha", "unknown_threshold_key"),  # the shared key verdict (ADR-038)
         ("routing_not_mapping", "gamma", "_routing"),
         ("conflicting_override_matcher", "alpha", "overrides[0]"),
         ("missing_receiver_field", "alpha", "overrides[1].receiver"),
@@ -261,8 +262,8 @@ def test_skipped_entry_document(tmp_path):
         ("timing_value_replaced", "alpha", "group_wait"),
         ("unknown_receiver_type", "beta", "receiver.type"),
     }
-    assert all(r["blocks"] == "validate" for r in doc["findings"]
-               if r["kind"] != "unclassified")
+    assert all(r["blocks"] == ("never" if r["kind"].startswith("key_") else "validate")
+               for r in doc["findings"] if r["kind"] != "unclassified")
 
 
 def test_caller_error_exit_still_writes_the_document(tmp_path):
@@ -353,7 +354,7 @@ def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
                                       "--dry-run", "--findings-json", str(out)])
 
-    def boom(_args, findings):
+    def boom(_args, findings, **_kw):
         findings.append(gm.Finding("  WARN: x", blocks="never"))
         raise BrokenPipeError("stdout closed")
 
@@ -698,7 +699,7 @@ def test_unwritable_path_keeps_the_exception(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
                                       "--dry-run", "--findings-json", str(out)])
 
-    def boom(_args, _findings):
+    def boom(_args, _findings, **_kw):
         raise RuntimeError("crash")
 
     monkeypatch.setattr(gar, "_run", boom)
