@@ -151,7 +151,7 @@ da-tools <command> --help
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--tenants <list>` 搭配 `--ci`／`--rule-packs`／`--deploy` 任一，或互動模式（不帶旗標） |
-| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
+| `gitops-check` | conf.d 本機結構檢查 | `local --dir <path>` |
 | `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema） | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump） | `--silences-file <json> --rule-source <path>` |
@@ -1346,59 +1346,38 @@ da-tools init --ci both --tenants db-a --dry-run
 
 #### gitops-check
 
-GitOps Native Mode 就緒度驗證——檢查 Git 倉庫可達性、本地配置結構、git-sync sidecar 部署狀態。
+conf.d 本機結構檢查：根目錄 defaults 載體在不在、每個檔經 `da-guard parse-tree` 讀不讀得了、閾值數與租戶檔數。
 
 conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 ```bash
-da-tools gitops-check <subcommand> [options]
+da-tools gitops-check local --dir <path> [--json]
 ```
-
-**子命令**
-
-| 子命令 | 用途 | 參數 |
-|--------|------|------|
-| `repo` | 驗證 Git 倉庫可達性、分支存在、`--path` 在該分支 | `--url <git-url> [--branch main] [--path configs/]` |
-| `local` | 驗證本地 clone 的 conf.d/ 結構 | `--dir <path>` |
-| `sidecar` | 檢查 K8s git-sync sidecar 部署就緒度 | `[--namespace monitoring]` |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--url <GIT-URL>` | `repo`：Git 倉庫 URL（必填） | （無） |
-| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |
-| `--path <PATH>` | `repo`：配置在倉庫內的路徑 | `configs/` |
-| `--dir <PATH>` | `local`：本地配置目錄（必填） | （無） |
-| `--namespace <NS>` | `sidecar`：K8s namespace | `monitoring` |
-| `--json` | 三個子命令都接受：JSON 輸出 | false |
-| `--ci` | 三個子命令都接受：只有 fail 結束碼 1，warning 結束碼 0（不帶時 warning 也是 1） | false |
+| `--dir <PATH>` | 本地配置目錄（必填） | （無） |
+| `--json` | JSON 輸出 | false |
 
-**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了就列在 `parse_errors`、fail。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
+**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了時，整棵樹以 `2` 拒收、逐條點名（上述共用的拒絕，`reason: conf_d_not_servable`）。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 通過；帶 `--ci` 時 warning 也是 0（目前沒有子命令會給 warning）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
-| `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）；`sidecar` 缺 git-sync Secret（`git-sync-credentials`）或 Deployment `threshold-exporter` 裡沒有 `git-sync` 容器。不帶 `--ci` 時 warning 也是 1 |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；`sidecar` 的 kubectl 沒有回答（叢集連不上、權限不足、kubectl 不在 PATH 或逾時；`reason: kubectl_error`）；工具未預期的例外 |
+| `0` | 通過 |
+| `1` | 有 fail：缺根目錄 defaults 載體 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--dir`、未知旗標）；conf.d 有讀不了的檔（`reason: conf_d_not_servable`）；`--dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
 
-`sidecar` 需要的權限：該 namespace 內 Secret `git-sync-credentials` 與 Deployment `threshold-exporter` 的 `get`（以名稱讀，限定 `resourceNames` 的 Role 也夠，不需要 `list`）。
-
-⚠️ **行為變更（`sidecar`，[#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210)）**：探測改用 `_lib_kubectl.kubectl_get` 以名稱讀 Secret 與 Deployment，不再跑 `kubectl version --short`（現行 kubectl 已拿掉 `--short`，先前一律報「kubectl 不可用」）。結束碼：齊全 `1` → `0`；缺件由 warn 改為 fail，`--ci` `0` → `1`；叢集連不上、權限不足、kubectl 不在時 `1`（`--ci` `0`）→ `2`。
+⚠️ **行為變更（[#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376)、[#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348)）**：`repo`、`sidecar` 子命令與 `--ci` 移除。它們檢查的是 GitOps Native Mode，自 [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349) 起不支援：chart 不部署 git-sync 容器，`sidecar` 只會 fail；`repo` 在 GitHub 上驗不了 `--path`（不支援 `git archive --remote`）。帶它們的呼叫結束碼 `0`／`1` → `2`。
 
 **範例**
 
 ```bash
-# 驗證 Git 倉庫
-da-tools gitops-check repo --url git@github.com:example/configs.git
-
-# 驗證本地配置結構
 da-tools gitops-check local --dir conf.d
-
-# 檢查 sidecar 部署
-da-tools gitops-check sidecar --namespace monitoring --json
+da-tools gitops-check local --dir conf.d --json
 ```
 
 ---

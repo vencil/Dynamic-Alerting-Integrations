@@ -1143,9 +1143,6 @@ RECIPES: list[Recipe] = [
     # ── gitops_check ───────────────────────────────────────────────────────
     R("gitops_check", "local",
       lambda t, s: ["local", "--dir", str(SEED_CONF_D), "--json"]),
-    R("gitops_check", "repo",
-      lambda t, s: ["repo", "--url", REPO_ROOT.as_uri(), "--json"]),
-    R("gitops_check", "sidecar", lambda t, s: ["sidecar", "--json"], needs_kubectl=True),
 
     # ── grafana_import ─────────────────────────────────────────────────────
     R("grafana_import", "dry-run",

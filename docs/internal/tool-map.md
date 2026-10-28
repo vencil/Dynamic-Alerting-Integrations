@@ -43,7 +43,7 @@ lang: zh
 | `generate_rule_pack_split.py` | Split Rule Packs into edge (Part 1) and central (Parts 2+3) YAML files. |
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
 | `generator_service.py` | `da-tools generator-service`: judges conf.d writes for tenant-api (ADR-036 §3). |
-| `gitops_check.py` | GitOps Native Mode readiness validator. |
+| `gitops_check.py` | local conf.d structure check. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
 | `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |

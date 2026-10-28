@@ -55,7 +55,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射 (ADR-006) | --endpoint <URL> 或 --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
 | `config-history` | 配置快照與歷史追蹤（snapshot / log / show / diff） | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
-| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
+| `gitops-check` | conf.d 本機結構檢查 | local --dir <PATH> | `da-tools gitops-check --help` |
 | `state-reconcile` | 遷移狀態目錄一致化（.da/state/ schema 驗證 + .da/manifest.json 重建，#405 Cat A） | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema，#405 Cat D） | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
@@ -105,7 +105,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 - **採用與初始化**
   - `init` — 專案骨架產生（CI/CD + conf.d + Kustomize）
   - `config-history` — 配置快照與歷史追蹤
-  - `gitops-check` — GitOps Native Mode 就緒度驗證
+  - `gitops-check` — conf.d 本機結構檢查
   - `state-reconcile` — 遷移狀態目錄一致化（schema 驗證 + manifest 重建）
   - `rule-pack-diff` — Rule Pack 兩版本機械比對（升級審計用）
   - `silencer-drift-check` — AM silence 漂移偵測（offline，cutover 必跑）
