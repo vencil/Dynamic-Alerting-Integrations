@@ -84,27 +84,70 @@ func withThresholdLeaves(block map[string]any, n *yaml.Node) {
 	if len(block) == 0 || n == nil {
 		return
 	}
-	var nodes map[string]yaml.Node
-	if n.Decode(&nodes) != nil {
-		return
-	}
-	for k, node := range nodes {
+	eachPair(n, func(k string, node *yaml.Node) {
 		if baseRowsSkipKey(k) {
-			continue
+			return
 		}
 		g, has := block[k]
 		if !has {
-			continue
+			return
 		}
-		switch vn := resolveAlias(&node); vn.Kind {
+		switch vn := resolveAlias(node); vn.Kind {
 		case yaml.ScalarNode:
-			block[k] = thresholdLeaf(g, vn.Value)
+			// Written only when it changes: most trees change nothing, and
+			// the walk then writes nothing.
+			if r := thresholdLeaf(g, vn.Value); r != g {
+				block[k] = r
+			}
 		case yaml.MappingNode:
 			if m, ok := g.(map[string]any); ok {
 				withScheduleLeaves(m, vn)
 			}
 		}
+	})
+}
+
+// eachPair calls fn for each key → value node of mapping n as yaml.v3's
+// decode into map[string]yaml.Node keys it: `<<` merges and aliases
+// resolved, nothing when that decode fails (a duplicate key). The common
+// shape — plain scalar keys, no merge, no duplicate — is read off n.Content
+// directly; anything else takes the decode itself, so both paths agree.
+func eachPair(n *yaml.Node, fn func(k string, v *yaml.Node)) {
+	if plainPairs(n) {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			fn(n.Content[i].Value, n.Content[i+1])
+		}
+		return
 	}
+	var nodes map[string]yaml.Node
+	if n.Decode(&nodes) != nil {
+		return
+	}
+	for k := range nodes {
+		node := nodes[k]
+		fn(k, &node)
+	}
+}
+
+// plainPairs reports whether every key of mapping n is a plain string
+// scalar (not an alias, a merge, a null or another tag) written once — the
+// keys a decode into map[string]yaml.Node keeps as written.
+func plainPairs(n *yaml.Node) bool {
+	if n.Kind != yaml.MappingNode {
+		return false
+	}
+	seen := make(map[string]struct{}, len(n.Content)/2)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k := n.Content[i]
+		if k.Kind != yaml.ScalarNode || k.Tag != "!!str" {
+			return false
+		}
+		if _, dup := seen[k.Value]; dup {
+			return false
+		}
+		seen[k.Value] = struct{}{}
+	}
+	return true
 }
 
 // withScheduleLeaves is withThresholdLeaves for one schedule: the mapping's
@@ -219,13 +262,9 @@ func withTenantThresholdLeaves(block map[string]any, n *yaml.Node) {
 	if len(block) == 0 || n == nil || n.Kind != yaml.MappingNode {
 		return
 	}
-	var bodies map[string]yaml.Node
-	if n.Decode(&bodies) != nil {
-		return
-	}
-	for id, node := range bodies {
+	eachPair(n, func(id string, node *yaml.Node) {
 		if body, ok := block[id].(map[string]any); ok {
-			withThresholdLeaves(body, resolveAlias(&node))
+			withThresholdLeaves(body, resolveAlias(node))
 		}
-	}
+	})
 }

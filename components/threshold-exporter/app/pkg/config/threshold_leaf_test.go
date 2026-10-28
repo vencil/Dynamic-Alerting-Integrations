@@ -54,6 +54,21 @@ var thresholdLeafLayers = map[string]func(v string) map[string]string{
 			"team/t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
 		}
 	},
+	// A `<<` merge inside the level's own mapping: the key reaches the
+	// level only through the merge, which yaml.v3 resolves on both sides.
+	"subtree-key-merged": func(v string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml":      "defaults:\n  mysql_connections: 5\n",
+			"team/_defaults.yaml": "x-base: &b {mysql_connections: " + v + "}\ndefaults:\n  <<: *b\n  redis_cpu: 1\n",
+			"team/t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
+		}
+	},
+	"tenant-merged": func(v string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 5\n",
+			"t1.yaml":        "x-base: &b {mysql_connections: " + v + "}\ntenants:\n  t1:\n    <<: *b\n    redis_cpu: 1\n",
+		}
+	},
 	"tenant": func(v string) map[string]string {
 		return map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: 5\n",
