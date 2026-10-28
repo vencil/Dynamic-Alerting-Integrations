@@ -39,6 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+import _lib_io  # noqa: E402
 from _lib_exitcodes import EXIT_OK, die_caller_error  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
@@ -205,14 +206,12 @@ def main() -> int:
     # newline is written separately) and the mode (0o600 instead of the 0o644
     # this file deliberately wants). The chmod is inside the same block: the
     # world-readable mode is part of producing a usable JWKS.
-    with output_write(args.jwks_out, flag="--jwks-out"):
-        with open(args.jwks_out, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(jwks, fh, indent=2)
-            fh.write("\n")
-        # JWKS carries only public keys — world-readable is correct (it ships
-        # in the gateway's Helm values / git). Set 0o644 explicitly so the
-        # file's permissions are intentional rather than umask-dependent.
-        os.chmod(args.jwks_out, 0o644)
+    # #3107 v2: stdout carries the Secret manifest, so `--jwks-out -` (or the
+    # file stdout is redirected to) is refused rather than mixed into it.
+    _lib_io.claim_stdout("the Secret manifest")
+    _lib_io.write_operator_output_or_die(
+        args.jwks_out, json.dumps(jwks, indent=2) + "\n",
+        flag="--jwks-out", mode=0o644)
 
     # stdout: ONLY the Secret manifest, so `| kubectl apply -f -` is clean.
     sys.stdout.write(_secret_manifest(

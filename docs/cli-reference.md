@@ -109,6 +109,14 @@ da-tools <command> --help
 
 **conf.d 上有讀不了的路徑：conf.d 工具共用一個拒絕**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)，[ADR-036](adr/036-single-parser-effective-config.md) §7 步驟 9）：讀 `--config-dir`（或 `--conf-d`、`--sources`、`--output` 指到的既有 conf.d）的工具，在讀內容、寫任何東西之前，先取這次執行的整棵樹索引（`da-guard parse-tree`）。只要有一條路徑是 `da-guard` 驗證會點名的（`verdict` 為 `unservable`：exporter 讀不了或解不開，例如 YAML 語法錯、一個檔多份文件、懸空或迴圈的 symlink、FIFO、列不出內容的目錄；或 `tree_refused`：路由產生器因它拒收整棵樹，例如指向目錄的 symlink、名稱像設定檔的目錄 `x.yaml/`），工具就在 stderr 逐條印 `ERROR: <路徑>: <原因>`（**全部列出、不截斷**），最後一行點名那棵樹，然後以 `2` 結束，什麼都不寫；帶 `--json` 時 stdout 是一份 envelope，`reason` 為 `conf_d_not_servable`，`refused_paths` 列出每一條被點名的路徑與它的判定（`[{"path": …, "verdict": "unservable" | "tree_refused"}, …]`，與 stderr 一樣全部列出）。`tenant-verify` 以它的輸入錯誤碼 `1` 結束（它的 `2` 是驗證不一致）。以前這些路徑在多支工具只印 `WARN`／`NOTE` 就照常結束碼 `0`（`configmap-assemble`、`assemble_config_dir`、`init`、`offboard`、`deprecate`、`migrate_conf_d` 的 `x.yaml/` 等），現在都是這個拒絕。例外是判定本身就是輸出的工具：`validate-config`（結束碼 `1`）、`generate-routes`、`check_routing_profiles`、`check_confd_schema`、`config-diff`，它們自己點名這些路徑並失敗，見各自章節；`da-tools guard` 本身照舊以 `3`／`4` 結束。`assemble_config_dir --validate` 已移除：它判為 ERROR 的檔（頂層不是 mapping、解析錯誤）現在都在組裝前被這個拒絕擋下，帶這個旗標會是用法錯誤（結束碼 2）。寫進已存在之輸出目錄的工具——`scaffold`、`onboard`、`migrate`（`-o`，每一種模式，含 `--triage` 與只給 `--scrape-config`）與 `da-assembler`（`--config-dir`）——在第一次寫入前對那個目錄走同一個拒絕；目錄還不存在、是空目錄、或只有沒有讀取端讀的檔時照常寫入。⛔ 它把輸出目錄**當成整棵樹**判：位在更大 conf.d 之內的目錄（`-o conf.d/sub`）被當成自己的一棵樹，旁邊的路徑不看——要判整個 conf.d，請傳 conf.d 的根。`da-assembler` 的 controller 每個 reconcile 週期判一次，被拒時逐條以 `ERROR` 記下路徑、這個週期不寫也不刪、行程繼續跑（`--once` 以 `2` 結束）；⚠️ 被拒週期略過的 watch 事件不會重播，watch 因 `410 Gone` 結束時也不會重新 list（[#3318](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3318)）。⚠️ 尚未接上這個拒絕、在下一步（β2，#3206）遷移的工具：`config_history`、`drift_detect`、`run_chaos_soak`（仍自己列 conf.d 的檔）；`migrate_to_operator`（以名稱篩 ConfigMap 匯出檔）。
 
+**輸出路徑：operator 輸出與生成物兩種寫法**（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：工具寫檔分兩個入口。⚠️ v2.9.0 映像仍是舊行為。 <!-- image-caveat: v2.9.0 -->
+
+- **operator 輸出**：`generate-routes --findings-json`、`fed-key --jwks-out`、`assemble_config_dir --manifest`。路徑交給 kernel 開檔，與 shell 的 `>` 相同。`-` 是 stdout；一次執行只准一個輸出寫 stdout，第二個結束碼 `2`。路徑正是 fd 1 已在寫的一般檔、pipe 或 socket 時（例如 `>` 或 `|` 之下的 `/dev/stdout`），視同 `-`；終端機與 `/dev/null` 不算。沒有 reader 的 FIFO 結束碼 `2`，不會卡住。本 euid 擁有、且不經 symlink 的一般檔，寫入前設成該輸出的權限（新建與既有的都是）：`--findings-json` 為 `0600`，公開內容的 `--jwks-out` 與 `--manifest` 為 `0644`。別人的檔、裝置、symlink 的目標，權限不動。寫入時出錯，一般檔留空檔，不留前半段；行程在寫入途中被殺掉時仍可能留下前半段。
+- **生成物（原子取代）**：`state-reconcile --manifest-path`、`configmap-assemble --output`。先寫暫存檔再改名，中途失敗時原檔不動。目標必須不存在或是一般檔：`-`、裝置、FIFO、socket、本行程的 stdout 都是結束碼 `2`。`configmap-assemble` 的完整契約見 [GitOps 部署 §3](integration/gitops-deployment.md#3-configmap-assembly)。
+- ⚠️ **行為變更**：
+  - owner 2026-10-21 核可（逐項見 [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：非 root 寫別人的裝置或可寫一般檔 `2` → `0`；唯讀檔、懸空 link、socket、無 reader 的 FIFO `0` → `2`；本來會卡住的寫入改為 `2`；`-` 不再建出名為 `-` 的檔。
+  - owner 2026-10-24 核可：`configmap-assemble --output` 為 `-`、裝置、FIFO 時 `0` → `2`，寫出的 manifest 為 `0600`。
+
 ---
 
 ## 命令分類
@@ -1964,7 +1972,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。可選填 `min_generator_version: "X.Y.Z"`：執行的 da-tools 比它舊（或讀不到自己的版本）時 exit 2，修法是調高 da-tools 版本；值不是 `X.Y.Z` 形式也是 exit 2（#2901）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
-| `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，先寫暫存檔再改名，所以 PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
+| `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，以 operator 輸出寫入（見上方「輸出路徑」：`-` 即 stdout，寫入失敗留空檔），PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
 

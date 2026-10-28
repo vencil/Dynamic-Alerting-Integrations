@@ -22,7 +22,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from _atomic_write import atomic_write_text  # noqa: E402
+sys.path.insert(0, str(SCRIPT_DIR.parent))  # #3107: the atomic writer is in scripts/tools/
+from _lib_atomic_write import atomic_write_text  # noqa: E402
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on

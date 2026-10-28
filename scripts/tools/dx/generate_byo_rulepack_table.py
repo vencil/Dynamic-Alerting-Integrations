@@ -38,7 +38,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _atomic_write import atomic_write_text  # noqa: E402
+from _lib_atomic_write import atomic_write_text  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402

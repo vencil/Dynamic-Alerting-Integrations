@@ -59,7 +59,7 @@ from _lib_io import (  # noqa: E402  (#1789)
     exit_on_yaml_file_error,
     output_write,
 )
-from _atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
+from _lib_atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
 from _lib_confd import legacy_state_files  # noqa: E402  (#2883)
 from _lib_tenant_state import KEY_GROUPS, StateInputError, load_state  # noqa: E402  (#2883)
 

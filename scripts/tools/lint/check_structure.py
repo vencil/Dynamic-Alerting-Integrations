@@ -42,6 +42,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_io.py",
     "_lib_validation.py",
     "_lib_prometheus.py",
+    "_lib_atomic_write.py",  # #3107: the one atomic writer (was dx/_atomic_write.py)
     "_lib_kubectl.py",     # #3207/#3210: the one cluster reader (kubectl get -o json)
     "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)

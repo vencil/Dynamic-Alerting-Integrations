@@ -61,8 +61,10 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
+    check_repo_artifact,
     exit_on_output_write_error,
     output_write,
+    write_repo_artifact,
 )
 from _lib_python import format_json_report  # noqa: E402
 
@@ -226,44 +228,8 @@ def write_json(path: Path, data: dict, *, flag: str | None = None) -> None:
     that read on Linux CI — causes constant merge noise.
     """
     payload = format_json_report(data) + "\n"
-    # #1789: the whole atomic dance is wrapped, not converted — the temp file,
-    # the fdopen and the `os.replace` are what make a crash mid-write leave
-    # the customer's state file intact, and a secure writer would drop that.
-    # `output_write` only reclassifies the exception on its way out, so the
-    # cleanup `except BaseException` below still runs first and still removes
-    # the temp file.
-    with output_write(path, flag=flag):
-        # mkstemp returns (fd, abs_path). Same dir as target → same filesystem
-        # → guaranteed atomic os.replace.
-        try:
-            fd, tmp_name = tempfile.mkstemp(
-                dir=str(path.parent),
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-            )
-        except OSError as exc:
-            # ⛔ Converted BY HAND, and only here. `mkstemp`'s OSError names
-            # the RANDOM temp sibling it was about to create
-            # (`.manifest.json.5qq0hzn7.tmp` — measured), which is neither
-            # `path` nor an ancestor of it, so `output_write`'s "does this
-            # name my path?" test correctly says no and would let it fly with
-            # a traceback. The failure is entirely about `path`'s directory,
-            # so it gets the same class, flag and exit code as the rest of
-            # the block.
-            raise OutputWriteError(path, exc, flag=flag) from exc
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                f.write(payload)
-            os.replace(tmp_name, path)
-        except BaseException:
-            # Clean up temp on any failure — including KeyboardInterrupt /
-            # SystemExit. Suppress OSError on unlink (temp already gone) so
-            # the original exception still propagates.
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+    # #3107 v2: a committed state file / manifest — a repo artifact.
+    write_repo_artifact(path, payload, flag=flag, mode=0o600, atomic_only=True)  # never half a manifest
 
 
 def reconcile(
@@ -491,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
 
     state_dir = Path(args.state_dir)
     manifest_path = Path(args.manifest_path)
+    # #3107 v2: checked BEFORE the read — a FIFO or /dev/stdout would block it.
+    check_repo_artifact(manifest_path, flag="--manifest-path")
 
     report = reconcile(state_dir, manifest_path, dry_run=args.dry_run)
     report["dry_run"] = args.dry_run

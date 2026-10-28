@@ -162,10 +162,10 @@ CALLERS: dict[str, Caller] = {
         "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:258",
         None, _setup_byo),
     "adr_index": Caller(
-        "generate_adr_index", "scripts/dx/generate_adr_index.py:253", "--target",
+        "generate_adr_index", "scripts/dx/generate_adr_index.py:260", "--target",
         _setup_adr_index),
     "planning_index": Caller(
-        "generate_planning_index", "scripts/dx/generate_planning_index.py:503", "--target",
+        "generate_planning_index", "scripts/dx/generate_planning_index.py:512", "--target",
         _setup_planning_index),
 }
 
@@ -380,10 +380,11 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
 def test_the_caller_table_is_the_surveyed_population():
     """Anti-vacuity for the parametrization: the eight #2128 sites, each at a
     line that still calls the helper — so a moved call is noticed here rather
-    than the table silently testing a neighbour."""
+    than the table silently testing a neighbour. #3107: a committed artifact
+    may reach the helper through its entry point, `_lib_io.write_repo_artifact`."""
     assert len(CALLERS) == 8
     for caller in CALLERS.values():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()
         window = "\n".join(src[int(line) - 1: int(line) + 12])
-        assert "atomic_write_text(" in window, caller.site
+        assert "atomic_write_text(" in window or "write_repo_artifact(" in window, caller.site

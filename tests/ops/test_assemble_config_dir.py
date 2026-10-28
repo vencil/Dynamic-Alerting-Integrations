@@ -1687,6 +1687,42 @@ class TestManifestOnlyNamesTheMissingFlag:
         assert str(s) in err
 
 
+class TestManifestOnStdoutIsRefusedBeforeAnyWrite:
+    """The assembly report owns stdout (#3107), so `--manifest -` can only
+    fail. It is refused with the other flag checks: `--output` is not
+    written for a run that answers rc 2."""
+
+    def _src(self, config_dir):
+        s = Path(config_dir) / "src"
+        s.mkdir()
+        _write_file(s / "ok.yaml", _TENANT_DOC.format(t="ok", v=1))
+        return s
+
+    def test_nothing_is_written(self, config_dir, capsys, cli_argv):
+        out = Path(config_dir) / "out"
+        cli_argv("assemble", "--sources", str(self._src(config_dir)),
+                 "--output", str(out), "--manifest", "-")
+        assert main() == EXIT_CALLER_ERROR
+        assert not out.exists()
+        assert "--manifest cannot write to standard output" in capsys.readouterr().err
+
+    def test_json_rejection_is_one_document(self, config_dir, capsys, cli_argv):
+        cli_argv("assemble", "--sources", str(self._src(config_dir)),
+                 "--output", str(Path(config_dir) / "out"), "--manifest", "-",
+                 "--json")
+        assert main() == EXIT_CALLER_ERROR
+        assert json.loads(capsys.readouterr().out) == {
+            "status": "caller_error", "reason": "manifest_is_stdout"}
+
+    def test_a_file_manifest_still_assembles(self, config_dir, cli_argv):
+        """CONTROL — a manifest path that is not stdout writes both."""
+        out, m = Path(config_dir) / "out", Path(config_dir) / "m.json"
+        cli_argv("assemble", "--sources", str(self._src(config_dir)),
+                 "--output", str(out), "--manifest", str(m))
+        assert main() == 0
+        assert out.is_dir() and json.loads(m.read_text(encoding="utf-8"))
+
+
 class TestCheckRefusesFlagsItCannotHonour:
     """#1828: `--check` returns before anything is assembled, so a flag that
     acts on the assembled output never ran under it: `--manifest` answered

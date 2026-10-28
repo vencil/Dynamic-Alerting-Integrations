@@ -36,9 +36,9 @@ import yaml
 # Trap #60 mid-flush corruption.
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
-from _atomic_write import atomic_write_text  # noqa: E402
-# `_atomic_write` put scripts/tools/ on sys.path for its own `_lib_io` import.
+sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
@@ -257,7 +257,7 @@ def main() -> int:
                 # only when the operator gave it.
                 flag = "--target" if args.target else None
                 with output_write(target, flag=flag):
-                    atomic_write_text(target, new, flag=flag)
+                    write_repo_artifact(target, new, flag=flag)
                 changed.append(_display(target))
 
     if args.check:

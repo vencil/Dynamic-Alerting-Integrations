@@ -1145,25 +1145,17 @@ def findings_document(findings: list[str], *, config_dir: str,
 
 
 def write_findings_json(path: str, doc: dict) -> None:
-    """Write *doc* to *path* atomically (temp file + rename), or exit 2.
+    """Write *doc* to *path* as an operator output (#3107 v2), or exit 2.
 
     UTF-8, ``ensure_ascii=False``, ``sort_keys``, ``allow_nan=False``. The
-    temp file sits beside *path*, so the rename never crosses a filesystem
-    and a reader sees the old document or the new one, never half of one.
+    kernel opens *path* (``-`` is stdout); a failed write leaves a regular
+    file empty, never half a document (owner 2026-10-24: gar is written
+    directly, not replaced atomically).
     """
     text = json.dumps(doc, ensure_ascii=False, sort_keys=True,
                       allow_nan=False, indent=2) + "\n"
-    tmp = f"{path}.tmp-{os.getpid()}"
-    try:
-        _lib_io.write_text_secure(tmp, text, flag="--findings-json")
-        os.replace(tmp, path)
-    except OSError as exc:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        cause = exc.cause if isinstance(exc, OutputWriteError) else exc
-        print(f"ERROR: {safe_label(str(OutputWriteError(path, cause, flag='--findings-json')))}",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    _lib_io.write_operator_output_or_die(path, text, flag="--findings-json",
+                                         exit_code=EXIT_CALLER_ERROR)
 
 
 def _exit_code_of(exc: SystemExit) -> int:
@@ -1193,10 +1185,24 @@ def main(argv: list[str] | None = None) -> None:
     code = effective_crash_exit_code()
     try:
         args = parser.parse_args(argv)
+        # #3107 v2: `--findings-json -` (or the file stdout already is) owns
+        # stdout. Without -o the routes go there too — refused before any is
+        # printed; with -o the run's own stdout lines move to stderr, so
+        # stdout carries the findings document alone.
+        receipts = contextlib.nullcontext()
+        if args.findings_json is not None and _lib_io.targets_stdout(args.findings_json):
+            if args.output is None:
+                try:
+                    _lib_io.claim_stdout("the routes output (no -o)")
+                    _lib_io.claim_stdout("--findings-json")
+                except _lib_io.OutputWriteError as exc:
+                    print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
+                    sys.exit(EXIT_CALLER_ERROR)
+            receipts = contextlib.redirect_stdout(sys.stderr)
         # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
-        with _lib_parse_cache.session(), _lib_parse_cache.judging():
+        with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
             _run(args, findings)
         code = EXIT_OK
     except SystemExit as exc:
@@ -1228,6 +1234,10 @@ def _write_findings_if_asked(early: argparse.Namespace,
     doc = findings_document(findings, config_dir=src.config_dir,
                             exit_code=code, validate=src.validate,
                             strict=src.strict)
+    if getattr(src, "output", None) is None:
+        # #3107 v2: without -o the routes go to stdout; `--findings-json -`
+        # would interleave a second document there.
+        _lib_io.claim_stdout("the routes output (no -o)")
     if not keep_exception:
         write_findings_json(src.findings_json, doc)
         return
