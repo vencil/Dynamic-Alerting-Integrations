@@ -1029,7 +1029,7 @@ func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue,
 				objectives = append(objectives, *w.objective)
 			}
 		case CustomAlertRejected:
-			if !w.switchedOff {
+			if !w.entry.SwitchedOff {
 				errCount++
 			}
 		case CustomAlertDuplicated:
@@ -1073,6 +1073,12 @@ type CustomAlertEntry struct {
 	// threshold key's value. Empty for any other rejection, and for an
 	// entry switched off (`threshold: disable`).
 	Refused string
+	// SwitchedOff (#3235), for a rejected entry only: it is rejected only
+	// once switched back on. The exporter serves it no row either way and
+	// has always taken it as a valid opt-out — it is not counted on
+	// da_custom_alert_parse_errors nor logged, and da-guard reports nothing
+	// for it (guard.CustomAlertFindingKind).
+	SwitchedOff bool
 }
 
 // CustomAlertEntries is CustomAlertEntry for every element of the tenant's
@@ -1100,10 +1106,6 @@ type walkedCustomAlert struct {
 	rows      []ResolvedThreshold
 	objective *ResolvedSloObjective
 	dup       CustomAlertDuplicate
-	// switchedOff: rejected only once switched back on. The exporter serves
-	// it no row either way and has always taken it as a valid opt-out — it
-	// is not counted on da_custom_alert_parse_errors nor logged.
-	switchedOff bool
 }
 
 // walkCustomAlertSpecs decodes the tenant's `_custom_alerts` and judges each
@@ -1140,7 +1142,7 @@ func walkCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, lo
 			// it back on would be served.
 			probe, perr := disabledProbe(tenant, spec)
 			if perr != nil {
-				w.entry.Status, w.switchedOff = CustomAlertRejected, true
+				w.entry.Status, w.entry.SwitchedOff = CustomAlertRejected, true
 				w.entry.Reason = "switched off; switched back on it would be rejected: " + perr.Error()
 			} else {
 				w.entry.Status = CustomAlertDisabled
