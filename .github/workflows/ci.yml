@@ -98,6 +98,9 @@ jobs:
               - "**/go.sum"
               - "tests/contract/**"
               - "tests/alertmanager-inhibit/**"
+              #   - components/da-read/** — the da-read leg (#3206): its own
+              #     module, beside the two component trees above.
+              - "components/da-read/**"
               #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
               #     `**/go.mod` above already woke the Go legs on a go.mod
               #     edit; this entry makes an edit to main.go / main_test.go
@@ -889,7 +892,7 @@ jobs:
         # delete-only PRs). Forbids stranding tenant_expected_exporter → a
         # false-positive TenantExporterAbsent critical against a de-provisioned tenant.
         run: |
-          bash scripts/ops/with_da_guard.sh python scripts/tools/lint/check_retire_drift.py --ci
+          bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python scripts/tools/lint/check_retire_drift.py --ci
 
       # Download-caches for the 3 pinned tarballs this job curls every run
       # (promtool / vmutils / pint — see the Lint job's hadolint step for the
@@ -1474,7 +1477,12 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # #3206: tests/conftest.py also builds da-read (components/da-read,
+          # Alertmanager's dependency tree) once per session; its go.sum in the
+          # key keeps those modules and their build cache warm.
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -1856,7 +1864,12 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # #3206: tests/conftest.py also builds da-read (components/da-read,
+          # Alertmanager's dependency tree) once per session; its go.sum in the
+          # key keeps those modules and their build cache warm.
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -2471,6 +2484,56 @@ jobs:
       - name: Check the tests read nothing this leg's filter misses (#1399)
         run: python3 scripts/ops/go_test_reads.py --job go-tests-am-inhibit --logs "$RUNNER_TEMP/go-testlog"
 
+  go-tests-da-read:
+    name: Go Tests — da-read
+    runs-on: ubuntu-24.04
+    # #3206 (ADR-036 §12): `da-read alertmanager` reads an Alertmanager config
+    # with Alertmanager's own loader for onboard_platform, and ships in the
+    # da-tools image. It is its own module (components/da-read) so the
+    # alertmanager dependency stays out of the exporter module, so neither
+    # Go leg above runs it. Path-gated like the other split Go jobs; the `go`
+    # filter carries components/da-read/**. Its tests write their inputs to
+    # temp dirs and read no repo file.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/da-read/go.mod
+
+      - name: Cache Go modules + build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # Own key, as for am-inhibit: this module's go.sum is its own.
+          key: ${{ runner.os }}-go-da-read-${{ hashFiles('components/da-read/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-da-read-
+
+      - name: Run da-read tests
+        working-directory: components/da-read
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test ./... -race -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Install pyyaml for the read-coverage check
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-da-read --logs "$RUNNER_TEMP/go-testlog"
+
   go-tests-e2e-bench-receiver:
     name: Go Tests — e2e-bench receiver
     runs-on: ubuntu-24.04
@@ -2575,7 +2638,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-e2e-bench-receiver, go-tests-bench-filter]
+    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
@@ -2594,6 +2657,7 @@ jobs:
           R_TE: ${{ needs.go-tests-threshold-exporter.result }}
           R_TA: ${{ needs.go-tests-tenant-api.result }}
           R_AM: ${{ needs.go-tests-am-inhibit.result }}
+          R_DR: ${{ needs.go-tests-da-read.result }}
           R_RX: ${{ needs.go-tests-e2e-bench-receiver.result }}
           R_BF: ${{ needs.go-tests-bench-filter.result }}
         run: |
@@ -2601,13 +2665,14 @@ jobs:
           echo "threshold-exporter: $R_TE"
           echo "tenant-api:         $R_TA"
           echo "am-inhibit:         $R_AM"
+          echo "da-read:            $R_DR"
           echo "e2e-bench receiver: $R_RX"
           echo "bench-filter:       $R_BF"
           if [ "$DETECT_RESULT" != "success" ]; then
             echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
             exit 1
           fi
-          for r in "$R_TE" "$R_TA" "$R_AM" "$R_RX" "$R_BF"; do
+          for r in "$R_TE" "$R_TA" "$R_AM" "$R_DR" "$R_RX" "$R_BF"; do
             if [ "$r" = "success" ]; then
               continue
             fi

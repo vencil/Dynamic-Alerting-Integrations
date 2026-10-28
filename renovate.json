@@ -76,6 +76,16 @@
       ],
       "datasourceTemplate": "custom.grafana-plugins",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/alertmanager at the version of the amtool the da-tools image ships (tests/ops/test_da_tools_amtool_pin_parity.py). The gomod manager is off (go.mod is the Go SSOT), so this one require line is read here, from the Go module proxy, and the packageRule below puts it in the SAME grouped PR as the prom/alertmanager image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
+      "matchStrings": [
+        "\\n[ \\t]*(?<depName>github\\.com/prometheus/alertmanager)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
+      ],
+      "datasourceTemplate": "go",
+      "versioningTemplate": "semver"
     }
   ],
   "customDatasources": {
@@ -86,6 +96,13 @@
     }
   },
   "packageRules": [
+    {
+      "description": "#3206 — the da-read go.mod's alertmanager requirement (customManager above) moves in the same PR as the prom/alertmanager image refs: same groupName as the third-party image group.",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["go"],
+      "matchDepNames": ["github.com/prometheus/alertmanager"],
+      "groupName": "third-party container images"
+    },
     {
       "description": "TRK-2605 — Grafana plugin bumps get their own PR, apart from the image digests: a plugin version is not an image and is not in the scan matrix. A MAJOR waits for the Dependency Dashboard, the same policy as image majors (and Grafana's own preinstall auto-update, which skips majors).",
       "matchDatasources": ["custom.grafana-plugins"],

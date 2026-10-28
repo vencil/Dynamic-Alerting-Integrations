@@ -12,6 +12,7 @@ import yaml
 
 from factories import make_am_config, make_am_receiver, write_yaml
 from onboard_platform import (
+    AlertmanagerConfigError,
     parse_alertmanager_config,
     flatten_route_tree,
     reverse_map_receiver,
@@ -68,20 +69,138 @@ class TestParseAlertmanagerConfig:
         assert result is not None
         assert "route" in result
 
+    # #3206（ADR-036 §12）：讀不了就拋 AlertmanagerConfigError、點名原因，不回 None——
+    # 「讀不了」不能變成「沒有租戶」。
+
     def test_invalid_file(self, config_dir):
-        """無效 YAML 檔案回傳 None。"""
+        """不是 Alertmanager 設定的檔：拒收，原因是 Alertmanager 載入函式的。"""
         path = write_yaml(config_dir, "bad.yaml", "just a string\n")
-        result = parse_alertmanager_config(path)
-        assert result is None
+        with pytest.raises(AlertmanagerConfigError) as exc_info:
+            parse_alertmanager_config(path)
+        assert "Alertmanager's config loader cannot read" in str(exc_info.value)
+        assert any("cannot unmarshal" in ln for ln in exc_info.value.detail_lines), (
+            exc_info.value.detail_lines)
 
     def test_nonexistent_file(self):
-        """不存在的檔案回傳 None。"""
-        assert parse_alertmanager_config("/nonexistent/path.yaml") is None
+        """不存在的檔案：拒收並點名。"""
+        with pytest.raises(AlertmanagerConfigError, match="cannot read /nonexistent/path.yaml"):
+            parse_alertmanager_config("/nonexistent/path.yaml")
 
     def test_empty_file(self, config_dir):
-        """空檔案回傳 None。"""
+        """空檔案：Alertmanager 拒收（no route provided）。"""
         path = write_yaml(config_dir, "empty.yaml", "")
-        assert parse_alertmanager_config(path) is None
+        with pytest.raises(AlertmanagerConfigError) as exc_info:
+            parse_alertmanager_config(path)
+        assert any("no route provided in config" in ln for ln in exc_info.value.detail_lines)
+
+    def test_receivers_without_route_is_refused(self, config_dir):
+        """#3206：只有 receivers、沒有 route 的設定 Alertmanager 拒收；以前當成可分析。"""
+        path = write_yaml(config_dir, "am.yaml", "receivers:\n  - name: default\n")
+        with pytest.raises(AlertmanagerConfigError) as exc_info:
+            parse_alertmanager_config(path)
+        assert any("no routes provided" in ln for ln in exc_info.value.detail_lines), (
+            exc_info.value.detail_lines)
+
+    def test_unknown_key_is_refused(self, config_dir):
+        """Alertmanager 以 strict 解碼：不認得的鍵拒收。"""
+        path = write_yaml(config_dir, "am.yaml",
+                          "route: {receiver: d}\nreceivers: [{name: d}]\ntenants: {}\n")
+        with pytest.raises(AlertmanagerConfigError) as exc_info:
+            parse_alertmanager_config(path)
+        assert any("field tenants not found" in ln for ln in exc_info.value.detail_lines)
+
+    def test_match_value_is_alertmanagers_reading(self, config_dir):
+        """`match: {tenant: 010}` 在 Alertmanager 是字串 "010"（欄位是字串、yaml.v2 取原文）。"""
+        path = write_yaml(config_dir, "am.yaml", (
+            "route:\n  receiver: d\n  routes:\n    - receiver: d\n      match: {tenant: 010}\n"
+            "receivers: [{name: d}]\n"))
+        result = parse_alertmanager_config(path)
+        assert result["route"]["routes"][0]["match"] == {"tenant": "010"}
+
+    @pytest.mark.parametrize("matcher", [
+        "{tenant=t1, severity=page}", "tenant=t1,severity=page", 'tenant="t1"', "tenant=~t1"])
+    def test_matchers_in_alertmanagers_normal_form_find_the_tenant(self, config_dir, matcher):
+        """#3206：da-read 印的是 Alertmanager 正規化後的 matchers（拆開、排序、值加引號：
+        `severity="page"`、`tenant="t1"`），租戶照樣找得到。"""
+        path = write_yaml(config_dir, "am.yaml", (
+            "route:\n  receiver: d\n  routes:\n    - receiver: r1\n"
+            f"      matchers: ['{matcher}']\n"
+            "receivers:\n  - name: d\n  - name: r1\n"
+            "    webhook_configs: [{url: 'https://h.example/x'}]\n"))
+        cfg = parse_alertmanager_config(path)
+        matchers = cfg["route"]["routes"][0]["matchers"]
+        assert all('"' in m for m in matchers) and matchers == sorted(matchers), matchers
+        routings, _summary = analyze_alertmanager(cfg)
+        assert set(routings) == {"t1"}, routings
+
+    def test_configmap_two_layers(self, config_dir):
+        """外層以 Kubernetes 讀法取出字串，內層經 stdin 交給 Alertmanager 的載入函式：
+        外層的 `x: 010` 是 8（Kubernetes），內層的 `tenant: 010` 是 "010"（Alertmanager）。"""
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am\n  labels: {x: '1'}\n"
+            "data:\n  alertmanager.yml: |\n"
+            "    route:\n      receiver: d\n      routes:\n        - receiver: d\n"
+            "          match: {tenant: 010}\n    receivers: [{name: d}]\n"))
+        result = parse_alertmanager_config(path)
+        assert result == {"route": {"receiver": "d", "routes": [
+            {"receiver": "d", "match": {"tenant": "010"}}]}, "receivers": [{"name": "d"}]}
+
+    def test_configmap_among_several_documents(self, config_dir):
+        """多份文件的檔：取持有 alertmanager.yml 的那份 ConfigMap。"""
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: Namespace\nmetadata: {name: monitoring}\n---\n"
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: am}\n"
+            "data:\n  alertmanager.yml: |\n    route: {receiver: d}\n    receivers: [{name: d}]\n"))
+        assert parse_alertmanager_config(path) == {
+            "route": {"receiver": "d"}, "receivers": [{"name": "d"}]}
+
+    def test_configmap_without_the_key_is_refused(self, config_dir):
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: am}\n"
+            "data:\n  other.yml: 'x'\n"))
+        with pytest.raises(AlertmanagerConfigError, match="no `data.alertmanager.yml` key"):
+            parse_alertmanager_config(path)
+
+    def test_configmap_whose_value_is_not_a_string_is_refused(self, config_dir):
+        """data 的值不是字串：kubectl 拒收這種 ConfigMap，這裡也拒收。"""
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: am}\n"
+            "data:\n  alertmanager.yml:\n    route: {receiver: d}\n"))
+        with pytest.raises(AlertmanagerConfigError, match="is not a string"):
+            parse_alertmanager_config(path)
+
+    def test_only_written_receiver_fields_are_copied(self, config_dir):
+        """`da-read` 只印原文寫了的鍵：Alertmanager 補的預設值與 global 帶進的值不會被
+        reverse_map_receiver 抄走；secret 照原值。"""
+        path = write_yaml(config_dir, "am.yaml", (
+            "global: {slack_api_url: 'https://hooks.slack.com/services/T/B/global'}\n"
+            "route: {receiver: s}\n"
+            "receivers:\n  - name: s\n    slack_configs: [{channel: '#a'}]\n"
+            "  - name: w\n    webhook_configs: [{url: 'https://h.example/x?token=s3cret'}]\n"))
+        result = parse_alertmanager_config(path)
+        assert result["receivers"][0] == {"name": "s", "slack_configs": [{"channel": "#a"}]}
+        assert result["receivers"][1]["webhook_configs"] == [
+            {"url": "https://h.example/x?token=s3cret"}]
+
+    def test_missing_da_read_is_an_error(self, config_dir, monkeypatch, tmp_path):
+        """找不到 da-read：拒收並說明怎麼取得，不回「沒有設定」。"""
+        monkeypatch.delenv("DA_READ_BINARY", raising=False)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        path = write_yaml(config_dir, "am.yaml", "route: {receiver: d}\nreceivers: [{name: d}]\n")
+        with pytest.raises(AlertmanagerConfigError, match="da-read was not found"):
+            parse_alertmanager_config(path)
+
+    def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
+        """main：拒收時 rc 2，stderr 帶 Alertmanager 的原因。"""
+        import onboard_platform as op
+        path = write_yaml(config_dir, "am.yaml", "receivers:\n  - name: default\n")
+        monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--alertmanager-config", path,
+                                         "--dry-run"])
+        with pytest.raises(SystemExit) as exc_info:
+            op.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "no routes provided" in err and "Alertmanager's config loader" in err, err
 
 
 class TestExtractTenantFromMatchers:

@@ -2569,7 +2569,9 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2 | — |
+| `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2。檔案先以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀：值是 Alertmanager 的讀法（`match: {tenant: 010}` 是租戶 `010`），只取原文寫了的鍵，Alertmanager 拒收的設定（例如沒有 `route`）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
+| `--da-crdecode-binary <PATH>` | Phase 1 用的 `da-crdecode` | `$DA_CRDECODE_BINARY`，否則 PATH（映像內建） |
+| `--da-read-binary <PATH>` | Phase 1 用的 `da-read` | `$DA_READ_BINARY`，否則 PATH（映像內建） |
 | `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`） | — |
 | `--scrape-config <FILE>` | Phase 3：Prometheus scrape config | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
@@ -2607,7 +2609,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|------|
 | `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
 | `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs`。⚠️ `--scrape-config` 檔案不存在也是 1（`--alertmanager-config` 不存在則是 2） |
-| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）；`phase1-routing/<tenant>.yaml` 與 `phase2-rules/_defaults-suggestion.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；值沒有寫入契約的型別（例如 `inf`）、或要寫進註解的租戶 id、metric key、閾值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；要寫這兩種檔時找不到可用的 da-guard 也是 2。⚠️ 例外：ConfigMap 包裝裡內嵌的 YAML 壞掉時是 traceback、回 1。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）；`phase1-routing/<tenant>.yaml` 與 `phase2-rules/_defaults-suggestion.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；值沒有寫入契約的型別（例如 `inf`）、或要寫進註解的租戶 id、metric key、閾值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；要寫這兩種檔時找不到可用的 da-guard 也是 2；Alertmanager 設定讀不了（Alertmanager 拒收、ConfigMap 內嵌的 YAML 壞掉、找不到 `da-crdecode`／`da-read`）也是 2，stderr 印出原因。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 

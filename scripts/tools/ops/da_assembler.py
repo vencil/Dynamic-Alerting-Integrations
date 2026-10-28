@@ -780,10 +780,11 @@ def decode_cr(cr_path: Path) -> tuple[Any, list, list[str]]:
 
     Raises :class:`CrDecodeError` when the binary is missing, cannot be run,
     does not finish within ``CRDECODE_TIMEOUT_SECONDS``, exits non-zero (the
-    file cannot be read, the conversion refuses it, it holds more than one
-    document, or it cannot be read as written) or prints something that is
-    not its JSON contract — a da-crdecode older than this tool prints no
-    ``differs_from_text``.
+    file cannot be read, the conversion refuses it, or it cannot be read as
+    written), the file holds no document or more than one (da-crdecode
+    returns each document `kubectl apply -f` would apply, #3206; a CR is
+    one), or it prints something that is not its JSON contract — a
+    da-crdecode older than this tool prints no ``differs_from_text``.
     ``json.loads`` raises RecursionError for a document nested too deeply for
     Python's JSON reader; that is left to the caller.
     """
@@ -816,10 +817,14 @@ def decode_cr(cr_path: Path) -> tuple[Any, list, list[str]]:
             f"{CRDECODE_BINARY_NAME} printed output that is not JSON: {e}",
             lines) from e
     docs = out.get("documents") if isinstance(out, dict) else None
-    if not isinstance(docs, list) or len(docs) != 1:
+    if not isinstance(docs, list):
         raise CrDecodeError(
-            f"{CRDECODE_BINARY_NAME} printed JSON without exactly one "
-            "document under \"documents\"", lines)
+            f"{CRDECODE_BINARY_NAME} printed JSON without a list under "
+            "\"documents\"", lines)
+    if len(docs) != 1:
+        raise CrDecodeError(
+            f"the CR file holds {len(docs)} documents as kubectl reads it; "
+            "--render-cr reads exactly one", lines)
     differs = out.get("differs_from_text")
     if (not isinstance(differs, list) or len(differs) != 1
             or not isinstance(differs[0], list)

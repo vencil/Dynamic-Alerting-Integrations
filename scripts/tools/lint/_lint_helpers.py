@@ -81,6 +81,9 @@ BUILD_EXEMPT = frozenset({
     # #2883 — reads a tenant-api state store copy (--state); imported by
     # offboard_tenant. Library, not CLI.
     "_lib_tenant_state.py",
+    # #3206 (ADR-036 §12) — runs da-crdecode / da-read for a manifest or an
+    # Alertmanager config; imported by onboard_platform. Library, not CLI.
+    "_lib_consumer_read.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.

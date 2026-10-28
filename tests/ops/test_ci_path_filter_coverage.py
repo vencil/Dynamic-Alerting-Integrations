@@ -2113,6 +2113,8 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-threshold-exporter"),
     ("ci.yml", "go-tests-tenant-api"),
     ("ci.yml", "go-tests-am-inhibit"),
+    # #3206: the da-read module's leg, gated on the `go` filter like its siblings.
+    ("ci.yml", "go-tests-da-read"),
     ("ci.yml", "go-tests-e2e-bench-receiver"),
     ("ci.yml", "go-tests-bench-filter"),
     ("docs-ci.yaml", "validate-mermaid"),

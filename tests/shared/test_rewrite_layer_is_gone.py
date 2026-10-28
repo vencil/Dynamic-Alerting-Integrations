@@ -76,8 +76,6 @@ LOADER = frozenset({
 #: none of it conf.d.
 LOADER_READERS = {
     "tools/_lib_io.py": "the loader's strict and file siblings are defined here",
-    "tools/ops/onboard_platform.py": "the Alertmanager config (its consumer: Alertmanager)",
-    "tools/lint/check_retire_drift.py": "Namespace manifests (their consumer: kubectl)",
     "tools/_lib_tenant_state.py": "tenant-api's state store (its consumer: tenant-api)",
     "tools/ops/migration_audit.py": "reads a tree with both readers on purpose to list where "
                                     "they differ (ADR-036 §8); deleted in step 13",

@@ -49,6 +49,14 @@ runtime target set with the repo's IaC DECLARATIONS that deploy it:
 A tenant counts as "has a K8s target" if EITHER is present. (Customers running
 their own GitOps may declare targets elsewhere → both dirs are overridable.)
 
+The namespaces file is a Kubernetes manifest, so it is read the way kubectl
+reads it (ADR-036 §12, #3206): by `da-crdecode`, every document `kubectl
+apply -f` would apply. A label value Kubernetes does not read as a string —
+`instance: 010` is the number 8, `instance: yes` is true — is refused by
+kubectl (a label takes only strings), so the Namespace never exists: it is
+reported as an error naming the file and the document (exit 2), never taken
+as its text and never skipped.
+
 Directions
 ----------
   VIOLATION (exit 1): conf.d declares db_type for <tenant> but NO K8s-target
@@ -62,11 +70,15 @@ Directions
 Exit codes (per scripts/tools/_lib_exitcodes.py):
     0  No retire-ordering violations (warnings allowed)
     1  Violation(s) detected (--ci) — conf.d db_type without a K8s target
-    2  Caller error (missing path, YAML parse failure, da-guard missing or
-       failing, or a conf.d file the exporter drops)
+    2  Caller error (missing path, da-guard or da-crdecode missing or
+       failing, a namespaces file kubectl would refuse — including an
+       `instance` label that is not a string —, or a conf.d file the
+       exporter drops)
 
-da-guard: `$DA_GUARD_BINARY`, else `da-guard` on `$PATH`. The pre-commit hook
-and CI run this through scripts/ops/with_da_guard.sh, which builds one.
+da-guard: `$DA_GUARD_BINARY`, else `da-guard` on `$PATH`; da-crdecode:
+`$DA_CRDECODE_BINARY`, else `da-crdecode` on `$PATH`. The pre-commit hook and
+CI run this through scripts/ops/with_da_guard.sh and
+scripts/ops/with_da_crdecode.sh, which build them.
 
 Usage:
     python scripts/tools/lint/check_retire_drift.py            # report
@@ -86,8 +98,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 try:
@@ -100,7 +110,7 @@ from _lib_io import exit_on_yaml_file_error  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 from _lib_io import YamlFileError, safe_label  # noqa: E402
 # The namespaces manifest is Kubernetes YAML, not conf.d: PyYAML.
-from _lib_yaml_keys import load_all_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests as kubectl reads them)
 # ADR-036 step 4 (#2906): conf.d's tenant files and their `tenants:` keys are
 # `da-guard parse-tree`'s, as the db_type is `da-guard served-values`'.
 import _lib_parse_cache  # noqa: E402
@@ -176,23 +186,52 @@ def helm_declared_targets(helm_dir: Path) -> Set[str]:
     return targets
 
 
+class NamespacesFileError(Exception):
+    """The namespaces file cannot be read as kubectl reads it, or kubectl
+    would refuse it. ``str()`` is one line; ``detail_lines`` carries
+    da-crdecode's own reason."""
+
+    def __init__(self, message: str, detail_lines: List[str] | None = None) -> None:
+        super().__init__(message)
+        self.detail_lines = list(detail_lines or [])
+
+
 def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
-    """Tenant ids from db-* Namespace `instance` labels (secondary cross-check)."""
+    """Tenant ids from db-* Namespace `instance` labels (secondary cross-check).
+
+    The file is read as kubectl reads it (`da-crdecode`, every document;
+    ADR-036 §12). Raises :class:`NamespacesFileError` when it cannot be, or
+    when a Namespace's `instance` label is not a string in that reading
+    (`instance: 010` is 8): kubectl refuses such a label, so the value is
+    reported, not taken as its text.
+    """
     targets: Set[str] = set()
     if not namespaces_file.is_file():
         return targets
-    text = namespaces_file.read_text(encoding="utf-8")
-    # #2216: the `instance` label value is a tenant id, read as its source
-    # text — `instance: 010` is tenant "010", not 8.
-    for doc in load_all_exporter_keys(text, raw_text_scalars=("instance",)):
+    try:
+        documents = _lib_consumer_read.kubernetes_documents(str(namespaces_file))
+    except _lib_consumer_read.ConsumerReadError as exc:
+        raise NamespacesFileError(
+            f"{namespaces_file}: cannot be read as kubectl reads it: {exc}",
+            exc.stderr_lines) from exc
+    for index, doc in enumerate(documents, start=1):
         if not isinstance(doc, dict) or doc.get("kind") != "Namespace":
             continue
-        labels = ((doc.get("metadata") or {}).get("labels")) or {}
-        if not isinstance(labels, dict):
+        metadata = doc.get("metadata")
+        labels = metadata.get("labels") if isinstance(metadata, dict) else None
+        if not isinstance(labels, dict) or "instance" not in labels:
             continue
-        inst = labels.get("instance")
+        inst = labels["instance"]
+        if not isinstance(inst, str):
+            name = metadata.get("name") if isinstance(metadata, dict) else None
+            raise NamespacesFileError(
+                f"{namespaces_file}: document {index} (Namespace "
+                f"{safe_label(repr(name))}): label `instance` is "
+                f"{safe_label(json.dumps(inst))} as Kubernetes reads it, not a string; "
+                "kubectl refuses a label that is not a string, so this Namespace "
+                "is never created. Quote the value (`instance: \"010\"`).")
         if inst:
-            targets.add(str(inst))
+            targets.add(inst)
     return targets
 
 
@@ -270,8 +309,10 @@ def main() -> int:
 
     try:
         result = evaluate(config_dir, Path(args.helm_dir), Path(args.namespaces_file))
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {safe_label(str(exc))}", file=sys.stderr)
+    except NamespacesFileError as exc:
+        print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
+        for line in exc.detail_lines:
+            print(f"  da-crdecode| {safe_label(line)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if args.json:

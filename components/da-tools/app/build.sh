@@ -250,6 +250,10 @@ TOOL_FILES=(
     # #2883 — reads a tenant-api state store copy (--state); imported by
     # ops/offboard_tenant. Imports _lib_io (above).
     _lib_tenant_state.py
+    # #3206 (ADR-036 §12) — a manifest or an Alertmanager config read the way
+    # its consumer reads it (runs the da-crdecode / da-read binaries bundled
+    # below); imported by ops/onboard_platform. Stdlib-only.
+    _lib_consumer_read.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup
@@ -364,8 +368,10 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
-echo "▸ Cross-compiling da-guard / da-batchpr / da-parser for amd64 + arm64..."
-for cmd in da-guard da-batchpr da-parser; do
+# #3206 (ADR-036 §12): da-crdecode reads Kubernetes manifests the way kubectl
+# does; onboard_platform hands it the ConfigMap that holds alertmanager.yml.
+echo "▸ Cross-compiling da-guard / da-batchpr / da-parser / da-crdecode for amd64 + arm64..."
+for cmd in da-guard da-batchpr da-parser da-crdecode; do
     for arch in amd64 arm64; do
         (cd "$EXPORTER_APP" && \
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
@@ -375,6 +381,26 @@ for cmd in da-guard da-batchpr da-parser; do
                 "./cmd/${cmd}")
     done
     echo "  Built ${cmd}.{amd64,arm64} (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
+done
+
+# #3206 (ADR-036 §12): da-read reads a config with its consumer's own loader
+# (`da-read alertmanager`: Alertmanager's config.Load, the amtool version
+# below). It is its own Go module, components/da-read, so the Alertmanager
+# dependency stays out of the exporter module; onboard_platform runs it.
+DA_READ_APP="$PROJECT_ROOT/components/da-read"
+if [ ! -d "$DA_READ_APP" ]; then
+    echo "  ✗ da-read source not found at $DA_READ_APP" >&2
+    exit 1
+fi
+for module_cmd in da-read; do
+    for arch in amd64 arm64; do
+        (cd "$DA_READ_APP" && \
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+                -buildvcs=false \
+                -o "$SCRIPT_DIR/${module_cmd}.${arch}" \
+                .)
+    done
+    echo "  Built ${module_cmd}.{amd64,arm64}"
 done
 
 # ── Assemble-only mode (for CI — Buildx handles the docker build) ──
@@ -389,7 +415,8 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
-rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-batchpr.* "$SCRIPT_DIR"/da-parser.*
+rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-batchpr.* "$SCRIPT_DIR"/da-parser.* \
+    "$SCRIPT_DIR"/da-crdecode.* "$SCRIPT_DIR"/da-read.*
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""
