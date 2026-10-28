@@ -2939,15 +2939,15 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.PASS, r
 
     @pytest.mark.parametrize("value, text, why", [
-        ("NaN", "NaN", "not a finite number"), ("-Inf", "-Inf", "not a finite number"),
-        (".inf", ".inf", "not a number threshold-exporter reads"),
-        (".nan", ".nan", "not a number threshold-exporter reads"),
-        ("!!float .inf", ".inf", "not a number threshold-exporter reads"),
-        ("disable", "disable", "not a number threshold-exporter reads"),
-        ("true", "true", "not a number threshold-exporter reads"),
-        ("2026-01-01", "2026-01-01", "not a number threshold-exporter reads"),
-        ("0x10", "0x10", "not a number threshold-exporter reads"),
-        ('"70:critical"', "70:critical", "not a number threshold-exporter reads"),
+        ("NaN", "NaN", "non_finite"), ("-Inf", "-Inf", "non_finite"),
+        (".inf", ".inf", "unparsed"),
+        (".nan", ".nan", "unparsed"),
+        ("!!float .inf", ".inf", "unparsed"),
+        ("disable", "disable", "unparsed"),
+        ("true", "true", "unparsed"),
+        ("2026-01-01", "2026-01-01", "unparsed"),
+        ("0x10", "0x10", "unparsed"),
+        ('"70:critical"', "70:critical", "unparsed"),
     ])
     def test_refused_values_fail(self, tmp_path, value, text, why):
         """#3140, #3250: the exporter refuses these (its text through
@@ -2959,7 +2959,9 @@ class TestRootDefaultsValues:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert f"`defaults.mysql_connections` is `{text}`, {why}" in detail, detail
+        assert (f"`defaults.mysql_connections` is `{text}`, which threshold-exporter "
+                f"refuses ({why})") in detail, detail
+        assert "da-guard` (root_default_refused)" in detail, detail
         assert "container_cpu" not in detail and "drops ALL of it" not in detail, detail
 
     def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):

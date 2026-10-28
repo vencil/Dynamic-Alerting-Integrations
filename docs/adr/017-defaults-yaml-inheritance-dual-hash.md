@@ -199,7 +199,7 @@ tenants:
 
 - **值是對照表或清單**：exporter 丟掉**整份檔**，log 一行 `ERROR: skip unparseable defaults/profiles file …`，`da_config_defaults_unusable{reason="parse_failure"}` 變 1，同檔的其他閾值一起消失。
 - **值是讀不成數字的純量**（例如 `mysql_connections: abc`）：只拒收那個鍵，同檔的其他閾值照送，da-guard 報 `root_default_refused`。
-- **鍵是保留鍵**（例如 `_severity_dedup: disable`、`_silent_mode: warning`，不論值為何）：exporter 只從根目錄 `defaults:` 讀閾值，這個值不傳給任何租戶，最終設定卻顯示它是繼承來的（`not_served` 標 `root_defaults_reserved`）。da-guard 報 `root_defaults_reserved_key`（error），`validate-config` 失敗，訊息寫出這個鍵該寫在哪裡。登錄表沒有的 `_` 鍵（例如 `_myth: 5`）什麼都不會發生，`validate-config` 以 WARN 指出沒有讀取端讀它。
+- **鍵是保留鍵，值是數字或字串**（例如 `_severity_dedup: disable`、`_silent_mode: warning`）：exporter 只從根目錄 `defaults:` 讀閾值，這個值不傳給任何租戶，最終設定卻顯示它是繼承來的（`not_served` 標 `root_defaults_reserved`）。da-guard 報 `root_defaults_reserved_key`（error），`validate-config` 失敗，訊息寫出這個鍵該寫在哪裡。值是對照表或清單時照第一條丟掉整份檔；值是 `null` 時 da-guard 沒有 finding，最終設定也不顯示這個鍵。登錄表沒有的 `_` 鍵（例如 `_myth: 5`）什麼都不會發生，`validate-config` 以 WARN 指出沒有讀取端讀它。
 - **值是數字**：它變成每個租戶的一條閾值 series，沒有任何警告。例如縮排 `max_metrics_per_tenant: 100` 之後，`/metrics` 多出 `user_threshold{component="max",metric="metrics_per_tenant"} 100`。
 
 讀取者只看文件頂層的鍵，縮排後對它們等於沒寫：

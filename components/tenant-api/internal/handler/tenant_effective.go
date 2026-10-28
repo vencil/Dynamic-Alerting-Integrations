@@ -74,20 +74,10 @@ import (
 // @Description YAML would type as another number than its text, e.g. 017,
 // @Description 0x1F, .nan or true, is shown as that text); not_served
 // @Description names each key whose shown value /metrics does not serve,
-// @Description with the exporter's own reason (parse_failed,
-// @Description root_defaults_unwrapped, value_rejected, value_unparsed,
-// @Description value_unparsed_dropped, window_invalid, undeliverable,
-// @Description root_null_undeclared, root_default_refused,
-// @Description root_defaults_reserved, spelling_duplicate, unregistered)
-// @Description and the file of the value shown; root_default_refused is a
-// @Description root defaults value the exporter does not read as a number,
-// @Description root_defaults_reserved a registered `_` key in the root
-// @Description defaults, which reaches no tenant; unregistered is a `_` key
-// @Description the reserved-key registry does not list, which /metrics
-// @Description serves in no layer; spelling_duplicate names a
-// @Description spelling of a threshold that the same mapping also writes
-// @Description under the spelling /metrics serves (two spellings of one
-// @Description dimensional key, or both #1231 names). One entry is not a
+// @Description with the exporter's own reason and the file of the value
+// @Description shown. The reasons are a closed set, each defined in
+// @Description docs/cli-reference.md under `da-guard effective` (one list,
+// @Description held against pkg/config's NotServed* constants by a test). One entry is not a
 // @Description key of effective_config: a `_` key (not a routing key) a
 // @Description subtree _defaults.yaml writes non-null and effective_config
 // @Description does not show; the subtree value is never applied (#3341) —

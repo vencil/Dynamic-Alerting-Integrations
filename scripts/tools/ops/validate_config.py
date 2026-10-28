@@ -2098,16 +2098,13 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 
 def _root_defaults_refused_detail(rel: str, key: str, text: str, refused: str) -> str:
     """One FAIL line for a root threshold whose value threshold-exporter
-    refuses (#3140, #3250; da-guard's root_default_refused says the same):
-    an entry of da-guard effective's `root_defaults_refused`, `refused` its
-    reason."""
-    why = ("not a finite number — an alert compared against NaN or an infinity never "
-           "fires or always fires" if refused == "non_finite"
-           else "not a number threshold-exporter reads")
-    return (f"{rel}: `defaults.{key}` is `{text}`, {why}. threshold-exporter serves no "
-            f"default row for `{key}`; only a tenant's own value is served, as for an "
-            f"`optional_overrides:` key. Write a finite number (a root default takes no "
-            f"`:severity`), or list `{key}` under `optional_overrides:` instead.")
+    refuses (#3140, #3250): an entry of da-guard effective's
+    `root_defaults_refused`, `refused` its reason. What to write instead is
+    da-guard's root_default_refused finding; this line names it rather than
+    carry a second copy of that sentence."""
+    return (f"{rel}: `defaults.{key}` is `{text}`, which threshold-exporter refuses "
+            f"({refused}) and serves no default row for; `da-guard` (root_default_refused) "
+            f"says what to write instead")
 
 
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
