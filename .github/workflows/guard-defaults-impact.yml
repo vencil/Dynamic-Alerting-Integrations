@@ -419,8 +419,9 @@ jobs:
           # trees (shipped config, try-local seed, recipe examples, e2e-bench
           # fixtures) — only one of them sits under the auto-detected root. The
           # golden fixtures (tests/golden/fixtures/) are conf.d trees too but are
-          # NOT validated: they are malformed on purpose and their da-guard exit
-          # codes are pinned by golden_served_test.go. The helper reports them as
+          # NOT validated: they are malformed on purpose; only their
+          # `da-guard served-values` exit codes are pinned (golden_served_test.go),
+          # the main check's result on them is not judged. The helper reports them as
           # `excluded` rows (its EXCLUDED_PREFIXES is the one list), listed below.
           # So the scope is not one directory: it is one (config-dir, scope) pair
           # per tree that the PR actually touched. Resolution lives in a tested
@@ -618,7 +619,7 @@ jobs:
                 # helper's reason, so "not in the comment" never means "checked".
                 excluded)  echo "### \`$a\` — NOT CHECKED: $b" >> "$REPORT"
                            echo >> "$REPORT"
-                           echo "此檔屬於刻意寫壞的測試 fixture 樹，da-guard 不驗它；每棵樹的結束碼由 \`tests/golden/not_served.json\` 與 \`golden_served_test.go\` 釘住。" >> "$REPORT"
+                           echo "此檔屬於刻意寫壞的測試 fixture 樹，這裡不判 da-guard 主檢查的結果；釘住的只有每棵樹 \`da-guard served-values\` 的結束碼（\`tests/golden/not_served.json\` 與 \`golden_served_test.go\`）。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::notice::${a} is a test fixture — not validated here (${b})" ;;
                 # The whole point of guard_defaults_scopes.py is that a file

@@ -829,8 +829,8 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
 
 class TestGoldenFixturesAreExcludedOutLoud:
     """#3341：`tests/golden/fixtures/**` 刻意寫壞（root `defaults:` 放 mapping、字串），
-    每棵樹的 da-guard 結束碼由 not_served.json + golden_served_test.go 釘住，所以
-    guard 不驗它——但要**點名**（`excluded` 列），不可靜默消失。前綴只在 helper 定義。"""
+    釘住的只有每棵樹 `da-guard served-values` 的結束碼（not_served.json +
+    golden_served_test.go），主檢查的結果刻意不判，所以 guard 不驗它——但要**點名**（`excluded` 列），不可靜默消失。前綴只在 helper 定義。"""
 
     _GOLDEN = "tests/golden/fixtures/reserved-null/conf.d/_defaults.yaml"
 
@@ -850,7 +850,7 @@ class TestGoldenFixturesAreExcludedOutLoud:
                              capsys, monkeypatch)
         assert rc == 0, rows
         assert rows == ["target\ttry-local/seed/conf.d\t.",
-                        f"excluded\t{self._GOLDEN}\ttest fixture (pinned by golden_served_test.go)"], rows
+                        f"excluded\t{self._GOLDEN}\ttest fixture (main check not judged; served-values exit pinned by golden_served_test.go)"], rows
 
     def test_the_prefix_is_matched_verbatim(self):
         """看起來像的路徑不算：前綴只認字面。"""

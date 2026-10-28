@@ -28,9 +28,11 @@ guard 驗錯樹之後貼上綠色 sticky comment。
 * 落在 `EXCLUDED_PREFIXES` 底下的檔案 ＝ **excluded**，不交給 da-guard、也不併進任何
   target，同樣由呼叫端點名回報（原因欄是這裡給的那句）。目前只有
   `tests/golden/fixtures/`：那些樹**刻意**寫壞（root `defaults:` 放 mapping、字串），
-  每棵樹的 da-guard 結束碼改由 `tests/golden/not_served.json` 與
-  `cmd/da-guard/golden_served_test.go` 釘住，與 `.pre-commit-config.yaml` 的 schema
-  檢查排除它的理由相同。⛔ 前綴只在這裡定義一次；workflow 只認 row kind。
+  與 `.pre-commit-config.yaml` 的 schema 檢查排除它的理由相同。每棵樹的
+  `da-guard served-values` 結束碼由 `tests/golden/not_served.json` 與
+  `cmd/da-guard/golden_served_test.go` 釘住；主檢查（`da-guard --config-dir`）在這些
+  樹上的結果則**刻意不判**（`mixed-mode` 回 1、`wrapper-siblings` 回 4，哪裡都沒釘）。
+  ⛔ 前綴只在這裡定義一次；workflow 只認 row kind。
 
 輸出（TSV，供 workflow 的 bash 直接讀）
 --------------------------------------
@@ -130,12 +132,13 @@ UNREPRESENTABLE = frozenset(chr(c) for c in range(0x20)) | {"\x7f",
 # reports `excluded` rows by kind and never matches a path itself.
 # tests/golden/fixtures/ encodes malformed shapes ON PURPOSE (a root
 # `defaults:` holding a mapping or a string, which the exporter drops whole);
-# each tree's da-guard exit code is pinned instead by
-# tests/golden/not_served.json and
-# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go — the
-# same reason .pre-commit-config.yaml keeps these trees out of the schema check.
+# the same reason .pre-commit-config.yaml keeps these trees out of the schema
+# check. What IS pinned is each tree's `da-guard served-values` exit code
+# (tests/golden/not_served.json +
+# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go); the main
+# check's result on them is deliberately not judged anywhere.
 EXCLUDED_PREFIXES = {
-    "tests/golden/fixtures/": "test fixture (pinned by golden_served_test.go)",
+    "tests/golden/fixtures/": "test fixture (main check not judged; served-values exit pinned by golden_served_test.go)",
 }
 
 
