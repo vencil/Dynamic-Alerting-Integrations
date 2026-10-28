@@ -151,9 +151,9 @@ spec:
           # passed in `env:` below, never as an arg, so a subcommand run in
           # this container with `kubectl exec ... tenant-api state show|restore`
           # or `config check` reads the same settings as the server. Only flags
-          # with no TA_* counterpart stay args. tests/helm/
-          # test_tenant_api_settings_are_env.py derives the TA_* flag list from
-          # the Go source and fails on any such flag here.
+          # with no TA_* counterpart stay args.
+          # tests/helm/test_tenant_api_settings_are_env.py derives the TA_*
+          # flag list from the Go source and fails on any such flag here.
           # A TA_* variable this image does not read stops it (exit 2, the
           # name printed: cmd/server/env_check.go), as an unknown flag does —
           # so a chart newer than its image fails loudly instead of having a
