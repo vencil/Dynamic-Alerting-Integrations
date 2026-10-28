@@ -112,6 +112,10 @@ func (f *FakeGenerator) SetMetrics(fn func() (int, string)) {
 func PassVerdict(req FakeValidateRequest, policySHA *string) map[string]any {
 	v := Verdict("pass", req, policySHA)
 	v["rc"] = 0
+	// The service's pass carries a key verdict (ADR-038 decision 5): here a
+	// complete one with nothing found. A test of the verdict replaces it.
+	v["key_verdict"] = map[string]any{"status": "complete", "tenants": len(req.Writes),
+		"seconds": 0.0, "findings": []map[string]any{}, "truncated": 0}
 	return v
 }
 

@@ -46,9 +46,11 @@ type ProposedFile struct {
 
 // WriteValidator judges the conf.d tree at base with files written over it.
 // A nil error lets the write commit those exact bytes; any error refuses it,
-// and is returned to the Writer's caller unchanged.
+// and is returned to the Writer's caller unchanged. With a nil error it may
+// return the key verdict on the write (ADR-038 decision 5, key_verdict.go),
+// which never refuses it; nil when it has none.
 type WriteValidator interface {
-	ValidateWrites(ctx context.Context, base string, files []ProposedFile) error
+	ValidateWrites(ctx context.Context, base string, files []ProposedFile) (*KeyVerdict, error)
 }
 
 // SetValidator installs the validator every content-changing write asks
@@ -72,17 +74,22 @@ var ErrNoValidator = errors.New("gitops: no write validator installed; refusing 
 // written.
 var errValidatorBase = errors.New("cannot read the commit the write lands on")
 
-// validateProposed asks the validator about files over base; nil when
-// there is nothing to write, ErrNoValidator when no validator is installed.
-// Caller holds w.mu.
-func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) error {
+// validateProposed asks the validator about files over base and renders
+// its key verdict for ctx's caller (adviseKeyVerdict); nothing when there is
+// nothing to write, ErrNoValidator when no validator is installed. Caller
+// holds w.mu.
+func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) (verdictAdvice, error) {
 	if len(files) == 0 {
-		return nil
+		return verdictAdvice{}, nil
 	}
 	if w.validator == nil {
-		return ErrNoValidator
+		return verdictAdvice{}, ErrNoValidator
 	}
-	return w.validator.ValidateWrites(ctx, base, files)
+	kv, err := w.validator.ValidateWrites(ctx, base, files)
+	if err != nil {
+		return verdictAdvice{}, err
+	}
+	return adviseKeyVerdict(ctx, files, kv), nil
 }
 
 // sampleJudgedBase reads HEAD as the commit a single-tenant write is judged
@@ -117,41 +124,46 @@ func (w *Writer) sampleJudgedBase() (string, error) {
 }
 
 // validateTenantFile is validateProposed for one tenant file under
-// w.configDir, against base — the commit sampleJudgedBase returned. Caller
-// holds w.mu.
+// w.configDir, against base — the commit sampleJudgedBase returned — with
+// the key verdict as lines of the write's notices. Caller holds w.mu.
 //
 // The direct-mode caller hands base to commitFileChange, which commits only
 // while HEAD is still base: w.mu keeps every in-process write out, but not a
 // commit made from outside the process since the sample.
-func (w *Writer) validateTenantFile(ctx context.Context, base, filePath, tenantID string, content []byte) error {
+func (w *Writer) validateTenantFile(ctx context.Context, base, filePath, tenantID string, content []byte) ([]string, error) {
 	if w.afterTenantRead != nil {
 		w.afterTenantRead()
 	}
 	if w.validator == nil {
-		return ErrNoValidator
+		return nil, ErrNoValidator
 	}
-	return w.validateProposed(ctx, base, []ProposedFile{{
+	adv, err := w.validateProposed(ctx, base, []ProposedFile{{
 		Path: confRelKey(w.configDir, filePath), Content: content, Tenants: []string{tenantID},
 	}})
+	if err != nil {
+		return nil, err
+	}
+	return adv.lines(), nil
 }
 
 // validateStaging is validateProposed for every file a batch changed in its
 // staging tree, read back from there — the bytes commitStaging commits.
 // On a pass it records them in st.validated, which commitStaging holds the
-// staged blobs to (checkStagedAsValidated). Caller holds w.mu.
-func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base string) error {
+// staged blobs to (checkStagedAsValidated), and returns the key verdict
+// rendered for ctx's caller. Caller holds w.mu.
+func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base string) (verdictAdvice, error) {
 	if len(st.order) == 0 {
-		return nil
+		return verdictAdvice{}, nil
 	}
 	if w.validator == nil {
-		return ErrNoValidator
+		return verdictAdvice{}, ErrNoValidator
 	}
 	files := make([]ProposedFile, 0, len(st.order))
 	validated := make(map[string][]byte, len(st.order))
 	for _, rel := range st.order {
 		content, err := os.ReadFile(filepath.Join(st.root, rel))
 		if err != nil {
-			return fmt.Errorf("read a batch file for the generator: %w", err)
+			return verdictAdvice{}, fmt.Errorf("read a batch file for the generator: %w", err)
 		}
 		path := filepath.ToSlash(rel)
 		if st.rel != "." && st.rel != "" {
@@ -161,11 +173,12 @@ func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base stri
 			Tenants: append([]string(nil), st.changed[rel]...)})
 		validated[rel] = content
 	}
-	if err := w.validateProposed(ctx, base, files); err != nil {
-		return err
+	adv, err := w.validateProposed(ctx, base, files)
+	if err != nil {
+		return verdictAdvice{}, err
 	}
 	st.validated = validated
-	return nil
+	return adv, nil
 }
 
 // ErrContentNormalized is what a write is refused with (errors.Is) when git

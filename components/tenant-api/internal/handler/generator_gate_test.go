@@ -685,3 +685,69 @@ func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
 		}
 	}
 }
+
+// ADR-038 decision 5, stage 2: a pass's key verdict reaches the warnings of
+// every write path — "not completed" with its reason, never the generator's
+// message (it can carry a platform path or stderr).
+func TestGeneratorGate_KeyVerdictReachesEveryPathsWarnings(t *testing.T) {
+	t.Parallel()
+	const secret = "/srv/secret/_defaults.yaml"
+	const line = "key verdict: not completed (it ran out of memory); the write was not refused — the keys of this write were not judged"
+	for _, p := range gatePaths() {
+		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAONFixture(t, p.mode)
+			fake := withFakeGenerator(t, f)
+			fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
+				v := testutil.PassVerdict(req, nil)
+				v["key_verdict"] = map[string]any{"status": "not_completed", "reason": "memory",
+					"tenants": 1, "seconds": 1.0, "message": "da-guard killed reading " + secret}
+				return 200, v
+			})
+			code, results := p.run(t, f)
+			if code >= 400 {
+				t.Fatalf("status %d, results %+v", code, results)
+			}
+			// Once per op that changed something (a batch says it on each).
+			if n := strings.Count(f.lastBody, line); n == 0 {
+				t.Errorf("the not-completed line is not in the answer:\n%s", f.lastBody)
+			}
+			if strings.Contains(f.lastBody, secret) {
+				t.Errorf("the generator's message reached the answer:\n%s", f.lastBody)
+			}
+		})
+	}
+}
+
+// Who sees a finding about a platform file: a caller who sees the whole
+// tree, in an answer; never an async task's stored results (read by whoever
+// polls the task), which say only that there is something.
+func TestGeneratorGate_KeyVerdictPlatformFindingsDisclosure(t *testing.T) {
+	t.Parallel()
+	const platform = "key verdict: notice: key _x in _defaults.yaml is read by no reader — tenant(s) t-a, t-b"
+	answer := func(_ int, req testutil.FakeValidateRequest) (int, any) {
+		v := testutil.PassVerdict(req, nil)
+		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 2, "seconds": 1.0, "truncated": 0,
+			"findings": []map[string]any{{"severity": "notice", "kind": "unread", "key": "_x",
+				"file": "_defaults.yaml", "tenants": []string{"t-a", "t-b"}, "reason": nil}}}
+		return 200, v
+	}
+	const ops = `{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}}]}`
+	for name, async_ := range map[string]bool{"sync": false, "async": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, _ := generatorDirectFixture(t, answer)
+			if !treePathsVisible(f.deps.RBAC, &rbac.VerifiedPrincipal{Email: "alice@example.com", Groups: []string{"admins"}}) {
+				t.Skip("the fixture's admins do not see the whole tree")
+			}
+			if code, res, _ := f.run(t, "", ops, async_); code >= 400 {
+				t.Fatalf("status %d, results %+v", code, res)
+			}
+			shown := strings.Contains(f.lastBody, platform)
+			withheld := strings.Contains(f.lastBody, "key verdict: there are findings about platform files")
+			if shown == async_ || withheld != async_ {
+				t.Errorf("shown %v, withheld %v:\n%s", shown, withheld, f.lastBody)
+			}
+		})
+	}
+}

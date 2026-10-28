@@ -23,6 +23,8 @@ type recordingValidator struct {
 	mu    sync.Mutex
 	calls []validatorCall
 	err   error
+	// verdict is the key verdict a pass returns.
+	verdict *KeyVerdict
 }
 
 type validatorCall struct {
@@ -30,11 +32,14 @@ type validatorCall struct {
 	files []ProposedFile
 }
 
-func (v *recordingValidator) ValidateWrites(_ context.Context, base string, files []ProposedFile) error {
+func (v *recordingValidator) ValidateWrites(_ context.Context, base string, files []ProposedFile) (*KeyVerdict, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.calls = append(v.calls, validatorCall{base, files})
-	return v.err
+	if v.err != nil {
+		return nil, v.err
+	}
+	return v.verdict, nil
 }
 
 var errFakeRefusal = errors.New("refused by the fake validator")

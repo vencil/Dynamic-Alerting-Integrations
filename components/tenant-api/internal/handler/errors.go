@@ -748,10 +748,14 @@ func tenantNamesFor(m *rbac.Manager, orgs *tenantorg.Manager, p *rbac.VerifiedPr
 	}
 }
 
-// withTenantNames marks r's context with the caller's tenantNamesFor, for
-// the validation the Writer runs on its behalf.
+// withTenantNames marks r's context with the caller's tenantNamesFor, and
+// whether it sees the whole tree (treePathsVisible: the key verdict's
+// platform findings, gitops.WithTreeVisible), for the validation the Writer
+// runs on its behalf.
 func withTenantNames(r *http.Request, d *Deps) *http.Request {
-	return r.WithContext(gitops.WithTenantNames(r.Context(), tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r))))
+	p := rbac.RequestPrincipal(r)
+	ctx := gitops.WithTenantNames(r.Context(), tenantNamesFor(d.RBAC, d.TenantOrg, p))
+	return r.WithContext(gitops.WithTreeVisible(ctx, treePathsVisible(d.RBAC, p)))
 }
 
 func nonNilFindings(f []generator.Finding) []generator.Finding {

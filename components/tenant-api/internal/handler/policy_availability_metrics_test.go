@@ -96,7 +96,7 @@ func TestGeneratorMetrics_AppendedAndScrapeSuccess(t *testing.T) {
 	fake.SetValidate(func(int, testutil.FakeValidateRequest) (int, any) { return 200, testutil.RejectedVerdict("busy") })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := gate.ValidateWrites(ctx, strings.Repeat("a", 40), []gitops.ProposedFile{{Path: "t.yaml", Content: []byte("x")}}); err == nil {
+	if _, err := gate.ValidateWrites(ctx, strings.Repeat("a", 40), []gitops.ProposedFile{{Path: "t.yaml", Content: []byte("x")}}); err == nil {
 		t.Fatal("busy: no error")
 	}
 	if got := render(); !strings.Contains(got, `tenant_api_generator_rejections_total{reason="busy"} 1`) {

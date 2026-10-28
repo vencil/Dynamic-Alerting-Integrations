@@ -11,7 +11,9 @@ import "context"
 // (gitopstest imports gitops).
 type permissiveValidator struct{}
 
-func (permissiveValidator) ValidateWrites(context.Context, string, []ProposedFile) error { return nil }
+func (permissiveValidator) ValidateWrites(context.Context, string, []ProposedFile) (*KeyVerdict, error) {
+	return nil, nil
+}
 
 // newTestWriter is NewWriter with permissiveValidator installed.
 func newTestWriter(configDir, gitDir string) *Writer {

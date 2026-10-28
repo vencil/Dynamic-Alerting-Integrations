@@ -113,6 +113,34 @@ type Verdict struct {
 	Findings   *FindingsDoc `json:"findings"`
 	StderrTail string       `json:"stderr_tail"`
 	Validated  *Validated   `json:"validated"`
+	// KeyVerdict is the key verdict on a pass (ADR-038 decision 5); nil
+	// from a service that predates it.
+	KeyVerdict *KeyVerdict `json:"key_verdict"`
+}
+
+// KeyVerdict is a pass's `key_verdict`: status complete or not_completed
+// (with reason and message), findings when complete, truncated the
+// findings not sent. Message is the service's own text, never shown to a
+// caller (it can carry a platform path or a program's stderr): it is
+// logged.
+type KeyVerdict struct {
+	Status    string       `json:"status"`
+	Reason    string       `json:"reason"`
+	Message   string       `json:"message"`
+	Tenants   int          `json:"tenants"`
+	Seconds   float64      `json:"seconds"`
+	Findings  []KeyFinding `json:"findings"`
+	Truncated int          `json:"truncated"`
+}
+
+// KeyFinding is one finding of a KeyVerdict.
+type KeyFinding struct {
+	Severity string   `json:"severity"`
+	Kind     string   `json:"kind"`
+	Key      string   `json:"key"`
+	File     *string  `json:"file"`
+	Tenants  []string `json:"tenants"`
+	Reason   *string  `json:"reason"`
 }
 
 // errorBody is the service's non-200 JSON body.
