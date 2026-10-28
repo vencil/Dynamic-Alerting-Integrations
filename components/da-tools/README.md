@@ -148,7 +148,7 @@ docker run --rm \
 | `diagnose` | 單 tenant 健康檢查（config + metric + alert） | `<tenant>` |
 | `batch-diagnose` | 多 tenant 並行健康檢查（auto-discover） | （自動探索） |
 | `check-alert` | 查 alert 觸發狀態 | `<alert_name> <tenant>` |
-| `alert-quality` | 警報品質四指標評估（噪音 / 陳腐 / 延遲 / 壓制） | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
+| `alert-quality` | 警報品質評估（噪音 / 陳腐 / 延遲） | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
 | `alert-correlate` | 告警關聯分析（時間窗聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
 | `cardinality-forecast` | 基數線性回歸預測 + 觸頂天數 | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
 | `maintenance-scheduler` | 評估排程式維護窗、自動建 Alertmanager silence | `--config-dir <dir>` |

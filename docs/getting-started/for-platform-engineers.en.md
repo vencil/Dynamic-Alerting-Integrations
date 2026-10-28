@@ -310,7 +310,7 @@ Schema validation runs by default, no flag needed; some checks only appear with 
 ### Alert Quality Scoring (v2.1.0)
 
 ```bash
-# Scan all tenants for alert quality (Noise / Stale / Latency / Suppression)
+# Scan all tenants for alert quality (Noise / Stale / Latency)
 da-tools alert-quality --prometheus http://localhost:9090
 
 # CI gate: exit 1 if score below 60

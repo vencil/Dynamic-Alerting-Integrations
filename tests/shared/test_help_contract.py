@@ -86,7 +86,7 @@ HELP_CONTRACTS = {
     "alert_quality": {
         "script": TOOLS_DIR / "ops" / "alert_quality.py",
         "flags": [
-            "--prometheus", "--alertmanager", "--period", "--tenant",
+            "--prometheus", "--period", "--tenant",
             "--json", "--markdown", "--ci", "--min-score",
         ],
         "required": ["--prometheus"],

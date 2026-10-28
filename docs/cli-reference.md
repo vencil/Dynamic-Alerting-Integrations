@@ -132,7 +132,7 @@ da-tools <command> --help
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
 | `grafana-import` | Grafana Dashboard ConfigMap 匯入（sidecar 自動掛載） | `--dashboard <file>` 或 `--verify` |
-| `alert-quality` | 警報品質評估（4 指標、三級評分、CI gate） | `--prometheus <url>` |
+| `alert-quality` | 警報品質評估（Noise / Stale / Latency、三級評分、CI gate） | `--prometheus <url>` |
 | `alert-correlate` | 告警關聯分析（時間窗口聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
 | `drift-detect` | 跨叢集配置漂移偵測（目錄級 SHA-256 比對） | `--dirs <list>` |
 | `cardinality-forecast` | Per-tenant 基數趨勢預測與觸頂預警 | `--prometheus <url>` |
@@ -1053,12 +1053,12 @@ da-tools grafana-import --dashboard overview.json --dry-run
 
 #### alert-quality
 
-分析 Alertmanager 歷史記錄，識別問題告警。4 項品質指標（Noise / Stale / Latency / Suppression）、三級評分（GOOD / WARN / BAD）、per-tenant 加權分數。
+分析 Prometheus 的 `ALERTS` 歷史，識別問題告警。品質指標 Noise / Stale / Latency、三級評分（GOOD / WARN / BAD）、per-tenant 加權分數。⚠️ **行為變更（[#3212](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3212)）**：Suppression 這一維與 `--alertmanager` 旗標移除——它從來沒量對過（Alertmanager v2 的 `filter` 比對 label，`alertstate=suppressed` 永遠回空；分子是當下告警筆數、分母是 `--period` 的樣本點數），沒有任何來源能回答期間內、分租戶的抑制比例。帶 `--alertmanager` 的呼叫結束碼 `0` → `2`（argparse 未知旗標）；JSON 每筆告警少 `suppressed_count`、`suppression_ratio`、`suppression_grade`；分數不變（對真的 Alertmanager 這一維本來恆為 GOOD）。
 
 **用法**
 
 ```bash
-da-tools alert-quality --prometheus <URL> [--alertmanager <URL>] [--period <DURATION>] [--tenant <NAME>] [--json] [--markdown] [--ci] [--min-score <N>]
+da-tools alert-quality --prometheus <URL> [--period <DURATION>] [--tenant <NAME>] [--json] [--markdown] [--ci] [--min-score <N>]
 ```
 
 **參數**
@@ -1066,7 +1066,6 @@ da-tools alert-quality --prometheus <URL> [--alertmanager <URL>] [--period <DURA
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--prometheus` | Prometheus URL（必填） | - |
-| `--alertmanager` | Alertmanager URL（用於 suppression 資料）。給了而查不到時不當成 0 筆，見結束碼 | - |
 | `--period` | 分析期間 | `30d` |
 | `--tenant` | 篩選特定 tenant | 全部 |
 | `--json` | JSON 輸出 | - |
@@ -1093,7 +1092,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|------|
 | `0` | 成功（CI 模式：所有告警品質達標） |
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
-| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）；以及給了 `--alertmanager` 而它沒回答（連不上、HTTP 錯誤、回應不是 alert 物件的 list；[#3073](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3073)，之前當成 0 筆被抑制、rc 0，`--ci --min-score` 下本該 rc 1 的也被放行成 0）——此時不印報告，stderr 帶 `Error: <Prometheus\|Alertmanager> query failed: <原文>`；`--json` 印 `{"status": "caller_error", "reason": "prometheus_query_error"（Alertmanager 為 `alertmanager_query_error`）, "error": "<原文>", ...}`（其餘鍵沿用正常報告並歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
+| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）——此時不印報告，stderr 帶 `Error: Prometheus query failed: <原文>`；`--json` 印 `{"status": "caller_error", "reason": "prometheus_query_error", "error": "<原文>", ...}`（其餘鍵沿用正常報告並歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
 
 **樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：`ALERTS` 的每個樣本值由 lib 讀一次。讀不懂的值（例如 `"abc"`，或不是字串）視為回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不算任何狀態，不計入評估；丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped`（每筆告警另有同名欄位），文字報告也會印一行。
 
