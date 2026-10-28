@@ -1,7 +1,6 @@
 package config
 
 import (
-	"math"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -39,7 +38,9 @@ func thresholdLeaf(g any, text string) any {
 		return g
 	}
 	if v, ok := thresholdTextNumber(text); ok {
-		if f, isNumber := genericNumber(g); isNumber && f == v && math.Signbit(f) == math.Signbit(v) {
+		// == ignores the sign of a zero: yaml.v3 decodes `-0` as int 0 and the
+		// exporter reads -0, which every comparison of an alert treats as 0.
+		if f, isNumber := genericNumber(g); isNumber && f == v {
 			return g
 		}
 	}
@@ -168,7 +169,8 @@ func documentMapping(doc *yaml.Node) *yaml.Node {
 
 // mappingValue is the value node of top-level key key in mapping m (the
 // last one when written twice, as the generic decode keeps), nil when m
-// does not write it.
+// does not write it. A key m has only through a `<<` merge is found too, as
+// yaml.v3 resolves the merge (mergedPairs).
 func mappingValue(m *yaml.Node, key string) *yaml.Node {
 	if m == nil {
 		return nil
@@ -179,7 +181,34 @@ func mappingValue(m *yaml.Node, key string) *yaml.Node {
 			out = m.Content[i+1]
 		}
 	}
+	if out == nil {
+		if pairs, ok := mergedPairs(m); ok {
+			if n, has := pairs[key]; has {
+				out = &n
+			}
+		}
+	}
 	return resolveAlias(out)
+}
+
+// mergedPairs is mapping m with its `<<` merges resolved — yaml.v3's own
+// decode into map[string]yaml.Node — when m writes a merge key and decodes;
+// ok=false otherwise (nothing to resolve, or the decode's own error).
+func mergedPairs(m *yaml.Node) (map[string]yaml.Node, bool) {
+	merges := false
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; k.Kind == yaml.ScalarNode && k.Tag == "!!merge" {
+			merges = true
+		}
+	}
+	if !merges {
+		return nil, false
+	}
+	var pairs map[string]yaml.Node
+	if m.Decode(&pairs) != nil {
+		return nil, false
+	}
+	return pairs, true
 }
 
 // withTenantThresholdLeaves is withThresholdLeaves for each entry of block, a

@@ -463,6 +463,13 @@ func reservedKeyFix(k string) string {
 			k, filterPath(strings.TrimPrefix(k, "_state_")))
 	}
 	if readElsewhere[k] { // a TopLevelReadElsewhere key: its reader takes it from the top level
+		// A tenant's own entry reads it only when the registry says a tenant
+		// layer does (config.IsReservedKey: `_custom_alerts` yes, `_policies`
+		// — read at the top level alone — no; #3250 review).
+		if !config.IsReservedKey(k) {
+			return fmt.Sprintf("To have it take effect, move `%s` out of `defaults:` to the top level of the "+
+				"file, where it is read.", k)
+		}
 		return fmt.Sprintf("To have it take effect, move `%s` out of `defaults:` to the top level of the file, "+
 			"where it is read, or set it in each tenant's own entry under `tenants:`.", k)
 	}

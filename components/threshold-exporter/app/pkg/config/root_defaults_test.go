@@ -162,6 +162,15 @@ func TestRootDefaults_Shapes(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, got, want)
 		}
 	}
+	// `defaults:` through a top-level `<<` merge is read the same way (#3250
+	// review): a value the decode refuses refuses that key alone.
+	merged, err := parseConfigFile([]byte("x-base: &d {defaults: {a: abc, b: 017}}\n<<: *d\n"), false)
+	if err != nil {
+		t.Fatalf("merged defaults: %v", err)
+	}
+	if reason, refused := RefusedDefault(merged.Defaults["a"]); !refused || reason != RefusedUnparsed || merged.Defaults["b"] != 17 {
+		t.Errorf("merged defaults = %v (a refused %v %q), want a refused, b 17", merged.Defaults, refused, reason)
+	}
 	for name, doc := range map[string]string{
 		"not a mapping":  "defaults: [1, 2]\n",
 		"mapping value":  "defaults:\n  a:\n    b: 1\n",

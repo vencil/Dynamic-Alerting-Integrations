@@ -170,11 +170,40 @@ func splitRootDefaults(doc *yaml.Node) (rest, defaults *yaml.Node) {
 		}
 	}
 	if at < 0 {
-		return doc, nil
+		return splitMergedRootDefaults(doc, top)
 	}
 	cp := *top
 	cp.Content = append(append(make([]*yaml.Node, 0, len(top.Content)-2), top.Content[:at]...), top.Content[at+2:]...)
 	return &cp, top.Content[at+1]
+}
+
+// splitMergedRootDefaults is splitRootDefaults for a document whose
+// `defaults` comes only through a top-level `<<` merge (#3250 review): the
+// mapping as yaml.v3 resolves it (mergedPairs), rebuilt without `defaults`
+// in key order, and the `defaults` value. doc and no pair when there is no
+// such `defaults`.
+func splitMergedRootDefaults(doc, top *yaml.Node) (rest, defaults *yaml.Node) {
+	pairs, ok := mergedPairs(top)
+	if !ok {
+		return doc, nil
+	}
+	d, has := pairs["defaults"]
+	if !has {
+		return doc, nil
+	}
+	keys := make([]string, 0, len(pairs))
+	for k := range pairs {
+		if k != "defaults" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	cp := yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Line: top.Line, Column: top.Column}
+	for _, k := range keys {
+		v := pairs[k]
+		cp.Content = append(cp.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, &v)
+	}
+	return &cp, &d
 }
 
 // readRootDefaults reads a root `defaults:` value node into Defaults: a

@@ -3075,9 +3075,8 @@ class TestRootDefaultsUnderscoreKeys:
         assert r["status"] == vc.FAIL, r
         assert r["details"] == [f"_defaults.yaml: `defaults.{key}` reaches no tenant — threshold-exporter "
                                 "reads the root `defaults:` for thresholds only, while /effective shows the "
-                                "value as inherited (not_served: root_defaults_reserved); write "
-                                f"`{key}` in the tenant's own entry, a root platform file's `tenants:` "
-                                "entry or a profile"], r
+                                "value as inherited (not_served: root_defaults_reserved); `da-guard` "
+                                f"(root_defaults_reserved_key) says where `{key}` is read"], r
 
     def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata:\n    owner: dba\n")))

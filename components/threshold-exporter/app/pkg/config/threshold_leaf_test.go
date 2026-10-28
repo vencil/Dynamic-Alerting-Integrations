@@ -39,6 +39,21 @@ var thresholdLeafLayers = map[string]func(v string) map[string]string{
 			"team/t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
 		}
 	},
+	// #3250 review: `defaults:` that comes only through a top-level `<<`
+	// merge is read the same way.
+	"root-merged": func(v string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml": "x-base: &d {defaults: {mysql_connections: " + v + "}}\n<<: *d\n",
+			"t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
+		}
+	},
+	"subtree-merged": func(v string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml":      "defaults:\n  mysql_connections: 5\n",
+			"team/_defaults.yaml": "x-base: &d {defaults: {mysql_connections: " + v + "}}\n<<: *d\n",
+			"team/t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
+		}
+	},
 	"tenant": func(v string) map[string]string {
 		return map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: 5\n",
@@ -112,7 +127,7 @@ func TestThresholdLeaf_EffectiveShowsWhatMetricsServes(t *testing.T) {
 				case number && named:
 					t.Errorf("effective shows %v and names a reason it is not served (%v)", shown,
 						ec.NotServed["mysql_connections"])
-				case number && (!isServed || served != n || math.Signbit(served) != math.Signbit(n)):
+				case number && (!isServed || served != n):
 					t.Errorf("effective shows %v (%T); /metrics serves %v (row: %v)", shown, shown, served, isServed)
 				case !number && !named:
 					t.Errorf("effective shows %#v and names no reason; /metrics serves %v (row: %v)",
@@ -137,7 +152,7 @@ func TestThresholdLeaf_KeepsAnAgreeingValue(t *testing.T) {
 		{"70", "70", "70"}, {"70:critical", "70:critical", "70:critical"}, {nil, "", nil},
 		{math.Copysign(0, -1), "-0", math.Copysign(0, -1)},
 		{15, "017", "017"}, {31, "0x1F", "0x1F"}, {15, "0o17", "0o17"}, {true, "true", "true"},
-		{math.Inf(1), "1e999", "1e999"}, {math.NaN(), ".nan", ".nan"}, {0, "-0", "-0"},
+		{math.Inf(1), "1e999", "1e999"}, {math.NaN(), ".nan", ".nan"}, {0, "-0", 0},
 	} {
 		got := thresholdLeaf(c.g, c.text)
 		if fmt.Sprintf("%T %v", got, got) != fmt.Sprintf("%T %v", c.want, c.want) ||

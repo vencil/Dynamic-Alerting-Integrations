@@ -1062,3 +1062,72 @@ func TestGuard_SubtreeReservedSetByThreeEntries(t *testing.T) {
 		t.Errorf("message = %s", got[0].Message)
 	}
 }
+
+// #3250 review F1: a root `defaults:` threshold the root decode refuses is no
+// fallback either — the resolver serves no default row for it. A tenant
+// writing the same text (`70:critical` reads on a tenant row, not as a root
+// default; `abc` reads nowhere) is not told to drop it: dropping the first
+// moves /metrics from 70 to no row.
+func TestGuard_RedundantOverrideSkipsARefusedRootDefault(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{`"70:critical"`, "abc"} {
+		files := map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: " + v + "\n",
+			"t.yaml":         "tenants:\n  t1:\n    mysql_connections: " + v + "\n",
+		}
+		got := allFindings(t, "--config-dir", writeReservedConfD(t, files))
+		if !slices.Contains(got, "error root_default_refused  _defaults.yaml:defaults.mysql_connections") {
+			t.Errorf("%s: findings = %q, want root_default_refused", v, got)
+		}
+		for _, f := range got {
+			if strings.Contains(f, "redundant_override") {
+				t.Errorf("%s: %s", v, f)
+			}
+		}
+	}
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: \"70:critical\"\n",
+		"t.yaml":         "tenants:\n  t1:\n    mysql_connections: \"70:critical\"\n",
+	}
+	_, with, _, _ := served(t, files, "2026-10-01T00:00:00Z")
+	without := maps.Clone(files)
+	without["t.yaml"] = "tenants:\n  t1:\n    _metadata:\n      owner: x\n"
+	_, dropped, _, _ := served(t, without, "2026-10-01T00:00:00Z")
+	if with.Tenants["t1"].Values["mysql_connections"] != float64(70) || dropped.Tenants["t1"].Values["mysql_connections"] != nil {
+		t.Errorf("premise: served %v with the tenant's line, %v without; want 70, none",
+			with.Tenants["t1"].Values["mysql_connections"], dropped.Tenants["t1"].Values["mysql_connections"])
+	}
+}
+
+// #3250 review F3: root_defaults_reserved_key's fix is subtree_default_reserved_key's
+// (reservedKeyFix), the registry's places: `_policies` is read at the top
+// level alone — never "in each tenant's own entry" — and `_severity_dedup`
+// in a tenant's entry (not in a profile, which its readers do not read).
+func TestGuard_RootReservedKeyFixNamesWhereItIsRead(t *testing.T) {
+	t.Parallel()
+	dir := writeReservedConfD(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _policies: 1\n  _severity_dedup: disable\n",
+		"t.yaml":         "tenants:\n  t1:\n    _metadata:\n      owner: x\n",
+	})
+	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", dir)
+	var doc struct {
+		Report *reportedReport `json:"report"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	msg := map[string]string{}
+	for _, f := range doc.Report.Findings {
+		if f.Kind == "root_defaults_reserved_key" {
+			msg[strings.TrimPrefix(f.Field, "_defaults.yaml:defaults.")] = f.Message
+		}
+	}
+	if m := msg["_policies"]; !strings.Contains(m, "move `_policies` out of `defaults:` to the top level") ||
+		strings.Contains(m, "tenant's own entry") {
+		t.Errorf("_policies fix = %q; want the top level only", m)
+	}
+	if m := msg["_severity_dedup"]; !strings.Contains(m, "set `_severity_dedup` in each tenant's own entry") ||
+		strings.Contains(m, "profile") {
+		t.Errorf("_severity_dedup fix = %q; want the tenant's own entry, no profile", m)
+	}
+}

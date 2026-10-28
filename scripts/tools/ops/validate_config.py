@@ -2799,8 +2799,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     reserved = {k for k in reserved_keys if k in written and not k.startswith("_routing")}
     details += [f"{rel}: `defaults.{k}` reaches no tenant — threshold-exporter reads the root "
                 f"`defaults:` for thresholds only, while /effective shows the value as inherited "
-                f"(not_served: root_defaults_reserved); write `{k}` in the tenant's own entry, a "
-                f"root platform file's `tenants:` entry or a profile"
+                f"(not_served: root_defaults_reserved); `da-guard` (root_defaults_reserved_key) "
+                f"says where `{k}` is read"
                 for k in sorted(reserved)]
     if details:
         return _make_result("root_defaults", FAIL, details)

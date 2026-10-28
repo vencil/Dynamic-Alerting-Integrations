@@ -600,6 +600,7 @@ func computeEffectiveConfigDocAt(
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
 	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
+	var rootRefused map[string]bool // #3250: root thresholds the root decode refuses
 	var buf [8]ChainDefaults
 	parsed := buf[:0]
 	merged := make(map[string]any)
@@ -610,8 +611,11 @@ func computeEffectiveConfigDocAt(
 		}
 		parsed = append(parsed, pd)
 		writers = noteSpellingWriters(writers, i, pd.block)
+		if rootLevel >= 0 && i == rootLevel {
+			rootRefused = refusedRootThresholds(pd.block)
+		}
 		if rootLevel >= 0 && i != rootLevel {
-			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
+			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block, rootRefused)
 		}
 	}
 
@@ -664,7 +668,7 @@ func computeEffectiveConfigDocAt(
 	// dimensional key, #2419, is a fallback since #2031: resolveDimensionalRows
 	// serves it as the labelled series for a tenant that does not write it.)
 	chainD := dropRootOnlyTenantMapKeys(
-		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
+		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims, rootRefused)
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chainD)
@@ -734,13 +738,43 @@ func isCriticalRowKey(k string) bool {
 // #3250).
 func tenantMapOnlyKey(k string) bool { return isCriticalRowKey(k) || RootDefaultsReservedKey(k) }
 
-// noteTenantMapOnlyWriters records the tenantMapOnlyKey keys one
-// non-root chain level writes — "writes" being levelWritesSpelling, the
+// refusedRootThresholds is the threshold keys (not baseRowsSkipKey) of the
+// root level's block whose value the root decode refuses (#3250): text
+// thresholdTextNumber does not read — withThresholdLeaves leaves such a value
+// as its text — or a non-finite number. No tenant falls back to one of them
+// (the resolver serves no default row), so, like a tenantMapOnlyKey, it is no
+// fallback unless a deeper level writes the key. nil when none.
+func refusedRootThresholds(block map[string]any) map[string]bool {
+	var out map[string]bool
+	for k, v := range block {
+		if baseRowsSkipKey(k) || v == nil {
+			continue
+		}
+		refused := false
+		switch x := v.(type) {
+		case string:
+			_, ok := thresholdTextNumber(x)
+			refused = !ok
+		case float64:
+			refused = !finiteThreshold(x)
+		}
+		if refused {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// noteTenantMapOnlyWriters records the tenantMapOnlyKey keys, and the keys
+// of rootRefused, one non-root chain level writes — "writes" being levelWritesSpelling, the
 // predicate applySubtreeDefaults uses to decide what it hands the tenant's
 // override map. s stays nil until one is seen.
-func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[string]bool {
+func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any, rootRefused map[string]bool) map[string]bool {
 	for k := range block {
-		if !tenantMapOnlyKey(k) || !levelWritesSpelling(block, k) {
+		if !(tenantMapOnlyKey(k) || rootRefused[k]) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
@@ -752,17 +786,18 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[strin
 }
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
-// tenantMapOnlyKey keys no non-root level writes (#2544, #3250: their value
-// comes only from the tenant's override map, which the root does not fill;
-// see computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
+// tenantMapOnlyKey keys, and the rootRefused ones, no non-root level writes
+// (#2544, #3250: their value comes only from the tenant's override map,
+// which the root does not fill, or from no layer at all; see
+// computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.
-func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
+func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites, rootRefused map[string]bool) map[string]any {
 	if rootLevel < 0 {
 		return m
 	}
 	var drop []string
 	for k := range m {
-		if tenantMapOnlyKey(k) && !subtreeWrites[k] {
+		if (tenantMapOnlyKey(k) || rootRefused[k]) && !subtreeWrites[k] {
 			drop = append(drop, k)
 		}
 	}
