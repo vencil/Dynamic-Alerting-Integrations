@@ -2466,10 +2466,16 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
     (`value_not_served_as_written`). No YAML is judged here. A tree
     da-guard cannot load is the load-failure row `profiles` also uses.
 
-    #3209: also every `_custom_alerts` entry `da-guard served-values` marks
-    `refused` — the exporter rejects it for its `threshold:`, which da-guard
-    reports as the same `value_not_served`. The mark is Go's; this row only
-    lists it. A tree `effective` reads but served-values refuses (e.g. two
+    #3209, #3234, #3235: also every `_custom_alerts` entry the exporter does
+    not serve that da-guard reports — `da-guard served-values` prints the
+    finding's kind on the entry (`custom_alerts[].finding`: value_not_served
+    for a refused `threshold:`, custom_alert_duplicate_series,
+    custom_alert_rejected for any other field; a block that does not decode:
+    `custom_alerts_finding`). The verdict is Go's
+    (`guard.CustomAlertFindingKind` / `CustomAlertBlockFindingKind`); this
+    row only lists it (a status Go adds still needs the reader's closed set,
+    `CUSTOM_ALERT_STATUSES`). A da-guard older than the field is a caller
+    error, not a WARN. A tree `effective` reads but served-values refuses (e.g. two
     keys owning one series) keeps the threshold keys' verdict: the custom
     alerts are then not checked, which turns a PASS into a WARN saying so,
     never into a FAIL (the rows that read served-values report the tree).
@@ -2485,6 +2491,14 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
         served = load_served_tree(config_dir).tenants
         unchecked = None
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError, YamlFileError) as exc:
+        if isinstance(exc, DaGuardError) and exc.stale:
+            # #3234: a da-guard older than `custom_alerts[].finding` gives no
+            # custom-alert verdict at all — a caller error (exit 2), not a
+            # WARN under which every unserved custom alert passes.
+            return _tenant_load_failure_row(
+                "values_not_served", exc, config_dir,
+                (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
+                 _VALUES_NOT_SERVED_NO_DA_GUARD_HINT))
         served, unchecked = {}, (f"custom alerts not checked: `da-guard served-values` did not read the tree "
                                  f"({type(exc).__name__}: {' '.join(str(exc).split())})")
     details: list[str] = []
@@ -2496,12 +2510,16 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
                 continue
             details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}")
         src = te.key_sources.get("_custom_alerts")
+        if tid in served and served[tid].custom_alerts_finding is not None:
+            details.append(f"{src.file if src is not None else te.source_file}: tenant {tid}: "
+                           f"`_custom_alerts`: does not decode ({served[tid].custom_alerts_finding}): "
+                           f"{served[tid].custom_alerts_error}")
         for e in (served[tid].custom_alerts or ()) if tid in served else ():
-            if e.refused is None:
+            if e.finding is None:
                 continue
             details.append(f"{src.file if src is not None else te.source_file}: tenant {tid}: "
-                           f"`_custom_alerts[{e.index}]` (`{e.spec.get('name')}`): threshold refused "
-                           f"({e.refused}): {e.reason}")
+                           f"`_custom_alerts[{e.index}]` (`{e.spec.get('name')}`): {e.status} "
+                           f"({e.finding}): {e.reason}")
     if details:
         return _make_result("values_not_served", FAIL, details + ([unchecked] if unchecked else []))
     # #2725: not "serves every threshold value as written" — a value no
@@ -2960,9 +2978,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "differs from its end; write a subtree default as a number or a "
         "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
         "of a threshold a mapping writes twice (spelling_duplicate); write a "
-        "custom alert's `threshold:` the same way as a threshold value. "
-        "`da-guard effective --config-dir <dir>` lists each one under `not_served` "
-        "(a custom alert: `da-guard served-values`, `custom_alerts[].refused`).",
+        "custom alert's `threshold:` the same way as a threshold value, fix the "
+        "custom-alert field its reason names, or delete a custom alert that "
+        "repeats an earlier one. `da-guard effective --config-dir <dir>` lists "
+        "each one under `not_served` (a custom alert: `da-guard served-values`, "
+        "`custom_alerts[].finding`).",
         "docs/cli-reference.md#validate-config",
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.

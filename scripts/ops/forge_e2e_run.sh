@@ -16,7 +16,7 @@ set -euo pipefail
 # PINNED — never :latest (#616 DoD). tag+digest so Renovate can own the bump
 # (renovate.json customManager "forge e2e GitLab CE", #2442): it keys on the
 # `${GITLAB_CE_IMAGE:-<repo>:<tag>@sha256:…}` shape below — keep it on one line.
-GITLAB_CE_IMAGE="${GITLAB_CE_IMAGE:-gitlab/gitlab-ce:18.11.12-ce.0@sha256:9dc94c49789d1ffec78e1998b088c83d7d1d9d5f2dc8b388cbb2bd2de328dd21}"
+GITLAB_CE_IMAGE="${GITLAB_CE_IMAGE:-gitlab/gitlab-ce:18.11.13-ce.0@sha256:a1c10a9a1e46a7b22260c350088476f87f012359725786e095d42899cf261681}"
 GITLAB_PORT="${GITLAB_PORT:-8929}"
 CONTAINER="${CONTAINER:-vibe-gitlab-ce-e2e}"
 GO_TEST_TIMEOUT="${GO_TEST_TIMEOUT:-30m}"

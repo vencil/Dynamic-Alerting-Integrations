@@ -33,6 +33,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
+	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/scrape"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -212,6 +214,11 @@ type servedTenantValues struct {
 	// CustomAlertsError: why the tenant's `_custom_alerts` does not decode
 	// (the exporter serves none of it); absent when it does.
 	CustomAlertsError string `json:"custom_alerts_error,omitempty"`
+	// CustomAlertsFinding (#3235): the kind of the error da-guard reports for
+	// a block that does not decode (guard.CustomAlertBlockFindingKind,
+	// custom_alert_rejected on Field `_custom_alerts`); null when it decodes.
+	// Always present, like custom_alerts[].finding.
+	CustomAlertsFinding *string `json:"custom_alerts_finding"`
 }
 
 // servedCustomAlert is one entry of servedTenantValues.CustomAlerts.
@@ -233,6 +240,27 @@ type servedCustomAlert struct {
 	// classes keys[].refused uses. da-guard reports such an entry as
 	// value_not_served. Absent for any other rejection.
 	Refused string `json:"refused,omitempty"`
+	// Finding (#3234, #3235): the kind of the error da-guard reports for this
+	// entry (guard.CustomAlertFindingKind) — value_not_served,
+	// custom_alert_duplicate_series or custom_alert_rejected; null when
+	// da-guard reports none (served, disabled, or switched off). Always
+	// present, so a reader tells a da-guard older than the field from "no
+	// finding".
+	Finding *string `json:"finding"`
+}
+
+// customAlertFinding is servedCustomAlert.Finding of e.
+func customAlertFinding(e config.CustomAlertEntry) *string {
+	return kindOrNil(guard.CustomAlertFindingKind(e))
+}
+
+// kindOrNil is k's name, or nil for the zero Kind.
+func kindOrNil(k findingkind.Kind) *string {
+	if k.IsZero() {
+		return nil
+	}
+	s := k.String()
+	return &s
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -788,10 +816,11 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 		entries, blockErr := config.CustomAlertEntries(tenant, overrides)
 		tv.CustomAlerts, tv.CustomAlertsError = make([]servedCustomAlert, 0, len(entries)), blockErr
+		tv.CustomAlertsFinding = kindOrNil(guard.CustomAlertBlockFindingKind(blockErr))
 		for _, e := range entries {
 			tv.CustomAlerts = append(tv.CustomAlerts, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
 				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities,
-				Refused: e.Refused})
+				Refused: e.Refused, Finding: customAlertFinding(e)})
 		}
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)

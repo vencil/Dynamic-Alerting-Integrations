@@ -101,7 +101,13 @@
 //     exporter drops because an earlier entry already serves its series. The
 //     set is the exporter's own (CheckInput.CustomAlertDuplicates).
 //
-//  13. A tree whose /metrics cannot be gathered (#2031; see
+//  13. Custom alerts the exporter rejects for a field other than
+//     `threshold:` (#3235; see custom_alert_rejected.go), error. Which
+//     finding a custom alert that is not served is — this one,
+//     value_not_served or custom_alert_duplicate_series — is
+//     CustomAlertFindingKind (CheckInput.CustomAlertsRejected).
+//
+//  14. A tree whose /metrics cannot be gathered (#2031; see
 //     metrics_not_gatherable.go), error: some series is produced twice, so
 //     the exporter's scrape fails as a whole (CheckInput.MetricsNotGatherable),
 //     over the whole tree.
@@ -341,6 +347,19 @@ type CheckInput struct {
 	// #3209). Each becomes the same value_not_served error a refused
 	// threshold row does, for a tenant in EffectiveConfigs; nil skips.
 	CustomAlertsRefused map[string][]RefusedCustomAlert `json:"-"`
+
+	// CustomAlertsRejected maps tenant ID → the `_custom_alerts` entries
+	// CustomAlertFindingKind reports as custom_alert_rejected: rejected for
+	// a field other than `threshold:` (#3235). Each becomes that error for a
+	// tenant in EffectiveConfigs; nil skips.
+	CustomAlertsRejected map[string][]RejectedCustomAlert `json:"-"`
+
+	// CustomAlertBlockErrors maps tenant ID → why its `_custom_alerts` does
+	// not decode (config.CustomAlertEntries' blockErr): the exporter serves
+	// none of it. Each becomes one custom_alert_rejected error on Field
+	// `_custom_alerts` (CustomAlertBlockFindingKind), for a tenant in
+	// EffectiveConfigs; nil skips.
+	CustomAlertBlockErrors map[string]string `json:"-"`
 
 	// CustomAlertDuplicates maps tenant ID → the `_custom_alerts` entries
 	// the exporter drops because an earlier entry of the list already serves

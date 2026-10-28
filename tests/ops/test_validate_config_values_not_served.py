@@ -145,35 +145,81 @@ def test_refused_custom_alert_threshold_fails(tmp_path, threshold, refused):
     assert r["status"] == vc.FAIL, r
     assert len(r["details"]) == 1, r
     assert r["details"][0].startswith(
-        f"team/t.yaml: tenant tx: `_custom_alerts[0]` (`q_high`): threshold refused ({refused}): "), r
+        "team/t.yaml: tenant tx: `_custom_alerts[0]` (`q_high`): rejected (value_not_served): "), r
 
 
 @pytest.mark.parametrize("window, threshold", [
     ("5m", "'80:critical'"), ("5m", "disable"), ("5m", "'disable:critical'"),
-    ("5x", "'80'"),  # 因其他欄位拒收：不是門檻值的拒收，不是本列的
 ])
 def test_custom_alert_threshold_not_refused_passes(tmp_path, window, threshold):
     r = vc.check_values_not_served(str(_tree(tmp_path, None, _CA % (window, threshold))))
     assert r["status"] == vc.PASS, r
 
 
-def test_custom_alert_lines_match_da_guard_value_not_served(tmp_path, da_guard_binary):
-    """同一棵樹：本列點名的 custom alert (tenant, field) == da-guard 主 gate 對
-    `_custom_alerts[i]` 的 value_not_served findings。"""
-    d = _tree(tmp_path, None,
-              "    _custom_alerts:\n"
-              "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
-              "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: '80'}\n"
-              "      - {recipe: threshold, name: c, metric: m3, op: '>', window: 5m, threshold: abc}\n")
+# #3234、#3235：exporter 不送的每一筆 custom alert——門檻值拒收、與前一筆重複、
+# 因其他欄位（window、quantile、objective……）拒收——都是本列的 FAIL，列出的就是
+# Go 印在 served-values `custom_alerts[].finding` 的那個 kind；關掉而「打開才會被拒」
+# 的那筆是 exporter 認可的 opt-out，不是 finding。
+_UNSERVED = (
+    "    _custom_alerts:\n"
+    "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
+    "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: '80'}\n"
+    "      - {recipe: threshold, name: c, metric: m3, op: '>', window: 5m, threshold: abc}\n"
+    "      - {recipe: threshold, name: b_again, metric: m2, op: '>', window: 5m, threshold: '90'}\n"
+    "      - {recipe: threshold, name: w, metric: m4, op: '>', window: 5x, threshold: '80'}\n"
+    "      - {recipe: p99_latency, name: lat, metric: req_seconds_bucket, quantile: '1.5', threshold: '0.5', window: 5m}\n"
+    "      - {recipe: slo_burn_rate, name: avail, metric: e, denominator_metric: r, objective: '100'}\n"
+    "      - {recipe: slo_burn_rate, name: soffbad, metric: e3, denominator_metric: r3, objective: disable, mode: loud}\n"
+    "      - {recipe: threshold, name: off, metric: m5, op: '>', window: 5m, threshold: disable}\n")
+_UNSERVED_FINDINGS = {
+    ("tx", "_custom_alerts[0]", "value_not_served"), ("tx", "_custom_alerts[2]", "value_not_served"),
+    ("tx", "_custom_alerts[3]", "custom_alert_duplicate_series"), ("tx", "_custom_alerts[4]", "custom_alert_rejected"),
+    ("tx", "_custom_alerts[5]", "custom_alert_rejected"), ("tx", "_custom_alerts[6]", "custom_alert_rejected"),
+}
+
+
+def _custom_alert_lines(row):
+    out = set()
+    for line in row["details"]:
+        _file, tenant, rest = line.split(": ", 2)
+        field, _name, _status, kind = rest.split(" ", 3)
+        out.add((tenant.removeprefix("tenant "), field.strip("`"), kind.split(")", 1)[0].strip("(")))
+    return out
+
+
+def test_custom_alert_lines_match_da_guard_findings(tmp_path, da_guard_binary):
+    """同一棵樹：本列點名的 custom alert (tenant, field, kind) == da-guard 主 gate 對
+    `_custom_alerts[i]` 的 findings，三種 kind 都在。"""
+    d = _tree(tmp_path, None, _UNSERVED)
     r = vc.check_values_not_served(str(d))
-    row = {(line.split(": ", 3)[1].removeprefix("tenant "), line.split(": ", 3)[2].split(" ")[0].strip("`"))
-           for line in r["details"]}
+    assert r["status"] == vc.FAIL, r
     proc = subprocess.run([da_guard_binary, "--config-dir", str(d), "--format", "json"],
                           capture_output=True, check=False, timeout=600)
     assert proc.returncode == 1, proc.stderr
-    gate = {(f["tenant_id"], f["field"]) for f in json.loads(proc.stdout)["report"]["findings"]
-            if f["kind"] == "value_not_served"}
-    assert row == gate == {("tx", "_custom_alerts[0]"), ("tx", "_custom_alerts[2]")}, (row, gate)
+    gate = {(f["tenant_id"], f["field"], f["kind"]) for f in json.loads(proc.stdout)["report"]["findings"]
+            if f["field"].startswith("_custom_alerts[")}
+    assert _custom_alert_lines(r) == gate == _UNSERVED_FINDINGS, (r, gate)
+
+
+@pytest.mark.parametrize("entry, kind", [
+    # #3234：同一 shape 與 severity 的第二筆被 exporter 丟掉。
+    ("{recipe: threshold, name: q_again, metric: qd, op: '>', window: 5m, threshold: '90'}",
+     "custom_alert_duplicate_series"),
+    # #3235：image 裡沒有 jsonschema 時，這些只有本列擋得到。
+    ("{recipe: threshold, name: w, metric: qd2, op: '>', window: 5x, threshold: '80'}", "custom_alert_rejected"),
+    ("{recipe: p99_latency, name: lat, metric: req_seconds_bucket, quantile: '1.5', threshold: '0.5', window: 5m}",
+     "custom_alert_rejected"),
+    ("{recipe: slo_burn_rate, name: avail, metric: e, denominator_metric: r, objective: '100'}",
+     "custom_alert_rejected"),
+])
+def test_unserved_custom_alert_end_to_end_exits_1(tmp_path, capsys, cli_argv, entry, kind):
+    body = _CA % ("5m", "'80'") + "      - " + entry + "\n"
+    cli_argv("validate_config", "--config-dir", str(_tree(tmp_path, None, body)))
+    with pytest.raises(SystemExit) as exc:
+        vc.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 1, out
+    assert "[FAIL] values_not_served" in out and f"`_custom_alerts[1]`" in out and f"({kind})" in out, out
 
 
 def test_refused_custom_alert_end_to_end_exits_1(tmp_path, capsys, cli_argv):
@@ -197,3 +243,35 @@ def test_tree_served_values_refuses_is_warn_not_fail(tmp_path):
     assert r["status"] == vc.WARN, r
     assert r["details"][-1].startswith("custom alerts not checked: "), r
     assert r["hint"] == vc._VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT, r
+
+
+def test_a_custom_alerts_block_that_does_not_decode_fails(tmp_path):
+    """#3235：整段 `_custom_alerts` 解不開時 exporter 一筆都不送；Go 印在 served-values
+    的 `custom_alerts_finding`，本列照列（先前 da-guard 無 finding、本列 PASS）。"""
+    r = vc.check_values_not_served(str(_tree(tmp_path, None, "    _custom_alerts: 'not: [a list'\n")))
+    assert r["status"] == vc.FAIL, r
+    assert any("`_custom_alerts`: does not decode (custom_alert_rejected)" in d for d in r["details"]), r
+
+
+def test_a_da_guard_without_the_finding_field_is_a_caller_error(tmp_path, monkeypatch, da_guard_binary):
+    """#3234：舊版 da-guard 的 served-values 沒有 `finding`——不是「沒有 finding」，是
+    沒有判定：本列 caller error（結束碼 2），不再是 WARN 讓不送的告警整棵樹通過。"""
+    import sys as _sys
+    fake = tmp_path / "old-da-guard"
+    fake.write_text(
+        f"#!{_sys.executable}\n"
+        "import json, subprocess, sys\n"
+        f"p = subprocess.run([{da_guard_binary!r}] + sys.argv[1:], capture_output=True, text=True)\n"
+        "out = p.stdout\n"
+        "if len(sys.argv) > 1 and sys.argv[1] == 'served-values':\n"
+        "    doc = json.loads(out)\n"
+        "    for tv in doc.get('tenants', {}).values():\n"
+        "        tv.pop('custom_alerts_finding', None)\n"
+        "        for e in tv.get('custom_alerts', []):\n"
+        "            e.pop('finding', None)\n"
+        "    out = json.dumps(doc)\n"
+        "sys.stdout.write(out); sys.stderr.write(p.stderr); sys.exit(p.returncode)\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+    r = vc.check_values_not_served(str(_tree(tmp_path, None, _CA % ("5x", "'80'"))))
+    assert r["status"] == vc.FAIL and r["caller_error"], r
