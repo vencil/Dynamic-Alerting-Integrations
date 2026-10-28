@@ -21,15 +21,25 @@ Exit codes:
        not be answered, or the flags contradict each other (`--check` with
        `--manifest`, `--manifest` without `--sources`) — refused before
        anything is read or written. `--validate` was removed (#3206): every
-       file it called an ERROR is refused before assembly.
+       file it called an ERROR is refused before assembly. Also exit 2: the
+       copy itself refused by `da-guard write` (each refused file named;
+       nothing written), or a write that stopped part-way (the files left
+       named). `--check` asks da-guard the same batch as a dry run.
+
+The files are put into `--output` by `da-guard write` (ADR-036 §2: only Go
+writes conf.d), one batch of `copy` entries judged once, all or nothing: each
+source file's bytes as they are. A new file is mode 0600 (it was 0644 before
+#3206): an exporter reading `--output` as another uid needs the mode widened
+by whoever deploys it. A file already in `--output` is replaced, its mode and
+owner kept.
 """
 
 import argparse
 import hashlib
 import os
-import shutil
 import stat
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Tuple
 
@@ -53,9 +63,13 @@ from _lib_confd import (  # noqa: E402
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 from _lib_io import claim_stdout, write_operator_output  # noqa: E402  (#3107)
+import _lib_confedit  # noqa: E402  (#3206: da-guard write puts the files in place)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
+
+#: The tool name on every line `_lib_confedit.write_all_or_exit` prints.
+_TOOL = "assemble_config_dir"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -341,46 +355,70 @@ def carriers_already_in(output_dir: Path, listing: Any = None) -> Dict[str, Path
 
 # ── Assembly ─────────────────────────────────────────────────────────
 
+def copy_entries(file_map: Dict[str, Path]) -> List[dict]:
+    """The `da-guard write` batch putting *file_map* into the output: a
+    `copy` entry per name, in name order, each replacing whatever file the
+    output already holds there (`assemble()` never clears `--output`; a rerun
+    overwrites its own files, as the copy always did).
+
+    The source is sent as the file it names (`os.path.realpath`): da-guard
+    opens a copy's source without following a symlink, and a shard's carrier
+    that is a file symlink is read by the exporter through the link — so the
+    bytes copied are the ones the source's own walk read."""
+    return [_lib_confedit.copy_entry(name, os.path.realpath(file_map[name]), replace=True)
+            for name in sorted(file_map)]
+
+
+def judge(file_map: Dict[str, Path], output_dir: "Path | None") -> None:
+    """`--check`: the batch `assemble()` would send, judged by a dry run of
+    `da-guard write` and nothing written — against `--output` when it is a
+    directory, else an empty one (what a missing `--output` is). A refusal is
+    named on stderr and the process exits 2, as on a real assembly."""
+    entries = copy_entries(file_map)
+    if output_dir is not None and output_dir.is_dir():
+        _lib_confedit.write_all_or_exit(output_dir, entries, tool=_TOOL, dry_run=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="assemble-config-dir-") as tmp:
+        _lib_confedit.write_all_or_exit(tmp, entries, tool=_TOOL, dry_run=True)
+
+
+def _make_output(output_dir: Path) -> None:
+    # #1789: `output_dir` reaches here from `--output` only — main is the
+    # sole caller — so the flag is named literally rather than threaded
+    # through a parameter no other caller would ever set.
+    with output_write(output_dir, flag="--output", action="create directory"):
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def assemble(
     file_map: Dict[str, Path],
     output_dir: Path,
     *,
     dry_run: bool = False,
 ) -> int:
-    """Copy files from file_map into output_dir.
+    """Put every file of *file_map* into *output_dir* through `da-guard
+    write` (ADR-036 §2, #3206): one batch of `copy_entries`, judged once with
+    the whole batch in place, written all or nothing. A refusal, a write that
+    stopped part-way or no usable da-guard is named on stderr and exits 2
+    (`write_all_or_exit`); an `--output` this run created is removed again.
 
-    Returns number of files written.
+    *dry_run*: each file listed and the batch judged (`judge`), nothing
+    written. Returns the number of files.
     """
-    # #1789: `output_dir` reaches here from `--output` only — main is the
-    # sole caller — so the flag is named literally rather than threaded
-    # through a parameter no other caller would ever set.
-    if not dry_run:
-        with output_write(output_dir, flag="--output",
-                          action="create directory"):
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    for name in sorted(file_map):
-        src = file_map[name]
-        dst = output_dir / name
-        if dry_run:
-            print(f"  {name:40s} ← {src}")
-        else:
-            # ⚠️ Only the DESTINATION side is converted. `shutil.copy2` reads
-            # `src`, which comes from `--sources`, and a source ENTRY that is
-            # itself a directory named `x.yaml` raises `IsADirectoryError`
-            # naming the SOURCE — `output_write` lets that fly through
-            # unchanged rather than telling the operator to check `--output`,
-            # the one flag that is correct (measured; pinned by
-            # `test_a_bad_source_entry_does_not_blame_the_output_flag`).
-            with output_write(dst, flag="--output", action="copy into"):
-                shutil.copy2(src, dst)
-                os.chmod(dst,
-                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                         | stat.S_IROTH)
-        count += 1
-
-    return count
+    if dry_run:
+        for name in sorted(file_map):
+            print(f"  {name:40s} ← {file_map[name]}")
+        judge(file_map, output_dir)
+        return len(file_map)
+    # ⚠️ A source entry that cannot be copied (a directory called `x.yaml`,
+    # a FIFO) never blames `--output`, the one flag that is correct: the
+    # shared conf.d refusal names it under its source before this is reached
+    # (`test_a_bad_source_entry_does_not_blame_the_output_flag`), and one
+    # that turns into such an entry afterwards is da-guard's `bad_source`,
+    # naming the source.
+    _lib_confedit.write_all_or_exit(output_dir, copy_entries(file_map), tool=_TOOL,
+                                    make_root=lambda: _make_output(output_dir))
+    return len(file_map)
 
 
 # ── Manifest ─────────────────────────────────────────────────────────
@@ -683,8 +721,9 @@ def main() -> int:
                   file=sys.stderr)
         return tu.EXIT_FOR[verdict.outcome]
 
-    # --check: just report, don't write
+    # --check: the same batch, judged by da-guard and not written
     if args.check:
+        judge(file_map, output_dir)
         if not args.json:
             print(f"\n✅ No conflicts. {len(file_map)} file(s) ready "
                   f"to assemble from {len(sources)} source(s).")
@@ -742,6 +781,8 @@ def main() -> int:
         print(format_json_report(result))
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
+        print(f"   New files are mode 0600: if the exporter reads {output_dir} "
+              f"as another uid, widen it (e.g. chmod -R a+rX {output_dir})")
         if residue:
             print(f"   ⚠️  {output_dir} holds "
                   f"{len(carriers_already_in(output_dir))} carrier(s) the "

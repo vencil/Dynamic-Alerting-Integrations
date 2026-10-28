@@ -1034,7 +1034,10 @@ _KNOWN_SITES = {
     # each is a real argv-fed output path from the #1789 survey.
     "scripts/tools/dx/describe_tenant.py": {".write_text"},
     "scripts/tools/ops/baseline_discovery.py": {"os.makedirs", "open(w)"},
-    "scripts/tools/ops/assemble_config_dir.py": {"shutil.copy2", "os.chmod"},
+    # #3206: the copies are da-guard write's; the `--output` mkdir and the
+    # manifest write (#3107: through write_operator_output) are the tool's
+    # own sinks left.
+    "scripts/tools/ops/assemble_config_dir.py": {".mkdir", "write_operator_output()"},
     "scripts/tools/ops/state_reconcile.py": {".mkdir"},
     "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.

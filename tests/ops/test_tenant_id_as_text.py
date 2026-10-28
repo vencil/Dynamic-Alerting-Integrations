@@ -540,7 +540,7 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr("m", f'    {row["source"]}:\n      container_cpu: "2"\n'),
                   encoding="utf-8")
-    doc, _ = da_assembler.decode_cr(cr)
+    doc, _differs, _ = da_assembler.decode_cr(cr)
     (stored,) = doc["spec"]["tenants"]
     rc = da_assembler.render_cr_file(cr, tmp_path)
     if stored != row["exporter_key"] or not is_valid_tenant_id(stored):

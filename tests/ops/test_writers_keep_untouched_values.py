@@ -3,12 +3,15 @@
 as the exporter read them (#2220).
 
 `deprecate_rule --execute` (Step 1 `_defaults.yaml` carriers, Step 2 tenant
-files) and `patch_config` (`_patch_carrier`, legacy and multi-file) load a
-file, delete or set ONE key and dump the rest back. Through
-`safe_load` + `safe_dump` every other unquoted value was retyped on the way:
-`010` → `8`, `12:30` → `750`, `0x1F` → `31`, `yes` → `true`,
-`2099-01-01T00:00:00Z` → `2099-01-01 00:00:00+00:00` — and the exporter's
-value moved with it (10 → 8, 12 → 750, a maintenance window closed).
+files) and `patch_config` (`_patch_carrier`, legacy and multi-file) delete or
+set ONE key of a file. Through `safe_load` + `safe_dump` every other unquoted
+value was retyped on the way: `010` → `8`, `12:30` → `750`, `0x1F` → `31`,
+`yes` → `true`, `2099-01-01T00:00:00Z` → `2099-01-01 00:00:00+00:00` — and
+the exporter's value moved with it (10 → 8, 12 → 750, a maintenance window
+closed). Since #3206 both send only the change to `da-guard write`, which
+edits the yaml.v3 node tree; the PyYAML rewrite layer that #2220 first fixed
+this in is deleted (ADR-036 step 11), and with it this file's tests of that
+layer — what stays pins the tools.
 
 ⛔ The oracle is the exporter, not a Python reader: `da-guard served-values`
 (what /metrics serves) before and after the write must be the same except
@@ -23,7 +26,6 @@ makes a missing `go` a failure instead, as in `test_patch_config_exporter`.
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
@@ -32,14 +34,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 import _lib_tenant_values as tv
 import deprecate_rule
 import patch_config as pc
-from _lib_io import (DuplicateKeyError, load_yaml_file_for_rewrite,
-                     strict_load_for_rewrite)
-from _lib_yaml_keys import RawPlain, dump_for_rewrite, load_for_rewrite
 from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
 import _lib_parse_cache
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
@@ -398,105 +396,6 @@ def test_patch_config_writes_a_typed_severity_value_as_a_string():
                           "70:critical") is None
 
 
-# ── the loader / dumper pair itself (no Go) ──────────────────────────────
-
-# (source spelling, how the rewrite writes it). Plain → as written; quoted →
-# `safe_dump`'s own quoting of that string, as before #2220; null → `null`,
-# as before.
-_SPELLINGS = [("010", "010"), ("12:30", "12:30"), ("0x1F", "0x1F"),
-              ("yes", "yes"), ("2099-01-01T00:00:00Z", "2099-01-01T00:00:00Z"),
-              ("80.5", "80.5"), ("500", "500"), ("true", "true"),
-              ("plain words", "plain words"), ("1_000", "1_000"),
-              ("0o17", "0o17"), (".inf", ".inf"), ("70:critical", "70:critical"),
-              ("'010'", "'010'"), ('"12:30"', "'12:30'"), ('"a b"', "a b")]
-
-
-@pytest.mark.parametrize("load", [load_for_rewrite, strict_load_for_rewrite],
-                         ids=["load_for_rewrite", "strict_load_for_rewrite"])
-@pytest.mark.parametrize("spelling,written", _SPELLINGS,
-                         ids=[s for s, _w in _SPELLINGS])
-def test_a_value_and_a_key_round_trip_as_written(load, spelling, written):
-    got = dump_for_rewrite(load(f"k: {spelling}\n{spelling}: v\n"),
-                           sort_keys=False)
-    assert got == f"k: {written}\n{written}: v\n"
-
-
-@pytest.mark.parametrize("spelling", ["~", "", "null"])
-def test_a_null_value_is_written_null_as_before(spelling):
-    assert dump_for_rewrite(load_for_rewrite(f"k: {spelling}\n")) == "k: null\n"
-
-
-def test_null_stays_none_and_quoted_stays_a_plain_str():
-    doc = load_for_rewrite("a: ~\nb: '010'\nc: 010\n")
-    assert doc["a"] is None
-    assert type(doc["b"]) is str and doc["b"] == "010"
-    assert isinstance(doc["c"], RawPlain) and doc["c"] == "010"
-
-
-def test_a_new_str_value_is_quoted_when_yaml_would_retype_it():
-    doc = load_for_rewrite("t:\n  a: 1\n")
-    doc["t"]["b"] = "50"
-    doc["t"]["c"] = "70:critical"
-    assert dump_for_rewrite(doc, sort_keys=False) == \
-        "t:\n  a: 1\n  b: '50'\n  c: 70:critical\n"
-
-
-def test_an_explicit_tag_is_not_taken_for_plain():
-    """`!!str 5` is a string the exporter's float field refuses; written back
-    plain `5` it would become a number — a change, so it is not RawPlain."""
-    doc = load_for_rewrite("a: !!str 5\n")
-    assert type(doc["a"]) is str
-    assert dump_for_rewrite(doc) == "a: '5'\n"
-
-
-def test_the_file_entry_point_keeps_the_load_contract(tmp_path):
-    assert load_yaml_file_for_rewrite(str(tmp_path / "nope.yaml"), {}) == {}
-    empty = tmp_path / "empty.yaml"
-    empty.write_text("", encoding="utf-8")
-    assert load_yaml_file_for_rewrite(str(empty), {}) == {}
-    bad = tmp_path / "bad.yaml"
-    bad.write_bytes(b"a: [\n")
-    with pytest.raises(yaml.YAMLError, match="bad.yaml"):
-        load_yaml_file_for_rewrite(str(bad))
-
-
-def test_the_strict_entry_point_still_rejects_a_duplicate_key():
-    with pytest.raises(DuplicateKeyError):
-        strict_load_for_rewrite("010: a\n'010': b\n")
-
-
-def _load_via_file(tmp_path: Path, text: str):
-    p = tmp_path / "f.yaml"
-    p.write_text(text, encoding="utf-8")
-    return load_yaml_file_for_rewrite(str(p))
-
-
-@pytest.mark.parametrize("entry", ["load_for_rewrite", "strict_load_for_rewrite",
-                                   "load_yaml_file_for_rewrite"])
-def test_the_rewrite_loaders_cannot_construct_python_objects(entry, tmp_path):
-    """Behavioural safety pin (see `_lib_yaml_keys.load_exporter_keys`): the
-    rewrite loaders are hand-driven SafeLoader subclasses, outside bandit
-    B506's predicate — this is what pins them. Must-still-work control."""
-    load = {"load_for_rewrite": load_for_rewrite,
-            "strict_load_for_rewrite": strict_load_for_rewrite,
-            "load_yaml_file_for_rewrite":
-                lambda text: _load_via_file(tmp_path, text)}[entry]
-    payload = '!!python/object/apply:os.system ["echo rewrite-loader-pwned"]\n'
-    with pytest.raises(yaml.YAMLError) as exc:
-        load(payload)
-    cause = getattr(exc.value, "cause", exc.value)
-    assert isinstance(cause, yaml.constructor.ConstructorError), exc.value
-    assert load("a: [1, 2]\n") == {"a": ["1", "2"]}
-
-
-def test_dump_for_rewrite_is_safe_dump_for_ordinary_data():
-    """No RawPlain in the data → byte-identical to `yaml.safe_dump`."""
-    data = {"a": 8, "b": "010", "c": [True, None, 1.5], "d": {"e": "x y"}}
-    assert dump_for_rewrite(data, default_flow_style=False, allow_unicode=True,
-                            sort_keys=False) == yaml.safe_dump(
-        data, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
     """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
     ADR-036 §2), not `RawPlain`. A scalar `defaults:` is servable only in a
@@ -510,9 +409,3 @@ def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path)
         [(_p, ok, msg, _r)] = deprecate_rule.remove_from_all_defaults(
             "mysql_slave_lag", str(tmp_path / "team"))
     assert not ok and "（!!int）" in msg, msg
-
-
-def test_a_reader_that_is_not_a_rewrite_still_gets_pyyaml_types():
-    """Rewrite paths only: the ordinary exporter-key read is unchanged."""
-    from _lib_yaml_keys import load_exporter_keys
-    assert load_exporter_keys(io.StringIO("a: 010\nb: yes\n")) == {"a": 8, "b": True}

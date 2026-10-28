@@ -100,6 +100,12 @@ var (
 	// series, or a row of its shape and severity.
 	FindingCustomAlertDuplicateSeries = register("custom_alert_duplicate_series",
 		"judges `_custom_alerts` entries that put the same series on /metrics")
+	// FindingCustomAlertRejected (error; #3235): a `_custom_alerts` entry the
+	// exporter rejects for anything but its `threshold:` (a bad `window:`,
+	// `quantile:`, `objective:`, recipe, …) — it serves no row and the alert
+	// can never fire. A refused `threshold:` is value_not_served (#3209).
+	FindingCustomAlertRejected = register("custom_alert_rejected",
+		"judges `_custom_alerts` entries the exporter rejects for a field other than threshold")
 	// FindingCustomAlertOverCap (error; #3042): a tenant's own `_custom_alerts`
 	// asks the exporter to serve more rows than the per-tenant cap.
 	FindingCustomAlertOverCap = register("custom_alert_over_cap",

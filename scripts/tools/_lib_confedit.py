@@ -9,8 +9,9 @@ CREATE of a new file from a typed value (its comments are layout:
 `comments()` on a map entry or a sequence item, `head_comment`,
 `foot_comment`), a REPLACE of a file's whole text with a typed value (a
 create that may overwrite: nothing of the old file is kept), a MOVE of an
-existing file, byte for byte, or a DELETE of an existing file (none there:
-`unchanged`). Every file is read back by `parse-tree` in the tree with every file
+existing file, byte for byte, a COPY of a file from outside the tree, byte
+for byte (another tree's file: `assemble_config_dir`), or a DELETE of an
+existing file (none there: `unchanged`). Every file is read back by `parse-tree` in the tree with every file
 of the call in place, and written atomically, or nothing is. The contract
 is `da-guard write`'s row in docs/cli-reference.md; this module only sends
 the files and reads the answer (`da-guard.write/v3`).
@@ -97,6 +98,7 @@ from __future__ import annotations
 
 import decimal
 import json
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -105,7 +107,7 @@ from typing import Any, Callable, Iterable, NoReturn, Optional, Sequence
 import _lib_parse_tree
 
 #: The one da-guard command every change goes through (edit, create,
-#: replace, move, delete).
+#: replace, move, copy, delete).
 COMMAND = "write"
 SUBCOMMAND = COMMAND
 SCHEMA = "da-guard.write/v3"
@@ -313,12 +315,25 @@ def create_entry(rel: str, content: dict, head_comment: Optional[str] = None,
     return entry
 
 
-def delete_entry(rel: str) -> dict:
+def delete_entry(rel: str, *, tenants: "Optional[Sequence[str]]" = None) -> dict:
     """Delete the existing file *rel* (judged as a move's source: a regular
     file a reader reads, one parse-tree reads); no file there is
     `unchanged`. A batch that would worsen the tree without it (a carrier
-    whose other spelling then is selected, …) is `TreeWorsened`."""
-    return {"path": rel, "delete": True}
+    whose other spelling then is selected, …) is `TreeWorsened`.
+
+    *tenants*: the delete's precondition (#3206) — the file, in the bytes
+    da-guard reads for the judgement, must be a tenant file whose `tenants:`
+    declares exactly these ids, else it is refused `declares_mismatch`
+    (naming what it declares) and the batch writes nothing. A file changed
+    after that read is `changed_during_write`; a rewrite of the same inode
+    after da-guard's last byte comparison and before its unlink is the
+    residual window (no lock)."""
+    entry: dict = {"path": rel, "delete": True}
+    if tenants is not None:
+        if isinstance(tenants, str):
+            raise TypeError("tenants is a sequence of tenant ids, not one string")
+        entry["tenants"] = [str(t) for t in tenants]
+    return entry
 
 
 class NewFile:
@@ -353,6 +368,23 @@ class NewFile:
         with tempfile.TemporaryDirectory(prefix="confedit-preview-") as tmp:
             doc = _one(COMMAND, tmp, self.entry(), True, binary, timeout)
         return doc["content"]
+
+
+def copy_entry(rel: str, source: "Path | str", *, replace: bool = False) -> dict:
+    """Put the bytes of *source* — a file OUTSIDE the tree (another conf.d's)
+    — at *rel*, as they are: comments and layout stay, nothing is decoded and
+    re-encoded. *source* is sent as an absolute path (made absolute here, not
+    resolved); da-guard opens it without following a symlink and takes a
+    regular file only (a symlink, a directory, a FIFO: `bad_source`; missing:
+    `source_missing`), and refuses one inside the tree (a move's: `bad_path`).
+    Judged and put in place as a create (mode 0600, never the source's);
+    *replace*: the file at *rel* may exist and is replaced whole, as
+    `create_entry(..., replace=True)` (its mode and owner kept; the same bytes
+    are `unchanged`)."""
+    entry = {"path": rel, "copy": os.path.abspath(str(source))}
+    if replace:
+        entry["replace"] = True
+    return entry
 
 
 def move_entry(rel: str, from_rel: str) -> dict:
@@ -543,7 +575,7 @@ def _check(doc: dict) -> None:
 def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
          binary: Optional[str], timeout: Optional[float]) -> dict:
     """One da-guard run of *files* (each an `edit_entry` / `create_entry` /
-    `move_entry` / `delete_entry`):
+    `move_entry` / `copy_entry` / `delete_entry`):
     its document, the files answered in the order sent."""
     args = [command, "--config-dir", str(root), "--input", "-", "--json"]
     if dry_run:
@@ -660,7 +692,7 @@ def move(root: "Path | str", rel: str, from_rel: str, *, dry_run: bool = False,
 def write_all(root: "Path | str", entries: "Sequence[dict]", *, dry_run: bool = False,
               binary: Optional[str] = None, timeout: Optional[float] = None) -> "list[dict]":
     """Every entry of *entries* (`edit_entry` / `create_entry` /
-    `move_entry` / `delete_entry`) or none, in ONE da-guard run (module docstring, "Several
+    `move_entry` / `copy_entry` / `delete_entry`) or none, in ONE da-guard run (module docstring, "Several
     files"): the files' results, in order.
 
     Raises EditsRefused (one or more refused: nothing written; TreeWorsened
@@ -691,10 +723,18 @@ def emit_all(root: "Path | str", files: "Sequence[tuple[str, dict]]", *,
 
 def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: str,
                       binary: Optional[str] = None, timeout: Optional[float] = None,
-                      make_root: "Optional[Callable[[], Any]]" = None) -> "list[dict]":
+                      make_root: "Optional[Callable[[], Any]]" = None,
+                      dry_run: bool = False,
+                      partial_note: Optional[str] = None) -> "list[dict]":
     """`write_all` for a one-shot CLI that writes conf.d (#3206 step 10c):
-    the files' results when the batch passes (a dry run is `write_all(...,
-    dry_run=True)`). Otherwise every line goes to stderr prefixed `<tool>: `
+    the files' results when the batch passes. *dry_run*: the same batch
+    judged and nothing written (`write_all(..., dry_run=True)`), a refusal
+    named and exit 2 as on a real write — a tool whose preview must say
+    whether the run would be refused; *make_root* is then not called.
+    *partial_note*: one more line after a write that stopped part-way — what
+    the tool had yet to do with the files it wrote (its own step after the
+    batch), which nobody else can say.
+    Otherwise every line goes to stderr prefixed `<tool>: `
     and the process exits 2 (EXIT_CALLER_ERROR) — a refusal (each refused
     file named with its reason, the tree-worsening ones too; nothing
     written), da-guard's caller error or an older da-guard (nothing
@@ -714,7 +754,7 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
     from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: PLC0415
 
     created: "list[Path]" = []
-    if make_root is not None:
+    if make_root is not None and not dry_run:
         p = Path(root).absolute()
         while not p.exists() and p != p.parent:
             created.append(p)
@@ -735,7 +775,7 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
         sys.exit(EXIT_CALLER_ERROR)
 
     try:
-        return write_all(root, entries, binary=binary, timeout=timeout)
+        return write_all(root, entries, dry_run=dry_run, binary=binary, timeout=timeout)
     except EditsRefused as exc:
         for r in exc.refusals:
             say(f"{r.path}: {r.reason}: {r.message}")
@@ -745,6 +785,8 @@ def write_all_or_exit(root: "Path | str", entries: "Sequence[dict]", *, tool: st
         die(f"{exc} — nothing was written")
     except PartialWrite as exc:
         left = [*exc.written, *exc.maybe_written]
+        if partial_note:
+            say(partial_note)
         die(f"the write under {root} stopped part-way: {exc.cause}; "
             f"{len(exc.written)} file(s) written, {len(exc.maybe_written)} may have "
             f"been written, not rolled back: {', '.join(left) or '(none)'}")

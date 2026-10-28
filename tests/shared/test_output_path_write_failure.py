@@ -729,11 +729,9 @@ ROWS: list[Row] = [
       lambda c, out: ["--sources", _shard_source_dir(c.tmp), "--output", str(out)],
       reach="one tmp conf.d shard with a single tenant file",
       # `--output` and `--manifest` are two flags on two different paths, so
-      # they get a row each. Only the `mkdir` is reachable from here: the
-      # `shutil.copy2` behind it CANNOT be made to fail by the artifact_is_dir
-      # shape, because copy2 with a directory destination copies INTO it
-      # (measured: rc=0, the file lands at <out>/alpha.yaml/alpha.yaml). That
-      # sink is wrapped and only the static pin speaks for it.
+      # they get a row each. Only the `mkdir` is the tool's own sink here:
+      # since #3206 the files are put in place by `da-guard write` (a copy
+      # batch), whose failures are its own named refusals, not this flag's.
       shapes=("parent_is_file", "target_is_file")),
     R("ops/assemble_config_dir.py", "--manifest", "file",
       lambda c, out: ["--sources", _shard_source_dir(c.tmp),
@@ -1069,10 +1067,11 @@ def test_a_bad_source_entry_does_not_blame_the_output_flag(tmp_path):
 
     A source entry that is itself a DIRECTORY named `x.yaml` (measured, not
     hypothetical — `discover_yamls` lists it by extension, it does not stat
-    it) makes `shutil.copy2` raise `IsADirectoryError` naming the SOURCE.
-    That failure happens INSIDE the block wrapped for `--output`, and the
-    wrapper is what decides not to claim it: `output_write` converts only an
-    `OSError` that names its own path or an ancestor of it.
+    it) once made `shutil.copy2` raise `IsADirectoryError` naming the SOURCE,
+    inside the block wrapped for `--output`. Since #3206 the shared conf.d
+    refusal ends the run on it before anything is copied, and the copy is
+    `da-guard write`'s (a source that is no regular file: `bad_source`,
+    naming the source).
 
     Turning this one into the standard line would print "cannot copy into
     <output>/x.yaml … check the value given to --output" and send the

@@ -562,6 +562,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			notServed[ec.TenantID] = ec.NotServed
 		}
 	}
+	refused, rejected, blockErrs := customAlertVerdicts(scoped)
 
 	return guard.CheckInput{
 		EffectiveConfigs: effective,
@@ -589,7 +590,11 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ValuesNotServed: notServed,
 		// #3209: custom alerts whose threshold the exporter refuses — the
 		// same value_not_served as a refused threshold row.
-		CustomAlertsRefused: customAlertsRefused(scoped),
+		// #3235: custom alerts rejected for anything else. Both are
+		// dispatched by guard.CustomAlertFindingKind.
+		CustomAlertsRefused:    refused,
+		CustomAlertsRejected:   rejected,
+		CustomAlertBlockErrors: blockErrs,
 		// #2031: the exporter's own build drops these entries.
 		CustomAlertDuplicates: customAlertDuplicates(scoped),
 		CustomAlertsOverCap:   customAlertsOverCap(scoped),
@@ -652,33 +657,47 @@ func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.Cus
 	return out
 }
 
-// customAlertsRefused is guard.CheckInput.CustomAlertsRefused: for each
-// in-scope tenant, the `_custom_alerts` entries of the exporter's own build
-// it rejects for their `threshold:` (config.CustomAlertEntries, Refused set;
-// #3209). nil when none. No file is named: ScopeEffective attributes no key
-// to a layer (EffectiveConfig.KeySources is nil there), and a profile or a
-// root platform file may supply the list.
-func customAlertsRefused(scoped *config.ScopedTenants) map[string][]guard.RefusedCustomAlert {
+// customAlertVerdicts is guard.CheckInput.CustomAlertsRefused and
+// CustomAlertsRejected: for each in-scope tenant, the `_custom_alerts`
+// entries of the exporter's own build guard.CustomAlertFindingKind reports
+// as value_not_served (a refused `threshold:`, #3209) or as
+// custom_alert_rejected (#3235), and why each tenant's block does not decode
+// (guard.CustomAlertBlockFindingKind). nil when none. No file is named:
+// ScopeEffective attributes no key to a layer (EffectiveConfig.KeySources is
+// nil there), and a profile or a root platform file may supply the list.
+func customAlertVerdicts(scoped *config.ScopedTenants) (refused map[string][]guard.RefusedCustomAlert, rejected map[string][]guard.RejectedCustomAlert, blockErrs map[string]string) {
 	if scoped.Config == nil {
-		return nil
+		return nil, nil, nil
 	}
-	var out map[string][]guard.RefusedCustomAlert
 	for _, ec := range scoped.Tenants {
-		entries, _ := config.CustomAlertEntries(ec.TenantID, scoped.Config.Tenants[ec.TenantID])
+		entries, blockErr := config.CustomAlertEntries(ec.TenantID, scoped.Config.Tenants[ec.TenantID])
+		if !guard.CustomAlertBlockFindingKind(blockErr).IsZero() {
+			if blockErrs == nil {
+				blockErrs = map[string]string{}
+			}
+			blockErrs[ec.TenantID] = blockErr
+		}
 		for _, e := range entries {
-			if e.Refused == "" {
-				continue
+			switch guard.CustomAlertFindingKind(e) {
+			case findingkind.FindingValueNotServed:
+				if refused == nil {
+					refused = map[string][]guard.RefusedCustomAlert{}
+				}
+				refused[ec.TenantID] = append(refused[ec.TenantID], guard.RefusedCustomAlert{
+					Index: e.Index, Name: e.Spec.Name, Threshold: e.Spec.Threshold,
+					Refused: e.Refused, Reason: e.Reason,
+				})
+			case findingkind.FindingCustomAlertRejected:
+				if rejected == nil {
+					rejected = map[string][]guard.RejectedCustomAlert{}
+				}
+				rejected[ec.TenantID] = append(rejected[ec.TenantID], guard.RejectedCustomAlert{
+					Index: e.Index, Name: e.Spec.Name, Reason: e.Reason,
+				})
 			}
-			if out == nil {
-				out = map[string][]guard.RefusedCustomAlert{}
-			}
-			out[ec.TenantID] = append(out[ec.TenantID], guard.RefusedCustomAlert{
-				Index: e.Index, Name: e.Spec.Name, Threshold: e.Spec.Threshold,
-				Refused: e.Refused, Reason: e.Reason,
-			})
 		}
 	}
-	return out
+	return refused, rejected, blockErrs
 }
 
 // customAlertsOverCap is guard.CheckInput.CustomAlertsOverCap: for each

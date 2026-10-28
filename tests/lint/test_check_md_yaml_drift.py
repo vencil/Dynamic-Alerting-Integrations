@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "tools" / "lint" / "check_md_yaml_drift.py"
 
@@ -106,11 +108,60 @@ def test_composite_fence_is_split_per_documented_file(tmp_path: Path) -> None:
     assert "docs/composite.md:6" in r.stdout
 
 
-def test_multi_document_block_validates_each_document(tmp_path: Path) -> None:
-    body = "```yaml\ndefaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n"
-    r = _run(_mkrepo(tmp_path, "multi.md", body))
+@pytest.mark.parametrize("body, kind", [
+    ("```yaml\ndefaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n", "multiple_documents"),
+    ("```yaml\ntenants:\n  t1: {a: '1'}\ntenants:\n  t2: {a: '2'}\n```\n", "duplicate_key"),
+    ("```yaml\ntenants:\n  t1: !!binary YQ==\n```\n", "tag_not_allowed"),
+])
+def test_an_unreadable_confd_example_fails(tmp_path: Path, body: str, kind: str) -> None:
+    """ADR-036 step 11 (#3206): an example is read as conf.d is read (da-guard
+    parse-tree). One the exporter refuses whole is a violation — a reader who
+    copies it gets a file that is not served. Before, PyYAML read it
+    leniently (each document, the last of a repeated key) and judged that."""
+    r = _run(_mkrepo(tmp_path, "bad.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert f"[UNREADABLE] docs/bad.md:2 ({kind})" in r.stdout, r.stdout
+
+
+def test_a_marked_unreadable_example_passes(tmp_path: Path) -> None:
+    """Control: a deliberate counter-example carries the marker and a reason."""
+    body = ("<!-- md-yaml-drift: ignore — shows a refused file -->\n"
+            "```yaml\ndefaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n")
+    r = _run(_mkrepo(tmp_path, "marked.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Config units checked:        2" in r.stdout
+
+
+def test_an_unreadable_block_that_is_no_confd_example_passes(tmp_path: Path) -> None:
+    """Control: `---`-separated k8s manifests (and a frontmatter example) are
+    no conf.d; parse-tree refusing them as one conf.d file says nothing."""
+    body = ("```yaml\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n"
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\n```\n"
+            "```yaml\n---\ntitle: x\nlang: zh\n---\n```\n")
+    r = _run(_mkrepo(tmp_path, "k8s.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Unreadable conf.d examples:  0" in r.stdout, r.stdout
+
+
+def test_values_are_read_as_conf_d_reads_them(tmp_path: Path) -> None:
+    """ADR-036 step 11 (#3206): `send_resolved: yes` is the string "yes" to
+    yaml.v3 (the exporter, and the route generator through parse-tree), so a
+    documented receiver with it does not meet the schema's boolean. PyYAML
+    read True, and this gate passed an example the platform reads otherwise."""
+    body = ("```yaml\ntenants:\n  t1:\n    _routing:\n      receiver:\n"
+            "        type: slack\n        api_url: https://hooks.slack.com/x\n"
+            "        send_resolved: yes\n```\n")
+    r = _run(_mkrepo(tmp_path, "yes.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "'send_resolved': 'yes'" in r.stdout, r.stdout
+
+
+def test_no_da_guard_fails_closed(tmp_path: Path) -> None:
+    """Without da-guard nothing is read, and that is an error, never a pass."""
+    body = "```yaml\ndefaults:\n  a: 1\n```\n"
+    r = _run(_mkrepo(tmp_path, "x.md", body),
+             env={"DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")})
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert "da-guard parse-tree" in r.stderr, r.stderr
 
 
 def test_missing_jsonschema_fails_closed(tmp_path: Path) -> None:

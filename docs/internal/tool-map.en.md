@@ -264,9 +264,9 @@ lang: en
 - `scripts/tools/_lib_toolcount.py`: One scan behind the "N 個 Python 工具" sentence.
 - `scripts/tools/_lib_validation.py`: Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`: Version SSOT readers for the dx doc-generation tools.
-- `scripts/tools/_lib_write_check.py`: a conf.d writer's confirmation before it writes (ADR-036 §2).
+- `scripts/tools/_lib_write_check.py`: a writer's check of the tree it writes into (#3206).
 - `scripts/tools/_lib_yaml.py`: Minimal CRD YAML serialization helpers for operator tooling.
-- `scripts/tools/_lib_yaml_keys.py`: Read YAML the way the exporter reads a tenant id: as the scalar's TEXT.
+- `scripts/tools/_lib_yaml_keys.py`: Read YAML that is not conf.d with tenant ids as the exporter keys them (scalar TEXT).
 - `scripts/tools/ops/_federation_revocation_reconciler.py`: Federation revocation reconciler — ADR-028 D1 detective control (#924).
 - `scripts/tools/ops/_grar_merge.py`: Routing-config merging + tenant substitution + receiver building.
 - `scripts/tools/ops/_grar_parse.py`: Configuration loading + parsing for generate_alertmanager_routes.
