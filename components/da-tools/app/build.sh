@@ -247,8 +247,8 @@ TOOL_FILES=(
     # edit` (ADR-036 §2: only Go writes conf.d); imported by ops/patch_config,
     # ops/threshold_govern and ops/deprecate_rule. Imports _lib_parse_tree (above).
     _lib_confedit.py
-    # #2883 — reads a tenant-api state store copy (--state); imported by
-    # ops/offboard_tenant. Imports _lib_io (above).
+    # #2883 / ADR-036 §12 — reads `tenant-api state show`'s JSON (--state);
+    # imported by ops/offboard_tenant. Standard library only.
     _lib_tenant_state.py
     # #3206 (ADR-036 §12) — a manifest or an Alertmanager config read the way
     # its consumer reads it (runs the da-crdecode / da-read binaries bundled

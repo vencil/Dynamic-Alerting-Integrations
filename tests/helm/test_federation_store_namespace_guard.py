@@ -25,7 +25,8 @@ every one of them is a chance to re-derive it independently:
   * the Role (a Role only grants access to objects in ITS namespace, so it has
     to follow the ConfigMap)
   * the RoleBinding
-  * the ``--federation-namespace`` flag the binary reads
+  * the ``--federation-namespace`` setting the binary reads (passed as
+    ``TA_FEDERATION_NAMESPACE``, ADR-036 §12)
 
 The assertions below are deliberately **equality between the rendered places**
 rather than each place against a literal. A literal-per-place test passes when
@@ -101,9 +102,10 @@ def _store_places(docs: list[dict]) -> dict[str, str]:
             places[kind.lower()] = meta["namespace"]
         elif kind == "Deployment":
             for c in d["spec"]["template"]["spec"]["containers"]:
-                for arg in c.get("args", []):
-                    if arg.startswith("--federation-namespace="):
-                        places["flag"] = arg.split("=", 1)[1]
+                # ADR-036 §12: passed as TA_FEDERATION_NAMESPACE, not an arg.
+                for e in c.get("env") or []:
+                    if e.get("name") == "TA_FEDERATION_NAMESPACE":
+                        places["flag"] = e["value"]
     return places
 
 

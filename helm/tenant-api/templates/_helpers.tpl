@@ -32,7 +32,7 @@ Empty `federation.store.namespace` = this release's namespace, which is the
 historical behaviour and stays the default so existing installs are untouched.
 
 ⛔ SINGLE SOURCE. configmap-federation-store.yaml, the RBAC pair and the
---federation-namespace flag all resolve the namespace THROUGH THIS TEMPLATE and
+TA_FEDERATION_NAMESPACE env all resolve the namespace THROUGH THIS TEMPLATE and
 must never re-derive it. Three independent copies is exactly how the store and
 its consumers drifted apart in the first place: a ConfigMap is namespace-scoped
 and both the gateway and the reconciler consume it as a VOLUME, so they can only
@@ -164,6 +164,29 @@ Call with (list "<values path for the error>" <value>).
 {{- else -}}
 {{- $v | quote -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+A TA_* env entry of the tenant-api container (ADR-036 §12): `- name: <NAME>`
+and `value: "<v>"`. Arguments: (list "<NAME>" <value> "<values path>").
+
+tenant-api reads an EMPTY TA_* variable as unset and silently uses its
+default (envOrDefault), where an empty command-line flag was an explicit
+value. So an empty or nil value fails the render here, naming the values
+path; a setting whose absence is meant (`with` / `if` around the entry) keeps
+that condition, only the value it renders may not be empty.
+tests/helm/test_tenant_api_settings_are_env.py requires every TA_* entry of
+deployment.yaml to be a literal constant, this helper or tenant-api.intEnv.
+*/}}
+{{- define "tenant-api.taEnv" -}}
+{{- $name := index . 0 -}}
+{{- $v := index . 1 -}}
+{{- $path := index . 2 -}}
+{{- if or (kindIs "invalid" $v) (eq (toString $v) "") -}}
+{{- fail (printf "%s must not be empty: tenant-api reads an empty %s as unset and silently uses its default" $path $name) -}}
+{{- end -}}
+- name: {{ $name }}
+  value: {{ toString $v | quote }}
 {{- end }}
 
 {{/*

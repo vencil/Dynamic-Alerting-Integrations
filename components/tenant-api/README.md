@@ -242,6 +242,8 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 預設欄寫的是**沒設這個變數時的實際值**;`(空)` = 空字串,意義寫在說明欄。表格由 `cmd/server/env_readme_parity_test.go` 對原始碼比對:變數名單兩向一致,預設值能從原始碼推得的逐一比對(推不出的幾個在測試裡列明原因)。
 
+⛔ **不認得的 `TA_*` 變數拒絕啟動**([ADR-036 §12](../../docs/adr/036-single-parser-effective-config.md)):server 與 `state`／`config` 子命令解析完旗標後檢查環境,`TA_` 開頭卻不是本版會讀的變數(清單 `cmd/server/known_env.go`,由讀取點產生、`TestKnownTAEnv_IsTheSourceList` 守住)時點名並以結束碼 2 退出,與不認得的旗標相同。這通常表示映像比 Helm chart 舊。Kubernetes 為 Service 注入的變數不在此限，只放行這幾種確切形狀：`*_SERVICE_HOST`、`*_SERVICE_PORT[_<名稱>]`、`*_PORT_<n>_<TCP|UDP|SCTP>[_ADDR|_PORT|_PROTO]`，以及值是 `tcp://…` 這類的單獨 `*_PORT`（所以 `TA_METRICS_PORT=9090` 這種設定名照樣拒收）。
+
 **基本**
 
 | 變數 | 預設 | 說明 |
@@ -486,11 +488,11 @@ cp -a /state ./tenant-api-state-backup
 
 ⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常；擋住它的是 AccountID 高水位（見下）：帳本倒退到上一次配發之前時，運行中的 pod 拒絕配發、重啟的 pod 拒絕啟動，直到用 `state restore` 合併回去。
 
-還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點）：
+還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點；Helm chart 凡有 `TA_*` 對應的設定（store 的 `TA_STATE_STORE`／`TA_STATE_CONFIGMAP`、federation 的 `TA_FEDERATION_KEY`／`TA_FEDERATION_STORE`／`TA_FEDERATION_NAMESPACE` 等）一律以環境變數傳，`kubectl exec` 起的子命令才讀得到與 server 相同的設定）：
 
 ```bash
 # 先看會改什麼（不寫入）
-kubectl -n tenant-api exec -i deploy/tenant-api -- \
+kubectl -n tenant-api exec -i deploy/tenant-api -c tenant-api -- \
   tenant-api state restore --from - --dry-run --keys _groups.yaml,_views.yaml < tenant-api-state-backup.yaml
 # 確認後去掉 --dry-run 再跑一次
 ```
@@ -520,6 +522,22 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 
 ⚠️ 已知限制：帳本與 federation token store 一起被還原成同一份舊備份時，高水位與 token 紀錄也一樣舊，只剩安全邊際擋著：備份之後配發的 id 數超過邊際，之後的配發**可能重發它們**（跨租戶 log 洩漏）。備份越新，需要的邊際越小；預期配發量大時調高 `--account-id-margin`。
 
+### 讀出 state 與檢查管理設定：`state show`、`config check`
+
+工具（`offboard_tenant`、`generate_tenant_metadata` 的 `--state`）要的是 tenant-api 自己讀出來的 state，不是 ConfigMap 原文（[ADR-036 §12](../../docs/adr/036-single-parser-effective-config.md)）。`state show` 把每筆紀錄交給 server 用的同一個解析函式，印成一份 JSON（`schema: tenant-api.state-show/v1`）：
+
+```bash
+# 線上：讀 pod 設定的 store（唯讀；store 不存在算讀不到，不當成空的）
+kubectl -n tenant-api exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json
+# 備份：不需要 store 設定
+docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant-api-state-backup.yaml > state.json
+```
+
+- 每筆紀錄是 `{"key", "record", "problem"}`，`record`（解碼結果，欄位名與紀錄的 YAML 相同）與 `problem` 恰有一個不是 null。`problem.kind`：`unreadable`（parse-tree 判為讀不了）或 `rejected`（解碼或該紀錄的檢查拒收）。store 沒有的紀錄不列。
+- 不讀執行中 server 的熱重載快照：熱重載失敗時 server 保留上一版，讀快照會把壞掉的紀錄藏起來。
+- 結束碼：0 已印出（包括帶 problem 的紀錄）、1 store 或備份讀不到、2 用法錯誤。
+
+`config check --kind rbac|tenant-orgs FILE|-` 以 server 讀 `_rbac.yaml`／`_tenant_orgs.yaml` 的同一個解析函式判定，印出 `{"schema": "tenant-api.config-check/v1", "kind", "config", "problem"}`；RBAC 另依 `--identity-claim-headers`（或 `TA_IDENTITY_CLAIM_HEADERS`）宣告的 claim 檢查。空檔讀得了（空設定）。結束碼：0 讀得了、1 拒收、2 用法錯誤或輸入打不開。
 
 ### dir 模式的外部寫入者必須拿 flock
 

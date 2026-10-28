@@ -22,8 +22,9 @@ What is pinned here, and why each is pinned:
   `!!python/object/apply` payload must be refused. ⛔ Deleting that test
   leaves them unguarded.
 * **Nothing the pre-#2123 private loaders refused is accepted now**
-  (`check_admin_config_schema`, `check_image_pin_capability` compared
-  CONSTRUCTED keys — stricter than yaml.v3 — and keep doing so).
+  (`check_image_pin_capability` compared CONSTRUCTED keys — stricter than
+  yaml.v3 — and keeps doing so; `check_admin_config_schema`, the other, no
+  longer reads YAML with PyYAML, ADR-036 §12).
 """
 from __future__ import annotations
 
@@ -171,19 +172,13 @@ _LEGACY_VALUE_IDENTITY = {
 
 @pytest.mark.parametrize("doc", sorted(_LEGACY_VALUE_IDENTITY.values()),
                          ids=sorted(_LEGACY_VALUE_IDENTITY))
-def test_admin_config_and_image_pin_still_refuse_equal_constructed_keys(doc):
-    import check_admin_config_schema as adm
+def test_image_pin_still_refuses_equal_constructed_keys(doc):
+    # (check_admin_config_schema left PyYAML in ADR-036 §12: tenant-api's
+    # `config check` and parse-tree judge its files — the duplicate keys are
+    # yaml.v3's, tests/lint/test_check_admin_config_schema.py.)
     import check_image_pin_capability as pin
-    with pytest.raises(DuplicateKeyError):
-        adm._load_all_strict(doc)
     with pytest.raises(yaml.YAMLError):
         pin.load_all_strict(doc)
-
-
-def test_admin_config_still_refuses_an_override_of_a_merged_key():
-    import check_admin_config_schema as adm
-    with pytest.raises(DuplicateKeyError):
-        adm._load_all_strict("a: &x {p: 1}\nc:\n  <<: *x\n  p: 2\n")
 
 
 def test_image_pin_still_refuses_a_merge_key():
@@ -200,10 +195,7 @@ def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected)
     (patch_config's and deprecate_rule's own walkers left with ADR-036 §2,
     #2906: they read conf.d through da-guard parse-tree, whose duplicate_key
     is yaml.v3's — tests/shared/test_writers_confirm_parse_tree.py.)"""
-    import check_admin_config_schema as adm
     import check_image_pin_capability as pin
-    with pytest.raises(yaml.YAMLError):
-        adm._load_all_strict(doc)
     with pytest.raises(yaml.YAMLError):
         pin.load_all_strict(doc)
     assert find_duplicate_key(yaml.compose(doc)) is not None

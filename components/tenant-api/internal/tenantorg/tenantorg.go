@@ -45,7 +45,7 @@ import (
 
 // Config is the parsed _tenant_orgs.yaml structure: tenant ID → org list.
 type Config struct {
-	TenantOrgs map[string][]string `yaml:"tenant_orgs"`
+	TenantOrgs map[string][]string `yaml:"tenant_orgs" json:"tenant_orgs"`
 }
 
 // Manager holds the hot-reloadable tenant→orgs mapping. The hot-reload
@@ -132,6 +132,14 @@ func parseConfig(data []byte) (*Config, error) {
 		cfg.TenantOrgs = make(map[string][]string)
 	}
 	return &cfg, nil
+}
+
+// ParseConfig is the parse function the server reads _tenant_orgs.yaml with
+// (parseConfig), exported for `tenant-api config check --kind tenant-orgs`
+// (ADR-036 §12): a file it accepts is one the server loads, one it refuses
+// the server refuses too.
+func ParseConfig(data []byte) (*Config, error) {
+	return parseConfig(data)
 }
 
 // OrgsInTree reads tenantID's organizations from the `_tenant_orgs.yaml` in

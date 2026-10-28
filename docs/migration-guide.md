@@ -361,7 +361,7 @@ Prometheus 下次 reload 自動處理；不需重啟 Pod。典型客戶情境決
 
 ```bash
 da-tools offboard db-a              # 預檢（無外部依賴）
-da-tools offboard db-a --state tenant-api-state.yaml --execute    # 確認後執行（--state：kubectl get configmap tenant-api-state -o yaml 存下的檔）
+da-tools offboard db-a --state state.json --execute    # 確認後執行（--state：kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show 的輸出）
 
 da-tools deprecate mysql_slave_lag             # 預覽
 da-tools deprecate mysql_slave_lag --execute   # 修改檔案

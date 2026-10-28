@@ -27,6 +27,18 @@ import pytest
 import yaml
 from _render_baseline import baseline_args
 
+
+def _ta_env(out: str, name: str):
+    """The tenant-api container's env value *name* in a render (ADR-036 §12:
+    settings with a TA_* variable are env, not args); None when absent."""
+    for d in yaml.safe_load_all(out):
+        if d and d.get("kind") == "Deployment":
+            for c in d["spec"]["template"]["spec"]["containers"]:
+                if c["name"] == "tenant-api":
+                    vals = [e.get("value") for e in c.get("env") or [] if e["name"] == name]
+                    return vals[0] if vals else None
+    return None
+
 _CHART = "helm/tenant-api"
 _VALUES = "helm/tenant-api/values.yaml"
 _DEPLOYMENT = "helm/tenant-api/templates/deployment.yaml"
@@ -71,8 +83,8 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
     assert "humanSocket.enabled" in directives, (
         "deployment must gate the socket wiring on humanSocket.enabled"
     )
-    assert "--human-socket=" in directives, (
-        "deployment must pass --human-socket when enabled"
+    assert "TA_HUMAN_SOCKET" in directives and "--human-socket" not in directives, (
+        "deployment must pass TA_HUMAN_SOCKET (env, ADR-036 §12) when enabled"
     )
     assert "unix://" in directives, (
         "deployment must switch the oauth2-proxy upstream to unix:// when enabled"
@@ -103,8 +115,8 @@ def test_render_default_omits_socket_wiring(repo_root: Path):
         "default render must keep the http upstream"
     )
     assert "unix://" not in out, "default render must NOT emit a unix:// upstream"
-    assert "--human-socket=" not in out, (
-        "default render must NOT pass --human-socket"
+    assert _ta_env(out, "TA_HUMAN_SOCKET") is None and "--human-socket" not in out, (
+        "default render must NOT pass the human socket"
     )
     assert "name: human-sock" not in out, (
         "default render must NOT mount the human-sock volume"
@@ -124,8 +136,8 @@ def test_render_enabled_switches_upstream_and_mounts_socket(repo_root: Path):
     assert "http://localhost:8080" not in out, (
         "enabled render must NOT leave the http upstream behind (else both would render)"
     )
-    assert "--human-socket=/run/ta-human/human.sock" in out, (
-        "enabled render must pass --human-socket to tenant-api"
+    assert _ta_env(out, "TA_HUMAN_SOCKET") == "/run/ta-human/human.sock", (
+        "enabled render must pass TA_HUMAN_SOCKET to tenant-api"
     )
     # the volume is mounted into both containers (2 mounts) + defined once (1).
     assert out.count("name: human-sock") == 3, (

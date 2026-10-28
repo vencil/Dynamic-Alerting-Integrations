@@ -61,12 +61,12 @@ const (
 // With Match present, Name becomes a pure label / audit identifier and the
 // rule applies iff the Match conditions hold (see MatchBlock).
 type GroupRule struct {
-	Name         string       `yaml:"name"`
-	Match        *MatchBlock  `yaml:"match,omitempty"`        // optional claims-aware matcher; nil = legacy name matching
-	Tenants      []string     `yaml:"tenants"`                // tenant IDs or patterns ("*", "db-a-*")
-	Permissions  []Permission `yaml:"permissions"`            // [read, write, admin]
-	Environments []string     `yaml:"environments,omitempty"` // ["production", "staging"] — empty = all
-	Domains      []string     `yaml:"domains,omitempty"`      // ["finance", "ecommerce"] — empty = all
+	Name         string       `yaml:"name" json:"name"`
+	Match        *MatchBlock  `yaml:"match,omitempty" json:"match,omitempty"`               // optional claims-aware matcher; nil = legacy name matching
+	Tenants      []string     `yaml:"tenants" json:"tenants"`                               // tenant IDs or patterns ("*", "db-a-*")
+	Permissions  []Permission `yaml:"permissions" json:"permissions"`                       // [read, write, admin]
+	Environments []string     `yaml:"environments,omitempty" json:"environments,omitempty"` // ["production", "staging"] — empty = all
+	Domains      []string     `yaml:"domains,omitempty" json:"domains,omitempty"`           // ["finance", "ecommerce"] — empty = all
 
 	// OrgScope opts this rule into the org-scope axis (ADR-027 / LD-6 P4).
 	// Empty (the default) = the rule places no org restriction and behaves
@@ -76,7 +76,7 @@ type GroupRule struct {
 	// tenant. The key MUST be declared in --identity-claim-headers
 	// (validateConfig enforces this at load — an org-scope on an undeclared
 	// claim could never match and must fail loud, not silently deny).
-	OrgScope string `yaml:"org-scope,omitempty"`
+	OrgScope string `yaml:"org-scope,omitempty" json:"org-scope,omitempty"`
 }
 
 // MatchBlock is the claims-aware rule matcher (ADR-027 / LD-6 P3).
@@ -100,13 +100,13 @@ type GroupRule struct {
 // onto the same claim key — nothing here can tell them apart. A true
 // issuer namespace arrives with JWT verification (iss), deferred to D2-A.
 type MatchBlock struct {
-	Groups []string            `yaml:"groups,omitempty"` // OR-within: any one group qualifies
-	Claims map[string][]string `yaml:"claims,omitempty"` // claim key → allowed values (OR-within); keys AND-across
+	Groups []string            `yaml:"groups,omitempty" json:"groups,omitempty"` // OR-within: any one group qualifies
+	Claims map[string][]string `yaml:"claims,omitempty" json:"claims,omitempty"` // claim key → allowed values (OR-within); keys AND-across
 }
 
 // RBACConfig is the parsed _rbac.yaml structure.
 type RBACConfig struct {
-	Groups []GroupRule `yaml:"groups"`
+	Groups []GroupRule `yaml:"groups" json:"groups"`
 }
 
 // Manager holds the hot-reloadable RBAC config. The hot-reload

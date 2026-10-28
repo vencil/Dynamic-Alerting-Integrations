@@ -14,8 +14,8 @@
   python3 offboard_tenant.py db-a --config-dir /path/to/conf.d --execute
 
   # 一併檢查 tenant-api state store 的引用（群組、views、federation 子集）
-  kubectl -n tenant-api get configmap tenant-api-state -o yaml > state.yaml
-  python3 offboard_tenant.py db-a --state state.yaml --execute
+  kubectl -n tenant-api exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json
+  python3 offboard_tenant.py db-a --state state.json --execute
 
 Pre-check 項目:
   1. 確認 tenant config 檔案存在
@@ -24,8 +24,12 @@ Pre-check 項目:
   4. 檢查是否有 custom_ 前綴的規則引用此 tenant
   5. tenant-api state store 的引用（--state）：群組成員、views 的 filters、
      federation 子集；AccountID 配發只列為資訊（永不回收，ADR-021）。
-     工具不寫 state store，只印出要呼叫的 tenant-api API。沒給 --state 時
-     標為「未判定」，--execute 需另加 --skip-state-check 才執行。
+     工具不寫 state store，只印出要呼叫的 tenant-api API。--state 收
+     `tenant-api state show` 印出的 JSON（ADR-036 §12：紀錄由 tenant-api 自己的
+     解析函式讀；舊的 ConfigMap／state 目錄輸入一律拒收並附取得 JSON 的指令）。
+     沒給 --state，或用到的紀錄（groups、views、該租戶的 subset）帶 problem
+     （tenant-api 無法使用）時標為「未判定」並點名，--execute 需另加
+     --skip-state-check 才執行；帶 problem 的紀錄絕不當成空。
 
 讀取（ADR-036 §2，#2906）：哪些檔、每個檔的內容一律取自 `da-guard parse-tree`
 （yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到的租戶檔裡（任何深度，exporter 遞迴讀整棵樹），`tenants:`
@@ -71,6 +75,9 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 _TOOL = "offboard_tenant"
 from _lib_confd import LEGACY_STATE_FILES  # noqa: E402  (#2883)
 from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets live in tenant-api's state store)
+    KEY_ACCOUNT_REGISTRY,
+    KEY_GROUPS,
+    KEY_VIEWS,
     StateInputError,
     load_state,
     subset_key,
@@ -272,14 +279,14 @@ def _legacy_refs(tenant, state, config_dir):
         return e is not None and e.config_file
     for name in LEGACY_STATE_FILES:
         path = base / name
-        if name == "_account_registry.yaml" or name in state.records or not config_file(name):
+        if name == "_account_registry.yaml" or state.has(name) or not config_file(name):
             continue
         if name not in tree.selected:
             continue
         if any(tenant in t for t in _texts(tree.node(name))):
             refs.append((f"conf.d 的 {safe_label(name)}（state store 沒有這筆紀錄，tenant-api 下次開機會匯入）",
                          f"刪除 {safe_label(str(path))}，或先讓 tenant-api 匯入後再以 API 清除"))
-    if subset_key(tenant) not in state.records:
+    if not state.has(subset_key(tenant)):
         for ext in (".yaml", ".yml"):
             path = base / "_federation" / f"{tenant}{ext}"
             if config_file(f"_federation/{tenant}{ext}"):
@@ -288,36 +295,58 @@ def _legacy_refs(tenant, state, config_dir):
     return refs
 
 
+def state_keys_used(tenant):
+    """這個工具判定 tenant 的 state 引用時用到的紀錄（ADR-036 §12）：groups、
+    views 與該租戶的 federation 子集。federation 白名單與 AccountID 帳本不在
+    其中——前者不含租戶引用，後者只列為資訊。"""
+    return (KEY_GROUPS, KEY_VIEWS, subset_key(tenant))
+
+
+def undetermined_state_records(tenant, state):
+    """用到的紀錄中 tenant-api 無法使用的（帶 problem）：[(key, Problem)]。
+    這些紀錄的引用無法判定——絕不當成空（ADR-036 §12）。"""
+    return [(k, state.problem(k)) for k in state_keys_used(tenant)
+            if state.problem(k) is not None]
+
+
 def check_state_references(tenant, state, config_dir=None):
     """tenant-api state store 中對 tenant 的引用（#2883）。
 
     回傳 (references, info)：references 是 (說明, 要呼叫的 API) 的清單，
     info 是只供參考的行（AccountID 配發）。config_dir 給定時，另列 conf.d
-    殘留舊檔中 tenant-api 下次開機會匯入的引用。
+    殘留舊檔中 tenant-api 下次開機會匯入的引用。帶 problem 的紀錄不在這裡
+    判定（`undetermined_state_records` 點名它們）。
     """
     refs = _legacy_refs(tenant, state, config_dir)
-    for gid, g in sorted(state.groups().items()):
-        members = [str(m) for m in (g.get("members") or [])]
-        if tenant in members:
-            refs.append((f"群組 {safe_label(gid)} 的成員",
-                         f"PUT /api/v1/groups/{safe_label(gid)}（members 移除 {safe_label(tenant)}）"))
-    for vid, v in sorted(state.views().items()):
-        filters = v.get("filters") or {}
-        if not isinstance(filters, dict):
-            continue
-        keys = sorted(str(k) for k, val in filters.items() if str(val) == tenant)
-        if keys:
-            refs.append((f"view {safe_label(vid)} 的 filters（{safe_label(', '.join(keys))}）",
-                         f"PUT 或 DELETE /api/v1/views/{safe_label(vid)}"))
+    if state.problem(KEY_GROUPS) is None:
+        for gid, g in sorted(state.groups().items()):
+            members = [str(m) for m in (g.get("members") or [])]
+            if tenant in members:
+                refs.append((f"群組 {safe_label(gid)} 的成員",
+                             f"PUT /api/v1/groups/{safe_label(gid)}（members 移除 {safe_label(tenant)}）"))
+    if state.problem(KEY_VIEWS) is None:
+        for vid, v in sorted(state.views().items()):
+            filters = v.get("filters") or {}
+            if not isinstance(filters, dict):
+                continue
+            keys = sorted(str(k) for k, val in filters.items() if str(val) == tenant)
+            if keys:
+                refs.append((f"view {safe_label(vid)} 的 filters（{safe_label(', '.join(keys))}）",
+                             f"PUT 或 DELETE /api/v1/views/{safe_label(vid)}"))
     key = subset_key(tenant)
-    if key in state.records:
+    if state.has(key) and state.problem(key) is None:
         refs.append((f"federation 子集紀錄 {safe_label(key)}",
                      "tenant-api 沒有刪除子集的 API：照 docs/internal/tenant-offboarding-runbook.md 步驟 2 "
                      "以 kubectl patch 移除 ConfigMap 的這個 key"))
     info = []
-    account = state.account_id(tenant)
-    if account is not None:
-        info.append(f"AccountID 配發 {safe_label(account)}：永不回收（ADR-021），不需要也不可以清")
+    reg_problem = state.problem(KEY_ACCOUNT_REGISTRY)
+    if reg_problem is not None:
+        info.append(f"AccountID 帳本 tenant-api 無法使用（{safe_label(reg_problem.kind)}）："
+                    f"{safe_label(reg_problem.message)}——配發無法列出（只供參考，不擋下架）")
+    else:
+        account = state.account_id(tenant)
+        if account is not None:
+            info.append(f"AccountID 配發 {safe_label(account)}：永不回收（ADR-021），不需要也不可以清")
     return refs, info
 
 
@@ -398,6 +427,9 @@ def run_precheck(tenant, config_dir, state=None, *, emit=None):
         report.append("⚠️  state store 引用：未判定（未提供 --state；群組、views、"
                       "federation 子集存在 tenant-api 的 state store，不在 conf.d）")
     else:
+        for key, prob in undetermined_state_records(tenant, state):
+            report.append(f"⚠️  state store 引用：未判定——{safe_label(key)} tenant-api 無法使用"
+                          f"（{safe_label(prob.kind)}）：{safe_label(prob.message)}")
         state_refs, state_info = check_state_references(tenant, state, config_dir)
         if state_refs:
             report.append(f"⚠️  state store 引用 ({safe_label(state.source)})，"
@@ -502,7 +534,7 @@ def execute_offboard(tenant, config_dir):
     return True
 
 
-@exit_on_yaml_file_error  # #2883: an unreadable --state record → rc 2, named
+@exit_on_yaml_file_error  # #1654: an unreadable YAML file → rc 2, named
 @_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
 def main():
     """CLI entry point: 安全的 Tenant 下架工具。."""
@@ -517,10 +549,11 @@ def main():
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只做 Pre-check)")
     parser.add_argument("--state",
-                        help="tenant-api state store 的副本：state 目錄，或 "
-                             "`kubectl get configmap tenant-api-state -o yaml|json` 存下的檔")
+                        help="`tenant-api state show` 印出的 JSON（- 為標準輸入）："
+                             "`kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json`")
     parser.add_argument("--skip-state-check", action="store_true",
-                        help="沒有 --state 時仍允許 --execute（state store 引用不檢查）")
+                        help="state store 引用無法判定時仍允許 --execute：沒給 --state，"
+                             "或用到的紀錄（groups、views、該租戶的 subset）tenant-api 無法使用")
 
     args = parser.parse_args()
     # ADR-035: the id names a conf.d key and a file — refuse what the
@@ -535,7 +568,9 @@ def main():
         try:
             state = load_state(args.state)
         except StateInputError as e:
-            print(f"ERROR: {safe_label(e)}", file=sys.stderr)
+            hint = ("（state store 若確實是空的，不給 --state、改加 --skip-state-check）"
+                    if e.empty else "")
+            print(f"ERROR: {safe_label(e)}{hint}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
     with _lib_parse_cache.session():  # one parse-tree document for the run
@@ -551,6 +586,12 @@ def _run(args, state):
         if can_proceed and state is None and not args.skip_state_check:
             print("\n❌ 未提供 --state，無法確認 tenant-api state store 的引用。"
                   "加 --state，或明確加 --skip-state-check 後再執行下架。")
+            sys.exit(EXIT_CALLER_ERROR)
+        undetermined = [] if state is None else undetermined_state_records(args.tenant, state)
+        if can_proceed and undetermined and not args.skip_state_check:
+            names = ", ".join(safe_label(k) for k, _ in undetermined)
+            print(f"\n❌ state store 引用無法判定：tenant-api 無法使用 {names}。"
+                  "修好這些紀錄後重新取得 state show，或明確加 --skip-state-check 後再執行下架。")
             sys.exit(EXIT_CALLER_ERROR)
         if can_proceed:
             print(f"\n⚡ 正在執行下架...\n")

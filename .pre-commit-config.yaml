@@ -807,12 +807,17 @@ repos:
         # it is verbose.
         verbose: true
 
-      # Gemini #1056 disposition 3b: pre-merge structural validation for the
-      # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).
-      # _rbac / _tenant_orgs parse STRICTLY (yaml KnownFields), so a typo'd key is a
-      # runtime LOAD ERROR — startup-fatal, or last-good masking on hot-reload.
-      # _domain_policy parses LENIENTLY (policy.go uses plain yaml.Unmarshal), so a
-      # typo'd constraint key is SILENTLY IGNORED and this lint is its ONLY guard.
+      # Gemini #1056 disposition 3b: pre-merge validation for the tenant-api ADMIN
+      # meta-config files (_rbac / _domain_policy / _tenant_orgs). ADR-036 §12: each
+      # is read by its consumer — _rbac / _tenant_orgs and the Helm-embedded RBAC by
+      # `tenant-api config check` (the server's parse functions; a refusal is a
+      # violation), _domain_policy by `da-guard parse-tree`, the Helm values by
+      # `da-crdecode`; the JSON schemas are the stricter authoring checks on what
+      # those decoded. The wrapper uses $TENANT_API_BINARY / $DA_CRDECODE_BINARY /
+      # $DA_GUARD_BINARY when set, else builds .build/<name> (make <name>-build);
+      # without go that build fails by name and so does this hook — a run without
+      # the readers must not pass. _domain_policy's runtime reader is LENIENT (a
+      # typo'd constraint key is SILENTLY IGNORED), so this lint is its ONLY guard.
       # Either way the failure is invisible until production; this shifts it left so
       # a broken admin config cannot merge. pass_filenames: true + a stem regex
       # matches these files ANYWHERE in the repo (try-local seed, examples, future
@@ -833,7 +838,7 @@ repos:
       # Lint job (pre-commit run admin-config-schema-check).
       - id: admin-config-schema-check
         name: admin meta-config (_rbac / _domain_policy / _tenant_orgs + embedded RBAC) ↔ JSON schemas
-        entry: python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
+        entry: bash scripts/ops/with_admin_config_tools.sh python3 -X utf8 scripts/tools/lint/check_admin_config_schema.py
         language: python
         files: '(^|/)(_rbac|_domain_policy|_tenant_orgs)\.ya?ml$|(^|/)helm/tenant-api/values\.yaml$'
         additional_dependencies: ['pyyaml', 'jsonschema']

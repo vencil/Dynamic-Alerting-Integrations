@@ -192,21 +192,21 @@ func TestEffectiveSubset(t *testing.T) {
 
 func TestParsePolicyConfig(t *testing.T) {
 	doc := []byte("whitelist:\n  - metric: mysql_up\n  - metric: pg_up\n")
-	cfg, err := parsePolicyConfig(doc)
+	cfg, err := ParsePolicyConfig(doc)
 	if err != nil {
-		t.Fatalf("parsePolicyConfig() error = %v", err)
+		t.Fatalf("ParsePolicyConfig() error = %v", err)
 	}
 	if len(cfg.Whitelist) != 2 || cfg.Whitelist[0].Metric != "mysql_up" {
-		t.Fatalf("parsePolicyConfig() = %+v, want 2 entries starting with mysql_up", cfg.Whitelist)
+		t.Fatalf("ParsePolicyConfig() = %+v, want 2 entries starting with mysql_up", cfg.Whitelist)
 	}
 
 	// An empty document yields an empty, non-nil whitelist.
-	empty, err := parsePolicyConfig([]byte(""))
+	empty, err := ParsePolicyConfig([]byte(""))
 	if err != nil {
-		t.Fatalf("parsePolicyConfig(empty) error = %v", err)
+		t.Fatalf("ParsePolicyConfig(empty) error = %v", err)
 	}
 	if empty.Whitelist == nil {
-		t.Error("parsePolicyConfig(empty) Whitelist is nil, want non-nil empty slice")
+		t.Error("ParsePolicyConfig(empty) Whitelist is nil, want non-nil empty slice")
 	}
 }
 
@@ -266,8 +266,8 @@ func TestParse_ParseTreeRefusal(t *testing.T) {
 		{"!!binary value", "whitelist:\n  - metric: !!binary bTE=\n", "metrics:\n  - !!binary bTE=\n", "tag_not_allowed"},
 		{"non-specific tag", "whitelist:\n  - metric: ! \"m1\"\n", "metrics:\n  - ! \"m1\"\n", "non_specific_tag"},
 	} {
-		if cfg, err := parsePolicyConfig([]byte(c.whitelist)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
-			t.Errorf("%s: parsePolicyConfig = %+v, %v; want a refusal of kind %s", c.name, cfg, err, c.kind)
+		if cfg, err := ParsePolicyConfig([]byte(c.whitelist)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
+			t.Errorf("%s: ParsePolicyConfig = %+v, %v; want a refusal of kind %s", c.name, cfg, err, c.kind)
 		}
 		if s, err := ParseSubset([]byte(c.subset)); err == nil || !strings.Contains(err.Error(), "kind "+c.kind) {
 			t.Errorf("%s: ParseSubset = %+v, %v; want a refusal of kind %s", c.name, s, err, c.kind)

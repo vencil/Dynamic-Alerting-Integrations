@@ -98,6 +98,10 @@ func main() {
 	if stateSubcommand(os.Args) {
 		os.Exit(runStateCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
+	// ADR-036 §12: `tenant-api config check --kind rbac|tenant-orgs FILE|-`.
+	if configSubcommand(os.Args) {
+		os.Exit(runConfigCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 
 	// ── Flags ──────────────────────────────────────────────────────────────────
 	// --config-dir and the state-store flags are shared with `tenant-api
@@ -116,8 +120,8 @@ func main() {
 		"#1597: bind a rule's environments[]/domains[] on the WRITE plane. Before this the fields constrained only list visibility, so a rule reading environments:[production] still permitted writes to every tenant it matched. Default false = shadow (writes still allowed, but counted as tenant_api_scope_would_deny_total{axis=\"metadata_write\"}); flip only after that counter shows increase()==0 over the soak window. SEPARATE from --rbac-metadata-scope-enforce on purpose: that flag governs an axis the list plane already binds, so reusing it would tighten writes the moment a list-plane-soaked deployment upgraded.")
 	rbacOrgScopeEnforce := flag.Bool("rbac-org-scope-enforce", envBool("TA_RBAC_ORG_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P4: fail-closed org-scope axis — an org-scoped rule DENIES an unlabeled tenant (no orgs in _tenant_orgs.yaml) instead of shadow-allowing it. ONE flag flips both list visibility (ScopeAllowed) and write authorization (AllowedInOrg) atomically. Default false = shadow (allow, but count tenant_api_scope_would_deny_total{axis=\"org\"} and {axis=\"org_write\"}); flip only after BOTH axes show increase()==0 over the soak window")
-	identityClaimHeaders := flag.String("identity-claim-headers", envOrDefault("TA_IDENTITY_CLAIM_HEADERS", ""),
-		"ADR-027/LD-6 P2: comma-separated claimKey=Header-Name pairs (e.g. 'org=X-Auth-Request-Org,region=X-Auth-Request-Region') declaring which trusted-hop headers load which named verified claims onto the request principal. Claims are carried only — nothing consumes them for authz until P3 match evaluation. Default empty = the seam is closed and behavior is unchanged.")
+	// Shared with `tenant-api config check` (ADR-036 §12).
+	identityClaimHeaders := registerIdentityClaimFlag(flag.CommandLine)
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
@@ -267,6 +271,11 @@ func main() {
 		"#2903 (ADR-036 §4/§5): read-only path of the deployment policy file the generator container judges with (its --policy). tenant-api hashes it to check that the generator judged with the same file. Empty = the generator runs without one (both sides must agree)")
 
 	flag.Parse()
+	// ADR-036 §12: an unknown TA_* variable is a usage error, like an unknown
+	// flag (env_check.go).
+	if !checkTAEnv(os.Environ(), os.Stderr) {
+		os.Exit(2)
+	}
 	if err := checkRBACFlag(flagExplicit(flag.CommandLine, "rbac"), *rbacPath); err != nil {
 		log.Fatalf("FATAL: %v (#2491)", err)
 	}

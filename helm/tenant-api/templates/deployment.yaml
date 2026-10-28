@@ -146,32 +146,46 @@ spec:
             readOnlyRootFilesystem: false
             capabilities:
               drop: ["ALL"]
+          # ADR-036 §12: every setting tenant-api reads from a TA_* variable
+          # (envOrDefault / envBool / envNonEmptyOrDefault in cmd/server) is
+          # passed in `env:` below, never as an arg, so a subcommand run in
+          # this container with `kubectl exec ... tenant-api state show|restore`
+          # or `config check` reads the same settings as the server. Only flags
+          # with no TA_* counterpart stay args.
+          # tests/helm/test_tenant_api_settings_are_env.py derives the TA_*
+          # flag list from the Go source and fails on any such flag here.
+          # A TA_* variable this image does not read stops it (exit 2, the
+          # name printed: cmd/server/env_check.go), as an unknown flag does —
+          # so a chart newer than its image fails loudly instead of having a
+          # setting ignored. An image older than that check still ignores it.
           args:
-            - --addr={{ .Values.tenantApi.listenAddr }}
-            - --config-dir=/conf.d
-            - --git-dir=/conf.d
-            - --state-store=configmap
-            - --state-configmap={{ .Values.state.configMapName }}
-            - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
+          env:
+            {{- include "tenant-api.taEnv" (list "TA_ADDR" .Values.tenantApi.listenAddr "tenantApi.listenAddr") | nindent 12 }}
+            - name: TA_CONFIG_DIR
+              value: "/conf.d"
+            - name: TA_GIT_DIR
+              value: "/conf.d"
+            - name: TA_RBAC_PATH
+              value: "/etc/rbac/_rbac.yaml"
             # #2855: always explicit — the chart used to pass none, so every
             # install ran direct. writeBackGuard (_helpers.tpl) rejects an
             # unset or incomplete writeBack before we get here.
-            - --write-mode={{ .Values.writeBack.mode }}
+            {{- include "tenant-api.taEnv" (list "TA_WRITE_MODE" .Values.writeBack.mode "writeBack.mode") | nindent 12 }}
             {{- if ne .Values.writeBack.mode "direct" }}
-            - --git-base-branch={{ .Values.writeBack.baseBranch }}
+            {{- include "tenant-api.taEnv" (list "TA_GIT_BASE_BRANCH" .Values.writeBack.baseBranch "writeBack.baseBranch") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
-            - --github-repo={{ .Values.writeBack.github.repo }}
-            - --github-base-branch={{ .Values.writeBack.github.targetBranch }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_REPO" .Values.writeBack.github.repo "writeBack.github.repo") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_BASE_BRANCH" .Values.writeBack.github.targetBranch "writeBack.github.targetBranch") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
             {{- /* A numeric project id written in a values file is a float64
                  to helm, printed as 4.5678901e+07 from 1e6 up; print it as an
                  integer. */}}
             {{- $project := .Values.writeBack.gitlab.project }}
-            - --gitlab-project={{ if kindIs "float64" $project }}{{ $project | int64 }}{{ else }}{{ $project }}{{ end }}
-            - --gitlab-target-branch={{ .Values.writeBack.gitlab.targetBranch }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_PROJECT" (ternary (toString ($project | int64)) (toString $project) (kindIs "float64" $project)) "writeBack.gitlab.project") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_TARGET_BRANCH" .Values.writeBack.gitlab.targetBranch "writeBack.gitlab.targetBranch") | nindent 12 }}
             {{- end }}
             {{- if .Values.rbac.metadataScopeEnforce }}
             # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
@@ -181,24 +195,26 @@ spec:
             # has stayed 0 over the soak window (monotonic counter — a zero rate,
             # not an absolute-zero value) AND a scan confirms no still-unlabeled
             # tenant, mirroring the machineIdentity audit→enforce discipline.
-            - --rbac-metadata-scope-enforce
+            - name: TA_RBAC_METADATA_SCOPE_ENFORCE
+              value: "true"
             {{- end }}
             {{- if .Values.rbac.metadataWriteScopeEnforce }}
             # ADR-027 / #1597: bind the env/domain metadata axis to the WRITE
             # plane too (before #1597 it constrained list visibility only, so a
             # rule scoped to one environment could still PUT a tenant in
-            # another). Its OWN flag, not metadataScopeEnforce: that one flips an
-            # already-bound axis, this one binds writes for the first time, so
+            # another). Its OWN switch, not metadataScopeEnforce: that one flips
+            # an already-bound axis, this one binds writes for the first time, so
             # sharing would tighten a list-plane-soaked deployment on upgrade
             # with no soak window. Flip ONLY after
             # increase(tenant_api_scope_would_deny_total{axis="metadata_write"}[soak])
             # has stayed 0 over the window — a non-zero rate names the real
             # writes this flip starts rejecting.
-            - --rbac-metadata-write-scope-enforce
+            - name: TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE
+              value: "true"
             {{- end }}
             {{- if .Values.rbac.orgScopeEnforce }}
             # ADR-027 / LD-6 P4: flip the org scope axis from SHADOW (default) to
-            # fail-closed — ONE flag atomically enforces list visibility, write
+            # fail-closed — ONE switch atomically enforces list visibility, write
             # authorization AND read-by-id (P4a+P4b+P4c) for org-scoped rules; no
             # split-brain. Flip ONLY after
             # increase(tenant_api_scope_would_deny_total{axis="org"}[soak]) AND
@@ -206,37 +222,33 @@ spec:
             # covers list + read-by-id/collection reads — P4c closed the read
             # IDOR, #1040) plus a scan for still-unlabeled tenants. Ship
             # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
-            - --rbac-org-scope-enforce
+            - name: TA_RBAC_ORG_SCOPE_ENFORCE
+              value: "true"
             {{- end }}
             # ADR-036 §3–§5 (#2903): every content-changing write asks the
             # generator container on this socket before it commits; with a
             # deployment policy file, tenant-api reads the same file (same
             # path in both containers) to check that the generator judged
             # with it.
-            - --generator-socket={{ include "tenant-api.generatorSocketPath" . }}
+            {{- include "tenant-api.taEnv" (list "TA_GENERATOR_SOCKET" (include "tenant-api.generatorSocketPath" .) "tenant-api.generatorSocketPath") | nindent 12 }}
             {{- if .Values.generator.policy.existingConfigMap }}
-            - --deploy-policy={{ include "tenant-api.generatorPolicyPath" . }}
-            {{- end }}
-            {{- if .Values.identity.claimHeaders }}
-            # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
-            # (identity.claimHeaders). Rendered as ONE flag, keys sorted (helm
-            # map range iterates key-sorted). Carriage-only in P2 — the binary
-            # loads the named claims onto the verified principal; no authz
-            # behavior changes until P3 match evaluation consumes them.
-            {{- $pairs := list }}
-            {{- range $k, $v := .Values.identity.claimHeaders }}
-            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
-            {{- end }}
-            - --identity-claim-headers={{ join "," $pairs }}
+            {{- include "tenant-api.taEnv" (list "TA_DEPLOY_POLICY" (include "tenant-api.generatorPolicyPath" .) "generator.policy (tenant-api.generatorPolicyPath)") | nindent 12 }}
             {{- end }}
             {{- if .Values.federation.enabled }}
-            - --federation-key=/etc/federation/{{ .Values.federation.signingKey.secretKey }}
-            - --federation-store={{ .Values.federation.store.configMapName }}
+            {{- $keyFile := .Values.federation.signingKey.secretKey }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_KEY" (ternary "" (printf "/etc/federation/%s" (toString $keyFile)) (empty $keyFile)) "federation.signingKey.secretKey") | nindent 12 }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_STORE" .Values.federation.store.configMapName "federation.store.configMapName") | nindent 12 }}
             # Always passed, never inferred. The binary would otherwise fall back
             # to the pod's own namespace, which silently disagrees with the
             # ConfigMap the chart just created whenever the two differ (#1313).
-            - --federation-namespace={{ include "tenant-api.federationStoreNamespace" . }}
-            - --federation-token-ttl={{ .Values.federation.tokenTTL }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_NAMESPACE" (include "tenant-api.federationStoreNamespace" .) "federation.store.namespace (tenant-api.federationStoreNamespace)") | nindent 12 }}
+            {{- /* As a flag, a malformed TTL stopped the start; tenant-api
+                 reads TA_FEDERATION_TOKEN_TTL leniently (warn + the 4h
+                 default), so the render refuses one Go cannot parse. */}}
+            {{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" (toString .Values.federation.tokenTTL)) }}
+            {{- fail (printf "federation.tokenTTL %q is not a Go duration (e.g. 4h, 90m)" (toString .Values.federation.tokenTTL)) }}
+            {{- end }}
+            {{- include "tenant-api.taEnv" (list "TA_FEDERATION_TOKEN_TTL" .Values.federation.tokenTTL "federation.tokenTTL") | nindent 12 }}
             {{- end }}
             {{- if .Values.machineIdentity.enabled }}
             # ADR-027 machine-identity audit baseline — verify machine callers'
@@ -247,8 +259,9 @@ spec:
             # audience would accept ANY SA token (incl. the default-audience
             # kube-apiserver token) — `required` fails the render loudly rather
             # than shipping that hole (ADR-027 G4).
-            - --machine-identity-audit
-            - --machine-identity-audience={{ required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience }}
+            - name: TA_MACHINE_IDENTITY_AUDIT
+              value: "true"
+            {{- include "tenant-api.taEnv" (list "TA_MACHINE_IDENTITY_AUDIENCE" (required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience) "machineIdentity.audience") | nindent 12 }}
             {{- end }}
             {{- if .Values.humanSocket.enabled }}
             # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): serve the
@@ -257,9 +270,23 @@ spec:
             # touches the network 8080 plane. The socket lives on the human-sock
             # emptyDir mounted into both containers. audit-only impact: requests
             # over this listener are excluded from the machine-identity audit.
-            - --human-socket={{ .Values.humanSocket.path }}
+            {{- include "tenant-api.taEnv" (list "TA_HUMAN_SOCKET" .Values.humanSocket.path "humanSocket.path") | nindent 12 }}
             {{- end }}
-          env:
+            - name: TA_STATE_STORE
+              value: "configmap"
+            {{- include "tenant-api.taEnv" (list "TA_STATE_CONFIGMAP" .Values.state.configMapName "state.configMapName") | nindent 12 }}
+            {{- if .Values.identity.claimHeaders }}
+            # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
+            # (identity.claimHeaders). Rendered as ONE value, keys sorted (helm
+            # map range iterates key-sorted). Carriage-only in P2 — the binary
+            # loads the named claims onto the verified principal; no authz
+            # behavior changes until P3 match evaluation consumes them.
+            {{- $pairs := list }}
+            {{- range $k, $v := .Values.identity.claimHeaders }}
+            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
+            {{- end }}
+            {{- include "tenant-api.taEnv" (list "TA_IDENTITY_CLAIM_HEADERS" (join "," $pairs) "identity.claimHeaders") | nindent 12 }}
+            {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
             - name: TA_GITHUB_TOKEN
               valueFrom:
@@ -267,8 +294,7 @@ spec:
                   name: {{ .Values.writeBack.token.secretName }}
                   key: {{ .Values.writeBack.token.secretKey }}
             {{- with .Values.writeBack.github.apiUrl }}
-            - name: TA_GITHUB_API_URL
-              value: {{ . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITHUB_API_URL" . "writeBack.github.apiUrl") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
@@ -278,8 +304,7 @@ spec:
                   name: {{ .Values.writeBack.token.secretName }}
                   key: {{ .Values.writeBack.token.secretKey }}
             {{- with .Values.writeBack.gitlab.apiUrl }}
-            - name: TA_GITLAB_API_URL
-              value: {{ . | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GITLAB_API_URL" . "writeBack.gitlab.apiUrl") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- include "tenant-api.gitCredentialEnv" . | nindent 12 }}
@@ -300,8 +325,7 @@ spec:
             # (and more aggressive than) the regular git timeout so a degraded forge
             # fast-fails to 503 instead of pinning the write lock. Emitted only when
             # set; otherwise the binary's 5s default applies.
-            - name: TA_GIT_FETCH_TIMEOUT
-              value: {{ .Values.tenantApi.gitFetchTimeout | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_GIT_FETCH_TIMEOUT" .Values.tenantApi.gitFetchTimeout "tenantApi.gitFetchTimeout") | nindent 12 }}
             {{- end }}
             {{- if ne (toString .Values.tenantApi.writeQueueDepth) "" }}
             # Write-plane load-shedding queue depth (TRK-320) — bounds writes
@@ -322,16 +346,13 @@ spec:
             {{- with .Values.tenantApi.server }}
             {{- with .timeouts }}
             {{- if .read }}
-            - name: TA_READ_TIMEOUT
-              value: {{ .read | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_READ_TIMEOUT" .read "tenantApi.server.timeouts.read") | nindent 12 }}
             {{- end }}
             {{- if .write }}
-            - name: TA_WRITE_TIMEOUT
-              value: {{ .write | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_WRITE_TIMEOUT" .write "tenantApi.server.timeouts.write") | nindent 12 }}
             {{- end }}
             {{- if .idle }}
-            - name: TA_IDLE_TIMEOUT
-              value: {{ .idle | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_IDLE_TIMEOUT" .idle "tenantApi.server.timeouts.idle") | nindent 12 }}
             {{- end }}
             {{- end }}
             {{- if .maxBodyBytes }}
@@ -349,16 +370,13 @@ spec:
             {{- end }}
             {{- with .Values.tenantApi.sse }}
             {{- if .heartbeat }}
-            - name: TA_SSE_HEARTBEAT
-              value: {{ .heartbeat | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_HEARTBEAT" .heartbeat "tenantApi.sse.heartbeat") | nindent 12 }}
             {{- end }}
             {{- if .writeTimeout }}
-            - name: TA_SSE_WRITE_TIMEOUT
-              value: {{ .writeTimeout | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_WRITE_TIMEOUT" .writeTimeout "tenantApi.sse.writeTimeout") | nindent 12 }}
             {{- end }}
             {{- if .maxLifetime }}
-            - name: TA_SSE_MAX_LIFETIME
-              value: {{ .maxLifetime | quote }}
+            {{- include "tenant-api.taEnv" (list "TA_SSE_MAX_LIFETIME" .maxLifetime "tenantApi.sse.maxLifetime") | nindent 12 }}
             {{- end }}
             {{- end }}
           ports:

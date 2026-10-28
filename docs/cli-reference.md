@@ -2410,8 +2410,8 @@ da-tools offboard <tenant> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
-| `--state <PATH>` | tenant-api state store 的副本：state 目錄，或 `kubectl get configmap tenant-api-state -o yaml`（或 `-o json`）存下的檔。用來列出群組成員、views 的 `filters`、federation 子集對這個租戶的引用（[#2883](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2883)） | — |
-| `--skip-state-check` | 沒有 `--state` 時仍允許 `--execute`（state store 引用不檢查） | false |
+| `--state <PATH>` | `tenant-api state show` 印出的 JSON（`-` 讀標準輸入）：每筆 state 紀錄經 tenant-api 自己的解析函式讀過（[ADR-036](adr/036-single-parser-effective-config.md) §12）。用來列出群組成員、views 的 `filters`、federation 子集對這個租戶的引用（[#2883](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2883)）。舊的輸入（存下的 ConfigMap、state 目錄）拒收並附取得 JSON 的指令 | — |
+| `--skip-state-check` | state store 引用無法判定時仍允許 `--execute`：沒給 `--state`，或用到的紀錄（groups、views、該租戶的 subset）tenant-api 無法使用（JSON 裡帶 `problem`） | false |
 
 不帶 `--execute` 就是預覽，不需要另外的 dry-run 旗標。
 
@@ -2419,16 +2419,17 @@ da-tools offboard <tenant> [options]
 
 Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時刪除宣告這個租戶的每一個租戶檔，任何深度（exporter 遞迴讀整棵樹：`<config-dir>/<tenant>.yaml`、`team-eu/<tenant>.yaml` 都算；同一租戶另由 `<tenant>.yml` 或別的租戶檔宣告時一併刪除，否則 exporter 仍從那個檔服務它；`_` 開頭的平台檔、子目錄的 `_defaults.yaml`、以及檔名帶著租戶 id 卻沒宣告它的檔都不刪，只算跨檔案引用）——不是工具自己刪，而是一批交給 [`da-guard write`](#guard) 的 `delete` 項目（[ADR-036](adr/036-single-parser-effective-config.md) §2：只有 Go 寫 conf.d，#3206）：它把每個檔當成搬移的來源判（一般檔、不是 symlink、有讀取端、parse-tree 讀得了），並以拿掉它們之後的整棵樹判一次（樹不能變壞），被拒時逐條點名、結束碼 `2`、什麼都不刪。pre-check（有沒有 `--execute` 都一樣）的判定包含同一批的 `--dry-run`，被拒同樣是 `2`，「✅ Pre-check 通過」只在它也通過後才印。**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
-群組、views、federation 子集存在 tenant-api 的 state store，不在 conf.d；conf.d 裡若還留著 `_groups.yaml` 等舊檔，只印 ⚠️ 說明已不再被讀，不拿它當答案。有 `--state` 時列出 state store 裡的引用與要呼叫的 tenant-api API；conf.d 殘留的舊檔若 state store 沒有對應紀錄，tenant-api 下次開機會匯入它，所以其中的引用也一併列出（例如 `PUT /api/v1/groups/{id}` 移除成員），工具本身不寫 state store；AccountID 配發只列為資訊（永不回收）。沒給 `--state` 時這一項標為「未判定」，`--execute` 需另加 `--skip-state-check` 才會執行。
+群組、views、federation 子集存在 tenant-api 的 state store，不在 conf.d；conf.d 裡若還留著 `_groups.yaml` 等舊檔，只印 ⚠️ 說明已不再被讀，不拿它當答案。有 `--state` 時列出 state store 裡的引用與要呼叫的 tenant-api API；conf.d 殘留的舊檔若 state store 沒有對應紀錄，tenant-api 下次開機會匯入它，所以其中的引用也一併列出（例如 `PUT /api/v1/groups/{id}` 移除成員），工具本身不寫 state store；AccountID 配發只列為資訊（永不回收）。沒給 `--state`，或用到的紀錄（groups、views、該租戶的 subset）帶 `problem`（tenant-api 無法使用，點名該紀錄與原因；絕不當成空）時，這一項標為「未判定」，`--execute` 需另加 `--skip-state-check` 才會執行。聯邦白名單與 AccountID 帳本不在判定範圍內，帶 `problem` 不擋下架。
 
 **範例**
 
 ```bash
 # 預設只做 Pre-check（不寫入）
 da-tools offboard db-old --config-dir ./conf.d
-# 實際執行下架（先存一份 state store 給 --state）
-kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.yaml
-da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --execute
+# 實際執行下架（先取得 tenant-api 讀出的 state 給 --state）
+kubectl -n tenant-api exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json
+# 從備份：docker run -i --rm <部署中的 tenant-api 映像> state show --from - < backup.yaml > state.json
+da-tools offboard db-old --config-dir ./conf.d --state state.json --execute
 ```
 
 **讀法（ADR-036 §2，#2906）**：哪些檔、每個檔的內容（含跨檔案引用的比對）一律取自 `da-guard parse-tree`（yaml.v3 的讀法）。要刪的檔是任何深度的租戶檔裡 `tenants:` 宣告了這個 tenant 的每一個，而且每一個都恰好只宣告這個 tenant；任何一個另宣告了別的租戶，pre-check 不通過（刪檔會連帶下架別人），一個都不刪。parse-tree 讀不了的檔具名、擋下 `--execute`。找不到可用的 da-guard 結束碼 `2`。
@@ -2439,7 +2440,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用），兩者都包含 `da-guard write --dry-run` 判同一批也通過；帶 `--execute` 時已刪除租戶檔（da-guard write 判定時檔已不在、沒有刪任何檔是 `2`） |
 | `1` | pre-check 未通過（沒有任何租戶檔宣告這個租戶——檔名是它卻沒宣告它的檔會點名「`<path>` 檔名是 `<tenant>` 但沒宣告它（宣告了 …）」，都沒有時是「找不到設定檔案」；或要刪的檔另宣告了別的租戶，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179）。conf.d 上有 parse-tree 讀不了的路徑時不到這一步：pre-check 之前就以 `2` 拒絕（[共用的拒絕](#confd-refusal)，#3206） |
-| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`<tenant>` 不合 ADR-035 的租戶 id 規則（點名規則，什麼都不讀不刪）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；`da-guard write` 拒刪，不論有沒有 `--execute`（設定檔是 symlink、拿掉後樹變壞……，stderr 逐條點名，什麼都不刪；pre-check 報告照印，但不印「通過」）；找不到可用的 da-guard |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`<tenant>` 不合 ADR-035 的租戶 id 規則（點名規則，什麼都不讀不刪）；`--state` 讀不了、不是 `tenant-api state show` 的 JSON（不認得的 `schema`、舊的 ConfigMap／state 目錄輸入）、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key；帶 `--execute` 卻沒有 `--state`、或用到的紀錄帶 `problem`，又沒有 `--skip-state-check`；`da-guard write` 拒刪，不論有沒有 `--execute`（設定檔是 symlink、拿掉後樹變壞……，stderr 逐條點名，什麼都不刪；pre-check 報告照印，但不印「通過」）；找不到可用的 da-guard |
 
 ---
 

@@ -1057,12 +1057,26 @@ def _ids_mapping_file(d, spell):
             for e in im.entries}
 
 
+def _state_show_json(d: Path, records: dict) -> Path:
+    """The `tenant-api state show --from <dir>` JSON of *records* (ADR-036
+    §12: the tools read the state as tenant-api reads it). The binary is the
+    `tenant_api_env` fixture's ($TENANT_API_BINARY)."""
+    import subprocess
+    state = _tree(d / "state", records)
+    proc = subprocess.run([os.environ["TENANT_API_BINARY"], "state", "show", "--from", str(state)],
+                          capture_output=True, check=True, timeout=60)
+    out = d / "state.json"
+    out.write_bytes(proc.stdout)
+    return out
+
+
 def _ids_custom_groups(d, spell):
-    # #2883: groups are read from tenant-api's state store (a state dir here).
+    # #2883 / ADR-036 §12: groups are what tenant-api's `state show` makes of
+    # the state store's record.
     import generate_tenant_metadata as m
     import _lib_tenant_state as lts
-    _tree(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"})
-    return set(m._load_custom_groups(lts.load_state(d), d / "conf.d")["g1"]["members"])
+    st = lts.load_state(_state_show_json(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"}))
+    return set(m._load_custom_groups(st, d / "conf.d")["g1"]["members"])
 
 
 _VALUE_READERS_2216 = {
@@ -1073,7 +1087,7 @@ _VALUE_READERS_2216 = {
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
 @pytest.mark.parametrize("reader", sorted(_VALUE_READERS_2216))
-def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant):
+def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, tenant_api_env, reader, variant):
     """Before (#2216): UNQ gave {8} / {"8"}, and parse_mapping_file raised
     AttributeError (`.strip()` on the int)."""
     assert _VALUE_READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
@@ -1122,14 +1136,15 @@ def test_offboard_finds_a_reference_written_as_a_list_value(
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
-def test_offboard_finds_a_group_member_written_as_a_list_value(tmp_path, capsys, variant):
+def test_offboard_finds_a_group_member_written_as_a_list_value(tmp_path, capsys, tenant_api_env, variant):
     """`members: [010]` in the state store's `_groups.yaml` names tenant
-    "010" (#2216); groups are read from the state store since #2883."""
+    "010" (#2216); groups are read from the state store since #2883, as
+    tenant-api reads them (`state show`, ADR-036 §12)."""
     import offboard_tenant as ot
     import _lib_tenant_state as lts
-    _tree(tmp_path, {"_groups.yaml": "groups:\n  g1:\n    members: [{id}]\n".format(
-        id=_ID_SPELLINGS[variant])})
-    refs, _ = ot.check_state_references("010", lts.load_state(tmp_path))
+    st = lts.load_state(_state_show_json(tmp_path, {"_groups.yaml": "groups:\n  g1:\n    members: [{id}]\n".format(
+        id=_ID_SPELLINGS[variant])}))
+    refs, _ = ot.check_state_references("010", st)
     assert [what for what, _ in refs] == ["群組 g1 的成員"]
 
 

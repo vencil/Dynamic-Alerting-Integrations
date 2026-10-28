@@ -44,8 +44,13 @@ COPY components/threshold-exporter/app/ components/threshold-exporter/app/
 
 WORKDIR /src/components/tenant-api
 ARG TARGETOS TARGETARCH
+# The version `tenant-api state show` / `config check` print as
+# tenant_api_version (ADR-036 §12): release.yaml passes the tenant-api/v* tag
+# (as `v<version>`, the image tag), the way da-tools' build.sh sets
+# main.Version on da-guard. A local build keeps "(devel)".
+ARG VERSION="(devel)"
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.version=${VERSION}" \
     -o /tenant-api \
     ./cmd/server
 

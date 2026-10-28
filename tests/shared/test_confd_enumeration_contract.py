@@ -514,8 +514,6 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
     "lint/check_metric_dictionary.py":
         "globs RULE_PACKS_DIR (rule-packs/) for the alert names and threshold "
         "readers the dictionary contract checks (issue 1196)",
-    "_lib_tenant_state.py":
-        "iterdir over a tenant-api state directory (--state), not conf.d (#2883)",
     "lint/check_orphan_lint.py":
         "globs .github/workflows",
     "lint/check_unpinned_deps.py":
