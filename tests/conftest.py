@@ -381,6 +381,59 @@ def da_read_env(monkeypatch, da_read_binary, da_crdecode_binary):
     return da_read_binary
 
 
+@pytest.fixture(scope="session")
+def tenant_api_binary(tmp_path_factory):
+    """從本 repo 的 Go 原始碼建出的 tenant-api（ADR-036 §12）。
+
+    `_lib_tenant_state` 讀 `tenant-api state show` 的 JSON，`check_admin_config_schema`
+    經 `tenant-api config check` 判定；建不起來（含沒有 go）一律 fail、不 skip，
+    理由同 `da_guard_binary`。每個 xdist worker 建一次。
+    """
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: tenant-api cannot be built, so `state show` / "
+                    "`config check` (the readers of tenant-api's own records) cannot be measured")
+    out = tmp_path_factory.mktemp("tenant-api-bin") / "tenant-api"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/server"],
+        cwd=os.path.join(REPO_ROOT, "components", "tenant-api"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=900, env=go_build_env())
+    if proc.returncode != 0:
+        pytest.fail(f"go build tenant-api failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+@pytest.fixture
+def tenant_api_env(monkeypatch, tenant_api_binary):
+    """`$TENANT_API_BINARY` 指向 `tenant_api_binary`，只在本測試期間。"""
+    monkeypatch.setenv("TENANT_API_BINARY", tenant_api_binary)
+    return tenant_api_binary
+
+
+@pytest.fixture
+def state_show(tenant_api_binary, tmp_path_factory):
+    """`state_show(records)`: the `tenant-api state show --from <dir>` JSON for
+    a state directory holding *records* (key → YAML text), written to a file;
+    its path is returned. The JSON is tenant-api's, never hand-written."""
+    import subprocess
+
+    def make(records: "dict[str, str]") -> str:
+        d = tmp_path_factory.mktemp("state-dir")
+        for k, v in records.items():
+            (d / k).write_text(v, encoding="utf-8")
+        proc = subprocess.run([tenant_api_binary, "state", "show", "--from", str(d)],
+                              capture_output=True, check=False, timeout=60)
+        if proc.returncode != 0:
+            pytest.fail(f"tenant-api state show exited {proc.returncode}:\n"
+                        f"{proc.stderr.decode('utf-8', 'replace')}")
+        out = tmp_path_factory.mktemp("state-json") / "state.json"
+        out.write_bytes(proc.stdout)
+        return str(out)
+    return make
+
+
 # ── Function-scoped fixtures ──────────────────────────────────────────
 
 @pytest.fixture

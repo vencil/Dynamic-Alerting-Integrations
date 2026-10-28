@@ -3,8 +3,10 @@
 The tenant-api chart gains an OPT-IN identity claim-header seam (issue #962,
 LD-6 P2): ``identity.claimHeaders`` maps claim keys to the trusted-hop HTTP
 headers carrying their values (e.g. ``org=X-Auth-Request-Org``). When any pair
-is set, the deployment passes a SINGLE ``--identity-claim-headers=key=Header,...``
-arg with keys sorted (helm map range iterates key-sorted). P2 is carriage-only:
+is set, the deployment passes a SINGLE ``TA_IDENTITY_CLAIM_HEADERS=key=Header,...``
+env value (the variable ``--identity-claim-headers`` reads; env rather than an
+arg since ADR-036 §12, so ``kubectl exec ... tenant-api config check`` sees the
+same declaration) with keys sorted (helm map range iterates key-sorted). P2 is carriage-only:
 the binary loads the named claims onto the verified principal; no authz
 behavior changes until P3 match evaluation consumes them.
 
@@ -15,7 +17,8 @@ Two layers, mirroring test_machine_identity_guard.py:
   * render (helm-gated) — proves the default render emits NO claim flag (the
     off state must stay byte-identical to pre-P2 — #1036: a stray blank line
     shifts the checksum annotation and triggers a pointless rollout) and that
-    two ``--set`` pairs render as exactly ONE key-sorted argv entry.
+    two ``--set`` pairs render as exactly ONE key-sorted env entry, and never as
+an arg.
 """
 from __future__ import annotations
 
@@ -63,8 +66,12 @@ def test_deployment_carries_guarded_claim_arg_block(repo_root: Path):
     assert "identity.claimHeaders" in directives, (
         "deployment must gate the claim-header arg on .Values.identity.claimHeaders"
     )
-    assert "--identity-claim-headers=" in directives, (
-        "deployment must pass --identity-claim-headers when claimHeaders is set"
+    assert "TA_IDENTITY_CLAIM_HEADERS" in directives, (
+        "deployment must pass TA_IDENTITY_CLAIM_HEADERS when claimHeaders is set"
+    )
+    assert "--identity-claim-headers" not in directives, (
+        "the claim declaration is env, not an arg (ADR-036 §12: kubectl exec "
+        "subcommands read the environment only)"
     )
 
 
@@ -86,6 +93,9 @@ def test_render_default_omits_claim_flag(repo_root: Path):
     assert "identity-claim-headers" not in res.stdout, (
         "default render leaked --identity-claim-headers (seam must be OFF)"
     )
+    assert "TA_IDENTITY_CLAIM_HEADERS" not in res.stdout, (
+        "default render leaked TA_IDENTITY_CLAIM_HEADERS (seam must be OFF)"
+    )
 
 
 @_needs_helm
@@ -99,13 +109,12 @@ def test_render_two_pairs_emit_single_sorted_arg(repo_root: Path):
     )
     assert res.returncode == 0, f"claim-header render must succeed: {res.stderr}"
     out = res.stdout
-    expected = "--identity-claim-headers=org=X-Auth-Request-Org,region=X-R"
-    assert out.count("--identity-claim-headers") == 1, (
-        "the claim headers must render as a SINGLE flag occurrence"
+    expected = "org=X-Auth-Request-Org,region=X-R"
+    assert out.count("TA_IDENTITY_CLAIM_HEADERS") == 1, (
+        "the claim headers must render as a SINGLE env entry"
     )
-    assert expected in out, f"expected key-sorted single arg {expected!r} in render"
-    # Structural proof: the tenant-api container carries it as ONE argv entry
-    # (a substring match alone could pass on a broken multi-line render).
+    assert "--identity-claim-headers" not in out, "the claim headers are env, not an arg"
+    # Structural proof: the tenant-api container carries it as ONE env entry.
     docs = [d for d in yaml.safe_load_all(out) if d]
     dep = next(d for d in docs if d.get("kind") == "Deployment")
     ta = next(
@@ -113,7 +122,22 @@ def test_render_two_pairs_emit_single_sorted_arg(repo_root: Path):
         for c in dep["spec"]["template"]["spec"]["containers"]
         if c["name"] == "tenant-api"
     )
-    claim_args = [a for a in ta["args"] if a.startswith("--identity-claim-headers")]
-    assert claim_args == [expected], (
-        f"tenant-api argv must carry exactly [{expected!r}], got {claim_args!r}"
+    claim_env = [e.get("value") for e in ta["env"] if e["name"] == "TA_IDENTITY_CLAIM_HEADERS"]
+    assert claim_env == [expected], (
+        f"tenant-api env must carry exactly [{expected!r}], got {claim_env!r}"
     )
+
+
+@_needs_helm
+def test_render_state_store_settings_are_env(repo_root: Path):
+    """ADR-036 §12: the store settings are env, so `kubectl exec ... tenant-api
+    state show` (which reads only the environment) opens the server's store."""
+    res = _helm_template(repo_root, "state.configMapName=my-state")
+    assert res.returncode == 0, res.stderr
+    docs = [d for d in yaml.safe_load_all(res.stdout) if d]
+    dep = next(d for d in docs if d.get("kind") == "Deployment")
+    ta = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "tenant-api")
+    env = {e["name"]: e.get("value") for e in ta["env"]}
+    assert env.get("TA_STATE_STORE") == "configmap"
+    assert env.get("TA_STATE_CONFIGMAP") == "my-state"
+    assert not [a for a in ta["args"] if a.startswith(("--state-store", "--state-configmap", "--state-dir"))]

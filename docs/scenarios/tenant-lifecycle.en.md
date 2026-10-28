@@ -342,8 +342,8 @@ cp conf.d/db-product-01.yaml conf.d.archive/
 
 # 3. Automated offboarding (recommended)
 da-tools offboard db-product-01 --config-dir conf.d            # Pre-check (the default; writes nothing)
-kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.yaml   # group / view / federation subset references live in the state store
-da-tools offboard db-product-01 --config-dir conf.d --state tenant-api-state.yaml --execute  # Execute: deletes conf.d/db-product-01.yaml
+kubectl -n tenant-api exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json   # group / view / federation subset references live in the state store, read by tenant-api
+da-tools offboard db-product-01 --config-dir conf.d --state state.json --execute  # Execute: deletes conf.d/db-product-01.yaml
 
 # 4. Offboard legacy custom rules (if migrated; without --execute it only previews)
 da-tools deprecate custom_pg_connections custom_pg_replication_lag --config-dir conf.d --execute
@@ -416,7 +416,7 @@ tar czf archive/db-product-01-offboarding-$(date +%Y%m%d).tar.gz conf.d.archive/
 | **backtest_threshold.py** | Test threshold changes | `--tenant <name> --metric <key> --old-value 80 --new-value 75` |
 | **batch_diagnose.py** | Multi-tenant report | `--output report.json` |
 | **lint_custom_rules.py** | Custom rule validation | `custom-rules.yaml` |
-| **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/ --state <state copy>` (pre-check only by default, `--execute` deletes; without `--state`, `--execute` also needs `--skip-state-check`; no archiving — `cp` first, see 4.1) |
+| **offboard_tenant.py** | Tenant offboarding | `<name> --config-dir conf.d/ --state <tenant-api state show JSON>` (pre-check only by default, `--execute` deletes; without `--state`, or when a record it uses carries a `problem`, `--execute` also needs `--skip-state-check`; no archiving — `cp` first, see 4.1) |
 | **deprecate_rule.py** | Rule offboarding | `rule-name-1 rule-name-2 --config-dir conf.d/ --execute` (without `--config-dir` it points at a path inside the repo) |
 | **onboard_platform.py** | Pre-migration scan | `--alertmanager-config <am.yml> --rule-files '<glob>' --output-dir migration_input/` |
 | **migrate_rule.py** | Rule migration transform | `<legacy-rules.yaml> --output-dir migration_output/` |

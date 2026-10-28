@@ -3,22 +3,46 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/federation/account"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/staterestore"
 	"github.com/vencil/tenant-api/internal/statestore"
+	"github.com/vencil/tenant-api/internal/views"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // stateCmdUsage is printed for `tenant-api state` without a known verb.
 const stateCmdUsage = `usage: tenant-api state restore --from FILE|DIR|- [--keys k1,k2] [--account-id-margin N] [--dry-run]
        tenant-api state restore --no-backup [--dry-run]
+       tenant-api state show [--from FILE|DIR|-]
+
+state show prints every record of the state store as tenant-api reads it,
+as one JSON document (schema tenant-api.state-show/v1, ADR-036 §12): each
+record the store holds goes through the server's own parse function and is
+printed decoded ("record") or with why it cannot be used ("problem": kind
+"unreadable" or "rejected"). Without --from it reads the configured store
+read-only (a missing state directory or ConfigMap is an error, not an empty
+store); with --from it reads a backup, as restore does, and needs no store
+settings. It never reads a running server's hot-reload snapshot.
+
+  kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json
+  docker run -i --rm <tenant-api image> state show --from - < backup.yaml > state.json
+
+Exit codes of state show: 0 printed (records with a problem included), 1 the
+store or backup cannot be read, 2 usage.
+
+state restore:
 
 Restores tenant-api's state store from a backup (#2884). A backup is the
 state ConfigMap as "kubectl get configmap tenant-api-state -o yaml" (or
@@ -26,7 +50,7 @@ state ConfigMap as "kubectl get configmap tenant-api-state -o yaml" (or
 ConfigMap document from standard input. On Kubernetes, run it in the
 tenant-api pod so it uses the pod's ServiceAccount and settings:
 
-  kubectl exec -i deploy/tenant-api -- tenant-api state restore --from - --dry-run < backup.yaml
+  kubectl exec -i deploy/tenant-api -c tenant-api -- tenant-api state restore --from - --dry-run < backup.yaml
 
 The AccountID registry (_account_registry.yaml) is always merged, never
 replaced: allocations are the union of the current registry, the backup and
@@ -52,8 +76,12 @@ federation token store is read for live logs tokens.
 
 Exit codes: 0 restored (or dry run done), 1 refused or failed, 2 usage.`
 
-// runStateCmd runs `tenant-api state <verb>` and returns the exit code.
+// runStateCmd runs `tenant-api state <verb>` (restore, show) and returns the
+// exit code.
 func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "show" {
+		return runStateShow(args[1:], stdin, stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "restore" {
 		fmt.Fprintln(stderr, stateCmdUsage)
 		return 2
@@ -205,3 +233,133 @@ func toTokenAllocations(recs []token.Record) []account.TokenAllocation {
 
 // stateSubcommand reports whether argv asks for `tenant-api state ...`.
 func stateSubcommand(argv []string) bool { return len(argv) > 1 && argv[1] == "state" }
+
+// stateShowSchema names the JSON document `tenant-api state show` prints.
+const stateShowSchema = "tenant-api.state-show/v1"
+
+// Problem kinds of a record or config that cannot be used (ADR-036 §12).
+const (
+	// problemUnreadable: parse-tree judged the bytes unreadable (confd.Judge
+	// returned a *cfg.UnreadableFileError).
+	problemUnreadable = "unreadable"
+	// problemRejected: the decode or the record's own checks refused it.
+	problemRejected = "rejected"
+)
+
+// problem says why a record or config cannot be used.
+type problem struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// problemOf classifies a parse function's error.
+func problemOf(err error) *problem {
+	if _, ok := cfg.UnreadableKindOf(err); ok {
+		return &problem{Kind: problemUnreadable, Message: err.Error()}
+	}
+	return &problem{Kind: problemRejected, Message: err.Error()}
+}
+
+// shownRecord is one entry of state show's records: exactly one of Record
+// and Problem is non-nil.
+type shownRecord struct {
+	Key     string   `json:"key"`
+	Record  any      `json:"record"`
+	Problem *problem `json:"problem"`
+}
+
+type stateShowDoc struct {
+	Schema           string        `json:"schema"`
+	TenantAPIVersion string        `json:"tenant_api_version"`
+	Records          []shownRecord `json:"records"`
+}
+
+// parseStateRecord passes one record to the parse function the server reads
+// it with. ok is false for a key that is not a state record.
+func parseStateRecord(key string, data []byte) (rec any, ok bool, err error) {
+	switch key {
+	case statestore.KeyGroups:
+		rec, err = groups.ParseConfig(data)
+	case statestore.KeyViews:
+		rec, err = views.ParseConfig(data)
+	case statestore.KeyFederationPolicy:
+		rec, err = fedpolicy.ParsePolicyConfig(data)
+	case statestore.KeyAccountRegistry:
+		rec, err = account.Parse(data)
+	default:
+		if !staterestore.ValidKey(key) {
+			return nil, false, nil
+		}
+		rec, err = fedpolicy.ParseSubset(data)
+	}
+	return rec, true, err
+}
+
+// showRecords judges every state record of snap, sorted by key. Keys that
+// are not state records are left out, as are records the snapshot lacks.
+func showRecords(snap map[string][]byte) []shownRecord {
+	keys := make([]string, 0, len(snap))
+	for k := range snap {
+		if staterestore.ValidKey(k) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]shownRecord, 0, len(keys))
+	for _, k := range keys {
+		rec, ok, err := parseStateRecord(k, snap[k])
+		switch {
+		case !ok:
+			continue
+		case err != nil:
+			out = append(out, shownRecord{Key: k, Problem: problemOf(err)})
+		default:
+			out = append(out, shownRecord{Key: k, Record: rec})
+		}
+	}
+	return out
+}
+
+// runStateShow runs `tenant-api state show [--from FILE|DIR|-]`.
+func runStateShow(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("tenant-api state show", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprintln(stderr, stateCmdUsage) }
+	from := fs.String("from", "", "Backup to read instead of the store: a ConfigMap YAML/JSON file, a state directory, or - for stdin")
+	sf := registerStateFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintln(stderr, stateCmdUsage)
+		return 2
+	}
+	var snap map[string][]byte
+	if *from != "" {
+		// A backup needs no store settings: none of sf is read.
+		bak, err := staterestore.Load(*from, stdin)
+		if err != nil {
+			fmt.Fprintf(stderr, "state show: %v\n", err)
+			return 1
+		}
+		snap = bak
+	} else {
+		s, err := readStateSnapshot(*sf)
+		if err != nil {
+			fmt.Fprintf(stderr, "state show: %v\n", err)
+			return 1
+		}
+		snap = s
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(stateShowDoc{
+		Schema:           stateShowSchema,
+		TenantAPIVersion: tenantAPIVersion(),
+		Records:          showRecords(snap),
+	}); err != nil {
+		fmt.Fprintf(stderr, "state show: write output: %v\n", err)
+		return 1
+	}
+	return 0
+}

@@ -517,12 +517,17 @@ jobs:
       # `da-guard served-values`; its wrapper (scripts/ops/with_da_guard.sh)
       # builds .build/da-guard with `make da-guard-build`, which needs go. Without
       # this step the hook fails by name (go is not on PATH), never passes.
-      - name: Set up Go (da-guard for platform-data-check)
+      # ADR-036 §12: `admin-config-schema-check`'s wrapper
+      # (scripts/ops/with_admin_config_tools.sh) builds .build/tenant-api and
+      # .build/da-crdecode the same way, so the tenant-api module is cached too.
+      - name: Set up Go (da-guard / tenant-api / da-crdecode for the lint hooks)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/tenant-api/go.sum
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
@@ -738,7 +743,9 @@ jobs:
           # _tenant_orgs) structural schema validation. Backstops the local hook so a
           # direct push / bypass cannot land a key-typo or bad-enum admin config that
           # the strict runtime parser would reject (startup fatal / last-good masking).
-          # Hook venv carries jsonschema via additional_dependencies.
+          # Hook venv carries jsonschema via additional_dependencies; the hook's
+          # wrapper builds tenant-api / da-crdecode / da-guard with the Go set up
+          # above (ADR-036 §12: the files are judged by their Go consumers).
           pre-commit run admin-config-schema-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files

@@ -482,8 +482,10 @@ machineIdentity:
 # TRUSTED-HOP HTTP HEADER carrying its value. Which header exists is decided
 # by the deployment's login entrypoint (e.g. oauth2-proxy alpha-config
 # `injectRequestHeaders`); wiring that transport side is a follow-up PR.
-# Rendered as a single `--identity-claim-headers=key=Header,...` arg with
-# keys sorted (helm map range iterates key-sorted).
+# Rendered as a single `TA_IDENTITY_CLAIM_HEADERS=key=Header,...` env value
+# (the variable --identity-claim-headers reads; env so `kubectl exec ...
+# tenant-api config check` sees it too, ADR-036 §12) with keys sorted (helm
+# map range iterates key-sorted).
 # ⚠ TRUST BOUNDARY: every header listed here MUST be injected by the trusted
 # hop and MUST NOT be client-forgeable (strip-and-set at the proxy) — the
 # same trust boundary as X-Forwarded-Groups. In-platform backstop: a claim
