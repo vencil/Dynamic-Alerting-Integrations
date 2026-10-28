@@ -51,7 +51,7 @@ func TestResolveBaseRows_ExpiredOverrideFailsSafeToDefault(t *testing.T) {
 		},
 	}
 	got := map[string]float64{}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		got[r.Tenant] = r.Value
 	}
 	if len(got) != 3 {

@@ -214,7 +214,7 @@ func TestDefaultsSymlinkParityMatrix(t *testing.T) {
 				assertSomeLinkEscapesConfD(t, confD, root, tree.Symlinks)
 			}
 			for tenant, want := range tree.Expect {
-				ec, err := ResolveEffective(confD, tenant)
+				ec, err := ResolveEffective(confD, tenant, fixedNow)
 				switch shape, _ := want.shape(); shape {
 				case shapeAbsent:
 					if !errors.Is(err, ErrTenantNotFound) {

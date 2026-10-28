@@ -56,7 +56,7 @@ func TestResolveSilentModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &ThresholdConfig{Tenants: tt.tenants}
-			result := cfg.ResolveSilentModes()
+			result := cfg.ResolveSilentModesAt(fixedNow)
 			if len(result) != tt.expectedLen {
 				t.Fatalf("expected %d, got %d", tt.expectedLen, len(result))
 			}
@@ -79,7 +79,7 @@ func TestResolveAt_SkipsSilentKey(t *testing.T) {
 			},
 		},
 	}
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	for _, r := range resolved {
 		if r.Metric == "mode" || r.Component == "silent" {
 			t.Errorf("_silent_mode leaked into thresholds: %+v", r)
@@ -100,7 +100,7 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 			"db-d": {"mysql_connections": SV("70")}, // no silent_mode → Normal
 		},
 	}
-	result := cfg.ResolveSilentModes()
+	result := cfg.ResolveSilentModesAt(fixedNow)
 	// db-a: 1, db-b: 2, db-c: 0, db-d: 0 = 3
 	if len(result) != 3 {
 		t.Errorf("expected 3, got %d", len(result))
@@ -190,7 +190,7 @@ func TestResolveAt_SkipsSeverityDedupKey(t *testing.T) {
 			},
 		},
 	}
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	for _, r := range resolved {
 		if r.Metric == "severity_dedup" || r.Metric == "dedup" {
 			t.Errorf("_severity_dedup leaked into threshold metrics: %+v", r)
@@ -416,7 +416,7 @@ func TestResolveAt_SkipsRoutingKey(t *testing.T) {
 			},
 		},
 	}
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	for _, r := range resolved {
 		if r.Metric == "routing" || r.Component == "_routing" {
 			t.Errorf("_routing leaked into threshold metrics: %+v", r)
@@ -529,7 +529,7 @@ func TestCardinalityGuard(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.cfg.Resolve()
+			result := tt.cfg.ResolveAt(fixedNow)
 			if len(result) != tt.expected {
 				t.Errorf("expected %d metrics, got %d", tt.expected, len(result))
 			}
@@ -626,7 +626,7 @@ func TestResolveAtWithStats_PerTenantOverLimitMagnitude(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, stats := tt.cfg.ResolveAtWithStats(time.Now())
+			_, stats := tt.cfg.ResolveAtWithStats(fixedNow)
 			if len(stats.PerTenantOverLimit) != len(tt.wantMag) {
 				t.Fatalf("stats has %d tenants, want %d (got %+v)",
 					len(stats.PerTenantOverLimit), len(tt.wantMag), stats.PerTenantOverLimit)
@@ -668,14 +668,14 @@ func TestResolveAtWithStats_ClearOnReturnBelowCap(t *testing.T) {
 		Tenants:             map[string]map[string]ScheduledValue{"t": {}},
 		MaxMetricsPerTenant: 500,
 	}
-	_, statsBefore := cfg.ResolveAtWithStats(time.Now())
+	_, statsBefore := cfg.ResolveAtWithStats(fixedNow)
 	if statsBefore.PerTenantOverLimit["t"] != 100 {
 		t.Fatalf("before-trim magnitude = %d, want 100", statsBefore.PerTenantOverLimit["t"])
 	}
 
 	// Trim defaults to 400 — tenant now fits well within the 500 cap.
 	cfg.Defaults = defsWith400
-	_, statsAfter := cfg.ResolveAtWithStats(time.Now())
+	_, statsAfter := cfg.ResolveAtWithStats(fixedNow)
 	if statsAfter.PerTenantOverLimit["t"] != 0 {
 		t.Errorf("after-trim magnitude = %d, want 0 (state-coded gauge contract: must clear on return to compliance, not stick at the previous over-limit value)",
 			statsAfter.PerTenantOverLimit["t"])
@@ -752,8 +752,8 @@ func TestValidateTenantKeys(t *testing.T) {
 
 func TestResolveSilentModes_Structured(t *testing.T) {
 	t.Parallel()
-	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	future := fixedNow.Add(24 * time.Hour).Format(time.RFC3339)
+	past := fixedNow.Add(-1 * time.Hour).Format(time.RFC3339)
 	tests := []struct {
 		name    string
 		cfg     *ThresholdConfig
@@ -798,7 +798,7 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.cfg.ResolveSilentModesAt(time.Now())
+			result := tt.cfg.ResolveSilentModesAt(fixedNow)
 			if len(result) != tt.wantLen {
 				t.Fatalf("expected %d, got %d", tt.wantLen, len(result))
 			}
@@ -819,8 +819,8 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 
 func TestResolveMaintenanceExpiries(t *testing.T) {
 	t.Parallel()
-	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	past := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
+	future := fixedNow.Add(24 * time.Hour).Format(time.RFC3339)
+	past := fixedNow.Add(-2 * time.Hour).Format(time.RFC3339)
 	tests := []struct {
 		name    string
 		cfg     *ThresholdConfig
@@ -850,7 +850,7 @@ func TestResolveMaintenanceExpiries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.cfg.ResolveMaintenanceExpiriesAt(time.Now())
+			result := tt.cfg.ResolveMaintenanceExpiriesAt(fixedNow)
 			if len(result) != tt.wantLen {
 				t.Fatalf("expected %d, got %d", tt.wantLen, len(result))
 			}
@@ -864,7 +864,7 @@ func TestResolveMaintenanceExpiries(t *testing.T) {
 func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 	t.Parallel()
 	// When structured _state_maintenance has expired, the state filter should NOT be emitted
-	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	past := fixedNow.Add(-1 * time.Hour).Format(time.RFC3339)
 	yamlStr := "expires: " + past + "\ntarget: enable\n"
 	cfg := &ThresholdConfig{
 		StateFilters: map[string]StateFilter{
@@ -874,7 +874,7 @@ func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 			"db-a": {"_state_maintenance": SV(yamlStr)},
 		},
 	}
-	result := cfg.ResolveStateFiltersAt(time.Now())
+	result := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(result) != 0 {
 		t.Errorf("expected 0 (maintenance expired → filter disabled), got %d", len(result))
 	}
@@ -883,7 +883,7 @@ func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
 	t.Parallel()
 	// When structured _state_maintenance has future expires, the state filter should be emitted
-	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+	future := fixedNow.Add(24 * time.Hour).Format(time.RFC3339)
 	yamlStr := "expires: " + future + "\ntarget: enable\n"
 	cfg := &ThresholdConfig{
 		StateFilters: map[string]StateFilter{
@@ -893,7 +893,7 @@ func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
 			"db-a": {"_state_maintenance": SV(yamlStr)},
 		},
 	}
-	result := cfg.ResolveStateFiltersAt(time.Now())
+	result := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(result) != 1 {
 		t.Fatalf("expected 1, got %d", len(result))
 	}
@@ -913,7 +913,7 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 			"db-a": {"_state_maintenance": SV("enable")},
 		},
 	}
-	result := cfg.ResolveStateFiltersAt(time.Now())
+	result := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(result) != 1 {
 		t.Errorf("expected 1, got %d", len(result))
 	}
@@ -927,8 +927,8 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 // last row is the one it could not see at all: no platform filter, no row.
 func TestOperationalStatesAt_Maintenance(t *testing.T) {
 	t.Parallel()
-	future := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
-	past := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	future := fixedNow.Add(24 * time.Hour).Format(time.RFC3339)
+	past := fixedNow.Add(-1 * time.Hour).Format(time.RFC3339)
 	declared := map[string]StateFilter{"maintenance": {Severity: "warning", DefaultState: "disable"}}
 	tests := []struct {
 		name     string
@@ -950,7 +950,7 @@ func TestOperationalStatesAt_Maintenance(t *testing.T) {
 				StateFilters: tt.filters,
 				Tenants:      map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": tt.value}},
 			}
-			got := cfg.OperationalStatesAt(time.Now()).ByTenant(cfg)["db-a"].MaintenanceActive
+			got := cfg.OperationalStatesAt(fixedNow).ByTenant(cfg)["db-a"].MaintenanceActive
 			if got != tt.isActive {
 				t.Errorf("expected active=%v, got %v", tt.isActive, got)
 			}

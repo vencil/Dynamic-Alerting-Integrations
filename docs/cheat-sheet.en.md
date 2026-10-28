@@ -55,7 +55,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | --ci <PLATFORM>, --tenants <LIST>, --non-interactive, --dry-run | `da-tools init --help` |
 | `config-history` | Config snapshot & history tracking (snapshot / log / show / diff) | --config-dir <PATH>, -m <MSG>, --limit <N> | `da-tools config-history --help` |
-| `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | --url <URL>, --dir <PATH>, --namespace <NS> | `da-tools gitops-check --help` |
+| `gitops-check` | Local conf.d structure check | local --dir <PATH> | `da-tools gitops-check --help` |
 | `state-reconcile` | Migration state directory reconciliation (.da/state/ schema validation + .da/manifest.json rebuild, #405 Cat A) | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema, #405 Cat D) | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump, #405 Cat B) | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
@@ -105,7 +105,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 - **Adoption & Initialization**
   - `init` — Project skeleton generation (CI/CD + conf.d + Kustomize)
   - `config-history` — Config snapshot & history tracking
-  - `gitops-check` — GitOps Native Mode readiness validation
+  - `gitops-check` — local conf.d structure check
   - `state-reconcile` — Migration state directory reconciliation (schema validation + manifest rebuild)
   - `rule-pack-diff` — Mechanical diff between two Rule Pack versions (upgrade audit)
   - `silencer-drift-check` — Alertmanager silence drift audit (offline; required at cutover)

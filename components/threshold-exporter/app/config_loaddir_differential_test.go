@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -115,7 +114,7 @@ func sharedView(t *testing.T, dir string) (operationalView, *ThresholdConfig) {
 	if parseFailed != nil {
 		t.Fatalf("config.LoadDir reported parse failures on a tree without any: %v", parseFailed)
 	}
-	ops := cfg.OperationalStatesAt(time.Now())
+	ops := cfg.OperationalStatesAt(fixedNow)
 	view := operationalView{States: ops.ByTenant(cfg), ExpiredSilences: []string{}}
 	for _, sm := range ops.ExpiredSilences {
 		reason := sm.Reason

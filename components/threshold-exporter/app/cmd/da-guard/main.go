@@ -328,7 +328,10 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if refuseNonUTF8Tree(f.configDir, programName, errOut) {
 		return exitCallerErr // utf8_names.go: every subcommand that walks conf.d (#3206)
 	}
-	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir)
+	// The run's one instant (#3368): the effective resolve's not_served and
+	// the /metrics gather verdict read `expires:` at it.
+	now := time.Now().UTC()
+	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir, now)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		// #2123: a resolve failure that is one file failing the decode (a
@@ -411,7 +414,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// carriers, the /metrics gather verdict (#2031) — is reported with no
 	// tenant exactly as with some. The per-tenant checks find nothing on zero
 	// tenants.
-	input := buildCheckInput(scoped, f)
+	input := buildCheckInput(scoped, f, now)
 	report, err := check(input)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
@@ -530,7 +533,9 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 // different tenants inherit different merged-defaults views, and
 // the guard's per-tenant resolution honors that. See
 // guard.CheckInput documentation for the resolution rule.
-func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
+//
+// now is the run's instant, the one ScopeEffective resolved at (#3368).
+func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guard.CheckInput {
 	effective := make(map[string]map[string]any, len(scoped.Tenants))
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
@@ -598,7 +603,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		CustomAlertsOverCap:   customAlertsOverCap(scoped),
 		// #2031: the whole tree, whatever the scope — one series two keys
 		// share fails the scrape for every tenant.
-		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)),
+		MetricsNotGatherable: gatherVerdict(scoped.Config, now, writtenNamer(scoped.WrittenKeys)),
 	}
 }
 

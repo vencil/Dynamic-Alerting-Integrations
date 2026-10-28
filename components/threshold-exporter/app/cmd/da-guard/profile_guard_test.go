@@ -39,7 +39,7 @@ func servedWarning(t *testing.T, dir, tenantFile, key string) (float64, bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == "tx" && r.Severity == "warning" && r.Component+"_"+r.Metric == key {
 			return r.Value, true
 		}

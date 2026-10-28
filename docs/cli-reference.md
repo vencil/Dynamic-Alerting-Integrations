@@ -151,7 +151,7 @@ da-tools <command> --help
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `init` | 專案骨架產生（CI/CD + conf.d + Kustomize overlays） | `--tenants <list>` 搭配 `--ci`／`--rule-packs`／`--deploy` 任一，或互動模式（不帶旗標） |
-| `gitops-check` | GitOps Native Mode 就緒度驗證（repo / local / sidecar） | `<subcommand>` |
+| `gitops-check` | conf.d 本機結構檢查 | `local --dir <path>` |
 | `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema） | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump） | `--silences-file <json> --rule-source <path>` |
@@ -1346,59 +1346,38 @@ da-tools init --ci both --tenants db-a --dry-run
 
 #### gitops-check
 
-GitOps Native Mode 就緒度驗證——檢查 Git 倉庫可達性、本地配置結構、git-sync sidecar 部署狀態。
+conf.d 本機結構檢查：根目錄 defaults 載體在不在、每個檔經 `da-guard parse-tree` 讀不讀得了、閾值數與租戶檔數。
 
 conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
 ```bash
-da-tools gitops-check <subcommand> [options]
+da-tools gitops-check local --dir <path> [--json]
 ```
-
-**子命令**
-
-| 子命令 | 用途 | 參數 |
-|--------|------|------|
-| `repo` | 驗證 Git 倉庫可達性、分支存在、`--path` 在該分支 | `--url <git-url> [--branch main] [--path configs/]` |
-| `local` | 驗證本地 clone 的 conf.d/ 結構 | `--dir <path>` |
-| `sidecar` | 檢查 K8s git-sync sidecar 部署就緒度 | `[--namespace monitoring]` |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--url <GIT-URL>` | `repo`：Git 倉庫 URL（必填） | （無） |
-| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |
-| `--path <PATH>` | `repo`：配置在倉庫內的路徑 | `configs/` |
-| `--dir <PATH>` | `local`：本地配置目錄（必填） | （無） |
-| `--namespace <NS>` | `sidecar`：K8s namespace | `monitoring` |
-| `--json` | 三個子命令都接受：JSON 輸出 | false |
-| `--ci` | 三個子命令都接受：只有 fail 結束碼 1，warning 結束碼 0（不帶時 warning 也是 1） | false |
+| `--dir <PATH>` | 本地配置目錄（必填） | （無） |
+| `--json` | JSON 輸出 | false |
 
-**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了就列在 `parse_errors`、fail。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
+**`local` 的讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：哪些檔、各寫了什麼，一律經 `da-guard parse-tree`（yaml.v3，exporter 的選檔）。根目錄的 defaults 載體是 exporter 讀的那一份（任何大小寫，`.yaml` 優先）；租戶檔算**整棵樹**（子目錄裡的也算），exporter 讀的每個檔（含 `_` 平台檔）讀不了時，整棵樹以 `2` 拒收、逐條點名（上述共用的拒絕，`reason: conf_d_not_servable`）。需要 da-guard（`$DA_GUARD_BINARY`，否則 `$PATH`）；沒有或執行失敗時結束碼 2，不給結論。⚠️ **Breaking**：先前只看根目錄、子目錄的租戶檔不算也不驗，`_` 平台檔讀不了也不 fail。
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 通過；帶 `--ci` 時 warning 也是 0（目前沒有子命令會給 warning）；`repo` 的 `--path` 伺服器無法驗證（不支援 `git archive --remote`）只記在 `config_path_verified: false`，仍是通過 |
-| `1` | 有 fail：`repo` 倉庫連不上、分支不存在（照 git 的解析：`--branch main` 是 `refs/heads/main`，不會比到 `refs/heads/feature/main`；`heads/x`、`refs/heads/x` 都指 `refs/heads/x`；tag 不算分支），或伺服器回答 `--path` 不在該分支（沒給 `--path` 時檢查的是預設的 `configs/`；伺服器訊息不是英文時落回「無法驗證」）；`local` 缺根目錄 defaults 載體、有檔讀不了（`parse_errors`）；`sidecar` 缺 git-sync Secret（`git-sync-credentials`）或 Deployment `threshold-exporter` 裡沒有 `git-sync` 容器。不帶 `--ci` 時 warning 也是 1 |
-| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--url`／`--dir`、未知旗標）；`local --dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；`local` 找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；`sidecar` 的 kubectl 沒有回答（叢集連不上、權限不足、kubectl 不在 PATH 或逾時；`reason: kubectl_error`）；工具未預期的例外 |
+| `0` | 通過 |
+| `1` | 有 fail：缺根目錄 defaults 載體 |
+| `2` | 沒有結論：沒給子命令（印出說明）、argparse 拒絕的參數（未知子命令、缺 `--dir`、未知旗標）；conf.d 有讀不了的檔（`reason: conf_d_not_servable`）；`--dir` 指到的不是目錄（`reason: dir_not_found`），或判斷不了是不是目錄、例如上層目錄執行者進不去（`reason: dir_not_accessible`）；找不到可用的 `da-guard parse-tree`（`$DA_GUARD_BINARY`，否則 `$PATH`）或它執行失敗；工具未預期的例外 |
 
-`sidecar` 需要的權限：該 namespace 內 Secret `git-sync-credentials` 與 Deployment `threshold-exporter` 的 `get`（以名稱讀，限定 `resourceNames` 的 Role 也夠，不需要 `list`）。
-
-⚠️ **行為變更（`sidecar`，[#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210)）**：探測改用 `_lib_kubectl.kubectl_get` 以名稱讀 Secret 與 Deployment，不再跑 `kubectl version --short`（現行 kubectl 已拿掉 `--short`，先前一律報「kubectl 不可用」）。結束碼：齊全 `1` → `0`；缺件由 warn 改為 fail，`--ci` `0` → `1`；叢集連不上、權限不足、kubectl 不在時 `1`（`--ci` `0`）→ `2`。
+⚠️ **行為變更（[#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376)、[#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348)）**：`repo`、`sidecar` 子命令與 `--ci` 移除。它們檢查的是 GitOps Native Mode，自 [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349) 起不支援：chart 不部署 git-sync 容器，`sidecar` 只會 fail；`repo` 在 GitHub 上驗不了 `--path`（不支援 `git archive --remote`）。帶它們的呼叫結束碼 `0`／`1` → `2`。
 
 **範例**
 
 ```bash
-# 驗證 Git 倉庫
-da-tools gitops-check repo --url git@github.com:example/configs.git
-
-# 驗證本地配置結構
 da-tools gitops-check local --dir conf.d
-
-# 檢查 sidecar 部署
-da-tools gitops-check sidecar --namespace monitoring --json
+da-tools gitops-check local --dir conf.d --json
 ```
 
 ---
@@ -2971,7 +2950,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 
 | Finding kind | 嚴重度 | 觸發 |
 |---|---|---|
-| `subtree_default_undeliverable` | warn | 租戶從子目錄 `_defaults.yaml` 繼承了一個閾值 key，而根目錄 `_defaults.yaml` 與 `optional_overrides:` 都沒有宣告它。租戶的有效設定（`/effective`）會顯示該 key 的某個值，但 exporter 不會為它產生任何 series，該 key 的告警永遠不會觸發；exporter 載入時印 ERROR，並把該租戶計入 `da_config_subtree_undeliverable_tenants`。判定直接取 exporter 自己載入這棵樹的結果，da-guard 不另做判斷，只報 `--scope` 內的租戶。修法：把該閾值 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`。tenant 欄為該租戶，Field 為 key。`served-values` 同時把它列進 `unserved`。不報的有三類：保留鍵（例如 `_metadata`、`_profile`、`_state_*`）與 exporter 本來就不產生閾值列的鍵（`_silent_*`、`_state_*`、`_severity_dedup`、`_routing*`）——這兩類宣告到根目錄不是修法（`_` 鍵在任何一層都不產生閾值列），改由下方的 `subtree_default_reserved_key` 報（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）；以及子目錄把它關掉（值為 `disable` 等）的 key，關掉的 key 不報。exporter 的 ERROR 與 gauge 仍會計入這些 key。`_` 開頭的鍵都不是閾值，exporter 在任何一層都不為它產生閾值列（登錄表沒有的，例如 `_myth`，也一樣），所以都不在這裡報，改由 `subtree_default_reserved_key` 報（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)；之前登錄表沒有的 `_` 鍵會被當成閾值送出，在這裡報）。⚠️ 目前為 warn（只有 `--warn-as-error` 會讓結束碼變 1），預計下一個 minor 版改為 error |
+| `subtree_default_undeliverable` | error | 租戶從子目錄 `_defaults.yaml` 繼承了一個閾值 key，而根目錄 `_defaults.yaml` 與 `optional_overrides:` 都沒有宣告它。租戶的有效設定（`/effective`）會顯示該 key 的某個值，但 exporter 不會為它產生任何 series，該 key 的告警永遠不會觸發；exporter 載入時印 ERROR，並把該租戶計入 `da_config_subtree_undeliverable_tenants`。判定直接取 exporter 自己載入這棵樹的結果，da-guard 不另做判斷，只報 `--scope` 內的租戶。修法：把該閾值 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`。tenant 欄為該租戶，Field 為 key。`served-values` 同時把它列進 `unserved`。不報的有三類：保留鍵（例如 `_metadata`、`_profile`、`_state_*`）與 exporter 本來就不產生閾值列的鍵（`_silent_*`、`_state_*`、`_severity_dedup`、`_routing*`）——這兩類宣告到根目錄不是修法（`_` 鍵在任何一層都不產生閾值列），改由下方的 `subtree_default_reserved_key` 報（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）；以及子目錄把它關掉（值為 `disable` 等）的 key，關掉的 key 不報。exporter 的 ERROR 與 gauge 仍會計入這些 key。`_` 開頭的鍵都不是閾值，exporter 在任何一層都不為它產生閾值列（登錄表沒有的，例如 `_myth`，也一樣），所以都不在這裡報，改由 `subtree_default_reserved_key` 報（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)；之前登錄表沒有的 `_` 鍵會被當成閾值送出，在這裡報）。結束碼 1，不需 `--warn-as-error` |
 | `root_default_refused` | error | 根目錄 `_defaults.yaml` 的 `defaults:` 有閾值的值 exporter 讀不了（[#3140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3140)、[#3250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3250)）：以原文經 `parseThresholdNumber` 讀，與租戶值同一種讀法——`NaN`、`-Inf`（非有限數）、`.nan`、`abc`、`disable`、`0x10`、`1e999`、`70:critical`（根目錄的預設值不帶 `:severity`）等。exporter 不為它送預設列，這個 key 比照 `optional_overrides:` 的宣告 key：租戶自己寫的值（含 `<key>_critical`）照送，沒寫的租戶沒有 series。判定是 exporter 解碼本身（`pkg/config` 的 `RootDefaultRefusals`），訊息帶寫下的原文；`_` 開頭的 key 不報。tenant 欄空白，Field 為 `<檔名>:defaults.<key>`；沒有租戶的樹也會報。⚠️ **行為變更**：#3250 前名為 `root_default_non_finite`、只報 `.nan`／`.inf`；其他讀不了的純量當時讓整份檔被丟（exit 3），現在 exit 1；`0x10` 這類先前照 yaml.v3 讀法送出的值，exit 0 → 1。修法：寫有限數，或改列進 `optional_overrides:` |
 | `root_defaults_reserved_key` | error | 根目錄 `_defaults.yaml` 的 `defaults:` 有登錄表上的 `_` key（例如 `_silent_mode`、`_severity_dedup`、`_state_*`、`_profile`；`_metadata` 不在此列，路由鍵——`_routing` 與 `_routing_` 開頭的——也不在此列，由 `routing_in_unread_location` 報；`_routingfoo` 這類 `_routing` 前綴下、卻不是路由鍵的照報）（[#3250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3250)）。exporter 只從根目錄 `defaults:` 讀閾值，這個值不傳給任何租戶，`/effective` 卻顯示為繼承值（`not_served` 標 `root_defaults_reserved`）；租戶自己寫了同值時也不報 `redundant_override`（刪掉租戶那一行會改變 `/metrics`）。修法依該鍵的讀取端而定，訊息照登錄表寫出（與 `subtree_default_reserved_key` 同一句）：多數寫在租戶自己的條目；`_state_<filter>` 也可改設根目錄的 `state_filters.<filter>.default_state`；只在頂層被讀的（例如 `_policies`）移到檔案頂層。**行為變更**：#3250 之前，值不是數字時整份檔被丟（exit 3），是數字時不報；現在兩者都報這一項（error，exit 1） |
 | `root_default_null_undeclared` | warn | 租戶這一側（租戶檔、根目錄平台檔的 `tenants:` 或 profile）設了某個閾值 key，而根目錄 `_defaults.yaml` 把它（任一拼法）寫成 null（`k:`、`~`、`null`）。null 等於沒寫（[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)），根目錄因此沒有宣告這個 key，exporter 不為它產生任何 series，該告警永遠不會觸發——升級前 null 被解成門檻 0，租戶自己的值照常送出，所以這是升級後行為改變的地方。判定直接取 exporter 自己載入這棵樹的結果，只報 `--scope` 內的租戶；`served-values` 同時把它列進 `unserved`。修法：在根目錄 `_defaults.yaml` 給它一個數字，或列進 `optional_overrides:`（只宣告、不給平台值；null 那一行留著或刪掉都可以）。`_` 開頭的 key 都不是閾值，在任何一層都不產生閾值列，給數字也不是修法，所以不報（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。租戶這一側設的 `<key>_critical`，若根目錄把 `<key>`（任一拼法）寫成 null，也報在這裡：critical row 只在根目錄 `defaults:` 有 `<key>` 時才送；修法只有在根目錄給 `<key>` 一個數字（這也會對沒自訂值的租戶送出 `<key>` 的 warning 門檻），列進 `optional_overrides:` 不會送出 critical row。根目錄從來沒寫過 `<key>` 的 `<key>_critical` 不是 null 造成的，不在這裡報。子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 報，不重複報在這裡；租戶把它設為 `disable` 等關掉的值不報 |

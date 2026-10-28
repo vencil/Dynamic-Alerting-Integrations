@@ -99,7 +99,7 @@ func TestResolve_DimensionalBasic(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Metric != resolved[j].Metric {
 			return resolved[i].Metric < resolved[j].Metric
@@ -165,7 +165,7 @@ func TestResolve_DimensionalDisable(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 1 {
 		t.Fatalf("expected 1 (disabled one skipped), got %d: %+v", len(resolved), resolved)
 	}
@@ -188,7 +188,7 @@ func TestResolve_DimensionalBackwardCompat(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	for _, r := range resolved {
 		if len(r.CustomLabels) > 0 {
 			t.Errorf("non-dimensional config should have no CustomLabels, got %v", r.CustomLabels)
@@ -231,7 +231,7 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().Resolve()
+	resolved := mgr.GetConfig().ResolveAt(fixedNow)
 	// Expected: redis_memory=75 + redis_db_keys{db=db0}=1000 = 2 (db1 disabled)
 	if len(resolved) != 2 {
 		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
@@ -306,7 +306,7 @@ func TestResolve_RegexDimensional(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 
 	// Should get: 1 base + 3 dimensional = 4
 	if len(resolved) != 4 {
@@ -370,7 +370,7 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().Resolve()
+	resolved := mgr.GetConfig().ResolveAt(fixedNow)
 	if len(resolved) != 2 {
 		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
 	}
@@ -447,7 +447,7 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 
 	// The _critical key with {} is NOT processed by the _critical scanner
 	// because it doesn't match: it contains "{" so it enters the dimensional block,
@@ -486,7 +486,7 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 			},
 		},
 	}
-	resolved2 := cfg2.Resolve()
+	resolved2 := cfg2.ResolveAt(fixedNow)
 	if len(resolved2) != 1 || resolved2[0].Severity != "critical" {
 		t.Errorf("value:critical syntax should work for regex dimensional, got %+v", resolved2)
 	}

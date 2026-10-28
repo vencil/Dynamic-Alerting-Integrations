@@ -68,14 +68,9 @@ type ResolveStats struct {
 	SloObjectives []ResolvedSloObjective
 }
 
-// Resolve applies three-state logic using the current time.
-// Wraps ResolveAt(time.Now()) for backward compatibility.
-func (c *ThresholdConfig) Resolve() []ResolvedThreshold {
-	return c.ResolveAt(time.Now())
-}
-
-// ResolveAt applies three-state logic at a specific time.
-// The time parameter enables deterministic testing of time-window overrides (B4).
+// ResolveAt applies three-state logic at now. There is no wall-clock variant
+// (#3368): the caller's edge reads its clock once and passes it, so a test
+// pins the instant and a scrape resolves every family at one instant.
 //
 //   - custom value → use it (with time-window resolution)
 //   - omitted      → use default
@@ -440,7 +435,7 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // without producing a row: every `_` key (#3045). The `_` namespace is the
 // reserved-key registry's and none of its keys is a threshold — the
 // _state_ / _silent_ / _severity_dedup / _routing keys are read by
-// ResolveStateFilters() / ResolveSilentModes() / ResolveSeverityDedup() /
+// ResolveStateFiltersAt / ResolveSilentModesAt / ResolveSeverityDedup /
 // ResolveRouting(), the others by other readers or by nothing — so a `_`
 // key in a `defaults:` (`_myth: 5`, `_namespaces: 5`) is no threshold row
 // either. Named so the #1976 report (undeliverableThresholds) asks the row
@@ -945,9 +940,10 @@ func canonicalLabelKey(custom, regex map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
-// ResolveStateFilters resolves state-based monitoring filters for all tenants.
-// For each state filter defined in config, each tenant gets an enabled flag
-// unless explicitly disabled via _state_<filter_name>: "disable" in tenants map.
+// ResolveStateFiltersAt resolves state-based monitoring filters for all
+// tenants at now. For each state filter defined in config, each tenant gets
+// an enabled flag unless explicitly disabled via _state_<filter_name>:
+// "disable" in tenants map.
 //
 // v1.7.0: _state_maintenance supports structured format with expires.
 // When expires is past, the filter is treated as disabled (maintenance auto-deactivates).
@@ -955,11 +951,6 @@ func canonicalLabelKey(custom, regex map[string]string) string {
 // emitted for that tenant (#2000: fail-closed — never mute without an end).
 //
 // Returns the list of enabled state filters to expose as Prometheus metrics.
-func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
-	return c.ResolveStateFiltersAt(time.Now())
-}
-
-// ResolveStateFiltersAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFilter {
 	return c.resolveStateFiltersAt(now, log.Printf)
 }
@@ -1043,9 +1034,16 @@ func (c *ThresholdConfig) resolveStateFiltersAt(now time.Time, logf func(format 
 	return result
 }
 
-// ResolveSilentModes resolves silent mode preferences for all tenants.
-// Supports both scalar format ("warning"/"critical"/"all"/"disable") and
-// structured format ({target, expires, reason}).
+// maintenanceExpiresIgnoredWarn is the one WARN text for an unparseable
+// _state_maintenance expires (#2000), shared by ResolveStateFiltersAt and
+// ResolveMaintenanceExpiriesAt so the two call sites cannot drift apart.
+func maintenanceExpiresIgnoredWarn(tenant, expires string, err error) string {
+	return fmt.Sprintf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _state_maintenance setting is IGNORED (maintenance not active) until it is fixed", expires, tenant, err)
+}
+
+// ResolveSilentModesAt resolves silent mode preferences for all tenants at
+// now. Supports both scalar format ("warning"/"critical"/"all"/"disable")
+// and structured format ({target, expires, reason}).
 //
 // When expires is set and in the past (relative to `now`), the entry is marked Expired=true
 // and the sentinel metric should NOT be emitted (silent mode auto-deactivates).
@@ -1055,18 +1053,6 @@ func (c *ThresholdConfig) resolveStateFiltersAt(now time.Time, logf func(format 
 //
 // Returns one ResolvedSilentMode per tenant+severity combination.
 // "all" expands to two entries: one for "warning" and one for "critical".
-func (c *ThresholdConfig) ResolveSilentModes() []ResolvedSilentMode {
-	return c.ResolveSilentModesAt(time.Now())
-}
-
-// maintenanceExpiresIgnoredWarn is the one WARN text for an unparseable
-// _state_maintenance expires (#2000), shared by ResolveStateFiltersAt and
-// ResolveMaintenanceExpiriesAt so the two call sites cannot drift apart.
-func maintenanceExpiresIgnoredWarn(tenant, expires string, err error) string {
-	return fmt.Sprintf("WARN: invalid expires %q in _state_maintenance for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _state_maintenance setting is IGNORED (maintenance not active) until it is fixed", expires, tenant, err)
-}
-
-// ResolveSilentModesAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMode {
 	return c.resolveSilentModesAt(now, log.Printf)
 }
@@ -1126,14 +1112,10 @@ func resolveSilentTarget(tenant, target string, expires time.Time, reason string
 	}
 }
 
-// ResolveMaintenanceExpiries resolves maintenance mode expiry state for all tenants.
-// Only returns entries for tenants with structured _state_maintenance that have an expires field.
-// Used by the collector to emit da_config_event when maintenance mode expires.
-func (c *ThresholdConfig) ResolveMaintenanceExpiries() []ResolvedMaintenanceExpiry {
-	return c.ResolveMaintenanceExpiriesAt(time.Now())
-}
-
-// ResolveMaintenanceExpiriesAt is the time-parameterized version for testability.
+// ResolveMaintenanceExpiriesAt resolves maintenance mode expiry state for all
+// tenants at now. Only returns entries for tenants with structured
+// _state_maintenance that have an expires field. Used by the collector to
+// emit da_config_event when maintenance mode expires.
 func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []ResolvedMaintenanceExpiry {
 	return c.resolveMaintenanceExpiriesAt(now, true)
 }
@@ -1208,14 +1190,10 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool)
 	return result
 }
 
-// ResolveThresholdExpiries resolves time-boxed threshold expiry state for all
-// tenants (PREVENT #656). Used by the collector to emit da_config_event when a
-// loosened threshold's TTL lapses. v1: base standard metrics only.
-func (c *ThresholdConfig) ResolveThresholdExpiries() []ResolvedThresholdExpiry {
-	return c.ResolveThresholdExpiriesAt(time.Now())
-}
-
-// ResolveThresholdExpiriesAt is the time-parameterized version for testability.
+// ResolveThresholdExpiriesAt resolves time-boxed threshold expiry state for
+// all tenants at now (PREVENT #656). Used by the collector to emit
+// da_config_event when a loosened threshold's TTL lapses. v1: base standard
+// metrics only.
 func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedThresholdExpiry {
 	var result []ResolvedThresholdExpiry
 	// #1231: membership goes through the same canonical view as

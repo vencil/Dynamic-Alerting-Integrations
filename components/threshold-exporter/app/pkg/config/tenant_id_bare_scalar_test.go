@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,7 +33,7 @@ func servedMySQLConnections(t *testing.T, dir, tenantID string) float64 {
 		}
 		t.Fatalf("oracle: the flat plane does not serve tenant %q (it serves %q) — the case tests nothing", tenantID, got)
 	}
-	for _, r := range cfg.ResolveAt(time.Now()) {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == tenantID && r.Component == "mysql" && r.Severity == "warning" {
 			return r.Value
 		}
@@ -64,14 +63,14 @@ func assertWalkerAgreesWithFlatPlane(t *testing.T, dir, tenantID string, want fl
 	if served := servedMySQLConnections(t, dir, tenantID); served != want {
 		t.Fatalf("oracle: flat plane serves %v for %q, case expects %v", served, tenantID, want)
 	}
-	ec, err := ResolveEffective(dir, tenantID)
+	ec, err := ResolveEffective(dir, tenantID, fixedNow)
 	if err != nil {
 		t.Fatalf("ResolveEffective(%q): %v — the flat plane serves this tenant", tenantID, err)
 	}
 	if got := effectiveMySQLConnections(t, ec); got != want {
 		t.Fatalf("ResolveEffective(%q) mysql_connections = %v, flat plane serves %v", tenantID, got, want)
 	}
-	scoped, err := ScopeEffective(dir, dir)
+	scoped, err := ScopeEffective(dir, dir, fixedNow)
 	if err != nil {
 		t.Fatalf("ScopeEffective: %v — the flat plane serves tenant %q", err, tenantID)
 	}

@@ -21,7 +21,7 @@ func TestResolveEffectiveFromScan_ReadsOnlyTheTenantsFiles(t *testing.T) {
 	files := effectiveScanCorpus()["chain and siblings"]
 	testutil.WriteTree(t, dir, files)
 	ageTree(t, dir)
-	want := effectiveAnswer(ResolveEffective(dir, "t1"))
+	want := effectiveAnswer(ResolveEffective(dir, "t1", fixedNow))
 	warm := warmScanOf(t, dir)
 	needed := map[string]bool{"_defaults.yaml": true, "a/_defaults.yaml": true, "a/b/_defaults.yaml": true,
 		"a/b/_defaults.yml": true, "a/b/t1.yaml": true}
@@ -44,7 +44,7 @@ func TestResolveEffectiveFromScan_ReadsOnlyTheTenantsFiles(t *testing.T) {
 		})
 	}
 	done := make(chan string, 1)
-	go func() { done <- effectiveAnswer(ResolveEffectiveFromScan(warm, "t1")) }()
+	go func() { done <- effectiveAnswer(ResolveEffectiveFromScan(warm, "t1", fixedNow)) }()
 	select {
 	case got := <-done:
 		if got != want {

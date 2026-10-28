@@ -136,7 +136,7 @@ func (f *mergeRetryFixture) edit(t *testing.T, variant string) {
 // tx from the tree as it stands — the value the cached merged_hash owes.
 func (f *mergeRetryFixture) effectiveHash(t *testing.T) string {
 	t.Helper()
-	pe, err := config.ResolveEffective(f.dir, mergeRetryTenant)
+	pe, err := config.ResolveEffective(f.dir, mergeRetryTenant, fixedNow)
 	if err != nil {
 		t.Fatalf("ResolveEffective: %v", err)
 	}

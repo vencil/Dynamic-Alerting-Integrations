@@ -199,12 +199,14 @@ func applySubtreeDefaults(
 				// defaults file was charged as a validation error to every
 				// tenant under it, blocking their writes.
 				//
-				// Delivering these keys needs per-subtree scope in
-				// `ThresholdConfig` (or refusing them at validation time),
-				// which is #1976. Until then the honest state is "not
-				// delivered, and LOUD about it" — recorded here and reported
-				// by da_config_subtree_undeliverable_tenants
-				// (config_subtree_undeliverable.go). The one thing this must
+				// Delivering these keys would need per-subtree scope in
+				// `ThresholdConfig`; #1976 chose to refuse them at
+				// validation time instead (da-guard's
+				// subtree_default_undeliverable, an error). So the state
+				// here stays "not delivered, and LOUD about it" — recorded
+				// here and reported by da_config_subtree_undeliverable_tenants
+				// (config_subtree_undeliverable.go) for a tree that reaches
+				// the exporter without da-guard. The one thing this must
 				// never be again is silent. (#1569 blind review.)
 				if verdict == subtreeUnreachable {
 					if unreachable[tenantID] == nil {

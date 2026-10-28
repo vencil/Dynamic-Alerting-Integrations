@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -84,18 +85,21 @@ func benchResolveEffective(b *testing.B, withPlatform bool) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := config.ResolveEffective(root, tid); err != nil {
+		if _, err := config.ResolveEffective(root, tid, benchNow); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
+
+// benchNow is the resolve instant (package config_test cannot see benchNow).
+var benchNow = time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 
 func benchScopeEffective(b *testing.B, withPlatform bool) {
 	root, _ := buildEffectiveBenchTree(b, withPlatform)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s, err := config.ScopeEffective(root, root)
+		s, err := config.ScopeEffective(root, root, benchNow)
 		if err != nil {
 			b.Fatal(err)
 		}

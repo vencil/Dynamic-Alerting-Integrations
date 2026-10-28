@@ -261,6 +261,10 @@ type ConfigManager struct {
 	// test code uses SetClock to swap in a FakeClock and then
 	// `Advance(window)` to fire timers synchronously. Origin: TRK-011
 	// deeper applied to exporter (mirrors PR #354 in tenant-api).
+	//
+	// #3368: it is also the instant every schedule resolve of this manager
+	// reads (Now) — /metrics, /config and the values-not-served audit — so
+	// a test that sets a fake one pins `window:` / `expires:` for all three.
 	clock clockwork.Clock
 
 	// metrics is this manager's *configMetrics instance. Production
@@ -338,7 +342,7 @@ func NewConfigManagerWithDebounce(path string, debounceWindow time.Duration) *Co
 }
 
 // SetClock swaps the clock used by WatchLoop's ticker + the debounce
-// timer. Test-only — production code constructs managers via
+// timer, and the instant Now returns (the scrape's, #3368). Test-only — production code constructs managers via
 // NewConfigManagerWithDebounce which installs a real clock. Calling
 // this AFTER WatchLoop has started is undefined (the ticker is bound
 // to whichever clock was current at NewTicker time).
@@ -1863,8 +1867,8 @@ func (m *ConfigManager) coldMergedHash(tenantID, tenantFile string, defaultsChai
 }
 
 // logConfigStats logs config summary with cheap counts instead of calling
-// the expensive Resolve()/ResolveStateFilters()/ResolveSilentModes().
-// At 1000 tenants, this saves ~4ms per reload (Resolve alone costs ~2-5ms).
+// the expensive ResolveAt/ResolveStateFiltersAt/ResolveSilentModesAt.
+// At 1000 tenants, this saves ~4ms per reload (ResolveAt alone costs ~2-5ms).
 // The "resolved thresholds" count is estimated from tenant override counts
 // rather than running the full resolution pipeline.
 // logger may be nil → falls back to log.Default() (production safety).

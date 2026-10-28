@@ -41,7 +41,7 @@ func servedSeries(t *testing.T, dir string) []string {
 	}
 	at := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	reg := prometheus.NewRegistry()
-	scrape.Register(reg, scrape.NewCollectorWithHooks(staticSource{cfg}, scrape.Hooks{Now: func() time.Time { return at }}), scrape.NewConfigMetrics())
+	scrape.Register(reg, scrape.NewCollectorWithHooks(staticSource{cfg, at}, scrape.Hooks{}), scrape.NewConfigMetrics())
 	mfs, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)

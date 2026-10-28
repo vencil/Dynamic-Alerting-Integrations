@@ -51,7 +51,7 @@ func TestDeclaredEmission_TenantValueEmitsExactlyOneRow(t *testing.T) {
 		map[string]ScheduledValue{"oracle_wait_time_rate": {Default: "50"}},
 	)
 
-	got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate")
+	got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate")
 
 	if len(got) != 1 {
 		t.Fatalf("want exactly 1 row, got %d: %+v", len(got), got)
@@ -70,7 +70,7 @@ func TestDeclaredEmission_DeclaredButUnsetEmitsNothing(t *testing.T) {
 		map[string]ScheduledValue{},
 	)
 
-	if got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate"); len(got) != 0 {
+	if got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate"); len(got) != 0 {
 		t.Fatalf("a declared key the tenant never set must emit nothing, got %+v", got)
 	}
 }
@@ -82,7 +82,7 @@ func TestDeclaredEmission_DisableEmitsNothing(t *testing.T) {
 			t.Parallel()
 			cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate"},
 				map[string]ScheduledValue{"oracle_wait_time_rate": {Default: word}})
-			if got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate"); len(got) != 0 {
+			if got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate"); len(got) != 0 {
 				t.Fatalf("%q must suppress the row, got %+v", word, got)
 			}
 		})
@@ -132,7 +132,7 @@ func TestDeclaredEmission_UnparseableValueDropsWithNoFallback(t *testing.T) {
 	cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate"},
 		map[string]ScheduledValue{"oracle_wait_time_rate": {Default: "not-a-number"}})
 
-	if got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate"); len(got) != 0 {
+	if got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate"); len(got) != 0 {
 		t.Fatalf("an unparseable declared value must emit nothing (no default to fall back to), got %+v", got)
 	}
 	// The drop is the whole difference from resolveBaseRows, which falls back to
@@ -159,13 +159,13 @@ func TestDeclaredEmission_ExpiresIsInertNotAVanish(t *testing.T) {
 			Expiry:  &ExpiryMeta{Expires: "2020-01-01T00:00:00Z"}, // long lapsed
 		}})
 
-	got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate")
+	got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate")
 	if len(got) != 1 || got[0].Value != 50 {
 		t.Fatalf("a lapsed expires must not take the threshold away, got %+v", got)
 	}
 	// ...and no expiry event, matching the validator's refusal (the pair is
 	// held together by TestDeclaredKey_ExpiryRefusalAndEventSuppressionAgree).
-	if ev := cfg.ResolveThresholdExpiriesAt(time.Now()); len(ev) != 0 {
+	if ev := cfg.ResolveThresholdExpiriesAt(fixedNow); len(ev) != 0 {
 		t.Errorf("no expiry event may fire for a key whose expiry is inert, got %+v", ev)
 	}
 }
@@ -210,7 +210,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 			[]string{"mysql_connections"}, // in both
 			map[string]ScheduledValue{"mysql_connections": {Default: "200"}},
 		)
-		got := rowsFor(cfg.ResolveAt(time.Now()), "mysql_connections")
+		got := rowsFor(cfg.ResolveAt(fixedNow), "mysql_connections")
 		if len(got) != 1 {
 			t.Fatalf("resolveBaseRows already owns a valued key; want 1 row, got %d: %+v", len(got), got)
 		}
@@ -225,7 +225,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 			map[string]ScheduledValue{`oracle_wait_time_rate{db="ORCL"}`: {Default: "50"}})
 		// resolveDimensionalRows has emitted this since PR-B; the declared loop
 		// must not add a second one.
-		got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate")
+		got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate")
 		if len(got) != 1 {
 			t.Fatalf("resolveDimensionalRows already owns dimensional keys; want 1 row, got %d: %+v", len(got), got)
 		}
@@ -244,7 +244,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 		cfg := declaredEmissionCfg(nil, []string{key},
 			map[string]ScheduledValue{key: {Default: "50"}})
 
-		rows := cfg.ResolveAt(time.Now())
+		rows := cfg.ResolveAt(fixedNow)
 
 		// resolveDimensionalRows owns it and emits exactly one row, keyed on
 		// the parsed BASE. The declared loop would key on the whole string,
@@ -263,7 +263,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 			map[string]ScheduledValue{"oracle_wait_time_rate_critical": {Default: "90"}})
 		// ValidateTenantKeys refuses this shape because resolveCriticalRows
 		// drops it; the emission loop must not route around that refusal.
-		if got := cfg.ResolveAt(time.Now()); len(got) != 0 {
+		if got := cfg.ResolveAt(fixedNow); len(got) != 0 {
 			t.Fatalf("declared loop must not emit the critical shape, got %+v", got)
 		}
 	})
@@ -273,7 +273,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 		for _, key := range []string{"_metadata", "_profile", "_custom_alerts", "_state_maintenance"} {
 			cfg := declaredEmissionCfg(nil, []string{key},
 				map[string]ScheduledValue{key: {Default: "1"}})
-			if got := cfg.ResolveAt(time.Now()); len(got) != 0 {
+			if got := cfg.ResolveAt(fixedNow); len(got) != 0 {
 				t.Errorf("reserved key %q must not become a threshold row, got %+v", key, got)
 			}
 		}
@@ -295,7 +295,7 @@ func TestDeclaredEmission_CountsTowardCardinalityCap(t *testing.T) {
 		})
 	cfg.MaxMetricsPerTenant = 2
 
-	rows, stats := cfg.ResolveAtWithStats(time.Now())
+	rows, stats := cfg.ResolveAtWithStats(fixedNow)
 
 	if len(rows) != 2 {
 		t.Fatalf("cap must truncate declared rows too: want 2, got %d", len(rows))
@@ -314,7 +314,7 @@ func TestDeclaredEmission_AliasTargetDualEmits(t *testing.T) {
 	cfg := declaredEmissionCfg(nil, []string{canonical},
 		map[string]ScheduledValue{canonical: {Default: "60"}})
 
-	rows := cfg.ResolveAt(time.Now())
+	rows := cfg.ResolveAt(fixedNow)
 
 	if got := rowsFor(rows, canonical); len(got) != 1 {
 		t.Errorf("canonical row missing: %+v", rows)
@@ -366,7 +366,7 @@ func TestApplyProfiles_DoesNotFillDeclaredKeys(t *testing.T) {
 	}
 
 	// ...and the consequence that matters: no row for it.
-	if got := rowsFor(cfg.ResolveAt(time.Now()), "oracle_wait_time_rate"); len(got) != 0 {
+	if got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate"); len(got) != 0 {
 		t.Fatalf("a profile-supplied declared key must not emit, got %+v", got)
 	}
 }
@@ -396,7 +396,7 @@ func TestApplyProfiles_StillFillsCriticalTierEvenWhenDeclared(t *testing.T) {
 	}
 
 	cfg.ApplyProfiles()
-	rows := rowsFor(cfg.ResolveAt(time.Now()), "jvm_memory")
+	rows := rowsFor(cfg.ResolveAt(fixedNow), "jvm_memory")
 
 	// warning (from defaults) + critical (from the profile-filled _critical)
 	if len(rows) != 2 {
@@ -436,7 +436,7 @@ func TestApplyProfiles_BlocksDimensionalSpellingOfDeclaredBase(t *testing.T) {
 
 	cfg.ApplyProfiles()
 
-	if rows := cfg.ResolveAt(time.Now()); len(rows) != 0 {
+	if rows := cfg.ResolveAt(fixedNow); len(rows) != 0 {
 		t.Fatalf("a profile must not arm a declared key via its dimensional spelling, got %+v", rows)
 	}
 }
@@ -450,7 +450,7 @@ func TestDeclaredEmission_TypoedReservedKeyOnTheListEmitsNothing(t *testing.T) {
 	cfg := declaredEmissionCfg(nil, []string{"_silence_mode"},
 		map[string]ScheduledValue{"_silence_mode": {Default: "1"}})
 
-	if rows := cfg.ResolveAt(time.Now()); len(rows) != 0 {
+	if rows := cfg.ResolveAt(fixedNow); len(rows) != 0 {
 		t.Fatalf("a typo'd reserved key must not become a threshold row, got %+v", rows)
 	}
 }

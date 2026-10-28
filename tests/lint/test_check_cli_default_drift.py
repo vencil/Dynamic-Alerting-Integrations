@@ -397,7 +397,7 @@ def test_a_tool_that_sets_the_crash_code_does_not_leave_it_set(tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 # #3139: options declared on a sub-parser (`add_subparsers`) are compared too.
 # Before this, only the top-level parser's actions were read, so a command whose
-# options all live on sub-commands (gitops-check repo/local/sidecar) had every
+# options all lived on sub-commands (gitops-check repo/local/sidecar, then) had every
 # option-table row land in `flag_undeclared` — editing the documented
 # `--branch` default from `main` to `master` stayed green.
 # ---------------------------------------------------------------------------
@@ -420,32 +420,28 @@ def _mutated_reference(tmp_path: Path, old: str, new: str) -> Path:
 class TestSubParserDefaults:
 
     def test_a_sub_command_option_is_introspected(self, real_defaults):
-        assert real_defaults["gitops-check"].get("--branch") == "main", (
-            "gitops-check's `repo --branch` lives on a sub-parser; its default "
-            "is not in the introspected map, so its documented default is "
-            "never compared.")
-        # config-history: a top-level option plus sub-command ones, side by side
+        # config-history: a top-level option plus sub-command ones, side by
+        # side (`snapshot -m` and `log --limit` live on sub-parsers).
         assert {"--config-dir", "--message", "--limit"} <= set(
             real_defaults["config-history"])
+        assert real_defaults["config-history"]["--message"] == "", (
+            "config-history's `snapshot -m` lives on a sub-parser; its default "
+            "is not in the introspected map, so its documented default is "
+            "never compared.")
 
-    @pytest.mark.parametrize("old,new,flag", [
-        ("| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |",
-         "| `--branch <BRANCH>` | `repo`：要檢查的分支 | `master` |", "--branch"),
-        ("| `--namespace <NS>` | `sidecar`：K8s namespace | `monitoring` |",
-         "| `--namespace <NS>` | `sidecar`：K8s namespace | `kube-system` |",
-         "--namespace"),
-    ])
     def test_a_wrong_sub_command_default_in_the_real_doc_is_reported(
-            self, tmp_path, real_defaults, old, new, flag):
+            self, tmp_path, real_defaults):
+        old = "| `-m, --message <TEXT>` | `snapshot`：快照訊息 | （空） |"
+        new = "| `-m, --message <TEXT>` | `snapshot`：快照訊息 | `hello` |"
         findings, _stats, _n, _b = mod.scan(
             (_mutated_reference(tmp_path, old, new),), real_defaults)
-        assert [(f.command, f.flag) for f in findings] == [("gitops-check", flag)], (
-            f"changed the documented default of gitops-check {flag} and the "
-            f"check did not report it: {findings}")
+        assert [(f.command, f.flag) for f in findings] == [("config-history", "-m")], (
+            f"changed the documented default of config-history `snapshot -m` and "
+            f"the check did not report it: {findings}")
 
     def test_the_unmutated_copy_is_clean(self, tmp_path, real_defaults):
         """Control for the test above: the copy itself is not what goes red."""
-        anchor = "| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |"
+        anchor = "| `-m, --message <TEXT>` | `snapshot`：快照訊息 | （空） |"
         findings, _s, _n, _b = mod.scan(
             (_mutated_reference(tmp_path, anchor, anchor),), real_defaults)
         assert findings == []

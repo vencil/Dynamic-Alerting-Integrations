@@ -703,7 +703,7 @@ func TestDebounceWindow_ServedAndCommittedStateLagDiskUntilFire(t *testing.T) {
 	touchTreeAt(t, dir, time.Now().Add(3*time.Second))
 	m.triggerDebouncedReload(ReloadReasonSource)
 
-	disk, err := config.ResolveEffective(dir, "tenant-a")
+	disk, err := config.ResolveEffective(dir, "tenant-a", fixedNow)
 	if err != nil {
 		t.Fatalf("ResolveEffective: %v", err)
 	}

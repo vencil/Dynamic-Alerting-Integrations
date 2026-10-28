@@ -150,7 +150,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
 | `init` | Project skeleton generation (CI/CD + conf.d + Kustomize overlays) | `--tenants <list>` with any of `--ci` / `--rule-packs` / `--deploy`, or interactive mode (no flags) |
-| `gitops-check` | GitOps Native Mode readiness validation (repo / local / sidecar) | `<subcommand>` |
+| `gitops-check` | Local conf.d structure check | `local --dir <path>` |
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump) | `--silences-file <json> --rule-source <path>` |
@@ -1349,59 +1349,38 @@ da-tools init --ci both --tenants db-a --dry-run
 
 #### gitops-check
 
-GitOps Native Mode readiness validation — checks Git repo accessibility, local config structure, and git-sync sidecar deployment status.
+Local conf.d structure check: whether the root defaults carrier is there, whether every file reads through `da-guard parse-tree`, and the threshold and tenant-file counts.
 
 When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
 ```bash
-da-tools gitops-check <subcommand> [options]
+da-tools gitops-check local --dir <path> [--json]
 ```
-
-**Subcommands**
-
-| Subcommand | Purpose | Parameters |
-|------------|---------|------------|
-| `repo` | Validate Git repo accessibility, branch existence, and that `--path` is in that branch | `--url <git-url> [--branch main] [--path configs/]` |
-| `local` | Validate local clone's conf.d/ structure | `--dir <path>` |
-| `sidecar` | Check K8s git-sync sidecar deployment readiness | `[--namespace monitoring]` |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--url <GIT-URL>` | `repo`: the Git repository URL (required) | (none) |
-| `--branch <BRANCH>` | `repo`: the branch to check | `main` |
-| `--path <PATH>` | `repo`: the config path inside the repository | `configs/` |
-| `--dir <PATH>` | `local`: the local config directory (required) | (none) |
-| `--namespace <NS>` | `sidecar`: K8s namespace | `monitoring` |
-| `--json` | Accepted by all three subcommands: JSON output | false |
-| `--ci` | Accepted by all three subcommands: only a failure exits 1, a warning exits 0 (without it a warning exits 1 too) | false |
+| `--dir <PATH>` | Local config directory (required) | (none) |
+| `--json` | JSON output | false |
 
-**How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and every file the exporter reads (`_` platform files included) that cannot be read is listed in `parse_errors` and fails the check. It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
+**How `local` reads** (ADR-036 step 4, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): which files there are, and what each holds, always come from `da-guard parse-tree` (yaml.v3, the exporter's file selection). The root defaults carrier is the one the exporter reads (any case, `.yaml` first); tenant files are counted over the **whole tree** (subdirectories too), and when a file the exporter reads (`_` platform files included) cannot be read, the whole tree is refused with `2`, each such file named (the shared refusal above, `reason: conf_d_not_servable`). It needs da-guard (`$DA_GUARD_BINARY`, else `$PATH`); without one, or when it fails, the exit code is 2 and there is no verdict. ⚠️ **Breaking**: it used to look at the root only — tenant files in subdirectories were neither counted nor checked, and an unreadable `_` platform file did not fail it.
 
-**Exit Codes**
+**Exit codes**
 
-| Code | Description |
-|------|-------------|
-| `0` | Passed; with `--ci` a warning is 0 too (no subcommand gives one today); a `repo` `--path` the server cannot verify (it does not support `git archive --remote`) is only recorded as `config_path_verified: false` and still passes |
-| `1` | A failure: `repo` cannot reach the repository, the branch does not exist (as git resolves it: `--branch main` is `refs/heads/main`, never `refs/heads/feature/main`; `heads/x` and `refs/heads/x` both name `refs/heads/x`; a tag is not a branch), or the server answers that `--path` is not in that branch (without `--path`, the default `configs/` is what is checked; a server answering in another language falls back to "cannot verify"); `local` has no root defaults carrier, or a file that cannot be read (`parse_errors`); `sidecar` finds no git-sync Secret (`git-sync-credentials`) or no `git-sync` container in Deployment `threshold-exporter`. Without `--ci` a warning is 1 too |
-| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--url` / `--dir`, unknown flag); `local --dir` naming no directory (`reason: dir_not_found`), or a path it cannot tell is one, e.g. under a parent the caller cannot enter (`reason: dir_not_accessible`); `local` finds no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it fails; `sidecar`'s kubectl gives no answer (cluster unreachable, forbidden, kubectl not on PATH or timed out; `reason: kubectl_error`); an unexpected exception in the tool |
+| Code | Meaning |
+|------|---------|
+| `0` | Passed |
+| `1` | A failure: the root defaults carrier is missing |
+| `2` | No verdict: no subcommand given (help is printed), arguments argparse rejects (unknown subcommand, missing `--dir`, unknown flag); a file in the conf.d that cannot be read (`reason: conf_d_not_servable`); `--dir` naming no directory (`reason: dir_not_found`), or whether it is one cannot be told, e.g. a parent directory the caller cannot enter (`reason: dir_not_accessible`); no usable `da-guard parse-tree` (`$DA_GUARD_BINARY`, else `$PATH`) or it failed; an unexpected exception in the tool |
 
-`sidecar` needs `get` on Secret `git-sync-credentials` and Deployment `threshold-exporter` in the namespace (read by name, so a Role restricted by `resourceNames` is enough; no `list`).
-
-⚠️ **Behaviour change (`sidecar`, [#3210](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3210))**: it reads the Secret and the Deployment by name through `_lib_kubectl.kubectl_get` and no longer runs `kubectl version --short` (current kubectl dropped `--short`, so it always reported "kubectl not available"). Exit codes: everything present `1` → `0`; a missing part is a fail instead of a warn, `--ci` `0` → `1`; an unreachable or forbidden cluster, or no kubectl, `1` (`--ci` `0`) → `2`.
+⚠️ **Behaviour change ([#3376](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3376), [#3348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3348))**: the `repo` and `sidecar` subcommands and `--ci` are removed. They checked GitOps Native Mode, unsupported since [#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349): the chart deploys no git-sync container, so `sidecar` could only fail, and `repo` cannot verify `--path` on GitHub (no `git archive --remote` there). A call with them exits `0` / `1` → `2`.
 
 **Examples**
 
 ```bash
-# Validate Git repo
-da-tools gitops-check repo --url git@github.com:example/configs.git
-
-# Validate local config structure
 da-tools gitops-check local --dir conf.d
-
-# Check sidecar deployment
-da-tools gitops-check sidecar --namespace monitoring --json
+da-tools gitops-check local --dir conf.d --json
 ```
 
 ---
@@ -2985,7 +2964,7 @@ All three skip a file the exporter drops (still named only by exit 3).
 
 | Finding kind | Severity | Trigger |
 |---|---|---|
-| `subtree_default_undeliverable` | warn | a tenant inherits a threshold key from a subtree `_defaults.yaml` that neither the conf.d root `_defaults.yaml` nor `optional_overrides:` declares. The tenant's effective config (`/effective`) shows a value for it, but the exporter serves no series for it, so that alert can never fire; at load time the exporter logs an ERROR and counts the tenant on `da_config_subtree_undeliverable_tenants`. The verdict is taken from the exporter's own load of the tree; da-guard judges nothing itself, and reports tenants under `--scope` only. Fix: declare that threshold key in the root `_defaults.yaml` or in `optional_overrides:`. Tenant is the tenant; Field is the key. `served-values` lists the key in `unserved` too. Three kinds of key are not reported: reserved keys (such as `_metadata`, `_profile`, `_state_*`) and keys the exporter never serves as a threshold row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`) — declaring either kind at the root is not a fix (no `_` key makes a threshold row in any layer); they are reported as `subtree_default_reserved_key` below ([#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)) — and keys the subtree switches off (a `disable` value and the like), which are simply not reported. The exporter's ERROR and gauge still count all of them. No `_` key is a threshold: the exporter makes no threshold row of one in any layer (one the registry does not list, such as `_myth`, included), so none is reported here but as `subtree_default_reserved_key` ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045); before it, a `_` key the registry does not list was served as a threshold and reported here). ⚠️ A warning for now (only `--warn-as-error` turns it into exit 1); planned to become an error in the next minor release |
+| `subtree_default_undeliverable` | error | a tenant inherits a threshold key from a subtree `_defaults.yaml` that neither the conf.d root `_defaults.yaml` nor `optional_overrides:` declares. The tenant's effective config (`/effective`) shows a value for it, but the exporter serves no series for it, so that alert can never fire; at load time the exporter logs an ERROR and counts the tenant on `da_config_subtree_undeliverable_tenants`. The verdict is taken from the exporter's own load of the tree; da-guard judges nothing itself, and reports tenants under `--scope` only. Fix: declare that threshold key in the root `_defaults.yaml` or in `optional_overrides:`. Tenant is the tenant; Field is the key. `served-values` lists the key in `unserved` too. Three kinds of key are not reported: reserved keys (such as `_metadata`, `_profile`, `_state_*`) and keys the exporter never serves as a threshold row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`) — declaring either kind at the root is not a fix (no `_` key makes a threshold row in any layer); they are reported as `subtree_default_reserved_key` below ([#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)) — and keys the subtree switches off (a `disable` value and the like), which are simply not reported. The exporter's ERROR and gauge still count all of them. No `_` key is a threshold: the exporter makes no threshold row of one in any layer (one the registry does not list, such as `_myth`, included), so none is reported here but as `subtree_default_reserved_key` ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045); before it, a `_` key the registry does not list was served as a threshold and reported here). Exits 1 without `--warn-as-error` |
 | `root_default_refused` | error | a threshold under the root `_defaults.yaml`'s `defaults:` whose value the exporter does not read ([#3140](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3140), [#3250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3250)): its text through `parseThresholdNumber`, the way a tenant's value is read — `NaN`, `-Inf` (non-finite), `.nan`, `abc`, `disable`, `0x10`, `1e999`, `70:critical` (a root default takes no `:severity`) and the like. The exporter serves no default row for it, and the key is read like an `optional_overrides:` declared key: a tenant's own value (its `<key>_critical` too) is served, a tenant that writes none has no series. The verdict is the exporter's decode itself (`pkg/config` `RootDefaultRefusals`), and the message quotes the text written; a `_` key is not reported. Tenant is empty, Field is `<file>:defaults.<key>`; reported for a tree with no tenant too. ⚠️ **Behavior change**: before #3250 it was `root_default_non_finite` and named `.nan` / `.inf` only; any other scalar it does not read made the whole file dropped (exit 3) and exits 1 now; a value such as `0x10`, served before as yaml.v3 read it, goes exit 0 → 1. Fix: write a finite number, or list the key under `optional_overrides:` instead |
 | `root_defaults_reserved_key` | error | a registered `_` key under the root `_defaults.yaml`'s `defaults:` (`_silent_mode`, `_severity_dedup`, `_state_*`, `_profile` and the like; not `_metadata`, and not a routing key — `_routing` or one starting `_routing_` — which `routing_in_unread_location` reports; a key under the `_routing` prefix that is no routing key, such as `_routingfoo`, is reported) ([#3250](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3250)). The exporter reads the root `defaults:` for thresholds only, so the value reaches no tenant, while `/effective` shows it as inherited (`not_served`: `root_defaults_reserved`); a tenant writing the same value is not reported `redundant_override` either (dropping its line changes `/metrics`). The fix depends on the key's readers and is worded from the registry (the same sentence as `subtree_default_reserved_key`'s): most go in the tenant's own entry; `_state_<filter>` may instead set `state_filters.<filter>.default_state` in the root; one read at the top level alone (`_policies`) moves to the file's top level. **Behavior change**: before #3250 a non-numeric value dropped the whole file (exit 3) and a number was not reported; both are reported now (error, exit 1) |
 | `root_default_null_undeclared` | warn | the tenant side (the tenant file, a root platform file's `tenants:` entry or a profile) sets a threshold key that the root `_defaults.yaml` writes as null (`k:`, `~`, `null`) under either spelling. A null is no write ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)), so the root does not declare the key and the exporter serves no series for it: that alert can never fire. Before the upgrade the null decoded to a threshold of 0 and the tenant's own value was served, so this is where behavior changes on upgrade. The verdict is taken from the exporter's own load of the tree, for tenants under `--scope` only; `served-values` lists the key in `unserved` too. Fix: give it a number in the root `_defaults.yaml`, or list it under `optional_overrides:` (declared without a platform value; the null line may stay or go). No `_` key is a threshold or makes a threshold row in any layer, so a number is no fix and it is not reported ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)). A tenant-side `<key>_critical` whose `<key>` the root writes as null (either spelling) is reported here too: the critical row is served only when the root `defaults:` holds `<key>`, so the only fix is a number for `<key>` at the root (which also serves `<key>` at warning severity to tenants that do not set it); listing it under `optional_overrides:` does not serve the critical row. A `<key>_critical` whose `<key>` the root never wrote is not caused by a null and is not reported here. A value a subtree `_defaults.yaml` hands down is reported by `subtree_default_undeliverable`, not here as well; a key the tenant switches off (`disable` and the like) is not reported |

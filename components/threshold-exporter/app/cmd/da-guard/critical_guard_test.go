@@ -41,11 +41,11 @@ func legacyCritical(t *testing.T) string {
 // rootCriticalFields is the Field of every root_defaults_critical_key finding.
 func rootCriticalFields(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	scoped, err := config.ScopeEffective(dir, dir)
+	scoped, err := config.ScopeEffective(dir, dir, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}))
+	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, &flags{}, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}

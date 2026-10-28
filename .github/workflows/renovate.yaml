@@ -82,7 +82,7 @@ jobs:
         # floating @v46 major alias (unlike actions/checkout@v6), so a bare @v46 fails to
         # resolve ("unable to find version v46"). Pin the full version. Since #1354 the
         # github-actions manager bumps it in the grouped "GitHub Actions" PR.
-        uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
+        uses: renovatebot/github-action@2804199d260ad00c1fae0e9e842888369391c776 # v46.3.10
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}

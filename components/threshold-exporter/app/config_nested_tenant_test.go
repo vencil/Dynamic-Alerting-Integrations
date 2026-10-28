@@ -17,7 +17,7 @@ package main
 //   - `TestScanDirHierarchical_MixedMode` calls `scanDirHierarchical` DIRECTLY.
 //     It never runs `Load()` and never looks at `GetConfig()`, so the split
 //     between the two populations is invisible to it.
-//   - the golden parity suite asserts only on the `Resolve()` side
+//   - the golden parity suite asserts only on the `ResolveAt` side
 //     (`source_file` / `defaults_chain` / `merged_hash` / `effective_config`).
 //
 // So everything below goes through the REAL entry — `NewConfigManager` +
@@ -150,7 +150,7 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 
 	// (1) Control — the flat tenant must be present on every plane. If this
 	//     fails the fixture is broken and nothing below means anything.
-	if _, err := config.ResolveEffective(dir, flatTenant); err != nil {
+	if _, err := config.ResolveEffective(dir, flatTenant, fixedNow); err != nil {
 		t.Fatalf("control: ResolveEffective(%s): %v — fixture is broken", flatTenant, err)
 	}
 	if got := keysOfTenants(m.GetConfig()); !contains(got, flatTenant) {
@@ -168,7 +168,7 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 	//     `diagnose --show-inheritance`, which #1447 calls the ONLY way out of
 	//     "config looks right but the alert never fires") is told everything
 	//     is fine.
-	if _, err := config.ResolveEffective(dir, nestedTenant); err != nil {
+	if _, err := config.ResolveEffective(dir, nestedTenant, fixedNow); err != nil {
 		t.Fatalf("premise: ResolveEffective(%s) must succeed (%v) — without it "+
 			"this test is about a tenant that does not exist, not about a split "+
 			"population", nestedTenant, err)
@@ -285,7 +285,7 @@ func TestTheSameTenantFlattenedIsFine(t *testing.T) {
 	}
 
 	for _, tenant := range []string{flatTenant, movedTenant} {
-		if _, err := config.ResolveEffective(dir, tenant); err != nil {
+		if _, err := config.ResolveEffective(dir, tenant, fixedNow); err != nil {
 			t.Errorf("ResolveEffective(%s): %v", tenant, err)
 		}
 		if got := keysOfTenants(m.GetConfig()); !contains(got, tenant) {
@@ -380,7 +380,7 @@ func TestTheEmittedValueMatchesTheResolvedOne(t *testing.T) {
 			"leaked into the one global map", got)
 	}
 
-	eff, err := config.ResolveEffective(dir, "tenant-inheritor")
+	eff, err := config.ResolveEffective(dir, "tenant-inheritor", fixedNow)
 	if err != nil {
 		t.Fatalf("premise: ResolveEffective(tenant-inheritor) must succeed: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestTheDeepestSubtreeDefaultWins(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	eff, err := config.ResolveEffective(dir, inheritor)
+	eff, err := config.ResolveEffective(dir, inheritor, fixedNow)
 	if err != nil {
 		t.Fatalf("premise: ResolveEffective(%s) must succeed: %v", inheritor, err)
 	}

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gopkg.in/yaml.v3"
 )
@@ -57,9 +58,9 @@ func captureLoad(t *testing.T, m *ConfigManager) string {
 // itself meant it was never declared, so its OWN value stopped emitting; and
 // an `expires:` in a subtree defaults file was charged to every tenant under
 // it, blocking their writes. All four share one root cause — that field is a
-// flat global list with no subtree scope. Fixing it properly needs per-subtree
-// scope in `ThresholdConfig` (or refusing such a key at validation time),
-// i.e. #1976.
+// flat global list with no subtree scope. Delivering it would need per-subtree
+// scope in `ThresholdConfig`; #1976 refuses such a key at validation time
+// instead (da-guard's subtree_default_undeliverable, an error).
 //
 // So the contract asserted here is: the value does NOT reach the output plane,
 // nothing is silently written anywhere, and the undeliverable audit NAMES the
@@ -88,8 +89,8 @@ func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 
 	// The half that is NOT delivered — and must not pretend to be.
 	if _, present := seriesFor(t, m, "t1", "evicted_keys"); present {
-		t.Errorf("a subtree-only key emitted a series; either #1976 landed or the " +
-			"global declared surface was widened again")
+		t.Errorf("a subtree-only key emitted a series; either per-subtree delivery " +
+			"landed or the global declared surface was widened again")
 	}
 	if _, leaked := m.GetConfig().Defaults["redis_evicted_keys"]; leaked {
 		t.Errorf("the subtree's key leaked into the global Defaults map; every tenant " +
@@ -311,7 +312,7 @@ func TestTheUndeliverableAuditRunsOnEveryCommit(t *testing.T) {
 // ⛔ MEASURED: reverting `lower := strings.ToLower(name)` to `lower := name`
 // left the package GREEN — no fixture anywhere used `.YAML` or `.YML`. The
 // defect it silently restores needs no nesting at all: a `UPPER.YAML` at the
-// conf.d ROOT resolves through `Resolve()` and emits nothing, because the two
+// conf.d ROOT resolves through `ResolveAt` and emits nothing, because the two
 // enumerators over one tree disagreed on which extensions count.
 func TestAnUppercaseExtensionAtTheRootStillEmits(t *testing.T) {
 	dir := t.TempDir()
@@ -710,6 +711,9 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 
 	m := NewConfigManager(dir)
 	defer m.Close()
+	// The scrape resolves at the manager's clock: pinned inside the window
+	// (#3368 — "00:00-23:59" is end-exclusive, shut for the 23:59 minute).
+	m.SetClock(clockwork.NewFakeClockAt(fixedNow))
 	captureLoad(t, m)
 	cfg := m.GetConfig()
 
@@ -823,7 +827,7 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 		if err := m.Load(); err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if filters := m.GetConfig().ResolveStateFilters(); len(filters) != 1 || filters[0].Tenant != "t1" {
+		if filters := m.GetConfig().ResolveStateFiltersAt(fixedNow); len(filters) != 1 || filters[0].Tenant != "t1" {
 			t.Errorf("the subtree's `disable` was applied, or the filter is off: %v "+
 				"(want t1's maintenance filter on, the root's default_state)", filters)
 		}

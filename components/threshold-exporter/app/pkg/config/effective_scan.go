@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ErrScanStale is returned by ResolveEffectiveFromScan when a file the resolve
@@ -69,7 +70,7 @@ var ErrScanStale = errors.New("conf.d changed since the scan")
 // resolve reads, the gap surfaces as ErrScanStale (the bytes no longer hash
 // to the carried hash); for one it does not read — another tenant file whose
 // carried declarations are stale — it is not seen.
-func ResolveEffectiveFromScan(scan *TreeScan, tenantID string) (*EffectiveConfig, error) {
+func ResolveEffectiveFromScan(scan *TreeScan, tenantID string, now time.Time) (*EffectiveConfig, error) {
 	tenantFile, err := scan.Locate(tenantID)
 	if err != nil {
 		return nil, err
@@ -83,7 +84,7 @@ func ResolveEffectiveFromScan(scan *TreeScan, tenantID string) (*EffectiveConfig
 	if err != nil {
 		return nil, err
 	}
-	r.served = newServedVerdicts(&built, false)
+	r.served = newServedVerdicts(&built, false, now)
 	ec, err := r.resolve(tenantID)
 	// #2031: tenant-api's /effective shows every key as written.
 	return ec.AsWritten(), err

@@ -3,6 +3,7 @@ package gitops
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -49,7 +50,10 @@ const effectiveResolveAttempts = 3
 // *cfg.DecodeError, …) as cfg.ResolveEffective returns them; a walk that
 // failed, timed out or met the breaker, and a resolve still stale after the
 // last attempt, as other errors (the handler's 500).
-func (w *Writer) ResolveEffective(tenantID string) (*cfg.EffectiveConfig, error) {
+//
+// now is the request's instant: not_served reads `expires:` at it (#3368 —
+// the library reads no wall clock; the handler is the edge that does).
+func (w *Writer) ResolveEffective(tenantID string, now time.Time) (*cfg.EffectiveConfig, error) {
 	for attempt := 1; ; attempt++ {
 		scan, err := w.walkTreeFrom(&w.stuckReadTreeScans, attempt == 1)
 		if err != nil {
@@ -58,7 +62,7 @@ func (w *Writer) ResolveEffective(tenantID string) (*cfg.EffectiveConfig, error)
 		if w.onEffectiveWalked != nil {
 			w.onEffectiveWalked()
 		}
-		ec, err := cfg.ResolveEffectiveFromScan(scan, tenantID)
+		ec, err := cfg.ResolveEffectiveFromScan(scan, tenantID, now)
 		if errors.Is(err, cfg.ErrScanStale) && attempt < effectiveResolveAttempts {
 			continue
 		}
