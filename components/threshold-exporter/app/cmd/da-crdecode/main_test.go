@@ -63,8 +63,9 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		{"not-utf8", "a: \xff\n", "invalid leading UTF-8"},
 		{"self-referencing-anchor", "a: &a [1, *a]\n", "contains itself"},
 		{"inf-has-no-json", "a: .inf\n", "unsupported value"},
-		// `...` does not separate documents for kubectl: the piece goes to
-		// the conversion whole, which refuses the text after it.
+		// `...` does not separate documents for kubectl's splitter, and under
+		// kubectl the conversion takes only the first document of the piece
+		// and drops the rest without a word; da-crdecode refuses it here.
 		{"text-after-document-end", "a: 1\n...\nb: 2\n", "did not find expected <document start>"},
 		// kubectl's YAMLReader refuses content after `---` on its line.
 		{"content-after-separator", "a: 1\n--- b: 2\n", "line 2: invalid YAML document separator: b: 2"},

@@ -1477,7 +1477,12 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # #3206: tests/conftest.py also builds da-read (components/da-read,
+          # Alertmanager's dependency tree) once per session; its go.sum in the
+          # key keeps those modules and their build cache warm.
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py
@@ -1859,7 +1864,12 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          # #3206: tests/conftest.py also builds da-read (components/da-read,
+          # Alertmanager's dependency tree) once per session; its go.sum in the
+          # key keeps those modules and their build cache warm.
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # Vector CLI — same rationale as setup-Helm above. The ADR-021 #609
       # projection AC behavior gate (tests/shared/test_vector_projection_vrl.py

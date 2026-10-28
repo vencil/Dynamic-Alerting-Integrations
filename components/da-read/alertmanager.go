@@ -25,13 +25,19 @@ import (
 // values (commoncfg.MarshalSecretValue). That JSON is then walked side by
 // side with the text (written.go):
 //
-//   - a mapping keeps only the keys the text writes at the same path, in the
-//     order written, under the key as written; the keys Alertmanager adds —
-//     its defaults, the values it carries in from `global`, the `labels` it
-//     gives each receiver — are left out;
-//   - a list is walked item by item and must have the length written;
-//   - every value is Alertmanager's reading (`match: {tenant: 010}` is the
-//     string "010": the field is a string and yaml.v2 takes the text).
+//   - the Go type of the config decides how far: a struct keeps only the
+//     fields the text writes at the same path, in the order written, under
+//     the key as written; the fields Alertmanager adds — its defaults, the
+//     values it carries in from `global`, the `labels` it gives each
+//     receiver — are left out;
+//   - a list of structs (routes, receivers, the *_configs lists,
+//     inhibit_rules) is paired with the written list by index and must have
+//     its length;
+//   - every other value — a map (`match`, email `headers`), a list of
+//     strings, a type that marshals itself (Matchers: one written entry
+//     `{a=b, c=d}` reads as two matchers), a scalar — is Alertmanager's
+//     reading, printed whole (`match: {tenant: 010}` is the string "010": the
+//     field is a string and yaml.v2 takes the text).
 //
 // The JSON's keys are the structs' json tags, which are not always their yaml
 // tags (telegram_configs' `bot_token` is `token`, `chat_id` is `chat`; the
@@ -41,23 +47,20 @@ import (
 // as empty (`omitempty`: `continue: false`) is printed as its value. A key the
 // text writes that cannot be found that way is refused, never dropped.
 //
-// Below a value whose type marshals itself (Matchers, Regexp, a URL, a
-// duration), or where the text is not a mapping, the JSON is the reading of
-// what is written and is printed whole; a mapping written as null (`global:`)
-// writes no key and is printed as {}.
+// A struct written as null (`global:`) writes no field and is printed as {}.
 
 // errNotInReading wraps a written key or list the reading has no place for.
 var errNotInReading = errors.New("the text writes it, but Alertmanager's reading has no such entry")
 
 // readAlertmanager returns da-read's stdout for the Alertmanager config *data*.
 func readAlertmanager(data []byte) ([]byte, error) {
-	n, err := countDocuments(data)
+	extra, err := laterDocumentWithContent(data)
 	if err != nil {
 		return nil, fmt.Errorf("refused by Alertmanager's config loader: %v", err)
 	}
-	if n > 1 {
-		return nil, fmt.Errorf("the file holds %d YAML documents; Alertmanager reads only the first, "+
-			"so which one is meant cannot be told", n)
+	if extra > 0 {
+		return nil, fmt.Errorf("YAML document %d of the file has content; Alertmanager reads only "+
+			"the first document and drops the rest without a word, so it is refused here", extra)
 	}
 	cfg, err := config.Load(string(data))
 	if err != nil {
@@ -113,21 +116,27 @@ func decodeJSON(b []byte) (interface{}, error) {
 	return v, nil
 }
 
-// countDocuments counts the YAML documents in *data* with the yaml.v2
-// Alertmanager loads with; config.Load reads only the first.
-func countDocuments(data []byte) (int, error) {
+// laterDocumentWithContent returns the position (2, 3, ...) of the first
+// YAML document after the first one that holds anything, or 0 when none
+// does. config.Load reads only the first document and drops the rest, so a
+// later one with content is refused; one that holds nothing — a trailing
+// `---`, only comments or blank lines, an explicit null — is accepted, as
+// da-crdecode (and kubectl) skip it. Read with the yaml.v2 Alertmanager
+// loads with.
+func laterDocumentWithContent(data []byte) (int, error) {
 	dec := yamlv2.NewDecoder(bytes.NewReader(data))
-	n := 0
-	for {
+	for n := 1; ; n++ {
 		var v interface{}
 		err := dec.Decode(&v)
 		if errors.Is(err, io.EOF) {
-			return n, nil
+			return 0, nil
 		}
 		if err != nil {
-			return n, err
+			return 0, err
 		}
-		n++
+		if n > 1 && v != nil {
+			return n, nil
+		}
 	}
 }
 
@@ -321,51 +330,68 @@ func lookup(v interface{}, path []string) (interface{}, bool) {
 	return v, true
 }
 
-// valueOf is the reading of the written key *key* in the mapping read as
-// *read*, whose Go value is *sv* (or the zero Value), and the Go value below.
+// valueOf is the reading of the written key *key* in the struct *sv*, read
+// as *read*, and the Go value below it.
 func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []interface{}) (interface{}, reflect.Value, error) {
-	if sv.IsValid() && sv.Kind() == reflect.Struct {
-		f, ok := findField(sv, key)
-		if !ok || f.jsonPath == nil {
-			return nil, reflect.Value{}, fmt.Errorf("%s: %w (%s has no field %q that is printed)",
-				pathString(path), errNotInReading, sv.Type(), key)
-		}
-		if v, ok := lookup(read, f.jsonPath); ok {
-			return v, f.value, nil
-		}
-		if f.leftOut() {
-			b, err := json.Marshal(f.value.Interface())
-			if err != nil {
-				return nil, reflect.Value{}, err
-			}
-			v, err := decodeJSON(b)
-			return v, f.value, err
-		}
-		return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
+	f, ok := findField(sv, key)
+	if !ok || f.jsonPath == nil {
+		return nil, reflect.Value{}, fmt.Errorf("%s: %w (%s has no field %q that is printed)",
+			pathString(path), errNotInReading, sv.Type(), key)
 	}
-	v, ok := read[key]
-	if !ok {
-		return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
+	if v, ok := lookup(read, f.jsonPath); ok {
+		return v, f.value, nil
 	}
-	var child reflect.Value
-	if sv.IsValid() && sv.Kind() == reflect.Map && sv.Type().Key().Kind() == reflect.String {
-		child = sv.MapIndex(reflect.ValueOf(key).Convert(sv.Type().Key()))
+	if f.leftOut() {
+		b, err := json.Marshal(f.value.Interface())
+		if err != nil {
+			return nil, reflect.Value{}, err
+		}
+		v, err := decodeJSON(b)
+		return v, f.value, err
 	}
-	return v, child, nil
+	return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
 }
 
+// isStructList reports whether *t* is a slice or array of structs (or of
+// pointers to them) whose JSON is encoding/json's: routes, receivers, the
+// *_configs lists, inhibit_rules.
+func isStructList(t reflect.Type) bool {
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Array {
+		return false
+	}
+	e := t.Elem()
+	for e.Kind() == reflect.Pointer {
+		e = e.Elem()
+	}
+	return e.Kind() == reflect.Struct && !e.Implements(jsonMarshaler) &&
+		!reflect.PointerTo(e).Implements(jsonMarshaler)
+}
+
+// walk prints the reading *read* of the written node *node*, whose Go value
+// is *rv*. The Go type decides how far the text is followed: a struct keeps
+// only the fields the text writes; a list of structs is paired with the
+// written list by index; anything else — a map (`match`, email `headers`),
+// a list of strings or scalars, a type that marshals itself (Matchers,
+// Regexp, a URL, a duration), a scalar — is printed whole, as read.
 func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path []interface{}) error {
 	n := deref(node)
 	sv := typed(rv)
-	switch v := read.(type) {
-	case map[string]interface{}:
+	if !sv.IsValid() {
+		return w.plain(read)
+	}
+	switch {
+	case sv.Kind() == reflect.Struct:
+		v, ok := read.(map[string]interface{})
+		if !ok {
+			return w.plain(read)
+		}
 		if n == nil || isNull(n) {
-			// Nothing written below: no key is kept.
+			// Nothing written below: no field is kept.
 			w.out.WriteString("{}")
 			return nil
 		}
 		if n.Kind != yaml.MappingNode {
-			return w.plain(v)
+			return w.plain(read)
 		}
 		wm, err := w.c.entries(n)
 		if err != nil {
@@ -393,25 +419,21 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 		}
 		w.out.WriteByte('}')
 		return nil
-	case []interface{}:
-		if n == nil || n.Kind != yaml.SequenceNode {
-			return w.plain(v)
+	case isStructList(sv.Type()):
+		v, ok := read.([]interface{})
+		if !ok || n == nil || n.Kind != yaml.SequenceNode {
+			return w.plain(read)
 		}
-		if len(n.Content) != len(v) {
+		if len(n.Content) != len(v) || sv.Len() != len(v) {
 			return fmt.Errorf("%s: %w: %d entries written, %d read", pathString(path), errNotInReading,
 				len(n.Content), len(v))
 		}
-		indexable := sv.IsValid() && (sv.Kind() == reflect.Slice || sv.Kind() == reflect.Array) && sv.Len() == len(v)
 		w.out.WriteByte('[')
 		for i, item := range v {
 			if i > 0 {
 				w.out.WriteByte(',')
 			}
-			var child reflect.Value
-			if indexable {
-				child = sv.Index(i)
-			}
-			if err := w.walk(n.Content[i], item, child, extend(path, i)); err != nil {
+			if err := w.walk(n.Content[i], item, sv.Index(i), extend(path, i)); err != nil {
 				return err
 			}
 		}

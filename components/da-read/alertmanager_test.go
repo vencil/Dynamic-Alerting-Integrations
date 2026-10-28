@@ -219,7 +219,7 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 			"cannot have continue in root route"},
 		{"bad-matcher", "route: {receiver: r, routes: [{receiver: r, matchers: ['a=~(']}]}\nreceivers: [{name: r}]\n",
 			"error parsing regexp"},
-		{"two-documents", minimal + "---\n" + minimal, "holds 2 YAML documents"},
+		{"two-documents", minimal + "---\n" + minimal, "YAML document 2 of the file has content"},
 		{"not-yaml", "route: [\n", "refused by Alertmanager's config loader"},
 	}
 	for _, tc := range cases {
@@ -287,17 +287,22 @@ func TestCallerErrors(t *testing.T) {
 	}
 }
 
+type hidden struct {
+	Shown  string `yaml:"shown" json:"shown"`
+	Hidden string `yaml:"hidden" json:"-"`
+	Kept   string `yaml:"kept" json:"kept"`
+}
+
+type withList struct {
+	Items []hidden `yaml:"items" json:"items"`
+}
+
 // A key the text writes that the reading has no place for is refused, never
 // dropped. Alertmanager's strict loading refuses unknown keys before this
 // walk runs, so the walk is driven directly, on a type whose field is not
 // printed and a reading that lacks a written key or list entry.
 func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 	t.Parallel()
-	type hidden struct {
-		Shown  string `yaml:"shown" json:"shown"`
-		Hidden string `yaml:"hidden" json:"-"`
-		Kept   string `yaml:"kept" json:"kept"`
-	}
 	cases := []struct {
 		name, in string
 		read     interface{}
@@ -308,10 +313,10 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 			reflect.ValueOf(hidden{Shown: "a", Hidden: "b"}), `hidden: the text writes it`},
 		{"field-missing-from-reading", "kept: a\n", map[string]interface{}{},
 			reflect.ValueOf(hidden{Kept: "a"}), `kept: the text writes it`},
-		{"untyped-key-missing", "a: {b: 1, c: 2}\n", map[string]interface{}{"a": map[string]interface{}{"b": 1}},
-			reflect.Value{}, `a.c: the text writes it`},
-		{"list-length", "a: [1, 2]\n", map[string]interface{}{"a": []interface{}{1}},
-			reflect.Value{}, `a: the text writes it, but Alertmanager's reading has no such entry: 2 entries written, 1 read`},
+		{"struct-list-length", "items: [{kept: a}, {kept: b}]\n",
+			map[string]interface{}{"items": []interface{}{map[string]interface{}{"kept": "a"}}},
+			reflect.ValueOf(withList{Items: []hidden{{Kept: "a"}}}),
+			`items: the text writes it, but Alertmanager's reading has no such entry: 2 entries written, 1 read`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -324,6 +329,77 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 			err := w.walk(root.Content[0], tc.read, tc.rv, nil)
 			if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err = %v; want errNotInReading with %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The Go type decides how far the text is followed: below a map, a list of
+// strings or a type that marshals itself, the reading is printed whole. One
+// written matcher entry `{a=b, c=d}` (or `a=b,c=d`) is two matchers to
+// Alertmanager; a map's keys are its own. Before, these were refused as
+// "written but not in the reading".
+func TestOnlyStructsAndStructListsAreFollowed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, in, want string
+	}{
+		{"matchers-braces", "route:\n  receiver: r\n  routes:\n" +
+			"  - {receiver: r, matchers: ['{tenant=t1, severity=page}']}\nreceivers: [{name: r}]\n",
+			`{"route":{"receiver":"r","routes":[{"receiver":"r","matchers":["severity=\"page\"","tenant=\"t1\""]}]},` +
+				`"receivers":[{"name":"r"}]}`},
+		{"matchers-comma", "route:\n  receiver: r\n  routes:\n" +
+			"  - {receiver: r, matchers: ['tenant=t1,severity=page']}\nreceivers: [{name: r}]\n",
+			`{"route":{"receiver":"r","routes":[{"receiver":"r","matchers":["severity=\"page\"","tenant=\"t1\""]}]},` +
+				`"receivers":[{"name":"r"}]}`},
+		{"inhibit-matchers", minimal + "inhibit_rules:\n- {source_matchers: ['{a=b, c=d}'], target_matchers: ['x=y']}\n",
+			`{"route":{"receiver":"r"},"receivers":[{"name":"r"}],"inhibit_rules":[` +
+				`{"source_matchers":["a=\"b\"","c=\"d\""],"target_matchers":["x=\"y\""]}]}`},
+		// Alertmanager canonicalizes a header name (`a` is `A`): its reading.
+		{"email-headers", "route: {receiver: r}\nreceivers:\n- name: r\n  email_configs:\n" +
+			"  - {to: a@b.c, from: x@y.z, smarthost: 'h:25', headers: {a: b}}\n",
+			`{"route":{"receiver":"r"},"receivers":[{"name":"r","email_configs":[` +
+				`{"to":"a@b.c","from":"x@y.z","smarthost":"h:25","headers":{"A":"b"}}]}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := document(t, tc.in); got != tc.want {
+				t.Fatalf("document %s\nwant     %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// Alertmanager's loader reads only the first YAML document and drops the
+// rest without a word. A later document that holds nothing — a trailing
+// `---`, only comments or blank lines, an explicit null — is accepted, as
+// da-crdecode skips it; one with content is refused.
+func TestLaterDocumentsMustBeEmpty(t *testing.T) {
+	t.Parallel()
+	want := `{"route":{"receiver":"r"},"receivers":[{"name":"r"}]}`
+	for name, in := range map[string]string{
+		"trailing-separator": minimal + "---\n",
+		"comment-only":       minimal + "---\n# nothing here\n",
+		"blank":              minimal + "---\n\n\n---\n",
+		"explicit-null":      minimal + "---\nnull\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := document(t, in); got != want {
+				t.Fatalf("document %s; want %s", got, want)
+			}
+		})
+	}
+	for name, in := range map[string]string{
+		"second-config": minimal + "---\n" + minimal,
+		"third-scalar":  minimal + "---\n---\nx\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rc, out, errOut := runOn(t, in)
+			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "has content; Alertmanager reads only the first") {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming the later document", rc, out, errOut)
 			}
 		})
 	}

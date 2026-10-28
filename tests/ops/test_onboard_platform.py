@@ -117,6 +117,22 @@ class TestParseAlertmanagerConfig:
         result = parse_alertmanager_config(path)
         assert result["route"]["routes"][0]["match"] == {"tenant": "010"}
 
+    @pytest.mark.parametrize("matcher", [
+        "{tenant=t1, severity=page}", "tenant=t1,severity=page", 'tenant="t1"', "tenant=~t1"])
+    def test_matchers_in_alertmanagers_normal_form_find_the_tenant(self, config_dir, matcher):
+        """#3206：da-read 印的是 Alertmanager 正規化後的 matchers（拆開、排序、值加引號：
+        `severity="page"`、`tenant="t1"`），租戶照樣找得到。"""
+        path = write_yaml(config_dir, "am.yaml", (
+            "route:\n  receiver: d\n  routes:\n    - receiver: r1\n"
+            f"      matchers: ['{matcher}']\n"
+            "receivers:\n  - name: d\n  - name: r1\n"
+            "    webhook_configs: [{url: 'https://h.example/x'}]\n"))
+        cfg = parse_alertmanager_config(path)
+        matchers = cfg["route"]["routes"][0]["matchers"]
+        assert all('"' in m for m in matchers) and matchers == sorted(matchers), matchers
+        routings, _summary = analyze_alertmanager(cfg)
+        assert set(routings) == {"t1"}, routings
+
     def test_configmap_two_layers(self, config_dir):
         """外層以 Kubernetes 讀法取出字串，內層經 stdin 交給 Alertmanager 的載入函式：
         外層的 `x: 010` 是 8（Kubernetes），內層的 `tenant: 010` 是 "010"（Alertmanager）。"""

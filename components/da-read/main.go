@@ -27,7 +27,7 @@
 //
 //	0  read; JSON on stdout
 //	2  caller error, or the file is refused: bad arguments, the file cannot
-//	   be read, it holds more than one YAML document, Alertmanager's loader
+//	   be read, a YAML document after the first has content, Alertmanager's loader
 //	   refuses it, or a key the text writes is not in Alertmanager's reading
 //	   (the reason is on stderr)
 package main
