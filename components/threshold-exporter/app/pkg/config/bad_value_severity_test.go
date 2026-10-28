@@ -43,7 +43,7 @@ func TestResolveBaseRows_BadValueDropsSeveritySuffix(t *testing.T) {
 				t.Fatal(err)
 			}
 			var got []string
-			for _, r := range cfg.Resolve() {
+			for _, r := range cfg.ResolveAt(fixedNow) {
 				if r.Tenant == "tx" && r.Component == "mysql" && r.Metric == "connections" {
 					got = append(got, fmt.Sprintf("%g/%s", r.Value, r.Severity))
 				}

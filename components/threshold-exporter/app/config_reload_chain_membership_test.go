@@ -259,7 +259,7 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 			if !ok {
 				t.Fatalf("t is not in the committed hierarchy after reload")
 			}
-			pe, err := config.ResolveEffective(dir, "t")
+			pe, err := config.ResolveEffective(dir, "t", fixedNow)
 			if err != nil {
 				t.Fatalf("ResolveEffective: %v", err)
 			}

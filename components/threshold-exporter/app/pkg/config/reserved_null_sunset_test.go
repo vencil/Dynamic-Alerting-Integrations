@@ -78,7 +78,7 @@ func rnLoad(t *testing.T, files map[string]string) (*ThresholdConfig, *Effective
 	if err != nil || len(failed) != 0 {
 		t.Fatalf("LoadDir: %v, dropped %v", err, failed)
 	}
-	ec, err := ResolveEffective(dir, "t1")
+	ec, err := ResolveEffective(dir, "t1", fixedNow)
 	if err != nil {
 		t.Fatalf("ResolveEffective: %v", err)
 	}

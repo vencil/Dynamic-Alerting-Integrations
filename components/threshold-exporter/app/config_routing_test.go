@@ -46,7 +46,7 @@ func TestResolve_ProfileBasic(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold, got %d", len(result))
 	}
@@ -71,7 +71,7 @@ func TestResolve_ProfileOverriddenByTenant(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold, got %d", len(result))
 	}
@@ -93,7 +93,7 @@ func TestResolve_ProfileFallbackToDefaults(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	// #1231: mysql_threads_running dual-emits a legacy metric="cpu" twin
 	// during the alias transition window → 3 rows.
 	if len(result) != 3 {
@@ -130,7 +130,7 @@ func TestResolve_ProfileDisable(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 0 {
 		t.Errorf("expected 0 resolved thresholds (disabled), got %d", len(result))
 	}
@@ -147,7 +147,7 @@ func TestResolve_ProfileNotFound(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 resolved threshold (default), got %d", len(result))
 	}
@@ -172,7 +172,7 @@ func TestResolve_ProfileWithSilentMode(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	silents := cfg.ResolveSilentModes()
+	silents := cfg.ResolveSilentModesAt(fixedNow)
 	if len(silents) != 1 {
 		t.Fatalf("expected 1 silent mode from profile, got %d", len(silents))
 	}
@@ -314,7 +314,7 @@ func TestResolve_ProfileWithCritical(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 thresholds (warning+critical), got %d", len(result))
 	}
@@ -369,7 +369,7 @@ profiles:
 		t.Error("profiles in tenant file should be ignored")
 	}
 
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 	if len(result) != 1 || result[0].Value != 85 {
 		t.Errorf("expected profile value 85, got %v", result)
 	}
@@ -407,7 +407,7 @@ tenants:
 		t.Fatalf("Load() failed: %v", err)
 	}
 	cfg := mgr.GetConfig()
-	result := cfg.Resolve()
+	result := cfg.ResolveAt(fixedNow)
 
 	// db-a: connections=95 (tenant override), threads_running=75 (profile)
 	// db-b: connections=85 (profile), threads_running=75 (profile)

@@ -30,7 +30,7 @@ func TestResolve_ThreeState(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Tenant != resolved[j].Tenant {
 			return resolved[i].Tenant < resolved[j].Tenant
@@ -80,7 +80,7 @@ func TestResolve_DisableVariants(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 0 {
 		t.Errorf("expected 0 resolved thresholds for disabled variants, got %d: %+v", len(resolved), resolved)
 	}
@@ -95,7 +95,7 @@ func TestResolve_CustomSeverity(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 1 {
 		t.Fatalf("expected 1, got %d", len(resolved))
 	}
@@ -111,7 +111,7 @@ func TestResolve_EmptyTenants(t *testing.T) {
 		Tenants:  map[string]map[string]ScheduledValue{},
 	}
 
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 0 {
 		t.Errorf("expected 0 (no tenants), got %d", len(resolved))
 	}
@@ -131,7 +131,7 @@ func TestResolve_TenantWithNoOverrides(t *testing.T) {
 
 	// #1231: mysql_threads_running dual-emits a legacy metric="cpu" twin
 	// during the alias transition window, so 2 defaults yield 3 rows.
-	resolved := cfg.Resolve()
+	resolved := cfg.ResolveAt(fixedNow)
 	if len(resolved) != 3 {
 		t.Fatalf("expected 3, got %d", len(resolved))
 	}
@@ -187,7 +187,7 @@ func TestResolveStateFilters_AllEnabled(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.ResolveStateFilters()
+	resolved := cfg.ResolveStateFiltersAt(fixedNow)
 	sort.Slice(resolved, func(i, j int) bool {
 		if resolved[i].Tenant != resolved[j].Tenant {
 			return resolved[i].Tenant < resolved[j].Tenant
@@ -225,7 +225,7 @@ func TestResolveStateFilters_PerTenantDisable(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.ResolveStateFilters()
+	resolved := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(resolved) != 1 {
 		t.Fatalf("expected 1, got %d: %+v", len(resolved), resolved)
 	}
@@ -248,7 +248,7 @@ func TestResolveStateFilters_DisableVariants(t *testing.T) {
 		},
 	}
 
-	resolved := cfg.ResolveStateFilters()
+	resolved := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(resolved) != 0 {
 		t.Errorf("expected 0, got %d: %+v", len(resolved), resolved)
 	}
@@ -261,10 +261,10 @@ func TestResolveStateFilters_NoFilters(t *testing.T) {
 		Tenants:  map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}},
 	}
 
-	if len(cfg.ResolveStateFilters()) != 0 {
+	if len(cfg.ResolveStateFiltersAt(fixedNow)) != 0 {
 		t.Error("expected 0 state filters")
 	}
-	if len(cfg.Resolve()) != 1 {
+	if len(cfg.ResolveAt(fixedNow)) != 1 {
 		t.Error("expected 1 threshold")
 	}
 }
@@ -277,7 +277,7 @@ func TestResolveStateFilters_DefaultSeverity(t *testing.T) {
 		Tenants:      map[string]map[string]ScheduledValue{"db-a": {}},
 	}
 
-	resolved := cfg.ResolveStateFilters()
+	resolved := cfg.ResolveStateFiltersAt(fixedNow)
 	if len(resolved) != 1 || resolved[0].Severity != "warning" {
 		t.Errorf("expected severity=warning, got %+v", resolved)
 	}
@@ -291,10 +291,10 @@ func TestResolve_IgnoresStateKeys(t *testing.T) {
 		Tenants:      map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70"), "_state_container_crashloop": SV("disable")}},
 	}
 
-	if thresholds := cfg.Resolve(); len(thresholds) != 1 || thresholds[0].Value != 70 {
+	if thresholds := cfg.ResolveAt(fixedNow); len(thresholds) != 1 || thresholds[0].Value != 70 {
 		t.Errorf("unexpected thresholds: %+v", thresholds)
 	}
-	if sf := cfg.ResolveStateFilters(); len(sf) != 0 {
+	if sf := cfg.ResolveStateFiltersAt(fixedNow); len(sf) != 0 {
 		t.Errorf("expected 0 state filters, got %d", len(sf))
 	}
 }

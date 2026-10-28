@@ -56,6 +56,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -202,12 +203,12 @@ type EffectiveConfig struct {
 // for a syntax error is read as empty here too — the tenant is answered, the
 // file named in ChainParseFailed — where it used to fail the request with a
 // *DecodeError.
-func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
+func ResolveEffective(configDir, tenantID string, now time.Time) (*EffectiveConfig, error) {
 	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
 	if err != nil {
 		return nil, err
 	}
-	return ResolveEffectiveFromScan(scan, tenantID)
+	return ResolveEffectiveFromScan(scan, tenantID, now)
 }
 
 // discardLogger silences the walker for the library readers. ⛔ Deliberate:

@@ -141,7 +141,7 @@ func servedValueFor(m *ConfigManager, tenant, key string) (float64, bool) {
 	if cfg == nil {
 		return 0, false
 	}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == tenant && r.Component+"_"+r.Metric == key && r.Severity == "warning" {
 			return r.Value, true
 		}
@@ -182,7 +182,7 @@ func exporterSilentMode(m *ConfigManager, tenant string) *string {
 		return nil
 	}
 	var targets []string
-	for _, s := range cfg.ResolveSilentModes() {
+	for _, s := range cfg.ResolveSilentModesAt(fixedNow) {
 		if s.Tenant == tenant {
 			targets = append(targets, s.TargetSeverity)
 		}
@@ -328,7 +328,7 @@ func tenantAPIServed(t *testing.T, dir, tenant, key string) (value float64, serv
 		t.Fatalf("read %s: %v", loc, err)
 	}
 	merged := config.MergeTenantWithRootDefaults(dir, tenant, body)
-	for _, r := range merged.ResolveAt(time.Now()) {
+	for _, r := range merged.ResolveAt(fixedNow) {
 		if r.Tenant == tenant && r.Component+"_"+r.Metric == key && r.Severity == "warning" && len(r.CustomLabels) == 0 {
 			return r.Value, true, true
 		}
@@ -378,7 +378,7 @@ func assertTenantAPIAgreesWithMetrics(t *testing.T, tree, tenant string, api, me
 // `platform_overlay` exactly when the column says null.
 func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker) {
 	t.Helper()
-	ec, err := config.ResolveEffective(dir, tenant)
+	ec, err := config.ResolveEffective(dir, tenant, fixedNow)
 	if want == nil {
 		if !errors.Is(err, config.ErrTenantNotFound) {
 			t.Errorf("%s: /effective for %s = (%v, %v), want not found", tree, tenant, ec, err)
@@ -420,7 +420,7 @@ func assertWalkerCriticalRowsServed(t *testing.T, m *ConfigManager, tree, tenant
 		return
 	}
 	served := map[string]float64{}
-	for _, r := range m.GetConfig().Resolve() {
+	for _, r := range m.GetConfig().ResolveAt(fixedNow) {
 		if r.Tenant == tenant && r.Severity == "critical" {
 			served[r.Component+"_"+r.Metric] = r.Value
 		}

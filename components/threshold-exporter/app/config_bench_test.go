@@ -92,7 +92,7 @@ func BenchmarkResolve_10Tenants_Scalar(b *testing.B) {
 	cfg := buildScalarConfig(10)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cfg.Resolve()
+		cfg.ResolveAt(fixedNow)
 	}
 }
 
@@ -100,7 +100,7 @@ func BenchmarkResolve_100Tenants_Scalar(b *testing.B) {
 	cfg := buildScalarConfig(100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cfg.Resolve()
+		cfg.ResolveAt(fixedNow)
 	}
 }
 
@@ -108,7 +108,7 @@ func BenchmarkResolve_1000Tenants_Scalar(b *testing.B) {
 	cfg := buildScalarConfig(1000)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cfg.Resolve()
+		cfg.ResolveAt(fixedNow)
 	}
 }
 
@@ -170,7 +170,7 @@ func BenchmarkResolveSilentModes_1000(b *testing.B) {
 	cfg := buildSilentConfig(1000)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cfg.ResolveSilentModes()
+		cfg.ResolveSilentModesAt(fixedNow)
 	}
 }
 

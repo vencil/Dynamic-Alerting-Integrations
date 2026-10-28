@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"sort"
 	"testing"
-	"time"
 )
 
 // thresholdIdentity renders a resolved threshold as a stable string so a
@@ -67,7 +66,7 @@ func TestResolveAtWithStats_DeterministicTruncation(t *testing.T) {
 		}
 	}
 
-	now := time.Now()
+	now := fixedNow
 
 	// Expected survivors: 3 unversioned + v1 + v2 (lexicographically first two
 	// versions). v3 / v4 are the dropped tail.
@@ -125,7 +124,7 @@ func TestResolveAtWithStats_ExplicitDefaultVersionProtected(t *testing.T) {
 		MaxMetricsPerTenant: 2, // 4 produced → keep 2
 	}
 
-	now := time.Now()
+	now := fixedNow
 	for i := 0; i < 40; i++ {
 		result, _ := cfg.ResolveAtWithStats(now)
 		if len(result) != 2 {
@@ -202,7 +201,7 @@ func TestResolveAtWithStats_TruncationDropsLegacyTwinBeforeCanonical(t *testing.
 		}
 	}
 
-	now := time.Now()
+	now := fixedNow
 
 	// (a) Boundary splits the twin pair (cap=2): canonical lives, twin dies.
 	// Before the twin-aware sort key the twin's LEGACY identity ("cpu")

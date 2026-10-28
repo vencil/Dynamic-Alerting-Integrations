@@ -384,6 +384,9 @@ type servedVerdicts struct {
 	all      bool
 	unparsed map[string]map[string]string
 	done     bool
+	// now is the instant ValuesNotServed reads expires: at — the caller's
+	// (#3368: pkg/config reads no wall clock).
+	now time.Time
 
 	// noUnparsed skips ValuesNotServed: the caller reads only verdicts the
 	// switch in notServed decides before the resolver's record
@@ -397,8 +400,8 @@ type servedVerdicts struct {
 	gate bool
 }
 
-func newServedVerdicts(built *FlatBuild, all bool) *servedVerdicts {
-	v := &servedVerdicts{cfg: &built.Config, all: all}
+func newServedVerdicts(built *FlatBuild, all bool, now time.Time) *servedVerdicts {
+	v := &servedVerdicts{cfg: &built.Config, all: all, now: now}
 	if len(built.ParseFailed) > 0 {
 		v.parseFailed = make(map[string]bool, len(built.ParseFailed))
 		for _, k := range built.ParseFailed {
@@ -440,12 +443,12 @@ func (v *servedVerdicts) unparsedOf(tenantID string) map[string]string {
 	}
 	if v.all {
 		if !v.done {
-			v.unparsed = v.cfg.ValuesNotServed(time.Now())
+			v.unparsed = v.cfg.ValuesNotServed(v.now)
 			v.done = true
 		}
 		return v.unparsed[tenantID]
 	}
-	return v.cfg.TenantValuesNotServed(tenantID, time.Now())
+	return v.cfg.TenantValuesNotServed(tenantID, v.now)
 }
 
 // chainFileUnread reports whether chain file rel is one /metrics does not

@@ -397,7 +397,7 @@ func TestSimulate_VsCommitted_ParityHash(t *testing.T) {
 		t.Fatalf("tenant-a is not in the committed hierarchy")
 	}
 	// Disk path: the shared resolver over the same tree.
-	disk, err := config.ResolveEffective(dir, "tenant-a")
+	disk, err := config.ResolveEffective(dir, "tenant-a", fixedNow)
 	if err != nil {
 		t.Fatalf("config.ResolveEffective: %v", err)
 	}

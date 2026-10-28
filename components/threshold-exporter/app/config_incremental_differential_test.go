@@ -265,7 +265,7 @@ func sortedLabelPairs(m map[string]string) string {
 // `OptionalOverrides`. A differential is only as wide as the face it diffs.
 func scrapeView(cfg *ThresholdConfig) string {
 	rows := make([]string, 0)
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		rows = append(rows, fmt.Sprintf("threshold|%s|%s_%s|%v|%s|custom=%v|regex=%v",
 			r.Tenant, r.Component, r.Metric, r.Value, r.Severity,
 			sortedLabelPairs(r.CustomLabels), sortedLabelPairs(r.RegexLabels)))
@@ -276,8 +276,8 @@ func scrapeView(cfg *ThresholdConfig) string {
 			rows = append(rows, fmt.Sprintf("%s|%+v", tag, rv.Index(i).Interface()))
 		}
 	}
-	add("state", cfg.ResolveStateFilters())
-	add("silent", cfg.ResolveSilentModes())
+	add("state", cfg.ResolveStateFiltersAt(fixedNow))
+	add("silent", cfg.ResolveSilentModesAt(fixedNow))
 	add("dedup", cfg.ResolveSeverityDedup())
 	add("metadata", cfg.ResolveMetadata())
 	add("routing", cfg.ResolveRouting())

@@ -13,7 +13,7 @@ package main
 //
 // Behavior pin: type aliases (`type X = config.X`) propagate methods,
 // struct layout, and JSON/YAML tags identically. Existing tests calling
-// `cfg.Resolve()`, `cfg.ResolveAt(...)`, `cfg.ApplyProfiles()` still
+// `cfg.ResolveAt(...)`, `cfg.ApplyProfiles()` still
 // dispatch to `pkg/config/resolve.go` unchanged.
 
 import "github.com/vencil/threshold-exporter/pkg/config"

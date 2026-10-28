@@ -99,7 +99,7 @@ func TestCommittedMergedHash_AgreesWithResolveEffective(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: %s is not in the committed hierarchy", where, tid)
 		}
-		pe, err := config.ResolveEffective(dir, tid)
+		pe, err := config.ResolveEffective(dir, tid, fixedNow)
 		if err != nil {
 			t.Fatalf("%s: ResolveEffective(%s): %v", where, tid, err)
 		}
@@ -272,7 +272,7 @@ func TestReload_PlatformTenantsEdit_MovesMergedHash(t *testing.T) {
 				if moved := after != before[tid]; moved != wantMove {
 					t.Errorf("%s merged_hash moved=%v (%s → %s), want moved=%v", tid, moved, before[tid], after, wantMove)
 				}
-				pe, err := config.ResolveEffective(dir, tid)
+				pe, err := config.ResolveEffective(dir, tid, fixedNow)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", tid, err)
 				}
@@ -311,7 +311,7 @@ func TestColdLoad_MergedHashIncludesPlatformOverlay(t *testing.T) {
 				if want.Walker == nil {
 					continue
 				}
-				pe, err := config.ResolveEffective(dir, tid)
+				pe, err := config.ResolveEffective(dir, tid, fixedNow)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", tid, err)
 				}

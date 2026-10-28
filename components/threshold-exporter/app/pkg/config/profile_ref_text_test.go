@@ -84,7 +84,7 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 			if got := servedRows(t, dir)["mysql_connections/warning"]; got != tc.want {
 				t.Fatalf("oracle: /metrics serves %v, case expects %v", got, tc.want)
 			}
-			ec, err := ResolveEffective(dir, "tx")
+			ec, err := ResolveEffective(dir, "tx", fixedNow)
 			if err != nil {
 				t.Fatalf("ResolveEffective: %v", err)
 			}
@@ -94,7 +94,7 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 			if got := ec.EffectiveConfig["_profile"]; got != tc.wantName {
 				t.Errorf("ResolveEffective _profile = %#v, want %#v (the text /metrics elects)", got, tc.wantName)
 			}
-			scoped, err := ScopeEffective(dir, dir)
+			scoped, err := ScopeEffective(dir, dir, fixedNow)
 			if err != nil {
 				t.Fatalf("ScopeEffective: %v", err)
 			}

@@ -22,7 +22,7 @@ func servedRows(t *testing.T, dir string) map[string]float64 {
 		t.Fatal(err)
 	}
 	out := map[string]float64{}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == "tx" {
 			out[r.Component+"_"+r.Metric+"/"+r.Severity] = r.Value
 		}
@@ -93,7 +93,7 @@ func TestProfileExpansion_EdgeRulesMatchApplyProfiles(t *testing.T) {
 					t.Fatalf("premise: /metrics %s = %v, want %v (all rows %v)", k, served[k], v, served)
 				}
 			}
-			ec, err := ResolveEffective(dir, "tx")
+			ec, err := ResolveEffective(dir, "tx", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

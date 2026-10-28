@@ -36,7 +36,6 @@ package config
 
 import (
 	"testing"
-	"time"
 )
 
 // pg_connections rather than the mariadb pair this issue was found on:
@@ -92,7 +91,7 @@ func TestCriticalKeyUnderDefaultsProducesNoCriticalTier(t *testing.T) {
 		Tenants: map[string]map[string]ScheduledValue{"t-1": {}},
 	}
 
-	rows := cfg.ResolveAt(time.Now())
+	rows := cfg.ResolveAt(fixedNow)
 
 	if len(rows) != 2 {
 		t.Fatalf("want exactly 2 rows (both from resolveBaseRows), got %d: %+v", len(rows), sigs(rows))
@@ -126,7 +125,7 @@ func TestCriticalKeyAsTenantOverrideProducesTheCriticalTier(t *testing.T) {
 		},
 	}
 
-	rows := cfg.ResolveAt(time.Now())
+	rows := cfg.ResolveAt(fixedNow)
 
 	if len(rows) != 2 {
 		t.Fatalf("want exactly 2 rows (base warning + critical), got %d: %+v", len(rows), sigs(rows))

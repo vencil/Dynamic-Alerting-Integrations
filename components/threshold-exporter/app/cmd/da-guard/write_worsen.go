@@ -32,6 +32,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -95,11 +96,14 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 				Message: fmt.Sprintf("parse-tree would name a problem (%s: %s)", a.Problem.Kind, a.Problem.Message)})
 		}
 	}
-	was, wasDup, err := treeValidation(disk.AbsRoot, config.ScanOptions{}, disk)
+	// One instant for both trees (#3368): a comparison across two clock
+	// reads could name an `expires:` passing between them as the batch's.
+	at := time.Now().UTC()
+	was, wasDup, err := treeValidation(disk.AbsRoot, config.ScanOptions{}, disk, at)
 	if err != nil {
 		return nil, err
 	}
-	now, _, err := treeValidation(disk.AbsRoot, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs}, after)
+	now, _, err := treeValidation(disk.AbsRoot, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs}, after, at)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +136,11 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // set aside instead (ScanOptions.SkipDuplicated, the walk's own record) and
 // reported as one, so every other tenant is still validated. duplicated is
 // those tenant ids.
-func treeValidation(root string, opts config.ScanOptions, limits *config.TreeScan) (
+func treeValidation(root string, opts config.ScanOptions, limits *config.TreeScan, at time.Time) (
 	out map[string]writeWorsened, duplicated map[string]bool, err error) {
 	out, duplicated = map[string]writeWorsened{}, map[string]bool{}
 	opts.SkipDuplicated = true
-	scoped, err := config.ScopeEffectiveWith(root, opts)
+	scoped, err := config.ScopeEffectiveWith(root, opts, at)
 	var de *config.DecodeError
 	switch {
 	case errors.As(err, &de):
@@ -167,7 +171,7 @@ func treeValidation(root string, opts config.ScanOptions, limits *config.TreeSca
 		limit = 0
 	}
 	f.cardinalityLimit = limit
-	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, f))
+	report, err := guard.CheckDefaultsImpact(buildCheckInput(scoped, f, at))
 	if err != nil {
 		return nil, nil, err
 	}

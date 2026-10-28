@@ -55,7 +55,7 @@ func TestScrapeWarnChildProcess(t *testing.T) {
 		t.Skip("child process of TestCollector_MaintenanceExpiresWarnOncePerScrape")
 	}
 	reg := prometheus.NewRegistry()
-	Register(reg, NewCollector(staticSource{scrapeWarnConfig(tree == "declared")}), NewConfigMetrics())
+	Register(reg, NewCollector(staticSource{scrapeWarnConfig(tree == "declared"), scrapeAt}), NewConfigMetrics())
 	if _, err := reg.Gather(); err != nil {
 		t.Fatalf("gather: %v", err)
 	}

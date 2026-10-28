@@ -198,7 +198,7 @@ func TestNotServed_Table(t *testing.T) {
 			testutil.WriteTree(t, tmp, files)
 			root := filepath.Join(tmp, "conf.d")
 
-			tree, err := EffectiveTree(root)
+			tree, err := EffectiveTree(root, fixedNow)
 			if err != nil {
 				t.Fatalf("EffectiveTree: %v", err)
 			}
@@ -217,7 +217,7 @@ func TestNotServed_Table(t *testing.T) {
 				t.Errorf("EffectiveTree ChainParseFailed = %v, want %v", tx.ChainParseFailed, tc.chain)
 			}
 			for id, ec := range byID {
-				one, err := ResolveEffective(root, id)
+				one, err := ResolveEffective(root, id, fixedNow)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", id, err)
 				}
@@ -251,7 +251,7 @@ func TestNotServed_ScopeEffectiveFillsNotServed(t *testing.T) {
 		"conf.d/sub/tx.yaml":        "tenants:\n  tx: {}\n",
 	})
 	root := filepath.Join(tmp, "conf.d")
-	got, err := ScopeEffective(root, "")
+	got, err := ScopeEffective(root, "", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestNotServed_ScopeEffectiveFillsNotServed(t *testing.T) {
 	if len(got.Tenants) != 1 || !reflect.DeepEqual(got.Tenants[0].NotServed, want) {
 		t.Fatalf("ScopeEffective tenants %+v: want tx with NotServed %v", got.Tenants, want)
 	}
-	tree, err := EffectiveTree(root)
+	tree, err := EffectiveTree(root, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,10 +274,10 @@ func TestNotServed_ScopeEffectiveFillsNotServed(t *testing.T) {
 		"conf.d/sub/tx.yaml":        "tenants:\n  tx: {}\n",
 	})
 	broot := filepath.Join(broken, "conf.d")
-	if _, err := ScopeEffective(broot, ""); err == nil {
+	if _, err := ScopeEffective(broot, "", fixedNow); err == nil {
 		t.Error("ScopeEffective over an undecodable chain file: nil error, want the gate to stop")
 	}
-	if tr, err := EffectiveTree(broot); err != nil || len(tr.Tenants) != 1 || len(tr.Tenants[0].ChainParseFailed) != 1 {
+	if tr, err := EffectiveTree(broot, fixedNow); err != nil || len(tr.Tenants) != 1 || len(tr.Tenants[0].ChainParseFailed) != 1 {
 		t.Errorf("EffectiveTree over an undecodable chain file: %+v, %v; want tx with ChainParseFailed", tr, err)
 	}
 }

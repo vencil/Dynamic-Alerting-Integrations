@@ -1245,8 +1245,7 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	var keyErr error
 	var results []emitResult
 	metrics := scrape.NewConfigMetrics()
-	collector := scrape.NewCollectorWithHooks(staticSource{cfg}, scrape.Hooks{
-		Now: func() time.Time { return at },
+	collector := scrape.NewCollectorWithHooks(staticSource{cfg, at}, scrape.Hooks{
 		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
 			var stats config.ResolveStats
 			keyed, stats, keyErr = resolve(c, now)
@@ -1339,13 +1338,17 @@ func keyReading(tenant, name string, rows []config.ResolvedThreshold) (reading, 
 	return reading{value: first.Value, severity: first.Severity}, nil
 }
 
-// staticSource serves one loaded config to the collector. ConfigInfo is the
-// zero value: the exporter fills it from its deployment (flags / git), not
-// from the tree.
-type staticSource struct{ cfg *config.ThresholdConfig }
+// staticSource serves one loaded config to the collector, at one instant
+// (--at, else the run's clock read). ConfigInfo is the zero value: the
+// exporter fills it from its deployment (flags / git), not from the tree.
+type staticSource struct {
+	cfg *config.ThresholdConfig
+	at  time.Time
+}
 
 func (s staticSource) GetConfig() *config.ThresholdConfig { return s.cfg }
 func (s staticSource) GetConfigInfo() config.ConfigInfo   { return config.ConfigInfo{} }
+func (s staticSource) Now() time.Time                     { return s.at }
 
 // emitResult is the collector's verdict on one row.
 type emitResult struct {

@@ -191,7 +191,7 @@ func TestResolveAtWithKeys_ReportsTheServedKey(t *testing.T) {
 			},
 		},
 	}
-	keyed, _, err := cfg.ResolveAtWithKeys(time.Now())
+	keyed, _, err := cfg.ResolveAtWithKeys(fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestResolveAtWithKeys_NaNThreshold(t *testing.T) {
 				Defaults: map[string]float64{"mysql_connections": tc.def},
 				Tenants:  map[string]map[string]ScheduledValue{"tenant-a": tc.tenant},
 			}
-			keyed, _, err := cfg.ResolveAtWithKeys(time.Now())
+			keyed, _, err := cfg.ResolveAtWithKeys(fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

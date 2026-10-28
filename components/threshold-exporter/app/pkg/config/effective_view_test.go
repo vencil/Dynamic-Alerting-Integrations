@@ -198,7 +198,7 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 				t.Errorf("/metrics serves %v, want %v", rows, tc.row)
 			}
 
-			scoped, err := EffectiveTree(dir)
+			scoped, err := EffectiveTree(dir, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -220,7 +220,7 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 			}
 
 			// /effective (ResolveEffective) is the same answer.
-			one, err := ResolveEffective(dir, "tx")
+			one, err := ResolveEffective(dir, "tx", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -246,7 +246,7 @@ func TestEffectiveView_MergedHashStaysTheMerges(t *testing.T) {
 	writeMergeTree(t, dir, map[string]string{
 		"_defaults.yaml": root, "sub/_defaults.yaml": sub, "sub/tx.yaml": tenant,
 	})
-	ec, err := ResolveEffective(dir, "tx")
+	ec, err := ResolveEffective(dir, "tx", fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestEffectiveView_SimulateIsTheEffectiveAnswer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ec, err := ResolveEffective(root, "tx")
+			ec, err := ResolveEffective(root, "tx", fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

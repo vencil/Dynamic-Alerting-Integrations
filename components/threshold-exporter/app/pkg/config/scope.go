@@ -59,6 +59,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ScopedTenants is the bundle ScopeEffective returns: per-tenant
@@ -256,16 +257,16 @@ type DefaultsFile struct {
 // A scope that contains zero tenants is NOT an error — Tenants
 // will simply be nil. The caller (CLI) prints a friendly message
 // and exits success in that case (vacuously safe defaults change).
-func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, scopeDir, false, nil, ScanOptions{})
+func ScopeEffective(configDir, scopeDir string, now time.Time) (*ScopedTenants, error) {
+	return scopeEffective(configDir, scopeDir, false, nil, ScanOptions{}, now)
 }
 
 // ScopeEffectiveWith is ScopeEffective of the whole tree (no scope) as opts
 // makes it read (ScanOptions: the overlays a `da-guard write` batch
 // would write, #3206) — the validation `da-guard --config-dir` runs, of
 // that tree.
-func ScopeEffectiveWith(configDir string, opts ScanOptions) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", false, nil, opts)
+func ScopeEffectiveWith(configDir string, opts ScanOptions, now time.Time) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", false, nil, opts, now)
 }
 
 // EffectiveTree is ScopeEffective over the whole tree (scopeDir = configDir)
@@ -277,8 +278,8 @@ func ScopeEffectiveWith(configDir string, opts ScanOptions) (*ScopedTenants, err
 // Errors are ScopeEffective's, plus one: a tree with no .yaml file at all is
 // refused with the exporter's own load's message (LoadDir), since the
 // exporter refuses to serve it — an empty result would read as "no tenants".
-func EffectiveTree(configDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true, nil, ScanOptions{})
+func EffectiveTree(configDir string, now time.Time) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true, nil, ScanOptions{}, now)
 }
 
 // EffectiveTreeLogged is EffectiveTree with the exporter's own load logging
@@ -288,8 +289,8 @@ func EffectiveTree(configDir string) (*ScopedTenants, error) {
 // ParseFailed alone does not carry. The walker's WARN for the root itself is
 // held back and dropped when RootListErr carries the same reason, as
 // LoadDirReport does (withRootWalkWarnHeld). nil logs nothing (EffectiveTree).
-func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true, logger, ScanOptions{})
+func EffectiveTreeLogged(configDir string, logger *log.Logger, now time.Time) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true, logger, ScanOptions{}, now)
 }
 
 // EffectiveTreeWith is EffectiveTreeLogged over the tree as opts makes it
@@ -298,14 +299,15 @@ func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, 
 // chains, hashes, the exporter's build — is of that tree. A refused overlay
 // is an error wrapping ErrOverlay, with a nil result. The zero opts is
 // EffectiveTreeLogged.
-func EffectiveTreeWith(configDir string, logger *log.Logger, opts ScanOptions) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true, logger, opts)
+func EffectiveTreeWith(configDir string, logger *log.Logger, opts ScanOptions, now time.Time) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true, logger, opts, now)
 }
 
 // scopeEffective is ScopeEffective; wholeTree is EffectiveTree's mode (key
 // attribution on, an empty tree refused). logger takes the walk's and the
-// build's log lines (EffectiveTreeLogged); nil discards them.
-func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger, opts ScanOptions) (*ScopedTenants, error) {
+// build's log lines (EffectiveTreeLogged); nil discards them. now is the
+// instant NotServed reads `expires:` at (the caller's clock, #3368).
+func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger, opts ScanOptions, now time.Time) (*ScopedTenants, error) {
 	if logger == nil {
 		logger = discardLogger
 	}
@@ -487,7 +489,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		// gate (ScopeEffective) fills NotServed the same way, for da-guard's
 		// value_not_served, and keeps stopping on an undecodable chain file
 		// (servedVerdicts.gate).
-		resolver.served = newServedVerdicts(built, true)
+		resolver.served = newServedVerdicts(built, true, now)
 		resolver.served.gate = !wholeTree
 	}
 	out := &ScopedTenants{

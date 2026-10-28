@@ -457,7 +457,7 @@ func TestLoadDir_RootNonThresholdSpellingBesideAValueServesTheValue(t *testing.T
 			t.Fatalf("%s: LoadDir: %v", canonVal, err)
 		}
 		var got []float64
-		for _, r := range cfg.Resolve() {
+		for _, r := range cfg.ResolveAt(fixedNow) {
 			if r.Tenant == "tx" && r.Component == "mysql" && r.Metric == "threads_running" && r.Severity == "warning" {
 				got = append(got, r.Value)
 			}

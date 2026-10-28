@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // rootDefaultsWithCap has three default keys, so a cap of 2 truncates every
@@ -51,7 +50,7 @@ func TestRootDefaultsCapTakesEffectInDirectoryMode(t *testing.T) {
 			"directory mode is dropping the field again (#2028)", cfg.MaxMetricsPerTenant)
 	}
 	// End to end: the cap is what ResolveAt truncates to, not just a field.
-	_, stats := cfg.ResolveAtWithStats(time.Now())
+	_, stats := cfg.ResolveAtWithStats(fixedNow)
 	if got := stats.PerTenantOverLimit["t-a"]; got != 1 {
 		t.Errorf("PerTenantOverLimit[t-a] = %d, want 1 (3 metrics against a cap of 2)", got)
 	}
@@ -69,7 +68,7 @@ func TestWithoutTheKeyTheBuiltInCapStillApplies(t *testing.T) {
 	if cfg.MaxMetricsPerTenant != 0 {
 		t.Fatalf("MaxMetricsPerTenant = %d, want 0 (unset → built-in)", cfg.MaxMetricsPerTenant)
 	}
-	if _, stats := cfg.ResolveAtWithStats(time.Now()); stats.PerTenantOverLimit["t-a"] != 0 {
+	if _, stats := cfg.ResolveAtWithStats(fixedNow); stats.PerTenantOverLimit["t-a"] != 0 {
 		t.Errorf("t-a over limit without a configured cap: %v", stats.PerTenantOverLimit)
 	}
 }

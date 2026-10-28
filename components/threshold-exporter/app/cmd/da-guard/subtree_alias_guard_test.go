@@ -59,7 +59,7 @@ func subtreeAliasServed(t *testing.T, dir, body string) string {
 	if err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
-	for _, r := range cfg.Resolve() {
+	for _, r := range cfg.ResolveAt(fixedNow) {
 		if r.Tenant == "tx" && r.Component == "mysql" && r.Metric == "threads_running" && r.Severity == "warning" {
 			return strconv.FormatFloat(r.Value, 'f', -1, 64)
 		}

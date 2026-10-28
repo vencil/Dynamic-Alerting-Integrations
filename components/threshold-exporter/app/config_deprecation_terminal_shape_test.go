@@ -37,7 +37,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // goldenFixture reads one file under tests/golden/fixtures. Missing is a
@@ -216,7 +215,7 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 			cfg := mgr.GetConfig()
 
 			got := map[string]bool{}
-			for _, r := range cfg.ResolveAt(time.Now()) {
+			for _, r := range cfg.ResolveAt(fixedNow) {
 				got[r.Component+"_"+r.Metric] = true
 			}
 			if len(got) != len(a.wantMetrics) {
@@ -231,7 +230,7 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 			if _, present := got["cpu_usage"]; present {
 				t.Errorf("the deprecated metric still resolves: %v", got)
 			}
-			if n := len(cfg.ResolveStateFilters()); n != a.wantStateFilters {
+			if n := len(cfg.ResolveStateFiltersAt(fixedNow)); n != a.wantStateFilters {
 				t.Errorf("state_filters resolved = %d, want %d",
 					n, a.wantStateFilters)
 			}
@@ -310,7 +309,7 @@ func assertDefaultRow(t *testing.T, name string, doc []byte, key string, want bo
 	cfg, _ := parsePartialConfig("_defaults.yaml", "/conf.d/_defaults.yaml", doc,
 		newConfigMetrics(), log.New(io.Discard, "", 0))
 	cfg.Tenants = map[string]map[string]ScheduledValue{"t": {}}
-	keyed, _, err := cfg.ResolveAtWithKeysSilent(time.Now())
+	keyed, _, err := cfg.ResolveAtWithKeysSilent(fixedNow)
 	if err != nil {
 		t.Fatalf("%s: resolve: %v", name, err)
 	}

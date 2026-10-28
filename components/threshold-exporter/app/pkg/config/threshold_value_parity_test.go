@@ -33,7 +33,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 type thresholdValueRow struct {
@@ -219,7 +218,7 @@ func baseRowValues(t *testing.T, value string) []float64 {
 	t.Helper()
 	c := &ThresholdConfig{}
 	rows := c.resolveBaseRows("t", map[string]float64{"mysql_connections": 80},
-		map[string]ScheduledValue{"mysql_connections": {Default: value}}, time.Now(), nil, discardLogf, nil)
+		map[string]ScheduledValue{"mysql_connections": {Default: value}}, fixedNow, nil, discardLogf, nil)
 	var out []float64
 	for _, r := range rows {
 		out = append(out, r.Value)

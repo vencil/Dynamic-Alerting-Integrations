@@ -108,13 +108,6 @@ type TenantMerge struct {
 	profileFileOrder []string
 }
 
-// Resolve is ThresholdConfig.Resolve without the resolver's log lines — see
-// TenantMerge. Shadowed too: the promoted one calls ResolveAt on the embedded
-// *ThresholdConfig, which would bypass the shadow below.
-func (m *TenantMerge) Resolve() []ResolvedThreshold {
-	return m.ResolveAt(time.Now())
-}
-
 // ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —
 // see TenantMerge.
 func (m *TenantMerge) ResolveAt(now time.Time) []ResolvedThreshold {
