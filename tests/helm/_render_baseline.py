@@ -16,3 +16,41 @@ def baseline_args(chart: str | Path) -> list[str]:
     if Path(chart).parts[-2:] == ("helm", "tenant-api"):
         return ["-f", str(_TENANT_API_BASELINE)]
     return []
+
+
+# ── tenant-api settings: TA_* env, not args (ADR-036 §12) ──────────────
+
+import re  # noqa: E402
+
+_TENANT_API_GO = Path(__file__).resolve().parents[2] / "components" / "tenant-api"
+#: A flag registered with a TA_* variable as its default: `"flag-name",
+#: envOrDefault("TA_X"` (also envBool / envNonEmptyOrDefault — every env*
+#: helper cmd/server reads a flag's default with).
+_FLAG_ENV = re.compile(r'"([a-z][a-z0-9-]*)",\s*env[A-Za-z]*\(\s*"(TA_[A-Z0-9_]+)"')
+
+
+def tenant_api_flag_envs() -> dict[str, str]:
+    """flag name → the TA_* variable tenant-api reads it from, derived from
+    the Go source (cmd/ and internal/, tests excluded) — never a hand list."""
+    out: dict[str, str] = {}
+    for p in sorted(_TENANT_API_GO.rglob("*.go")):
+        if p.name.endswith("_test.go"):
+            continue
+        for flag, env in _FLAG_ENV.findall(p.read_text(encoding="utf-8")):
+            assert out.get(flag, env) == env, (flag, env, out[flag])
+            out[flag] = env
+    return out
+
+
+def tenant_api_setting(container: dict, flag: str) -> "str | None":
+    """The value the tenant-api container gives *flag*: its TA_* env value
+    when the flag has one (the chart passes those as env), else `--flag=v`
+    in args; None when absent. A bare switch passed as env reads "true"."""
+    env = tenant_api_flag_envs().get(flag)
+    if env is not None:
+        values = [e.get("value") for e in container.get("env") or [] if e.get("name") == env]
+    else:
+        values = [a.split("=", 1)[1] for a in container.get("args") or []
+                  if isinstance(a, str) and a.startswith(f"--{flag}=")]
+    assert len(values) <= 1, (flag, values)
+    return values[0] if values else None

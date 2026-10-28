@@ -175,8 +175,6 @@ class _CallerError(Exception):
 
 #: The document `tenant-api config check` prints.
 CONFIG_CHECK_SCHEMA = "tenant-api.config-check/v1"
-#: The first tenant-api with `config check` (as for `state show`).
-MIN_TENANT_API_VERSION = "2.9.24"
 TENANT_API_ENV = "TENANT_API_BINARY"
 CRDECODE_ENV = "DA_CRDECODE_BINARY"
 #: A tenant-api older than `config check` reads `config` as the server's
@@ -264,8 +262,8 @@ def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
     if kind == "rbac":
         cmd += ["--identity-claim-headers", claims]
     cmd.append(os.path.abspath(path) if path is not None else "-")
-    older = (f"(a tenant-api older than v{MIN_TENANT_API_VERSION} has no `config check`; "
-             "use one built from this checkout: make tenant-api-build)")
+    older = ("(this needs a tenant-api that has `config check`; build one from this "
+             "checkout: make tenant-api-build)")
     try:
         proc = subprocess.run(cmd, input=data if data is not None else b"",
                               capture_output=True, check=False, timeout=_TIMEOUT_SECONDS)

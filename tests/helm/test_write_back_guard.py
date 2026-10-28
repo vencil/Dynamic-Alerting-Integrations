@@ -134,28 +134,32 @@ def test_acknowledged_direct_is_explicit_and_carries_no_forge_wiring():
     assert res.returncode == 0, res.stderr
     cs = _containers(res.stdout)
     assert "git-clone" not in cs  # no gitRepoUrl
+    # ADR-036 §12: settings with a TA_* variable are env, not args.
     args = cs["tenant-api"]["args"]
-    assert "--write-mode=direct" in args
-    assert not [a for a in args if a.startswith(("--github-", "--gitlab-", "--git-base-branch"))]
+    assert not [a for a in args if a.startswith(("--write-mode", "--github-", "--gitlab-", "--git-base-branch"))]
     env = _env(cs["tenant-api"])
-    assert not {"TA_GITHUB_TOKEN", "TA_GITLAB_TOKEN", "GIT_FORGE_TOKEN", "GIT_CONFIG_COUNT"} & env.keys()
+    assert env["TA_WRITE_MODE"]["value"] == "direct"
+    assert not {"TA_GITHUB_TOKEN", "TA_GITLAB_TOKEN", "GIT_FORGE_TOKEN", "GIT_CONFIG_COUNT",
+                "TA_GIT_BASE_BRANCH", "TA_GITHUB_REPO", "TA_GITHUB_BASE_BRANCH",
+                "TA_GITLAB_PROJECT", "TA_GITLAB_TARGET_BRANCH"} & env.keys()
 
 
 @_needs_helm
 @pytest.mark.parametrize("args, mode, flags, token_env, user", [
-    (_GITHUB, "pr-github", ["--github-repo=acme/conf", "--github-base-branch=main"], "TA_GITHUB_TOKEN", "x-access-token"),
-    (_GITLAB, "pr-gitlab", ["--gitlab-project=acme/conf", "--gitlab-target-branch=main"], "TA_GITLAB_TOKEN", "oauth2"),
+    (_GITHUB, "pr-github", {"TA_GITHUB_REPO": "acme/conf", "TA_GITHUB_BASE_BRANCH": "main"}, "TA_GITHUB_TOKEN", "x-access-token"),
+    (_GITLAB, "pr-gitlab", {"TA_GITLAB_PROJECT": "acme/conf", "TA_GITLAB_TARGET_BRANCH": "main"}, "TA_GITLAB_TOKEN", "oauth2"),
 ])
 def test_pr_mode_is_wired_end_to_end(args, mode, flags, token_env, user):
     res = _render(*args)
     assert res.returncode == 0, res.stderr
     cs = _containers(res.stdout)
-    main_args = cs["tenant-api"]["args"]
-    assert f"--write-mode={mode}" in main_args
-    assert "--git-base-branch=main" in main_args
-    for f in flags:
-        assert f in main_args
+    # ADR-036 §12: the forge settings are TA_* env, not args.
     env = _env(cs["tenant-api"])
+    assert env["TA_WRITE_MODE"]["value"] == mode
+    assert env["TA_GIT_BASE_BRANCH"]["value"] == "main"
+    for name, value in flags.items():
+        assert env[name]["value"] == value, name
+    assert not [a for a in cs["tenant-api"]["args"] if a.startswith(("--write-mode", "--git", "--github"))]
     assert env[token_env]["valueFrom"]["secretKeyRef"] == {"name": "vcs", "key": "token"}
     # clone and push authenticate the same way, from the Secret
     for name in ("git-clone", "tenant-api"):
@@ -202,7 +206,7 @@ def test_a_numeric_gitlab_project_id_from_a_values_file_stays_an_integer(tmp_pat
     res = subprocess.run(["helm", "template", "t", str(_REPO_ROOT / _CHART), "-f", str(vf)],
                          capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert res.returncode == 0, res.stderr
-    assert "--gitlab-project=45678901" in _containers(res.stdout)["tenant-api"]["args"]
+    assert _env(_containers(res.stdout)["tenant-api"])["TA_GITLAB_PROJECT"]["value"] == "45678901"
 
 
 @_needs_helm

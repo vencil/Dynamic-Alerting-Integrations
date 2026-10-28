@@ -1,0 +1,105 @@
+"""ADR-036 §12: the tenant-api container gets every setting that has a TA_*
+variable as env, never as a container arg.
+
+`kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show` (and
+`state restore`, `config check`) is a new process: it sees the container's
+environment, not the server's argv. A setting the chart passes as an arg is
+invisible to it — `state show` would not find the state store, `state
+restore` would merge the AccountID registry without the federation store's
+live tokens and high-water mark. So every flag tenant-api registers with a
+TA_* default must reach the container as that variable.
+
+The flag → variable list is derived from the Go source
+(`_render_baseline.tenant_api_flag_envs`: `"flag", envOrDefault("TA_…"` and the
+other env* helpers), never written by hand: a flag that gains a TA_* variable
+joins the check by itself.
+"""
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+from _helm_gate import helm_required
+from _render_baseline import baseline_args, tenant_api_flag_envs
+
+_REPO = Path(__file__).resolve().parents[2]
+_CHART = "helm/tenant-api"
+_HAS_HELM = shutil.which("helm") is not None
+_REQUIRE_HELM = helm_required()
+
+#: Renders that between them turn on every conditional tenant-api setting.
+_RENDERS = {
+    "default": [],
+    "everything-on": [
+        "federation.enabled=true", "machineIdentity.enabled=true", "humanSocket.enabled=true",
+        "rbac.metadataScopeEnforce=true", "rbac.metadataWriteScopeEnforce=true",
+        "rbac.orgScopeEnforce=true", "identity.claimHeaders.org=X-Org",
+        "generator.policy.existingConfigMap=da-policy",
+    ],
+    "pr-github": ["writeBack.mode=pr-github", "gitRepoUrl=https://github.com/acme/conf.git",
+                  "writeBack.token.secretName=vcs", "writeBack.github.repo=acme/conf"],
+    "pr-gitlab": ["writeBack.mode=pr-gitlab", "gitRepoUrl=https://gitlab.example/acme/conf.git",
+                  "writeBack.token.secretName=vcs", "writeBack.gitlab.project=acme/conf"],
+}
+
+#: What `tenant-api state show|restore` needs from the environment
+#: (registerStateFlags, registerFederationStoreFlags in cmd/server).
+_STATE_SUBCOMMAND_FLAGS = ("config-dir", "state-store", "state-configmap", "state-namespace",
+                           "state-dir", "federation-key", "federation-store",
+                           "federation-namespace")
+
+
+def _tenant_api(name: str) -> dict:
+    if not _HAS_HELM:
+        if _REQUIRE_HELM:
+            pytest.fail(f"{_REQUIRE_HELM}: but no `helm` on PATH")
+        pytest.skip("helm CLI not on PATH")
+    cmd = ["helm", "template", "t", str(_REPO / _CHART), *baseline_args(_CHART)]
+    for kv in _RENDERS[name]:
+        cmd += ["--set", kv]
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=60)
+    assert res.returncode == 0, res.stderr
+    for d in yaml.safe_load_all(res.stdout):
+        if d and d.get("kind") == "Deployment":
+            for c in d["spec"]["template"]["spec"]["containers"]:
+                if c["name"] == "tenant-api":
+                    return c
+    raise AssertionError("no tenant-api container rendered")
+
+
+def test_the_derived_list_is_not_vacuous():
+    envs = tenant_api_flag_envs()
+    # Every setting the state subcommand reads has a TA_* variable, so the env
+    # route reaches it (none needs a new variable).
+    missing = [f for f in _STATE_SUBCOMMAND_FLAGS if f not in envs]
+    assert not missing, f"state subcommand settings with no TA_* variable: {missing}"
+    assert envs["federation-key"] == "TA_FEDERATION_KEY"
+
+
+@pytest.mark.parametrize("render", sorted(_RENDERS))
+def test_no_arg_has_a_ta_variable(render):
+    envs = tenant_api_flag_envs()
+    container = _tenant_api(render)
+    as_args = sorted({a[2:].split("=", 1)[0] for a in container.get("args") or []
+                      if isinstance(a, str) and a.startswith("--")} & envs.keys())
+    assert not as_args, (
+        f"{render}: tenant-api args carry flags that have a TA_* variable: {as_args} — pass "
+        f"them as env ({', '.join(envs[f] for f in as_args)}) so `kubectl exec ... tenant-api "
+        "state show|restore` and `config check` see them")
+
+
+def test_the_settings_reach_the_env():
+    envs = tenant_api_flag_envs()
+    container = _tenant_api("everything-on")
+    env = {e["name"] for e in container.get("env") or []}
+    for flag in ("addr", "config-dir", "git-dir", "rbac", "write-mode", "generator-socket",
+                 "deploy-policy", "federation-key", "federation-store", "federation-namespace",
+                 "machine-identity-audit", "machine-identity-audience", "human-socket",
+                 "rbac-metadata-scope-enforce", "rbac-metadata-write-scope-enforce",
+                 "rbac-org-scope-enforce", "identity-claim-headers", "state-store",
+                 "state-configmap"):
+        assert envs[flag] in env, f"--{flag} ({envs[flag]}) is not in the tenant-api env"

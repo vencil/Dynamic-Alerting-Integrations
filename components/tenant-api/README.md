@@ -486,7 +486,7 @@ cp -a /state ./tenant-api-state-backup
 
 ⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常；擋住它的是 AccountID 高水位（見下）：帳本倒退到上一次配發之前時，運行中的 pod 拒絕配發、重啟的 pod 拒絕啟動，直到用 `state restore` 合併回去。
 
-還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點；Helm chart 以環境變數 `TA_STATE_STORE`／`TA_STATE_CONFIGMAP` 傳 store 設定，`kubectl exec` 起的子命令才讀得到）：
+還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點；Helm chart 凡有 `TA_*` 對應的設定（store 的 `TA_STATE_STORE`／`TA_STATE_CONFIGMAP`、federation 的 `TA_FEDERATION_KEY`／`TA_FEDERATION_STORE`／`TA_FEDERATION_NAMESPACE` 等）一律以環境變數傳，`kubectl exec` 起的子命令才讀得到與 server 相同的設定）：
 
 ```bash
 # 先看會改什麼（不寫入）

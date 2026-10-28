@@ -32,7 +32,7 @@ Empty `federation.store.namespace` = this release's namespace, which is the
 historical behaviour and stays the default so existing installs are untouched.
 
 ⛔ SINGLE SOURCE. configmap-federation-store.yaml, the RBAC pair and the
---federation-namespace flag all resolve the namespace THROUGH THIS TEMPLATE and
+TA_FEDERATION_NAMESPACE env all resolve the namespace THROUGH THIS TEMPLATE and
 must never re-derive it. Three independent copies is exactly how the store and
 its consumers drifted apart in the first place: a ConfigMap is namespace-scoped
 and both the gateway and the reconciler consume it as a VOLUME, so they can only

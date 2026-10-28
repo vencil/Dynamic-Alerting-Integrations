@@ -19,7 +19,8 @@ use it (``problem``: kind ``unreadable`` or ``rejected``):
 old inputs (a saved ConfigMap, a state directory), a document of a schema
 this module does not know, a document without records — is refused with
 :class:`StateInputError`, whose message names the commands above and the
-tenant-api version that has ``state show``.
+fact that it needs a tenant-api with ``state show`` (the ``schema`` decides,
+never a version number).
 
 A record with a problem is never read as empty: :meth:`TenantState.problem`
 names it, and the accessors of a record raise :class:`RecordProblem` for it.
@@ -44,15 +45,13 @@ SUBSET_SUFFIX = ".yaml"
 
 #: The one document schema this module reads (`tenant-api state show`).
 STATE_SHOW_SCHEMA = "tenant-api.state-show/v1"
-#: The first tenant-api release with `state show` (changelog.d/3206-tenant-api-state-show.md).
-MIN_TENANT_API_VERSION = "2.9.24"
 #: The problem kinds `state show` writes.
 PROBLEM_KINDS = ("unreadable", "rejected")
 
 #: How to get the JSON this module reads; part of every refusal of an input.
 HOW_TO_GET_STATE = (
-    f"--state takes the JSON `tenant-api state show` prints (tenant-api v{MIN_TENANT_API_VERSION} "
-    "or later): on a cluster `kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show "
+    "--state takes the JSON `tenant-api state show` prints (a tenant-api that has "
+    "`state show`): on a cluster `kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show "
     "> state.json`; from a backup `docker run -i --rm <the deployed tenant-api image> state show "
     "--from - < backup.yaml > state.json`")
 

@@ -554,7 +554,7 @@ class TestFailClosed:
         p = _write(tmp, "_tenant_orgs.yaml", "tenant_orgs: {}\n")
         result = _run("--tenant-api-binary", fake, p)
         assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
-        assert "older than" in result.stderr, result.stderr
+        assert "a tenant-api that has `config check`" in result.stderr, result.stderr
 
 
 # --- parser parity: the schema must never be STRICTER than the parser ------

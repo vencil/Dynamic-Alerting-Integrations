@@ -456,12 +456,15 @@ federation:
 # Enabling on an existing deployment:
 #   helm upgrade <release> helm/tenant-api --set machineIdentity.enabled=true
 # The chart then adds the ClusterRole/ClusterRoleBinding, enables token
-# automount, and passes --machine-identity-audit + --machine-identity-audience.
+# automount, and sets TA_MACHINE_IDENTITY_AUDIT + TA_MACHINE_IDENTITY_AUDIENCE
+# (--machine-identity-audit / --machine-identity-audience, passed as env so
+# `kubectl exec` subcommands see them too; ADR-036 §12).
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the audit
 # code (the --machine-identity-* flags). The image tag derives from appVersion;
-# enabling this against an image that predates the flags crash-loops on an
-# unknown flag. Enable only once the deployed image supports it.
+# an image that predates them ignores the TA_* variables and silently runs no
+# audit (they are env since ADR-036 §12, no longer args an old image would
+# refuse). Enable only once the deployed image supports it.
 # ⚠ Do NOT enable via `helm upgrade --reuse-values`: it can carry a stale
 # audience past the required-gate. Pass machineIdentity values explicitly.
 machineIdentity:
@@ -509,9 +512,10 @@ identity:
 # identity audit denominator, so the audit reflects the machine/relay plane only.
 #
 # ⚠ PREREQUISITE: the running tenant-api image must already contain the
-# --human-socket flag (image tag derives from appVersion). Enabling this against
-# an image that predates the flag crash-loops on an unknown flag — enable only
-# once the deployed image supports it (same discipline as machineIdentity).
+# --human-socket setting (TA_HUMAN_SOCKET; image tag derives from appVersion). An
+# image that predates it ignores the variable and never opens the socket, so
+# oauth2-proxy has no upstream — enable only once the deployed image supports
+# it (same discipline as machineIdentity).
 # ⚠ Do NOT enable via `helm upgrade --reuse-values` — pass humanSocket values
 # explicitly, matching the machineIdentity guidance above.
 #
@@ -604,7 +608,7 @@ generator:
   # a user who can write to the repository cannot loosen it. The chart ships
   # no policy content: name an existing ConfigMap you manage and its key. Set,
   # it is mounted read-only into the generator (passed as --policy) and into
-  # tenant-api at the same path (passed as --deploy-policy: tenant-api checks
+  # tenant-api at the same path (passed as TA_DEPLOY_POLICY: tenant-api checks
   # that the generator judged with the same file, by its hash, #2903). The
   # ConfigMap must exist: the pod does not start without it. An unusable
   # policy file refuses every content-changing write with 503

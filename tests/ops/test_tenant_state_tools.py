@@ -103,7 +103,7 @@ def _cm_yaml(root: Path) -> Path:
 def _assert_names_the_commands(msg: str) -> None:
     assert "kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show" in msg, msg
     assert "docker run -i --rm" in msg and "state show --from -" in msg, msg
-    assert f"v{lts.MIN_TENANT_API_VERSION}" in msg, msg
+    assert "a tenant-api that has `state show`" in msg, msg
 
 
 @pytest.mark.parametrize("form", ["configmap-yaml", "configmap-json", "state-dir"])
