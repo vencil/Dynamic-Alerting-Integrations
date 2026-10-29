@@ -551,10 +551,19 @@ def configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | Non
                                  read_binary: str | None = None) -> bool:
     """Whether a ConfigMap data value goes to the rule loader. ``RULE_FILE``
     does, ``NOT_A_RULE_FILE`` does not. An ``UNDECIDED`` value goes only when
-    the rule loader loads a ``groups`` key from it: a ConfigMap also carries
-    files that are no YAML at all (the Alertmanager templates of
-    k8s/03-monitoring/configmap-alertmanager.yaml, which both readings
-    refuse), so such a value is not taken for a broken rule file."""
+    the rule loader loads a ``groups`` key from it.
+
+    ⚠️ A limit, not a verdict: whether a data value IS a rule file is decided
+    by its consumer — where the ConfigMap is mounted and which keys the
+    Prometheus ``rule_files`` glob takes — and none of that is in the value.
+    A ConfigMap also carries files that are no YAML at all (the Alertmanager
+    templates of k8s/03-monitoring/configmap-alertmanager.yaml, which both
+    readings refuse), so a value both readings refuse is taken for such a
+    file. That is a silent skip: a rule file broken so badly that neither
+    da-crdecode nor the rule loader reads it (a tab in its indentation, say)
+    is not read and not reported when it sits in a ConfigMap — as on main,
+    where PyYAML's parse error on a data value was passed over. A whole file
+    is not judged this way (``may_be_rule_file``)."""
     decl = rule_file_declaration(text, crdecode_binary)
     if decl != UNDECIDED:
         return decl == RULE_FILE
