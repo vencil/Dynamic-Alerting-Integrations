@@ -315,7 +315,8 @@ class TestLoadBaseConfig:
         """
         with pytest.raises(gar.BaseConfigInputError) as exc:
             load_base_config("")
-        assert str(exc.value).startswith("--base-config:")
+        # #3276: the shared caller-path judgement names '' as supplied.
+        assert str(exc.value).startswith("--base-config '': ")
 
     def test_control_none_still_means_omitted(self):
         """⛔ Pairs with the test above: `None` must keep returning defaults, or
