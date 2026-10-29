@@ -176,9 +176,10 @@ def test_renovate_json_is_strict_json_and_well_formed():
     assert cfg.get("pinDigests") is True
     assert len(_image_managers(cfg)) == 4
     # TRK-2605: plus exactly one Grafana plugin manager on the catalog datasource;
-    # #3206: and one Go-module manager, da-read's alertmanager requirement.
+    # #3206: and two Go-module managers, da-read's alertmanager and prometheus
+    # requirements.
     others = [m for m in cfg["customManagers"] if m not in _image_managers(cfg)]
-    assert [m.get("datasourceTemplate") for m in others] == ["custom.grafana-plugins", "go"], others
+    assert [m.get("datasourceTemplate") for m in others] == ["custom.grafana-plugins", "go", "go"], others
     assert "grafana-plugins" in cfg.get("customDatasources", {})
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
 
@@ -625,6 +626,23 @@ def test_vendored_third_party_tree_is_out_of_renovates_reach():
     assert anchor.is_file(), f"{anchor} gone — re-derive what this guards"
 
 
+def _go_module_manager(cfg: dict, module: str) -> dict:
+    """The ONE go-datasource custom manager whose extraction includes `module`."""
+    owners = [m for m in cfg["customManagers"] if m.get("datasourceTemplate") == "go"
+              and any(d["depName"] == module for d in _extract(m))]
+    assert len(owners) == 1, (module, owners)
+    return owners[0]
+
+
+def _go_module_deps(cfg: dict, module: str) -> list[dict]:
+    """What the go manager owning `module` extracts: exactly that require line of
+    da-read's go.mod, so it neither misses it nor touches another line."""
+    deps = _extract(_go_module_manager(cfg, module))
+    assert [(d["file"], d["depName"]) for d in deps] == [
+        ("components/da-read/go.mod", module)], deps
+    return deps
+
+
 def test_da_read_alertmanager_requirement_moves_with_the_image_refs():
     """#3206: components/da-read/go.mod links the Alertmanager amtool is
     (test_da_tools_amtool_pin_parity.py holds the version equal to the
@@ -633,11 +651,7 @@ def test_da_read_alertmanager_requirement_moves_with_the_image_refs():
     and land in the SAME group as those refs — or every Alertmanager bump turns
     the pin test red in Renovate's own PR."""
     cfg = _load_config()
-    go_mgrs = [m for m in cfg["customManagers"] if m.get("datasourceTemplate") == "go"]
-    assert len(go_mgrs) == 1, go_mgrs
-    deps = _extract(go_mgrs[0])
-    assert [(d["file"], d["depName"]) for d in deps] == [
-        ("components/da-read/go.mod", "github.com/prometheus/alertmanager")], deps
+    deps = _go_module_deps(cfg, "github.com/prometheus/alertmanager")
     matrix_mgr = _matrix_manager(cfg)
     image_tags = {d["currentValue"] for m in cfg["customManagers"] if m is not matrix_mgr
                   for d in _extract(m) if d.get("depName") == "prom/alertmanager"}
@@ -648,3 +662,49 @@ def test_da_read_alertmanager_requirement_moves_with_the_image_refs():
         go_group = _resolve(cfg, manager="custom.regex", dep="github.com/prometheus/alertmanager",
                             datasource="go", update=update).get("groupName")
         assert image_group and go_group == image_group, (update, image_group, go_group)
+
+
+def test_da_read_prometheus_requirement_moves_with_the_image_refs():
+    """#3206: components/da-read/go.mod requires the Go module of the deployed
+    Prometheus (test_da_read_prometheus_pin_parity.py: image v3.X.Y is module
+    v0.3XX.Y). #3385 bumped the image alone and that pin test went red on main.
+    The require line must be extracted, sit at the module version of the tag the
+    image refs carry, ride the SAME group PR for minor / patch, and wait for the
+    Dashboard on a major like the image does."""
+    cfg = _load_config()
+    (dep,) = _go_module_deps(cfg, "github.com/prometheus/prometheus")
+    matrix_mgr = _matrix_manager(cfg)
+    image_tags = {d["currentValue"] for m in cfg["customManagers"] if m is not matrix_mgr
+                  for d in _extract(m) if d.get("depName") == "prom/prometheus"}
+    assert len(image_tags) == 1, image_tags
+    (tag,) = image_tags
+    major, minor, patch = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag).groups()
+    assert dep["currentValue"] == f"v0.{major}{int(minor):02d}.{patch}", (tag, dep)
+    for update in ("minor", "patch"):
+        image_group = _resolve(cfg, manager="custom.regex", dep="prom/prometheus",
+                               datasource="docker", update=update).get("groupName")
+        go_rule = _resolve(cfg, manager="custom.regex", dep="github.com/prometheus/prometheus",
+                           datasource="go", update=update)
+        assert image_group and go_rule.get("groupName") == image_group, (update, image_group, go_rule)
+        assert not go_rule.get("dependencyDashboardApproval"), (update, go_rule)
+    major_rule = _resolve(cfg, manager="custom.regex", dep="github.com/prometheus/prometheus",
+                          datasource="go", update="major")
+    assert major_rule.get("dependencyDashboardApproval") is True, major_rule
+
+
+def test_da_read_prometheus_versioning_reads_the_module_as_the_image_version():
+    """The Go proxy lists github.com/prometheus/prometheus's legacy
+    v2.*+incompatible tags beside the v0.3XX.Y ones; under semver
+    v2.55.1+incompatible outranks v0.315.1 and Renovate would propose it. The
+    regex versioning must read the require as image major/minor/patch, put a
+    Prometheus major in the major digit, and refuse legacy, rc and pre-v3 tags."""
+    mgr = _go_module_manager(_load_config(), "github.com/prometheus/prometheus")
+    template = mgr.get("versioningTemplate", "")
+    assert template.startswith("regex:"), template
+    rx = _py_regex(template[len("regex:"):])
+    for version, want in (("v0.315.1", ("3", "15", "1")), ("v0.305.2", ("3", "05", "2")),
+                          ("v0.400.0", ("4", "00", "0"))):
+        m = rx.match(version)
+        assert m and (m["major"], m["minor"], m["patch"]) == want, (version, m)
+    for refused in ("v2.55.1+incompatible", "v2.5.0", "v0.316.0-rc.2", "v0.35.0", "v0.3150.0"):
+        assert not rx.match(refused), refused

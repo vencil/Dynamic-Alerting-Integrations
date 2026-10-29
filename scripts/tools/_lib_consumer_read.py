@@ -9,6 +9,13 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   split as ``kubectl apply -f`` splits them). One entry per document kubectl
   would apply, in file order; an empty file has none. ``instance: 010`` is
   the number 8 here, as it is to kubectl.
+* ``kubernetes_text_documents(text)`` — the same reading of text held in
+  memory (a manifest ``kubectl ... -o yaml`` or ``helm template`` printed, a
+  ConfigMap a tool assembled), handed over on standard input.
+* ``kubernetes_documents_of(paths)`` / ``kubernetes_text_documents_each(texts)``
+  — the same for several files / texts. da-crdecode reads one input per run,
+  so these run one per input, a few at a time (``PARALLEL_RUNS``), and return
+  them in the order given.
 * ``alertmanager_config(text)`` — an Alertmanager config as Alertmanager
   loads it: ``da-read alertmanager`` (Alertmanager's own ``config.Load``, at
   the amtool version the da-tools image ships), keeping only the keys the
@@ -31,8 +38,10 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
 
 Each raises :class:`ConsumerReadError` when the binary is missing, cannot
 be run, does not finish, refuses the input (its reason is in
-``stderr_lines``) or prints something that is not its JSON contract. Nothing
-here returns "empty" for "could not be read".
+``stderr_lines``) or prints something that is not its JSON contract; a
+refusal is the subclass :class:`InputRefused` (a lint names the file, a
+missing binary it does not). Nothing here returns "empty" for "could not be
+read".
 
 Binaries: an explicit path (a tool's ``--da-crdecode-binary`` /
 ``--da-read-binary``), else ``$DA_CRDECODE_BINARY`` / ``$DA_READ_BINARY``,
@@ -48,6 +57,7 @@ import json
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 CRDECODE_BINARY_NAME = "da-crdecode"
@@ -67,6 +77,39 @@ class ConsumerReadError(Exception):
     def __init__(self, message: str, stderr_lines: list[str] | None = None) -> None:
         super().__init__(message)
         self.stderr_lines = list(stderr_lines or [])
+
+    def detail(self) -> str:
+        """The one line, then the binary's reason, joined with `` | `` — for a
+        finding that has one line to say it in."""
+        return " | ".join([str(self), *self.stderr_lines])
+
+
+class InputRefused(ConsumerReadError):
+    """The binary ran and refused its input (exit 2 with its reason on
+    stderr): the consumer does not read this text. Every other
+    :class:`ConsumerReadError` means the reading could not be had at all —
+    a caller that reports a refused input as a finding must not report a
+    missing binary that way.
+
+    ⛔ Only :func:`_refused` decides this, so there is one judgement of it:
+    exit 2 (da-crdecode's and da-read's answer to the input; the arguments
+    are ours, so not a usage error) with a reason on stderr that is not a Go
+    runtime crash — a panic also exits 2 with stderr, and is not an answer
+    about the input. Not found, could not run, did not finish, any other exit
+    code, exit 0 without the JSON contract: a plain ConsumerReadError.
+    """
+
+
+#: A Go runtime crash: the first stderr line of an unrecovered panic or a
+#: fatal runtime error (both exit 2, as a refusal does).
+_GO_CRASH_PREFIXES = ("panic: ", "fatal error: ")
+
+
+def _refused(returncode: int, lines: list[str]) -> bool:
+    """Whether a run that exited *returncode* with stderr *lines* is the
+    binary refusing its input (see :class:`InputRefused`)."""
+    return (returncode == 2 and bool(lines)
+            and not lines[0].startswith(_GO_CRASH_PREFIXES))
 
 
 def _stderr_lines(raw: bytes | None) -> list[str]:
@@ -117,6 +160,8 @@ def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str]) -> Any
 def _run(binary: str | None, name: str, env: str, build_hint: str,
          args: list[str], stdin: bytes | None) -> dict:
     proc, lines = _invoke(binary, name, env, build_hint, args, stdin)
+    if _refused(proc.returncode, lines):
+        raise InputRefused(f"{name} refused the input", lines)
     if proc.returncode != 0:
         raise ConsumerReadError(f"{name} exited {proc.returncode}", lines)
     out = _json(proc, name, lines)
@@ -136,6 +181,97 @@ def kubernetes_documents(path: str, binary: str | None = None) -> list[Any]:
     out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
                [os.path.abspath(path)], None)
     return out["documents"]
+
+
+def kubernetes_text_documents(text: str | bytes, binary: str | None = None) -> list[Any]:
+    """The documents of the Kubernetes manifest *text*, as kubectl reads them
+    (``da-crdecode -``): for text a tool holds rather than a file."""
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
+               ["-"], data)
+    return out["documents"]
+
+
+#: How many da-crdecode runs ``kubernetes_documents_of`` keeps going at once.
+PARALLEL_RUNS = 8
+
+
+def kubernetes_documents_of(paths: Iterable[Any], binary: str | None = None, *,
+                            keep_refusals: bool = False
+                            ) -> "dict[str, list[Any] | ConsumerReadError]":
+    """``kubernetes_documents`` for every path in *paths*, keyed by
+    ``str(path)`` in the order given. The first path (in that order) whose
+    reading cannot be had raises its :class:`ConsumerReadError`; the message
+    names the path. With *keep_refusals*, a file da-crdecode refuses (its
+    reason on stderr) is not raised: its value is the error, for a caller
+    that reports per file. A run that gave no reason (no binary, it could not
+    run, it printed no JSON contract) is raised either way — that is not an
+    answer about the file."""
+    keys = [str(p) for p in paths]
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+
+    def one(path: str) -> "list[Any] | ConsumerReadError":
+        try:
+            return kubernetes_documents(path, binary=resolved)
+        except ConsumerReadError as e:
+            return e
+
+    if not keys:
+        return {}
+    if not resolved:
+        # the "not found" message of a single read, once, before any run
+        _run(None, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build", [], None)
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        results = list(pool.map(one, keys))
+    out: "dict[str, list[Any]]" = {}
+    for path, res in zip(keys, results):
+        if isinstance(res, ConsumerReadError):
+            if keep_refusals and _is_refusal(res):
+                out[path] = res
+                continue
+            raise _same_kind(res)(f"{path}: {res}", res.stderr_lines) from res
+        out[path] = res
+    return out
+
+
+def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
+                                   keep_refusals: bool = False
+                                   ) -> "list[list[Any] | ConsumerReadError]":
+    """``kubernetes_text_documents`` for every text in *texts*, in order, a
+    few runs at a time. Errors as :func:`kubernetes_documents_of` (by
+    position instead of path)."""
+    items = list(texts)
+    if not items:
+        return []
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+    if not resolved:
+        _run(None, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build", [], None)
+
+    def one(text: str | bytes) -> "list[Any] | ConsumerReadError":
+        try:
+            return kubernetes_text_documents(text, binary=resolved)
+        except ConsumerReadError as e:
+            return e
+
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        results = list(pool.map(one, items))
+    for i, res in enumerate(results):
+        if isinstance(res, ConsumerReadError) and not (
+                keep_refusals and _is_refusal(res)):
+            raise _same_kind(res)(f"text #{i + 1}: {res}", res.stderr_lines) from res
+    return results
+
+
+def _same_kind(e: ConsumerReadError) -> type:
+    """The class to re-raise *e* as with a prefixed message: a refusal stays
+    :class:`InputRefused`, everything else is a plain ConsumerReadError."""
+    return InputRefused if isinstance(e, InputRefused) else ConsumerReadError
+
+
+def _is_refusal(e: ConsumerReadError) -> bool:
+    """da-crdecode ran and refused the input (:class:`InputRefused`)."""
+    return isinstance(e, InputRefused)
 
 
 def alertmanager_config(text: str | bytes, binary: str | None = None) -> dict:
@@ -175,7 +311,7 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
     return _one_document(out, "config")
 
 
-class RuleFileRefused(ConsumerReadError):
+class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""
 
@@ -219,7 +355,7 @@ class RuleFile:
         return f"RuleFile({self.path!r}, {state})"
 
 
-class RuleFilesRefused(ConsumerReadError):
+class RuleFilesRefused(InputRefused):
     """At least one rule file is refused; ``results`` holds every file's
     :class:`RuleFile` (in the order given) and ``refused`` the refused ones."""
 

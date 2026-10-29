@@ -174,3 +174,50 @@ def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> 
                                       "--root", str(tmp_path), "--timeout", "7"])
     assert _cir.main() == 0
     assert seen == [7] and type(seen[0]) is int
+
+
+# ── #3206 (ADR-036 §12): the sources are read as kubectl / Helm read them ──
+def test_a_file_kubectls_reading_refuses_stops_the_run(tmp_path: Path) -> None:
+    """It used to be a `::warning::` and a skip — a clean-looking run that
+    checked less. Now exit 2, naming the file."""
+    _write(tmp_path / "helm/a/values.yaml", 'image:\n  repository: foo/bar\n  tag: "1.0"\n')
+    _write(tmp_path / "k8s/bad.yaml", "--- kind: x\n")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "bad.yaml" in proc.stderr and "the way kubectl does" in proc.stderr
+
+
+def test_a_tag_is_kubectls_reading_of_it(tmp_path: Path) -> None:
+    """A quoted `tag: "1.10"` is the text."""
+    _write(tmp_path / "helm/b/values.yaml", 'image:\n  repository: foo/baz\n  tag: "1.10"\n')
+    assert _list_refs(tmp_path) == {"foo/baz:1.10"}
+
+
+@pytest.mark.parametrize("values, key_path", [
+    ("image:\n  repository: foo/bar\n  tag: 1.10\n", "image.tag"),     # the number 1.1
+    ("app:\n  image:\n    repository: foo/bar\n    tag: 1e3\n", "app.image.tag"),  # 1000
+    ("c:\n  - image: 7\n", "c[0].image"),
+])
+def test_a_non_text_image_field_stops_the_run_naming_it(tmp_path: Path, values, key_path) -> None:
+    """#3407 review: an unquoted `tag: 1.10` / `1e3` is a number to Helm, so
+    no ref can be built from it. It used to be skipped silently — a ref never
+    checked; now rc 2 naming the file and the key path."""
+    _write(tmp_path / "helm/a/values.yaml", values)
+    _write(tmp_path / "helm/b/values.yaml", 'image:\n  repository: foo/baz\n  tag: "1.10"\n')
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "helm/a/values.yaml" in proc.stderr and key_path in proc.stderr, proc.stderr
+
+
+def test_no_da_crdecode_is_exit_2_not_a_pyyaml_reading(tmp_path: Path) -> None:
+    import os
+    _write(tmp_path / "helm/a/values.yaml", 'image:\n  repository: foo/bar\n  tag: "1.0"\n')
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        env={**os.environ, "DA_CRDECODE_BINARY": str(tmp_path / "no-such-da-crdecode")})
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)

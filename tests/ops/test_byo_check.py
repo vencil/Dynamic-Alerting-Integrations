@@ -206,8 +206,12 @@ class TestCheckAlertmanager:
         config_yaml = (
             "route:\n"
             "  receiver: 'null'\n"
-            "  match:\n"
-            "    tenant: db-a\n"
+            "  routes:\n"
+            "    - receiver: 'null'\n"
+            "      match:\n"
+            "        tenant: db-a\n"
+            "receivers:\n"
+            "  - name: 'null'\n"
             "inhibit_rules:\n"
             "  - source_matchers: ['severity=\"critical\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
             "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
@@ -1107,7 +1111,13 @@ class TestJudgeInhibitSemantics:
 
 
 class TestCheckAlertmanagerInhibitSemantics:
-    """End-to-end wiring of the semantic check through check_alertmanager."""
+    """End-to-end wiring of the semantic check through check_alertmanager.
+
+    #3206: the running config is read by Alertmanager's own loader (da-read),
+    which refuses a config without a route — so every config here carries
+    one (`_ROUTE`), or the semantic check would be the loader's refusal."""
+
+    _ROUTE = "route:\n  receiver: default\nreceivers:\n  - name: default\n"
 
     def _run(self, config_yaml, alerts):
         mock_resp = MagicMock()
@@ -1125,7 +1135,7 @@ class TestCheckAlertmanagerInhibitSemantics:
         return {c["check"]: c for c in checks}
 
     def test_confirmed_1132_trap_surfaces_as_warn(self):
-        config = (
+        config = self._ROUTE + (
             "inhibit_rules:\n"
             "  - source_matchers: ['alertname=\"TenantSeverityDedupEnabled\"']\n"
             "    target_matchers: ['severity=\"warning\"']\n"
@@ -1135,9 +1145,10 @@ class TestCheckAlertmanagerInhibitSemantics:
                               "severity": "none", "tenant": "db-a"}}]  # no metric_group
         checks = self._run(config, alerts)
         assert checks["alertmanager_inhibit_semantics"]["status"] == "warn"
+        assert "metric_group" in checks["alertmanager_inhibit_semantics"]["detail"]
 
     def test_no_inhibit_rules_skips_semantic_check(self):
-        checks = self._run("route:\n  receiver: default\n", [])
+        checks = self._run(self._ROUTE, [])
         assert "alertmanager_inhibit_semantics" not in checks
         # the presence check still fires
         assert checks["alertmanager_inhibit_rules"]["status"] == "warn"
@@ -1148,7 +1159,75 @@ class TestCheckAlertmanagerInhibitSemantics:
         checks = self._run(bad, [])
         sem = checks.get("alertmanager_inhibit_semantics")
         assert sem is not None and sem["status"] == "warn"
-        assert "parse" in sem["detail"].lower()
+        assert "loader refuses" in sem["detail"]
+
+    def test_a_config_alertmanager_refuses_warns_in_its_words(self):
+        """#3206: well-formed YAML Alertmanager's loader refuses (no route) is
+        not analyzed — PyYAML used to read it and judge its inhibit rules."""
+        config = ("inhibit_rules:\n"
+                  "  - source_matchers: ['severity=\"critical\"']\n"
+                  "    target_matchers: ['severity=\"warning\"']\n"
+                  "    equal: ['tenant']\n")
+        sem = self._run(config, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "warn"
+        assert "no route" in sem["detail"]
+
+    def test_inhibit_rules_are_alertmanagers_reading(self):
+        """#3206: a matcher Alertmanager normalizes (spaces, quotes) is judged
+        as Alertmanager reads it."""
+        config = self._ROUTE + (
+            "inhibit_rules:\n"
+            "  - source_matchers: ['alertname = TenantSeverityDedupEnabled']\n"
+            "    target_matchers: ['severity=\"warning\"']\n"
+            "    equal: ['tenant', 'metric_group']\n")
+        alerts = [{"labels": {"alertname": "TenantSeverityDedupEnabled",
+                              "severity": "none", "tenant": "db-a"}}]
+        sem = self._run(config, alerts)["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "warn" and "metric_group" in sem["detail"]
+
+    def test_no_da_read_is_a_failed_check(self, monkeypatch):
+        """#3206: without da-read there is no reading — a failed check
+        (caller error), never a silent skip or a PyYAML fallback."""
+        monkeypatch.setenv("DA_READ_BINARY", "/nonexistent/da-read")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+        assert "da-read" in sem["detail"] or "nonexistent" in sem["detail"]
+
+    @staticmethod
+    def _fake_da_read(tmp_path, monkeypatch, body: str) -> None:
+        script = tmp_path / "fake-da-read"
+        script.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("DA_READ_BINARY", str(script))
+
+    def test_a_crashed_da_read_is_a_caller_error_not_a_refusal(self, tmp_path, monkeypatch):
+        """CodeRabbit on #3407: stderr alone is no refusal. A da-read that
+        exits 3 with a reason is no answer about the config — a failed check
+        (exit 2), not the warn a refusal is."""
+        self._fake_da_read(tmp_path, monkeypatch, "echo 'boom' >&2; exit 3")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_a_go_panic_is_a_caller_error_not_a_refusal(self, tmp_path, monkeypatch):
+        """A Go panic also exits 2 with stderr; it is not the loader's answer."""
+        self._fake_da_read(tmp_path, monkeypatch,
+                           "echo 'panic: runtime error' >&2; echo 'goroutine 1' >&2; exit 2")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_a_da_read_that_does_not_finish_is_a_caller_error(self, tmp_path, monkeypatch):
+        self._fake_da_read(tmp_path, monkeypatch, "echo 'slow' >&2; exec sleep 5")
+        monkeypatch.setattr(bc._lib_consumer_read, "TIMEOUT_SECONDS", 0.5)
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_exit_2_with_a_reason_is_the_refusal_path(self, tmp_path, monkeypatch):
+        """rc 2 with the loader's reason is a refusal: the named warn."""
+        self._fake_da_read(tmp_path, monkeypatch,
+                           "echo 'da-read: <stdin>: no route provided in config' >&2; exit 2")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "warn" and "caller_error" not in sem
+        assert "loader refuses" in sem["detail"] and "no route" in sem["detail"]
 
     def test_malformed_status_payload_is_a_caller_error(self):
         """#3133 batch 4: a status answer that is not read (config null or not

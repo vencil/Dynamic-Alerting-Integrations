@@ -50,14 +50,35 @@ surface, resolve the workload's entry point and assert it exists in the
 
 Scan surface
 ------------
-  k8s/**/*.yaml             literal `image:` strings, full YAML parse
-  helm/*/values*.yaml       image pins as a `repository:` + `tag:` PAIR
+  k8s/**/*.yaml             literal `image:` strings, read the way kubectl
+                            reads them (`da-crdecode`, ADR-036 §12)
+  helm/*/values*.yaml       image pins as a `repository:` + `tag:` PAIR, read
+                            the way Helm reads them (`da-crdecode`)
   helm/*/templates/**/*.yaml container `command:` / `args:`, parsed after
-                            stripping Go-template actions. RECURSIVE on
-                            purpose: the pre-commit `files:` regex matches
-                            `templates/<subdir>/x.yaml` too, so a
-                            non-recursive glob would give a hook that FIRES
+                            stripping Go-template actions (THE STRIP PATH).
+                            RECURSIVE on purpose: the pre-commit `files:`
+                            regex matches `templates/<subdir>/x.yaml` too, so
+                            a non-recursive glob would give a hook that FIRES
                             on a file the scanner never opens — and prints OK.
+  `helm template` output    every chart that pins da-tools, rendered with its
+                            default values and with each `values*.yaml`
+                            override, the `RENDER_BASE_SETS` of
+                            check_iac_helm.py applied (THE RENDER PATH); the
+                            output is read the way kubectl reads it
+                            (`da-crdecode`, every document).
+
+The two Helm paths see different containers, so the workloads they find are
+taken TOGETHER (a union, one entry per (chart, entry point, tag)): the strip
+path sees every `{{ if }}` branch, including one the default values never
+render; the render path sees a container a template `include`s, which the
+strip path drops as control flow. Neither alone is the whole chart.
+
+The strip path's text is this gate's own construction (a template with its
+actions cut out): no consumer reads it, so it is read with strict PyYAML, whose
+duplicate-key refusal is what catches two `{{ if }}`/`{{ else }}` branches
+writing the same key. Everything a consumer reads — manifests, values files,
+rendered charts — is read the consumer's way, where a duplicate key is the
+last one (kubectl and Helm both keep the last; measured, #3206).
 
 The pin MUST be read by parsing YAML, never by scanning lines: a Helm values
 pin is split across two lines (`repository:` / `tag:`) and so is invisible to
@@ -77,10 +98,14 @@ Five conditions are errors, never a silent pass:
     `command:` / `args:` — a `command:` key that is PRESENT but unreadable
     counts, because an explicit command replaces the image entrypoint and
     reading `args[0]` instead answers with something that never runs;
-  * a document holds a duplicate mapping key, which a plain YAML load resolves
-    silently in favour of the last one. Stripping template actions manufactures
-    exactly that shape out of an `{{ if }}`/`{{ else }}` pair writing the same
-    key in both branches, and the branch that loses is not scanned;
+  * a STRIPPED template holds a duplicate mapping key, which a plain YAML
+    load resolves silently in favour of the last one. Stripping template
+    actions manufactures exactly that shape out of an `{{ if }}`/`{{ else }}`
+    pair writing the same key in both branches, and the branch that loses is
+    not scanned;
+  * a manifest, values file or rendered chart that kubectl's / Helm's reading
+    (`da-crdecode`) refuses, a chart `helm template` cannot render, or no
+    `helm` / `da-crdecode` to ask;
   * `entrypoint.py` / `build.sh` cannot be read (or parses to nothing) at the
     pinned tag;
   * a chart pins a da-tools image but its templates yield ZERO containers.
@@ -137,6 +162,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -154,9 +180,12 @@ from _lint_helpers import (  # noqa: E402
 )
 from _lib_validation import i18n_text  # noqa: E402
 from _lib_io import (  # noqa: E402  (#2123 shared strict loader)
-    StrictSafeLoader, reject_equal_constructed_keys, strict_safe_load,
-    strict_safe_load_all,
+    StrictSafeLoader, reject_equal_constructed_keys, strict_safe_load_all,
 )
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests / values / renders read kubectl's way)
+# The `--set`s a chart refuses to render without — the same ones the Helm
+# SAST layer renders with, imported rather than copied.
+from check_iac_helm import RENDER_BASE_SETS  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -229,7 +258,9 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "entry (the gate will demand it).",
 }
 
-# --- YAML loading -----------------------------------------------------------
+# --- YAML loading (the strip path only) -------------------------------------
+# Only the STRIPPED TEMPLATES are read here: text this gate makes, with no
+# consumer. Manifests, values files and rendered charts go to da-crdecode.
 # ⛔ `yaml.safe_load` resolves a duplicate mapping key by keeping the LAST one
 # and saying NOTHING. That is not an edge case here: an `{{ if }}`/`{{ else }}`
 # pair that writes `containers:` in both branches becomes two `containers:`
@@ -257,17 +288,20 @@ class _StrictLoader(StrictSafeLoader):
 # bandit B506 flags that call for any Loader it cannot name-match to
 # SafeLoader, and a SafeLoader *subclass* is not name-matched.
 def load_all_strict(text: str) -> list:
-    """`yaml.safe_load_all`, but a duplicate mapping key raises ConstructorError."""
+    """`yaml.safe_load_all`, but a duplicate mapping key raises ConstructorError.
+    For a STRIPPED template only (see above)."""
     return list(strict_safe_load_all(text, loader=_StrictLoader))
 
 
-def load_strict(text: str):
-    """`yaml.safe_load`, but a duplicate mapping key raises ConstructorError.
+def _consumer_read_detail(exc: "_lib_consumer_read.ConsumerReadError") -> str:
+    return exc.detail()
 
-    Mirrors safe_load exactly, second document included: `get_single_data()`
-    raises on a multi-document stream rather than quietly reading the first.
-    """
-    return strict_safe_load(text, loader=_StrictLoader)
+
+def read_values(path: Path):
+    """A chart's values file as Helm reads it (da-crdecode): its one document,
+    or None for an empty file. Raises ConsumerReadError."""
+    docs = _lib_consumer_read.kubernetes_documents(str(path))
+    return docs[0] if docs else None
 
 
 # --- Go-template stripping --------------------------------------------------
@@ -682,14 +716,19 @@ def _chart_dirs() -> list[Path]:
 def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
     """da-tools containers in raw k8s manifests (literal image strings)."""
     workloads: list[Workload] = []
-    for path in _k8s_files():
+    files = _k8s_files()
+    try:
+        read = _lib_consumer_read.kubernetes_documents_of(files, keep_refusals=True)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        errors.append(f"k8s/: cannot read the manifests the way kubectl does, so no "
+                      f"image pin in them was checked ({_consumer_read_detail(exc)})")
+        return workloads
+    for path in files:
         rel = path.relative_to(REPO_ROOT).as_posix()
-        try:
-            docs = load_all_strict(path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            errors.append(f"{rel}: not parseable as YAML, so any image pin in it "
-                          f"is invisible to this gate ({exc.__class__.__name__}: "
-                          f"{getattr(exc, 'problem', exc)})")
+        docs = read[str(path)]
+        if isinstance(docs, _lib_consumer_read.ConsumerReadError):
+            errors.append(f"{rel}: kubectl's reading refuses it, so any image pin in "
+                          f"it is invisible to this gate ({_consumer_read_detail(docs)})")
             continue
         for doc in docs:
             for container in iter_containers(doc):
@@ -759,11 +798,10 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
         for values in values_files:
             values_rel = values.relative_to(REPO_ROOT).as_posix()
             try:
-                values_doc = load_strict(values.read_text(encoding="utf-8"))
-            except yaml.YAMLError as exc:
-                errors.append(f"{values_rel}: not parseable as YAML "
-                              f"({exc.__class__.__name__}: "
-                              f"{getattr(exc, 'problem', exc)}), so an image pin in "
+                values_doc = read_values(values)
+            except _lib_consumer_read.ConsumerReadError as exc:
+                errors.append(f"{values_rel}: cannot be read the way Helm reads it "
+                              f"({_consumer_read_detail(exc)}), so an image pin in "
                               f"it is invisible to this gate")
                 unreadable = True
                 continue
@@ -919,6 +957,119 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
     return workloads
 
 
+#: Seconds one `helm template` may take.
+HELM_TIMEOUT_S = 120
+
+
+def _chart_pins_da_tools(chart: Path) -> bool:
+    """Whether any `values*.yaml` of *chart* pins the da-tools repository
+    (Helm's reading). A values file that cannot be read says nothing here:
+    the strip path reports it."""
+    for values in _yaml_files(chart, "values*"):
+        try:
+            doc = read_values(values)
+        except _lib_consumer_read.ConsumerReadError:
+            continue
+        if any(pin.get("repository") == DA_TOOLS_REPO for _t, pin in find_image_pins(doc)):
+            return True
+    return False
+
+
+def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
+    """da-tools containers in what `helm template` renders (THE RENDER PATH).
+
+    Every chart that pins da-tools is rendered with its default values and
+    with each `values*.yaml` override as `-f`, `RENDER_BASE_SETS` applied;
+    the output is read the way kubectl reads it (da-crdecode, every
+    document). A rendered `image:` is a literal, so the pin and the container
+    are associated per container here, not per chart. Fail-closed: no helm, a
+    render helm refuses, an output da-crdecode refuses, a da-tools container
+    whose tag or entry point cannot be resolved — each is an error. helm's and
+    da-crdecode's exit codes are read separately (two runs, no pipe)."""
+    workloads: list[Workload] = []
+    charts = [c for c in _chart_dirs() if _chart_pins_da_tools(c)]
+    if not charts:
+        return workloads
+    helm = shutil.which("helm")
+    if helm is None:
+        errors.append(
+            "helm is not on PATH, so the chart(s) pinning da-tools "
+            f"({', '.join(c.relative_to(REPO_ROOT).as_posix() for c in charts)}) were "
+            "not rendered: a container a template `include`s is checked only by "
+            "rendering — install helm (the dev container and CI pin it)")
+        return workloads
+    for chart in charts:
+        chart_rel = chart.relative_to(REPO_ROOT).as_posix()
+        variants: list[Path | None] = [None] + [
+            v for v in _yaml_files(chart, "values*") if v.stem != "values"]
+        for variant in variants:
+            label = (f"-f {variant.relative_to(REPO_ROOT).as_posix()}"
+                     if variant else "default values")
+            cmd = [helm, "template", "image-pin-capability", str(chart)]
+            for kv in RENDER_BASE_SETS.get(chart.name, []):
+                cmd += ["--set", kv]
+            if variant is not None:
+                cmd += ["-f", str(variant)]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, check=False,
+                                      timeout=HELM_TIMEOUT_S)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                errors.append(f"{chart_rel} ({label}): helm template could not run: {exc}")
+                continue
+            if proc.returncode != 0:
+                errors.append(
+                    f"{chart_rel} ({label}): helm template exited {proc.returncode}, so "
+                    f"its containers were not checked: "
+                    f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+                continue
+            try:
+                docs = _lib_consumer_read.kubernetes_text_documents(proc.stdout)
+            except _lib_consumer_read.ConsumerReadError as exc:
+                errors.append(f"{chart_rel} ({label}): the rendered chart cannot be read "
+                              f"the way kubectl reads it ({_consumer_read_detail(exc)})")
+                continue
+            for doc in docs:
+                for container in iter_containers(doc):
+                    image = container.get("image")
+                    if not isinstance(image, str):
+                        continue
+                    repo, tag, digest = parse_image_ref(image)
+                    if repo != DA_TOOLS_REPO:
+                        continue
+                    name = container.get("name", "<unnamed>")
+                    where = f"{chart_rel} rendered with {label} (container {name})"
+                    if digest:
+                        errors.append(f"{where}: image is digest-pinned ({digest}); a "
+                                      f"digest cannot be mapped to a {TAG_PREFIX}v* tag")
+                        continue
+                    if not tag or not _TAG_RE.fullmatch(tag):
+                        errors.append(f"{where}: da-tools image tag {tag!r} is not a "
+                                      f"vX.Y.Z release tag")
+                        continue
+                    resolved = resolve_entry(container)
+                    if resolved is None:
+                        errors.append(f"{where}: cannot tell what this da-tools "
+                                      f"container runs — {unresolved_reason(container)}")
+                        continue
+                    kind, entry = resolved
+                    workloads.append(Workload(chart_rel, f"{where} @ {tag}", tag, kind, entry))
+    return workloads
+
+
+def union_workloads(*paths: "list[Workload]") -> list[Workload]:
+    """The workloads of every path, one per (source, kind, entry, tag) — the
+    first path's description kept."""
+    seen: set[tuple[str, str, str, str]] = set()
+    out: list[Workload] = []
+    for workloads in paths:
+        for w in workloads:
+            ident = (w.source, w.kind, w.entry, w.image_tag)
+            if ident not in seen:
+                seen.add(ident)
+                out.append(w)
+    return out
+
+
 def evaluate(workload: Workload) -> str | None:
     """Return a defect description if the pinned tag cannot run *workload*, else None."""
     command_map, tool_files = capabilities_for_tag(workload.git_tag)
@@ -1003,7 +1154,9 @@ def main() -> int:
     parser.parse_args()
 
     errors: list[str] = []
-    workloads = collect_k8s_workloads(errors) + collect_helm_workloads(errors)
+    workloads = union_workloads(
+        collect_k8s_workloads(errors) + collect_helm_workloads(errors),
+        collect_rendered_workloads(errors))
 
     # Collection errors first: a pin we could not even resolve makes any
     # verdict about the rest incomplete, and reporting it is more actionable

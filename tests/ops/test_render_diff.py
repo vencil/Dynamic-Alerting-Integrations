@@ -71,10 +71,18 @@ def _routes(d: rd.RenderDiff, cls=rd.RouteChange) -> list:
 def test_adr_example_group_wait_reaches_the_two_inheriting_tenants(tmp_path, da_guard):
     d = _diff(tmp_path, da_guard, lambda c: _edit(c, '  group_wait: "30s"', '  group_wait: "99s"'))
     got = {c.tenant: c.changes for c in _routes(d)}
-    assert got == {"db-a": {"group_wait": ("30s", "99s")}, "es-prod": {"group_wait": ("30s", "99s")}}
+    # #3206: the values are Alertmanager's reading (da-read), so 99s is its spelling 1m39s.
+    assert got == {"db-a": {"group_wait": ("30s", "1m39s")}, "es-prod": {"group_wait": ("30s", "1m39s")}}
     assert all(c.kind == "changed" for c in _routes(d))
     assert d.served.status == "computed" and d.served.changes == ()  # exporter 不讀 _routing_defaults
     assert d.exit_code == 1
+
+
+def test_a_duration_respelled_is_not_a_change(tmp_path, da_guard):
+    """#3206: the route tree is Alertmanager's reading, where 30s and 0m30s
+    are one duration — PyYAML's reading saw two strings and a change."""
+    d = _diff(tmp_path, da_guard, lambda c: _edit(c, '  group_wait: "30s"', '  group_wait: "0m30s"'))
+    assert _routes(d) == [] and d.exit_code == 0
 
 
 def test_adr_example_container_memory_reaches_the_four_tenants_not_overriding_it(tmp_path, da_guard):

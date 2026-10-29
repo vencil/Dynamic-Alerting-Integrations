@@ -63,15 +63,10 @@ _YAML_ONLY = {"safe_load", "safe_load_all", "load", "load_all", "compose", "comp
 # (file, enclosing function) of the PyYAML calls that read something other
 # than a conf.d file — each one named with what it reads.
 NOT_CONFD = {
-    # the generated Alertmanager config / ConfigMap (this run's own output)
-    ("_grar_render.py", "evaluate_generated_config"),
-    ("_grar_render.py", "apply_to_configmap"),
-    ("generate_alertmanager_routes.py", "_output_configmap_mode"),
-    # --apply: the ConfigMap read back from the cluster (kubectl)
-    ("_grar_render.py", "_read_existing_configmap"),
-    # --base-config / --policy: operator files outside conf.d (ADR-036 §3:
-    # the deployment policy is read fresh for every judgement)
-    ("_grar_render.py", "load_base_config"),
+    # (#3206: the generated ConfigMap, the cluster's, and --base-config are
+    # read by da-crdecode / da-read now — no PyYAML call left for them.)
+    # --policy: an operator file outside conf.d (ADR-036 §3: the deployment
+    # policy is read fresh for every judgement)
     ("_grar_validate.py", "load_policy_document"),
     # the platform rules pack shipped beside the tool
     ("_grar_validate.py", "platform_alert_identities"),
@@ -123,11 +118,13 @@ def test_the_modes_are_the_named_ones_and_distinct():
     assert "text_sequences=('tenants',)" in pc.TENANT_LISTS_AS_TEXT.name
 
 
-def _quiet_main(argv):
+def _quiet_main(argv, *, key_verdict=False):
+    """The generator as the container runs it (`_gsvc_child`: no key verdict
+    inside it, ADR-038 §5); `key_verdict=True` is the CLI."""
     with contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):
         try:
-            gar.main(argv)
+            gar.main(argv, key_verdict=key_verdict)
         except SystemExit as exc:
             return gar._exit_code_of(exc)
     return 0
@@ -182,7 +179,8 @@ def test_runtime_no_pyyaml_reader_is_built_for_a_confd_file(tmp_path, monkeypatc
     monkeypatch.setattr(yaml.reader.Reader, "__init__", rec)
     monkeypatch.setattr(pt, "load", spy)
     _lib_confd.reset_warned_for_test()
-    _quiet_main(["--config-dir", str(d), "--validate", "--strict"])
+    # The CLI: its key verdict reads the same tree-mode document too.
+    _quiet_main(["--config-dir", str(d), "--validate", "--strict"], key_verdict=True)
     assert runs == [d]  # one tree-mode document for the whole run
     confd = [s for s in built if (isinstance(s, str) and (s in texts or s.startswith(str(d))))]
     assert confd == [], confd

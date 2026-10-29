@@ -291,10 +291,22 @@ def _chart_supply() -> set[str]:
     check_threshold_registry.py; reading values.yaml here means this gate keeps
     measuring the deployment even if that equivalence ever breaks.
     """
-    import yaml  # local import: only this face needs it
-
-    doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    doc = _chart_values()
     return set(((doc.get("thresholdConfig") or {}).get("defaults") or {}).keys())
+
+
+def _chart_values() -> dict:
+    """The shipped chart's values.yaml as Helm reads it (da-crdecode, ADR-036
+    §12, #3206) — not PyYAML. Raises ConsumerReadError when that reading
+    cannot be had (a caller error in `main`)."""
+    import _lib_consumer_read  # noqa: PLC0415
+
+    docs = _lib_consumer_read.kubernetes_documents(str(_CHART_VALUES))
+    doc = docs[0] if docs else {}
+    if not isinstance(doc, dict):
+        raise _lib_consumer_read.ConsumerReadError(
+            f"{_CHART_VALUES}: Helm reads it as {type(doc).__name__}, not a mapping")
+    return doc
 
 
 def _shipped_optional() -> set[str]:
@@ -312,9 +324,7 @@ def _shipped_optional() -> set[str]:
     here means this face keeps
     measuring the deployment even if that equivalence ever breaks.
     """
-    import yaml  # local import: only the chart faces need it
-
-    doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    doc = _chart_values()
     return set((doc.get("thresholdConfig") or {}).get("optional_overrides") or [])
 
 
@@ -1930,7 +1940,7 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     return keys
 
 
-def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, KeyInfo]:
+def _defaults_section(text: "str | dict", *, unwrap_chart: bool = False) -> dict[str, KeyInfo]:
     """{key path: depth} under `defaults:` of a `_defaults.yaml` / chart values.
 
     ⛔ `unwrap_chart` is OFF by default and only the chart face turns it on. The
@@ -1941,10 +1951,16 @@ def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, Key
     stops having its real `defaults:` read at all — injected `_critical` and
     everything else silently vanished, rc=0. A conf.d file has no
     `thresholdConfig:` in its schema, so for those the top level IS the root.
-    """
-    import yaml  # local import: only the generator faces need it
 
-    doc = yaml.safe_load(text) or {}
+    *text* is YAML text (a generator's conf.d-shaped output, read here with
+    PyYAML until conf.d-shaped text moves to `parse-tree`) or an already-read
+    mapping — the chart's values as Helm reads them (`_chart_values`, #3206).
+    """
+    if isinstance(text, dict):
+        doc = text
+    else:
+        import yaml  # local import: only the generator faces need it
+        doc = yaml.safe_load(text) or {}
     root = (doc.get("thresholdConfig") or doc) if unwrap_chart else doc
     return _walk_defaults_keys(root.get("defaults") or {})
 
@@ -2022,8 +2038,7 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
         # GENERATORS — no artifact on disk to read; the producer IS the surface.
         # ⛔ Only this one unwraps `thresholdConfig:` — see `_defaults_section`.
         "chart (helm/threshold-exporter/values.yaml)":
-            _defaults_section(_CHART_VALUES.read_text(encoding="utf-8"),
-                              unwrap_chart=True),
+            _defaults_section(_chart_values(), unwrap_chart=True),
         # ⛔ These two hand back a live mapping rather than YAML text, so they
         # used to be flattened with `{k: 0 for k in ...}` — assuming depth 0 by
         # construction. Blind review measured the cost: `main()` prints

@@ -29,6 +29,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Chart.yaml, read Helm's way)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
     DaGuardError,
     DaGuardNotFoundError,
@@ -476,8 +477,23 @@ def _chart_app_version(chart_dir: str) -> str:
             f"ERROR: {chart} not found — a wizard first-party image maps to "
             f"chart {chart_dir!r}. Update WIZARD_FIRST_PARTY if it was renamed."
         )
-    data = yaml.safe_load(chart.read_text(encoding="utf-8"))
-    app = str(data.get("appVersion", "")).strip()
+    # ADR-036 §12 (#3206): Chart.yaml as Helm reads it (sigs.k8s.io/yaml,
+    # da-crdecode). An unquoted `appVersion: 1.10` is the number 1.1 there,
+    # as it is to Helm; the convention check below sees what Helm sees.
+    try:
+        docs = _lib_consumer_read.kubernetes_documents(str(chart))
+    except _lib_consumer_read.ConsumerReadError as e:
+        detail = e.detail()
+        raise SystemExit(f"ERROR: cannot read {chart} the way Helm does: {detail}") from e
+    data = docs[0] if len(docs) == 1 and isinstance(docs[0], dict) else None
+    if data is None:
+        raise SystemExit(f"ERROR: {chart} is not one mapping in Helm's reading")
+    app = data.get("appVersion", "")
+    if not isinstance(app, str):
+        raise SystemExit(
+            f"ERROR: helm/{chart_dir}/Chart.yaml appVersion is {app!r} in Helm's reading, "
+            f"not a string; quote it (appVersion: \"{app}\").")
+    app = app.strip()
     if not app:
         raise SystemExit(f"ERROR: helm/{chart_dir}/Chart.yaml has no appVersion")
     # The caller prefixes "v". A chart that already carries one would yield

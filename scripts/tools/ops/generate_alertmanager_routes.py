@@ -150,6 +150,11 @@ from _grar_render import (  # noqa: E402
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
 from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
+# #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
+from _grar_render import (  # noqa: E402
+    ConsumerReadError, InputRefused, alertmanager_reading, consumer_read_message,
+    emitted_alertmanager_yml,
+)
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the whole --validate verdict, shared with validate-config's routes
@@ -183,8 +188,9 @@ from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # #2901 (ADR-036 §6): the policy's min_generator_version, read in the same
 # parse as allowed_domains, and the comparison the generator container shares.
 from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
-import yaml  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+import _lib_key_verdict  # noqa: E402  (ADR-038 §5: the shared key verdict)
+from _lib_confd import WARN_LIMIT  # noqa: E402
 
 
 # ============================================================
@@ -436,15 +442,37 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # value got folded into a line break, so only a round trip of the emitted
     # text sees what the cluster will see. Gated before every emission
     # (file, stdout, dry-run preview): a rejected config is not written.
-    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    # ADR-036 §12 (#3206): the round trip is Kubernetes' reading of the
+    # emitted text (da-crdecode), the config Alertmanager's (da-read).
+    try:
+        am_yml = emitted_alertmanager_yml(cm_yaml)
+    except ConsumerReadError as exc:
+        print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
+              f"to write it to {target} (nothing was written): "
+              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     rc = amtool_gate(am_yml,
                      what="the ConfigMap's alertmanager.yml",
                      refusing=f"write it to {target} (nothing was written)")
     if rc is not None:
         sys.exit(rc)
     # #2660: on the same emitted text amtool checked, so a --base-config's
-    # own root receiver is what is judged, not the built-in one.
-    warn_if_root_receiver_without_integration(yaml.safe_load(am_yml))
+    # own root receiver is what is judged, not the built-in one. Alertmanager's
+    # loader refusing it (amtool absent, so nothing refused it yet) is the
+    # verdict amtool would give: rc 1, nothing written.
+    try:
+        emitted = alertmanager_reading(am_yml)
+    except ConsumerReadError as exc:
+        if not isinstance(exc, InputRefused):
+            print(f"ERROR: cannot read the ConfigMap's alertmanager.yml the way "
+                  f"Alertmanager does — refusing to write it to {target} (nothing was "
+                  f"written): {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        print(f"FAIL: Alertmanager's config loader refuses the ConfigMap's alertmanager.yml "
+              f"— refusing to write it to {target} (nothing was written): "
+              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    warn_if_root_receiver_without_integration(emitted)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
@@ -1167,11 +1195,16 @@ def _exit_code_of(exc: SystemExit) -> int:
     return 1  # a message: Python prints it and exits 1
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML.
 
     *argv* defaults to ``sys.argv[1:]``; the generator container (#2901)
-    passes its own, in the judgement process."""
+    passes its own, in the judgement process. *key_verdict*: whether
+    ``--validate`` also reports the shared key verdict (ADR-038 §5). The
+    container passes False: it judges the keys itself, after the generator
+    and under its own deadline (``_gsvc_child.key_verdict``), so running it
+    here too would judge every write twice, the second time outside that
+    deadline."""
     parser = _build_parser()
     # #2766: every finding the run prints, in the order it was determined.
     # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
@@ -1203,7 +1236,7 @@ def main(argv: list[str] | None = None) -> None:
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
         with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
-            _run(args, findings)
+            _run(args, findings, key_verdict=key_verdict)
         code = EXIT_OK
     except SystemExit as exc:
         code = _exit_code_of(exc)
@@ -1218,6 +1251,50 @@ def main(argv: list[str] | None = None) -> None:
                                  keep_exception=True)
         raise
     _write_findings_if_asked(early, args, findings, code)
+
+
+# The shared verdict's finding kinds → this generator's (FINDING_KINDS).
+_KEY_VERDICT_KINDS = {
+    "unread": "key_unread",
+    "disable_noop": "key_disable_noop",
+    "disable_partial": "key_disable_partial",
+}
+
+
+def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
+    """The shared verdict on keys no reader reads (``_lib_key_verdict``,
+    ADR-038 §5), under ``--validate``: the same lines validate-config's
+    ``unread_keys`` row prints, on stderr, each a ``blocks: never`` finding.
+
+    Reported only until the gates block (#3016): the exit code does not
+    change. A verdict that cannot be given — da-guard failing, anything the
+    verdict raises — is one NOTICE, never a refusal (decision 5: a broken
+    da-guard must not fail a run the generator passed)."""
+    try:
+        verdict = _lib_key_verdict.judge_tree(config_dir)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged", never a refusal
+        line = Finding(
+            "  NOTICE: key verdict incomplete: the keys no reader reads were not "
+            f"judged ({type(exc).__name__}: {' '.join(str(exc).split())})",
+            kind="key_verdict_incomplete", blocks="never")
+        print(safe_label(line), file=sys.stderr)
+        findings.append(line)
+        return
+    lines = []
+    for f in verdict.findings:
+        level = "NOTICE" if f.severity == _lib_key_verdict.NOTICE else "WARN"
+        lines.append(Finding(
+            f"  {level}: key verdict: {_lib_key_verdict.finding_line(f, WARN_LIMIT)}",
+            kind=_KEY_VERDICT_KINDS[f.kind], blocks="never",
+            tenant=f.tenants[0] if len(f.tenants) == 1 else None,
+            file=f.file, field=f.key))
+    undecidable = _lib_key_verdict.undecidable_line(verdict)
+    if undecidable is not None:
+        lines.append(Finding(f"  NOTICE: key verdict: {undecidable}",
+                             kind="key_undecidable", blocks="never"))
+    for line in lines:
+        print(safe_label(line), file=sys.stderr)
+    findings.extend(lines)
 
 
 def _write_findings_if_asked(early: argparse.Namespace,
@@ -1269,9 +1346,10 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
     return early
 
 
-def _run(args: argparse.Namespace, findings: list[str]) -> None:
+def _run(args: argparse.Namespace, findings: list[str], *,
+         key_verdict: bool = True) -> None:
     """``main`` after argument parsing; appends each finding to *findings*
-    (#2766) as soon as the run has determined it."""
+    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s."""
 
     # #1650: four more flags of the #1616 class — accepted, then never read
     # by the mode that is about to run. Decided HERE, before any conf.d work,
@@ -1391,6 +1469,12 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     _refuse_invalid_tenant_ids(tree, findings)
     _refuse_field_type_errors(tree, findings)
     findings.extend(schema_warnings)
+    # ADR-038 §5: after the refusals (a refused tree is judged by nothing
+    # else), before the exits below that end the run short of
+    # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
+    # nothing to render is judged too.
+    if args.validate and key_verdict:
+        _report_key_verdict(args.config_dir, findings)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)

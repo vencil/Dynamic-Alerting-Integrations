@@ -20,7 +20,8 @@ write when the per-file parse cache is gone, in one judgement process:
    ``apply_writes`` — the container's own functions, so ``git ls-tree`` and
    ``git cat-file --batch`` run as they do there);
 2. the route generator, ``generate_alertmanager_routes.main`` with
-   ``--validate --strict --findings-json`` (the argv ``_gsvc_child`` builds),
+   ``--validate --strict --findings-json`` (the argv ``_gsvc_child`` builds;
+   ``key_verdict=False``, as there),
    with NO parse cache installed: it reads conf.d through one
    ``da-guard parse-tree`` tree-mode run, and its ``--validate`` runs
    ``amtool check-config`` on the generated config;
@@ -298,7 +299,7 @@ def _source_line(path: str, name: str) -> str:
 
 def read_limits(chart: str, values: "list[str]") -> dict:
     """The generator container's judgement limits, as the chart renders them."""
-    import yaml  # rendered Kubernetes manifests, not conf.d
+    import _lib_consumer_read  # ADR-036 §12: the rendered manifests, read kubectl's way
     if shutil.which("helm") is None:
         raise NotMeasured("helm is not on PATH: the limits are read from the rendered chart")
     cmd = ["helm", "template", "m", chart]
@@ -308,8 +309,13 @@ def read_limits(chart: str, values: "list[str]") -> dict:
     if proc.returncode != 0:
         raise NotMeasured(f"helm template exited {proc.returncode}: "
                           f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+    try:
+        rendered = _lib_consumer_read.kubernetes_text_documents(proc.stdout)
+    except _lib_consumer_read.ConsumerReadError as e:
+        raise NotMeasured("the rendered chart could not be read the way kubectl reads it: "
+                          + e.detail()) from e
     container = None
-    for doc in yaml.safe_load_all(proc.stdout):
+    for doc in rendered:
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
         for c in doc["spec"]["template"]["spec"].get("containers", []):
@@ -499,7 +505,9 @@ def judge(spec: dict) -> dict:
     t = time.monotonic()
     memory, rc = None, None
     try:
-        gar.main(argv)
+        # As `_gsvc_child` calls it: the container judges the keys itself,
+        # not inside the generator (ADR-038 §5); stage 3 times that half.
+        gar.main(argv, key_verdict=False)
         rc = 0
     except SystemExit as exc:
         rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)

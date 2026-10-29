@@ -80,10 +80,18 @@ ALLOWED = {
         (1, 'the commit-scope source of truth, a repo data file read only by lints'),
     ('scripts/tools/lint/check_cross_ns_url_consistency.py', 'load_config'):
         (1, "this lint's own config data file"),
+    ('scripts/tools/lint/check_cross_ns_url_consistency.py', 'scan_compose'):
+        (1, "try-local/docker-compose.yaml, read by docker compose (compose-go); da-tools ships no compose reading"),
     ('scripts/tools/lint/check_devcontainer_dep_parity.py', 'ci_packages'):
         (1, '.github/workflows/ci.yml; read by GitHub Actions, no Go consumer'),
     ('scripts/tools/lint/check_flaky_registry.py', 'main'):
         (1, 'the flaky-test registry, a repo data file read only by CI scripts'),
+    ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
+        (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
+            "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
+    ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
+        (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
+            "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
     ('scripts/tools/lint/check_log_egress_policy.py', 'lint_chart'):
         (1, 'a Vector config read by Vector (Rust); no Go consumer and no da-tools reading'),
     ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker.run_fences'):
@@ -122,6 +130,9 @@ ALLOWED = {
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'load_metrics_from_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
+    ('scripts/tools/ops/da_assembler.py', '_legacy_name_hint'):
+        (3, "the file name an earlier da-assembler wrote, which PyYAML's typing of the name decided; "
+            "only PyYAML can say what it was. Decides nothing: the CR is judged from da-crdecode"),
     ('scripts/tools/ops/init_project.py', '_classify_root_file'):
         (2, "the customer repo's CI files (GitHub workflow, GitLab CI, pre-commit), read by those CI systems; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_gitlab_root_includes'):
@@ -141,18 +152,8 @@ ALLOWED = {
 }
 
 DEBT = {
-    ('scripts/ops/check_image_refs_resolve.py', '_walk_sources'):
-        (1, Reading.D),
-    ('scripts/ops/configmap_assemble.py', 'measure_artifact'):
-        (1, Reading.D),
     ('scripts/tools/dx/generate_alert_reference.py', 'load_rule_packs'):
         (1, Reading.A),
-    ('scripts/tools/dx/generate_byo_rulepack_table.py', 'read_projected_packs'):
-        (1, Reading.D),
-    ('scripts/tools/dx/generate_crd_schemas.py', '_CRDLoader'):
-        (1, Reading.D),
-    ('scripts/tools/dx/generate_platform_data.py', '_chart_app_version'):
-        (1, Reading.D),
     ('scripts/tools/dx/generate_platform_data.py', 'count_rules_in_configmap'):
         (2, Reading.A),
     ('scripts/tools/dx/generate_platform_data.py', 'count_rules_in_yaml'):
@@ -167,8 +168,6 @@ DEBT = {
         (2, Reading.A),
     ('scripts/tools/dx/inject_waveform.py', 'parse_rules'):
         (1, Reading.A),
-    ('scripts/tools/dx/measure_judgement_budget.py', 'read_limits'):
-        (1, Reading.D),
     ('scripts/tools/lint/_rule_tree.py', '_containers_from_text'):
         (1, Reading.A),
     ('scripts/tools/lint/_rule_tree.py', '_documents'):
@@ -179,32 +178,12 @@ DEBT = {
         (2, Reading.A),
     ('scripts/tools/lint/check_bilingual_annotations.py', 'BilingualAnnotationChecker.check_rule_pack'):
         (1, Reading.A),
-    ('scripts/tools/lint/check_configmap_mount_completeness.py', 'configmap_rule_packs'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_configmap_mount_completeness.py', 'deployment_mounts'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_cross_ns_url_consistency.py', '_scan_yaml_docs'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_ha_threshold_aggregation.py', '_iter_rule_groups'):
         (2, Reading.A),
-    ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_image_pin_capability.py', 'load_strict'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_k8s_manifests.py', 'collect_pss_findings'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_ksm_version_allowlist.py', '_iter_docs'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_log_egress_policy.py', 'render_chart'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_maintenance_symmetry.py', 'classify_all'):
         (1, Reading.A),
     ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker._looks_like_confd'):
         (1, Reading.E),
-    ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker.run_crd'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_metric_dictionary.py', 'extract_rule_pack_metrics'):
         (3, Reading.A),
     ('scripts/tools/lint/check_metric_group_pairs.py', '_load_yaml'):
@@ -223,32 +202,16 @@ DEBT = {
         (1, Reading.A),
     ('scripts/tools/lint/check_rulepack_sync.py', '_groups_from_rulepack'):
         (1, Reading.A),
-    ('scripts/tools/lint/check_scrape_reachability.py', 'parse_services'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_single_writer_invariant.py', 'check_targets'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_threshold_reachability.py', '_chart_supply'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_threshold_reachability.py', '_defaults_section'):
-        (1, Reading.D),
+        (1, Reading.E),
     ('scripts/tools/lint/check_threshold_reachability.py', '_init_project_declared'):
         (1, Reading.E),
-    ('scripts/tools/lint/check_threshold_reachability.py', '_shipped_optional'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_threshold_unit_sanity.py', '_collect'):
-        (3, Reading.D),
+        (2, Reading.E),
     ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
         (1, Reading.A),
     ('scripts/tools/lint/validate_docs_versions.py', 'count_rule_packs'):
         (3, Reading.A),
-    ('scripts/tools/ops/_grar_render.py', '_read_existing_configmap'):
-        (1, Reading.C),
-    ('scripts/tools/ops/_grar_render.py', 'apply_to_configmap'):
-        (1, Reading.C),
-    ('scripts/tools/ops/_grar_render.py', 'evaluate_generated_config'):
-        (1, Reading.C),
-    ('scripts/tools/ops/_grar_render.py', 'load_base_config'):
-        (1, Reading.C),
     ('scripts/tools/ops/_grar_validate.py', 'platform_alert_identities'):
         (2, Reading.A),
     ('scripts/tools/ops/_observed_map_lib.py', 'alert_referenced_keys'):
@@ -257,20 +220,8 @@ DEBT = {
         (1, Reading.A),
     ('scripts/tools/ops/_registry_lib.py', 'plan_surfaces'):
         (1, Reading.A),
-    ('scripts/tools/ops/_render_diff.py', 'render_routes'):
-        (2, Reading.C),
     ('scripts/tools/ops/_threshold_alerts.py', 'build_index'):
         (1, Reading.A),
-    ('scripts/tools/ops/byo_check.py', 'check_alertmanager'):
-        (1, Reading.C),
-    ('scripts/tools/ops/da_assembler.py', '_legacy_name_hint'):
-        (3, Reading.D),
-    ('scripts/tools/ops/explain_route.py', 'build_trace_tree'):
-        (2, Reading.C),
-    ('scripts/tools/ops/explain_route.py', 'trace_alert_routing'):
-        (1, Reading.C),
-    ('scripts/tools/ops/generate_alertmanager_routes.py', '_output_configmap_mode'):
-        (2, Reading.C),
     ('scripts/tools/ops/generate_rule_pack_split.py', 'load_rule_pack'):
         (1, Reading.A),
     ('scripts/tools/ops/lint_custom_rules.py', 'lint_file'):

@@ -533,6 +533,15 @@ jobs:
             components/tenant-api/go.sum
             components/da-read/go.sum
 
+      # #3206: `image-pin-capability-check` renders every chart that pins
+      # da-tools (`helm template`, the render path); without helm it exits 2.
+      - name: Set up Helm (image-pin capability render path)
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
+
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
       # image pull on the runner). Pin matches HADOLINT_VERSION in
@@ -1180,8 +1189,10 @@ jobs:
       - name: "Rule-pack 3-copy sync incl. operator (HARD gate — ADR-024 PR3-pre)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
+      # #3206 (ADR-036 §12): the manifests are read through da-crdecode
+      # (kubectl's reading); the wrapper builds it with the setup-go above.
       - name: "ConfigMap mount completeness (#869 dead-rule guard)"
-        run: python scripts/tools/lint/check_configmap_mount_completeness.py --ci
+        run: bash scripts/ops/with_da_crdecode.sh python scripts/tools/lint/check_configmap_mount_completeness.py --ci
 
       # #741 S3b: the deployed custom-alert pack is COMPILED from the live conf.d
       # _custom_alerts (not hand-edited). This is the source→pack drift gate that
@@ -1314,12 +1325,18 @@ jobs:
       - name: Run Container SAST Layer 2 (Helm)
         run: python3 scripts/tools/lint/check_iac_helm.py --ci
 
-      - name: Install PyYAML (L4 PSS namespace-label rule, #1018)
-        # The native PSS rule in check_k8s_manifests.py parses manifests with
-        # PyYAML; setup-python builds don't bundle it. Without this the rule
-        # degrades to an explicit WARN (never a silent skip) — installing it
-        # here makes the informational findings actually visible in CI logs.
+      - name: Install PyYAML (the L2 wrapper's imports)
         run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
+
+      # #3206 (ADR-036 §12): the native PSS namespace-label rule (#1018) reads
+      # the manifests through da-crdecode (kubectl's reading); without it the
+      # step fails by name (rc 2), never degrades to a PyYAML reading.
+      - name: Set up Go (da-crdecode for the L4 PSS rule)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
 
       - name: Run Container SAST Layer 4 (raw k8s manifests)
         # Real layer (NOT a stub): k8s/ holds real raw manifests. kube-linter
@@ -1327,7 +1344,7 @@ jobs:
         # registry. 0 Critical / baseline-High exempt -> exit 0; a new Critical
         # or unregistered High -> exit 1 (fails this required-check job).
         # Also runs the native, WARN-only PSS namespace-label rule (#1018).
-        run: python3 scripts/tools/lint/check_k8s_manifests.py --ci
+        run: bash scripts/ops/with_da_crdecode.sh python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
   python-tests-run:
     # CI-ROI 6C: renamed from the required-check name "Python Tests
@@ -2350,6 +2367,21 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
+      # #3206 (ADR-036 §12): generator_real_test.go / batch_patch_diff_test.go
+      # start the REAL Python generator, which reads back the ConfigMap it
+      # emits the way kubectl does (da-crdecode) and the config the way
+      # Alertmanager loads it (da-read alertmanager). The tests build only
+      # da-guard themselves; without these two the generator exits 2 and the
+      # test reports `run_failed`. Absolute paths: `go test` runs in each
+      # package directory. Same Go as above (all three go.mod pin one
+      # version); the actions/cache key above hashes `**/go.sum`, so
+      # da-read's and threshold-exporter's modules are already in it.
+      - name: Build da-crdecode and da-read (the real generator's readers)
+        run: |
+          make da-crdecode-build da-read-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
+
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
@@ -2877,10 +2909,13 @@ jobs:
           cache: true
           cache-dependency-path: components/threshold-exporter/app/go.sum
 
-      - name: Build da-guard
+      # #3206: platform_data and byo_rulepack_table read Helm / k8s files
+      # through da-crdecode; built here once like da-guard.
+      - name: Build da-guard and da-crdecode
         run: |
-          make da-guard-build
+          make da-guard-build da-crdecode-build
           echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Check platform-data integrity
         run: python3 scripts/tools/dx/generate_platform_data.py --check

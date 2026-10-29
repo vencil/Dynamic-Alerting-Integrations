@@ -122,6 +122,11 @@ def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
     rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
     assert doc["rc"] == rc
     assert doc["result"] == ("pass" if rc == 0 else "findings")
+    # ADR-038 §5: the CLI's `--validate` also prints the shared key verdict
+    # (`key_*`, `blocks: never`); the container does not run it inside the
+    # generator — it judges the keys itself, in `key_verdict`.
+    assert not [r for r in doc["findings"]["findings"] if r["kind"].startswith("key_")]
+    cli = dict(cli, findings=[r for r in cli["findings"] if not r["kind"].startswith("key_")])
     assert _norm(doc["findings"], Path(doc["findings"]["config_dir"])) \
         == _norm(cli, tree)
     assert doc["validated"] == {
@@ -386,7 +391,7 @@ def test_no_complete_result_is_incomplete(tmp_path, world, stage, action):
 
 _FAKE_GENERATOR = """
 import json, _gsvc_child
-def _fake(argv):
+def _fake(argv, **_kw):
     path = argv[argv.index("--findings-json") + 1]
     with open(path, "w", encoding="utf-8") as fh:
         json.dump({{"exit_code": {doc_rc}, "findings": []}}, fh)

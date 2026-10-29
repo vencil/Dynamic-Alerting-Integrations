@@ -9,8 +9,10 @@ ones in `values.yaml`, so a values typo (or matrix↔values drift) slips through
 This lint closes that gap — it parses the actual deployment sources and checks
 each concrete ref against the registry.
 
-Parsing (NOT grep — comments/prose would yield phantom refs): yaml.safe_load each
-file and walk the tree, collecting
+Parsing (NOT grep — comments/prose would yield phantom refs): each file is read
+the way kubectl / Helm read it (`da-crdecode`, ADR-036 §12, #3206; a file either
+refuses stops the run at rc 2 — it is never skipped) and the tree is walked,
+collecting
   * any mapping with string `repository` + non-empty `tag` -> "<registry>/<repo>:<tag>"
   * any `image:` key whose value is a "repo:tag" string
 Empty / templated ({{ ... }}) tags are SKIPPED: first-party `tag: ""` resolves to
@@ -55,11 +57,23 @@ from pathlib import Path
 # bad", and a reader of a CI log must be able to tell those apart.
 EXIT_NO_RESOLVER = 3
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover - pyyaml is a hard dep in CI / pre-commit
-    print("check_image_refs_resolve: PyYAML not installed", file=sys.stderr)
-    sys.exit(2)
+
+def _consumer_read():
+    """`scripts/tools/_lib_consumer_read.py` (stdlib only), loaded by file so
+    this module adds nothing to `sys.path` (see `_positive_timeout`)."""
+    import importlib.util
+    name = "_cir_lib_consumer_read"
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().parents[1] / "tools" / "_lib_consumer_read.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check_image_refs_resolve: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
 
 # Globs of the deployment sources humans hand-edit image refs into.
 # ⛔ `values*.yaml`, not `values.yaml` (#1302). A `-f values-tier2.yaml` overlay is
@@ -330,22 +344,48 @@ def _is_concrete(ref: str) -> bool:
     return ":" in last or "@" in last
 
 
+class NonStringImageField(ValueError):
+    """An image field the reading gives as something other than text — an
+    unquoted `tag: 1e3` is the number 1000 to kubectl / Helm. No ref can be
+    built from it, so it is an error naming the key path, never a ref that is
+    silently not checked."""
+
+
+def _key_path(path: list) -> str:
+    return "".join(f"[{k}]" if isinstance(k, int) else f".{k}" for k in path).lstrip(".") or "."
+
+
 def _refs_from_node(node, dropped: set[str] | None = None) -> set[str]:
     """Recursively collect concrete image refs from a parsed YAML node.
 
     `dropped`, when given, receives what an image-shaped node held but this
-    function did NOT return: a Shape A block whose `tag` is empty, missing or
-    not a string (YAML reads `tag: 11` as an int), and a Shape B `image:` with
-    no tag or digest (`image: nginx`, i.e. `:latest`). Helm-template strings are
-    not reported — they are not refs. Callers that ask "is every ref pinned"
-    need this; `discover_refs()` alone cannot see a ref it never returns."""
+    function did NOT return: a Shape A block whose `tag` is empty or missing,
+    and a Shape B `image:` with no tag or digest (`image: nginx`, i.e.
+    `:latest`). Helm-template strings are not reported — they are not refs.
+    Callers that ask "is every ref pinned" need this; `discover_refs()` alone
+    cannot see a ref it never returns.
+
+    Raises :class:`NonStringImageField` (naming the key path) when a Shape A
+    block's `tag` / `digest` / `registry`, or a Shape B `image:`, is a number
+    or boolean in the reading (`tag: 11`, `tag: 1e3`): that ref would go
+    unchecked, so it is an error, not a skip (#3407 review)."""
     found: set[str] = set()
 
-    def walk(n):
+    def refuse(path: list, key: str, value) -> None:
+        raise NonStringImageField(
+            f"{_key_path([*path, key])} is {value!r} ({type(value).__name__}), not text: "
+            "quote it so the image ref can be read")
+
+    def walk(n, path: list):
         if isinstance(n, dict):
             # Shape A: {repository, tag[, registry]} image block.
             repo = n.get("repository")
             tag = n.get("tag")
+            if isinstance(repo, str):
+                for key in ("tag", "digest", "registry"):
+                    value = n.get(key)
+                    if value is not None and not isinstance(value, str):
+                        refuse(path, key, value)
             if isinstance(repo, str) and isinstance(tag, str) and tag.strip():
                 registry = n.get("registry")
                 ref = f"{registry}/{repo}" if isinstance(registry, str) and registry else repo
@@ -359,17 +399,19 @@ def _refs_from_node(node, dropped: set[str] | None = None) -> set[str]:
             # Shape B: `image:` as a single "repo:tag" string (e.g. mariadb.image,
             # raw k8s container image).
             img = n.get("image")
+            if img is not None and not isinstance(img, (str, dict, list)):
+                refuse(path, "image", img)
             if isinstance(img, str) and _is_concrete(img):
                 found.add(img.strip())
             elif dropped is not None and isinstance(img, str) and img.strip() and "{{" not in img:
                 dropped.add(img.strip())
-            for v in n.values():
-                walk(v)
+            for k, v in n.items():
+                walk(v, [*path, k])
         elif isinstance(n, list):
-            for v in n:
-                walk(v)
+            for i, v in enumerate(n):
+                walk(v, [*path, i])
 
-    walk(node)
+    walk(node, [])
     return found
 
 
@@ -381,17 +423,38 @@ def _keep(r: str) -> bool:
 
 
 def _walk_sources(root: Path, dropped: set[str] | None = None) -> set[str]:
+    """Refs in every SOURCE_GLOBS file, each read as kubectl / Helm read it
+    (`da-crdecode`, ADR-036 §12). A file that cannot be read that way — or no
+    da-crdecode — ends the run at rc 2: a skipped file is a clean-looking run
+    that checked less (it used to be a `::warning::` and a skip)."""
+    cr = _consumer_read()
+    paths = [path for pattern in SOURCE_GLOBS for path in sorted(root.glob(pattern))]
+    try:
+        read = cr.kubernetes_documents_of(paths)
+    except cr.ConsumerReadError as exc:
+        print(f"check_image_refs_resolve: cannot read a deployment source the way kubectl "
+              f"does: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        raise SystemExit(2) from exc
     refs: set[str] = set()
-    for pattern in SOURCE_GLOBS:
-        for path in sorted(root.glob(pattern)):
-            try:
-                docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
-            except yaml.YAMLError as exc:
-                print(f"::warning:: skipping unparseable {path}: {exc}", file=sys.stderr)
+    unreadable: list[str] = []
+    for path, docs in read.items():
+        for i, doc in enumerate(docs):
+            if doc is None:
                 continue
-            for doc in docs:
-                if doc is not None:
-                    refs |= _refs_from_node(doc, dropped)
+            try:
+                refs |= _refs_from_node(doc, dropped)
+            except NonStringImageField as exc:
+                where = path if len(docs) == 1 else f"{path} (document {i + 1})"
+                unreadable.append(f"{where}: {exc}")
+    if unreadable:
+        # A ref that cannot be read is a ref not checked: rc 2, every one named.
+        print("check_image_refs_resolve: an image field is not text in kubectl's / Helm's "
+              "reading, so its ref cannot be checked:", file=sys.stderr)
+        for line in unreadable:
+            print(f"  {line}", file=sys.stderr)
+        raise SystemExit(2)
     return refs
 
 

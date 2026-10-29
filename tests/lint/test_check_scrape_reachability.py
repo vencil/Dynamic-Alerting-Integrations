@@ -792,3 +792,19 @@ def test_extract_metrics_compact_operator_writing():
     assert "tenant_api_uptime_seconds" in extract_metrics("tenant_api_uptime_seconds>60")
     assert "foo_total" in extract_metrics("rate(foo_total[5m])*100")
     assert "rate" not in extract_metrics("rate(foo_total[5m])*100")
+
+
+def test_a_crashed_da_crdecode_is_raised_not_a_skipped_file(tmp_path, monkeypatch):
+    """#3407 review: `parse_services` skips a manifest kubectl's reading
+    refuses; a da-crdecode that crashes (a Go panic exits 2 with stderr, as a
+    refusal does) is no answer about the file, so it is raised (a caller
+    error in `main`) — never a manifest silently missing its Services."""
+    svc = tmp_path / "svc.yaml"
+    svc.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: s\n", encoding="utf-8")
+    fake = tmp_path / "fake-da-crdecode"
+    fake.write_text("#!/bin/sh\necho 'panic: boom' >&2\nexit 2\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("DA_CRDECODE_BINARY", str(fake))
+    with pytest.raises(gate._lib_consumer_read.ConsumerReadError) as exc:
+        gate.parse_services([svc])
+    assert not isinstance(exc.value, gate._lib_consumer_read.InputRefused)

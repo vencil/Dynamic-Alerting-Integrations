@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 11: conf.d examples read by Go)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: embedded k8s objects read kubectl's way)
 
 try:
     import yaml
@@ -429,57 +430,73 @@ class MdYamlDriftChecker:
         out_of_scope: Dict[str, int] = {}
         docs_dir = self.repo_root / "docs"
 
+        # ADR-036 §12 (#3206): an embedded object is read the way kubectl
+        # reads it (da-crdecode), not with PyYAML. Only a fence whose text
+        # holds `apiVersion` can yield an object this pass looks at (it needs
+        # a string `apiVersion` key), so only those are handed over — one
+        # da-crdecode run per fence, a few at a time. A fence kubectl's
+        # reading refuses is skipped: fence hygiene is `--check fences`' job.
+        # No da-crdecode is a caller error, never a PyYAML reading.
+        fences: List[Tuple[str, int, str]] = []
         for md_file in sorted(docs_dir.rglob("*.md")):
             rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
             for line_num, yaml_content in self._extract_yaml_blocks(md_file, skipped):
+                if "apiVersion" in yaml_content:
+                    fences.append((rel_path, line_num, yaml_content))
+        try:
+            readings = _lib_consumer_read.kubernetes_text_documents_each(
+                [f[2] for f in fences], keep_refusals=True)
+        except _lib_consumer_read.ConsumerReadError as e:
+            print(f"ERROR: cannot read the docs' k8s objects the way kubectl does: {e}",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        for (rel_path, line_num, _text), documents in zip(fences, readings):
+            if isinstance(documents, _lib_consumer_read.ConsumerReadError):
+                continue  # fence hygiene is `--check fences`' job
+            for data in documents:
+                if not isinstance(data, dict):
+                    continue
+                api_version, kind = data.get("apiVersion"), data.get("kind")
+                if not isinstance(api_version, str) or not isinstance(kind, str):
+                    continue
+                group, _, version = api_version.rpartition("/")
+                if group in NON_CLUSTER_GROUPS:
+                    out_of_scope[f"{api_version} {kind} (not a cluster object)"] = \
+                        out_of_scope.get(f"{api_version} {kind} (not a cluster object)", 0) + 1
+                    continue
+                if group in BUILTIN_GROUPS:
+                    out_of_scope[f"{api_version} {kind} (built-in, out of scope)"] = \
+                        out_of_scope.get(f"{api_version} {kind} (built-in, out of scope)", 0) + 1
+                    continue
+                schema_path = base / group / f"{kind}_{version}.json"
+                if not schema_path.exists():
+                    issues.append({
+                        "file": rel_path, "line": line_num,
+                        "what": f"{api_version} {kind}",
+                        "error": (f"no vendored schema at "
+                                  f"{'/'.join(CRD_SCHEMA_DIR)}/{group}/{kind}_{version}.json "
+                                  f"— add {{group: {group}, kind: {kind}, "
+                                  f"version: {version}}} to docs/schemas/crd/SOURCES.yaml "
+                                  f"and run `make crd-schemas`"),
+                    })
+                    continue
                 try:
-                    documents = list(yaml.safe_load_all(yaml_content))
-                except yaml.YAMLError:
-                    continue  # fence hygiene is `--check fences`' job
-                for data in documents:
-                    if not isinstance(data, dict):
-                        continue
-                    api_version, kind = data.get("apiVersion"), data.get("kind")
-                    if not isinstance(api_version, str) or not isinstance(kind, str):
-                        continue
-                    group, _, version = api_version.rpartition("/")
-                    if group in NON_CLUSTER_GROUPS:
-                        out_of_scope[f"{api_version} {kind} (not a cluster object)"] = \
-                            out_of_scope.get(f"{api_version} {kind} (not a cluster object)", 0) + 1
-                        continue
-                    if group in BUILTIN_GROUPS:
-                        out_of_scope[f"{api_version} {kind} (built-in, out of scope)"] = \
-                            out_of_scope.get(f"{api_version} {kind} (built-in, out of scope)", 0) + 1
-                        continue
-                    schema_path = base / group / f"{kind}_{version}.json"
-                    if not schema_path.exists():
-                        issues.append({
-                            "file": rel_path, "line": line_num,
-                            "what": f"{api_version} {kind}",
-                            "error": (f"no vendored schema at "
-                                      f"{'/'.join(CRD_SCHEMA_DIR)}/{group}/{kind}_{version}.json "
-                                      f"— add {{group: {group}, kind: {kind}, "
-                                      f"version: {version}}} to docs/schemas/crd/SOURCES.yaml "
-                                      f"and run `make crd-schemas`"),
-                        })
-                        continue
-                    try:
-                        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-                    except (json.JSONDecodeError, OSError) as e:
-                        print(f"ERROR: cannot read {schema_path}: {e}", file=sys.stderr)
-                        return EXIT_CALLER_ERROR
-                    checked += 1
-                    errors = sorted(jsonschema.Draft7Validator(schema).iter_errors(data),
-                                    key=lambda err: list(err.path))
-                    for err in errors:
-                        where = "/".join(str(x) for x in err.path) or "<root>"
-                        issues.append({
-                            "file": rel_path, "line": line_num,
-                            "what": f"{api_version} {kind}",
-                            "error": f"{where}: {err.message}",
-                        })
-                    if self.verbose and not errors:
-                        print(f"  OK   {rel_path}:{line_num} ({api_version} {kind})")
+                    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as e:
+                    print(f"ERROR: cannot read {schema_path}: {e}", file=sys.stderr)
+                    return EXIT_CALLER_ERROR
+                checked += 1
+                errors = sorted(jsonschema.Draft7Validator(schema).iter_errors(data),
+                                key=lambda err: list(err.path))
+                for err in errors:
+                    where = "/".join(str(x) for x in err.path) or "<root>"
+                    issues.append({
+                        "file": rel_path, "line": line_num,
+                        "what": f"{api_version} {kind}",
+                        "error": f"{where}: {err.message}",
+                    })
+                if self.verbose and not errors:
+                    print(f"  OK   {rel_path}:{line_num} ({api_version} {kind})")
 
         print("=" * 60)
         print("MARKDOWN EMBEDDED CRD OBJECTS")

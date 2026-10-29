@@ -179,6 +179,8 @@ git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 
 適合：正式 GitOps 流程。產出的 ConfigMap YAML 是完整可 `kubectl apply` 的格式，無需手動合併。不提供 `--base-config` 時使用內建預設值（`resolve_timeout: 5m`、`group_by: [alertname, tenant]`、default receiver）。
 
+⚠️ **`--base-config` 必須是 Alertmanager 收得下的完整設定**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）：要有 `route:` 與它指名的 `receivers:`；`global:`、`inhibit_rules:` 可以省略、會補內建值。generator 以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀 base，少了 `route:` 或 receivers 就拒收、結束碼 2，訊息是載入函式的原話——不會再補一個內建的 route。
+
 ⚠️ **v2.10.0 起「提供了但用不了」不再等於「沒提供」（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616)）**：上面範例的 `--base-config` 是相對路徑。舊行為是——路徑打錯、指到目錄、檔案是空的或只有註解，都**結束碼 0 並靜默改用內建預設值**，產出的 ConfigMap 與完全不提供這個旗標**逐位元組相同**；你的 `global:`（SMTP smarthost、Slack webhook）就這樣被換掉並被 ArgoCD/Flux sync 進叢集。新行為是**結束碼 2 並指名這個旗標**。⛔ 正確的處置是修路徑，不是拿掉 `--base-config`——拿掉的結果與舊的錯誤行為相同。另外 `--base-config` 只有 `--output-configmap` 會讀它（`--validate` 會在組裝 ConfigMap 之前就返回），用在其他模式現在也是結束碼 2 而不是被靜默忽略。
 
 **模式比較：**

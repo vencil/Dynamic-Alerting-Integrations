@@ -33,8 +33,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
@@ -42,6 +40,7 @@ from _lib_atomic_write import atomic_write_text  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Deployment, read kubectl's way)
 from generate_rule_pack_stats import gather_stats  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -79,8 +78,9 @@ def read_projected_packs() -> list:
     回傳 [(pack_key, configmap_name, [file, ...]), ...]，順序即 manifest 內的
     宣告順序（刻意不排序：那個順序是部署面的既有語意）。
     """
-    docs = [d for d in yaml.safe_load_all(DEPLOYMENT.read_text(encoding="utf-8"))
-            if d and d.get("kind") == "Deployment"]
+    # ADR-036 §12 (#3206): the manifest as kubectl reads it (da-crdecode).
+    docs = [d for d in _lib_consumer_read.kubernetes_documents(str(DEPLOYMENT))
+            if isinstance(d, dict) and d.get("kind") == "Deployment"]
     if not docs:
         raise ValueError(f"{DEPLOYMENT} 內找不到 kind: Deployment")
     volumes = docs[0]["spec"]["template"]["spec"]["volumes"]
@@ -212,7 +212,14 @@ def main() -> int:
     except (ValueError, KeyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    except (OSError, yaml.YAMLError) as exc:
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # No da-crdecode, or kubectl's reading refuses the manifest: no
+        # answer about the table either way (exit 2).
+        print(f"ERROR: 無法以 kubectl 的讀法讀取 {DEPLOYMENT}：{exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        return 2
+    except OSError as exc:
         # A malformed manifest or an unreadable source is a CALLER/environment
         # error (exit 2), not "the table is stale" (exit 1). Without this the
         # traceback escapes — Python's default exit 1 used to misreport it as
