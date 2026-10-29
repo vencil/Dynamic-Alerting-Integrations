@@ -433,6 +433,10 @@ def test_platform_base_keeps_its_watchdog_url_file(tmp_path):
     assert all(file_reference_paths(r) == [] for r in tenant_recvs)
 
 
+#: #3206: --base-config is read by Alertmanager's own loader (da-read), which
+#: refuses a config without a route — every base here carries one.
+_BASE_ROUTE = "route:\n  receiver: r\nreceivers:\n  - name: r\n"
+
 _GLOBAL_CREDENTIALS = {
     "smtp_auth_username": "global:\n  smtp_auth_username: u\n",
     "smtp_auth_password": "global:\n  smtp_auth_password: p\n",
@@ -449,7 +453,7 @@ _GLOBAL_CREDENTIALS = {
 @pytest.mark.parametrize("name", sorted(_GLOBAL_CREDENTIALS))
 def test_base_global_credential_is_refused(tmp_path, name):
     base_file = tmp_path / "base.yaml"
-    base_file.write_text(_GLOBAL_CREDENTIALS[name], encoding="utf-8")
+    base_file.write_text(_GLOBAL_CREDENTIALS[name] + _BASE_ROUTE, encoding="utf-8")
     assert base_global_inherited_credentials(load_base_config(str(base_file))) == [f"global.{name}"]
     d = _write(tmp_path, _tree("tenant", ""))
     out = tmp_path / "cm.yaml"
@@ -467,8 +471,8 @@ def test_base_global_without_credentials_passes(tmp_path):
     base_file.write_text(
         "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.com:587\n"
         "  smtp_from: am@example.com\n  smtp_auth_username: ''\n  smtp_auth_password: ~\n"
-        "  http_config:\n    follow_redirects: true\n    tls_config:\n      server_name: s\n",
-        encoding="utf-8")
+        "  http_config:\n    follow_redirects: true\n    tls_config:\n      server_name: s\n"
+        + _BASE_ROUTE, encoding="utf-8")
     assert base_global_inherited_credentials(load_base_config(str(base_file))) == []
     d = _write(tmp_path, _tree("tenant", ""))
     p = _gar("--config-dir", str(d), "--output-configmap", "--base-config", str(base_file),
@@ -479,7 +483,7 @@ def test_base_global_without_credentials_passes(tmp_path):
 def test_base_global_is_checked_before_the_tenant_scan(tmp_path):
     """A tree with no routes cannot pass a credential base in silence."""
     base_file = tmp_path / "base.yaml"
-    base_file.write_text(_GLOBAL_CREDENTIALS["smtp_auth_password"], encoding="utf-8")
+    base_file.write_text(_GLOBAL_CREDENTIALS["smtp_auth_password"] + _BASE_ROUTE, encoding="utf-8")
     d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS})
     p = _gar("--config-dir", str(d), "--output-configmap", "--base-config", str(base_file),
              "--dry-run")
