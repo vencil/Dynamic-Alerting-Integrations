@@ -19,6 +19,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 import _lib_kubectl  # noqa: E402
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 import batch_diagnose as bd  # noqa: E402
 
 
@@ -46,7 +47,7 @@ def mock_run(monkeypatch, da_guard_env):
     `subprocess.run` — the process boundary, with kubectl_get's own reading
     of rc / stdout / stderr under test too."""
     fake = MagicMock()
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", _kubectl_only(fake))
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(fake)))
     return fake
 
 
@@ -125,12 +126,15 @@ class TestDiscoverTenants:
             bd.discover_tenants()
 
     def test_missing_configmap_is_named(self, mock_run):
-        """ConfigMap 不存在（`--ignore-not-found`：rc 0、stdout 空）→ KubectlError
-        點名那個 ConfigMap 與 namespace，不是 `No tenants found`（#3349）。"""
+        """ConfigMap 不存在（`--ignore-not-found`：rc 0、stdout 空）→ 具名的呼叫端
+        錯誤，點名那個 ConfigMap 與 namespace，不是 `No tenants found`（#3349）。
+        kubectl 有回答，所以 reason 不是 kubectl_error。"""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        with pytest.raises(bd.KubectlError, match="ConfigMap 'threshold-config' not found "
-                                                  "in namespace 'monitoring'"):
+        with pytest.raises(bd.CallerError, match="ConfigMap 'threshold-config' not found "
+                                                 "in namespace 'monitoring'") as exc:
             bd.discover_tenants()
+        assert not isinstance(exc.value, bd.KubectlError)
+        assert exc.value.reason == "configmap_not_found"
 
     def test_empty_configmap(self, mock_run):
         """空 ConfigMap 應返回空列表。"""
@@ -788,7 +792,7 @@ class TestDiscoveryWithoutAnAnswer:
         assert r.returncode == 2, r.stdout + r.stderr
         assert "No tenants found" not in r.stderr
         assert "ConfigMap 'threshold-config' not found in namespace 'monitoring'" in r.stderr
-        assert json.loads(r.stdout)["reason"] == "kubectl_error"
+        assert json.loads(r.stdout)["reason"] == "configmap_not_found"
 
 
 # ── #2954：--timeout 真的會中斷單一租戶的檢查 ─────────────────────
@@ -866,3 +870,31 @@ class TestPerTenantTimeout:
             diagnose.prometheus_instant).parameters["timeout"].default
         assert calls >= 4
         assert bd.DEFAULT_TIMEOUT_S > calls * per_query, (calls, per_query)
+
+
+# ── #3349：某租戶的 Pod 讀取沒得到回答 → 整批 rc 2 ─────────────────
+
+
+def test_a_forbidden_pod_read_makes_the_batch_an_environment_error(monkeypatch):
+    """整條鏈：pod_phase 的讀取被拒（rc 1、stdout 仍有空 List）→ check() 往上丟
+    KubectlError → 該租戶標成環境錯誤 → 批次 rc 2。之前是「Pod not found」、
+    批次 rc 1——一個讀不到的叢集被報成租戶有問題。"""
+    import diagnose
+
+    def prom(_url, query):
+        if query.startswith("tenant_expected_exporter"):
+            return [{"metric": {"db_type": "mariadb"}, "value": [0, "1"]}], None
+        if query.startswith("mysql_up"):
+            return [{"metric": {}, "value": [0, "1"]}], None
+        return [], None
+    monkeypatch.setattr(diagnose, "query_prometheus", prom)
+    forbidden = MagicMock(return_value=MagicMock(
+        returncode=1, stdout='{"apiVersion": "v1", "items": [], "kind": "List"}',
+        stderr='Error from server (Forbidden): pods is forbidden\n'))
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(forbidden))
+
+    result = bd.run_diagnose_for_tenant("t1", "http://prom:9090", timeout_sec=30)
+    assert result.get("_environment_error") is True, result
+    assert "Forbidden" in result["issues"][0] and "Pod not found" not in result["issues"], result
+    env = {result["tenant"]} if result.pop("_environment_error") else set()
+    assert bd.batch_exit_code([result], env) == 2

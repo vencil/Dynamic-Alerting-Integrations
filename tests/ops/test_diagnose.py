@@ -13,6 +13,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
 import diagnose  # noqa: E402
 import _lib_kubectl  # noqa: E402
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 from _lib_tenant_values import ServedValuesError  # noqa: E402
 import subprocess  # noqa: E402
 
@@ -32,7 +33,7 @@ def _kubectl_answers(monkeypatch, rc=0, stdout="", stderr=""):
     def fake(cmd, **kw):
         calls.append((cmd, kw))
         return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", fake)
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
     return calls
 
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 from typing import Any, Optional
 
 from _lib_exitcodes import CallerError
@@ -60,18 +61,28 @@ def _last_line(text: str) -> str:
 def _answer(cmd: list[str], what: str, timeout: float) -> str:
     """kubectl's stdout when it answered (rc 0), else ``KubectlError``: not
     on PATH, no answer within *timeout*, or a non-zero exit (named by
-    kubectl's own last stderr line). The one place that decides it."""
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout, check=False)
-    except FileNotFoundError as exc:
-        raise KubectlError(f"{what}: kubectl is not on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise KubectlError(f"{what}: no answer within {timeout:g}s") from exc
+    kubectl's own last stderr line). The one place that decides it.
+
+    Both streams go to files, not pipes: the answer is read once kubectl
+    itself has exited. A process kubectl leaves behind still holding a pipe
+    (an exec credential plugin's helper) would otherwise hold the read open
+    until it exits too — an answer reported as none (#3349 review)."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                  timeout=timeout, check=False)
+        except FileNotFoundError as exc:
+            raise KubectlError(f"{what}: kubectl is not on PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise KubectlError(f"{what}: no answer within {timeout:.3g}s") from exc
+        out.seek(0)
+        err.seek(0)
+        stdout = out.read().decode("utf-8", "replace")
+        stderr = err.read().decode("utf-8", "replace")
     if proc.returncode != 0:
-        why = _last_line(proc.stderr) or "no message on stderr"
+        why = _last_line(stderr) or "no message on stderr"
         raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
-    return proc.stdout
+    return stdout
 
 
 def _kubectl(kubeconfig: Optional[str]) -> list[str]:

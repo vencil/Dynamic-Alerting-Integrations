@@ -50,7 +50,7 @@ from _lib_python import (  # noqa: E402
     write_json_or_die,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError,
     arm_crash_envelope, disarm_crash_envelope,
 )
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9, #3206: Go classes the keys)
@@ -77,8 +77,10 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     """
     cm_data = kubectl_get("configmap", configmap, namespace=namespace, timeout=15)
     if cm_data is None:
-        raise KubectlError(f"ConfigMap {configmap!r} not found in namespace {namespace!r}: "
-                           "nothing to discover tenants from (or pass --tenants)")
+        # kubectl answered: the ConfigMap is not there — not a kubectl_error.
+        raise CallerError(f"ConfigMap {configmap!r} not found in namespace {namespace!r}: "
+                          "nothing to discover tenants from (or pass --tenants)",
+                          reason="configmap_not_found")
 
     # #1588: the carrier here is a ConfigMap KEY, not a directory entry —
     # but the key names ARE the conf.d filenames, so this is the same

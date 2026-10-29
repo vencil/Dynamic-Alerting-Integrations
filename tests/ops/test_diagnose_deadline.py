@@ -22,6 +22,7 @@ import pytest
 
 import _lib_exitcodes
 import _lib_kubectl
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 import batch_diagnose as bd
 import diagnose
 
@@ -89,7 +90,7 @@ class TestKubectlBudget:
         def fake(cmd, **kw):
             seen.update(kw)
             return subprocess.CompletedProcess(cmd, 0, '{"items": []}', "")
-        monkeypatch.setattr(_lib_kubectl.subprocess, "run", fake)
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
         return seen
 
     def test_timeout_expired_is_an_environment_error(self, monkeypatch):
@@ -231,7 +232,7 @@ class TestSingleDiagnoseCli:
                 raise subprocess.TimeoutExpired(cmd, kw["timeout"])
             pods = {"items": [{"status": {"phase": "CrashLoopBackOff"}}]}
             return subprocess.CompletedProcess(cmd, 0, json.dumps(pods), "")
-        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl)
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(kubectl))
         cli_argv("diagnose", "t1", "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc:
             diagnose.main()

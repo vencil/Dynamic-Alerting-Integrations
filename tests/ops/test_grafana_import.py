@@ -22,6 +22,7 @@ sys.path.insert(0, _TOOLS_DIR)
 import grafana_import as gi  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 import _lib_kubectl  # noqa: E402
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 from _lib_kubectl import KubectlError  # noqa: E402
 
 
@@ -187,7 +188,7 @@ def _kubectl_lists(monkeypatch, rc=0, stdout="", stderr=""):
     def fake(cmd, **kw):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", fake)
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
     return calls
 
 
