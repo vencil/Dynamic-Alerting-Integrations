@@ -169,7 +169,7 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
         raise ConsumerReadError(f"{name} did not finish within {TIMEOUT_SECONDS}s",
                                 _stderr_lines(e.stderr)) from e
     except OSError as e:
-        raise ConsumerReadError(f"cannot run {binary}: {e}") from e
+        raise ConsumerReadError(f"cannot run {name} ({binary}): {e}") from e
     return proc, _stderr_lines(proc.stderr)
 
 

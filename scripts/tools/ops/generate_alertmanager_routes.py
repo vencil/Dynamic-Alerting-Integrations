@@ -1381,8 +1381,12 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     try:
         platform_alert_identities()
     except _lib_consumer_read.ConsumerReadError as exc:
-        die_caller_error("cannot read the shipped platform rules: "
-                         + _lib_consumer_read.error_text(exc))
+        die_caller_error(
+            "ERROR: cannot read the shipped platform rules — their ConfigMap is "
+            "read the way kubectl does (da-crdecode) and its rule files the way "
+            "Prometheus' rule loader does (da-read prometheus-rules); stopping "
+            "before any work (nothing was written): "
+            + _lib_consumer_read.error_text(exc))
     allowed_domains = policy.allowed_domains or []
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
