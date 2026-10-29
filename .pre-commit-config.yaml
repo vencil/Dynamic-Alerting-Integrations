@@ -1727,7 +1727,10 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_(cache|tree)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$
+        # #3206: the templates and the docs' fences are read through `da-guard
+        # parse-tree` too, each fence split into its files by
+        # check_md_yaml_drift's splitter — so that file changes the answer.
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_(threshold_unit_sanity|md_yaml_drift)\.py|scripts/tools/_lib_parse_(cache|tree)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"

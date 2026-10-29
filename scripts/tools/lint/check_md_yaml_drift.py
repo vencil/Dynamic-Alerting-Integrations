@@ -19,7 +19,6 @@ import os
 import re
 import sys
 import argparse
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -121,20 +120,22 @@ def _read_as_confd(texts: List[str]) -> List[Tuple[object, "str | None"]]:
     of conf.d). Raises `_lib_parse_tree.ParseTreeError` (BinaryMissing
     included) when da-guard cannot answer: the run is then unusable whole.
     """
-    if not texts:
-        return []
-    names = [f"unit{i:06d}.yaml" for i in range(len(texts))]
-    with tempfile.TemporaryDirectory(prefix="md-yaml-drift-") as root:
-        lines = _lib_parse_tree.run_files_raw(
-            root, [(n, t.encode("utf-8")) for n, t in zip(names, texts)])
-    out: List[Tuple[object, "str | None"]] = []
-    for name, raw in zip(names, lines):
-        tree = _lib_parse_tree.tree_of(_lib_parse_tree.file_document(raw))
-        try:
-            out.append((tree.value(name), None))
-        except _lib_parse_tree.FileUnreadable as e:
-            out.append((None, e.kind))
-    return out
+    return [(None, r.kind) if isinstance(r, _lib_parse_tree.FileUnreadable)
+            else (_lib_parse_tree.to_python(r), None)
+            for r in _lib_parse_tree.read_texts(texts)]
+
+
+def _token_re(words) -> "re.Pattern[str]":
+    """Any of *words* as a whole token: not inside a longer name (`_routing`
+    is not found in `_routing_defaults`, `tenants` not in `my_tenants`)."""
+    alt = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+    return re.compile(r"(?<![A-Za-z0-9_])(?:" + alt + r")(?![A-Za-z0-9_])")
+
+
+#: `_confd_declaration`'s answers (the three of
+#: `_lib_consumer_read.rule_file_declaration`, for a text parse-tree refused).
+NOT_CONFD = "not-confd"
+UNDECIDED = "undecided"
 
 
 class MdYamlDriftChecker:
@@ -546,12 +547,13 @@ class MdYamlDriftChecker:
         that file is a conf.d example it is a VIOLATION (`self._unreadable`,
         reported by `run`): a reader who copies it gets a file that is not
         served. A deliberate counter-example carries the ignore marker with a
-        reason. Whether such a file is a conf.d example is asked of its
-        content, which parse-tree cannot give: `_looks_like_confd` reads it
-        leniently (PyYAML, as the fence and CRD passes read every fence) and
-        applies `_is_tenant_config` to each document — a classification only,
-        nothing of it is judged. So a `---`-separated k8s manifest or a
-        frontmatter example is no conf.d example and passes, as before.
+        reason. Whether such a file is a conf.d example cannot be asked of
+        its content — parse-tree refused it, and no other reading stands in
+        for the exporter's (#3206). `_confd_declaration` answers from the
+        text alone: a file that spells none of the keys `_is_tenant_config`
+        decides on is no conf.d example (a `---`-separated k8s manifest, a
+        frontmatter example pass, as before); one that spells one is
+        undecided and counted as an example — fail-closed.
         """
         docs_dir = self.repo_root / "docs"
         self._skipped = []
@@ -574,21 +576,38 @@ class MdYamlDriftChecker:
                 # that is not a mapping is no config file's shape (a list, a
                 # shell line), as it never was.
                 if (problem not in ("syntax_error", "top_level_not_mapping")
-                        and self._looks_like_confd(text)):
+                        and self._confd_declaration(text) != NOT_CONFD):
                     self._unreadable.append((rel_path, line, problem))
                 continue
             if self._is_tenant_config(data):
                 yield rel_path, line, data
 
-    def _looks_like_confd(self, text: str) -> bool:
-        """Is a file parse-tree refused a conf.d example? Classification
-        only (see `iter_config_units`). A text PyYAML cannot read either is
-        taken as one (fail-closed: its marker says what it is)."""
-        try:
-            docs = list(yaml.safe_load_all(text))
-        except yaml.YAMLError:
-            return True
-        return any(self._is_tenant_config(d) for d in docs)
+    def _confd_declaration(self, text: str) -> str:
+        """Can a text parse-tree REFUSED be ruled out as a conf.d example?
+        Classification only (see `iter_config_units`); no YAML is read here.
+
+        Every key `_is_tenant_config` decides on (`tenants`, the tenant
+        markers, the platform keys) is a mapping key, and a mapping key is
+        spelled in the text: in plain, single-quoted or double-quoted form it
+        holds its own characters, unless a double-quoted escape (``\\x74``)
+        or a line folded by ``\\`` spells it. So:
+
+        * ``NOT_CONFD`` — none of those keys is spelled as a token and the
+          text has no backslash: no reading of it can hold one;
+        * ``UNDECIDED`` — otherwise. This is not "yes": `x: {_routing: 1}`
+          twice is refused (a repeated key) and is a tenant snippet, a
+          ConfigMap that embeds a tenant file under `data:` is not. It
+          cannot be read, so it cannot be told, and the caller takes it as a
+          conf.d example (fail-closed: the ignore marker says what it is).
+
+        ⛔ Not a lenient YAML reading (PyYAML's was, before #3206): one
+        said "no" for a text it read differently from the exporter — the
+        repeated `x:` above, last one wins, reads as `x: 1` — and so passed
+        a tenant snippet the exporter refuses whole. A word in a comment
+        also counts here: over-reporting is the safe direction."""
+        if "\\" in text or _CONFD_KEY_RE.search(text):
+            return UNDECIDED
+        return NOT_CONFD
 
     def _receiver_checks(self, data: Dict, kind: str) -> List[Tuple[Dict, Dict, str]]:
         """Hold every `receiver:` to the one contract the generator enforces.
@@ -736,6 +755,11 @@ class MdYamlDriftChecker:
         print("is governed by platform-defaults.schema.json, a tenant snippet by")
         print("tenant-config.schema.json.")
         return EXIT_VIOLATION
+
+
+#: Every key `_is_tenant_config` decides on, as a token (`_confd_declaration`).
+_CONFD_KEY_RE = _token_re(
+    {"tenants"} | MdYamlDriftChecker.TENANT_CONFIG_MARKERS | PLATFORM_KEYS)
 
 
 def main():

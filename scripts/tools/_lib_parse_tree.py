@@ -23,6 +23,11 @@ comparison (ADR-037 decision 3) and, through `_lib_parse_cache.ConfdReader`,
 by the route generator and every tool that reads conf.d through it (ADR-036
 step 4, #2906).
 
+`read_texts` reads texts that are not files of any tree on disk — a
+conf.d example in the docs, a template the portal ships, the
+`_defaults.yaml` a generator writes — each as one conf.d file, in one run
+(ADR-036 §12, #3206).
+
 Loader API (ADR-036 step 4, #2906)
 ----------------------------------
 `load` wraps `run`'s document in a read-only `Tree`; `Tree.value(rel)` is a
@@ -291,6 +296,44 @@ def file_document(raw: bytes) -> dict:
     item: the same reading of the same bytes (the line, without its
     newline, is file mode's stdout)."""
     return read_document(raw)
+
+
+def read_texts(texts: "Iterable[str | bytes]", binary: Optional[str] = None,
+               timeout: Optional[float] = None) -> "list[Any]":
+    """Each of *texts* read as one conf.d file, as yaml.v3 — the exporter's
+    parser — reads it (ADR-036 §12, #3206): its content as parse-tree's
+    tagged nodes (`to_python` / `scalar_text` read them), or the
+    `FileUnreadable` parse-tree gives it (``file`` is a scratch name; the
+    caller names the text). In order, one item per text.
+
+    One `parse-tree --inputs -` run (batch file mode) over an empty scratch
+    directory, each text as its own tenant file there, so no tree is walked
+    and no text is judged beside another. For text that is no file of a tree
+    on disk: an example in the docs, a template the portal ships, the
+    `_defaults.yaml` a generator writes. Raises `ParseTreeError` (BinaryMissing
+    included) when da-guard cannot answer: the run is then unusable whole —
+    never "every text unreadable"."""
+    import tempfile  # noqa: PLC0415
+
+    items = [t if isinstance(t, bytes) else t.encode("utf-8") for t in texts]
+    if not items:
+        return []
+    names = [f"unit{i:06d}.yaml" for i in range(len(items))]
+    with tempfile.TemporaryDirectory(prefix="da-parse-texts-") as root:
+        lines = run_files_raw(root, list(zip(names, items)), binary, timeout)
+    out: "list[Any]" = []
+    for name, raw in zip(names, lines):
+        tree = tree_of(file_document(raw))
+        try:
+            out.append(tree.node(name))
+        except FileUnreadable as e:
+            out.append(e)
+        except KeyError as e:
+            # A tenant file of the root is always read; no reader for one is
+            # a da-guard this reader does not understand.
+            raise ParseTreeError(f"da-guard {SUBCOMMAND} --inputs did not read "
+                                 f"{name}: {e}") from e
+    return out
 
 
 def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:

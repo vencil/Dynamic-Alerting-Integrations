@@ -161,14 +161,6 @@ ALLOWED = {
 }
 
 DEBT = {
-    ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker._looks_like_confd'):
-        (1, Reading.E),
-    ('scripts/tools/lint/check_threshold_reachability.py', '_defaults_section'):
-        (1, Reading.E),
-    ('scripts/tools/lint/check_threshold_reachability.py', '_init_project_declared'):
-        (1, Reading.E),
-    ('scripts/tools/lint/check_threshold_unit_sanity.py', '_collect'):
-        (2, Reading.E),
     ('scripts/tools/ops/migration_audit.py', '_Walk.__init__'):
         (1, Reading.E),
     ('scripts/tools/ops/migration_audit.py', '_read_today'):

@@ -63,8 +63,6 @@ import os
 import re
 import sys
 
-import yaml
-
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
 )
@@ -80,12 +78,20 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import (  # noqa: E402
     NonFiniteThresholdError, i18n_text, parse_threshold_number, split_threshold_severity)
-# ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
-# (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
+# ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`;
+# so are the portal templates and the docs' fenced examples (ADR-036 §12,
+# #3206: conf.d-shaped text). Chart values / manifests are read Helm's /
+# kubectl's way (da-crdecode); the registry by `_registry_lib` (Python's own
+# data). This module reads no YAML itself.
 import _lib_parse_cache  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: values / manifests read Helm's / kubectl's way)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
+# The fence split md-yaml-drift (and the Go docs gate) apply: one fence, the
+# files it documents.
+from check_md_yaml_drift import MdYamlDriftChecker as _MdYamlDriftChecker  # noqa: E402
+
+_split_documented_files = _MdYamlDriftChecker._split_documented_files
 
 # ---------------------------------------------------------------- dimensions
 
@@ -282,7 +288,8 @@ _REGISTRY_KEYS: set[str] = set()
 _MD_YAML_RE = re.compile(r"```ya?ml\n(.*?)```", re.S)
 
 # Structured artifacts that carry threshold values. Markdown docs are scanned
-# separately (best-effort fenced-YAML) because a fragment may not parse.
+# separately (fenced YAML; a fence the exporter's reading refuses holds no
+# threshold anyone serves and is passed over — see `_collect`).
 # The registry is the repo's own data (read by `_registry_lib.load_registry`,
 # Python only); every other entry is a Helm values file or a manifest, read
 # the way Helm / kubectl read it (da-crdecode, ADR-036 §12, #3206).
@@ -358,14 +365,18 @@ def _read(path: str) -> str:
 
 
 class ArtifactRefused(Exception):
-    """A Helm values file or manifest in `_YAML_GLOBS` that Helm's / kubectl's
-    reading (da-crdecode) refuses. `refused` is [(repo path, reason)].
+    """Inputs the gate is meant to judge that their consumer's reading
+    refuses: a Helm values file or manifest in `_YAML_GLOBS` (Helm's /
+    kubectl's reading, da-crdecode), a portal template (the exporter's,
+    `da-guard parse-tree`, #3206). `refused` is [(surface, reason)], the
+    reason naming the reading.
 
     A caller error (exit 2), not a finding: the gate could not read an input
     it is meant to judge, so it has no verdict on that file — the same class
     as a conf.d file da-guard cannot read (ParseTreeError, exit 2) and as
     `_lib_exitcodes`' "malformed input". It is never a skip: a value in a
-    file Helm refuses is a value this gate did not look at."""
+    file its consumer refuses is a value this gate did not look at. Raised
+    once every input was read, naming each."""
 
     def __init__(self, refused: "list[tuple[str, str]]") -> None:
         super().__init__("; ".join(f"{rel}: {why}" for rel, why in refused))
@@ -391,13 +402,14 @@ def _collect(root: str) -> list[tuple[str, str, float, bool]]:
     # caller errors in `main` (exit 2), never a skip (#3206).
     read = _lib_consumer_read.kubernetes_documents_of(
         [path for rel, path in files if rel != _REGISTRY_REL], keep_refusals=True)
-    refused = [(rel, " | ".join(read[path].stderr_lines) or str(read[path]))
+    refused = [(rel, "Helm's / kubectl's reading (da-crdecode) refuses it: "
+                + (" | ".join(read[path].stderr_lines) or str(read[path])))
                for rel, path in files
                if rel != _REGISTRY_REL
                and isinstance(read[path], _lib_consumer_read.ConsumerReadError)]
-    if refused:
-        raise ArtifactRefused(refused)
     for rel, path in files:
+        if rel != _REGISTRY_REL and isinstance(read[path], _lib_consumer_read.ConsumerReadError):
+            continue  # raised below, with every other refusal
         if rel == _REGISTRY_REL:
             try:
                 docs = [registry_lib.load_registry(path)]
@@ -435,25 +447,46 @@ def _collect(root: str) -> list[tuple[str, str, float, bool]]:
                     found.append((f"docs/assets/recommendation-data.json[{field}]",
                                   key, num, field == "recommended"))
 
+    # template-data (a tenant body the portal hands out to paste into a
+    # tenant file) and the docs' fenced YAML: conf.d-shaped text, read as the
+    # exporter reads a conf.d file (`da-guard parse-tree`, ADR-036 §12, #3206)
+    # in ONE run; every scalar is its source text, as in the conf.d trees.
+    texts: list[tuple[str, str, bool]] = []   # (surface, text, is a template)
     td = os.path.join(root, "docs/assets/template-data.json")
     if os.path.isfile(td):
         for tpl in json.loads(_read(td)).get("templates") or []:
-            try:
-                doc = yaml.safe_load(tpl.get("yaml") or "")
-            except Exception:
+            surface = f"docs/assets/template-data.json[{tpl.get('id')}]"
+            text = tpl.get("yaml") or ""
+            if not isinstance(text, str):
+                refused.append((surface, f"its yaml is {type(text).__name__}, not text"))
                 continue
-            for key, val in _walk_values(doc):
-                found.append((f"docs/assets/template-data.json[{tpl.get('id')}]", key, val, True))
-
+            texts.append((surface, text, True))
     for rel, path in _iter_doc_files(root):
         for block in _MD_YAML_RE.findall(_read(path)):
-            try:
-                doc = yaml.safe_load(block)
-            except Exception:
-                continue  # doc fragments legitimately aren't standalone YAML
-            for key, val in _walk_values(doc):
-                found.append((rel, key, val, True))
+            # One fence may document several files stacked under `# <name>.yaml`
+            # headers; each is its own file (the split md-yaml-drift and the Go
+            # docs gate use). Read whole, the stack repeats `tenants:` and the
+            # exporter's reading refuses it.
+            for _offset, text in _split_documented_files(block.split("\n")):
+                texts.append((rel, text, False))
+    for (surface, _text, is_template), node in zip(
+            texts, _lib_parse_tree.read_texts([t for _s, t, _i in texts])):
+        if isinstance(node, _lib_parse_tree.FileUnreadable):
+            if is_template:
+                # A template the portal ships that the exporter refuses whole:
+                # an input this gate could not judge — named, never skipped.
+                refused.append((surface, "the exporter's reading (da-guard parse-tree) "
+                                f"refuses it: {node.kind}: {node.message}"))
+            # A docs fence the exporter refuses is no file it serves, so it holds
+            # no threshold anyone runs: shell lines, rule-pack excerpts (a list),
+            # `---`-separated manifests. A refused conf.d EXAMPLE is a defect, and
+            # md-yaml-drift-check names it (UNREADABLE); this gate judges values.
+            continue
+        for key, val in _walk_values(_as_source_text(node)):
+            found.append((surface, key, val, True))
 
+    if refused:
+        raise ArtifactRefused(refused)
     return found
 
 
@@ -590,8 +623,8 @@ def main(argv: list[str] | None = None) -> int:
         # #3206: a values file / manifest Helm or kubectl cannot read is an
         # input this gate could not judge — named, exit 2 (see ArtifactRefused).
         for rel, why in exc.refused:
-            print(f"ERROR: {rel}: Helm's / kubectl's reading (da-crdecode) refuses it, so "
-                  f"its threshold values were not checked: {why}", file=sys.stderr)
+            print(f"ERROR: {rel}: {why} — so its threshold values were not checked",
+                  file=sys.stderr)
         return EXIT_CALLER_ERROR
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: cannot read the Helm values / manifests the way Helm and kubectl "
