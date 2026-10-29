@@ -11,7 +11,8 @@ Python reads (a GitHub workflow, the pre-commit config, mkdocs, the repo's
 own data) are read as before, each place listed with its reason.
 
 WHAT COUNTS AS ONE POINT. A reference to a PyYAML parsing entry (`ENTRIES`:
-`yaml.safe_load` … `yaml.scan` and the Loader classes) — not only a call:
+`yaml.safe_load` … `yaml.scan`, the Loader classes and their reading
+components) — not only a call:
 `f = yaml.safe_load` and `map(yaml.safe_load, …)` count too. An aliased import
 (`from yaml import safe_load as sl`), a module alias (`import yaml as y`) and a
 constant `getattr(yaml, "safe_load")` are counted under the canonical name
@@ -36,8 +37,16 @@ reads the file — add the point to `ALLOWED` with its reason. Fewer, or a key
 gone, is red too: shrink or drop the row (DEBT only shrinks). ⛔ Nothing
 mechanical stops a new row in `DEBT`; a new DEBT row is refused in review.
 
+A star import (`from yaml import *`, `from _lib_io import *`) binds every
+entry of that module; a plain rebinding of a module (`Y = yaml`, `x = io`) is
+followed. ruamel.yaml counts too (`RUAMEL_ENTRIES`: its `YAML` class and load
+functions).
+
 ⚠️ WHAT IT CANNOT CATCH (it reads names, not values): a name built at run time
-(`getattr(yaml, "safe_" + "load")`, `importlib`); a parser handed in from a
+(`getattr(yaml, "safe_" + "load")`, `importlib`, `__import__`); a module or an
+entry reached through a mapping (`yaml.__dict__["safe_load"]`,
+`sys.modules["yaml"]`); a module or parser handed in as an argument and used as
+an attribute of the parameter (`def f(m): m.safe_load(...)`), including from a
 module outside `scripts/`; and the callers of a helper inside `scripts/` other
 than `WRAPPER_HOMES` — only the helper's own point counts, so an `ALLOWED`
 helper later called on a file with a Go consumer stays green.
@@ -62,13 +71,23 @@ from _yaml_reader_baseline import ALLOWED, DEBT, Reading, debt_by_class  # noqa:
 
 REPO = HERE.parents[1]
 
-#: PyYAML's parsing entries: the load / compose / parse / scan functions and the
-#: Loader classes. `dump`, `safe_dump`, `YAMLError`, node classes are not here.
+#: PyYAML's parsing entries: the load / compose / parse / scan functions, the
+#: Loader classes and the reading components a loader is built from (also by
+#: their submodule path, `yaml.reader.Reader`). `dump`, `safe_dump`,
+#: `YAMLError`, node classes are not here.
 ENTRIES = frozenset({
     "safe_load", "safe_load_all", "load", "load_all", "full_load", "full_load_all",
     "unsafe_load", "unsafe_load_all", "compose", "compose_all", "parse", "scan",
     "SafeLoader", "CSafeLoader", "Loader", "CLoader", "FullLoader", "CFullLoader",
     "UnsafeLoader", "CUnsafeLoader", "BaseLoader", "CBaseLoader",
+    "Reader", "Scanner", "Parser", "Composer", "CParser",
+})
+
+#: ruamel.yaml's: the `YAML` class (whose instance does the reading) and the
+#: module-level load functions.
+RUAMEL_ENTRIES = frozenset({
+    "YAML", "load", "load_all", "safe_load", "safe_load_all", "round_trip_load",
+    "round_trip_load_all", "compose", "compose_all", "parse", "scan",
 })
 
 #: The shared readers whose definitions reaching an entry make them entries
@@ -89,22 +108,26 @@ class Scan:
     wrappers: "dict[str, frozenset[str]]"
 
 
-def _is_entry(ref: Ref) -> bool:
-    return ref.name in ENTRIES and module_is(ref.module, package="yaml")
+def _entries_of(module: str, known: "dict[str, set[str]]") -> "frozenset[str] | set[str]":
+    """The names that reach a parser when taken from *module*."""
+    if module_is(module, package="yaml"):
+        return ENTRIES
+    if module_is(module, package="ruamel.yaml"):
+        return RUAMEL_ENTRIES
+    return known.get(module.rsplit(".", 1)[-1], set())
 
 
 def _reaches(ref: Ref, known: "dict[str, set[str]]", own: "set[str]") -> bool:
     """Whether *ref* reaches a parser: an entry, or a wrapper or re-export of
     one by its module (`_lib_io.load_yaml_file`, or `load_yaml_file` imported
-    from `_lib_python`), or — in a wrapper home — one of the home's own
+    from `_lib_python`); a bare name a star import may have bound
+    (`from yaml import *`); or — in a wrapper home — one of the home's own
     wrappers (*own*) by bare name."""
     if ref.via_import:
         return False
-    if _is_entry(ref):
-        return True
     if ref.module is not None:
-        return ref.name in known.get(ref.module.rsplit(".", 1)[-1], ())
-    return ref.name in own
+        return ref.name in _entries_of(ref.module, known)
+    return ref.name in own or any(ref.name in _entries_of(m, known) for m in ref.star)
 
 
 def scan(sources: "dict[str, str]") -> Scan:
@@ -125,13 +148,15 @@ def scan(sources: "dict[str, str]") -> Scan:
                     defined[stem].add(r.top)
                     known[stem].add(r.top)
                     changed = True
-                # a module-level import of an entry is a re-export under its local name
-                if (r.via_import and r.scope == "<module>" and r.module is not None
-                        and r.local not in known[stem]
-                        and (_is_entry(r) or r.name in known.get(
-                            r.module.rsplit(".", 1)[-1], ()))):
-                    known[stem].add(r.local)
-                    changed = True
+                # a module-level import of an entry is a re-export under its
+                # local name; a star import re-exports all of them
+                if r.via_import and r.scope == "<module>" and r.module is not None:
+                    names = _entries_of(r.module, known)
+                    new = (set(names) if r.name == "*" else
+                           {r.local} if r.name in names else set()) - known[stem]
+                    if new:
+                        known[stem] |= new
+                        changed = True
     points: "collections.Counter[tuple[str, str]]" = collections.Counter()
     for path, rs in trees.items():
         own = defined.get(_stem(path), set())
@@ -275,6 +300,21 @@ def _at(*scopes: str) -> "dict[tuple[str, str], int]":
     ("from _lib_python import load_yaml_file\ndef f(p):\n    return load_yaml_file(p)\n",
      _at("f")),
     ("def f():\n    import yaml\n    return yaml.full_load('x')\n", _at("f")),
+    # star imports bind every entry of the module
+    ("from yaml import *\ndef f(t):\n    return safe_load(t)\n", _at("f")),
+    ("from _lib_io import *\ndef f(p):\n    return load_yaml_file(p)\n", _at("f")),
+    # a module rebound by plain assignment, at module level and in a function
+    ("import yaml as _y\nY = _y\ndef f(p):\n    return Y.safe_load(p)\n", _at("f")),
+    ("import _lib_io as io\ndef f(p):\n    x = io\n    return x.load_yaml_file(p)\n",
+     _at("f")),
+    # PyYAML's reading components, also by submodule path
+    ("import yaml\nclass R(yaml.reader.Reader, yaml.Scanner):\n    pass\n", _at("R", "R")),
+    ("from yaml.parser import Parser\nP = Parser\n", _at("<module>")),
+    # ruamel.yaml
+    ("from ruamel.yaml import YAML\ndef f(t):\n    return YAML().load(t)\n", _at("f")),
+    ("import ruamel.yaml\ndef f(t):\n    return ruamel.yaml.YAML(typ='safe').load(t)\n",
+     _at("f")),
+    ("from ruamel import yaml\nd = yaml.round_trip_load('a: 1')\n", _at("<module>")),
 ])
 def test_each_reading_is_caught(src, want) -> None:
     assert _points(src) == want
@@ -288,6 +328,9 @@ def test_each_reading_is_caught(src, want) -> None:
     "from yaml import safe_load\n",                                    # imported, never used
     "def safe_load(t):\n    return t\nsafe_load('x')\n",             # own function, same name
     "x = 'yaml.safe_load'\n",                                          # a string
+    "from json import *\nd = load(open('x'))\n",                       # another star
+    "import json as j\nJ = j\nd = J.load(open('x'))\n",                # another rebinding
+    "import yaml\nn = yaml.ScalarNode('tag', 'v')\n",                 # a node, not a reader
 ])
 def test_what_is_not_a_reading(src) -> None:
     assert _points(src) == {}

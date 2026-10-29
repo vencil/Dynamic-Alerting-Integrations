@@ -35,9 +35,17 @@ class built on `yaml.SafeLoader` is the reader, not the module around it.
 `def` / `class` name, or the target of a module-level assignment
 (`SAFE_LOADER = yaml.CSafeLoader`); `None` for other module-level code.
 
+A star import (`from yaml import *`) cannot say which names it binds, so a
+bare name that no other import binds carries the star-imported modules in
+`star`; the caller decides whether the name is one of theirs. A plain
+rebinding of a module (`Y = yaml`, `x = io`, at module level or in a function)
+is followed: `Y.safe_load` is (`yaml`, `safe_load`).
+
 ⚠️ It reads names, not values: a name built at run time
-(`getattr(m, "safe_" + "load")`, `importlib.import_module`), or a parser handed
-in as an argument from another module, is not a `Ref` to it.
+(`getattr(m, "safe_" + "load")`, `importlib.import_module`, `__import__`), a
+module reached through a mapping (`yaml.__dict__["safe_load"]`,
+`sys.modules["yaml"]`), or a module or parser handed in as an argument (an
+attribute of a parameter) is not a `Ref` to it.
 """
 from __future__ import annotations
 
@@ -56,6 +64,8 @@ class Ref:
     lineno: int
     #: for an import (`via_import`), the name it binds here
     local: Optional[str] = None
+    #: for a bare name no import binds: the modules star-imported in this file
+    star: "tuple[str, ...]" = ()
 
 
 def module_is(module: Optional[str], *, last: str = "", package: str = "") -> bool:
@@ -69,12 +79,15 @@ def module_is(module: Optional[str], *, last: str = "", package: str = "") -> bo
     return bool(package) and (module == package or module.startswith(package + "."))
 
 
-def _bindings(tree: ast.AST) -> "tuple[dict[str, str], dict[str, tuple[str, str]]]":
-    """(local name -> module) and (local name -> (module, canonical name)),
-    from every import in the file, at any depth (a lazy `import yaml` inside a
-    function binds the same module)."""
+def _bindings(tree: ast.AST
+              ) -> "tuple[dict[str, str], dict[str, tuple[str, str]], tuple[str, ...]]":
+    """(local name -> module), (local name -> (module, canonical name)) and the
+    star-imported modules, from every import in the file, at any depth (a lazy
+    `import yaml` inside a function binds the same module), then every plain
+    rebinding of a module (`Y = y`)."""
     modules: "dict[str, str]" = {}
     names: "dict[str, tuple[str, str]]" = {}
+    stars: "list[str]" = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
@@ -87,6 +100,10 @@ def _bindings(tree: ast.AST) -> "tuple[dict[str, str], dict[str, tuple[str, str]
             src = node.module
             for a in node.names:
                 local = a.asname or a.name
+                if a.name == "*":
+                    if src is not None:
+                        stars.append(src)
+                    continue
                 if src is None:            # `from . import _lib_io`
                     modules[local] = a.name
                 else:
@@ -94,7 +111,20 @@ def _bindings(tree: ast.AST) -> "tuple[dict[str, str], dict[str, tuple[str, str]
                     # name; it is recorded as both and the use decides
                     names[local] = (src, a.name)
                     modules[local] = f"{src}.{a.name}"
-    return modules, names
+    rebinds = [(n.targets[0].id, n.value.id) for n in ast.walk(tree)
+               if isinstance(n, ast.Assign) and len(n.targets) == 1
+               and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Name)]
+    # `Y = y; Z = Y` — follow chains, one pass per rebinding at most (a name
+    # rebound to two different modules in two functions must not oscillate;
+    # the file is read flow-insensitively, so the last rebinding wins)
+    for _ in range(len(rebinds)):
+        before = dict(modules)
+        for target, source in rebinds:
+            if source in modules:
+                modules[target] = modules[source]
+        if modules == before:
+            break
+    return modules, names, tuple(stars)
 
 
 def _dotted(node: ast.AST) -> Optional[str]:
@@ -107,8 +137,9 @@ def _dotted(node: ast.AST) -> Optional[str]:
 
 
 class _Walker(ast.NodeVisitor):
-    def __init__(self, modules: "dict[str, str]", names: "dict[str, tuple[str, str]]"):
-        self.modules, self.names = modules, names
+    def __init__(self, modules: "dict[str, str]", names: "dict[str, tuple[str, str]]",
+                 stars: "tuple[str, ...]" = ()):
+        self.modules, self.names, self.stars = modules, names, stars
         self.stack: "list[str]" = []
         self.top: Optional[str] = None
         self.out: "list[Ref]" = []
@@ -117,9 +148,10 @@ class _Walker(ast.NodeVisitor):
         return ".".join(self.stack) or "<module>"
 
     def _emit(self, module: Optional[str], name: str, node: ast.AST,
-              via_import: bool = False, local: Optional[str] = None) -> None:
+              via_import: bool = False, local: Optional[str] = None,
+              star: "tuple[str, ...]" = ()) -> None:
         self.out.append(Ref(module, name, self._scope(), self.top, via_import,
-                            getattr(node, "lineno", 0), local))
+                            getattr(node, "lineno", 0), local, star))
 
     def _module_of(self, value: ast.AST) -> Optional[str]:
         """The module *value* names, if it names one through an import:
@@ -178,7 +210,7 @@ class _Walker(ast.NodeVisitor):
             if node.id in self.names:
                 self._emit(*self.names[node.id], node)
             else:
-                self._emit(None, node.id, node)
+                self._emit(None, node.id, node, star=self.stars)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         self._emit(self._module_of(node.value), node.attr, node)
