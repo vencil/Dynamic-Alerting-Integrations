@@ -34,7 +34,10 @@ package guard
 // The limit compared against (CardinalityLimit) is a budget: an explicit
 // --cardinality-limit may differ from the exporter's own cap
 // (CheckInput.ExporterRowCap), so each finding says whether that cap
-// truncates the rows, rather than assuming the budget is the cap.
+// truncates the rows, rather than assuming the budget is the cap. A count
+// over the exporter's cap is an error whatever the budget (the guard exists
+// to catch truncation before deploy); a limit ≤ 0 still turns the whole
+// check off.
 //
 // ⛔ NO COUNT OF ITS OWN: before #3380 this file counted the top-level keys
 // of the effective config, less a hand-kept skip-list of reserved prefixes;
@@ -52,7 +55,8 @@ import (
 const defaultCardinalityWarnRatio = 0.8
 
 // checkCardinality compares each in-scope tenant's predicted row count
-// (input.PredictedRowCounts) with input.CardinalityLimit and emits
+// (input.PredictedRowCounts) with input.CardinalityLimit, and with the
+// exporter's own cap (input.ExporterRowCap, when known), and emits
 // findings. Returns nothing when CardinalityLimit ≤ 0 (caller opted out);
 // a tenant absent from PredictedRowCounts produces no row, so no finding.
 func checkCardinality(input CheckInput) []Finding {
@@ -83,6 +87,19 @@ func checkCardinality(input CheckInput) []Finding {
 				Message: fmt.Sprintf(
 					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of %d",
 					tenantID, count, input.CardinalityLimit) + exporterCapClause(count, input.ExporterRowCap),
+			})
+		case input.ExporterRowCap > 0 && count > input.ExporterRowCap:
+			// Within the budget but over the exporter's own cap (an explicit
+			// limit above it): the exporter truncates, so it is an error
+			// whatever the budget says (#3380).
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingCardinalityExceeded,
+				TenantID: tenantID,
+				Field:    "",
+				Message: fmt.Sprintf(
+					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, within the per-tenant cardinality limit of %d but over the exporter's own max_metrics_per_tenant of %d; the exporter would silently truncate them to %d",
+					tenantID, count, input.CardinalityLimit, input.ExporterRowCap, input.ExporterRowCap),
 			})
 		case count > warnFloor:
 			out = append(out, Finding{

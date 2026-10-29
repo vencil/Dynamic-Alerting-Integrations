@@ -329,9 +329,15 @@ func TestCheckCardinality_SaysWhetherTheExporterTruncates(t *testing.T) {
 		// The limit is the exporter's cap: over it is cut.
 		{"limit equals the exporter's cap", 101, 100, 100, findingkind.FindingCardinalityExceeded,
 			"the exporter would silently truncate them to its max_metrics_per_tenant of 100", "truncates none"},
-		// Under a raised budget but over the exporter's cap: still cut.
-		{"count over the exporter's cap, under the limit", 900, 1000, 100, findingkind.FindingCardinalityWarning,
-			"the exporter would silently truncate them to its max_metrics_per_tenant of 100", "truncates none"},
+		// Under a raised budget but over the exporter's cap: cut, so an
+		// error whatever the budget — in the warn tier and below it alike.
+		{"count over the exporter's cap, in the limit's warn tier", 900, 1000, 100, findingkind.FindingCardinalityExceeded,
+			"within the per-tenant cardinality limit of 1000 but over the exporter's own max_metrics_per_tenant of 100; the exporter would silently truncate them to 100", "truncates none"},
+		{"count over the exporter's cap, below the limit's warn tier", 150, 1000, 100, findingkind.FindingCardinalityExceeded,
+			"within the per-tenant cardinality limit of 1000 but over the exporter's own max_metrics_per_tenant of 100; the exporter would silently truncate them to 100", "truncates none"},
+		// Raised budget, count within the exporter's cap: the budget's rules.
+		{"raised limit, count within the exporter's cap, warn tier", 90, 100, 95, findingkind.FindingCardinalityWarning,
+			"the exporter's own max_metrics_per_tenant (95) truncates none of them", "truncate them"},
 		{"exporter cap negative", 60, 50, -1, findingkind.FindingCardinalityExceeded,
 			"is negative (no cap), so it truncates none of them", "truncate them"},
 		{"exporter cap unknown", 60, 50, 0, findingkind.FindingCardinalityExceeded,
@@ -348,5 +354,21 @@ func TestCheckCardinality_SaysWhetherTheExporterTruncates(t *testing.T) {
 				t.Errorf("message %q: want %q, not %q", got[0].Message, tc.want, tc.notWant)
 			}
 		})
+	}
+}
+
+// A raised limit with the count within the exporter's cap and below the warn
+// floor is no finding: the budget's rules, as before.
+func TestCheckCardinality_RaisedLimitWithinTheExportersCapIsClean(t *testing.T) {
+	in := one(100, 1000)
+	in.ExporterRowCap = 500
+	if got := checkCardinality(in); len(got) != 0 {
+		t.Errorf("100 rows, limit 1000, exporter cap 500: got %v, want no finding", got)
+	}
+	// Exactly at the exporter's cap: nothing is cut.
+	in = one(500, 1000)
+	in.ExporterRowCap = 500
+	if got := checkCardinality(in); len(got) != 0 {
+		t.Errorf("500 rows at an exporter cap of 500 under limit 1000: got %v, want no finding", got)
 	}
 }

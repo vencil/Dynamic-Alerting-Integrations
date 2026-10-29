@@ -378,3 +378,42 @@ func TestCardinality_ExplicitLimitBelowTheExportersCapSaysNoTruncation(t *testin
 			code, exitFindings, stdout, stderr)
 	}
 }
+
+// A --cardinality-limit above the exporter's own cap does not hide the cut:
+// rows over the root max_metrics_per_tenant are cardinality_exceeded whatever
+// the budget, and rows within it follow the budget (#3380).
+func TestCardinality_RaisedLimitStillReportsTheExportersCut(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": "max_metrics_per_tenant: 3\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n",
+		"tx.yaml":        "tenants:\n  tx: {}\n",
+		"ty.yaml":        "tenants:\n  ty:\n    m4: disable\n",
+	})
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "100", "--format", "json")
+	if code != exitFindings {
+		t.Fatalf("exit = %d, want %d. stdout=%q stderr=%q", code, exitFindings, stdout, stderr)
+	}
+	var doc struct {
+		Report struct {
+			Findings []struct {
+				Kind     string `json:"kind"`
+				TenantID string `json:"tenant_id"`
+				Message  string `json:"message"`
+			} `json:"findings"`
+		} `json:"report"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Report.Findings) != 1 {
+		t.Fatalf("findings %+v, want one (tx; ty's 3 rows are within the exporter's cap of 3)", doc.Report.Findings)
+	}
+	f := doc.Report.Findings[0]
+	if f.TenantID != "tx" || f.Kind != "cardinality_exceeded" ||
+		!strings.Contains(f.Message, "within the per-tenant cardinality limit of 100 but over the exporter's own max_metrics_per_tenant of 3; the exporter would silently truncate them to 3") {
+		t.Errorf("finding %+v, want tx cardinality_exceeded naming the cut to 3 and the budget of 100", f)
+	}
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", false); served != 3 {
+		t.Errorf("control: /metrics serves tx %d series, want 3 (cut from 4)", served)
+	}
+}

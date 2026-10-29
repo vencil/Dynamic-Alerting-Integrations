@@ -301,7 +301,8 @@ type CheckInput struct {
 	// max_metrics_per_tenant): > 0 the cap, < 0 no truncation, 0 unknown.
 	// CardinalityLimit is the budget compared against and may differ from it
 	// (an explicit --cardinality-limit); the findings say whether the
-	// exporter truncates by this one (#3380).
+	// exporter truncates by this one, and a count over it is
+	// cardinality_exceeded whatever CardinalityLimit is (> 0) (#3380).
 	ExporterRowCap int `json:"-"`
 
 	// DefaultsFiles are the defaults carriers of the scan
