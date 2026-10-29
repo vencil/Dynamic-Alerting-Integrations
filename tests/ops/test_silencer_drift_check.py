@@ -934,17 +934,18 @@ def test_main_missing_silences_file(rule_pack_file, tmp_path):
 
 
 def test_main_missing_rule_source(silences_file, tmp_path, capsys):
-    rc = sdc.main(
-        [
-            "--silences-file",
-            str(silences_file),
-            "--rule-source",
-            str(tmp_path / "nope"),
-        ]
-    )
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "does not exist" in err
+    from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
+    with pytest.raises(CallerError) as exc:
+        sdc.main(
+            [
+                "--silences-file",
+                str(silences_file),
+                "--rule-source",
+                str(tmp_path / "nope"),
+            ]
+        )
+    assert exc.value.reason == "path_not_found"
+    assert f"--rule-source {tmp_path / 'nope'}: " in str(exc.value)
 
 
 def test_main_empty_rule_source(silences_file, tmp_path, capsys):

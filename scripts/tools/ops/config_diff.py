@@ -47,7 +47,7 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538)
+from _lib_io import classify_path, raise_path_problems, safe_label  # noqa: E402  (#1538; #3276)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error)
@@ -1693,6 +1693,14 @@ def _main():
     if args.json_output or args.format == "json":
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope(schema=JSON_SCHEMA)
+    # A side with nothing at its path is an empty tree (a first import, see
+    # `_tree_doc`); anything else the shared judgement refuses is a caller
+    # error with its own reason — a file, or a path under a parent the caller
+    # cannot enter (#3276) — so it is asked before the catch-all below.
+    raise_path_problems([
+        p for p in (classify_path(path, "dir", flag=flag)
+                    for flag, path in (("--old-dir", args.old_dir), ("--new-dir", args.new_dir)))
+        if p is not None and not p.missing])
     try:
         return _run(args)
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
@@ -1711,10 +1719,6 @@ def _main():
 
 def _run(args):
     """Render, compare, print; exits 0/1/2 itself."""
-    for flag, path in (("--old-dir", args.old_dir), ("--new-dir", args.new_dir)):
-        if Path(path).exists() and not Path(path).is_dir():
-            print(f"ERROR: {flag} is not a directory: {path}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
     at = args.at or now_at()
     # #3206: ONE parse-tree document per side for the whole run — the platform
     # settings read it, and whether a side has any config file is asked of

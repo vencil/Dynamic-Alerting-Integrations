@@ -60,7 +60,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope,
 )
 
 # ---------------------------------------------------------------------------
@@ -92,9 +92,9 @@ except ImportError:
 # file (`--policy`, validate-config's `--policy-dsl`) in parse-tree's file
 # mode, in no tree. A key written twice is a file parse-tree cannot read.
 try:
-    from _lib_io import load_confd_file
+    from _lib_io import classify_path, load_confd_file
 except ImportError:
-    from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
+    from scripts.tools._lib_io import classify_path, load_confd_file  # type: ignore[no-redef]
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
@@ -1288,22 +1288,12 @@ def _main(argv: Optional[list[str]] = None) -> int:
     # --config-dir <typo> --ci && promote` would fail open. (Note: a dir that
     # EXISTS but has no _policies is a separate, legitimate no-op handled at
     # the `if not rules` path and left at EXIT_OK.)
-    if not Path(args.config_dir).is_dir():
-        msg = (f"設定目錄不存在: {args.config_dir}" if lang == "zh"
-               else f"config directory not found: {args.config_dir}")
-        print(msg, file=sys.stderr)
-        if args.json_output:
-            print(format_json_report({
-                "status": "caller_error",
-                "reason": "config_dir_not_found",
-                "tenants_evaluated": 0,
-                "rules_evaluated": 0,
-                "error_count": 0,
-                "warning_count": 0,
-                "passed": False,
-                "violations": [],
-            }))
-        return EXIT_CALLER_ERROR
+    # #3276: judged by the shared caller-path check; `--json` gets the armed
+    # envelope (the keys above) with that check's reason.
+    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    if config_dir_problem is not None:
+        raise CallerError(f"設定目錄無法使用: {config_dir_problem.message}" if lang == "zh"
+                          else config_dir_problem.message, config_dir_problem.reason)
 
     # #1651 (D-06 "fix the class, not the cell"): `--policy` SUPPLIED but not a
     # file is a caller error, never "no policy". Measured before the fix:
@@ -1312,27 +1302,14 @@ def _main(argv: Optional[list[str]] = None) -> int:
     # `load_yaml_file` returns None for a non-file so `load_policies` gave [].
     # Both then printed "No policy rules found" — a typo'd gate that passes.
     # Omitted is `is None` (argparse default); '' is supplied.
-    if args.policy is not None and not Path(args.policy).is_file():
-        if lang == "zh":
-            print(f"--policy 不是檔案: {args.policy!r}", file=sys.stderr)
-            print("  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。",
-                  file=sys.stderr)
-        else:
-            print(f"--policy: {args.policy!r} is not a file", file=sys.stderr)
-            print("  ⛔ Do not drop the flag to clear this — that evaluates "
-                  "without your policy file.", file=sys.stderr)
-        if args.json_output:
-            print(format_json_report({
-                "status": "caller_error",
-                "reason": "policy_file_not_found",
-                "tenants_evaluated": 0,
-                "rules_evaluated": 0,
-                "error_count": 0,
-                "warning_count": 0,
-                "passed": False,
-                "violations": [],
-            }))
-        return EXIT_CALLER_ERROR
+    policy_problem = (None if args.policy is None
+                      else classify_path(args.policy, "file", flag="--policy"))  # #3276
+    if policy_problem is not None:
+        raise CallerError(
+            f"{policy_problem.message}\n  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。"
+            if lang == "zh" else
+            f"{policy_problem.message}\n  ⛔ Do not drop the flag to clear this — that evaluates "
+            "without your policy file.", policy_problem.reason)
 
     # Load policies
     rules: list[PolicyRule] = []

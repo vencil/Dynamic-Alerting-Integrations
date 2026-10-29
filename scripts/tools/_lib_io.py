@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import functools
 import io
 import json
@@ -15,7 +16,7 @@ import re
 import stat
 import sys
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional, TypeVar
+from typing import Any, Callable, Iterator, NamedTuple, Optional, TypeVar
 
 import yaml
 
@@ -1290,6 +1291,90 @@ def ensure_dir_or_die(
         ensure_dir(path, flag=flag)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
+
+
+class PathProblem(NamedTuple):
+    """Why a caller-given path cannot be used (`classify_path`)."""
+
+    reason: str
+    """`--json` reason: ``{dir,file,path}_not_{found,accessible}``."""
+    message: str
+    """The stderr line, without ``ERROR:``."""
+    missing: bool
+    """True only when nothing is at the path (ENOENT, ENOTDIR, ELOOP)."""
+
+
+#: #3276: what a stat errno means for a caller-given path. Only "nothing is
+#: there" is not-found; every other errno (EACCES under a parent the caller
+#: cannot enter, EIO, …) is not-accessible — never folded into "not found".
+_STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
+
+
+def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Optional[PathProblem]:
+    """None when *path* (given by the caller, via *flag*) is usable as a
+    *kind* — ``"dir"``, ``"file"`` or ``"any"`` — else the `PathProblem`.
+
+    #3276. The one judgement of a caller-given path, replacing each tool's
+    ``Path.is_dir()`` / ``exists()`` / ``is_file()`` and ``os.path.*``:
+    which errnos those swallow differs across Python versions (3.13 raises
+    EACCES, 3.14 answers False) and ``os.path.*`` already answers False, so
+    a path under a parent the caller cannot enter was a traceback or a
+    "not found". Here ``os.stat`` decides by errno.
+
+    * ``"dir"``: a directory. Only stat: whether its content can be listed
+      is the reader's verdict (for a conf.d, da-guard's ``walk_error``).
+    * ``"file"``: anything but a directory, that opens for reading (a FIFO
+      too: opened non-blocking, never read).
+    * ``"any"``: anything that stats.
+    """
+    # '' is SUPPLIED (an unset shell variable) and must stay visible.
+    shown = safe_label(str(path)) if str(path) else "''"
+    label = f"{flag} {shown}" if flag else shown
+    noun = {"dir": "dir", "file": "file", "any": "path"}[kind]
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        missing = exc.errno in _STAT_MISSING
+        return PathProblem(f"{noun}_not_{'found' if missing else 'accessible'}",
+                           f"{label}: {exc.strerror}", missing)
+    if kind == "dir" and not stat.S_ISDIR(st.st_mode):
+        return PathProblem("dir_not_found", f"{label}: not a directory", False)
+    if kind == "file":
+        if stat.S_ISDIR(st.st_mode):
+            return PathProblem("file_not_found", f"{label}: is a directory, not a file", False)
+        try:
+            os.close(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)))
+        except OSError as exc:
+            return PathProblem("file_not_accessible", f"{label}: {exc.strerror}", False)
+    return None
+
+
+def require_path(path: Any, kind: str, *, flag: Optional[str] = None) -> None:
+    """`classify_path`, raising `CallerError` (rc 2 under ``run()``, the
+    reason in the ``--json`` envelope) when *path* is not usable."""
+    problem = classify_path(path, kind, flag=flag)
+    if problem is not None:
+        raise _lib_exitcodes.CallerError(problem.message, problem.reason)
+
+
+def require_dir(path: Any, *, flag: Optional[str] = None) -> None:
+    """`require_path` for a directory."""
+    require_path(path, "dir", flag=flag)
+
+
+def require_file(path: Any, *, flag: Optional[str] = None) -> None:
+    """`require_path` for a file."""
+    require_path(path, "file", flag=flag)
+
+
+def raise_path_problems(problems: "list[Optional[PathProblem]]") -> None:
+    """Raise one `CallerError` naming every problem in *problems* (one
+    ``ERROR:`` line each, Nones skipped) with the first one's reason; return
+    when there is none. For a tool given several paths at once."""
+    found = [p for p in problems if p is not None]
+    if found:
+        raise _lib_exitcodes.CallerError("\nERROR: ".join(p.message for p in found),
+                                         found[0].reason)
 
 
 def _output_write_names_target(exc: OSError, path: Any) -> bool:

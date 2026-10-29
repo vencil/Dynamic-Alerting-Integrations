@@ -86,6 +86,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
@@ -1274,8 +1275,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    if not os.path.isdir(settings.repo):
-        print(f"ERROR: --repo {settings.repo!r} is not a directory", file=sys.stderr)
+    repo_problem = classify_path(settings.repo, "dir", flag="--repo")  # #3276
+    if repo_problem is not None:
+        print(f"ERROR: {repo_problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     try:
         fmt = _object_format(settings.git, settings.repo)

@@ -158,7 +158,7 @@ class TestDetectLang:
             timeout=60,
         )
         assert proc.returncode == EXIT_CALLER_ERROR, (proc.stdout, proc.stderr)
-        assert 'Error: directory not found' in proc.stderr
+        assert f"Error: --config-dir {tmp_path / 'missing'}: " in proc.stderr
         assert '錯誤' not in proc.stderr
 
 

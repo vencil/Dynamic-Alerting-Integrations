@@ -124,6 +124,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_confd import (  # noqa: E402
@@ -1071,10 +1072,11 @@ def check_custom_rules(
     if rule_packs_dir is None:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
-    if not os.path.isdir(rule_packs_dir):
+    rule_packs_problem = classify_path(rule_packs_dir, "dir", flag="--rule-packs")
+    if rule_packs_problem is not None:
         result = _make_result(
             "custom_rules", FAIL,
-            [f"--rule-packs: not a directory: {rule_packs_dir!r}",
+            [rule_packs_problem.message,
              "  ⛔ Do not drop the flag to clear this — that removes the "
              "custom rule lint from the run, which is what this error stops."],
             caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
@@ -1539,11 +1541,10 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # argparse default is None, so nothing else reaches the else side. Same
     # split as #1616's --base-config.
     if policy_dsl_file is not None:
-        if not os.path.isfile(policy_dsl_file):
-            return _argv_error_row(
-                "policy_dsl",
-                f"--policy-dsl: not a file: {policy_dsl_file!r}",
-                _POLICY_DSL_INPUT_HINT)
+        policy_dsl_problem = classify_path(policy_dsl_file, "file", flag="--policy-dsl")
+        if policy_dsl_problem is not None:
+            return _argv_error_row("policy_dsl", policy_dsl_problem.message,
+                                   _POLICY_DSL_INPUT_HINT)
         # ⛔ "not a file" is ONE of the five shapes of "supplied but unusable",
         # and the first cut of this split closed only that one — the same 1-of-5
         # that external review had already caught on `--policy` one round
@@ -3459,9 +3460,11 @@ def _main() -> None:
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
 
-    if not os.path.isdir(args.config_dir):
-        print(f"ERROR: config-dir not found: {args.config_dir}",
-              file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path — a directory under
+    # a parent the caller cannot enter is named as such, not "not found".
+    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    if config_dir_problem is not None:
+        print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         # #1653: under --json this path used to leave stdout EMPTY, so a
         # `validate-config --json | jq` consumer got a parse error instead of
         # a report. It now emits the same document shape as every other run —
@@ -3472,7 +3475,7 @@ def _main() -> None:
         if args.json:
             print_report([_make_result(
                 "config_dir", FAIL,
-                [f"config-dir not found: {args.config_dir}"],
+                [config_dir_problem.message],
                 caller_error=True)], as_json=True)
         sys.exit(EXIT_CALLER_ERROR)
 

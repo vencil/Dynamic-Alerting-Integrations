@@ -26,7 +26,6 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -38,7 +37,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import classify_path, require_dir, safe_label  # noqa: E402  (#1538; #3276)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_request_with_retry,
@@ -107,8 +106,9 @@ def load_recurring_schedules(config_dir):
     (``_lib_tenant_values``) when da-guard is missing, fails, or a file the
     exporter's load cannot read: fail-closed, never an empty schedule set.
     """
-    if not Path(config_dir).is_dir():
-        print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
+    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    if config_dir_problem is not None:
+        print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         return {}
 
     try:
@@ -524,9 +524,7 @@ def main():
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
 
-    if not Path(args.config_dir).is_dir():
-        print(f"ERROR: config directory not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    require_dir(args.config_dir, flag="--config-dir")  # #3276
 
     t0 = time.monotonic()
 
