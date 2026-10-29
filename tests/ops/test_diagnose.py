@@ -12,6 +12,7 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
 import diagnose  # noqa: E402
+import _lib_kubectl  # noqa: E402
 from _lib_tenant_values import ServedValuesError  # noqa: E402
 import subprocess  # noqa: E402
 
@@ -20,23 +21,64 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
 # ---------------------------------------------------------------------------
-# run_cmd
+# pod_phase / mariadb_logs — the cluster reads, through _lib_kubectl (#3349)
 # ---------------------------------------------------------------------------
 
-class TestRunCmd:
-    """Tests for run_cmd()."""
+def _kubectl_answers(monkeypatch, rc=0, stdout="", stderr=""):
+    """Every `kubectl` the `_lib_kubectl` runner starts answers as given;
+    returns the recorded (argv, kwargs) pairs."""
+    calls = []
 
-    def test_success(self):
-        result = diagnose.run_cmd(["echo", "hello"])
-        assert result == "hello"
+    def fake(cmd, **kw):
+        calls.append((cmd, kw))
+        return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", fake)
+    return calls
 
-    def test_failure_returns_none(self):
-        result = diagnose.run_cmd(["false"])
-        assert result is None
 
-    def test_rejects_string_input(self):
-        with pytest.raises(TypeError, match="requires list"):
-            diagnose.run_cmd("echo hello")
+class TestKubectlReads:
+    """pod_phase() / mariadb_logs(): what used to be run_cmd's two kubectl
+    calls. No shell (an argv list, as run_cmd required); an answer is its
+    text; a read with no answer is KubectlError — it used to be None, which
+    check() read as "Pod not found" / no log."""
+
+    def test_pod_phase_is_the_first_pods_phase(self, monkeypatch):
+        calls = _kubectl_answers(monkeypatch, stdout=json.dumps(
+            {"items": [{"status": {"phase": "Running"}}, {"status": {"phase": "Pending"}}]}))
+        assert diagnose.pod_phase("db-a") == "Running"
+        (cmd, kw), = calls
+        assert cmd == ["kubectl", "get", "pods", "-n", "db-a", "-l", "app=mariadb",
+                       "-o", "json"]
+        assert not kw.get("shell")
+        assert kw["timeout"] == diagnose.KUBECTL_TIMEOUT_S
+
+    def test_no_pod_listed_is_none(self, monkeypatch):
+        """The one case that is "Pod not found": kubectl answered, listing none."""
+        _kubectl_answers(monkeypatch, stdout=json.dumps({"kind": "List", "items": []}))
+        assert diagnose.pod_phase("db-a") is None
+
+    def test_a_forbidden_read_is_no_answer_not_no_pod(self, monkeypatch):
+        """kubectl prints an empty List on stdout even when the list is
+        forbidden (rc 1): that is no answer, never "no Pod"."""
+        _kubectl_answers(monkeypatch, rc=1, stdout=json.dumps({"kind": "List", "items": []}),
+                         stderr='Error from server (Forbidden): pods is forbidden: '
+                                'User "nobody" cannot list resource "pods"')
+        with pytest.raises(_lib_kubectl.KubectlError, match=r"\(exit 1\).*Forbidden"):
+            diagnose.pod_phase("db-a")
+
+    def test_mariadb_logs_is_the_log_text(self, monkeypatch):
+        calls = _kubectl_answers(monkeypatch, stdout="a\nERROR b\n")
+        assert diagnose.mariadb_logs("db-a") == "a\nERROR b\n"
+        (cmd, kw), = calls
+        assert cmd == ["kubectl", "logs", "-n", "db-a", "deploy/mariadb", "-c", "mariadb",
+                       "--tail=20"]
+        assert not kw.get("shell")
+
+    def test_a_failed_logs_read_raises(self, monkeypatch):
+        _kubectl_answers(monkeypatch, rc=1, stderr="Error from server (NotFound): "
+                                                   'deployments.apps "mariadb" not found')
+        with pytest.raises(_lib_kubectl.KubectlError, match="kubectl logs deploy/mariadb"):
+            diagnose.mariadb_logs("db-a")
 
 
 # ---------------------------------------------------------------------------
@@ -338,12 +380,21 @@ class TestCheck:
     """Tests for check() — the main health check function.
 
     query_prometheus now returns (results, error) tuples via query_prometheus_instant.
+    The two cluster reads are their own seams (#3349): `pod_phase` (patched per
+    test) and `mariadb_logs` (the `logs` fixture: no ERROR line unless a test
+    sets one).
     """
 
-    @mock.patch("diagnose.run_cmd")
+    @pytest.fixture(autouse=True)
+    def logs(self, monkeypatch):
+        fake = mock.Mock(return_value="")
+        monkeypatch.setattr(diagnose, "mariadb_logs", fake)
+        return fake
+
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_healthy(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.return_value = "Running"
+    def test_healthy(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),       # mysql_up
@@ -356,10 +407,10 @@ class TestCheck:
         assert out["status"] == "healthy"
         assert out["tenant"] == "db-a"
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
     def test_check_writes_to_the_given_stream_not_sys_stdout(
-        self, mock_qp, mock_cmd, capsys,
+        self, mock_qp, mock_pod, capsys,
     ):
         """`out=` 讓呼叫端不必動到行程全域就能拿到文件。
 
@@ -371,7 +422,7 @@ class TestCheck:
         後半，一個「寫 buf 也寫 stdout」的實作會照樣通過，而那正是把行程全域
         重新拖下水的寫法。
         """
-        mock_cmd.return_value = "Running"
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),       # mysql_up
@@ -388,13 +439,13 @@ class TestCheck:
         assert sys.stdout is before, "check() 不得改動行程全域的 sys.stdout"
 
     @pytest.mark.parametrize("failing", ["maintenance", "silent"])
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_mode_query_not_answered_is_not_normal(self, mock_qp, mock_cmd, capsys,
+    def test_mode_query_not_answered_is_not_normal(self, mock_qp, mock_pod, capsys,
                                                     failing):
         """#3133：模式查詢沒得到回答 → 模式是 unknown、點名查詢失敗（rc 2）；
         以前吞掉、照報 normal / healthy、rc 0。"""
-        mock_cmd.return_value = "Running"
+        mock_pod.return_value = "Running"
         maint = (None, "connection refused") if failing == "maintenance" else ([], None)
         side = [_MARIADB, ([{"value": [1700000000, "1"]}], None), maint]
         if failing == "silent":
@@ -407,10 +458,12 @@ class TestCheck:
         assert any(i.startswith(diagnose.PROMETHEUS_FAILURE) for i in out["issues"]), out
         assert diagnose.exit_code(doc) == 2
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_pod_not_found(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.side_effect = [None, None]  # pod check fails, log fetch returns None
+    def test_pod_not_found(self, mock_qp, mock_pod, capsys):
+        """kubectl answered and lists no Pod — the only "Pod not found"; a read
+        with no answer is KubectlError (TestKubectlReads)."""
+        mock_pod.return_value = None
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
@@ -418,10 +471,11 @@ class TestCheck:
         assert out["status"] == "error"
         assert "Pod not found" in out["issues"]
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_pod_not_running(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.side_effect = ["Pending", "ERROR log line\nERROR another"]
+    def test_pod_not_running(self, mock_qp, mock_pod, capsys, logs):
+        mock_pod.return_value = "Pending"
+        logs.return_value = "ERROR log line\nERROR another"
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
@@ -429,10 +483,10 @@ class TestCheck:
         assert out["status"] == "error"
         assert any("Pending" in i for i in out["issues"])
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_exporter_down(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.side_effect = ["Running", None]  # pod ok, log fetch
+    def test_exporter_down(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"  # pod ok; the log fetch is the fixture's
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [0, "0"]}], None),  # mysql_up value "0" = DOWN
@@ -445,10 +499,10 @@ class TestCheck:
         assert out["status"] == "error"
         assert any("Exporter" in i for i in out["issues"])
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_prometheus_query_fails(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.return_value = "Running"
+    def test_prometheus_query_fails(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = _mariadb_then(None, "connection refused")
 
         diagnose.check("db-a", "http://prom:9090")
@@ -456,10 +510,10 @@ class TestCheck:
         assert out["status"] == "error"
         assert any("Prometheus" in i for i in out["issues"])
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_maintenance_mode(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.return_value = "Running"
+    def test_maintenance_mode(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
@@ -471,10 +525,10 @@ class TestCheck:
         assert out["status"] == "healthy"
         assert out["operational_mode"] == "maintenance"
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_silent_mode_all(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.return_value = "Running"
+    def test_silent_mode_all(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
@@ -489,10 +543,10 @@ class TestCheck:
         out = json.loads(capsys.readouterr().out)
         assert out["operational_mode"] == "silent:all"
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_silent_mode_single_severity(self, mock_qp, mock_cmd, capsys):
-        mock_cmd.return_value = "Running"
+    def test_silent_mode_single_severity(self, mock_qp, mock_pod, capsys):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
@@ -504,10 +558,10 @@ class TestCheck:
         out = json.loads(capsys.readouterr().out)
         assert out["operational_mode"] == "silent:warning"
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_with_config_dir(self, mock_qp, mock_cmd, capsys, tmp_path):
-        mock_cmd.return_value = "Running"
+    def test_with_config_dir(self, mock_qp, mock_pod, capsys, tmp_path):
+        mock_pod.return_value = "Running"
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
             ([{"value": [1700000000, "1"]}], None),        # mysql_up
@@ -529,11 +583,11 @@ class TestCheck:
         assert out["profile"] == "prod"
         assert "inheritance_chain" in out
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_metrics_check_exception(self, mock_qp, mock_cmd, capsys):
+    def test_metrics_check_exception(self, mock_qp, mock_pod, capsys):
         """Exception during Prometheus query is caught gracefully."""
-        mock_cmd.side_effect = ["Running", None]
+        mock_pod.return_value = "Running"
         # First call (mysql_up) raises, caught by except Exception
         mock_qp.side_effect = [
             _MARIADB,                                       # tenant_expected_exporter
@@ -547,14 +601,12 @@ class TestCheck:
         assert out["status"] == "error"
         assert any("Metrics check failed" in i for i in out["issues"])
 
-    @mock.patch("diagnose.run_cmd")
+    @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_error_with_logs(self, mock_qp, mock_cmd, capsys):
+    def test_error_with_logs(self, mock_qp, mock_pod, capsys, logs):
         """Error result includes recent ERROR logs."""
-        mock_cmd.side_effect = [
-            None,  # pod check fails
-            "2024-01-01 ERROR crash\n2024-01-01 INFO ok\n2024-01-01 ERROR oom",
-        ]
+        mock_pod.return_value = None  # pod check fails
+        logs.return_value = "2024-01-01 ERROR crash\n2024-01-01 INFO ok\n2024-01-01 ERROR oom"
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
         diagnose.check("db-a", "http://prom:9090")
@@ -562,6 +614,7 @@ class TestCheck:
         assert out["status"] == "error"
         assert len(out["recent_logs"]) <= 3
         assert all("ERROR" in log for log in out["recent_logs"])
+        logs.assert_called_once_with("db-a")
 
 
 # ============================================================

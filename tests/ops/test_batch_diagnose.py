@@ -18,6 +18,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+import _lib_kubectl  # noqa: E402
 import batch_diagnose as bd  # noqa: E402
 
 
@@ -40,10 +41,36 @@ def _kubectl_only(fake):
 @pytest.fixture
 def mock_run(monkeypatch, da_guard_env):
     """The `kubectl` that `discover_tenants` runs (a MagicMock: set its
-    `return_value` / `side_effect`); da-guard is the real one."""
+    `return_value` / `side_effect`); da-guard is the real one. #3349: the
+    read goes through `_lib_kubectl.kubectl_get`, so this is that runner's
+    `subprocess.run` — the process boundary, with kubectl_get's own reading
+    of rc / stdout / stderr under test too."""
     fake = MagicMock()
-    monkeypatch.setattr(bd.subprocess, "run", _kubectl_only(fake))
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", _kubectl_only(fake))
     return fake
+
+
+def _fake_kubectl(tmp_path, rc, stdout="", stderr=""):
+    """A real `kubectl` executable that prints *stdout* / *stderr* and exits
+    *rc*; returns a PATH with it first."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "kubectl"
+    exe.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"sys.stdout.write({stdout!r})\n"
+        f"sys.stderr.write({stderr!r})\n"
+        f"sys.exit({rc})\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return f"{bindir}{os.pathsep}{os.environ['PATH']}"
+
+
+def _batch_cli(tmp_path, path, *args):
+    return subprocess.run(
+        [sys.executable, str(Path(bd.__file__)), *args],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(tmp_path),
+        env={**os.environ, "PATH": path, "PROMETHEUS_URL": ""})
 
 
 class TestDiscoverTenants:
@@ -63,6 +90,9 @@ class TestDiscoverTenants:
         )
         result = bd.discover_tenants()
         assert result == ["db-a", "db-b"]
+        cmd = mock_run.call_args.args[0]
+        assert cmd == ["kubectl", "get", "configmap", "threshold-config", "-n", "monitoring",
+                       "--ignore-not-found", "-o", "json"]
 
     def test_skip_underscore_keys(self, mock_run):
         """_ 前綴的 key 應被忽略。"""
@@ -80,17 +110,27 @@ class TestDiscoverTenants:
         assert result == ["db-a"]
 
     def test_kubectl_failure(self, mock_run):
-        """kubectl 失敗應返回空列表。"""
-        mock_run.return_value = MagicMock(returncode=1, stderr="error")
-        result = bd.discover_tenants()
-        assert result == []
+        """kubectl 失敗是 KubectlError（rc 2，點名 kubectl 自己那行話）。
+        #3349：以前返回空列表，main 再報成 `No tenants found`。"""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="",
+            stderr='Error from server (Forbidden): configmaps "threshold-config" is forbidden')
+        with pytest.raises(bd.KubectlError, match=r"\(exit 1\).*Forbidden"):
+            bd.discover_tenants()
 
     def test_kubectl_timeout(self, mock_run):
-        """kubectl timeout 應返回空列表。"""
-        import subprocess
+        """kubectl timeout 是 KubectlError（#3349：以前返回空列表）。"""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=15)
-        result = bd.discover_tenants()
-        assert result == []
+        with pytest.raises(bd.KubectlError, match="no answer within 15s"):
+            bd.discover_tenants()
+
+    def test_missing_configmap_is_named(self, mock_run):
+        """ConfigMap 不存在（`--ignore-not-found`：rc 0、stdout 空）→ KubectlError
+        點名那個 ConfigMap 與 namespace，不是 `No tenants found`（#3349）。"""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with pytest.raises(bd.KubectlError, match="ConfigMap 'threshold-config' not found "
+                                                  "in namespace 'monitoring'"):
+            bd.discover_tenants()
 
     def test_empty_configmap(self, mock_run):
         """空 ConfigMap 應返回空列表。"""
@@ -328,10 +368,10 @@ class TestDiscoverTenantsEdge:
     """discover_tenants() 邊際案例。"""
 
     def test_invalid_json(self, mock_run):
-        """無效 JSON 回傳空清單。"""
+        """無效 JSON 是 KubectlError（#3349：以前回傳空清單）。"""
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
-        result = bd.discover_tenants()
-        assert result == []
+        with pytest.raises(bd.KubectlError, match="not JSON"):
+            bd.discover_tenants()
 
     def test_non_yaml_keys_ignored(self, mock_run):
         """非 .yaml 結尾的 key 被忽略。"""
@@ -553,9 +593,7 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
 
     def _discover(self, monkeypatch, keys):
         cm = {"data": {k: "tenants: {}" for k in keys}}
-        monkeypatch.setattr(
-            bd.subprocess, "run",
-            _kubectl_only(lambda *a, **k: MagicMock(returncode=0, stdout=json.dumps(cm))))
+        monkeypatch.setattr(bd, "kubectl_get", lambda *a, **k: cm)
         return bd.discover_tenants()
 
     def test_yml_key_is_a_tenant(self, monkeypatch):
@@ -688,7 +726,7 @@ class TestExitCode:
                                                  cli_argv):
         """`da-tools diagnose` alone exits 2 without kubectl; batch must too."""
         def no_kubectl(tenant, prom_url, out=None):
-            raise bd.CommandNotFoundError("kubectl not found on PATH")
+            raise bd.KubectlError("`kubectl get pods` in namespace 't1': kubectl is not on PATH")
         monkeypatch.setattr(bd, "diagnose_check", no_kubectl)
         cli_argv("batch_diagnose", "--tenants", "t1",
                  "--prometheus", "http://prom:9090", "--json")
@@ -722,6 +760,35 @@ class TestExitCode:
                             {"tenant": tenant, "status": "healthy"})
         assert bd.main() == 0
         json.loads(capsys.readouterr().out)
+
+
+# ── #3349：探索讀不到 ConfigMap 是環境錯誤，不是「沒有租戶」──────────
+
+
+class TestDiscoveryWithoutAnAnswer:
+    """真的跑 CLI、PATH 上放假 kubectl：探索讀取沒得到回答時，以前印一行
+    `ERROR: kubectl failed` 再以 `No tenants found` 結束——讀起來像叢集裡沒有
+    租戶。現在是 KubectlError：rc 2，點名 kubectl，--json 的 envelope reason
+    是 `kubectl_error`。"""
+
+    def test_forbidden_discovery_exits_2_naming_kubectl(self, tmp_path):
+        path = _fake_kubectl(
+            tmp_path, 1, stderr='Error from server (Forbidden): configmaps "threshold-config" '
+                                'is forbidden: User "nobody" cannot get resource "configmaps"\n')
+        r = _batch_cli(tmp_path, path, "--prometheus", "http://127.0.0.1:1", "--json")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "No tenants found" not in r.stderr
+        assert "Traceback" not in r.stderr
+        assert "kubectl get configmap threshold-config" in r.stderr and "Forbidden" in r.stderr
+        assert json.loads(r.stdout)["reason"] == "kubectl_error"
+
+    def test_a_missing_configmap_exits_2_naming_it(self, tmp_path):
+        path = _fake_kubectl(tmp_path, 0)   # --ignore-not-found: rc 0, nothing on stdout
+        r = _batch_cli(tmp_path, path, "--prometheus", "http://127.0.0.1:1", "--json")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "No tenants found" not in r.stderr
+        assert "ConfigMap 'threshold-config' not found in namespace 'monitoring'" in r.stderr
+        assert json.loads(r.stdout)["reason"] == "kubectl_error"
 
 
 # ── #2954：--timeout 真的會中斷單一租戶的檢查 ─────────────────────
