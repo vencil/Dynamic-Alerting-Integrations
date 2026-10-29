@@ -26,7 +26,7 @@ import sys
 
 import pytest
 
-from _platform_fs import unprivileged_sandbox  # noqa: E402
+from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
@@ -554,7 +554,7 @@ def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
 def test_the_chinese_wording(tree, kind, name, detail):
     """`lang="zh"`: the same verdicts, said in Chinese — no English strerror."""
     if name == "loop":
-        os.symlink(tree / "loop", tree / "loop")
+        symlink_or_skip(tree / "loop", tree / "loop")
     problem = classify_path(tree / name, kind, lang="zh", flag="--x")
     assert problem.message == f"--x {tree / name}: {detail}"
 
