@@ -87,6 +87,16 @@
       ],
       "datasourceTemplate": "go",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/prometheus at the Go module of the Prometheus the platform deploys (k8s/03-monitoring/deployment-prometheus.yaml, prom/prometheus; tests/ops/test_da_read_prometheus_pin_parity.py). Image v3.X.Y is module v0.3XX.Y (X two digits), so the versioning regex reads that back as major 3 / minor X / patch Y: a Prometheus major (v0.4XX) is a Renovate major and waits for the Dashboard like the image major, and the proxy's legacy v2.*+incompatible tags and -rc tags do not parse, so they are never proposed (under plain semver v2.55.1+incompatible would outrank v0.315.1). The packageRule below puts it in the SAME grouped PR as the prom/prometheus image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
+      "matchStrings": [
+        "\\n[ \\t]*(?<depName>github\\.com/prometheus/prometheus)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
+      ],
+      "datasourceTemplate": "go",
+      "versioningTemplate": "regex:^v0\\.(?<major>[1-9])(?<minor>\\d{2})\\.(?<patch>\\d+)$"
     }
   ],
   "customDatasources": {
@@ -103,6 +113,22 @@
       "matchDatasources": ["go"],
       "matchDepNames": ["github.com/prometheus/alertmanager"],
       "groupName": "third-party container images"
+    },
+    {
+      "description": "#3206 — the da-read go.mod's prometheus requirement (customManager above) moves in the same PR as the prom/prometheus image refs: same groupName as the third-party image group, for the same update types that group takes (minor / patch).",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["go"],
+      "matchDepNames": ["github.com/prometheus/prometheus"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "third-party container images"
+    },
+    {
+      "description": "#3206 — a Prometheus major (module v0.3XX → v0.4XX, image v3 → v4) waits for the Dependency Dashboard, the same policy as the prom/prometheus image major.",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["go"],
+      "matchDepNames": ["github.com/prometheus/prometheus"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     },
     {
       "description": "TRK-2605 — Grafana plugin bumps get their own PR, apart from the image digests: a plugin version is not an image and is not in the scan matrix. A MAJOR waits for the Dependency Dashboard, the same policy as image majors (and Grafana's own preinstall auto-update, which skips majors).",
