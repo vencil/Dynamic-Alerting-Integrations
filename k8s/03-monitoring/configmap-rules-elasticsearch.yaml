@@ -40,24 +40,24 @@ data:
   elasticsearch-alert.yml: "groups:\n- name: elasticsearch-alerts\n  rules:\n  - alert:\
     \ ElasticsearchClusterRed\n    expr: 'tenant:es_cluster_health:status == 2\n\n\
     \      '\n    for: 30s\n    labels:\n      severity: critical\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      summary: Elasticsearch cluster RED\
-    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch\
-    \ 叢集狀態為 RED'\n      description: Cluster health is RED — data loss or unavailability\
-    \ possible\n      description_zh: 叢集健康狀態為 RED — 可能造成資料遺失或無法使用\n  - alert: ElasticsearchClusterYellow\n\
-    \    expr: \"(\\n  (\\n    tenant:es_cluster_health:status == 1\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
-    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
-    n  (\\n    tenant:es_cluster_health:status == 1\\n    unless on(tenant)\\n   \
-    \ (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
+    \ $labels.tenant }}'\n    annotations:\n      description: Cluster health is RED\
+    \ — data loss or unavailability possible\n      description_zh: 叢集健康狀態為 RED —\
+    \ 可能造成資料遺失或無法使用\n      summary: Elasticsearch cluster RED on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 RED'\n  -\
+    \ alert: ElasticsearchClusterYellow\n    expr: \"(\\n  (\\n    tenant:es_cluster_health:status\
+    \ == 1\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:es_cluster_health:status == 1\\n    unless on(tenant)\\\
+    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
     \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Elasticsearch\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Some\
+    \ replica shards are unassigned\n      description_zh: 部分副本分片未分配\n      owner:\
+    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: ES cluster YELLOW — replica shards unassigned'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 叢集 YELLOW — 副本分片未分配'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Elasticsearch\
     \ cluster YELLOW on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Elasticsearch 叢集狀態為 YELLOW'\n      platform_summary: '[{{ $labels.tier\
-    \ }}] {{ $labels.tenant }}: ES cluster YELLOW — replica shards unassigned'\n \
-    \     platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch\
-    \ 叢集 YELLOW — 副本分片未分配'\n      description: Some replica shards are unassigned\n\
-    \      description_zh: 部分副本分片未分配\n      runbook_url: '{{ $labels.runbook_url }}'\n\
-    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
+    \ }} 的 Elasticsearch 叢集狀態為 YELLOW'\n      tier: '{{ $labels.tier }}'\n  - alert:\
     \ ElasticsearchHighHeapUsage\n    expr: \"(\\n  (\\n    (\\n      tenant:es_heap_usage_percent:max\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:es_heap_usage_percent\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
@@ -67,15 +67,15 @@ data:
     \   unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
     \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
     \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Elasticsearch high heap usage on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch JVM heap 使用率過高'\n\
-    \      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: ES heap usage\
-    \ high — JVM sizing review'\n      platform_summary_zh: '[{{ $labels.tier }}]\
-    \ {{ $labels.tenant }}: Elasticsearch heap 使用率過高 — 請檢查 JVM 大小'\n      description:\
-    \ 'JVM heap: {{ $value | printf \"%.1f\" }}%'\n      description_zh: 'JVM heap:\
-    \ {{ $value | printf \"%.1f\" }}%'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: ElasticsearchHighDiskUsage\n    expr: \"(\\n  (\\n    (\\n      tenant:es_disk_usage_percent:max\\\
+    \    annotations:\n      description: 'JVM heap: {{ $value | printf \"%.1f\" }}%'\n\
+    \      description_zh: 'JVM heap: {{ $value | printf \"%.1f\" }}%'\n      owner:\
+    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: ES heap usage high — JVM sizing review'\n      platform_summary_zh: '[{{\
+    \ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch heap 使用率過高 — 請檢查 JVM 大小'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Elasticsearch\
+    \ high heap usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch JVM heap 使用率過高'\n      tier: '{{ $labels.tier }}'\n  - alert:\
+    \ ElasticsearchHighDiskUsage\n    expr: \"(\\n  (\\n    (\\n      tenant:es_disk_usage_percent:max\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:es_disk_usage_percent\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
@@ -84,16 +84,16 @@ data:
     \   unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
     \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
     \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Elasticsearch high disk usage on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 磁碟使用率過高'\n     \
-    \ platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: ES disk usage\
-    \ high — storage capacity review'\n      platform_summary_zh: '[{{ $labels.tier\
-    \ }}] {{ $labels.tenant }}: Elasticsearch 磁碟使用率過高 — 請檢查儲存容量'\n      description:\
-    \ 'Disk usage: {{ $value | printf \"%.1f\" }}%'\n      description_zh: '磁碟使用率:\
-    \ {{ $value | printf \"%.1f\" }}%'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: ElasticsearchHighSearchLatency\n    expr: \"(\\n  (\\n    (\\n   \
-    \   tenant:es_search_latency_ms:avg\\n      > on(tenant) group_left\\n      tenant:alert_threshold:es_search_latency_ms\\\
+    \    annotations:\n      description: 'Disk usage: {{ $value | printf \"%.1f\"\
+    \ }}%'\n      description_zh: '磁碟使用率: {{ $value | printf \"%.1f\" }}%'\n     \
+    \ owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}]\
+    \ {{ $labels.tenant }}: ES disk usage high — storage capacity review'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 磁碟使用率過高 — 請檢查儲存容量'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Elasticsearch\
+    \ high disk usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch 磁碟使用率過高'\n      tier: '{{ $labels.tier }}'\n  - alert: ElasticsearchHighSearchLatency\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:es_search_latency_ms:avg\\n      >\
+    \ on(tenant) group_left\\n      tenant:alert_threshold:es_search_latency_ms\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    (\\n      tenant:es_search_latency_ms:avg\\n      > on(tenant)\
@@ -101,43 +101,43 @@ data:
     \  unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: Elasticsearch high search latency on {{ $labels.tenant }}\n  \
-    \    summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: ES search latency elevated — query/index\
-    \ optimization review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引'\n      description: 'Average search latency:\
-    \ {{ $value | printf \"%.0f\" }}ms'\n      description_zh: '平均搜尋延遲: {{ $value\
-    \ | printf \"%.0f\" }}ms'\n      runbook_url: '{{ $labels.runbook_url }}'\n  \
-    \    owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
-    \ ElasticsearchUnassignedShards\n    expr: \"(\\n  (\\n    tenant:es_unassigned_shards:count\
-    \ > 0\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    \      description: 'Average search latency: {{ $value | printf \"%.0f\" }}ms'\n\
+    \      description_zh: '平均搜尋延遲: {{ $value | printf \"%.0f\" }}ms'\n      owner:\
+    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: ES search latency elevated — query/index optimization review'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Elasticsearch\
+    \ high search latency on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch 搜尋延遲過高'\n      tier: '{{ $labels.tier }}'\n  - alert: ElasticsearchUnassignedShards\n\
+    \    expr: \"(\\n  (\\n    tenant:es_unassigned_shards:count > 0\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    tenant:es_unassigned_shards:count > 0\\n    unless on(tenant)\\\
     n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
     \ tenant_metadata_info\\n)\\n\"\n    for: 10m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Elasticsearch\
-    \ has unassigned shards on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Elasticsearch 有未分配的分片'\n      platform_summary: '[{{ $labels.tier }}] {{\
-    \ $labels.tenant }}: ES unassigned shards — check node capacity'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 未分配分片 — 請檢查節點容量'\n\
-    \      description: '{{ $value }} unassigned shards — check node capacity'\n \
-    \     description_zh: '{{ $value }} 個未分配的分片 — 請檢查節點容量'\n      runbook_url: '{{\
-    \ $labels.runbook_url }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{\
-    \ $labels.tier }}'\n  - alert: ElasticsearchPendingTasks\n    expr: \"(\\n  (\\\
-    n    (\\n      tenant:es_pending_tasks:max\\n      > on(tenant) group_left\\n\
-    \      tenant:alert_threshold:es_pending_tasks\\n    )\\n    unless on(tenant)\\\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
+    \ $value }} unassigned shards — check node capacity'\n      description_zh: '{{\
+    \ $value }} 個未分配的分片 — 請檢查節點容量'\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: ES unassigned shards — check node\
+    \ capacity'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: Elasticsearch 未分配分片 — 請檢查節點容量'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      summary: Elasticsearch has unassigned shards on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 有未分配的分片'\n     \
+    \ tier: '{{ $labels.tier }}'\n  - alert: ElasticsearchPendingTasks\n    expr:\
+    \ \"(\\n  (\\n    (\\n      tenant:es_pending_tasks:max\\n      > on(tenant) group_left\\\
+    n      tenant:alert_threshold:es_pending_tasks\\n    )\\n    unless on(tenant)\\\
     n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
     \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
     n  (\\n    (\\n      tenant:es_pending_tasks:max\\n      > on(tenant) group_left\\\
     n      tenant:alert_threshold:es_pending_tasks\\n    )\\n    unless on(tenant)\\\
     n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
     \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Elasticsearch\
-    \ pending cluster tasks on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Elasticsearch 有待處理的叢集工作'\n      platform_summary: '[{{ $labels.tier }}]\
-    \ {{ $labels.tenant }}: ES pending cluster tasks — cluster overload review'\n\
-    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch\
-    \ 待處理叢集工作 — 請檢查叢集負載'\n      description: '{{ $value }} pending tasks — cluster\
-    \ may be overloaded'\n      description_zh: '{{ $value }} 個待處理工作 — 叢集可能負載過高'\n\
-    \      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n"
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
+    \ $value }} pending tasks — cluster may be overloaded'\n      description_zh:\
+    \ '{{ $value }} 個待處理工作 — 叢集可能負載過高'\n      owner: '{{ $labels.owner }}'\n     \
+    \ platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: ES pending cluster\
+    \ tasks — cluster overload review'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: Elasticsearch 待處理叢集工作 — 請檢查叢集負載'\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      summary: Elasticsearch pending cluster tasks\
+    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch\
+    \ 有待處理的叢集工作'\n      tier: '{{ $labels.tier }}'\n"

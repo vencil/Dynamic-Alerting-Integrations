@@ -46,20 +46,20 @@ spec:
         \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: jvm_gc_pause
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMHighGCPause on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 過高'
+        description: GC pause rate {{ $value }}s/5m exceeds threshold
+        description_zh: GC pause 速率 {{ $value }}秒/5分鐘 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: GC pause elevated
           — JVM tuning review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：GC pause 升高
           — JVM 調優審查'
-        description: GC pause rate {{ $value }}s/5m exceeds threshold
-        description_zh: GC pause 速率 {{ $value }}秒/5分鐘 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMHighGCPause on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 過高'
         tier: '{{ $labels.tier }}'
     - alert: JVMHighGCPauseCritical
       expr: "(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n      > on(tenant) group_left\n\
@@ -72,20 +72,20 @@ spec:
         \ tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: jvm_gc_pause
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMHighGCPauseCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 嚴重過高'
+        description: GC pause rate {{ $value }}s/5m exceeds critical threshold
+        description_zh: GC pause 速率 {{ $value }}秒/5分鐘 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical GC
           pause — application performance impacted'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 GC pause
           — 應用程式效能受影響'
-        description: GC pause rate {{ $value }}s/5m exceeds critical threshold
-        description_zh: GC pause 速率 {{ $value }}秒/5分鐘 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMHighGCPauseCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 嚴重過高'
         tier: '{{ $labels.tier }}'
     - alert: JVMMemoryPressure
       expr: "(\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant)\
@@ -98,20 +98,20 @@ spec:
         \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: jvm_memory
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMMemoryPressure on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM 記憶體壓力'
+        description: Heap usage {{ $value }}% exceeds threshold
+        description_zh: Heap 使用率 {{ $value }}% 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: heap memory
           pressure — JVM sizing review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：heap 記憶體壓力
           — JVM 大小調整審查'
-        description: Heap usage {{ $value }}% exceeds threshold
-        description_zh: Heap 使用率 {{ $value }}% 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMMemoryPressure on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM 記憶體壓力'
         tier: '{{ $labels.tier }}'
     - alert: JVMMemoryPressureCritical
       expr: "(\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant)\
@@ -124,20 +124,20 @@ spec:
         \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: jvm_memory
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMMemoryPressureCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM 記憶體壓力嚴重'
+        description: Heap usage {{ $value }}% exceeds critical threshold
+        description_zh: Heap 使用率 {{ $value }}% 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical heap
           pressure — OOM risk, escalate'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 heap 記憶體壓力
           — OOM 風險，需升級處理'
-        description: Heap usage {{ $value }}% exceeds critical threshold
-        description_zh: Heap 使用率 {{ $value }}% 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMMemoryPressureCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM 記憶體壓力嚴重'
         tier: '{{ $labels.tier }}'
     - alert: JVMThreadPoolExhaustion
       expr: "(\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
@@ -150,20 +150,20 @@ spec:
         \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: jvm_threads
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMThreadPoolExhaustion on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM thread pool 耗盡'
+        description: Active threads {{ $value }} exceeds threshold
+        description_zh: 活動 thread 數 {{ $value }} 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: thread pool
           saturation — request backlog risk'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：thread pool
           飽和 — request 積壓風險'
-        description: Active threads {{ $value }} exceeds threshold
-        description_zh: 活動 thread 數 {{ $value }} 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMThreadPoolExhaustion on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM thread pool 耗盡'
         tier: '{{ $labels.tier }}'
     - alert: JVMThreadPoolExhaustionCritical
       expr: "(\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
@@ -176,20 +176,20 @@ spec:
         \ tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: jvm_threads
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMThreadPoolExhaustionCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM thread pool 嚴重耗盡'
+        description: Active threads {{ $value }} exceeds critical threshold
+        description_zh: 活動 thread 數 {{ $value }} 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical thread
           exhaustion — service degradation likely'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 thread
           耗盡 — 服務降級可能性高'
-        description: Active threads {{ $value }} exceeds critical threshold
-        description_zh: 活動 thread 數 {{ $value }} 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMThreadPoolExhaustionCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM thread pool 嚴重耗盡'
         tier: '{{ $labels.tier }}'
     - alert: JVMPerformanceDegraded
       expr: "(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m > on(tenant) group_left\
@@ -204,19 +204,19 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: critical
         metric_group: jvm_performance
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: JVMPerformanceDegraded on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 JVM 效能降級'
+        description: Both GC pause and memory exceed thresholds — JVM performance
+          degraded
+        description_zh: GC pause 和記憶體皆超出閾值 — JVM 效能降級
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: multi-signal
           JVM degradation — escalate'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：多訊號 JVM 降級
           — 需升級處理'
-        description: Both GC pause and memory exceed thresholds — JVM performance
-          degraded
-        description_zh: GC pause 和記憶體皆超出閾值 — JVM 效能降級
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: JVMPerformanceDegraded on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 JVM 效能降級'
         tier: '{{ $labels.tier }}'

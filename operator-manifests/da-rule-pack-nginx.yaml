@@ -49,20 +49,20 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: nginx_connections
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxHighConnections on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線數過高'
+        description: Active connections {{ $value }} exceeds threshold
+        description_zh: 活動連線 {{ $value }} 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: Nginx connection
           threshold exceeded — upstream review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：Nginx 連線閾值已超出
           — upstream 審查'
-        description: Active connections {{ $value }} exceeds threshold
-        description_zh: 活動連線 {{ $value }} 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxHighConnections on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線數過高'
         tier: '{{ $labels.tier }}'
     - alert: NginxHighConnectionsCritical
       expr: "(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
@@ -75,20 +75,20 @@ spec:
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: nginx_connections
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxHighConnectionsCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線飽和嚴重'
+        description: Active connections {{ $value }} exceeds critical threshold
+        description_zh: 活動連線 {{ $value }} 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical Nginx
           connection saturation — escalate'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 Nginx 連線飽和
           — 需升級處理'
-        description: Active connections {{ $value }} exceeds critical threshold
-        description_zh: 活動連線 {{ $value }} 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxHighConnectionsCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線飽和嚴重'
         tier: '{{ $labels.tier }}'
     - alert: NginxRequestRateSpike
       expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
@@ -101,20 +101,20 @@ spec:
         \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: nginx_request_rate
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxRequestRateSpike on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰'
+        description: Request rate {{ $value }} req/s exceeds threshold
+        description_zh: Request 速率 {{ $value }} 請求/秒 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: request rate
           spike — traffic pattern review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：request 速率尖峰
           — 流量模式審查'
-        description: Request rate {{ $value }} req/s exceeds threshold
-        description_zh: Request 速率 {{ $value }} 請求/秒 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxRequestRateSpike on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰'
         tier: '{{ $labels.tier }}'
     - alert: NginxRequestRateSpikeCritical
       expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
@@ -127,20 +127,20 @@ spec:
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: nginx_request_rate
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxRequestRateSpikeCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰嚴重'
+        description: Request rate {{ $value }} req/s exceeds critical threshold
+        description_zh: Request 速率 {{ $value }} 請求/秒 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical request
           rate — possible DDoS or traffic surge, escalate'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 request
           速率 — 可能 DDoS 或流量激增，需升級處理'
-        description: Request rate {{ $value }} req/s exceeds critical threshold
-        description_zh: Request 速率 {{ $value }} 請求/秒 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxRequestRateSpikeCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰嚴重'
         tier: '{{ $labels.tier }}'
     - alert: NginxConnectionBacklog
       expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
@@ -153,20 +153,20 @@ spec:
         \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
-        severity: warning
         metric_group: nginx_waiting
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxConnectionBacklog on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓'
+        description: Waiting connections {{ $value }} exceeds threshold
+        description_zh: 等待中的連線 {{ $value }} 超出閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: connection backlog
           building — upstream capacity review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：連線積壓正在累積 —
           upstream 容量審查'
-        description: Waiting connections {{ $value }} exceeds threshold
-        description_zh: 等待中的連線 {{ $value }} 超出閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxConnectionBacklog on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓'
         tier: '{{ $labels.tier }}'
     - alert: NginxConnectionBacklogCritical
       expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
@@ -179,17 +179,17 @@ spec:
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
-        severity: critical
         metric_group: nginx_waiting
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: NginxConnectionBacklogCritical on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓嚴重'
+        description: Waiting connections {{ $value }} exceeds critical threshold
+        description_zh: 等待中的連線 {{ $value }} 超出嚴重閾值
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection
           backlog — service degradation likely'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重連線積壓 — 服務降級可能性高'
-        description: Waiting connections {{ $value }} exceeds critical threshold
-        description_zh: 等待中的連線 {{ $value }} 超出嚴重閾值
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: NginxConnectionBacklogCritical on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 上 Nginx 連線積壓嚴重'
         tier: '{{ $labels.tier }}'
