@@ -800,6 +800,11 @@ _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS: frozenset[str] = frozenset({
 # `tests/lint/test_check_threshold_reachability.py`, so this table cannot drift
 # from the confd-schema hooks' scope without a test going red.
 _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
+    "components/da-tools/app/examples/cardinality-demo/conf.d": (
+        1, 0,
+        "the QUICKSTART cardinality demo (#3380). min keys is 0 because its one "
+        "`_defaults.yaml` declares the demo tenant's keys under "
+        "`optional_overrides:` only — the artifact count is what guards it."),
     "components/threshold-exporter/config/conf.d": (
         1, 15,
         "the exporter's own conf.d: the dev/template tree every doc points at. "
@@ -1011,6 +1016,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # knows about (`_tracked_confd_roots`), and a root with no defaults artifact is
 # accounted for explicitly in `_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS` below.
 _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
+    "components/da-tools/app/examples/cardinality-demo/conf.d",
     "components/threshold-exporter/config/conf.d",
     "rule-packs/recipes/examples/conf.d",
     "try-local/seed/conf.d",
@@ -1043,6 +1049,10 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
 # line here. ⚠️ This pointer exists because the disclosure names the mechanism
 # but a maintainer reaching for the exemption edits THIS list, not that one.
 _DEFAULTS_ROOTS_MAY_BE_EMPTY: frozenset[str] = frozenset({
+    # The QUICKSTART cardinality demo (#3380): its `_defaults.yaml` declares the
+    # demo tenant's keys under `optional_overrides:` only — so the exporter
+    # serves them, one series each — and has no `defaults:` section on purpose.
+    "components/da-tools/app/examples/cardinality-demo/conf.d",
     # Both files here declare only other sections (custom-alert recipe examples);
     # `_SHIPPED_CONFD_ROOTS` already records the same fact as `min keys = 0`.
     "rule-packs/recipes/examples/conf.d",
@@ -1072,11 +1082,6 @@ _DEFAULTS_ROOTS_MAY_BE_EMPTY: frozenset[str] = frozenset({
 # beside the arm itself; the consequence is that "a root here that is deleted"
 # above means literally here, not anywhere in the two lists.
 _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS: dict[str, str] = {
-    "components/da-tools/app/examples/cardinality-demo/conf.d":
-        "the QUICKSTART cardinality demo: one `tenants:` file carrying enough "
-        "per-tenant metric keys to blow da-guard's --cardinality-limit. It "
-        "demonstrates a TENANT-side budget, so there is no platform-defaults "
-        "layer in it for the defaults-tier faces to read.",
     "tests/golden/fixtures/flat/conf.d":
         "the golden fixture for the FLAT (no-hierarchy) layout — its whole "
         "point is a conf.d holding a single `tenants:` file with no "
