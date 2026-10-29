@@ -386,7 +386,10 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     _grar_parse.set_git_irregular_entries(irregular)
     rc, memory = 1, False
     try:
-        gar.main(argv)
+        # ADR-038 §5: not the CLI's key verdict — this process judges the
+        # keys itself below (key_verdict()), after a pass and under its own
+        # deadline; the CLI's would judge every write a second time, outside it.
+        gar.main(argv, key_verdict=False)
         rc = 0
     except SystemExit as exc:
         rc = _exit_code_of(exc)
