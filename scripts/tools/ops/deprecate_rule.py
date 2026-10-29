@@ -85,7 +85,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and reading)
 import _lib_parse_tree  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import require_dir, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer)
     DA_GUARD_PREFIX,
@@ -930,9 +930,7 @@ def _main():
 
 def _deprecate(args):
     """The run, once the arguments are parsed."""
-    if not Path(args.config_dir).is_dir():
-        print(f"ERROR: config-dir not found: {args.config_dir}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    require_dir(args.config_dir, flag="--config-dir")  # #3276
 
     mode = "執行" if args.execute else "預覽"
 

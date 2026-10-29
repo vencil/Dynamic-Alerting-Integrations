@@ -572,9 +572,12 @@ class TestCLI:
         d = tmp_path / "exists"
         d.mkdir()
         cli_argv("drift_detect", "--dirs", f"{d},{tmp_path / 'nope'}")
-        with pytest.raises(SystemExit) as exc_info:
+        from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
+        with pytest.raises(CallerError) as exc_info:
             dd.main()
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert exc_info.value.reason == "dir_not_found"
+        assert str(tmp_path / "nope") in str(exc_info.value)
+        assert f"{d}:" not in str(exc_info.value)
 
     def test_main_label_mismatch(self, two_dirs, monkeypatch, cli_argv):
         """--labels 數量不符 → caller error (bad args)。"""

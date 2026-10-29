@@ -456,7 +456,7 @@ class TestBaseConfigFlag:
         rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
                       "--base-config", str(tmp_path / "missing.yml")])
         assert rc == 2
-        assert "not a file" in capsys.readouterr().err
+        assert f"--base-config {tmp_path / 'missing.yml'}: " in capsys.readouterr().err
 
     @pytest.mark.parametrize("receivers", [
         [{"slack_configs": [{"channel": "#x"}]}],  # a receiver without name

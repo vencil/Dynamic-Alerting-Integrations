@@ -28,8 +28,10 @@ import yaml
 
 import gitops_check as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
+
+_REPO = Path(__file__).resolve().parents[2]
 
 
 def run_main(argv):
@@ -96,7 +98,7 @@ class TestLocalDirMissingIsCallerError:
         assert "Traceback" not in proc.stderr
         assert proc.stderr.count("ERROR:") == 1, proc.stderr
         # named before da-guard is asked — not da-guard failing on no tree
-        assert "is not a directory" in proc.stderr or "不是目錄" in proc.stderr, proc.stderr
+        assert f"ERROR: --dir {missing}: {os.strerror(errno.ENOENT)}" in proc.stderr, proc.stderr
         if as_json:
             doc = json.loads(proc.stdout)
             assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_found")
@@ -906,6 +908,30 @@ class TestErrorRecovery:
         with refuses("team/bad.yaml") as err:
             gc.check_local(config_dir)
         assert "invalid_utf8: not valid UTF-8 at byte 12" in err.getvalue()
+
+    def test_local_names_a_dir_it_cannot_list(self):
+        """#3277: `--dir` itself cannot be listed (mode 000 to this uid). The
+        refusal is da-guard's for the root (`walk_error`, rc 2) — never a
+        report that `_defaults.yaml` is missing from a tree nobody read."""
+        with unprivileged_sandbox(str(_REPO)) as (box, run):
+            conf = Path(box) / "conf.d"
+            conf.mkdir()
+            (conf / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+            (conf / "_defaults.yaml").chmod(0o644)
+            conf.chmod(0)
+            probe = run([sys.executable, "-c", "import os, sys; os.listdir(sys.argv[1])",
+                         str(conf)])
+            assert probe.returncode != 0, "the uid can list it: the case would be vacuous"
+            proc = run([sys.executable,
+                        str(Path(box) / "scripts" / "tools" / "ops" / "gitops_check.py"),
+                        "local", "--dir", str(conf), "--json"])
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stdout + proc.stderr
+        assert "Traceback" not in proc.stderr, proc.stderr
+        assert "(walk_error)" in proc.stderr, proc.stderr
+        assert "_defaults.yaml" not in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+        doc = json.loads(proc.stdout)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "conf_d_not_servable"), doc
+        assert doc["refused_paths"] == [{"path": ".", "verdict": "unservable"}], doc
 
 
 # ── 11. Timestamp Tests ────────────────────────────────────────────────────

@@ -306,8 +306,10 @@ class TestCLI:
         assert "team-sre" in data
 
     def test_missing_config_dir(self):
-        rc = main(["--config-dir", "/nonexistent/path"])
-        assert rc == EXIT_CALLER_ERROR
+        from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
+        with pytest.raises(CallerError) as exc:
+            main(["--config-dir", "/nonexistent/path"])
+        assert exc.value.reason == "dir_not_found"
 
     def test_unknown_tenant_warns(self, full_config, capsys):
         rc = main(["--config-dir", full_config, "--tenant", "ghost"])

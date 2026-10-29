@@ -84,9 +84,11 @@ class TestDiscoverYamls:
         assert all(f.suffix == ".yaml" for f in result)
 
     def test_missing_dir_raises(self):
-        """不存在的目錄 raise FileNotFoundError。"""
-        with pytest.raises(FileNotFoundError):
+        """不存在的目錄是呼叫端錯誤（#3276：共用的路徑判定）。"""
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc:
             discover_yamls(Path("/nonexistent/dir"))
+        assert exc.value.reason == "dir_not_found"
 
     def test_empty_dir(self, config_dir):
         """空目錄回傳空清單。"""
@@ -501,7 +503,10 @@ class TestMainCLI:
     def test_missing_source_returns_2(self, config_dir, monkeypatch, cli_argv):
         """不存在的 source 目錄回傳 exit code 2。"""
         cli_argv('assemble', '--sources', '/nonexistent/dir', '--check')
-        assert main() == 2
+        from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
+        with pytest.raises(CallerError) as exc:
+            main()
+        assert exc.value.reason == "dir_not_found"
 
     def test_assemble_json_output(self, config_dir, monkeypatch, capsys, cli_argv):
         """組裝模式 --json 輸出結構化結果。"""

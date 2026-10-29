@@ -223,10 +223,6 @@ DEBT = {
         (1, Reading.A),
     ('scripts/tools/lint/check_rulepack_sync.py', '_groups_from_rulepack'):
         (1, Reading.A),
-    ('scripts/tools/lint/check_scrape_reachability.py', 'load_repo_jobs'):
-        (1, Reading.B),
-    ('scripts/tools/lint/check_scrape_reachability.py', 'parse_scrape_jobs'):
-        (1, Reading.B),
     ('scripts/tools/lint/check_scrape_reachability.py', 'parse_services'):
         (1, Reading.D),
     ('scripts/tools/lint/check_single_writer_invariant.py', 'check_targets'):
@@ -291,8 +287,6 @@ DEBT = {
         (1, Reading.E),
     ('scripts/tools/ops/onboard_platform.py', 'analyze_rule_files'):
         (2, Reading.A),
-    ('scripts/tools/ops/onboard_platform.py', 'parse_scrape_configs'):
-        (2, Reading.B),
     ('scripts/tools/ops/operator_generate.py', 'generate_crds'):
         (1, Reading.A),
     ('scripts/tools/ops/rule_pack_diff.py', 'load_rule_pack'):

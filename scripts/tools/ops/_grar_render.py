@@ -55,7 +55,7 @@ from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
-from _lib_io import safe_label  # noqa: E402
+from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -335,9 +335,10 @@ def load_base_config(path: str | None) -> dict:
     """
     if path is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
-    if not Path(path).is_file():
+    base_config_problem = classify_path(path, "file", flag="--base-config")  # #3276
+    if base_config_problem is not None:
         raise BaseConfigInputError(
-            f"--base-config: not a file: {path!r}\n"
+            f"{base_config_problem.message}\n"
             "  --base-config takes a PATH to a base Alertmanager YAML "
             "(global / route / receivers / inhibit_rules).\n"
             "  ⛔ Do not drop the flag to clear this error — that substitutes "

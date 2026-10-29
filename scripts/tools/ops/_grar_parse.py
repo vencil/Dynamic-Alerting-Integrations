@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 # ADR-036 step 4 (#2906): every conf.d read on this path is `da-guard
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).
@@ -1176,8 +1176,9 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "duplicate_tenants": {},
     }
 
-    if not os.path.isdir(config_dir):
-        print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
+    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    if config_dir_problem is not None:
+        print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # #2326 (ADR-016 "Amendment 2026-09-28", ADR-017 Decision 9): this reader walks the WHOLE
