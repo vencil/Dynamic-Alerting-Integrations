@@ -220,3 +220,32 @@ def test_importing_the_module_patches_nothing():
     import subprocess
     assert os.waitpid is not mjb._waitpid_with_rusage
     assert subprocess.Popen.__init__ is not mjb._popen_init
+
+
+def test_the_generator_runs_as_the_container_runs_it(monkeypatch, tmp_path):
+    """Stage 2 is the container's generator call: `gar.main(argv,
+    key_verdict=False)` (`_gsvc_child`). The default would also run the
+    whole-tree key verdict inside it, which the container never does, and
+    stage 3 already times the container's own (ADR-038 §5)."""
+    import _gsvc_child
+    import _lib_parse_tree
+    import generate_alertmanager_routes as gar
+    calls = []
+
+    def fake_main(argv, **kw):
+        calls.append((argv, kw))
+        raise SystemExit(0)
+    monkeypatch.setattr(_lib_parse_tree, "run_under_memory_limit", lambda: None)
+    monkeypatch.setenv("GOTRACEBACK", "single")  # judge() sets it; restored after
+    monkeypatch.setattr(mjb, "_LAUNCH_DIR", None)
+    for name in ("read_tree", "materialise", "apply_writes"):
+        monkeypatch.setattr(_gsvc_child, name, lambda *a: None)
+    monkeypatch.setattr(gar, "main", fake_main)
+    job = tmp_path / "job"
+    job.mkdir()
+    report = mjb.judge({"job_dir": str(job), "write": dict(WRITE), "base_commit": "0" * 40,
+                        "deadline_seconds": 20.0, "repo": str(tmp_path), "memory_limit": 0,
+                        "da_guard": "/bin/true"})
+    assert report["generator_rc"] == 0
+    assert [kw for _argv, kw in calls] == [{"key_verdict": False}]
+    assert "--validate" in calls[0][0]

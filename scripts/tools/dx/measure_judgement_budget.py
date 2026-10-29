@@ -20,7 +20,8 @@ write when the per-file parse cache is gone, in one judgement process:
    ``apply_writes`` — the container's own functions, so ``git ls-tree`` and
    ``git cat-file --batch`` run as they do there);
 2. the route generator, ``generate_alertmanager_routes.main`` with
-   ``--validate --strict --findings-json`` (the argv ``_gsvc_child`` builds),
+   ``--validate --strict --findings-json`` (the argv ``_gsvc_child`` builds;
+   ``key_verdict=False``, as there),
    with NO parse cache installed: it reads conf.d through one
    ``da-guard parse-tree`` tree-mode run, and its ``--validate`` runs
    ``amtool check-config`` on the generated config;
@@ -498,7 +499,9 @@ def judge(spec: dict) -> dict:
     t = time.monotonic()
     memory, rc = None, None
     try:
-        gar.main(argv)
+        # As `_gsvc_child` calls it: the container judges the keys itself,
+        # not inside the generator (ADR-038 §5); stage 3 times that half.
+        gar.main(argv, key_verdict=False)
         rc = 0
     except SystemExit as exc:
         rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
