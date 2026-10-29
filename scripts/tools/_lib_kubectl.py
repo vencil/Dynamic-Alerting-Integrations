@@ -25,6 +25,10 @@ only the ``get`` verb, which a Role restricted by ``resourceNames`` grants
 (a ``--field-selector`` list needs ``list``, which such a Role refuses —
 measured on kubectl 1.37.1: get rc 0, field-selector list rc 1 Forbidden).
 
+A container's log is read with ``kubectl_logs`` — ``kubectl logs``, the
+one read here that is not a ``get``: its text when kubectl answered, else
+``KubectlError`` on the same terms (#3349).
+
 ``KubectlError`` is a named caller error (reason ``kubectl_error``):
 uncaught, ``run()`` ends the process at rc 2 with one ``ERROR:`` line.
 """
@@ -32,6 +36,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 from typing import Any, Optional
 
 from _lib_exitcodes import CallerError
@@ -53,6 +58,37 @@ def _last_line(text: str) -> str:
     return ""
 
 
+def _answer(cmd: list[str], what: str, timeout: float) -> str:
+    """kubectl's stdout when it answered (rc 0), else ``KubectlError``: not
+    on PATH, no answer within *timeout*, or a non-zero exit (named by
+    kubectl's own last stderr line). The one place that decides it.
+
+    Both streams go to files, not pipes: the answer is read once kubectl
+    itself has exited. A process kubectl leaves behind still holding a pipe
+    (an exec credential plugin's helper) would otherwise hold the read open
+    until it exits too — an answer reported as none (#3349 review)."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                  timeout=timeout, check=False)
+        except FileNotFoundError as exc:
+            raise KubectlError(f"{what}: kubectl is not on PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise KubectlError(f"{what}: no answer within {timeout:.3g}s") from exc
+        out.seek(0)
+        err.seek(0)
+        stdout = out.read().decode("utf-8", "replace")
+        stderr = err.read().decode("utf-8", "replace")
+    if proc.returncode != 0:
+        why = _last_line(stderr) or "no message on stderr"
+        raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
+    return stdout
+
+
+def _kubectl(kubeconfig: Optional[str]) -> list[str]:
+    return ["kubectl", "--kubeconfig", kubeconfig] if kubeconfig else ["kubectl"]
+
+
 def kubectl_list(kind: str, *, namespace: Optional[str] = None,
                  selector: Optional[str] = None,
                  field_selector: Optional[str] = None,
@@ -63,10 +99,7 @@ def kubectl_list(kind: str, *, namespace: Optional[str] = None,
     *selector* is a label selector (``-l``), *field_selector* a field
     selector; *namespace* None lists in kubectl's current namespace.
     """
-    cmd = ["kubectl"]
-    if kubeconfig:
-        cmd += ["--kubeconfig", kubeconfig]
-    cmd += ["get", kind]
+    cmd = _kubectl(kubeconfig) + ["get", kind]
     if namespace is not None:
         cmd += ["-n", namespace]
     if selector:
@@ -75,18 +108,9 @@ def kubectl_list(kind: str, *, namespace: Optional[str] = None,
         cmd += ["--field-selector", field_selector]
     cmd += ["-o", "json"]
     what = f"`kubectl get {kind}`" + (f" in namespace {namespace!r}" if namespace is not None else "")
+    out = _answer(cmd, what, timeout)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout, check=False)
-    except FileNotFoundError as exc:
-        raise KubectlError(f"{what}: kubectl is not on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise KubectlError(f"{what}: no answer within {timeout:g}s") from exc
-    if proc.returncode != 0:
-        why = _last_line(proc.stderr) or "no message on stderr"
-        raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
-    try:
-        doc = json.loads(proc.stdout)
+        doc = json.loads(out)
     except ValueError as exc:
         raise KubectlError(f"{what}: output is not JSON ({exc})") from exc
     items = doc.get("items") if isinstance(doc, dict) else None
@@ -101,30 +125,31 @@ def kubectl_get(kind: str, name: str, *, namespace: Optional[str] = None,
     """The object *kind*/*name*, None when it does not exist, or
     ``KubectlError`` when kubectl does not answer (see the module docstring).
     Needs only ``get`` on that object."""
-    cmd = ["kubectl"]
-    if kubeconfig:
-        cmd += ["--kubeconfig", kubeconfig]
-    cmd += ["get", kind, name]
+    cmd = _kubectl(kubeconfig) + ["get", kind, name]
     if namespace is not None:
         cmd += ["-n", namespace]
     cmd += ["--ignore-not-found", "-o", "json"]
     what = f"`kubectl get {kind} {name}`" + (f" in namespace {namespace!r}" if namespace is not None else "")
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout, check=False)
-    except FileNotFoundError as exc:
-        raise KubectlError(f"{what}: kubectl is not on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise KubectlError(f"{what}: no answer within {timeout:g}s") from exc
-    if proc.returncode != 0:
-        why = _last_line(proc.stderr) or "no message on stderr"
-        raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
-    if not proc.stdout.strip():
+    out = _answer(cmd, what, timeout)
+    if not out.strip():
         return None
     try:
-        doc = json.loads(proc.stdout)
+        doc = json.loads(out)
     except ValueError as exc:
         raise KubectlError(f"{what}: output is not JSON ({exc})") from exc
     if not isinstance(doc, dict):
         raise KubectlError(f"{what}: output is not an object")
     return doc
+
+
+def kubectl_logs(namespace: str, target: str, *, container: Optional[str] = None,
+                 tail: Optional[int] = None, kubeconfig: Optional[str] = None,
+                 timeout: float = 10) -> str:
+    """The log text of *target* (``pod/x``, ``deploy/x``) in *namespace*, or
+    ``KubectlError`` when kubectl does not answer (see the module docstring)."""
+    cmd = _kubectl(kubeconfig) + ["logs", "-n", namespace, target]
+    if container:
+        cmd += ["-c", container]
+    if tail is not None:
+        cmd += [f"--tail={tail}"]
+    return _answer(cmd, f"`kubectl logs {target}` in namespace {namespace!r}", timeout)

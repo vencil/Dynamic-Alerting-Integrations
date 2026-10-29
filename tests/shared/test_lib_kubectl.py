@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 import os
 import stat
+import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -129,3 +131,31 @@ def test_get_without_an_answer_raises(tmp_path, monkeypatch, rc, stdout, stderr,
     _fake_kubectl(tmp_path, monkeypatch, rc, stdout, stderr)
     with pytest.raises(lk.KubectlError, match=why):
         lk.kubectl_get("secret", "s", namespace="ns")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell and background job")
+def test_an_answer_is_read_when_kubectl_exits_not_when_its_children_do(tmp_path, monkeypatch):
+    """#3349 review: kubectl answers and exits, leaving a child (an exec
+    credential plugin's helper) that still holds its stdout and stderr. The
+    answer is read when kubectl exits — read through a pipe, it waited for
+    that child, and a 10s budget reported an answered read as "no answer"."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    pidfile = tmp_path / "child.pid"
+    exe = bindir / "kubectl"
+    exe.write_text("#!/bin/sh\n"
+                   "echo '{\"items\": []}'\n"
+                   "sleep 30 &\n"
+                   f"echo $! > {pidfile}\n"
+                   "exit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    start = time.monotonic()
+    try:
+        assert lk.kubectl_list("pods", timeout=10) == []
+        assert time.monotonic() - start < 5
+    finally:
+        try:
+            os.kill(int(pidfile.read_text().strip()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass

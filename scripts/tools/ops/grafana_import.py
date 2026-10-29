@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_io import classify_path, require_dir  # noqa: E402  (#3276)
+from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
 
 def run_cmd(cmd, dry_run=False):
@@ -58,8 +59,14 @@ def run_cmd(cmd, dry_run=False):
         return "[dry-run]"
     try:
         return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.PIPE, timeout=120).strip()
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         return None
+    # #3349: no kubectl, or no answer in time, is the environment — named
+    # (rc 2, reason kubectl_error), not a traceback.
+    except FileNotFoundError as exc:
+        raise KubectlError(f"`{' '.join(cmd[:3])}`: kubectl is not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise KubectlError(f"`{' '.join(cmd[:3])}`: no answer within 120s") from exc
 
 
 def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
@@ -181,34 +188,11 @@ def verify_dashboards(namespace):
     """Verify existing Grafana dashboard ConfigMaps."""
     checks = []
 
-    # List ConfigMaps with grafana_dashboard label
-    output = run_cmd([
-        "kubectl", "get", "configmap",
-        "-n", namespace,
-        "-l", "grafana_dashboard=1",
-        "-o", "json",
-    ])
-
-    if output is None:
-        checks.append({
-            "check": "list_dashboard_configmaps",
-            "status": "fail",
-            "caller_error": True,  # kubectl transport/env failure = caller-error (exit 2)
-            "detail": "kubectl get configmap failed",
-        })
-        return checks
-
-    try:
-        data = json.loads(output)
-        items = data.get("items", [])
-    except json.JSONDecodeError:
-        checks.append({
-            "check": "list_dashboard_configmaps",
-            "status": "fail",
-            "caller_error": True,  # unparseable kubectl output = caller-error
-            "detail": "Failed to parse kubectl output",
-        })
-        return checks
+    # List ConfigMaps with grafana_dashboard label. #3349: a read that got
+    # no answer (forbidden, unreachable, no kubectl, out of time, not JSON)
+    # raises KubectlError — rc 2, reason kubectl_error — via _lib_kubectl.
+    items = kubectl_list("configmap", namespace=namespace, selector="grafana_dashboard=1",
+                         timeout=120)
 
     if not items:
         checks.append({
