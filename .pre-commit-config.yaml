@@ -1702,7 +1702,12 @@ repos:
 
       - id: image-pin-capability-check
         name: "image-pin capability — a pinned da-tools image must CONTAIN the program the workload runs"
-        entry: python3 -X utf8 scripts/tools/lint/check_image_pin_capability.py
+        # #3206: manifests, values files and the `helm template` output (the
+        # render path, taken together with the template-stripping path) are
+        # read through da-crdecode; with_da_crdecode.sh builds it. The render
+        # path needs helm on PATH (the dev container and the CI lint job pin
+        # it); without it the gate exits 2.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_image_pin_capability.py
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
@@ -1722,7 +1727,9 @@ repos:
         # and `templates/**` at any depth. A `files:` regex wider than the
         # scanner gives a hook that fires and prints OK; one narrower gives an
         # edit that never runs the gate.
-        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*\.ya?ml)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers)\.py)$
+        # The render path reads every file under templates/ (a `_helpers.tpl`
+        # changes what renders) and check_iac_helm.py's RENDER_BASE_SETS.
+        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers|check_iac_helm)\.py|scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: chart-ship-surface
         name: "chart ship surface — every root file of a packaged chart must be declared SHIP or .helmignore'd (#1755)"

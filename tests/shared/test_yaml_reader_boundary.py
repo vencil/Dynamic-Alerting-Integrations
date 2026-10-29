@@ -257,19 +257,12 @@ def test_debt_lists_by_reading() -> None:
 #: A later step adds its letter here when its last row goes (it is a set so two
 #: steps landing in either order merge by union). B: every reader of a
 #: `prometheus.yml` asks `da-read prometheus`; C: every reader of an
-#: Alertmanager config asks `da-read alertmanager`.
-CLEARED: "frozenset[Reading]" = frozenset({Reading.B, Reading.C})
+#: Alertmanager config asks `da-read alertmanager`; D: every reader of a
+#: Kubernetes manifest, Helm values file or rendered chart asks `da-crdecode`.
+CLEARED: "frozenset[Reading]" = frozenset({Reading.B, Reading.C, Reading.D})
 #: A class not cleared yet but down to these rows only — the rows an owner
 #: decision holds back. Empty for a class once it moves to CLEARED.
-REMAINING: "dict[Reading, frozenset[tuple[str, str]]]" = {
-    # Helm templates with their Go actions stripped, then read: the method is
-    # the owner's call (#3206 12d-3); da-crdecode has no reading of a template.
-    Reading.D: frozenset({
-        ("scripts/tools/lint/check_image_pin_capability.py", "_StrictLoader"),
-        ("scripts/tools/lint/check_image_pin_capability.py", "load_all_strict"),
-        ("scripts/tools/lint/check_image_pin_capability.py", "load_strict"),
-    }),
-}
+REMAINING: "dict[Reading, frozenset[tuple[str, str]]]" = {}
 
 
 def test_cleared_readings_have_no_debt() -> None:

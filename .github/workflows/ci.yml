@@ -533,6 +533,15 @@ jobs:
             components/tenant-api/go.sum
             components/da-read/go.sum
 
+      # #3206: `image-pin-capability-check` renders every chart that pins
+      # da-tools (`helm template`, the render path); without helm it exits 2.
+      - name: Set up Helm (image-pin capability render path)
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
+
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
       # image pull on the runner). Pin matches HADOLINT_VERSION in

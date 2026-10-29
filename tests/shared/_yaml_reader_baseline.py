@@ -86,6 +86,12 @@ ALLOWED = {
         (1, '.github/workflows/ci.yml; read by GitHub Actions, no Go consumer'),
     ('scripts/tools/lint/check_flaky_registry.py', 'main'):
         (1, 'the flaky-test registry, a repo data file read only by CI scripts'),
+    ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
+        (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
+            "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
+    ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
+        (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
+            "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
     ('scripts/tools/lint/check_log_egress_policy.py', 'lint_chart'):
         (1, 'a Vector config read by Vector (Rust); no Go consumer and no da-tools reading'),
     ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker.run_fences'):
@@ -174,12 +180,6 @@ DEBT = {
         (1, Reading.A),
     ('scripts/tools/lint/check_ha_threshold_aggregation.py', '_iter_rule_groups'):
         (2, Reading.A),
-    ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
-        (1, Reading.D),
-    ('scripts/tools/lint/check_image_pin_capability.py', 'load_strict'):
-        (1, Reading.D),
     ('scripts/tools/lint/check_maintenance_symmetry.py', 'classify_all'):
         (1, Reading.A),
     ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker._looks_like_confd'):

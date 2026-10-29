@@ -22,6 +22,7 @@ entry point the workload runs. Each test pins one branch of that contract:
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,7 +52,9 @@ _KNOWN_KEYS = (_GOVERN_KEY, _RECONCILER_KEY, _GENERATOR_KEY)
 def live():
     """(workloads, errors) collected from the real repo."""
     errors: list[str] = []
-    workloads = gate.collect_k8s_workloads(errors) + gate.collect_helm_workloads(errors)
+    workloads = gate.union_workloads(
+        gate.collect_k8s_workloads(errors) + gate.collect_helm_workloads(errors),
+        gate.collect_rendered_workloads(errors))
     return workloads, errors
 
 
@@ -861,19 +864,26 @@ def test_two_template_branches_writing_one_key_is_an_error(tmp_path, monkeypatch
     assert any("NO container could be parsed" in e for e in errors), errors
 
 
-def test_duplicate_keys_in_values_are_an_error(tmp_path, monkeypatch):
-    """A values file is read the same way — the LAST pin silently winning there
-    would mean the gate checks a tag the chart does not actually deploy."""
+# #3206 (ADR-036 §12, behaviour change): values files and manifests are read
+# the way Helm / kubectl read them (da-crdecode), and both keep the LAST of
+# two equal keys (measured: helm 4.3.0 `helm template` renders the second
+# value; kubectl's YAMLOrJSONDecoder collapses to the second). The strict
+# PyYAML reading refused them; the gate now checks what is deployed — the
+# last one. Only the STRIPPED templates keep the strict refusal (above).
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_duplicate_keys_in_values_are_read_as_helm_reads_them(tmp_path, monkeypatch):
     _write_chart(tmp_path, values=(
         'image:\n  repository: ghcr.io/vencil/da-tools\n  tag: "v2.9.0"\n'
         'image:\n  repository: ghcr.io/vencil/da-tools\n  tag: "v2.8.0"\n'))
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     errors: list[str] = []
-    assert gate.collect_helm_workloads(errors) == []
-    assert any("duplicate key 'image'" in e for e in errors), errors
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors == []
+    assert [w.image_tag for w in workloads] == ["v2.8.0"]
 
 
-def test_duplicate_keys_in_a_k8s_manifest_are_an_error(tmp_path, monkeypatch):
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_duplicate_keys_in_a_k8s_manifest_are_read_as_kubectl_reads_them(tmp_path, monkeypatch):
     (tmp_path / "k8s").mkdir()
     (tmp_path / "k8s" / "probe.yaml").write_text(
         "apiVersion: v1\n"
@@ -890,8 +900,9 @@ def test_duplicate_keys_in_a_k8s_manifest_are_an_error(tmp_path, monkeypatch):
         encoding="utf-8")
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     errors: list[str] = []
-    assert gate.collect_k8s_workloads(errors) == []
-    assert any("duplicate key 'containers'" in e for e in errors), errors
+    workloads = gate.collect_k8s_workloads(errors)
+    assert errors == []
+    assert [w.entry for w in workloads] == ["validate"]
 
 
 class TestStrictLoader:
@@ -903,12 +914,12 @@ class TestStrictLoader:
         keeps one of two mappings.
         """
         with pytest.raises(yaml.YAMLError) as exc:
-            gate.load_strict("? [a, b]\n: value\n")
+            gate.load_all_strict("? [a, b]\n: value\n")
         assert "unhashable" in str(exc.value)
 
     def test_it_matches_safe_load_on_ordinary_documents(self):
         text = "a: 1\nb:\n  - x\n  - y\n"
-        assert gate.load_strict(text) == yaml.safe_load(text)
+        assert gate.load_all_strict(text) == [yaml.safe_load(text)]
 
     def test_load_all_strict_returns_every_document(self):
         text = "a: 1\n---\nb: 2\n"
@@ -916,21 +927,14 @@ class TestStrictLoader:
 
     def test_a_duplicate_key_raises_rather_than_picking_one(self):
         with pytest.raises(yaml.YAMLError) as exc:
-            gate.load_strict("a: 1\na: 2\n")
+            gate.load_all_strict("a: 1\na: 2\n")
         assert "duplicate key 'a'" in str(exc.value)
 
     def test_a_duplicate_key_nested_in_a_list_also_raises(self):
         with pytest.raises(yaml.YAMLError):
             gate.load_all_strict("items:\n  - k: 1\n    k: 2\n")
 
-    def test_load_strict_refuses_a_multi_document_stream(self):
-        """safe_load raises here; returning the first document would be a
-        silent half-read of a values file."""
-        with pytest.raises(yaml.YAMLError):
-            gate.load_strict("a: 1\n---\nb: 2\n")
-
-    def test_an_empty_document_is_none_not_an_error(self):
-        assert gate.load_strict("") is None
+    def test_an_empty_document_is_no_document_not_an_error(self):
         assert gate.load_all_strict("") == []
 
 
@@ -1112,3 +1116,143 @@ def test_head_would_satisfy_both_workloads():
     assert command_map.get("generator-service") == "generator_service.py"
     assert "generator_service.py" in tool_files
     assert "_federation_revocation_reconciler.py" in tool_files
+
+
+# ── #3206 12d-3: the strip path and the render path, taken together ─────────
+# Two renderable charts (helpers defined, so `helm template` succeeds). Each
+# hides one incapable da-tools container from ONE path; the union must catch
+# both, and dropping the path that sees it must turn the verdict green — the
+# proof that each path carries detection the other does not.
+_RENDERABLE_HELPERS = """\
+{{- define "probe.image" -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag }}
+{{- end -}}
+{{- define "probe.sidecar" -}}
+- name: injected
+  image: {{ include "probe.image" . | quote }}
+  command:
+    - python3
+    - /opt/da-tools/no_such_tool_3206.py
+{{- end -}}
+"""
+_GOOD_CONTAINER = """\
+        - name: good
+          image: {{ include "probe.image" . | quote }}
+          command:
+            - python3
+            - /opt/da-tools/maintenance_scheduler.py
+"""
+#: (a) an incapable container only in an `if` the default values leave off.
+_IF_BRANCH_TMPL = (
+    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: probe\n"
+    "spec:\n  template:\n    spec:\n      containers:\n" + _GOOD_CONTAINER
+    + "        {{- if .Values.extra }}\n"
+    "        - name: off-by-default\n"
+    "          image: {{ include \"probe.image\" . | quote }}\n"
+    "          command:\n            - python3\n"
+    "            - /opt/da-tools/no_such_tool_3206.py\n"
+    "        {{- end }}\n")
+#: (b) an incapable container a template `include`s (whole-line action).
+_INCLUDE_TMPL = (
+    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: probe\n"
+    "spec:\n  template:\n    spec:\n      containers:\n" + _GOOD_CONTAINER
+    + "        {{- include \"probe.sidecar\" . | nindent 8 }}\n")
+_RENDER_VALUES = _VALUES_YAML + "extra: false\n"
+
+
+def _renderable_chart(root: Path, template: str) -> Path:
+    chart = _write_chart(root, values=_RENDER_VALUES, template=template)
+    (chart / "templates" / "_helpers.tpl").write_text(_RENDERABLE_HELPERS, encoding="utf-8")
+    return chart
+
+
+def _verdict(tmp_path, monkeypatch, *, strip=True, render=True):
+    """(violations, errors) of the gate over the chart under tmp_path, with
+    either path optionally dropped. Capabilities are read from this repo's
+    tags (REPO_ROOT restored before run_check)."""
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    stripped = gate.collect_helm_workloads(errors) if strip else []
+    rendered = gate.collect_rendered_workloads(errors) if render else []
+    monkeypatch.setattr(gate, "REPO_ROOT", REPO_ROOT)
+    violations, _ex, _stale, _orph = gate.run_check(
+        gate.union_workloads(stripped, rendered), {})
+    return violations, errors
+
+
+# The render path needs helm; where helm is required (CI, a remote session)
+# its absence fails `test_helm_present_when_required` elsewhere, so a skip
+# here is never the only signal.
+_needs_helm = pytest.mark.skipif(shutil.which("helm") is None, reason="the render path needs helm")
+
+
+@_needs_helm
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_an_if_branch_the_defaults_leave_off_is_caught_by_the_strip_path(tmp_path, monkeypatch):
+    _renderable_chart(tmp_path, _IF_BRANCH_TMPL)
+    violations, errors = _verdict(tmp_path, monkeypatch)
+    assert errors == []
+    assert any("no_such_tool_3206.py" in v for v in violations), violations
+    # the render path alone does not see it: the strip path is what detects it
+    violations, errors = _verdict(tmp_path, monkeypatch, strip=False)
+    assert errors == [] and violations == []
+
+
+@_needs_helm
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_an_included_sidecar_is_caught_by_the_render_path(tmp_path, monkeypatch):
+    _renderable_chart(tmp_path, _INCLUDE_TMPL)
+    violations, errors = _verdict(tmp_path, monkeypatch)
+    assert errors == []
+    assert any("no_such_tool_3206.py" in v and "rendered with default values" in v
+               for v in violations), violations
+    # the strip path alone does not see it: the render path is what detects it
+    violations, errors = _verdict(tmp_path, monkeypatch, render=False)
+    assert errors == [] and violations == []
+
+
+@_needs_helm
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_a_workload_both_paths_find_is_counted_once(tmp_path, monkeypatch):
+    _renderable_chart(tmp_path, _IF_BRANCH_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    both = gate.union_workloads(gate.collect_helm_workloads(errors),
+                                gate.collect_rendered_workloads(errors))
+    assert errors == []
+    assert sorted(w.entry for w in both) == ["maintenance_scheduler.py", "no_such_tool_3206.py"]
+
+
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_no_helm_is_an_error_not_a_pass(tmp_path, monkeypatch):
+    _renderable_chart(tmp_path, _INCLUDE_TMPL)
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(gate.shutil, "which", lambda _name: None)
+    errors: list[str] = []
+    assert gate.collect_rendered_workloads(errors) == []
+    assert len(errors) == 1 and "helm is not on PATH" in errors[0]
+
+
+@_needs_helm
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_a_render_helm_refuses_is_an_error(tmp_path, monkeypatch):
+    _write_chart(tmp_path, values=_RENDER_VALUES)   # `include "probe.name"` undefined
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    assert gate.collect_rendered_workloads(errors) == []
+    assert len(errors) == 1 and "helm template exited" in errors[0], errors
+
+
+def test_no_da_crdecode_is_an_error_not_a_pyyaml_reading(tmp_path, monkeypatch):
+    """#3206: values files and manifests are read Helm's / kubectl's way; with
+    no da-crdecode they are not read at all — an error, never PyYAML."""
+    _write_chart(tmp_path)
+    (tmp_path / "k8s").mkdir()
+    (tmp_path / "k8s" / "x.yaml").write_text("kind: ConfigMap\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-da-crdecode"))
+    errors: list[str] = []
+    assert gate.collect_k8s_workloads(errors) == []
+    assert gate.collect_helm_workloads(errors) == []
+    assert any("k8s/" in e and "the way kubectl does" in e for e in errors), errors
+    assert any("values.yaml" in e and "the way Helm reads it" in e for e in errors), errors
