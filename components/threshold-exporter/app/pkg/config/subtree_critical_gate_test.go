@@ -23,7 +23,7 @@ func TestSubtreeCritical_DeliveredOnlyOverAValuedBase(t *testing.T) {
 		files         map[string]string
 		key           string  // the critical key looked at, as the tree spells it
 		undeliverable bool    // in LoadReport.Undeliverable / not_served undeliverable
-		served        float64 // the critical row's value on /metrics; 0 = none
+		served        float64 // the key's row on /metrics (either reader); 0 = none
 		notServed     map[string]NotServedKey
 	}{
 		{name: "S3 base only in optional_overrides", files: map[string]string{
@@ -58,6 +58,29 @@ func TestSubtreeCritical_DeliveredOnlyOverAValuedBase(t *testing.T) {
 			"_defaults.yaml":     "defaults:\n  mysql_threads_running: 50\n",
 			"sub/_defaults.yaml": "defaults:\n  " + retiredCPU + "_critical: 90\n", "sub/tx.yaml": "tenants:\n  tx: {}\n",
 		}, key: retiredCPU + "_critical", served: 90},
+		// The other reader of a `_critical` key: a root `defaults:` that
+		// values the key itself (no base) is walked by resolveBaseRows, which
+		// serves the subtree's value of it.
+		{name: "root values the _critical key itself, no base: the subtree's value is served", files: map[string]string{
+			"_defaults.yaml":     "defaults:\n  redis_memory_critical: 5\n",
+			"sub/_defaults.yaml": sub, "sub/tx.yaml": "tenants:\n  tx: {}\n",
+		}, key: "redis_memory_critical", served: 90},
+		{name: "root values the retired spelling of the _critical key itself", files: map[string]string{
+			"_defaults.yaml":     "defaults:\n  " + retiredCPU + "_critical: 5\n",
+			"sub/_defaults.yaml": "defaults:\n  mysql_threads_running_critical: 90\n", "sub/tx.yaml": "tenants:\n  tx: {}\n",
+		}, key: "mysql_threads_running_critical", served: 90},
+		// A root-null base: the subtree value is not delivered, so it is the
+		// overlay's undeliverable (an error), not a tenant value the root
+		// null leaves unserved (root_null_undeclared, a warning).
+		{name: "subtree _critical over a root-null base", files: map[string]string{
+			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n  redis_memory: null\n",
+			"sub/_defaults.yaml": sub, "sub/tx.yaml": "tenants:\n  tx: {}\n",
+		}, key: "redis_memory_critical", undeliverable: true,
+			notServed: map[string]NotServedKey{"redis_memory_critical": {Reason: NotServedUndeliverable, File: "sub/_defaults.yaml"}}},
+		{name: "tenant _critical over a root-null base the root values the key of: served, nothing named", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  redis_memory: null\n  redis_memory_critical: 5\n",
+			"sub/tx.yaml":    "tenants:\n  tx:\n    redis_memory_critical: \"90\"\n",
+		}, key: "redis_memory_critical", served: 90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -76,7 +99,7 @@ func TestSubtreeCritical_DeliveredOnlyOverAValuedBase(t *testing.T) {
 			var got float64
 			canon, _ := canonicalKeyFor(tc.key)
 			for _, k := range keyed {
-				if k.Tenant == "tx" && k.Key == canon && k.Severity == "critical" && !k.LegacyTwin {
+				if k.Tenant == "tx" && k.Key == canon && !k.LegacyTwin {
 					got = k.Value
 				}
 			}

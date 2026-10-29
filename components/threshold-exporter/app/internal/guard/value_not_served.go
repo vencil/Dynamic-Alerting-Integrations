@@ -19,7 +19,11 @@ package guard
 // is exit 3, undeliverable is
 // subtree_default_undeliverable, root_null_undeclared is
 // root_default_null_undeclared, root_defaults_unwrapped is the
-// finding of that name).
+// finding of that name). unconsumed (#3378: a threshold key no row phase
+// reads) is deliberately not kept: how severe a key nobody reads is belongs
+// to ADR-038's one shared verdict — an error in a tenant file, a notice in a
+// profile or a platform file — and #3016 leaves the key-name judgement there
+// alone (see config.ValueNotServedAsWritten).
 //
 // A `_custom_alerts` entry whose `threshold:` the exporter refuses — the
 // same grammar and the same finite-number reader as a threshold row (#3209)
