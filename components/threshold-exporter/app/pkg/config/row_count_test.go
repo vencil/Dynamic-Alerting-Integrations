@@ -9,6 +9,7 @@ package config
 import (
 	"io"
 	"log"
+	"reflect"
 	"testing"
 	"time"
 
@@ -171,5 +172,67 @@ func TestPeakTenantRowCounts_DoesNotModifyTheConfig(t *testing.T) {
 	cfg.PeakTenantRowCounts(fixedNow)
 	if after := len(cfg.Tenants["tx"]["redis_keys"].Overrides); after != before || before != 1 {
 		t.Errorf("schedule overrides %d → %d; the config must not change", before, after)
+	}
+}
+
+// PeakTenantRowCountsOf resolves only the tenants asked for, and gives each
+// the entry the full table gives it — schedules and all.
+func TestPeakTenantRowCountsOf_IsTheFullTablesEntry(t *testing.T) {
+	t.Parallel()
+	cfg := loadRowCountTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+		"ta.yaml": "tenants:\n  ta:\n    redis_keys:\n      default: disable\n" +
+			"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
+		"tb.yaml": "tenants:\n  tb:\n    mysql_connections_critical:\n      default: disable\n" +
+			"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"95\"\n",
+		"tc.yaml": "tenants:\n  tc:\n    redis_keys: disable\n",
+	})
+	full := cfg.PeakTenantRowCounts(fixedNow)
+	if want := map[string]int{"ta": 2, "tb": 3, "tc": 1}; !reflect.DeepEqual(full, want) {
+		t.Fatalf("full table %v, want %v", full, want)
+	}
+	for _, subset := range [][]string{{"ta"}, {"tb", "tc"}, {"ta", "tb", "tc"}, {"tc", "nobody"}, nil} {
+		got := cfg.PeakTenantRowCountsOf(subset, fixedNow)
+		want := map[string]int{}
+		for _, id := range subset {
+			if n, ok := full[id]; ok {
+				want[id] = n
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("subset %v: %v, want %v (the full table's entries, no other tenant)", subset, got, want)
+		}
+	}
+}
+
+// `expires:` is read at now: a tenant's time-boxed "disable" switches the
+// default's row off until it expires, and the row is back after — at every
+// minute of the day. (A time-boxed `_critical` value does not change the
+// count: the resolver serves the critical row either way.)
+func TestPeakTenantRowCounts_ExpiresIsReadAtNow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		expires time.Time
+		want    int
+	}{
+		{"before expiry", fixedNow.Add(48 * time.Hour), 1},
+		{"after expiry", fixedNow.Add(-48 * time.Hour), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := loadRowCountTree(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+				"tx.yaml": "tenants:\n  tx:\n    redis_keys:\n      default: disable\n" +
+					"      expires: \"" + tc.expires.Format(time.RFC3339) + "\"\n      reason: drill\n",
+			})
+			got := cfg.PeakTenantRowCounts(fixedNow)["tx"]
+			if oracle := rowsEveryMinute(cfg)["tx"]; got != oracle {
+				t.Errorf("PeakTenantRowCounts = %d, ResolveAt's most rows over the day = %d", got, oracle)
+			}
+			if got != tc.want {
+				t.Errorf("PeakTenantRowCounts = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

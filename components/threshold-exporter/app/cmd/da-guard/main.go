@@ -650,17 +650,22 @@ func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTena
 // in-scope tenant, the user_threshold rows the exporter's own build of the
 // tree (scoped.Config, the build served-values and not_served read) makes
 // its resolver produce at the busiest minute of the UTC day, before the
-// max_metrics_per_tenant cut (config.PeakTenantRowCounts, #3380). now is the
+// max_metrics_per_tenant cut (config.PeakTenantRowCountsOf, only the in-scope
+// tenants are resolved, #3380). now is the
 // run's instant, the one `expires:` is read at (#3368). nil when there is no
 // build.
 func predictedRowCounts(scoped *config.ScopedTenants, now time.Time) map[string]int {
 	if scoped.Config == nil {
 		return nil
 	}
-	all := scoped.Config.PeakTenantRowCounts(now)
-	out := make(map[string]int, len(scoped.Tenants))
+	ids := make([]string, 0, len(scoped.Tenants))
 	for _, ec := range scoped.Tenants {
-		out[ec.TenantID] = all[ec.TenantID]
+		ids = append(ids, ec.TenantID)
+	}
+	counts := scoped.Config.PeakTenantRowCountsOf(ids, now)
+	out := make(map[string]int, len(ids))
+	for _, id := range ids {
+		out[id] = counts[id]
 	}
 	return out
 }

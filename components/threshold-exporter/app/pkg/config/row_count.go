@@ -54,3 +54,18 @@ func (c *ThresholdConfig) PeakTenantRowCounts(now time.Time) map[string]int {
 	}
 	return peak
 }
+
+// PeakTenantRowCountsOf is PeakTenantRowCounts for the given tenants of c
+// only: each one's entry of the full table, from a copy of c that holds just
+// them (a tenant's rows depend only on its own map and the config-wide
+// settings). A tenant absent from c has no entry.
+func (c *ThresholdConfig) PeakTenantRowCountsOf(tenants []string, now time.Time) map[string]int {
+	some := *c
+	some.Tenants = make(map[string]map[string]ScheduledValue, len(tenants))
+	for _, t := range tenants {
+		if overrides, ok := c.Tenants[t]; ok {
+			some.Tenants[t] = overrides
+		}
+	}
+	return some.PeakTenantRowCounts(now)
+}

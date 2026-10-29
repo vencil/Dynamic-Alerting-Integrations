@@ -256,3 +256,107 @@ func TestCardinality_DeclaredSubtreeKey_ExitsZero(t *testing.T) {
 		t.Errorf("must-trigger: limit 1 exit = %d, want %d with 2 rows: %q", code, exitFindings, stdout)
 	}
 }
+
+// A scoped run predicts its in-scope tenants only, each at the count the
+// whole tree's table gives it (config.PeakTenantRowCounts) and /metrics
+// serves; a tenant outside --scope has no entry.
+func TestCardinality_ScopedRunPredictsInScopeTenantsAsTheWholeTree(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+		"a/ta.yaml": "tenants:\n  ta:\n    redis_keys:\n      default: disable\n" +
+			"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
+		"a/tb.yaml": "tenants:\n  tb:\n    mysql_connections_critical: \"90\"\n",
+		"b/tc.yaml": "tenants:\n  tc:\n    redis_keys{db=\"db0\"}: \"10\"\n",
+	})
+	cfg := loadTree(t, dir)
+	whole := cfg.PeakTenantRowCounts(fixedNow)
+	scoped, err := config.ScopeEffective(dir, "a", fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buildCheckInput(scoped, &flags{cardinalityLimit: 1}, fixedNow).PredictedRowCounts
+	if len(got) != 2 {
+		t.Fatalf("predicted %v, want exactly ta and tb (tc is outside --scope a)", got)
+	}
+	for _, id := range []string{"ta", "tb"} {
+		if got[id] != whole[id] {
+			t.Errorf("%s: scoped %d, whole tree %d", id, got[id], whole[id])
+		}
+		if served := peakMetricsRows(t, cfg, id); got[id] != served {
+			t.Errorf("%s: predicted %d, /metrics serves %d", id, got[id], served)
+		}
+	}
+	// tb: mysql_connections, its critical, redis_keys.
+	if got["ta"] != 2 || got["tb"] != 3 {
+		t.Errorf("predicted %v, want ta 2, tb 3", got)
+	}
+}
+
+// Several tenants, each with its own schedule: each is predicted at its own
+// busiest minute, and each prediction is the most series /metrics serves it
+// at any minute of the day.
+func TestCardinality_EachTenantAtItsOwnBusiestMinute(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+		// 02:00-04:00: redis_keys on (2 rows), else off (1).
+		"ta.yaml": "tenants:\n  ta:\n    redis_keys:\n      default: disable\n" +
+			"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
+		// 22:00-06:00: a critical row (3 rows), else 2.
+		"tb.yaml": "tenants:\n  tb:\n    mysql_connections_critical:\n      default: disable\n" +
+			"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"95\"\n",
+		// 09:00-17:00: both thresholds off (0 rows), else 2 — the peak is
+		// outside the window.
+		"tc.yaml": "tenants:\n  tc:\n    mysql_connections:\n      default: \"70\"\n" +
+			"      overrides:\n        - window: \"09:00-17:00\"\n          value: disable\n" +
+			"    redis_keys:\n      default: \"6\"\n" +
+			"      overrides:\n        - window: \"09:00-17:00\"\n          value: disable\n",
+	})
+	cfg := loadTree(t, dir)
+	for id, want := range map[string]int{"ta": 2, "tb": 3, "tc": 2} {
+		got := predictedRows(t, dir, id)
+		if served := peakMetricsRows(t, cfg, id); got != served {
+			t.Errorf("%s: predicted %d, /metrics serves at most %d", id, got, served)
+		}
+		if got != want {
+			t.Errorf("%s: predicted %d, want %d", id, got, want)
+		}
+	}
+	// fixedNow (10:00) is inside tc's window: /metrics serves it nothing
+	// then, and the prediction still counts its busiest minute.
+	if n := metricsRows(t, cfg, fixedNow, "tc", true); n != 0 {
+		t.Errorf("control: /metrics serves tc %d series at 10:00, want 0", n)
+	}
+}
+
+// `expires:` is read at the run's instant: a time-boxed "disable" keeps the
+// default's row off until it expires. Before and after, the prediction is
+// what /metrics serves at that instant.
+func TestCardinality_ExpiresIsReadAtTheRunsInstant(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		expires time.Time
+		want    int
+	}{
+		{"before expiry", fixedNow.Add(48 * time.Hour), 1},
+		{"after expiry", fixedNow.Add(-48 * time.Hour), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeTree(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+				"tx.yaml": "tenants:\n  tx:\n    redis_keys:\n      default: disable\n" +
+					"      expires: \"" + tc.expires.Format(time.RFC3339) + "\"\n      reason: drill\n",
+			})
+			got := predictedRows(t, dir, "tx")
+			if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", true); got != served {
+				t.Errorf("predicted %d, /metrics serves %d at the same instant", got, served)
+			}
+			if got != tc.want {
+				t.Errorf("predicted %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
