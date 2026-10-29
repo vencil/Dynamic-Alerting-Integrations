@@ -694,12 +694,18 @@ def _read_rule_files(file_paths):
     read the way Prometheus loads it (#3206, ADR-036 §12).
 
     A file whose Kubernetes reading (da-crdecode) holds a ConfigMap is a
-    ConfigMap: the rule files are its data values that set out to be one (a
-    `groups:` key), each read by Prometheus' rule loader; any other file is
-    itself a rule file, read by the rule loader. All the rule loader's
-    reading happens in two `da-read prometheus-rules` runs. A file or value
-    the loader refuses is an error naming it with the loader's reason — a
-    refused ConfigMap value used to be dropped without a word. Raises
+    ConfigMap: its rule files are the data values
+    `_lib_consumer_read.configmap_value_is_rule_file` picks — a value whose
+    plain YAML reading has a `groups:` key, or one that reading refuses but
+    the rule loader loads a `groups:` key from. Any other value is not read
+    and not reported: one without `groups:` (an alertmanager.yml), and one
+    both readings refuse (a markdown template — or a rule file broken so
+    badly neither reads it). Every other file — one kubectl's reading
+    refuses included — is itself a rule file, read by the rule loader; one
+    it refuses, or one with no `groups`, is an error naming it. All the rule
+    loader's reading happens in two `da-read prometheus-rules` runs (plus
+    one per ConfigMap value kubectl's reading refuses). A rule file the
+    loader refuses is an error naming it with the loader's reason. Raises
     `_lib_consumer_read.ConsumerReadError` when a binary cannot be had."""
     plain, configmaps = [], []
     for fpath in file_paths:

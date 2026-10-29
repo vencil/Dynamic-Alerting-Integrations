@@ -230,3 +230,28 @@ def test_live_repo_is_compliant():
     """Integration teeth: the actual rule-packs/ tree passes (76 two-arm alerts symmetric,
     :core-factored kubernetes alerts at 0 copies, single-arm liveness out of scope)."""
     assert sym.check() == 0
+
+
+# #3206: a pack kubectl's plain YAML reading refuses cannot be ruled out as a
+# rule file — it goes to Prometheus' rule loader, whose refusal fails the
+# check naming it (it used to be dropped as "not a rule file": fail-open).
+_TAB_BROKEN_PACK = "groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n"
+
+
+def test_pack_no_reader_reads_fails_naming_it(tree, capsys):
+    (tree / "rule-pack-broken.yaml").write_text(_TAB_BROKEN_PACK, encoding="utf-8")
+    (tree / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    assert sym.check() != 0
+    assert "rule-pack-broken.yaml" in capsys.readouterr().err
+
+
+def test_yaml_without_groups_is_not_a_pack(tree):
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": _two_arm()}), encoding="utf-8")
+    (tree / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    assert sym.check() == 0
+
+
+def test_repo_rule_packs_pass(monkeypatch):
+    """smoke：repo 真實的 rule-packs/ → rc 0。"""
+    monkeypatch.setattr(sys, "argv", ["check_maintenance_symmetry.py", "--ci"])
+    assert sym.main() == 0

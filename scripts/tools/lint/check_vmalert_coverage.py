@@ -115,14 +115,15 @@ def declared_alerts() -> dict[str, str]:
     than mask that, a collision is detected and FAILS loudly (CodeRabbit #969).
 
     #3206 (ADR-036 §12): a file under rule-packs/ is a rule pack when it sets
-    out to be one (a `groups:` key in its plain YAML reading); every pack is
-    read the way Prometheus' rule loader reads it (one `da-read
+    out to be one (a `groups:` key in its plain YAML reading) or when that
+    reading refuses it — it cannot then be ruled out (`may_be_rule_file`);
+    every pack is read the way Prometheus' rule loader reads it (one `da-read
     prometheus-rules` run). A pack the loader refuses raises RulePacksRefused
     naming it."""
     out: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
     files = [f for f in _rule_pack_files()
-             if _lib_consumer_read.declares_rule_groups(f.read_bytes())]
+             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
     rule_files = _lib_consumer_read.prometheus_rule_file_results(files)
     refused = [f"{Path(rf.path).name}: {rf.problem}" for rf in rule_files
                if rf.problem is not None]

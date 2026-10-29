@@ -150,3 +150,33 @@ def test_yml_fixture_counts_as_coverage(tree):
     _write_baseline(tr, {})
     assert "A" in cov.tested_alertnames()
     assert cov.check() == 0                       # A covered by the .yml fixture -> clean
+
+
+# #3206: a pack kubectl's plain YAML reading refuses cannot be ruled out as a
+# rule file — it goes to Prometheus' rule loader, whose refusal fails the
+# gate naming it (it used to be dropped as "not a rule file": fail-open).
+_TAB_BROKEN_PACK = "groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n"
+
+
+def test_pack_no_reader_reads_fails_naming_it(tree, monkeypatch, capsys):
+    rp, tr = tree
+    (rp / "rule-pack-broken.yaml").write_text(_TAB_BROKEN_PACK, encoding="utf-8")
+    (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    _write_baseline(tr, {})
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
+    assert cov.main() != 0
+    assert "rule-pack-broken.yaml" in capsys.readouterr().err
+
+
+def test_yaml_without_groups_is_not_a_pack(tree):
+    rp, tr = tree
+    (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    _write_baseline(tr, {})
+    assert cov.declared_alerts() == {}
+    assert cov.check() == 0
+
+
+def test_repo_rule_packs_pass(monkeypatch):
+    """smoke：repo 真實的 rule-packs/ → rc 0。"""
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
+    assert cov.main() == 0

@@ -3,7 +3,7 @@ ADR-036 §12): `prometheus_rule_text_results` (the one helper that hands
 several inner strings to `da-read prometheus-rules` in one run),
 `manifest_rule_file_results` (a ConfigMap / PrometheusRule read the way
 kubectl reads it, its rule files the way Prometheus' rule loader reads them)
-and `declares_rule_groups`.
+and `rule_file_declaration`.
 
 The last part pins what changed for every migrated reader when the reading
 moved from PyYAML (YAML 1.1) to rulefmt (go-yaml v3 into Prometheus' typed
@@ -138,17 +138,34 @@ def test_a_manifest_kubectl_refuses_is_named(tmp_path) -> None:
         cr.manifest_rule_file_results([path])
 
 
-@pytest.mark.parametrize("text,declared", [
-    (RULES, True), ("groups: []\n", True), ("route: {}\n", False),
-    ("not: [yaml\n", False), ("", False), ("- a\n- b\n", False),
-    # kubectl's reading refuses it (+Inf has no JSON); the rule loader loads it
-    ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n"
-     "    annotations: {x: .inf}\n", True),
-    # both refuse it (a markdown template): no rule file
-    ("# - alert: example\n*markdown*\n", False),
+_INF_RULES = ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n"
+              "    annotations: {x: .inf}\n")
+_TAB_BROKEN = "groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n"
+_TEMPLATE = "# - alert: example\n*markdown*\n"
+
+
+@pytest.mark.parametrize("text,declaration", [
+    (RULES, cr.RULE_FILE), ("groups: []\n", cr.RULE_FILE),
+    ("route: {}\n", cr.NOT_A_RULE_FILE), ("", cr.NOT_A_RULE_FILE),
+    ("- a\n- b\n", cr.NOT_A_RULE_FILE),
+    # kubectl's reading refuses these, so it cannot say — not "no"
+    ("not: [yaml\n", cr.UNDECIDED), (_INF_RULES, cr.UNDECIDED),
+    (_TAB_BROKEN, cr.UNDECIDED), (_TEMPLATE, cr.UNDECIDED),
 ])
-def test_declares_rule_groups(text, declared) -> None:
-    assert cr.declares_rule_groups(text) is declared
+def test_rule_file_declaration(text, declaration) -> None:
+    assert cr.rule_file_declaration(text) == declaration
+    assert cr.may_be_rule_file(text) is (declaration != cr.NOT_A_RULE_FILE)
+
+
+@pytest.mark.parametrize("text,is_rule_file", [
+    (RULES, True), ("route: {}\n", False),
+    # undecided: the rule loader loads `groups` from it
+    (_INF_RULES, True),
+    # undecided and the rule loader refuses it too (a template)
+    (_TEMPLATE, False),
+])
+def test_configmap_value_is_rule_file(text, is_rule_file) -> None:
+    assert cr.configmap_value_is_rule_file(text) is is_rule_file
 
 
 # ── what the reading changed (PyYAML YAML 1.1 → rulefmt) ─────────────

@@ -775,6 +775,9 @@ def test_yaml_without_groups_is_no_rule_file(tmp_path, monkeypatch, capsys):
     (_OK_RULE + "---\nfoo: 1\n", "document 2"),
     # neither kubectl's reading nor the loader reads it: never skipped
     ("groups: [unclosed\n", "rule loader"),
+    # a tab in the indentation: both refuse it, so it cannot be ruled out
+    ("groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n",
+     "rule loader"),
 ])
 def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text, why):
     """(b) 有 `groups:` 但規則載入器拒收的 plain 檔 → ERROR，點名檔案。"""
@@ -814,3 +817,18 @@ def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
                       "--policy", _REAL_POLICY, "--ci"], monkeypatch)
     out = capsys.readouterr().out
     assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]
+
+
+def test_configmap_good_and_broken_rule_values(tmp_path, monkeypatch, capsys):
+    """ConfigMap 一好一壞兩個 data 值 → 壞的被點名、rc 非零。"""
+    good = _OK_RULE.replace("\n", "\n    ")
+    bad = "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n".replace(
+        "\n", "\n    ")
+    (tmp_path / "cm.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rules}\ndata:\n"
+        f"  good.yml: |\n    {good}\n  bad.yml: |\n    {bad}\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [line for line in capsys.readouterr().out.splitlines()
+              if line.startswith("ERROR")]
+    assert len(errors) == 1, errors
+    assert "cm.yaml" in errors[0] and "'bad.yml'" in errors[0], errors

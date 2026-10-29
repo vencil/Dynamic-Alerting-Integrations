@@ -44,8 +44,11 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   on it: each manifest the way kubectl reads it, then every ConfigMap
   ``data`` / ``binaryData`` value and every PrometheusRule ``spec`` by the
   rule loader (``RuleFile.manifest`` / ``.kind`` / ``.key`` say where it came
-  from). ``declares_rule_groups(text)`` picks, from a ConfigMap that also
-  carries other files, the values that set out to be rule files.
+  from). ``rule_file_declaration(text)`` says whether a text sets out to be
+  a rule file (yes / no / undecided: kubectl's reading refuses it);
+  ``may_be_rule_file`` (a whole file: undecided goes to the rule loader)
+  and ``configmap_value_is_rule_file`` (a ConfigMap value, which may be a
+  template no reader reads) build on it.
 
 Each raises :class:`ConsumerReadError` when the binary is missing, cannot
 be run, does not finish, refuses the input (its reason is in
@@ -500,34 +503,63 @@ def prometheus_rule_text_results(texts: "Iterable[tuple[str, str | bytes]]",
     return out
 
 
+#: ``rule_file_declaration``'s answers.
+RULE_FILE = "rule-file"
+NOT_A_RULE_FILE = "not-a-rule-file"
+UNDECIDED = "undecided"
+
+
 def documents_declare_rule_groups(docs: "list[Any]") -> bool:
     """Whether a file whose Kubernetes reading (da-crdecode) is *docs* sets
     out to be a rule file: one of the documents is a mapping with a
-    ``groups`` key. The one test ``declares_rule_groups`` and a caller that
-    already holds the documents both use."""
+    ``groups`` key. ``rule_file_declaration`` and a caller that already
+    holds the documents both use it."""
     return any(isinstance(d, dict) and "groups" in d for d in docs)
 
 
-def declares_rule_groups(text: "str | bytes", binary: str | None = None,
-                         read_binary: str | None = None) -> bool:
-    """Whether *text* — a ConfigMap data value, say — sets out to be a rule
-    file: a document of its Kubernetes reading (da-crdecode) is a mapping
-    with a ``groups`` key (``documents_declare_rule_groups``). This only
-    picks what to hand to the rule loader; what the file says is the rule
-    loader's reading.
+def rule_file_declaration(text: "str | bytes", binary: str | None = None) -> str:
+    """Whether *text* — a file, a ConfigMap data value — sets out to be a
+    rule file, by its Kubernetes reading (da-crdecode). Three answers:
 
-    A text that reading refuses is not dropped on its say alone: kubectl's
-    reading refuses some text Prometheus' rule loader reads (an annotation
-    value ``.inf`` is +Inf to sigs.k8s.io/yaml and has no JSON; to rulefmt it
-    is the string ``".inf"``). Such a text is asked of the rule loader
-    (*read_binary*): when it loads a ``groups`` key, the text is a rule file.
-    One both refuse (a markdown template) is not."""
+    * ``RULE_FILE`` — a document is a mapping with a ``groups`` key;
+    * ``NOT_A_RULE_FILE`` — it reads, and no document has one (a recipe,
+      the registry beside the packs);
+    * ``UNDECIDED`` — that reading refuses the text, so it cannot say. This
+      is not "no": kubectl's reading refuses some text Prometheus' rule
+      loader reads (an annotation value ``.inf`` is +Inf to sigs.k8s.io/yaml
+      and has no JSON; rulefmt reads the string ``".inf"``), and a broken
+      rule file (a tab in its indentation) is refused by both.
+
+    A whole file that is ``UNDECIDED`` is handed to the rule loader, whose
+    refusal is the authoritative reason (``may_be_rule_file``). This only
+    picks what to hand to the rule loader; what the file says is the rule
+    loader's reading."""
     try:
         docs = kubernetes_text_documents(text, binary)
     except InputRefused:
-        (rf,) = prometheus_rule_text_results([("text", text)], read_binary)
-        return rf.problem is None and documents_declare_rule_groups(rf.documents)
-    return documents_declare_rule_groups(docs)
+        return UNDECIDED
+    return RULE_FILE if documents_declare_rule_groups(docs) else NOT_A_RULE_FILE
+
+
+def may_be_rule_file(text: "str | bytes", binary: str | None = None) -> bool:
+    """Whether a whole file whose text is *text* goes to the rule loader:
+    anything ``rule_file_declaration`` does not rule out."""
+    return rule_file_declaration(text, binary) != NOT_A_RULE_FILE
+
+
+def configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | None = None,
+                                 read_binary: str | None = None) -> bool:
+    """Whether a ConfigMap data value goes to the rule loader. ``RULE_FILE``
+    does, ``NOT_A_RULE_FILE`` does not. An ``UNDECIDED`` value goes only when
+    the rule loader loads a ``groups`` key from it: a ConfigMap also carries
+    files that are no YAML at all (the Alertmanager templates of
+    k8s/03-monitoring/configmap-alertmanager.yaml, which both readings
+    refuse), so such a value is not taken for a broken rule file."""
+    decl = rule_file_declaration(text, crdecode_binary)
+    if decl != UNDECIDED:
+        return decl == RULE_FILE
+    (rf,) = prometheus_rule_text_results([("text", text)], read_binary)
+    return rf.problem is None and documents_declare_rule_groups(rf.documents)
 
 
 def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
@@ -551,7 +583,7 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
     that is not base64 of UTF-8) is a :class:`RuleFile` with that problem.
     Documents of other kinds are not read. With *only_declared*, a
     ConfigMap value is read only when it sets out to be a rule file
-    (``declares_rule_groups``) — for a ConfigMap that may also carry other
+    (``configmap_value_is_rule_file``) — for a ConfigMap that may also carry other
     files (an Alertmanager template); without it every value is a rule file
     and one that is not is refused. Raises :class:`InputRefused` naming the
     manifest when kubectl's reading refuses it.
@@ -573,7 +605,8 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
                 data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
                 for key, value in data.items():
                     if isinstance(value, str):
-                        if only_declared and not declares_rule_groups(value, crdecode_binary, binary):
+                        if only_declared and not configmap_value_is_rule_file(
+                                value, crdecode_binary, binary):
                             continue
                         keyed.append((path, kind, key, value, None))
                     else:
@@ -587,7 +620,8 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
                         keyed.append((path, kind, key, None,
                                       "binaryData value is not base64 of UTF-8 text"))
                     else:
-                        if only_declared and not declares_rule_groups(text, crdecode_binary, binary):
+                        if only_declared and not configmap_value_is_rule_file(
+                                text, crdecode_binary, binary):
                             continue
                         keyed.append((path, kind, key, text, None))
     readable = [(f"{p}#{k}", t) for p, _kind, k, t, _ in keyed if t is not None]

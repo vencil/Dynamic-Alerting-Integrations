@@ -274,10 +274,11 @@ def read_rule_packs() -> "list[_lib_consumer_read.RuleFile]":
     """The rule files under rule-packs/, as Prometheus' rule loader reads them
     (#3206, ADR-036 §12: one `da-read prometheus-rules` run). A file is a
     rule file when it sets out to be one — a `groups:` key in its plain YAML
-    reading (`declares_rule_groups`); the registry beside the packs is not.
-    Refused ones are in the list with their `problem`."""
+    reading — or when that reading refuses it, which cannot rule it out
+    (`may_be_rule_file`); the registry beside the packs is not. Refused ones
+    are in the list with their `problem`."""
     files = [f for f in _rule_pack_files()
-             if _lib_consumer_read.declares_rule_groups(f.read_bytes())]
+             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
     return _lib_consumer_read.prometheus_rule_file_results(files)
 
 

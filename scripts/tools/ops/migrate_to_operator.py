@@ -257,7 +257,8 @@ def parse_configmap_rules(source_dir: Path,
                 data_section = data.get("data", {})
                 if isinstance(data_section, dict):
                     for key, value in data_section.items():
-                        if isinstance(value, str) and _lib_consumer_read.declares_rule_groups(value):
+                        if isinstance(value, str) and \
+                                _lib_consumer_read.configmap_value_is_rule_file(value):
                             found.append(({
                                 "name": (data.get("metadata") or {}).get("name", yaml_file.stem),
                                 "file": yaml_file.name,
