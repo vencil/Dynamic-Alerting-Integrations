@@ -919,7 +919,9 @@ def estimate_affected_alerts(metric_key):
     key's spelling: ``mysql_connections`` reaches ``MariaDBHighConnections``
     and ``MariaDBSystemBottleneck``, which no CamelCase of the key names.
     ``—`` means no rule-pack alert reads the key (the change reaches no
-    alert); ``unknown`` means the rule packs were not found, and stderr says so.
+    alert); ``unknown`` means the rule packs could not be read — none found,
+    a pack Prometheus' rule loader refuses, or no da-read — and stderr says
+    which.
     """
     alerts = alerts_for_key(metric_key)
     if alerts is None:
