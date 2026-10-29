@@ -260,12 +260,13 @@ def test_lint_file_configmap_wrapper():
             "name": "wrapped_group",
             "rules": [{
                 "alert": "WrappedAlert",
-                "expr": 'holt_winters(my_metric[1h], 0.3, 0.7) > 100',
+                "expr": 'predict_linear(my_metric[1h], 3600) > 100',
                 "labels": {"severity": "critical"},
             }]
         }]
     })
-    content = {"data": {"rules.yaml": inner_yaml}}
+    content = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "r"},
+               "data": {"rules.yaml": inner_yaml}}
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.yaml', delete=False, encoding='utf-8'
     ) as f:
@@ -618,27 +619,30 @@ def test_override_scoped_to_path_only(compiled_forecast_pack, tmp_path):
 
 
 def test_override_keeps_other_checks_live(tmp_path):
-    """豁免檔內其餘 deny 照跑：holt_winters / 超過 forecast lookback 上限的 range 仍是 ERROR。"""
+    """豁免檔內其餘 deny 照跑：超過 forecast lookback 上限的 range 仍是 ERROR；
+    holt_winters 在 Prometheus 3 已不是函式，整檔被 rule loader 拒收，同樣是點名的
+    ERROR（#3206：檔案以 rulefmt 讀）。"""
     over = f"{parse_duration_seconds(FORECAST_MAX_LOOKBACK) + 1}s"   # 剛好超過豁免上限
-    text = (
-        "# GENERATED test fixture — mimics compile_custom_alerts header\n"
-        "groups:\n"
-        "- name: g\n"
-        "  rules:\n"
-        "  - record: custom:metric:x\n"
-        "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n"
-        "  - record: custom:metric:y\n"
-        f"    expr: avg_over_time(my_metric[{over}])\n"
-    )
+    header = ("# GENERATED test fixture — mimics compile_custom_alerts header\n"
+              "groups:\n"
+              "- name: g\n"
+              "  rules:\n")
     fpath = tmp_path / _GENERATED_PACK_RELPATH
     fpath.parent.mkdir(parents=True)
-    fpath.write_text(text, encoding="utf-8")
-    results, _ = lint_custom_rules.lint_file(
-        str(fpath), lint_custom_rules.DEFAULT_POLICY
-    )
-    messages = [r.message for r in results if r.severity == "ERROR"]
-    assert any("holt_winters" in m for m in messages)
-    assert any(f"range vector [{over}]" in m for m in messages)
+
+    def errors(rules):
+        fpath.write_text(header + rules, encoding="utf-8")
+        results, _ = lint_custom_rules.lint_file(
+            str(fpath), lint_custom_rules.DEFAULT_POLICY
+        )
+        return [r.message for r in results if r.severity == "ERROR"]
+
+    assert any(f"range vector [{over}]" in m for m in errors(
+        "  - record: custom:metric:y\n"
+        f"    expr: avg_over_time(my_metric[{over}])\n"))
+    refused = errors("  - record: custom:metric:x\n"
+                     "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n")
+    assert any("rule loader refuses" in m and "holt_winters" in m for m in refused), refused
 
 
 def test_committed_pack_and_policy_in_sync():

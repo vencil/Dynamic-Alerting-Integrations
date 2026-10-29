@@ -255,11 +255,14 @@ def test_debt_lists_by_reading() -> None:
 
 #: The readings whose migration is done: no DEBT row may move to them again.
 #: A later step adds its letter here when its last row goes (it is a set so two
-#: steps landing in either order merge by union). B: every reader of a
-#: `prometheus.yml` asks `da-read prometheus`; C: every reader of an
-#: Alertmanager config asks `da-read alertmanager`; D: every reader of a
-#: Kubernetes manifest, Helm values file or rendered chart asks `da-crdecode`.
-CLEARED: "frozenset[Reading]" = frozenset({Reading.B, Reading.C, Reading.D})
+#: steps landing in either order merge by union). A: every reader of a
+#: Prometheus rule file asks `da-read prometheus-rules`
+#: (`_lib_consumer_read.prometheus_rule_files` / `prometheus_rule_text_results`
+#: / `manifest_rule_file_results`); B: every reader of a `prometheus.yml` asks
+#: `da-read prometheus`; C: every reader of an Alertmanager config asks
+#: `da-read alertmanager`; D: every reader of a Kubernetes manifest, Helm
+#: values file or rendered chart asks `da-crdecode`.
+CLEARED: "frozenset[Reading]" = frozenset({Reading.A, Reading.B, Reading.C, Reading.D})
 #: A class not cleared yet but down to these rows only — the rows an owner
 #: decision holds back. Empty for a class once it moves to CLEARED.
 REMAINING: "dict[Reading, frozenset[tuple[str, str]]]" = {}

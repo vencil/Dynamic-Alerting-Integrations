@@ -190,7 +190,11 @@ class TestExtractRulePackMetrics:
         # Build an expr that mentions every common keyword.
         keywords = ["rate", "sum", "count", "histogram_quantile",
                      "tenant", "severity", "alertname"]
-        expr = " + ".join(f"{k}(real_metric_total)" for k in keywords)
+        # Valid PromQL (#3206: the pack is read by Prometheus' rule loader,
+        # which parses the expression) that names every keyword.
+        expr = ("rate(real_metric_total[5m]) + sum(real_metric_total)"
+                " + count(real_metric_total) + histogram_quantile(0.9, real_metric_total)"
+                " + sum by (tenant, severity, alertname) (real_metric_total)")
         _write(rule_packs / "rule-pack-x.yaml",
             f"groups:\n"
             f"  - name: x\n"

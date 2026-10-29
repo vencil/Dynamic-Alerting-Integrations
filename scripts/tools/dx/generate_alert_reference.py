@@ -16,7 +16,7 @@ Flags:
 
 SAST Rules:
     - File operations use absolute paths
-    - YAML parsing uses safe_load
+    - Rule packs are read by Prometheus' rule loader (da-read prometheus-rules)
     - No shell execution
 """
 
@@ -24,7 +24,6 @@ import argparse
 import os
 import re
 import sys
-import yaml
 import difflib
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -33,6 +32,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 # Built-in mapping for recommended actions by alert pattern
 RECOMMENDED_ACTIONS = {
@@ -454,29 +454,22 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
     # generate_rule_pack_stats.py / validate_docs_versions.py).
     _EXCLUDE = {"custom-alerts"}
 
-    # Find all rule-pack-*.yaml files.
-    for yaml_file in sorted(Path(rule_packs_dir).glob("rule-pack-*.yaml")):
-        if yaml_file.stem.replace("rule-pack-", "") in _EXCLUDE:
-            continue
-        try:
-            with open(yaml_file, "r", encoding="utf-8") as f:
-                content = yaml.safe_load(f)
-
-            if content is None:
-                continue
-
-            pack_name = get_rule_pack_name(str(yaml_file))
-            alerts = extract_alerts(content)
-
-            if alerts:
-                alerts_by_pack[pack_name] = alerts
-
-        except yaml.YAMLError as e:
-            print(f"Error parsing {yaml_file}: {e}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        except (OSError, yaml.YAMLError) as e:
-            print(f"Error reading {yaml_file}: {e}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+    # Find all rule-pack-*.yaml files, and read them the way Prometheus' rule
+    # loader reads them (#3206, ADR-036 §12: `da-read prometheus-rules`, one
+    # run for all). A pack the loader refuses — or a missing da-read — stops
+    # the generator; it does not document around it.
+    yaml_files = [f for f in sorted(Path(rule_packs_dir).glob("rule-pack-*.yaml"))
+                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    try:
+        rule_files = _lib_consumer_read.prometheus_rule_files(yaml_files)
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"Error reading rule packs: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    for yaml_file, rule_file in zip(yaml_files, rule_files):
+        pack_name = get_rule_pack_name(str(yaml_file))
+        alerts = extract_alerts(rule_file.documents[0])
+        if alerts:
+            alerts_by_pack[pack_name] = alerts
 
     return alerts_by_pack
 

@@ -488,21 +488,24 @@ jobs:
           # the same as needed.)
           pip install pyyaml promql-parser croniter -c requirements/ci-constraints.txt
 
-      # #3206 (ADR-036 §12): `byo_rulepack_table` reads the Prometheus
-      # Deployment the way kubectl does (da-crdecode); without it the check
-      # exits 2 by name. It is the only check in the `--only` list below that
-      # needs a reader binary — each was run with none on PATH and no
-      # DA_*_BINARY set, and every other one passed — so da-read is not built.
-      - name: Set up Go (da-crdecode for byo_rulepack_table)
+      - name: Set up Go (da-read / da-crdecode)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
-      - name: Build da-crdecode
+      # #3206 (ADR-036 §12): the rule files these steps read are read the way
+      # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
+      # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
+      # this checkout and exported; a failed build fails the job, and a tool
+      # without them fails by name — never a PyYAML fallback.
+      - name: Build da-read / da-crdecode
         run: |
-          make da-crdecode-build
+          make da-read-build da-crdecode-build
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
           echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)

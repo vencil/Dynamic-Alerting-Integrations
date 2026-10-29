@@ -477,7 +477,7 @@ class TestRenderAlertRules:
             "          custom_cpu > 0.9\n"
             "        for: 5m\n"
             "        labels:\n"
-            "          severity: warning\n"
+            '          severity: "warning"\n'
             "        annotations:\n"
             '          summary: "hi"\n'
             "\n"
@@ -658,7 +658,7 @@ class TestMain:
             mr.main()
         assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
-        assert "Error reading YAML" in err
+        assert "Error reading rule file" in err
 
     def test_invalid_yaml_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "bad.yaml"
@@ -668,7 +668,7 @@ class TestMain:
             mr.main()
         assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
-        assert "Error reading YAML" in err
+        assert "Error reading rule file" in err
 
     def test_no_groups_returns_cleanly(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "empty.yaml"

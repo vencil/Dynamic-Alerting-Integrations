@@ -108,12 +108,21 @@ ALLOWED = {
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/lint/check_metric_dictionary.py', 'main'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
+    ('scripts/tools/lint/check_orphan_recordings.py', '_load_yaml'):
+        (1, "the observed-map (scripts/tools/metric_observed_map.yaml), the repo's own threshold "
+            "data read only by Python tools; the rule files and Grafana ConfigMaps this lint also "
+            "reads go through da-read / da-crdecode"),
     ('scripts/tools/lint/check_portal_audience_enum.py', '_check_registry'):
         (1, "docs/assets/tool-registry.yaml, the repo's own tool catalogue"),
     ('scripts/tools/lint/check_property_coverage.py', 'main'):
         (1, "the property-test coverage manifest, this lint's own data"),
     ('scripts/tools/lint/check_tool_registry_jsx_parity.py', 'load_registry'):
         (1, "docs/assets/tool-registry.yaml, the repo's own tool catalogue"),
+    ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
+        (1, "promtool unit-test fixtures under tests/rulepacks (only their alert_rule_test "
+            "alertnames are taken, to count coverage; promtool reads them in CI and no da-read "
+            "reading covers that format) and this lint's own baseline; the rule packs go "
+            "through da-read prometheus-rules"),
     ('scripts/tools/lint/check_workflow_git_push_permissions.py', 'scan_workflow'):
         (1, 'GitHub workflows; read by GitHub Actions, no Go consumer'),
     ('scripts/tools/lint/check_workload_closure_drift.py', 'main'):
@@ -152,98 +161,16 @@ ALLOWED = {
 }
 
 DEBT = {
-    ('scripts/tools/dx/generate_alert_reference.py', 'load_rule_packs'):
-        (1, Reading.A),
-    ('scripts/tools/dx/generate_platform_data.py', 'count_rules_in_configmap'):
-        (2, Reading.A),
-    ('scripts/tools/dx/generate_platform_data.py', 'count_rules_in_yaml'):
-        (1, Reading.A),
-    ('scripts/tools/dx/generate_rule_pack_readme.py', 'extract_rule_counts'):
-        (1, Reading.A),
-    ('scripts/tools/dx/generate_rule_pack_stats.py', 'count_rules_in_configmap'):
-        (2, Reading.A),
-    ('scripts/tools/dx/generate_rule_pack_stats.py', 'count_rules_in_yaml'):
-        (1, Reading.A),
-    ('scripts/tools/dx/generate_rulepack_configmaps.py', 'main'):
-        (2, Reading.A),
-    ('scripts/tools/dx/inject_waveform.py', 'parse_rules'):
-        (1, Reading.A),
-    ('scripts/tools/lint/_rule_tree.py', '_containers_from_text'):
-        (1, Reading.A),
-    ('scripts/tools/lint/_rule_tree.py', '_documents'):
-        (1, Reading.A),
-    ('scripts/tools/lint/_rule_tree.py', '_generated_pack_names'):
-        (1, Reading.A),
-    ('scripts/tools/lint/_rule_tree.py', '_rule_shaped_but_unparsed'):
-        (2, Reading.A),
-    ('scripts/tools/lint/check_bilingual_annotations.py', 'BilingualAnnotationChecker.check_rule_pack'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_ha_threshold_aggregation.py', '_iter_rule_groups'):
-        (2, Reading.A),
-    ('scripts/tools/lint/check_maintenance_symmetry.py', 'classify_all'):
-        (1, Reading.A),
     ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker._looks_like_confd'):
         (1, Reading.E),
-    ('scripts/tools/lint/check_metric_dictionary.py', 'extract_rule_pack_metrics'):
-        (3, Reading.A),
-    ('scripts/tools/lint/check_metric_group_pairs.py', '_load_yaml'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_metric_group_pairs.py', 'collect_alerts'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_orphan_recordings.py', '_load_yaml'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_orphan_recordings.py', 'iter_rules'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_portal_rulepack_claims.py', 'collect_shipped_rules'):
-        (4, Reading.A),
-    ('scripts/tools/lint/check_rulepack_sync.py', '_groups_from_configmap'):
-        (2, Reading.A),
-    ('scripts/tools/lint/check_rulepack_sync.py', '_groups_from_operator'):
-        (1, Reading.A),
-    ('scripts/tools/lint/check_rulepack_sync.py', '_groups_from_rulepack'):
-        (1, Reading.A),
     ('scripts/tools/lint/check_threshold_reachability.py', '_defaults_section'):
         (1, Reading.E),
     ('scripts/tools/lint/check_threshold_reachability.py', '_init_project_declared'):
         (1, Reading.E),
     ('scripts/tools/lint/check_threshold_unit_sanity.py', '_collect'):
         (2, Reading.E),
-    ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
-        (1, Reading.A),
-    ('scripts/tools/lint/validate_docs_versions.py', 'count_rule_packs'):
-        (3, Reading.A),
-    ('scripts/tools/ops/_grar_validate.py', 'platform_alert_identities'):
-        (2, Reading.A),
-    ('scripts/tools/ops/_observed_map_lib.py', 'alert_referenced_keys'):
-        (1, Reading.A),
-    ('scripts/tools/ops/_observed_map_lib.py', 'extract_pack'):
-        (1, Reading.A),
-    ('scripts/tools/ops/_registry_lib.py', 'plan_surfaces'):
-        (1, Reading.A),
-    ('scripts/tools/ops/_threshold_alerts.py', 'build_index'):
-        (1, Reading.A),
-    ('scripts/tools/ops/generate_rule_pack_split.py', 'load_rule_pack'):
-        (1, Reading.A),
-    ('scripts/tools/ops/lint_custom_rules.py', 'lint_file'):
-        (2, Reading.A),
-    ('scripts/tools/ops/migrate_rule.py', '_yaml_scalar'):
-        (1, Reading.A),
-    ('scripts/tools/ops/migrate_rule.py', 'main'):
-        (1, Reading.A),
-    ('scripts/tools/ops/migrate_to_operator.py', 'parse_configmap_rules'):
-        (2, Reading.A),
     ('scripts/tools/ops/migration_audit.py', '_Walk.__init__'):
         (1, Reading.E),
     ('scripts/tools/ops/migration_audit.py', '_read_today'):
         (1, Reading.E),
-    ('scripts/tools/ops/onboard_platform.py', 'analyze_rule_files'):
-        (2, Reading.A),
-    ('scripts/tools/ops/operator_generate.py', 'generate_crds'):
-        (1, Reading.A),
-    ('scripts/tools/ops/rule_pack_diff.py', 'load_rule_pack'):
-        (1, Reading.A),
-    ('scripts/tools/ops/runtime_audit.py', 'parse_declared_rules'):
-        (1, Reading.A),
-    ('scripts/tools/ops/silencer_drift_check.py', 'load_alerts'):
-        (1, Reading.A),
 }

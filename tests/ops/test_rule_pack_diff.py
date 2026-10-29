@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import yaml
 from textwrap import dedent
 
 import pytest
@@ -64,7 +66,7 @@ def test_load_rule_pack_missing_file(tmp_path, capsys):
     data = rpd.load_rule_pack(tmp_path / "nonexistent.yaml")
     assert data is None
     err = capsys.readouterr().err
-    assert "cannot read" in err
+    assert "Prometheus' rule loader refuses" in err and "no such file" in err
 
 
 def test_load_rule_pack_invalid_yaml(tmp_path, capsys):
@@ -73,7 +75,7 @@ def test_load_rule_pack_invalid_yaml(tmp_path, capsys):
     data = rpd.load_rule_pack(p)
     assert data is None
     err = capsys.readouterr().err
-    assert "invalid YAML" in err
+    assert "Prometheus' rule loader refuses" in err and "broken.yaml" in err
 
 
 def test_load_rule_pack_top_level_not_mapping(tmp_path, capsys):
@@ -83,7 +85,7 @@ def test_load_rule_pack_top_level_not_mapping(tmp_path, capsys):
     data = rpd.load_rule_pack(p)
     assert data is None
     err = capsys.readouterr().err
-    assert "did not parse to a YAML mapping" in err
+    assert "Prometheus' rule loader refuses" in err and "cannot unmarshal !!seq" in err
 
 
 def test_load_rule_pack_groups_not_a_list_explicit_error(tmp_path, capsys):
@@ -97,8 +99,8 @@ def test_load_rule_pack_groups_not_a_list_explicit_error(tmp_path, capsys):
     data = rpd.load_rule_pack(p)
     assert data is None
     err = capsys.readouterr().err
-    assert "must be a list" in err
-    assert "dict" in err
+    assert "Prometheus' rule loader refuses" in err
+    assert "cannot unmarshal !!map into []rulefmt.RuleGroup" in err
 
 
 # ─── extract_rules ────────────────────────────────────────────────────
@@ -137,8 +139,10 @@ def test_extract_rules_empty_groups(empty_pack):
 def test_extract_rules_handles_missing_groups_key(tmp_path):
     p = tmp_path / "v.yaml"
     p.write_text("other_key: stuff\n", encoding="utf-8")
-    pack = rpd.load_rule_pack(p)
-    assert rpd.extract_rules(pack) == {}
+    # #3206: Prometheus' rule loader refuses the unknown key, so the loader
+    # answers None; extract_rules itself takes a groups-less mapping.
+    assert rpd.load_rule_pack(p) is None
+    assert rpd.extract_rules({"other_key": "stuff"}) == {}
 
 
 def test_extract_rules_handles_null_groups(tmp_path):
@@ -161,7 +165,10 @@ def test_extract_rules_skips_malformed_entries(tmp_path):
                 expr: x
           - "junk top-level"
     """)
-    pack = rpd.load_rule_pack(p)
+    # Prometheus refuses such a pack (load_rule_pack answers None, #3206);
+    # extract_rules stays robust to it when handed the shape directly.
+    assert rpd.load_rule_pack(p) is None
+    pack = yaml.safe_load(p.read_text(encoding="utf-8"))
     index = rpd.extract_rules(pack)
     assert set(index.keys()) == {"A1", "r1"}
 
@@ -176,7 +183,8 @@ def test_extract_rules_skips_rules_without_name(tmp_path):
               - alert: A1
                 expr: x
     """)
-    pack = rpd.load_rule_pack(p)
+    assert rpd.load_rule_pack(p) is None   # Prometheus refuses it (#3206)
+    pack = yaml.safe_load(p.read_text(encoding="utf-8"))
     index = rpd.extract_rules(pack)
     assert set(index.keys()) == {"A1"}
 

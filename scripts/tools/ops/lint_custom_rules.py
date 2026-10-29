@@ -51,6 +51,7 @@ from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 from _lib_io import classify_path  # noqa: E402  (#3276)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
@@ -249,8 +250,38 @@ def check_owner_label(labels, filepath, rule_name):
 # ---------------------------------------------------------------------------
 # File processing
 # ---------------------------------------------------------------------------
-def lint_file(filepath, policy):
-    """Lint a single YAML rule file. Returns (list of LintResult, rule_count)."""
+def read_rule_files(files):
+    """{path: [RuleFile, ...]} — every file of *files* as Prometheus loads it
+    (#3206, ADR-036 §12). A file whose Kubernetes reading (da-crdecode) holds
+    a ``kind: ConfigMap`` is a ConfigMap: each of its data values that sets
+    out to be a rule file (a ``groups:`` key; ``manifest_rule_file_results``
+    with ``only_declared``) is one; any other file — one kubectl's
+    reading refuses included — is itself a rule file. The rule files are read
+    by Prometheus' rule loader (``da-read prometheus-rules``), the plain
+    ones in one run and the ConfigMaps' in another. Raises
+    ``_lib_consumer_read.ConsumerReadError`` when a binary cannot be had."""
+    plain, configmaps = [], []
+    for path in files:
+        try:
+            docs = _lib_consumer_read.kubernetes_documents(path)
+        except _lib_consumer_read.InputRefused:
+            docs = []
+        is_cm = any(isinstance(d, dict) and d.get("kind") == "ConfigMap" for d in docs)
+        (configmaps if is_cm else plain).append(path)
+    out = {p: [rf] for p, rf in zip(
+        plain, _lib_consumer_read.prometheus_rule_file_results(plain))}
+    for rf in _lib_consumer_read.manifest_rule_file_results(configmaps, only_declared=True):
+        if rf.kind == "ConfigMap":
+            out.setdefault(rf.manifest, []).append(rf)
+    for p in configmaps:
+        out.setdefault(p, [])
+    return out
+
+
+def lint_file(filepath, policy, rule_files=None):
+    """Lint a single YAML rule file (or a ConfigMap holding rule files).
+    *rule_files* is its reading from ``read_rule_files``; read here when not
+    given. Returns (list of LintResult, rule_count)."""
     results = []
     rule_count = 0
     try:
@@ -270,31 +301,24 @@ def lint_file(filepath, policy):
     policy, override_results = resolve_file_policy(filepath, content, policy)
     results.extend(override_results)
 
-    # Handle ConfigMap-wrapped rules (data: key: |)
-    try:
-        doc = yaml.safe_load(content)
-    except yaml.YAMLError as e:
-        results.append(LintResult(filepath, None, None, "ERROR", f"YAML parse error: {e}"))
-        return results, rule_count
-
-    if not doc:
-        return results, rule_count
-
-    # Extract rule groups — support both direct format and ConfigMap wrapper
+    # #3206: the file is read the way Prometheus loads it — a plain rule file
+    # by its rule loader, a ConfigMap (data: key: |) the way kubectl reads it
+    # and each data value by the rule loader. A file or data value the loader
+    # refuses is an ERROR naming it, with the loader's reason; it is never
+    # skipped (a ConfigMap value with a `groups:` key that did not parse used
+    # to be dropped silently). A value that is no rule file at all (no
+    # `groups:` key) is not read, as before.
+    if rule_files is None:
+        rule_files = read_rule_files([filepath])[filepath]
     groups = []
-    if isinstance(doc, dict):
-        if "groups" in doc:
-            groups = doc["groups"]
-        elif "data" in doc:
-            # ConfigMap format: data contains YAML strings
-            for _key, val in doc["data"].items():
-                if isinstance(val, str):
-                    try:
-                        inner = yaml.safe_load(val)
-                        if isinstance(inner, dict) and "groups" in inner:
-                            groups.extend(inner["groups"])
-                    except yaml.YAMLError:
-                        pass
+    for rf in rule_files:
+        if rf.problem is not None:
+            where = f" (data key {rf.key!r})" if rf.key is not None else ""
+            results.append(LintResult(
+                filepath, None, None, "ERROR",
+                f"Prometheus' rule loader refuses it{where}: {rf.problem}"))
+            continue
+        groups.extend(rf.groups)
 
     if not groups:
         return results, rule_count
@@ -525,8 +549,13 @@ def main():
     files_checked = 0
     rules_checked = 0
 
+    try:
+        readings = read_rule_files(files)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}")
+
     for filepath in files:
-        results, count = lint_file(filepath, policy)
+        results, count = lint_file(filepath, policy, readings[filepath])
         all_results.extend(results)
         files_checked += 1
         rules_checked += count

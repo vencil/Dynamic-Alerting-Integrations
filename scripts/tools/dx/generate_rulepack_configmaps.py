@@ -37,6 +37,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
@@ -121,21 +122,38 @@ def main() -> int:
             print(f"ERROR: --pack name(s) not found: {sorted(missing)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
 
+    # #3206 (ADR-036 §12): every rule file is read the way Prometheus' rule
+    # loader reads it (`da-read prometheus-rules`) — the source packs, and
+    # under --check the generated data values and the committed ConfigMaps'
+    # (their outer layer the way kubectl reads it) — a few da-read runs for
+    # the whole set. A file the loader refuses stops the generator (rc 2).
+    try:
+        sources = _lib_consumer_read.prometheus_rule_files(packs)
+        cms = {_pack_name(p): build_configmap(_pack_name(p), rf.documents[0], args.namespace)
+               for p, rf in zip(packs, sources)}
+        if args.check:
+            generated = _lib_consumer_read.require_read(
+                _lib_consumer_read.prometheus_rule_text_results(
+                    [(name, v) for name, cm in cms.items() for v in cm["data"].values()]))
+            targets = [out_dir / f"configmap-rules-{name}.yaml" for name in cms]
+            committed = _lib_consumer_read.require_read(
+                _lib_consumer_read.manifest_rule_file_results([t for t in targets if t.exists()]))
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     drift = []
     wrote = 0
-    for pack in packs:
-        name = _pack_name(pack)
-        data = yaml.safe_load(pack.read_text(encoding="utf-8")) or {}
-        cm = build_configmap(name, data, args.namespace)
+    for name, cm in cms.items():
         target = out_dir / f"configmap-rules-{name}.yaml"
 
         if args.check:
             # Semantic compare: regenerated groups vs committed configmap groups.
-            gen_groups = []
-            for v in cm["data"].values():
-                gen_groups.extend((yaml.safe_load(v) or {}).get("groups", []))
+            gen_groups = [g for rf in generated if rf.path == name for g in rf.groups]
             gen_map = sync._extract(gen_groups)
-            committed_map = sync._extract(sync._groups_from_configmap(target)) if target.exists() else {}
+            committed_map = sync._extract(
+                [g for rf in committed
+                 if rf.kind == "ConfigMap" and rf.manifest == str(target) for g in rf.groups])
             findings = sync._diff_maps(gen_map, committed_map)
             if findings:
                 drift.append((name, findings))

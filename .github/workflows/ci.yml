@@ -886,18 +886,11 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
 
-      - name: Lint custom rules (deny-list + required labels)
-        run: |
-          python scripts/tools/ops/lint_custom_rules.py \
-            rule-packs/ \
-            --policy .github/custom-rule-policy.yaml \
-            --ci
-
       # #2858: the RETIRE gate reads db_type through `da-guard served-values`;
       # its wrapper (scripts/ops/with_da_guard.sh) builds .build/da-guard with
       # `make da-guard-build`, which needs go. Without this step the gate fails
       # by name (go is not on PATH), never passes.
-      - name: Set up Go (da-guard for the RETIRE-ordering gate)
+      - name: Set up Go (da-guard for the RETIRE-ordering gate; da-read / da-crdecode)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
@@ -906,6 +899,25 @@ jobs:
           cache-dependency-path: |
             components/threshold-exporter/app/go.sum
             components/tenant-api/go.sum
+            components/da-read/go.sum
+
+      # #3206 (ADR-036 §12): the rule files these steps read are read the way
+      # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
+      # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
+      # this checkout and exported; a failed build fails the job, and a tool
+      # without them fails by name — never a PyYAML fallback.
+      - name: Build da-read / da-crdecode
+        run: |
+          make da-read-build da-crdecode-build
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+
+      - name: Lint custom rules (deny-list + required labels)
+        run: |
+          python scripts/tools/ops/lint_custom_rules.py \
+            rule-packs/ \
+            --policy .github/custom-rule-policy.yaml \
+            --ci
 
       - name: RETIRE-ordering gate (#869 — no K8s-target delete with conf.d _metadata残留)
         # Unfiltered over HEAD (the pre-commit mirror's path filter can miss
@@ -2902,12 +2914,14 @@ jobs:
       # through `da-guard served-values`. Built once from this checkout and
       # exported, so both steps below (and validate_all's platform_data inside
       # `make lint-docs`) use the same binary; a failed build fails the job.
-      - name: Set up Go (da-guard)
+      - name: Set up Go (da-guard; da-read / da-crdecode)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # #3206: platform_data and byo_rulepack_table read Helm / k8s files
       # through da-crdecode; built here once like da-guard.
@@ -2915,6 +2929,17 @@ jobs:
         run: |
           make da-guard-build da-crdecode-build
           echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+
+      # #3206 (ADR-036 §12): the rule files these steps read are read the way
+      # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
+      # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
+      # this checkout and exported; a failed build fails the job, and a tool
+      # without them fails by name — never a PyYAML fallback.
+      - name: Build da-read / da-crdecode
+        run: |
+          make da-read-build da-crdecode-build
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
           echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Check platform-data integrity

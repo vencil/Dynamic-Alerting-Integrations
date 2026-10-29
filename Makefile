@@ -663,7 +663,10 @@ DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINA
 # alertmanager`（Alertmanager 自己的載入函式），Phase 3 的 prometheus.yml 與
 # check_scrape_reachability 讀的 Prometheus ConfigMap 內層交給 `da-read prometheus`
 # （Prometheus 自己的 config.Load）；check_admin_config_schema 也以
-# da-crdecode 讀 Helm values。與 da-guard 同一套：環境變數
+# da-crdecode 讀 Helm values；讀 Prometheus 規則檔的目標（version-check、
+# lint-docs、platform-data、rulepack-configmaps、custom-alerts-compile 與
+# 規則表產生器）以 `da-read prometheus-rules` 讀規則檔、da-crdecode 讀外層
+# ConfigMap。與 da-guard 同一套：環境變數
 # 已設就用它、不建；否則從本 checkout 建到 .build/。da-read 是獨立的 Go module
 # （components/da-read），不在 exporter module 裡。
 DA_READ_BUILD := $(CURDIR)/.build/da-read
@@ -752,9 +755,9 @@ onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for
 # release 而言，跟「只有 pytest 看得到」是同一句話：等於不存在。tag 前必須
 # 自己跑一次。
 .PHONY: version-check
-version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT/NO-SOURCE 皆會 fail)
-	@python3 ./scripts/tools/dx/bump_docs.py --check
-	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
+version-check: $(DA_READ_PREREQ) ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/DEAD/MISSING/GLOB-EMPTY/GLOB-DEAD/NO-SSOT/NO-SOURCE 皆會 fail)
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --check
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
 pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
@@ -928,28 +931,28 @@ migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-con
 	@python3 ./scripts/tools/dx/migrate_conf_d.py $(ARGS)
 
 .PHONY: generate-alert-reference
-generate-alert-reference: ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md（預設直接寫檔；--dry-run 只印、--check 偵測 drift）
-	@python3 ./scripts/tools/dx/generate_alert_reference.py $(ARGS)
+generate-alert-reference: $(DA_READ_PREREQ) ## 從 Rule Pack YAML 產生 ALERT-REFERENCE.md（預設直接寫檔；--dry-run 只印、--check 偵測 drift）
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_alert_reference.py $(ARGS)
 
 .PHONY: generate-nav
 generate-nav: ## 印一份 MkDocs nav 草稿（只讀、rc 恆 0；漏收文件的閘門在 mkdocs.yml 的 validation.nav.*，不在這支工具）
 	@python3 ./scripts/tools/dx/generate_nav.py
 
 .PHONY: generate-rule-pack-readme
-generate-rule-pack-readme: ## 從 Rule Pack YAML 重新產生並寫入 rule-packs/README.md（本目標固定 --update）。dry-run 是不帶旗標直接跑腳本；drift 偵測走 validate_all.py 的 --check，不經由本目標
-	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
+generate-rule-pack-readme: $(DA_READ_PREREQ) ## 從 Rule Pack YAML 重新產生並寫入 rule-packs/README.md（本目標固定 --update）。dry-run 是不帶旗標直接跑腳本；drift 偵測走 validate_all.py 的 --check，不經由本目標
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
 .PHONY: byo-rulepack-table
-byo-rulepack-table: $(DA_CRDECODE_PREREQ) ## 重新產生 BYO Prometheus 文件內的規則包表（#1267；sentinel 就地注入；Deployment 經 da-crdecode 讀：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
-	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
+byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內的規則包表（#1267；sentinel 就地注入；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Deployment 經 da-crdecode 讀：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
 
 .PHONY: platform-data
-platform-data: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
-	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
+platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
 
 .PHONY: rulepack-configmaps
-rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
-	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
+rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
 
 .PHONY: crd-schemas
 crd-schemas: $(DA_CRDECODE_PREREQ) ## 從釘住版本的上游 CRD 重生 docs/schemas/crd/（需網路；不在 pre-commit 上；CRD 經 da-crdecode 讀）
@@ -960,8 +963,8 @@ crd-schemas-check: $(DA_CRDECODE_PREREQ) ## 只比對上游 CRD 是否已在同�
 	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_crd_schemas.py --check
 
 .PHONY: rulepack-configmaps-check
-rulepack-configmaps-check: ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
-	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py --check
+rulepack-configmaps-check: $(DA_READ_PREREQ) ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rulepack_configmaps.py --check
 
 .PHONY: rulepack-promtool-test
 rulepack-promtool-test: ## promtool 行為單元測試（rule pack 告警 fire/no-fire 契約）
@@ -976,12 +979,12 @@ rulepack-pint: ## pint 規則靜態檢查（alerts/template label-flow gate；CI
 	@python3 ./scripts/tools/lint/check_pint.py
 
 .PHONY: custom-alerts-compile
-custom-alerts-compile: $(DA_GUARD_PREREQ) ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；照 exporter 送出的編譯，#3042；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
+custom-alerts-compile: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；照 exporter 送出的編譯，#3042；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
 
 .PHONY: custom-alerts-compile-check
-custom-alerts-compile-check: $(DA_GUARD_PREREQ) ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate；需要 da-guard）
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
+custom-alerts-compile-check: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate；需要 da-guard）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
 .PHONY: recipe-contract
 recipe-contract: ## 從 pkg/config/recipe_contract.json 產生 schema、portal、_lib_constants.py、rule-packs/recipes 的 recipe 副本（#3229）
@@ -1044,8 +1047,8 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 # rc 0，而 validate_all 一次都不跑——required check `Lint Documentation` 跑的正是這條。
 # 實測：無 .PHONY + 同名檔 → rc 0；補上 .PHONY 的對照組 → rc 2。
 .PHONY: lint-docs
-lint-docs: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；platform_data／byo_rulepack_table 經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
-	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/validate_all.py \
+lint-docs: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；platform_data／byo_rulepack_table 經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
 

@@ -23,6 +23,12 @@ directory levels (issue 1494):
 
 When neither exists the answer is "unknown", never a guess: callers get
 ``None`` and one line on stderr says why.
+
+The packs are read the way Prometheus' rule loader reads them (#3206,
+ADR-036 §12: ``da-read prometheus-rules``, all of them in one run). A pack
+the loader refuses, or no da-read to ask, is "unknown" the same way — the
+line on stderr names the pack and the loader's reason, or the missing
+binary; it is never read some other way.
 """
 from __future__ import annotations
 
@@ -31,12 +37,11 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_compat import find_project_root  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 PACK_GLOB = "rule-pack-*.yaml"
 
@@ -62,13 +67,13 @@ def find_rule_pack_paths(here: "Path | None" = None) -> "list[Path]":
 
 
 def build_index(pack_paths) -> "dict[str, tuple[str, ...]]":
-    """{threshold key: sorted alert names reaching it} over the given packs."""
+    """{threshold key: sorted alert names reaching it} over the given packs,
+    each read by Prometheus' rule loader (``RuleFilesRefused`` when it
+    refuses one)."""
     records: "dict[str, list[str]]" = {}
     alerts: "list[tuple[str, str]]" = []
-    for path in pack_paths:
-        with open(path, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh) or {}
-        for group in doc.get("groups") or []:
+    for rule_file in _lib_consumer_read.prometheus_rule_files(list(pack_paths)):
+        for group in rule_file.groups:
             for rule in group.get("rules") or []:
                 if not isinstance(rule, dict):
                     continue
@@ -114,8 +119,9 @@ def _index() -> "dict[str, tuple[str, ...]] | None":
         else:
             try:
                 _INDEX_CACHE = build_index(paths)
-            except (OSError, yaml.YAMLError) as exc:
-                _warn_once(f"rule packs unreadable: {exc}")
+            except _lib_consumer_read.ConsumerReadError as exc:
+                _warn_once("rule packs unreadable: "
+                           + "; ".join([str(exc), *exc.stderr_lines]))
     return _INDEX_CACHE
 
 

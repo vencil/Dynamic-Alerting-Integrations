@@ -244,12 +244,14 @@ def test_parse_rules_extracts_names_and_intervals():
 
 
 def test_parse_rules_rejects_non_groups_doc():
-    with pytest.raises(iw.InjectError, match="groups"):
+    # #3206: Prometheus' rule loader refuses it first, naming the stray key
+    with pytest.raises(iw.InjectError, match="(?s)rule loader 拒收.*field alerting not found"):
         iw.parse_rules([("f", "alerting:\n  rules: []\n")])
 
 
 def test_parse_rules_rejects_unparseable_interval():
-    with pytest.raises(iw.InjectError, match="interval"):
+    # #3206: the duration is Prometheus' to judge (rulefmt), before the grid check
+    with pytest.raises(iw.InjectError, match='not a valid duration string: "soon"'):
         iw.parse_rules([("f", "groups:\n  - name: g\n    interval: soon\n    rules:\n"
                               "      - alert: A\n        expr: vector(1)\n")])
 

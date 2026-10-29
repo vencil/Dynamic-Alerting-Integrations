@@ -93,30 +93,34 @@ from _lib_exitcodes import (  # noqa: E402
     disarm_crash_envelope)
 from _lib_python import format_json_report  # noqa: E402
 
-try:
-    import yaml
-except ImportError:
-    print(
-        "ERROR: PyYAML not installed. Install with: pip install pyyaml",
-        file=sys.stderr,
-    )
-    sys.exit(EXIT_CALLER_ERROR)
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 
 # ─── Parsing ──────────────────────────────────────────────────────────
 
 
-def load_rule_pack(path: Path) -> dict | None:
-    """Parse a rule pack YAML file. Returns the top-level dict, or None on error."""
-    try:
-        with path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except OSError as exc:
-        print(f"ERROR: cannot read {path}: {exc}", file=sys.stderr)
+def load_rule_packs(paths: "list[Path]") -> "list[dict | None]":
+    """Every pack of *paths* as Prometheus' rule loader reads it (#3206,
+    ADR-036 §12: ``da-read prometheus-rules``, one run for all), in order;
+    None for one it refuses (the reason is printed, naming the pack). Raises
+    ``_lib_consumer_read.ConsumerReadError`` when da-read cannot be had."""
+    out: "list[dict | None]" = []
+    for path, rule_file in zip(paths, _lib_consumer_read.prometheus_rule_file_results(paths)):
+        out.append(load_rule_pack(path, rule_file))
+    return out
+
+
+def load_rule_pack(path: Path, rule_file=None) -> dict | None:
+    """The rule pack at *path* as Prometheus' rule loader reads it (*rule_file*
+    from ``load_rule_packs``; read here when not given). Returns the
+    top-level dict, or None when the loader refuses it (the reason printed)."""
+    if rule_file is None:
+        (rule_file,) = _lib_consumer_read.prometheus_rule_file_results([path])
+    if rule_file.problem is not None:
+        print(f"ERROR: Prometheus' rule loader refuses {path}: {rule_file.problem}",
+              file=sys.stderr)
         return None
-    except yaml.YAMLError as exc:
-        print(f"ERROR: invalid YAML in {path}: {exc}", file=sys.stderr)
-        return None
+    data = rule_file.documents[0]
     if not isinstance(data, dict):
         print(
             f"ERROR: {path} did not parse to a YAML mapping at top level",
@@ -519,11 +523,12 @@ def main(argv: list[str] | None = None) -> int:
     from_path = Path(args.from_path)
     to_path = Path(args.to_path)
 
-    v1 = load_rule_pack(from_path)
-    if v1 is None:
+    try:
+        v1, v2 = load_rule_packs([from_path, to_path])
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    v2 = load_rule_pack(to_path)
-    if v2 is None:
+    if v1 is None or v2 is None:
         return EXIT_CALLER_ERROR
 
     report = diff_packs(v1, v2)

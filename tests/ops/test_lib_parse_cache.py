@@ -68,8 +68,8 @@ NOT_CONFD = {
     # --policy: an operator file outside conf.d (ADR-036 §3: the deployment
     # policy is read fresh for every judgement)
     ("_grar_validate.py", "load_policy_document"),
-    # the platform rules pack shipped beside the tool
-    ("_grar_validate.py", "platform_alert_identities"),
+    # (the platform rules pack shipped beside the tool is read by da-crdecode
+    # and `da-read prometheus-rules` since #3206 — no PyYAML call left)
 }
 
 

@@ -738,7 +738,9 @@ def test_scan_sees_the_known_population():
     expected = {
         "analyze_rule_pack_gaps.py", "backtest_threshold.py",
         "generate_tenant_mapping_rules.py",
-        "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
+        # migrate_to_operator.py, onboard_platform.py and operator_generate.py
+        # left with #3206 (ADR-036 §12): their rule files are read by
+        # `da-read prometheus-rules`, their manifests by da-crdecode.
         "policy_engine.py", "policy_opa_bridge.py",
         "blind_spot_discovery.py",
         "threshold_recommend.py",

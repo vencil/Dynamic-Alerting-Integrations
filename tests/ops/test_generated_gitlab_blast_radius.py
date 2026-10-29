@@ -146,8 +146,10 @@ def _run_job(pipeline: dict, work: Path, *, base_sha: str | None,
         "CONFIG_DIR": variables["CONFIG_DIR"],
         "DA_TOOLS_IMAGE": variables["DA_TOOLS_IMAGE"],
         "DA_GUARD_BINARY": os.environ.get("DA_GUARD_BINARY", ""),
-        "DA_CRDECODE_BINARY": os.environ.get("DA_CRDECODE_BINARY", ""),
+        # The image ships da-read / da-crdecode too (#3206): the route
+        # generator reads the shipped platform rules through them.
         "DA_READ_BINARY": os.environ.get("DA_READ_BINARY", ""),
+        "DA_CRDECODE_BINARY": os.environ.get("DA_CRDECODE_BINARY", ""),
     }
     if base_sha is not None:
         env["CI_MERGE_REQUEST_DIFF_BASE_SHA"] = base_sha
