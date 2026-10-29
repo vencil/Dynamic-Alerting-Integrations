@@ -27,7 +27,6 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -43,7 +42,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
-from diagnose import CommandNotFoundError  # noqa: E402  (#2493)
+from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3349)
 from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968)
 from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
 from _lib_python import (  # noqa: E402
@@ -71,25 +70,15 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
 
     Returns sorted list of tenant IDs (excludes _defaults.yaml and
     other reserved keys starting with '_').
+
+    #3349: a read that got no answer (forbidden, unreachable, no kubectl, out
+    of time) raises `KubectlError` (rc 2, named) — it used to return [] and
+    end as "No tenants found"; a ConfigMap that is not there is named too.
     """
-    cmd = [
-        "kubectl", "get", "configmap", configmap,
-        "-n", namespace, "-o", "json",
-    ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
-        )
-        if result.returncode != 0:
-            print(f"ERROR: kubectl failed: {result.stderr.strip()}", file=sys.stderr)
-            return []
-        cm_data = json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        print("ERROR: kubectl timed out", file=sys.stderr)
-        return []
-    except (json.JSONDecodeError, FileNotFoundError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return []
+    cm_data = kubectl_get("configmap", configmap, namespace=namespace, timeout=15)
+    if cm_data is None:
+        raise KubectlError(f"ConfigMap {configmap!r} not found in namespace {namespace!r}: "
+                           "nothing to discover tenants from (or pass --tenants)")
 
     # #1588: the carrier here is a ConfigMap KEY, not a directory entry —
     # but the key names ARE the conf.d filenames, so this is the same
@@ -172,7 +161,7 @@ def _check_tenant(tenant, prom_url):
             result = json.loads(output)
         else:
             result = {"status": "error", "tenant": tenant, "issues": ["empty output"]}
-    except (CommandNotFoundError, CommandTimeoutError) as exc:
+    except (KubectlError, CommandTimeoutError) as exc:
         # `da-tools diagnose` alone exits 2 on these (the environment lacks
         # kubectl, or it did not answer in time), not 1; keep the same class
         # here (#2493, #2968). Before the generic OSError branch below, which
