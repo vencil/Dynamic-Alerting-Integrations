@@ -677,7 +677,8 @@ def _is_routing_key(key: object) -> bool:
 def _is_routing_layer_key(key: object) -> bool:
     """``_severity_dedup`` or any key starting with ``_routing`` (Go:
     ``config.IsRoutingLayerKey``; #2914, why: ``routing_in_unread_location``
-    in docs/cli-reference.md#guard)."""
+    in docs/cli-reference.md#guard). Every key the registry says the
+    generator reads must be one (tests/ops/test_routing_layer_key_registry.py)."""
     return isinstance(key, str) and (key == "_severity_dedup" or key.startswith("_routing"))
 
 

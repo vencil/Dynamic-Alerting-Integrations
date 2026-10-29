@@ -83,3 +83,40 @@ func TestRegisteredReaders_ReturnsACopy(t *testing.T) {
 		t.Errorf("a caller's change reached the table: %v", b)
 	}
 }
+
+// TestIsRoutingLayerKey_CoversEveryKeyTheGeneratorReads: IsRoutingLayerKey is
+// written by hand, not generated from the registry, yet every key the
+// registry says the route generator reads must be one: da-guard's exit 4
+// (cmd/da-guard/undetermined.go) names a tree "only the generator judges"
+// by it, the resolvers skip such a key when building threshold rows, and a
+// threshold profile never fills one in. A generator key it missed would turn
+// da-guard's exit 4 into a silent 0 for a tree holding it. The Python twin
+// (_grar_parse._is_routing_layer_key) is held by the same rule in
+// tests/ops/test_routing_layer_key_registry.py.
+func TestIsRoutingLayerKey_CoversEveryKeyTheGeneratorReads(t *testing.T) {
+	t.Parallel()
+	reg := loadReservedKeyRegistry(t)
+	n := 0
+	for k, e := range reg.Keys {
+		if _, ok := e.ReadBy["generator"]; !ok {
+			continue
+		}
+		n++
+		if !IsRoutingLayerKey(k) {
+			t.Errorf("the registry says the route generator reads %q, but IsRoutingLayerKey(%q) is false: "+
+				"extend IsRoutingLayerKey and _grar_parse._is_routing_layer_key", k, k)
+		}
+	}
+	for p, e := range reg.Prefixes {
+		if _, ok := e.ReadBy["generator"]; !ok {
+			continue
+		}
+		n++
+		if k := p + "zz_probe"; !IsRoutingLayerKey(k) {
+			t.Errorf("the registry says the route generator reads prefix %q, but IsRoutingLayerKey(%q) is false", p, k)
+		}
+	}
+	if n == 0 {
+		t.Fatal("the registry declares no key the route generator reads: this test checks nothing")
+	}
+}
