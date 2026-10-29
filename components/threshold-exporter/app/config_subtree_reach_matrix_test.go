@@ -116,8 +116,11 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"resolveDimensionalRows logs `failed to parse dimensional key` itself"},
 		{"a critical tier over a root default", "  mysql_connections_critical: 200\n", "mysql_connections_critical", verdictDelivered, "",
 			"resolveCriticalRows finds mysql_connections in defaults"},
-		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictWarned, "",
-			"resolveCriticalRows logs `no matching default` itself"},
+		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictRefused, "",
+			"resolveCriticalRows serves a critical row only over a base cfg.Defaults values; the overlay asks that same condition (criticalBaseValued, #3378) — before, it handed the key down and the row was dropped with a WARN no report named"},
+		{"a critical tier over a declared-only base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictRefused,
+			"defaults:\n  mysql_connections: 80\noptional_overrides: [postgres_locks]\nstate_filters:\n  maintenance:\n    severity: warning\n",
+			"`optional_overrides:` declares the base without a value, and resolveCriticalRows needs the value (#3378)"},
 		// #3341: until then these were delivered (`_state_maintenance`,
 		// `_severity_dedup`), inert (`_silent_mode`) or refused as
 		// unreachable; a subtree now hands none of them down.
@@ -156,8 +159,8 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"a subtree carries no reserved key (#3341); before, ResolveSeverityDedup WARNed on it"},
 		{"a state filter carrying a time window", "  _state_maintenance:\n    default: disable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", "_state_maintenance", verdictNotCarried, "",
 			"a subtree carries no reserved key, windowed or not (#3341)"},
-		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictWarned, "",
-			"resolveCriticalRows excludes `_state_` and `_silent_` but NOT `_routing` — so this one it does read, and WARNs. Mirroring the dimensional arm's exclusions here instead would be a plausible-looking consistency edit that silently changes the verdict"},
+		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictRefused, "",
+			"resolveCriticalRows reads no `_` key (criticalRowBase, #3045), so the overlay asks no critical condition of it (#3378) and refuses it as any undeclared routing key"},
 		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictNotCarried, "",
 			"a subtree carries no `_` key but a routing key (#3341); before, resolveCriticalRows read it and WARNed"},
 	}

@@ -134,7 +134,7 @@ tenants:
 讀這個範例要注意兩件事：
 
 - **租戶的值加引號，`defaults:` 裡不加。** 租戶的閾值是字串或帶排程的物件，未加引號的數字會被 `check_confd_schema.py` 擋下；平台預設只收數字。
-- **子目錄只能改根目錄已宣告的閾值。** 把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。
+- **子目錄只能改根目錄已宣告的閾值。** 把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值（exporter 只為這種基底送 critical 列），只在 `optional_overrides:` 宣告不算，同樣標 `undeliverable`。
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 

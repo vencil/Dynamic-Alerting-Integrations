@@ -516,6 +516,9 @@ func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[
 // and the routing keys (subtreeReservedUnsupported, #3341); every other `_`
 // key is skipped before any verdict.
 func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
+	if base, critical := criticalRowBase(key); critical {
+		return criticalBaseValued(cfg, base)
+	}
 	if keyBypassesTheDeclaredSurface(key) {
 		return true
 	}
@@ -544,11 +547,23 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // Getting that wrong is #1911's shape one directory down — two mechanisms
 // enumerating one key space with different predicates.
 //
-// ⚠️ `_critical` and dimensional keys stay unconditional even though both
-// resolvers have a further condition (`defaults[base]` must exist / the label
-// set must parse). Both WARN on their own when it fails, so the outcome is
-// loud without this gate repeating it — and refusing them here would drop the
-// common case where the base IS a root default.
+// ⛔ A `_critical` KEY IS NOT ANSWERED HERE (#3378): resolveCriticalRows'
+// entry condition is not the suffix but `defaults[base]` — a base the root
+// `defaults:` holds a value for — and keyCanReachTheOutputPlane asks exactly
+// that (criticalBaseValued) before this function. This arm used to pass every
+// `_critical` on the suffix alone, on the ground that the resolver WARNs when
+// the base is missing; but that WARN is a log line on every scrape, while a
+// subtree value written into the tenant's map then reached no row and no
+// report — `x_critical` in a subtree with `x` only in `optional_overrides:`
+// (or nowhere at the root) was served by nothing and named by nothing. Asking
+// the resolver's own condition makes it the overlay's unreachable value
+// (subtree_default_undeliverable, the exporter's ERROR and gauge), and keeps
+// the common case — the base IS a root default — delivered.
+//
+// ⚠️ A dimensional key stays unconditional although its resolver has a
+// further condition (the label set must parse): a dimensional key is served
+// whether or not the root declares its base (measured), and an unparseable
+// label set WARNs on its own.
 //
 // The exclusions below are not invented here. They are copied from what
 // `resolveDimensionalRows` and `resolveCriticalRows` THEMSELVES skip: this
@@ -567,16 +582,34 @@ func keyBypassesTheDeclaredSurface(key string) bool {
 	switch {
 	case strings.Contains(key, "{") && !reservedShapeWins(key): // resolveDimensionalRows
 		return true
-	case strings.HasSuffix(key, criticalKeySuffix) &&
-		!strings.HasPrefix(key, "_state_") &&
-		!strings.HasPrefix(key, "_silent_"): // resolveCriticalRows
-		return true
 	}
 	return false
 }
 
 // criticalKeySuffix mirrors pkg/config's unexported `criticalSuffix`.
 const criticalKeySuffix = "_critical"
+
+// criticalBaseValued is resolveCriticalRows' entry condition for a critical
+// key with base base (criticalRowBase), asked of the config the resolver will
+// read: the canonical root defaults (canonicalizeDefaults) hold base. Both
+// #1231 directions, as declaredAnywhere's legacy arm: the subtree may spell
+// the key either way (the resolver canonicalizes the override map first), and
+// the root may still hold the retired spelling of the base (it canonicalizes
+// the defaults too). Existence only, as the resolver asks it: a root value
+// the decode refused (a NaN there, RefusedRootDefaults) still passes the
+// lookup.
+func criticalBaseValued(cfg *ThresholdConfig, base string) bool {
+	canon, _ := canonicalKeyFor(base)
+	if _, ok := cfg.Defaults[canon]; ok {
+		return true
+	}
+	if legacy, aliased := legacySpellingFor(canon); aliased {
+		if _, ok := cfg.Defaults[legacy]; ok {
+			return true
+		}
+	}
+	return false
+}
 
 // reservedShapeWins mirrors the reserved-key exclusions at the top of
 // `resolveDimensionalRows`, verbatim. Kept as its own function so a change
