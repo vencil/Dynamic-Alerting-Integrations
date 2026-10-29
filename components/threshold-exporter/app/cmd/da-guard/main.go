@@ -196,7 +196,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"'da-tools generate-routes --validate --strict', not here. "+
 			"Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
-		"Per-tenant predicted-metric-count ceiling; 0 disables. When omitted, the cap the exporter "+
+		"Per-tenant ceiling on the user_threshold rows the exporter would produce (at the busiest "+
+			"minute of the day, before its own truncation); 0 disables. When omitted, the cap the exporter "+
 			"enforces is used: max_metrics_per_tenant from the ROOT _defaults.yaml of --config-dir "+
 			"(unset/0 = 500, negative = no check).")
 	fs.StringVar(&f.baselineConfigDir, "baseline-config-dir", "",
@@ -568,6 +569,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		}
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
+	var rowCounts map[string]int
+	if f.cardinalityLimit > 0 {
+		rowCounts = predictedRowCounts(scoped, now)
+	}
 
 	return guard.CheckInput{
 		EffectiveConfigs: effective,
@@ -577,8 +582,10 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		NewDefaultsByTenant:  newDefaultsByTenant,
 		CardinalityLimit:     f.cardinalityLimit,
 		CardinalityWarnRatio: f.cardinalityWarnRatio,
-		DefaultsFiles:        scoped.DefaultsFiles,
-		ParseFailed:          scoped.ParseFailed,
+		// #3380: what the exporter's own resolver produces, not a key count.
+		PredictedRowCounts: rowCounts,
+		DefaultsFiles:      scoped.DefaultsFiles,
+		ParseFailed:        scoped.ParseFailed,
 		// #1976: the exporter's own build's undeliverable set, in-scope
 		// tenants only (ScopeEffective filters it).
 		UndeliverableInherited: scoped.Undeliverable,
@@ -637,6 +644,25 @@ func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTena
 			f.Message = strings.ReplaceAll(f.Message, strconv.Quote(canon), strconv.Quote(written))
 		}
 	}
+}
+
+// predictedRowCounts is guard.CheckInput.PredictedRowCounts: for each
+// in-scope tenant, the user_threshold rows the exporter's own build of the
+// tree (scoped.Config, the build served-values and not_served read) makes
+// its resolver produce at the busiest minute of the UTC day, before the
+// max_metrics_per_tenant cut (config.PeakTenantRowCounts, #3380). now is the
+// run's instant, the one `expires:` is read at (#3368). nil when there is no
+// build.
+func predictedRowCounts(scoped *config.ScopedTenants, now time.Time) map[string]int {
+	if scoped.Config == nil {
+		return nil
+	}
+	all := scoped.Config.PeakTenantRowCounts(now)
+	out := make(map[string]int, len(scoped.Tenants))
+	for _, ec := range scoped.Tenants {
+		out[ec.TenantID] = all[ec.TenantID]
+	}
+	return out
 }
 
 // customAlertDuplicates is guard.CheckInput.CustomAlertDuplicates: the

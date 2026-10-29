@@ -7,101 +7,75 @@ import (
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
-// fixtureMetrics builds a tenant effective config with `n` non-special
-// metric keys + the special keys we want to ignore. Used by every
-// cardinality test that needs to drive the counter to a specific size.
-func fixtureMetrics(n int, includeSpecial bool) map[string]any {
-	out := make(map[string]any, n+5)
-	for i := 0; i < n; i++ {
-		// Use a string-typed value to mirror what the merge engine
-		// emits for top-level threshold entries — ensures the
-		// counter doesn't accidentally key on value type.
-		out[metricKeyName(i)] = "warning"
+// rows builds a CheckInput whose in-scope tenants are the keys of counts,
+// each with counts[id] predicted rows — the count cmd/da-guard hands in
+// from the exporter's resolver (config.PeakTenantRowCounts, #3380). The
+// effective configs are empty: the check reads no key of them.
+func rows(counts map[string]int) CheckInput {
+	eff := make(map[string]map[string]any, len(counts))
+	for id := range counts {
+		eff[id] = map[string]any{}
 	}
-	if includeSpecial {
-		out["_state_disabled"] = nil
-		out["_silent_test"] = "warning"
-		out["_routing"] = "stub"
-		out["_severity_dedup"] = "enable"
-		out["_metadata"] = map[string]any{"contact": "ops"}
+	return CheckInput{EffectiveConfigs: eff, PredictedRowCounts: counts}
+}
+
+// tenantsOf is EffectiveConfigs with the given in-scope tenants, each empty.
+func tenantsOf(ids ...string) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(ids))
+	for _, id := range ids {
+		out[id] = map[string]any{}
 	}
 	return out
 }
 
-func metricKeyName(i int) string {
-	// Generate distinct keys without colliding with any reserved
-	// prefix. Format keeps test output readable when a finding
-	// references one of these synthetically.
-	return "metric_" + strings.Repeat("x", 1) + intToStr(i)
+// one is rows for the single tenant t1 with n predicted rows.
+func one(n int, limit int) CheckInput {
+	in := rows(map[string]int{"t1": n})
+	in.CardinalityLimit = limit
+	return in
 }
 
-// intToStr is a tiny helper to avoid pulling strconv into the test
-// file's import surface for a single use.
-func intToStr(n int) string {
-	if n == 0 {
-		return "0"
+// #3380: the count is the resolver's, never the effective config's keys —
+// a tenant whose merge carries many keys the exporter does not serve (a
+// subtree default the root does not declare) is judged on its rows.
+func TestCheckCardinality_CountsPredictedRowsNotEffectiveKeys(t *testing.T) {
+	in := one(1, 2)
+	for i := 0; i < 50; i++ {
+		in.EffectiveConfigs["t1"]["undeclared_"+strings.Repeat("x", i+1)] = 100
 	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
+	if got := checkCardinality(in); len(got) != 0 {
+		t.Errorf("1 row at limit 2 with 50 effective keys: got %v, want no finding", got)
 	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if neg {
-		return "-" + string(digits)
-	}
-	return string(digits)
-}
-
-// --- countMetricKeys / isSpecialKey -------------------------------
-
-func TestCountMetricKeys_SkipsSpecialPrefixes(t *testing.T) {
-	in := fixtureMetrics(7, true)
-	if got := countMetricKeys(in); got != 7 {
-		t.Errorf("countMetricKeys = %d, want 7 (special keys must be skipped)", got)
+	// At limit 1 the one row is 100% of the cap: the warn tier, never the
+	// error (count == limit truncates nothing).
+	in.CardinalityLimit = 1
+	if got := checkCardinality(in); len(got) != 1 || got[0].Kind != findingkind.FindingCardinalityWarning {
+		t.Errorf("1 row at limit 1: got %v, want one cardinality_warning", got)
 	}
 }
 
-func TestIsSpecialKey_FullCoverage(t *testing.T) {
-	cases := []struct {
-		key  string
-		want bool
-	}{
-		{"mysql_connections", false},
-		{"mysql_connections_critical", false}, // suffix _critical doesn't match prefix _
-		{"_state_disabled", true},
-		{"_state_anything", true},
-		{"_silent_warn", true},
-		{"_silent_", true}, // trailing-empty case is still a state-machine match
-		{"_routing", true},
-		{"_routing_extra", true}, // prefix match
-		{"_severity_dedup", true},
-		{"_metadata", true},
-		{"_severity_dedup_extra", false}, // exact match only
-		{"_metadata_extra", false},       // exact match only
-		{"_unknown", false},              // unknown _-prefix not skipped (counts as metric)
-		{"", false},
+func TestCheckCardinality_TenantWithoutPredictionCountsZero(t *testing.T) {
+	in := CheckInput{
+		EffectiveConfigs: map[string]map[string]any{"t1": {"m": 1}},
+		CardinalityLimit: 1,
 	}
-	for _, tc := range cases {
-		if got := isSpecialKey(tc.key); got != tc.want {
-			t.Errorf("isSpecialKey(%q) = %v, want %v", tc.key, got, tc.want)
-		}
+	if got := checkCardinality(in); len(got) != 0 {
+		t.Errorf("no PredictedRowCounts: got %v, want no finding", got)
+	}
+}
+
+func TestCheckCardinality_OutOfScopeTenantIsNotReported(t *testing.T) {
+	in := one(0, 10)
+	in.PredictedRowCounts["elsewhere"] = 500
+	if got := checkCardinality(in); len(got) != 0 {
+		t.Errorf("a tenant not in EffectiveConfigs: got %v, want no finding", got)
 	}
 }
 
 // --- checkCardinality dispatch -------------------------------------
 
 func TestCheckCardinality_NoOpWhenLimitZero(t *testing.T) {
-	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{
-			"t1": fixtureMetrics(5000, false), // way over any sensible limit
-		},
-		// CardinalityLimit=0 → check disabled
-	})
+	got := checkCardinality(one(5000, 0)) // CardinalityLimit=0 → check disabled
 	if len(got) != 0 {
 		t.Errorf("got %d findings with CardinalityLimit=0, want 0 (check disabled)", len(got))
 	}
@@ -109,8 +83,9 @@ func TestCheckCardinality_NoOpWhenLimitZero(t *testing.T) {
 
 func TestCheckCardinality_NoOpWhenLimitNegative(t *testing.T) {
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(100, false)},
-		CardinalityLimit: -1,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 100},
+		CardinalityLimit:   -1,
 	})
 	if len(got) != 0 {
 		t.Errorf("got %d findings with negative CardinalityLimit, want 0", len(got))
@@ -121,8 +96,9 @@ func TestCheckCardinality_BelowWarnFloorIsClean(t *testing.T) {
 	// Limit=100, ratio=0.8 → warn floor = 80. 50 metrics is well
 	// below; expect zero findings.
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(50, false)},
-		CardinalityLimit: 100,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 50},
+		CardinalityLimit:   100,
 	})
 	if len(got) != 0 {
 		t.Errorf("got %d findings at 50/100, want 0", len(got))
@@ -132,8 +108,9 @@ func TestCheckCardinality_BelowWarnFloorIsClean(t *testing.T) {
 func TestCheckCardinality_AboveWarnFloorEmitsWarn(t *testing.T) {
 	// Limit=100, ratio=0.8 → warn floor=80. 90 metrics should warn.
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(90, false)},
-		CardinalityLimit: 100,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 90},
+		CardinalityLimit:   100,
 	})
 	if len(got) != 1 {
 		t.Fatalf("got %d findings at 90/100, want 1 warning", len(got))
@@ -151,8 +128,9 @@ func TestCheckCardinality_AboveWarnFloorEmitsWarn(t *testing.T) {
 
 func TestCheckCardinality_AboveLimitEmitsError(t *testing.T) {
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(101, false)},
-		CardinalityLimit: 100,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 101},
+		CardinalityLimit:   100,
 	})
 	if len(got) != 1 {
 		t.Fatalf("got %d findings at 101/100, want 1 error", len(got))
@@ -173,8 +151,9 @@ func TestCheckCardinality_ExactlyAtLimitIsCleanWarn(t *testing.T) {
 	// limit (strict), so count == limit emits a WARN (still above
 	// the warn floor 80) but not an error.
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(100, false)},
-		CardinalityLimit: 100,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 100},
+		CardinalityLimit:   100,
 	})
 	if len(got) != 1 {
 		t.Fatalf("got %d findings at 100/100, want 1 (warn, not error)", len(got))
@@ -189,13 +168,14 @@ func TestCheckCardinality_DefaultWarnRatioIs80(t *testing.T) {
 	// 8 metrics: at floor → no warn (warn fires at strictly >).
 	// 9 metrics: above floor → warn fires.
 	in := CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"t1": fixtureMetrics(8, false)},
-		CardinalityLimit: 10,
+		EffectiveConfigs:   tenantsOf("t1"),
+		PredictedRowCounts: map[string]int{"t1": 8},
+		CardinalityLimit:   10,
 	}
 	if got := checkCardinality(in); len(got) != 0 {
 		t.Errorf("at floor (8/10): got %d findings, want 0", len(got))
 	}
-	in.EffectiveConfigs = map[string]map[string]any{"t1": fixtureMetrics(9, false)}
+	in.PredictedRowCounts = map[string]int{"t1": 9}
 	if got := checkCardinality(in); len(got) != 1 {
 		t.Errorf("just above floor (9/10): got %d findings, want 1", len(got))
 	}
@@ -205,7 +185,8 @@ func TestCheckCardinality_CustomWarnRatio(t *testing.T) {
 	// Custom ratio 0.5 → floor 50 with limit 100. 60 metrics should
 	// emit a warning even though 60 < 80 (the default floor).
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs:     map[string]map[string]any{"t1": fixtureMetrics(60, false)},
+		EffectiveConfigs:     tenantsOf("t1"),
+		PredictedRowCounts:   map[string]int{"t1": 60},
 		CardinalityLimit:     100,
 		CardinalityWarnRatio: 0.5,
 	})
@@ -218,7 +199,8 @@ func TestCheckCardinality_RatioOutOfRangeFallsBackToDefault(t *testing.T) {
 	cases := []float64{-0.1, 0, 1.1, 99}
 	for _, ratio := range cases {
 		got := checkCardinality(CheckInput{
-			EffectiveConfigs:     map[string]map[string]any{"t1": fixtureMetrics(85, false)},
+			EffectiveConfigs:     tenantsOf("t1"),
+			PredictedRowCounts:   map[string]int{"t1": 85},
 			CardinalityLimit:     100,
 			CardinalityWarnRatio: ratio,
 		})
@@ -234,7 +216,8 @@ func TestCheckCardinality_RatioOne_DisablesWarnTier(t *testing.T) {
 	// above limit ever fire (as errors). So 99/100 emits zero
 	// findings even though it's "almost full".
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs:     map[string]map[string]any{"t1": fixtureMetrics(99, false)},
+		EffectiveConfigs:     tenantsOf("t1"),
+		PredictedRowCounts:   map[string]int{"t1": 99},
 		CardinalityLimit:     100,
 		CardinalityWarnRatio: 1.0,
 	})
@@ -243,7 +226,8 @@ func TestCheckCardinality_RatioOne_DisablesWarnTier(t *testing.T) {
 	}
 	// 101 should still error.
 	got = checkCardinality(CheckInput{
-		EffectiveConfigs:     map[string]map[string]any{"t1": fixtureMetrics(101, false)},
+		EffectiveConfigs:     tenantsOf("t1"),
+		PredictedRowCounts:   map[string]int{"t1": 101},
 		CardinalityLimit:     100,
 		CardinalityWarnRatio: 1.0,
 	})
@@ -256,10 +240,11 @@ func TestCheckCardinality_RatioOne_DisablesWarnTier(t *testing.T) {
 
 func TestCheckCardinality_PerTenantIndependence(t *testing.T) {
 	got := checkCardinality(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{
-			"safe":    fixtureMetrics(50, false),  // below floor
-			"warned":  fixtureMetrics(85, false),  // between floor + limit
-			"errored": fixtureMetrics(150, false), // above limit
+		EffectiveConfigs: tenantsOf("safe", "warned", "errored"),
+		PredictedRowCounts: map[string]int{
+			"safe":    50,  // below floor
+			"warned":  85,  // between floor + limit
+			"errored": 150, // above limit
 		},
 		CardinalityLimit: 100,
 	})
@@ -286,11 +271,9 @@ func TestCheckCardinality_IntegratesWithCheckDefaultsImpact(t *testing.T) {
 	// correctly + cardinality errors drop the tenant from
 	// PassedTenantCount (per run.go's failingTenants map).
 	r, err := CheckDefaultsImpact(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{
-			"good":    fixtureMetrics(50, false),
-			"too-big": fixtureMetrics(200, false),
-		},
-		CardinalityLimit: 100,
+		EffectiveConfigs:   tenantsOf("good", "too-big"),
+		PredictedRowCounts: map[string]int{"good": 50, "too-big": 200},
+		CardinalityLimit:   100,
 	})
 	if err != nil {
 		t.Fatalf("CheckDefaultsImpact: %v", err)

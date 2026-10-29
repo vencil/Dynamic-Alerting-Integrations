@@ -17,7 +17,7 @@
 
 ## Try it（從本目錄 `components/da-tools/app/` 執行）
 
-內附 fixture [`examples/cardinality-demo/conf.d/`](examples/cardinality-demo/conf.d/) 是一個**故意過度配置**的租戶（60 個 metric 閾值；每個 key = runtime 一條 series）。對它跑 da-guard，預算設低 50（production 預設 500）：
+內附 fixture [`examples/cardinality-demo/conf.d/`](examples/cardinality-demo/conf.d/) 是一個**故意過度配置**的租戶（60 個 metric 閾值，都在根 `_defaults.yaml` 的 `optional_overrides:` 宣告過，所以 exporter 每個 key 送一條 series；da-guard 數的就是 exporter 實際會產生的列數，[#3380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3380)）。對它跑 da-guard，預算設低 50（production 預設 500）：
 
 ```sh
 docker run --rm -v "$(pwd)/examples:/work:ro" ghcr.io/vencil/da-tools:v2.9.0 \
@@ -40,7 +40,7 @@ docker run --rm -v "$(pwd)/examples:/work:ro" ghcr.io/vencil/da-tools:v2.9.0 \
 
 | Tenant | Field | Kind | Message |
 |--------|-------|------|---------|
-| over-budget-tenant | — | cardinality_exceeded | tenant "over-budget-tenant": predicted metric count 60 exceeds the per-tenant cardinality limit of 50; runtime would silently truncate the excess (config_resolve.go::ResolveAt) |
+| over-budget-tenant | — | cardinality_exceeded | tenant "over-budget-tenant": the exporter would produce 60 user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of 50; it would silently truncate the excess (max_metrics_per_tenant) |
 ```
 
 ```sh
