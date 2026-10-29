@@ -44,6 +44,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 DEFAULT_CHANGELOG = "CHANGELOG.md"
 DEFAULT_SECTION = "Unreleased"
@@ -468,8 +469,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.metric == "changelog":
         path = Path(args.path)
-        if not path.is_file():
-            return _fail(f"CHANGELOG not found: {path}")
+        # #3276: the shared judgement of a caller-given path.
+        problem = classify_path(args.path, "file", flag="--path")
+        if problem is not None:
+            word = "not found" if problem.missing else "not usable"
+            return _fail(f"CHANGELOG {word}: {problem.message}")
         try:
             text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError as exc:

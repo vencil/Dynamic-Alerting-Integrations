@@ -195,13 +195,20 @@ def test_main_all_with_expect_merged_hash_is_error(verify_module, conf_d, monkey
 
 
 def test_main_conf_d_not_found_returns_error(verify_module, monkeypatch, capsys, tmp_path, cli_argv):
-    """Bogus --conf-d path → exit 1."""
+    """Bogus --conf-d path → exit 1 (#3276: a CallerError, which `run()`
+    ends at this tool's caller-error code, 1)."""
+    import subprocess
+    from _lib_exitcodes import CallerError
     bogus = tmp_path / "nonexistent"
     cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(bogus))
-    code = verify_module.main()
-    assert code == 1
-    captured = capsys.readouterr()
-    assert "conf.d not found" in captured.err
+    with pytest.raises(CallerError) as exc:
+        verify_module.main()
+    assert exc.value.reason == "dir_not_found"
+    assert str(exc.value) == f"--conf-d {bogus}: No such file or directory"
+    proc = subprocess.run([sys.executable, str(TOOL_PATH), "db-fin-a", "--conf-d", str(bogus)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 1, proc.stderr
+    assert f"ERROR: --conf-d {bogus}: " in proc.stderr and "Traceback" not in proc.stderr
 
 
 def test_main_json_output_is_parseable(verify_module, conf_d, monkeypatch, capsys, cli_argv):

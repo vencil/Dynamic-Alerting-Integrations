@@ -85,7 +85,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
-from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
+from _lib_io import OutputWriteError, classify_path, safe_label  # noqa: E402  (#1789; #3276)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -139,6 +139,12 @@ class InjectError(Exception):
 def collect_rule_files(rules_path: str) -> list[str]:
     """--rules 可為單一規則檔或目錄（目錄取排序後的 *.yml / *.yaml）。"""
     p = Path(rules_path)
+    # #3276: the shared judgement of a caller-given path ("any": a file or a
+    # directory) — one under a parent the caller cannot enter is named.
+    problem = classify_path(rules_path, "any", flag="--rules")
+    if problem is not None:
+        raise InjectError(f"--rules 路徑{'不存在' if problem.missing else '無法使用'}："
+                          f"{problem.message}")
     if p.is_file():
         return [str(p)]
     if p.is_dir():
@@ -146,7 +152,7 @@ def collect_rule_files(rules_path: str) -> list[str]:
         if not files:
             raise InjectError(f"--rules 目錄 {rules_path} 內沒有任何 *.yaml / *.yml 規則檔")
         return files
-    raise InjectError(f"--rules 路徑不存在: {rules_path}")
+    raise InjectError(f"--rules 既非檔案也非目錄: {rules_path}")
 
 
 def _parse_group_interval(name: str, gname: str, grp: dict) -> int:
@@ -501,8 +507,16 @@ def run_pipeline(args, pack: dict, parsed_rules: dict) -> dict:
 
     harness = _load_vm_harness()
     vmalert_bin = args.vmalert or harness.find_vmalert()
-    if args.vmalert and not os.path.isfile(args.vmalert):
-        raise InjectError(f"--vmalert 指定的 binary 不存在: {args.vmalert}")
+    if args.vmalert:
+        # #3276: the shared judgement of a caller-given path. "any" then a
+        # regular file, not "file": a binary need only be executable, and
+        # "file" also opens it for reading.
+        problem = classify_path(args.vmalert, "any", flag="--vmalert")
+        if problem is not None:
+            raise InjectError(f"--vmalert 指定的 binary "
+                              f"{'不存在' if problem.missing else '無法使用'}：{problem.message}")
+        if not os.path.isfile(args.vmalert):
+            raise InjectError(f"--vmalert 指定的 binary 不是一般檔: {args.vmalert}")
     if vmalert_bin is None:
         raise InjectError(
             "找不到 vmalert binary（$VMALERT / PATH / /tmp/vm/vmalert-prod 皆無）——"

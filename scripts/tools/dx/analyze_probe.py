@@ -45,6 +45,7 @@ established now. The enumeration itself is recorded in dev/trk-373/ROUNDS.jsonl.
 
 import argparse
 import contextlib
+import errno
 import io
 import functools
 import os
@@ -84,6 +85,13 @@ _CF_HARNESS = "docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py
 # three ways globbing changed behaviour, and note that the CROSS DISPATCH section
 # hard-codes the word "three" in its prose.
 RUNS = ["probe-run1.txt", "probe-run2.txt", "probe-run3.txt"]
+
+# Nothing at the path: the errnos `Path.exists()` answered False for, and
+# `_lib_io.classify_path`'s *_not_found (#3276). That judgement is not
+# imported here: `_lib_io` needs PyYAML, which the bench workflow's bare
+# runner python is not promised, and installs the crash hook, which would
+# move every other uncaught error of this tool from rc 1 to 2.
+_MISSING = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 
 # ⛔ Divergence 2: records are NOT anchored at line start. `go test` prefixes the
 # first output line of each invocation with `BenchmarkProbeWriteLatency-4   \t`,
@@ -665,10 +673,21 @@ def main(argv=None):
 
     if args.from_log is not None:
         path = args.from_log
-        if not path.exists():
-            print(f"::error::missing data file {path}")
+        # #3276: what is at --from-log is decided by the read and its errno,
+        # not `exists()` (which raised on a path under a parent the caller
+        # cannot enter): nothing there is the missing-file refusal, a path
+        # that cannot be read as a file (a directory, EACCES) is named — rc 2
+        # either way, never the traceback (rc 1) it was. A FIFO or a process
+        # substitution is read as before.
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if exc.errno in _MISSING:
+                print(f"::error::missing data file {path}")
+            else:
+                print(f"::error::--from-log {path}: {exc.strerror}")
             return 2
-        session = load(path.read_text(encoding="utf-8"), path.name)
+        session = load(text, path.name)
         err = reject(session)
         if err:
             print(err)
@@ -685,13 +704,28 @@ def main(argv=None):
     # update that prose too.
     # ⚠️ Inherited, not chosen here: a `probe-run4.txt` in DIR is IGNORED rather
     # than rejected, because the original ignored it. Pinned by a test.
+    # #3276: a DIR the caller cannot look at is named, not a traceback (rc 1);
+    # nothing there is each file's missing-file refusal below, as before.
+    try:
+        os.stat(args.archive)
+    except OSError as exc:
+        if exc.errno not in _MISSING:
+            print(f"::error::--archive {args.archive}: {exc.strerror}")
+            return 2
     sessions = []
     for name in RUNS:
         path = args.archive / name
-        if not path.exists():
-            print(f"::error::missing data file {path}")
-            return 2
-        session = load(path.read_text(encoding="utf-8"), path.name)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if exc.errno in _MISSING:
+                print(f"::error::missing data file {path}")
+                return 2
+            if isinstance(exc, PermissionError):
+                print(f"::error::--archive {path}: {exc.strerror}")
+                return 2
+            raise  # anything else (a directory named probe-runN.txt) as before
+        session = load(text, path.name)
         err = reject(session, thin_msg=lambda s: (
             f"::error::parsed {len(s.rows)} measurement rows, need >= 2"))
         if err:

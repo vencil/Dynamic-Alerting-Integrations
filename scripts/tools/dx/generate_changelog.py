@@ -45,6 +45,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
 # ⛔ ONE base resolver for the whole repo. This file used to carry a second
 # one (`default_cap_base` + `_ref_exists`), and the two disagreed in the
 # direction nothing can notice: off a PR run the local one answered "HEAD",
@@ -826,9 +827,18 @@ def main() -> int:
         paths = ([Path(t) for t in dict.fromkeys(args.fragments)]
                  if args.fragments else fragment_paths(repo_root))
         paths = [p for p in paths if p.name != FRAGMENT_README]
-        missing = [str(p) for p in paths if not p.is_file()]
-        if missing:
-            print(f"ERROR: not a readable file: {', '.join(missing)}", file=sys.stderr)
+        # #3276: the shared judgement of a caller-given path, every one named.
+        # "any" then a regular file — what `is_file()` asked: "file" would
+        # also open it, and a fragment that does not open is the lint's
+        # finding (rc 1), not this refusal.
+        flag = "--fragments" if args.fragments else None
+        problems = [classify_path(p, "any", flag=flag) for p in paths]
+        bad = [pr.message if pr is not None
+               else f"{f'{flag} ' if flag else ''}{safe_label(str(p))}: not a regular file"
+               for p, pr in zip(paths, problems) if pr is not None or not p.is_file()]
+        if bad:
+            for message in bad:
+                print(f"ERROR: not a readable file: {message}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         if args.assemble:
             markdown, problems, notes = assemble_fragments(paths)
@@ -860,8 +870,10 @@ def main() -> int:
             # #3090 a crash exits 2 via _lib_exitcodes — still a traceback,
             # not the named one-line caller error below).
             p = Path(target)
-            if not p.is_file():
-                print(f"ERROR: not a readable file: {target}", file=sys.stderr)
+            # #3276: the shared judgement of a caller-given path.
+            problem = classify_path(target, "file", flag="--lint")
+            if problem is not None:
+                print(f"ERROR: not a readable file: {problem.message}", file=sys.stderr)
                 return EXIT_CALLER_ERROR
             try:
                 found = lint_changelog(target)

@@ -257,9 +257,12 @@ def main() -> int:
         return EXIT_USAGE_ERROR
 
     conf_d = Path(args.conf_d).resolve()
-    if not conf_d.is_dir():
-        print(f"error: conf.d not found: {conf_d}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+    # #3276: the shared judgement of a caller-given path. A CallerError
+    # leaves through `run()` at this tool's caller-error code — 1 (set
+    # below), the inverted contract (#3393). Imported here: importing this
+    # module must not change the importing process (see the guard below).
+    from _lib_io import require_dir
+    require_dir(conf_d, flag="--conf-d")
 
     describe_mod = _load_describe_module()
     try:

@@ -39,6 +39,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 # Nav section mapping: front matter tags → nav section
 SECTION_MAP = {
@@ -165,8 +166,11 @@ def main():
     repo_root = Path(args.repo_root)
     docs_dir = repo_root / 'docs'
 
-    if not docs_dir.exists():
-        print(f'Error: docs directory not found: {docs_dir}', file=sys.stderr)
+    # #3276: the shared judgement of a path derived from --repo-root.
+    problem = classify_path(docs_dir, "dir")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f'Error: docs directory {word}: {problem.message}', file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     all_docs = scan_docs(docs_dir, repo_root)

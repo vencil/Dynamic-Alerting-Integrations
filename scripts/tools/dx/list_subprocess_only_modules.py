@@ -81,6 +81,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
@@ -227,11 +228,16 @@ def read_coverage_data(path: Path):
     except Exception as exc:  # pragma: no cover - 環境缺 coverage
         raise RuntimeError(f"匯入 coverage 失敗，無從讀取量測資料：{exc}") from exc
 
-    if not path.exists():
+    # #3276: the shared judgement of a caller-given path ("any", as `exists()`
+    # was); only a path with nothing there gets the how-to-make-it hint.
+    problem = classify_path(path, "any", flag="--coverage-data")
+    if problem is not None and problem.missing:
         raise RuntimeError(
             f"找不到 coverage 資料檔：{path}。先跑 `pytest tests/ --cov` 產生它"
             "（conftest 會在 --cov 時自動接上 subprocess coverage）"
         )
+    if problem is not None:
+        raise RuntimeError(f"coverage 資料檔無法使用：{problem.message}")
     data = coverage.CoverageData(basename=str(path))
     try:
         data.read()
@@ -393,8 +399,15 @@ def main(argv: "list[str] | None" = None) -> int:
         return EXIT_CALLER_ERROR
 
     repo = Path(args.repo).resolve()
-    if not (repo / ".git").exists():
-        return unmeasurable(f"{repo} 不是 git repo")
+    # #3276: the shared judgement of a caller-given path — `exists()` raised
+    # on one under a parent the caller cannot enter (3.13). `.git` is "any":
+    # in a worktree it is a file.
+    problem = classify_path(repo, "dir", flag="--repo")
+    if problem is not None:
+        return unmeasurable(problem.message)
+    dot_git = classify_path(repo / ".git", "any")
+    if dot_git is not None:
+        return unmeasurable(f"{repo} 不是 git repo" if dot_git.missing else dot_git.message)
     data_path = Path(args.coverage_data) if args.coverage_data else repo / ".coverage"
     try:
         data = build(repo, data_path)

@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from _lib_io import classify_path  # #3276
+
 KEY_GROUPS = "_groups.yaml"
 KEY_VIEWS = "_views.yaml"
 KEY_FEDERATION_POLICY = "_federation_policy.yaml"
@@ -212,6 +214,12 @@ def _add(st: TenantState, r: Any, i: int, source: str) -> None:
 def _read(path: str | os.PathLike[str], source: str) -> bytes:
     if str(path) == "-":
         return sys.stdin.buffer.read()
+    # #3276: the shared judgement of a caller-given path ("any": a FIFO or a
+    # process substitution is read as before). `is_dir()` raised on a path
+    # under a parent the caller cannot enter (3.13): a traceback.
+    problem = classify_path(path, "any", flag="--state")
+    if problem is not None:
+        raise StateInputError(problem.message)
     p = Path(path)
     if p.is_dir():
         raise _refuse(source, "a directory (a state directory is not read any more: "

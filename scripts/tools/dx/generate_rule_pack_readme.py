@@ -24,6 +24,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 from validate_docs_versions import count_rule_packs  # noqa: E402
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
@@ -264,9 +265,12 @@ def count_preloaded_packs(rule_packs_dir: Path) -> int:
     only there, so any number from rule-packs/ alone would be wrong.
     """
     k8s_rules_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
-    if not k8s_rules_dir.is_dir():
+    # #3276: the shared judgement of a path derived from --rule-packs-dir —
+    # one under a parent the caller cannot enter is named, not a traceback.
+    problem = classify_path(k8s_rules_dir, "dir")
+    if problem is not None:
         raise FileNotFoundError(
-            f"{k8s_rules_dir} not found — the pack count needs it beside "
+            f"{problem.message} — the pack count needs {k8s_rules_dir} beside "
             f"{rule_packs_dir} (the configmap-only `platform` pack lives "
             f"there)")
     return count_rule_packs(rule_packs_dir, k8s_rules_dir)["pack_count"]
@@ -295,6 +299,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # #3276: the shared judgement of a caller-given path — a glob of a
+    # directory the caller cannot enter finds nothing, which read as "no rule
+    # pack YAML files".
+    problem = classify_path(args.rule_packs_dir, "dir", flag="--rule-packs-dir")
+    if problem is not None:
+        print(f"Error: {problem.message}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     try:
         rows, total_records, total_alerts = generate_table_rows(args.rule_packs_dir)

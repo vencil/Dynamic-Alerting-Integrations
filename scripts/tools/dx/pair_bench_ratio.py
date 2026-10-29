@@ -104,7 +104,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789; #3276)
+    classify_path, exit_on_output_write_error, output_write)
 
 # Same shape analyze_bench_history.py parses, deliberately: both read the raw
 # `go test -bench` stdout that bench_interleave.sh appends per round.
@@ -332,9 +333,11 @@ def main() -> int:
     args = ap.parse_args()
     try_utf8_stdout()
 
-    for p in (args.reference, args.main):
-        if not p.is_file():
-            print(f"[pair_bench_ratio] not a file: {p}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path.
+    for flag, p in (("--reference", args.reference), ("--main", args.main)):
+        problem = classify_path(p, "file", flag=flag)
+        if problem is not None:
+            print(f"[pair_bench_ratio] not a file: {problem.message}", file=sys.stderr)
             return 2
 
     ref, ref_cpu = read_side(args.reference)

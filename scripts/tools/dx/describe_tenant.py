@@ -51,7 +51,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout, find_project_root  # noqa: E402
 from _lib_confd import duplicate_declarations, tenant_declarations  # noqa: E402  (#2049)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
-from _lib_io import YamlFileError, exit_on_output_write_error, output_write, safe_label  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789; #3276)
+    YamlFileError, classify_path, exit_on_output_write_error, output_write, safe_label)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: one parse-tree document per run)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
@@ -392,10 +393,13 @@ def what_if_result(scanner: ConfDScanner, tid: str, draft: Path,
     if replaces is not None:
         rel = tree_rel(conf_d, replaces)
         target = conf_d / rel
-        if not target.is_file():
+        # #3276: the shared judgement of a caller-given path, in this tool's
+        # words (a WhatIfError, the document the --what-if mode answers with).
+        problem = classify_path(target, "file", flag="--replaces")
+        if problem is not None:
             raise WhatIfError(
                 f"--replaces {replaces} is not a file of the scanned tree {conf_d} "
-                f"(it must name an existing config file the scan lists)")
+                f"(it must name an existing config file the scan lists): {problem.message}")
         if _same_file(target, draft):
             raise WhatIfError(
                 f"--what-if {draft} and --replaces {replaces} are the same file: "
@@ -587,8 +591,12 @@ def main() -> None:
             # `--conf-d` remedy.
             conf_d = (repo_root or here) / "conf.d"
 
-    if not conf_d.exists():
-        print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path (or the one found
+    # for the caller, named without the flag it did not give).
+    problem = classify_path(conf_d, "dir", flag="--conf-d" if args.conf_d else None)
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"❌ conf.d/ {word}: {problem.message}", file=sys.stderr)
         print(f"   Use --conf-d to specify the path.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
@@ -598,7 +606,9 @@ def main() -> None:
         # level) are gone — the draft's place is said, and Go judges it.
         hint = ""
         given = Path(args.what_if)
-        if given.is_file():
+        # #3276: a hint only — `is_file()` raised on a path under a parent
+        # the caller cannot enter (3.13), ending in a traceback.
+        if classify_path(given, "file") is None:
             try:
                 rel = tree_rel(conf_d.resolve(), given)
                 hint = (f". {args.what_if} is in the scanned tree: to try an edit of "
@@ -613,8 +623,10 @@ def main() -> None:
     draft = None
     if args.what_if is not None:
         draft = Path(args.what_if).resolve()
-        if not draft.is_file():
-            print(f"❌ --what-if file not found: {draft}", file=sys.stderr)
+        problem = classify_path(draft, "file", flag="--what-if")  # #3276
+        if problem is not None:
+            word = "not found" if problem.missing else "not usable"
+            print(f"❌ --what-if file {word}: {problem.message}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
     try:

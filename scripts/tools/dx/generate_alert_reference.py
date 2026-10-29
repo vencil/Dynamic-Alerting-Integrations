@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 # Built-in mapping for recommended actions by alert pattern
 RECOMMENDED_ACTIONS = {
@@ -507,8 +508,11 @@ def main():
     # Resolve to absolute path
     rule_packs_dir = str(Path(args.output_dir).resolve())
 
-    if not Path(rule_packs_dir).is_dir():
-        print(f"Error: {rule_packs_dir} is not a directory", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path.
+    problem = classify_path(rule_packs_dir, "dir", flag="--output-dir")
+    if problem is not None:
+        print(f"Error: rule packs directory is not a directory: {problem.message}",
+              file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Load rule packs

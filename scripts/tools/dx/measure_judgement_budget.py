@@ -235,7 +235,7 @@ _REPO = os.path.abspath(os.path.join(_TOOLS, "..", ".."))
 sys.path.insert(0, _TOOLS)
 sys.path.insert(0, os.path.join(_TOOLS, "ops"))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
-from _lib_io import safe_label  # noqa: E402
+from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
 
 #: ADR-036 §3's pass rule (the owner's decision rule, not a limit): peak
 #: memory ≤ 75 % of the judgement limit, wall time ≤ half the deadline.
@@ -830,8 +830,11 @@ def _preflight(a: argparse.Namespace) -> str:
     if shutil.which("amtool") is None:
         raise NotMeasured("amtool is not on PATH: the judgement would not be complete "
                           "(the container answers VALIDATOR_UNAVAILABLE)")
-    if a.tree is not None and not os.path.isdir(a.tree):
-        raise NotMeasured(f"--tree {a.tree} is not a directory")
+    # #3276: the shared judgement of a caller-given path — `os.path.isdir`
+    # said "not a directory" for one under a parent the caller cannot enter.
+    problem = None if a.tree is None else classify_path(a.tree, "dir", flag="--tree")
+    if problem is not None:
+        raise NotMeasured(problem.message)
     if a.work_dir is not None and os.path.lexists(a.work_dir):
         raise NotMeasured(f"--work-dir {a.work_dir} already exists: name a new directory")
     return os.path.abspath(da_guard)

@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 from _version_patterns import DOCS_TREE_SYMLINK_ALIAS_PATHS  # noqa: E402
 
 
@@ -546,8 +547,12 @@ def main():
 
     # 解析 repo root
     repo_root = Path(args.repo_root).resolve()
-    if not repo_root.exists():
-        print(f"ERROR: Repository root not found: {repo_root}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path. A directory: a file
+    # given here used to pass `exists()` and report a coverage of nothing.
+    problem = classify_path(repo_root, "dir", flag="--repo-root")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"ERROR: Repository root {word}: {problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     # 執行分析
