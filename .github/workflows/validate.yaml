@@ -515,13 +515,24 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
       - name: Build da-guard
         run: |
           cd components/threshold-exporter/app
           # #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
           CGO_ENABLED=0 go build -buildvcs=false -o "$RUNNER_TEMP/da-guard" ./cmd/da-guard
           echo "DA_GUARD_BINARY=$RUNNER_TEMP/da-guard" >> "$GITHUB_ENV"
+      # #3206 (ADR-036 §12): the generator reads back the ConfigMap it emits
+      # the way kubectl does (da-crdecode) and the config the way Alertmanager
+      # loads it (da-read alertmanager); --base-config too. Without them the
+      # steps below fail by name.
+      - name: Build da-crdecode and da-read
+        run: |
+          make da-crdecode-build da-read-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
 
       # Schema validation + routing validation + webhook domain allowlist.
       # --strict (ADR-007): domain-policy violations are BLOCKING here —

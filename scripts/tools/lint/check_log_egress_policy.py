@@ -25,7 +25,8 @@ consistent with the repo's other check_*.py gates.
 
 Data flow (per the multi-document YAML caveat):
   helm template <chart> [-f values]
-    → yaml.safe_load_all(...)        # multi-doc stream
+    → da-crdecode (stdin)            # multi-doc stream, read as kubectl reads it
+                                     # (ADR-036 §12, #3206); no binary → exit 2
     → filter None (blank docs)
     → iterate manifests
     → for the Vector ConfigMap, ALSO parse the embedded vector.yaml
@@ -52,6 +53,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: rendered manifests read kubectl's way)
 from typing import Iterable, Optional
 
 import yaml
@@ -143,7 +145,15 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
     except subprocess.CalledProcessError as e:
         print(f"ERROR: helm template {chart_dir} failed:\n{e.stderr}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    return [d for d in yaml.safe_load_all(out.stdout) if d]
+    try:
+        docs = _lib_consumer_read.kubernetes_text_documents(out.stdout)
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"ERROR: the rendered {chart_dir} cannot be read the way kubectl reads it: {e}",
+              file=sys.stderr)
+        for line in e.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    return [d for d in docs if d]
 
 
 def _iter_sink_endpoints(vector_config: dict):

@@ -458,28 +458,35 @@ class TestBaseConfigFlag:
         assert rc == 2
         assert f"--base-config {tmp_path / 'missing.yml'}: " in capsys.readouterr().err
 
-    @pytest.mark.parametrize("receivers", [
-        [{"slack_configs": [{"channel": "#x"}]}],  # a receiver without name
-        {"name": "ops"},                            # a mapping, not a list
+    @pytest.mark.parametrize("receivers, reason", [
+        ([{"slack_configs": [{"channel": "#x"}]}], "missing name in receiver"),
+        ({"name": "ops"}, "cannot unmarshal"),
     ], ids=["receiver-without-name", "receivers-mapping"])
-    def test_malformed_base_receivers_is_unknown_not_a_crash(
-            self, capsys, tmp_path, receivers):
-        """assemble_configmap raises KeyError / TypeError here, not the
-        ValueError of a refusal; the trace still says unknown, rc 0."""
+    def test_malformed_base_receivers_is_refused_by_alertmanagers_loader(
+            self, capsys, tmp_path, receivers, reason):
+        """#3206: --base-config is read by Alertmanager's loader (da-read),
+        which refuses these before anything is assembled: rc 2, in the
+        loader's words (they used to reach assemble_configmap's KeyError /
+        TypeError and trace as "unknown", rc 0)."""
         base = tmp_path / "base.yml"
         base.write_text(yaml.safe_dump({"route": {"receiver": "ops"},
                                         "receivers": receivers}),
                         encoding="utf-8")
-        trace, err = _trace_err(capsys, _tree(tmp_path),
-                                "--base-config", str(base))
-        assert "WARN: the generator cannot assemble this config" in err
+        rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+                      "--trace", "--json", "--base-config", str(base)])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "Alertmanager's config loader refuses" in err and reason in err
         assert "Traceback" not in err
-        assert trace["final_receiver"] == \
-            "(unknown: the generator refuses this config)"
-        # No config, no inhibit rules to list.
-        step4 = trace["steps"][3]
-        assert step4["inhibit_rules_yaml"] is None
-        assert step4["detail"].startswith("Unknown: inhibit rules not available")
+
+    def test_unassemblable_base_dict_is_unknown_not_a_crash(self, tmp_path):
+        """A base dict that reaches assemble_configmap's KeyError (only a
+        direct caller can hand one now) is UnassemblableBase, not a crash."""
+        parsed = er._parse_config_files(str(_tree(tmp_path)))
+        with pytest.raises(er.UnassemblableBase):
+            er.build_trace_tree(parsed, {"global": {}, "route": {"receiver": "ops"},
+                                         "receivers": [{"slack_configs": []}],
+                                         "inhibit_rules": []})
 
     def test_trace_own_bug_is_not_swallowed(self, monkeypatch, tmp_path):
         """Only assemble_configmap's crash reads as a malformed base; a
@@ -499,9 +506,16 @@ _SILENT_MODE_RULE = {
     "equal": ["tenant"]}
 
 
+def _matcher_sets(rule):
+    """A rule with its matcher lists as sets: Alertmanager's reading sorts
+    the matchers of a list."""
+    return {k: (sorted(v) if k.endswith("_matchers") else v) for k, v in rule.items()}
+
+
 class TestInhibitRulesStep:
-    """#2293: step 4 lists the inhibit rules verbatim and concludes nothing —
-    suppression depends on which alerts fire at runtime."""
+    """#2293: step 4 lists the inhibit rules and concludes nothing —
+    suppression depends on which alerts fire at runtime. #3206: they are the
+    rules as Alertmanager loads them (da-read), not the text's PyYAML reading."""
 
     def test_lists_the_rules_handed_to_amtool(self, capsys, tmp_path,
                                                monkeypatch):
@@ -519,8 +533,9 @@ class TestInhibitRulesStep:
         args = ["--base-config", str(base), "--label", "metric_group=mem"]
         trace = _trace(capsys, conf, *args)
         [am_yml] = handed
-        rules = yaml.safe_load(am_yml)["inhibit_rules"]
-        assert _SILENT_MODE_RULE in rules  # the base's own rule is kept
+        rules = er.alertmanager_reading(am_yml)["inhibit_rules"]
+        # the base's own rule is kept
+        assert _matcher_sets(_SILENT_MODE_RULE) in [_matcher_sets(r) for r in rules]
         step4 = trace["steps"][3]
         assert yaml.safe_load(step4["inhibit_rules_yaml"]) == rules
         assert "not evaluate" in step4["detail"]
@@ -533,18 +548,18 @@ class TestInhibitRulesStep:
             assert note in out and "TenantSilentWarning" in out
             assert "Inhibited:" not in out and "抑制:" not in out
 
-    @pytest.mark.parametrize("extra", [
-        "    since: 2020-01-01\n",       # date value
-        "    2020-01-01: a\n",           # date key
-        "    !!binary aGk=: a\n",        # !!binary key
-        "    v: !!binary aGVsbG8=\n",    # !!binary value
-        "    v: .nan\n",
-        "    v: .inf\n",
-    ], ids=["v-date", "k-date", "k-binary", "v-binary", "v-nan", "v-inf"])
-    def test_non_json_yaml_values_do_not_crash(self, capsys, tmp_path,
-                                               monkeypatch, extra):
-        """A base rule may hold what JSON cannot carry: step 4 is the rules
-        handed to amtool as YAML text, and --json stays strict JSON."""
+    @pytest.mark.parametrize("extra, value", [
+        ("    since: 2020-01-01\n", ("since", "2020-01-01")),   # date value
+        ("    !!binary aGk=: a\n", ("hi", "a")),                 # !!binary key
+        ("    v: !!binary aGVsbG8=\n", ("v", "hello")),          # !!binary value
+        ("    v: .nan\n", ("v", ".nan")),
+        ("    v: .inf\n", ("v", ".inf")),
+    ], ids=["v-date", "k-binary", "v-binary", "v-nan", "v-inf"])
+    def test_values_are_alertmanagers_reading(self, capsys, tmp_path,
+                                              monkeypatch, extra, value):
+        """#3206: a base rule's label value is what Alertmanager's loader
+        makes of it — a string (`.nan` is ".nan", a date its text), where
+        PyYAML read a float or a date; --json stays strict JSON."""
         base = tmp_path / "base.yml"
         base.write_text(
             "route: {receiver: ops}\nreceivers: [{name: ops}]\n"
@@ -553,12 +568,7 @@ class TestInhibitRulesStep:
             "  equal: [tenant]\n"
             "  source_match:\n    severity: critical\n    tenant: x\n"
             + extra, encoding="utf-8")
-        handed: list[str] = []
-
-        def _stub(am_yml, *_a, **_k):
-            handed.append(am_yml)
-            return None, "stubbed"
-        monkeypatch.setattr(er, "run_amtool_trace", _stub)
+        monkeypatch.setattr(er, "run_amtool_trace", lambda *_a, **_k: (None, "stubbed"))
         conf = _tree(tmp_path)
         args = ["--config-dir", str(conf), "--tenant", _TT, "--trace",
                 "--base-config", str(base)]
@@ -567,12 +577,26 @@ class TestInhibitRulesStep:
         def _reject(const):
             raise ValueError(f"non-standard JSON constant {const}")
         [trace] = json.loads(capsys.readouterr().out, parse_constant=_reject)
-        rules = yaml.safe_load(handed[0])["inhibit_rules"]
-        # Compared as dumps: NaN != NaN.
-        assert yaml.safe_dump(yaml.safe_load(
-            trace["steps"][3]["inhibit_rules_yaml"])) == yaml.safe_dump(rules)
+        rules = yaml.safe_load(trace["steps"][3]["inhibit_rules_yaml"])
+        key, want = value
+        assert {key: want}.items() <= next(
+            r["source_match"] for r in rules if "source_match" in r).items()
         assert er.main(args) == 0
         assert "source_match:" in capsys.readouterr().out
+
+    def test_a_label_name_alertmanager_refuses_is_a_refused_base(self, capsys, tmp_path):
+        """#3206: a date KEY is the label name "2020-01-01" to Alertmanager,
+        which refuses it: the base is refused (rc 2), not traced."""
+        base = tmp_path / "base.yml"
+        base.write_text(
+            "route: {receiver: ops}\nreceivers: [{name: ops}]\n"
+            "inhibit_rules:\n- equal: [tenant]\n"
+            "  source_match:\n    severity: critical\n    2020-01-01: a\n",
+            encoding="utf-8")
+        rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+                      "--trace", "--base-config", str(base)])
+        assert rc == 2
+        assert 'invalid label name "2020-01-01"' in capsys.readouterr().err
 
 
 @needs_amtool

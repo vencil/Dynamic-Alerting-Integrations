@@ -43,7 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -57,42 +57,22 @@ except ImportError:
     print("ERROR: pyyaml not installed. Run: pip install pyyaml", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
 
-# ⛔ YAML 1.1 keeps a `=` value tag, and prometheus-operator's AlertmanagerConfig
-# CRD contains a literal `- =`. Without this constructor `safe_load` raises
-# "could not determine a constructor for the tag 'tag:yaml.org,2002:value'" on
-# the ONE source that matters most here. Subclassing SafeLoader keeps the safe
-# loader (no arbitrary object construction) while treating `=` as a scalar.
-#
-# ⛔ Register it on a PRIVATE subclass, never on `yaml.SafeLoader` itself (#2335):
-# `add_constructor` on the base class runs at import and mutates the process-wide
-# loader, so every SafeLoader-derived reader in the same process (exporter-key
-# loader, strict loader, plain `safe_load`) starts accepting `=` — but only if
-# this module happened to be imported first. Only the upstream CRD read uses it;
-# `SOURCES.yaml` is our own file and has no reason to carry `=`.
-class _CRDLoader(yaml.SafeLoader):
-    """SafeLoader that also constructs YAML 1.1 `!!value` (`=`) as a plain str."""
+# ADR-036 §12 (#3206): an upstream CRD is a Kubernetes manifest, so it is read
+# the way kubectl reads it — `da-crdecode` (sigs.k8s.io/yaml), the text handed
+# over on stdin — not with PyYAML. That reading takes prometheus-operator's
+# literal `- =` as the string "=" (PyYAML needed a private `!!value`
+# constructor for it). A tag it does not know (`!!python/object/apply:...`)
+# constructs nothing: it is not refused either — the node is read as the
+# plain value under the tag (a sequence stays a sequence of strings), as
+# kubectl reads it.
+import _lib_consumer_read  # noqa: E402
 
 
-_CRDLoader.add_constructor(
-    "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
-)
-
-
-def _load_crd_docs(text: str) -> Iterator[Any]:
-    """``yaml.load_all(text, Loader=_CRDLoader)``, spelled the long way.
-
-    Same reason as ``_lib_io._strict_loader_class``: bandit B506 flags any
-    SafeLoader SUBCLASS passed as ``Loader=``, so the loader is driven by hand.
-    Safety is pinned by behaviour instead —
-    ``tests/dx/test_generate_crd_schemas.py`` feeds this reader a real
-    ``!!python/object/apply`` payload and requires it to be refused.
-    """
-    loader = _CRDLoader(text)
-    try:
-        while loader.check_data():
-            yield loader.get_data()
-    finally:
-        loader.dispose()
+def _load_crd_docs(text: str) -> List[Any]:
+    """The documents of one upstream CRD file, as kubectl reads them. Raises
+    :class:`_lib_consumer_read.ConsumerReadError` when that reading cannot be
+    had (no da-crdecode, or it refuses the text)."""
+    return _lib_consumer_read.kubernetes_text_documents(text)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CRD_DIR = REPO_ROOT / "docs" / "schemas" / "crd"
@@ -190,8 +170,10 @@ def run(check_only: bool) -> int:
         digest = hashlib.sha256(raw).hexdigest()
         try:
             found, missing = _schemas_from(raw, src["kinds"])
-        except yaml.YAMLError as e:
-            print(f"ERROR: {sid}: CRD did not parse ({e})", file=sys.stderr)
+        except _lib_consumer_read.ConsumerReadError as e:
+            detail = e.detail()
+            print(f"ERROR: {sid}: CRD could not be read the way kubectl reads it ({detail})",
+                  file=sys.stderr)
             return EXIT_CALLER_ERROR
         if missing:
             names = ", ".join(f"{m['group']}/{m['version']} {m['kind']}" for m in missing)

@@ -21,7 +21,9 @@ How the job is stood in for:
   `CI_PROJECT_DIR`) are supplied here; `CONFIG_DIR` and `DA_TOOLS_IMAGE` are
   read from the generated pipeline's own `variables:`. config_diff.py renders
   through da-guard (ADR-037), which the image ships; here it is the one
-  conftest builds from this checkout (`$DA_GUARD_BINARY`).
+  conftest builds from this checkout (`$DA_GUARD_BINARY`). Its routes view
+  reads the generator's ConfigMap through da-crdecode and da-read (#3206),
+  which the image ships too; here `$DA_CRDECODE_BINARY` / `$DA_READ_BINARY`.
 
 ⚠️ Not covered here, and not measurable on this host: a real GitLab runner
 (clone ownership, `GIT_DEPTH` honoured, the MR pipeline existing at all).
@@ -59,7 +61,7 @@ from test_generated_ci_artifacts import (  # noqa: E402
 
 _SH = shutil.which("sh")
 
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+pytestmark = pytest.mark.usefixtures("da_guard_env", "da_read_env")
 _needs_tools = pytest.mark.skipif(
     _SH is None or shutil.which("git") is None,
     reason="executing the generated job needs `sh` and `git` on PATH",
@@ -144,6 +146,8 @@ def _run_job(pipeline: dict, work: Path, *, base_sha: str | None,
         "CONFIG_DIR": variables["CONFIG_DIR"],
         "DA_TOOLS_IMAGE": variables["DA_TOOLS_IMAGE"],
         "DA_GUARD_BINARY": os.environ.get("DA_GUARD_BINARY", ""),
+        "DA_CRDECODE_BINARY": os.environ.get("DA_CRDECODE_BINARY", ""),
+        "DA_READ_BINARY": os.environ.get("DA_READ_BINARY", ""),
     }
     if base_sha is not None:
         env["CI_MERGE_REQUEST_DIFF_BASE_SHA"] = base_sha

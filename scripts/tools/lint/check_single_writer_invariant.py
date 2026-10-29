@@ -67,13 +67,12 @@ import sys
 from pathlib import Path
 from typing import List
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Helm values read Helm's way)
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover
@@ -176,8 +175,10 @@ def check_targets(repo: Path) -> List[str]:
     findings: List[str] = []
 
     # 1. Helm values — replicaCount == 1
+    # ADR-036 §12 (#3206): values.yaml as Helm reads it (da-crdecode).
     vpath = repo / _HELM_VALUES
-    values = yaml.safe_load(vpath.read_text(encoding="utf-8")) or {}
+    docs = _lib_consumer_read.kubernetes_documents(str(vpath))
+    values = docs[0] if docs else {}
     for v in check_helm_values(values):
         findings.append(f"{_HELM_VALUES}: {v}")
 
@@ -216,8 +217,10 @@ def main() -> int:
 
     try:
         findings = check_targets(repo)
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: cannot read {_HELM_VALUES} the way Helm does: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if findings:

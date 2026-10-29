@@ -88,14 +88,10 @@ EXCEPTIONS: dict[tuple[str, str, str], tuple[int, str]] = {
         "match an ancestor of the repo. Not provable by the one-hop "
         "resolution because `p` is a comprehension variable over a "
         "subprocess string."),
-    ("scripts/tools/lint/check_cross_ns_url_consistency.py", "check_repo",
-     "for part in Path(rel).parts"): (2,
-        "Both sites (helm values loop, k8s manifest loop) test a `rel` "
-        "assigned on the line directly above as "
-        "`p.relative_to(repo).as_posix()`. The one-hop resolution cannot "
-        "prove it because the same function later rebinds `rel` as a "
-        "for-loop tuple target over `findings` (the scope model is "
-        "flow-insensitive), so the name has a non-plain binding."),}
+    # (#3206: check_cross_ns_url_consistency's two sites became one, in
+    # `check_repo._targets`, where `rel` has a single plain binding — the
+    # one-hop resolution proves it, so its exception is gone.)
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

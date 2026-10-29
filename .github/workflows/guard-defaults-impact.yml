@@ -237,6 +237,14 @@ jobs:
               ./cmd/da-guard
           "$RUNNER_TEMP/da-guard" --version
 
+      # #3206 (ADR-036 §12): `generate-routes --validate` reads the ConfigMap it
+      # assembles back the way kubectl does (da-crdecode); without it the
+      # generator exits 2 by name.
+      - name: Build da-crdecode
+        run: |
+          make da-crdecode-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+
       - name: Detect conf.d path
         id: detect
         # workflow_dispatch input is fed via env var rather than

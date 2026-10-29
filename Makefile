@@ -574,7 +574,7 @@ export CONFDIR
 SHARDED_OUTDIR := .build/config-dir
 
 .PHONY: configmap-assemble
-configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d DA_GUARD_BINARY=<da-guard>；租戶唯一性檢查需要 da-guard，沒有時結束碼 2）
+configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d DA_GUARD_BINARY=<da-guard> DA_CRDECODE_BINARY=<da-crdecode>；租戶唯一性檢查需要 da-guard、讀回 kubectl 產物需要 da-crdecode，沒有時結束碼 2）
 	@# ⛔ Selection AND quoting live in the script; the shell never touches a
 	@# file name here. There used to be three independent enumerations of
 	@# "which files ship" (the script's own, plus two make-level `shell`
@@ -689,7 +689,11 @@ da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crde
 	@mkdir -p "$(dir $(DA_CRDECODE_BUILD))"
 	@cd components/threshold-exporter/app && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_CRDECODE_BUILD)" ./cmd/da-crdecode
 
-DA_READ_PREREQ := $(if $(strip $(DA_READ_BINARY)),,da-read-build) $(if $(strip $(DA_CRDECODE_BINARY)),,da-crdecode-build)
+# #3206 12d-3：只要 da-crdecode 的目標（讀 Kubernetes manifest／Helm values 的 lint、
+# 產生器讀回自己組出的 ConfigMap）掛 $(DA_CRDECODE_PREREQ)、在指令前加 $(DA_CRDECODE_ENV)。
+DA_CRDECODE_PREREQ := $(if $(strip $(DA_CRDECODE_BINARY)),,da-crdecode-build)
+DA_CRDECODE_ENV = DA_CRDECODE_BINARY="$(if $(strip $(DA_CRDECODE_BINARY)),$$DA_CRDECODE_BINARY,$(DA_CRDECODE_BUILD))"
+DA_READ_PREREQ := $(if $(strip $(DA_READ_BINARY)),,da-read-build) $(DA_CRDECODE_PREREQ)
 DA_READ_ENV = DA_READ_BINARY="$(if $(strip $(DA_READ_BINARY)),$$DA_READ_BINARY,$(DA_READ_BUILD))" \
 	DA_CRDECODE_BINARY="$(if $(strip $(DA_CRDECODE_BINARY)),$$DA_CRDECODE_BINARY,$(DA_CRDECODE_BUILD))"
 
@@ -715,13 +719,13 @@ sharded-check: $(DA_GUARD_PREREQ) ## Sharded GitOps: 衝突偵測（dry-run；�
 		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --check
 
 .PHONY: validate-routes
-validate-routes: $(DA_GUARD_PREREQ) ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking；經 da-guard parse-tree 讀 conf.d：DA_GUARD_BINARY，未設就建 .build/da-guard)
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
+validate-routes: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking；經 da-guard parse-tree 讀 conf.d：DA_GUARD_BINARY，未設就建 .build/da-guard；組出的 ConfigMap 經 da-crdecode 讀回：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode)
+	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 .PHONY: validate-config
-validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證（各檢查列見 docs/cli-reference.md 的 validate-config；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/validate_config.py \
+validate-config: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 一站式配置驗證（各檢查列見 docs/cli-reference.md 的 validate-config；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；routes 列經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check
@@ -936,24 +940,24 @@ generate-rule-pack-readme: ## 從 Rule Pack YAML 重新產生並寫入 rule-pack
 	@python3 ./scripts/tools/dx/generate_rule_pack_readme.py --update
 
 .PHONY: byo-rulepack-table
-byo-rulepack-table: ## 重新產生 BYO Prometheus 文件內的規則包表（#1267；sentinel 就地注入）
-	@python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
+byo-rulepack-table: $(DA_CRDECODE_PREREQ) ## 重新產生 BYO Prometheus 文件內的規則包表（#1267；sentinel 就地注入；Deployment 經 da-crdecode 讀：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
 
 .PHONY: platform-data
-platform-data: $(DA_GUARD_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
+platform-data: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
 
 .PHONY: rulepack-configmaps
 rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
 	@python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
 
 .PHONY: crd-schemas
-crd-schemas: ## 從釘住版本的上游 CRD 重生 docs/schemas/crd/（需網路；不在 pre-commit 上）
-	@python3 ./scripts/tools/dx/generate_crd_schemas.py
+crd-schemas: $(DA_CRDECODE_PREREQ) ## 從釘住版本的上游 CRD 重生 docs/schemas/crd/（需網路；不在 pre-commit 上；CRD 經 da-crdecode 讀）
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_crd_schemas.py
 
 .PHONY: crd-schemas-check
-crd-schemas-check: ## 只比對上游 CRD 是否已在同一個 ref 上改動過（需網路）
-	@python3 ./scripts/tools/dx/generate_crd_schemas.py --check
+crd-schemas-check: $(DA_CRDECODE_PREREQ) ## 只比對上游 CRD 是否已在同一個 ref 上改動過（需網路；CRD 經 da-crdecode 讀）
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/generate_crd_schemas.py --check
 
 .PHONY: rulepack-configmaps-check
 rulepack-configmaps-check: ## 驗 configmap 副本與 rule-packs/ 源語意一致（drift guard）
@@ -1040,8 +1044,8 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 # rc 0，而 validate_all 一次都不跑——required check `Lint Documentation` 跑的正是這條。
 # 實測：無 .PHONY + 同名檔 → rc 0；補上 .PHONY 的對照組 → rc 2。
 .PHONY: lint-docs
-lint-docs: $(DA_GUARD_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
-	@$(DA_GUARD_ENV) python3 ./scripts/tools/validate_all.py \
+lint-docs: $(DA_GUARD_PREREQ) $(DA_CRDECODE_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；platform_data／byo_rulepack_table 經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
+	@$(DA_GUARD_ENV) $(DA_CRDECODE_ENV) python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
 
@@ -1050,8 +1054,8 @@ lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門
 	@python3 ./scripts/tools/lint/check_image_caveats.py
 
 .PHONY: lint-egress
-lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；ARGS="--values prod.yaml --allow-host siem.example.com"）
-	@python3 ./scripts/tools/lint/check_log_egress_policy.py --ci $(ARGS)
+lint-egress: $(DA_CRDECODE_PREREQ) ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；渲染結果經 da-crdecode 讀；ARGS="--values prod.yaml --allow-host siem.example.com"）
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/lint/check_log_egress_policy.py --ci $(ARGS)
 
 .PHONY: adr-index adr-index-check
 adr-index: ## 重新渲染 ADR 索引表（architecture-and-design.md + docs/adr/README{,.en}.md；新增/修改 ADR 後跑）

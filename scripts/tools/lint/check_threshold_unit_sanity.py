@@ -83,6 +83,7 @@ from _lib_validation import (  # noqa: E402
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: values / manifests read Helm's / kubectl's way)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
@@ -282,8 +283,12 @@ _MD_YAML_RE = re.compile(r"```ya?ml\n(.*?)```", re.S)
 
 # Structured artifacts that carry threshold values. Markdown docs are scanned
 # separately (best-effort fenced-YAML) because a fragment may not parse.
+# The registry is the repo's own data (read by `_registry_lib.load_registry`,
+# Python only); every other entry is a Helm values file or a manifest, read
+# the way Helm / kubectl read it (da-crdecode, ADR-036 §12, #3206).
+_REGISTRY_REL = "rule-packs/threshold-registry.yaml"
 _YAML_GLOBS = [
-    "rule-packs/threshold-registry.yaml",
+    _REGISTRY_REL,
     "helm/threshold-exporter/values.yaml",
     "environments/local/threshold-exporter.yaml",
     "environments/ci/threshold-exporter.yaml",
@@ -352,6 +357,21 @@ def _read(path: str) -> str:
         return fh.read()
 
 
+class ArtifactRefused(Exception):
+    """A Helm values file or manifest in `_YAML_GLOBS` that Helm's / kubectl's
+    reading (da-crdecode) refuses. `refused` is [(repo path, reason)].
+
+    A caller error (exit 2), not a finding: the gate could not read an input
+    it is meant to judge, so it has no verdict on that file — the same class
+    as a conf.d file da-guard cannot read (ParseTreeError, exit 2) and as
+    `_lib_exitcodes`' "malformed input". It is never a skip: a value in a
+    file Helm refuses is a value this gate did not look at."""
+
+    def __init__(self, refused: "list[tuple[str, str]]") -> None:
+        super().__init__("; ".join(f"{rel}: {why}" for rel, why in refused))
+        self.refused = refused
+
+
 def _collect(root: str) -> list[tuple[str, str, float, bool]]:
     """Return [(surface, key, value, is_threshold)] over every scannable artifact.
 
@@ -365,13 +385,29 @@ def _collect(root: str) -> list[tuple[str, str, float, bool]]:
         for key, val in _walk_values(doc):
             found.append((rel, key, val, True))
 
-    for rel, path in _iter_yaml_files(root):
-        try:
-            doc = yaml.safe_load(_read(path))
-        except Exception:
-            continue  # unparseable YAML is another gate's job
-        for key, val in _walk_values(doc):
-            found.append((rel, key, val, True))
+    files = list(_iter_yaml_files(root))
+    # No da-crdecode raises ConsumerReadError; a file its reading refuses is
+    # named and raised as ArtifactRefused once every file was read — both
+    # caller errors in `main` (exit 2), never a skip (#3206).
+    read = _lib_consumer_read.kubernetes_documents_of(
+        [path for rel, path in files if rel != _REGISTRY_REL], keep_refusals=True)
+    refused = [(rel, " | ".join(read[path].stderr_lines) or str(read[path]))
+               for rel, path in files
+               if rel != _REGISTRY_REL
+               and isinstance(read[path], _lib_consumer_read.ConsumerReadError)]
+    if refused:
+        raise ArtifactRefused(refused)
+    for rel, path in files:
+        if rel == _REGISTRY_REL:
+            try:
+                docs = [registry_lib.load_registry(path)]
+            except Exception:
+                continue  # unparseable YAML is another gate's job
+        else:
+            docs = read[path]
+        for doc in docs:
+            for key, val in _walk_values(doc):
+                found.append((rel, key, val, True))
 
     # docs/assets JSON: platform-data (value+unit), recommendation-data
     # (percentiles + recommended + unit), template-data (embedded tenant YAML).
@@ -549,6 +585,17 @@ def main(argv: list[str] | None = None) -> int:
     except ParseTreeError as exc:
         # ADR-036 step 4 (#2906): the conf.d trees are read by da-guard.
         print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except ArtifactRefused as exc:
+        # #3206: a values file / manifest Helm or kubectl cannot read is an
+        # input this gate could not judge — named, exit 2 (see ArtifactRefused).
+        for rel, why in exc.refused:
+            print(f"ERROR: {rel}: Helm's / kubectl's reading (da-crdecode) refuses it, so "
+                  f"its threshold values were not checked: {why}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: cannot read the Helm values / manifests the way Helm and kubectl "
+              f"do: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: unit-sanity check crashed: {exc}", file=sys.stderr)

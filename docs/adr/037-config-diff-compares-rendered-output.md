@@ -175,9 +175,11 @@ served-values 每個租戶加一個與 `values` 同層的欄位，記錄每個�
 路由面的比較結果：
 
 ```
-route db-a -> {'group_wait': ('30s', '99s')}
-route es-prod -> {'group_wait': ('30s', '99s')}
+route db-a -> {'group_wait': ('30s', '1m39s')}
+route es-prod -> {'group_wait': ('30s', '1m39s')}
 ```
+
+路由面的值是 Alertmanager 載入設定後的讀法，所以 `99s` 印成它的寫法 `1m39s`；只是寫法不同的時長（`90s` 與 `1m30s`）不算變更。
 
 這個樹裡有 5 個租戶。db-b 有自己的 `_routing`，mongo-prod 與 redis-prod 綁 routing profile，所以不受影響、不出現在結果裡；db-a 與 es-prod 繼承 `_routing_defaults`，被列出。
 

@@ -53,6 +53,9 @@ on:
       - "helm/**/values*.yaml"
       - "k8s/**"
       - "scripts/ops/check_image_refs_resolve.py"
+      # #3206: the reading the scan asks (da-crdecode) and its client.
+      - "scripts/tools/_lib_consumer_read.py"
+      - "components/threshold-exporter/app/cmd/da-crdecode/**"
       # ⛔ Same discipline as the `values*` line above, for the `delivered`
       # scope: this file IS the pin table that scope reads, so a PR that bumps
       # one of the customer-facing refs must be the PR that re-resolves
@@ -92,6 +95,19 @@ jobs:
       # failure in either scope below.
       - name: Install Python deps
         run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
+
+      # #3206 (ADR-036 §12): the values files and manifests are read through
+      # da-crdecode (kubectl's / Helm's reading); without it the scan exits 2.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-crdecode
+        run: |
+          make da-crdecode-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Resolve image refs (deploy scope — helm values + k8s manifests)
         id: deploy_scope

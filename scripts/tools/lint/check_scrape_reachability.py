@@ -127,8 +127,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import yaml
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 _OPS = PROJECT_ROOT / "scripts" / "tools" / "ops"
@@ -145,7 +143,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
-import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml as Prometheus reads it)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml / manifests as their consumers read them)
 # The repo's one content-based rule-tree scanner. Same directory, zero
 # import cost — see collect_rule_trees for why this file no longer globs.
 from _rule_tree import _rule_containers  # noqa: E402
@@ -473,14 +471,17 @@ def name_passes(metric: str, name_rules: list[tuple[str, str]]) -> bool:
 # ── Service manifest parsing (target existence side of the contract) ────────
 
 def parse_services(paths: list[Path]) -> list[dict]:
-    """Every `kind: Service` doc found in *paths* → {name, namespace, annotations}."""
+    """Every `kind: Service` doc found in *paths* → {name, namespace, annotations},
+    each file read the way kubectl reads it (da-crdecode, ADR-036 §12, #3206).
+    No da-crdecode raises ConsumerReadError (a caller error in `main`)."""
     services: list[dict] = []
+    read = _lib_consumer_read.kubernetes_documents_of(paths, keep_refusals=True)
     for p in paths:
-        try:
-            docs = list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
-        except yaml.YAMLError:
-            # Raw k8s manifests parse clean today; a parse failure here is
-            # kube-linter's problem (L4 gate), not silently a missing Service.
+        docs = read[str(p)]
+        if isinstance(docs, _lib_consumer_read.ConsumerReadError):
+            # Raw k8s manifests read clean today; a file kubectl's reading
+            # refuses is kube-linter's problem (L4 gate), not silently a
+            # missing Service.
             continue
         for doc in docs:
             if not isinstance(doc, dict) or doc.get("kind") != "Service":

@@ -159,5 +159,7 @@ def test_malformed_manifest_is_caller_error_not_drift(monkeypatch, tmp_path):
     bad = tmp_path / "deployment.yaml"
     bad.write_text("kind: Deployment\n  : : [\n", encoding="utf-8")
     monkeypatch.setattr(gen, "DEPLOYMENT", bad)
-    with pytest.raises(yaml.YAMLError):
+    # #3206: read the way kubectl reads it (da-crdecode), whose refusal is raised
+    with pytest.raises(gen._lib_consumer_read.ConsumerReadError) as exc:
         gen.read_projected_packs()
+    assert exc.value.stderr_lines

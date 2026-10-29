@@ -35,10 +35,10 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/tools
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+# ADR-036 §12 (#3206): every manifest is read the way kubectl reads it.
+import _lib_consumer_read  # noqa: E402
 
 MONITOR_DIR = Path("k8s/03-monitoring")
 DEPLOYMENT = MONITOR_DIR / "deployment-prometheus.yaml"
@@ -60,19 +60,21 @@ RULE_FILE_GLOB_SUFFIX = ".yml"
 
 
 def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
-    """{metadata.name: {data keys}} for every configmap-rules-*.yaml."""
+    """{metadata.name: {data keys}} for every ConfigMap in every
+    configmap-rules-*.yaml, as kubectl reads the files (da-crdecode)."""
     out: Dict[str, Set[str]] = {}
-    for path in sorted(monitor_dir.glob("configmap-rules-*.yaml")):
-        if path.name.startswith(CUSTOMER_MANAGED_PREFIX):
-            continue  # customer-managed, not in the platform gold-standard mount list
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
-            continue
-        name = ((doc.get("metadata") or {}).get("name")) or ""
-        data = doc.get("data")
-        keys = set(data.keys()) if isinstance(data, dict) else set()
-        if name:
-            out[str(name)] = keys
+    paths = [path for path in sorted(monitor_dir.glob("configmap-rules-*.yaml"))
+             # customer-managed, not in the platform gold-standard mount list
+             if not path.name.startswith(CUSTOMER_MANAGED_PREFIX)]
+    for docs in _lib_consumer_read.kubernetes_documents_of(paths).values():
+        for doc in docs:
+            if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
+                continue
+            name = ((doc.get("metadata") or {}).get("name")) or ""
+            data = doc.get("data")
+            keys = set(data.keys()) if isinstance(data, dict) else set()
+            if name:
+                out[str(name)] = keys
     return out
 
 
@@ -82,7 +84,7 @@ def deployment_mounts(deployment_path: Path) -> Dict[str, Dict[str, str]]:
     An empty inner dict means no `items:` → the whole ConfigMap is projected.
     """
     out: Dict[str, Dict[str, str]] = {}
-    for doc in yaml.safe_load_all(deployment_path.read_text(encoding="utf-8")):
+    for doc in _lib_consumer_read.kubernetes_documents(str(deployment_path)):
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
         volumes = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
@@ -180,8 +182,10 @@ def main(argv: List[str] | None = None) -> int:
         packs = configmap_rule_packs(monitor_dir)
         mounts = deployment_mounts(deployment)
         violations = check(packs, mounts)
-    except yaml.YAMLError as exc:
-        print(f"Error: failed to parse YAML: {exc}", file=sys.stderr)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"Error: cannot read a manifest the way kubectl does: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     n_packs = len(packs)

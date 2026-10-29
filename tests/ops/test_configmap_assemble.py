@@ -166,15 +166,18 @@ _REAL_RUN = subprocess.run
 
 
 def _listing_passes(fake):
-    """*fake* for every subprocess but `da-guard parse-tree`.
+    """*fake* for every subprocess but the readers: `da-guard parse-tree`
+    and `da-crdecode`.
 
     #3206: the script reads the conf.d through da-guard (a subprocess)
-    before it shells out to the validator or kubectl; a blanket patch of
-    `subprocess.run` would hand that call the validator's stub. The arms
-    here fake the validator / kubectl only, so the read runs for real."""
+    before it shells out to the validator or kubectl, and reads kubectl's
+    manifest back through da-crdecode after; a blanket patch of
+    `subprocess.run` would hand those calls the validator's stub. The arms
+    here fake the validator / kubectl only, so the reads run for real."""
     def run(*a, **k):
         cmd = a[0] if a else k.get("args")
-        if isinstance(cmd, (list, tuple)) and "parse-tree" in cmd:
+        if isinstance(cmd, (list, tuple)) and (
+                "parse-tree" in cmd or os.path.basename(str(cmd[0])) == "da-crdecode"):
             return _REAL_RUN(*a, **k)
         return fake(*a, **k)
     return run

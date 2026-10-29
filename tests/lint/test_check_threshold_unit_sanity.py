@@ -207,10 +207,27 @@ def test_non_finite_number_in_platform_data_and_a_rule_pack_stays_out_of_domain(
     `.inf` in a structured artifact are numbers already; they stay judged."""
     _write(tmp_path, "docs/assets/platform-data.json",
            '{"rulePacks": {"p": {"defaults": {"pct": {"value": -Infinity, "unit": "%"}}}}}')
-    _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: .inf\n")
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("OUT-OF-DOMAIN" in e and "platform-data.json" in e and "-inf" in e for e in errs), errs
-    assert any("OUT-OF-DOMAIN" in e and "values.yaml" in e and "inf" in e for e in errs), errs
+
+
+def test_a_values_file_helm_cannot_read_is_named_and_exit_2(tmp_path, capsys):
+    """#3206: the values file is read the way Helm reads it (da-crdecode).
+    Helm refuses `pct: .inf` (JSON has no infinity), so this gate cannot
+    judge the file: exit 2, the file named — never a silent skip (PyYAML
+    read the float and judged it OUT-OF-DOMAIN; a skip would pass it)."""
+    _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: .inf\n")
+    with pytest.raises(gate.ArtifactRefused) as exc:
+        _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert [rel for rel, _ in exc.value.refused] == ["helm/threshold-exporter/values.yaml"]
+
+
+def test_a_values_file_is_read_as_helm_reads_it(tmp_path):
+    """#3206: control for the test above — a values file Helm reads (through
+    da-crdecode) is still judged: an out-of-domain number in it is reported."""
+    _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: -5\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("OUT-OF-DOMAIN" in e and "values.yaml" in e and "pct = -5" in e for e in errs), errs
 
 
 def test_dimensional_key_resolves_to_its_base(tmp_path):
@@ -384,3 +401,13 @@ def test_real_repo_is_clean():
     """Smoke: the shipped artifacts satisfy the gate. If this goes red, an
     asset drifted from the registry — read the message, don't relax the gate."""
     assert gate.run_check()["errors"] == []
+
+
+def test_main_names_a_values_file_helm_cannot_read_and_exits_2(tmp_path, monkeypatch, capsys):
+    """#3206: the same refusal through `main` — exit 2 (an input the gate
+    could not judge, `_lib_exitcodes`' malformed input), the file named."""
+    _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: .inf\n")
+    monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
+    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "helm/threshold-exporter/values.yaml" in err and "refuses it" in err

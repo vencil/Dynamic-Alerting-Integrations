@@ -169,9 +169,11 @@ Input: on the repo's conf.d, change `_routing_defaults.group_wait` in `_defaults
 Routing comparison:
 
 ```
-route db-a -> {'group_wait': ('30s', '99s')}
-route es-prod -> {'group_wait': ('30s', '99s')}
+route db-a -> {'group_wait': ('30s', '1m39s')}
+route es-prod -> {'group_wait': ('30s', '1m39s')}
 ```
+
+Routing values are Alertmanager's reading of the loaded config, so `99s` prints as its spelling, `1m39s`; durations that differ only in spelling (`90s` and `1m30s`) are not a change.
 
 The tree has 5 tenants. db-b has its own `_routing`, and mongo-prod and redis-prod use a routing profile, so they are unaffected and absent; db-a and es-prod inherit `_routing_defaults` and are listed.
 
