@@ -4,7 +4,7 @@
 instance: db-a
 
 mariadb:
-  image: mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
+  image: mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd
   # SECURITY: Override these via --set or external secret manager in production.
   # Example: helm install ... --set mariadb.rootPassword=$(openssl rand -base64 24)
   rootPassword: ""    # REQUIRED — must be provided at install time
@@ -32,7 +32,7 @@ mariadb:
     long_query_time = 1
 
 exporter:
-  image: prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e
+  image: prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318
   collectors:
     - global_status
     - global_variables

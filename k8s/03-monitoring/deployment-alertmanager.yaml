@@ -101,7 +101,7 @@ spec:
           # empty-by-default = metrics listener disabled, so the sidecar now opens NO
           # port at all. It also polls every 3m by default (--watch-interval) as a
           # backstop for fsnotify, which configmap-reload had no equivalent of.
-          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1@sha256:06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b
+          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.94.2@sha256:a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
