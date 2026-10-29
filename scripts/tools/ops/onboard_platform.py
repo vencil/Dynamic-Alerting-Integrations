@@ -198,7 +198,7 @@ def _config_text(path, crdecode_binary, key, error, mounter):
     try:
         documents = _lib_consumer_read.kubernetes_documents(path, binary=crdecode_binary)
     except _lib_consumer_read.ConsumerReadError as e:
-        if not e.stderr_lines:
+        if not isinstance(e, _lib_consumer_read.InputRefused):
             # The binary is missing or broken — not an answer about the file.
             raise error(str(e)) from e
         # Kubernetes' reading refuses the file. A ConfigMap it refuses is
@@ -245,7 +245,7 @@ def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
                        *k8s_refusal.stderr_lines]
         raise AlertmanagerConfigError(
             f"Alertmanager's config loader cannot read {where}: {e}", detail,
-            refused_by_reader=bool(e.stderr_lines)) from e
+            refused_by_reader=isinstance(e, _lib_consumer_read.InputRefused)) from e
 
 
 def _extract_tenant_from_matchers(matchers, tenant_label):
@@ -1017,7 +1017,7 @@ def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None):
                        *k8s_refusal.stderr_lines]
         raise PrometheusConfigError(
             f"Prometheus' config loader cannot read {where}: {e}", detail,
-            refused_by_reader=bool(e.stderr_lines)) from e
+            refused_by_reader=isinstance(e, _lib_consumer_read.InputRefused)) from e
     return config.get("scrape_configs") or []
 
 

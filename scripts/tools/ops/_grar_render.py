@@ -64,7 +64,7 @@ from _grar_routes import (  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
-from _lib_consumer_read import ConsumerReadError  # noqa: E402, F401  (re-exported)
+from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -353,7 +353,7 @@ def alertmanager_reading(text: str) -> dict:
 
 def consumer_read_message(exc: ConsumerReadError) -> str:
     """One line for *exc*: its message and the reader's own reason."""
-    return " | ".join([str(exc), *exc.stderr_lines])
+    return exc.detail()
 
 
 def load_base_config(path: str | None) -> dict:
@@ -414,7 +414,7 @@ def load_base_config(path: str | None) -> dict:
     try:
         data = alertmanager_reading(raw)
     except ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, InputRefused):
             raise BaseConfigInputError(
                 f"--base-config: cannot read {path!r} the way Alertmanager does: {exc}") from exc
         raise BaseConfigInputError(
@@ -1026,7 +1026,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     try:
         existing = alertmanager_reading(existing_yml)
     except ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, InputRefused):
             warnings.append(
                 f"ERROR: cannot read ConfigMap key 'alertmanager.yml' the way "
                 f"Alertmanager does: {exc}")
@@ -1250,7 +1250,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     try:
         merged = alertmanager_reading(merged_yml)
     except ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, InputRefused):
             print(f"ERROR: cannot read the merged alertmanager.yml the way Alertmanager "
                   f"does — refusing to apply it (nothing was applied): {exc}",
                   file=sys.stderr)

@@ -483,7 +483,7 @@ def _chart_app_version(chart_dir: str) -> str:
     try:
         docs = _lib_consumer_read.kubernetes_documents(str(chart))
     except _lib_consumer_read.ConsumerReadError as e:
-        detail = " | ".join([str(e), *e.stderr_lines])
+        detail = e.detail()
         raise SystemExit(f"ERROR: cannot read {chart} the way Helm does: {detail}") from e
     data = docs[0] if len(docs) == 1 and isinstance(docs[0], dict) else None
     if data is None:

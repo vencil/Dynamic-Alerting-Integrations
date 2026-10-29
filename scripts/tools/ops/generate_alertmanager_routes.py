@@ -152,7 +152,8 @@ from _grar_render import (  # noqa: E402
 from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, alertmanager_reading, consumer_read_message, emitted_alertmanager_yml,
+    ConsumerReadError, InputRefused, alertmanager_reading, consumer_read_message,
+    emitted_alertmanager_yml,
 )
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
@@ -460,7 +461,7 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     try:
         emitted = alertmanager_reading(am_yml)
     except ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, InputRefused):
             print(f"ERROR: cannot read the ConfigMap's alertmanager.yml the way "
                   f"Alertmanager does — refusing to write it to {target} (nothing was "
                   f"written): {exc}", file=sys.stderr)

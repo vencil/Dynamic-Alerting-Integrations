@@ -247,7 +247,7 @@ def render_routes(conf_d: str | os.PathLike[str], *,
         except _lib_consumer_read.ConsumerReadError as e:
             raise RenderError(RenderFailure(
                 "tool", "route generator output could not be read its consumers' way ("
-                + " | ".join([str(e), *e.stderr_lines]) + ")")) from e
+                + e.detail() + ")")) from e
         except ValueError as e:
             raise RenderError(RenderFailure(
                 "tool", f"route generator output is not an Alertmanager ConfigMap ({e})")) from e

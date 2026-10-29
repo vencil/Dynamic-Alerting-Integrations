@@ -268,6 +268,21 @@ class TestPssLabelRule:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 2
 
+    def test_a_crashed_da_crdecode_is_a_caller_error_not_a_refusal(self, monkeypatch, tmp_path):
+        """#3407 review: a Go panic exits 2 with stderr, as a refusal does —
+        it is not kubectl's answer about the file, so it is not the
+        "refuses it" note: no reading, a caller error (exit 2)."""
+        ns = tmp_path / "ns.yaml"
+        ns.write_text("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: n\n",
+                      encoding="utf-8")
+        fake = tmp_path / "fake-da-crdecode"
+        fake.write_text("#!/bin/sh\necho 'panic: boom' >&2\nexit 2\n", encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(fake))
+        with pytest.raises(k8s._lib_consumer_read.ConsumerReadError) as exc:
+            k8s.collect_pss_findings([ns])
+        assert not isinstance(exc.value, k8s._lib_consumer_read.InputRefused)
+
     def test_a_label_is_kubectls_reading_of_it(self, tmp_path):
         """#3206: an unquoted `warn: yes` is the boolean true to kubectl (and
         was to PyYAML), not the level string — still a missing label."""

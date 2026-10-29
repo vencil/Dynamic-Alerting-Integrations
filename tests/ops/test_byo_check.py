@@ -1193,6 +1193,42 @@ class TestCheckAlertmanagerInhibitSemantics:
         assert sem["status"] == "fail" and sem["caller_error"] is True
         assert "da-read" in sem["detail"] or "nonexistent" in sem["detail"]
 
+    @staticmethod
+    def _fake_da_read(tmp_path, monkeypatch, body: str) -> None:
+        script = tmp_path / "fake-da-read"
+        script.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("DA_READ_BINARY", str(script))
+
+    def test_a_crashed_da_read_is_a_caller_error_not_a_refusal(self, tmp_path, monkeypatch):
+        """CodeRabbit on #3407: stderr alone is no refusal. A da-read that
+        exits 3 with a reason is no answer about the config — a failed check
+        (exit 2), not the warn a refusal is."""
+        self._fake_da_read(tmp_path, monkeypatch, "echo 'boom' >&2; exit 3")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_a_go_panic_is_a_caller_error_not_a_refusal(self, tmp_path, monkeypatch):
+        """A Go panic also exits 2 with stderr; it is not the loader's answer."""
+        self._fake_da_read(tmp_path, monkeypatch,
+                           "echo 'panic: runtime error' >&2; echo 'goroutine 1' >&2; exit 2")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_a_da_read_that_does_not_finish_is_a_caller_error(self, tmp_path, monkeypatch):
+        self._fake_da_read(tmp_path, monkeypatch, "echo 'slow' >&2; exec sleep 5")
+        monkeypatch.setattr(bc._lib_consumer_read, "TIMEOUT_SECONDS", 0.5)
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
+
+    def test_exit_2_with_a_reason_is_the_refusal_path(self, tmp_path, monkeypatch):
+        """rc 2 with the loader's reason is a refusal: the named warn."""
+        self._fake_da_read(tmp_path, monkeypatch,
+                           "echo 'da-read: <stdin>: no route provided in config' >&2; exit 2")
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "warn" and "caller_error" not in sem
+        assert "loader refuses" in sem["detail"] and "no route" in sem["detail"]
+
     def test_malformed_status_payload_is_a_caller_error(self):
         """#3133 batch 4: a status answer that is not read (config null or not
         an object, original not a string, a non-object body) is a failed

@@ -203,7 +203,7 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     try:
         docs = _lib_consumer_read.kubernetes_text_documents(manifest)
     except _lib_consumer_read.ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, _lib_consumer_read.InputRefused):
             raise
         return [f"kubectl's own reading refuses its output: {exc}: "
                 + " | ".join(exc.stderr_lines)], {}

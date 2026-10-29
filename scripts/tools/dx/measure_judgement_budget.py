@@ -311,7 +311,7 @@ def read_limits(chart: str, values: "list[str]") -> dict:
         rendered = _lib_consumer_read.kubernetes_text_documents(proc.stdout)
     except _lib_consumer_read.ConsumerReadError as e:
         raise NotMeasured("the rendered chart could not be read the way kubectl reads it: "
-                          + " | ".join([str(e), *e.stderr_lines])) from e
+                          + e.detail()) from e
     container = None
     for doc in rendered:
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":

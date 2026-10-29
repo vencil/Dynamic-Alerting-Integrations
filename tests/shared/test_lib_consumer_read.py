@@ -80,3 +80,71 @@ def test_not_found_is_said_before_any_run(monkeypatch) -> None:
     with pytest.raises(cr.ConsumerReadError, match="was not found"):
         cr.kubernetes_documents_of(["/nonexistent.yaml"])
     assert cr.kubernetes_documents_of([]) == {}
+
+
+# --- InputRefused: one judgement of "the binary refused this input" --------
+# (CodeRabbit on #3407: stderr alone is no refusal.)
+
+def _fake(tmp_path, body: str) -> str:
+    script = tmp_path / "fake-reader"
+    script.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_exit_2_with_a_reason_is_input_refused(tmp_path) -> None:
+    fake = _fake(tmp_path, "echo 'da-crdecode: <stdin>: bad' >&2; exit 2")
+    with pytest.raises(cr.InputRefused) as exc:
+        cr.kubernetes_text_documents("a: 1\n", binary=fake)
+    assert exc.value.stderr_lines == ["da-crdecode: <stdin>: bad"]
+    assert exc.value.detail() == "da-crdecode refused the input | da-crdecode: <stdin>: bad"
+
+
+def test_a_real_refusal_is_input_refused() -> None:
+    with pytest.raises(cr.InputRefused):
+        cr.kubernetes_text_documents("--- a: 1\n")
+
+
+@pytest.mark.parametrize("body", [
+    "echo 'boom' >&2; exit 3",                                   # another exit code
+    "echo 'panic: runtime error' >&2; echo 'goroutine 1' >&2; exit 2",  # a Go crash
+    "echo 'fatal error: out of memory' >&2; exit 2",
+    "exit 2",                                                    # no reason given
+    "echo 'not json'; echo 'warn' >&2; exit 0",                  # no JSON contract
+])
+def test_other_failures_are_not_input_refused(tmp_path, body) -> None:
+    fake = _fake(tmp_path, body)
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        cr.kubernetes_text_documents("a: 1\n", binary=fake)
+    assert not isinstance(exc.value, cr.InputRefused)
+
+
+def test_a_run_that_does_not_finish_is_not_input_refused(tmp_path, monkeypatch) -> None:
+    fake = _fake(tmp_path, "echo 'slow' >&2; exec sleep 5")
+    monkeypatch.setattr(cr, "TIMEOUT_SECONDS", 0.5)
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        cr.kubernetes_text_documents("a: 1\n", binary=fake)
+    assert not isinstance(exc.value, cr.InputRefused)
+
+
+def test_keep_refusals_keeps_only_input_refused(tmp_path) -> None:
+    """A crash is raised even with keep_refusals, naming the input; a refusal
+    is kept, and a refusal raised with a prefix stays InputRefused."""
+    p = tmp_path / "a.yaml"
+    p.write_text("a: 1\n", encoding="utf-8")
+    crash = _fake(tmp_path, "echo 'panic: x' >&2; exit 2")
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        cr.kubernetes_documents_of([p], binary=crash, keep_refusals=True)
+    assert not isinstance(exc.value, cr.InputRefused) and str(p) in str(exc.value)
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        cr.kubernetes_text_documents_each(["a: 1\n"], binary=crash, keep_refusals=True)
+    assert not isinstance(exc.value, cr.InputRefused)
+    with pytest.raises(cr.InputRefused, match="text #1"):
+        cr.kubernetes_text_documents_each(["--- x\n"])
+
+
+def test_rule_file_refusals_are_input_refused() -> None:
+    """Aligned with the rule-file readers' branch: a refused rule file is an
+    InputRefused too."""
+    assert issubclass(cr.RuleFileRefused, cr.InputRefused)
+    assert issubclass(cr.RuleFilesRefused, cr.InputRefused)

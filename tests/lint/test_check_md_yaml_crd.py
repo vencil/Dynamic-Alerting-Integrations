@@ -17,6 +17,7 @@ by measurement, not taste, and both fail SILENTLY if they regress:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -153,3 +154,22 @@ def test_unparseable_block_is_left_to_the_fences_pass(tmp_path: Path) -> None:
     body = "# t\n\n```yaml\nconf.d/\n├── a.yaml\n  : broken\n```\n"
     r = _run(_tree(tmp_path, body, with_schema=False))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def test_a_crashed_da_crdecode_fails_closed(tmp_path: Path) -> None:
+    """#3407 review: a da-crdecode that crashes (a Go panic exits 2 with
+    stderr, as a refusal does) is no answer about the fence — the pass exits
+    2 naming the reading; it does not skip the fence as a refused one."""
+    fake = tmp_path / "fake-da-crdecode"
+    fake.write_text("#!/bin/sh\necho 'panic: boom' >&2\necho 'goroutine 1' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    root = _tree(tmp_path, _block("  project: p\n"))
+    r = subprocess.run(  # noqa: S603
+        [sys.executable, "-X", "utf8", str(SCRIPT),
+         "--check", "crd", "--ci", "--repo-root", str(root)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "DA_CRDECODE_BINARY": str(fake)},
+    )
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "the way kubectl does" in r.stderr

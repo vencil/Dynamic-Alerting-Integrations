@@ -59,7 +59,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     tree_refusal,
 )
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, _run_binary, alertmanager_reading, assemble_configmap,
+    ConsumerReadError, InputRefused, _run_binary, alertmanager_reading, assemble_configmap,
     consumer_read_message, emitted_alertmanager_yml, receiver_integration_kinds,
 )
 from _grar_validate import (  # noqa: E402
@@ -818,7 +818,7 @@ def build_trace_tree(parsed: dict, base: dict | None = None,
         am_yml = emitted_alertmanager_yml(cm_yaml)
         am = alertmanager_reading(am_yml)
     except ConsumerReadError as exc:
-        if not exc.stderr_lines:
+        if not isinstance(exc, InputRefused):
             raise CallerError(f"the trace reads the assembled config the way kubectl and "
                               f"Alertmanager do: {exc}", reason="reader_unavailable") from exc
         raise AssemblyRefusedByAlertmanager(consumer_read_message(exc)) from exc

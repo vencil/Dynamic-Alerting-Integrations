@@ -294,7 +294,7 @@ def load_all_strict(text: str) -> list:
 
 
 def _consumer_read_detail(exc: "_lib_consumer_read.ConsumerReadError") -> str:
-    return " | ".join([str(exc), *exc.stderr_lines])
+    return exc.detail()
 
 
 def read_values(path: Path):
