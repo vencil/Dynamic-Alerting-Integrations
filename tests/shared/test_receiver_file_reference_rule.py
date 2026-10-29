@@ -446,21 +446,32 @@ _GLOBAL_CREDENTIALS = {
     "smtp_auth_identity": "global:\n  smtp_auth_identity: i\n",
     "http_config.basic_auth": "global:\n  http_config:\n    basic_auth:\n      username: u\n      password: p\n",
     "http_config.bearer_token_file": "global:\n  http_config:\n    bearer_token_file: /t\n",
+    "http_config.bearer_token": "global:\n  http_config:\n    bearer_token: t\n",
     "http_config.authorization": "global:\n  http_config:\n    authorization:\n      credentials: c\n",
 }
+
+
+#: #3206 (ADR-036 §12): the base is read as Alertmanager loads it, and its
+#: loader moves `bearer_token` / `bearer_token_file` to `authorization` — the
+#: key the refusal names, with a fixed note saying so.
+_READ_AS = {"http_config.bearer_token": "http_config.authorization",
+            "http_config.bearer_token_file": "http_config.authorization"}
 
 
 @pytest.mark.parametrize("name", sorted(_GLOBAL_CREDENTIALS))
 def test_base_global_credential_is_refused(tmp_path, name):
     base_file = tmp_path / "base.yaml"
     base_file.write_text(_GLOBAL_CREDENTIALS[name] + _BASE_ROUTE, encoding="utf-8")
-    assert base_global_inherited_credentials(load_base_config(str(base_file))) == [f"global.{name}"]
+    key = _READ_AS.get(name, name)
+    assert base_global_inherited_credentials(load_base_config(str(base_file))) == [f"global.{key}"]
     d = _write(tmp_path, _tree("tenant", ""))
     out = tmp_path / "cm.yaml"
     p = _gar("--config-dir", str(d), "--output-configmap", "--base-config", str(base_file),
              "-o", str(out))
     assert p.returncode == 1, (p.returncode, p.stderr)
-    assert f"global.{name}" in p.stderr
+    assert f"global.{key}" in p.stderr
+    note = "Alertmanager reads `bearer_token` / `bearer_token_file` as `authorization`"
+    assert (note in p.stderr) == key.endswith(".authorization"), p.stderr
     assert not out.exists()
     with pytest.raises(ValueError, match="global section sets"):
         assemble_configmap(load_base_config(str(base_file)), [], [], [])

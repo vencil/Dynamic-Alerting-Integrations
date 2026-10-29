@@ -487,6 +487,16 @@ def base_global_inherited_credentials(base: object) -> list[str]:
     return sorted(out)
 
 
+#: Said when a refused key is `…authorization`: the base is read as
+#: Alertmanager loads it (da-read, ADR-036 §12), and its loader moves a
+#: written `bearer_token` / `bearer_token_file` there, so the key named is
+#: not the one the operator wrote. A fixed sentence — the written key is not
+#: rebuilt here.
+BEARER_TOKEN_IS_AUTHORIZATION_NOTE = (
+    "(Alertmanager reads `bearer_token` / `bearer_token_file` as "
+    "`authorization`, so a base that writes either is named by that key.)")
+
+
 def assert_base_global_inherits_no_credentials(base: object) -> None:
     """Fail-closed guard (#3257): raise ValueError when the base config's
     ``global`` carries a credential a conf.d receiver would inherit
@@ -502,7 +512,9 @@ def assert_base_global_inherits_no_credentials(base: object) -> None:
         "smtp_auth_* values, a receiver without http_config takes "
         "global.http_config — and a conf.d receiver names its own endpoint, "
         "so the credential would be sent there. Set the credential on the "
-        "platform's own receivers in the base config instead of in global.")
+        "platform's own receivers in the base config instead of in global."
+        + (f" {BEARER_TOKEN_IS_AUTHORIZATION_NOTE}"
+           if any(k.endswith(".authorization") for k in keys) else ""))
 
 
 def _platform_placeholder_receiver_names() -> frozenset[str]:
