@@ -59,6 +59,10 @@ OPS_SITES = [
     ("generate-routes --base-config", "generate_alertmanager_routes.py",
      ["--config-dir", "{CONF}", "--output-configmap", "--base-config", "{F}",
       "-o", "{BOX}/routes.yaml"], "--base-config", None),
+    ("analyze-gaps --config-dir", "analyze_rule_pack_gaps.py", ["--config-dir", "{D}"],
+     "--config-dir", None),
+    ("analyze-gaps --tenant-config", "analyze_rule_pack_gaps.py", ["--tenant-config", "{F}"],
+     "--tenant-config", None),
     ("generator-service --repo", "generator_service.py",
      ["--socket", "{BOX}/gs.sock", "--repo", "{D}", "--config-subdir", "conf.d",
       "--work-dir", "{BOX}/gs-work"], "--repo", None),
@@ -199,9 +203,38 @@ def test_an_empty_path_is_shown_as_supplied(tmp_path):
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
-def test_a_fifo_is_a_file_and_is_not_read(tmp_path):
-    """A FIFO with no writer opens non-blocking: usable, and never waited on."""
+def test_a_file_is_a_regular_file(tmp_path):
+    """A FIFO or a device is not a file (as `is_file()` said): a reader that
+    asks `is_file()` would take it for "no file" and pass on nothing — and it
+    is never opened, so a writer waiting on the FIFO is not woken."""
     fifo = tmp_path / "p"
     os.mkfifo(fifo)
     assert stat.S_ISFIFO(os.stat(fifo).st_mode)
-    assert classify_path(fifo, "file") is None
+    for p in (fifo, os.devnull):
+        problem = classify_path(p, "file", flag="--policy")
+        assert (problem.reason, problem.missing) == ("file_not_found", False), p
+        assert problem.message == f"--policy {p}: not a regular file"
+
+
+@pytest.mark.parametrize("lang, words", [("zh", "--dir 無法使用："), ("en", "ERROR: --dir ")])
+def test_a_tool_keeps_its_own_words(tmp_path, lang, words):
+    """The judgement is shared; each tool's language for it stays its own."""
+    import subprocess
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / "gitops_check.py"),
+                           "local", "--dir", str(tmp_path / "nope")],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          env={**os.environ, "DA_LANG": lang})
+    assert proc.returncode == 2, proc.stderr
+    assert f"{words}" in proc.stderr and f"{tmp_path / 'nope'}: " in proc.stderr, proc.stderr
+
+
+def test_policy_on_dev_null_is_refused(tmp_path):
+    """The fail-open the review measured: `--policy /dev/null` evaluated no
+    policy at rc 0. A device is not the policy file the flag asks for."""
+    import subprocess
+    (tmp_path / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / "policy_engine.py"),
+                           "--config-dir", str(tmp_path), "--policy", os.devnull, "--ci"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"--policy {os.devnull}: not a regular file" in proc.stderr

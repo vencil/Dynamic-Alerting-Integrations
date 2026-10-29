@@ -28,11 +28,11 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
-from _lib_io import require_dir  # noqa: E402  (#3276)
+from _lib_io import classify_path  # noqa: E402  (#3276)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,10 @@ def check_local(dir_path: str) -> CheckResult:
     # No directory to check is the caller's input, not a verdict (#3211):
     # the caller-error exit (rc 2, its --json envelope) via `run()`, named
     # by the shared judgement of a caller-given path (#3241 → #3276).
-    require_dir(dir_path, flag="--dir")
+    problem = classify_path(dir_path, "dir", flag="--dir")
+    if problem is not None:
+        raise CallerError(_h(f"ERROR: --dir 無法使用：{problem.message}",
+                             f"ERROR: {problem.message}"), problem.reason)
 
     # ADR-036 step 4 (#2906): which files there are and what each holds is
     # `da-guard parse-tree`'s answer — the files the exporter selects, read

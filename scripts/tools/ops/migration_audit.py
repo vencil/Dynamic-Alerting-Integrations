@@ -720,6 +720,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         # like the caller_error document below
         arm_crash_envelope(build=lambda: {**empty_report(), "config_dir": args.config_dir})
     try:
+        # #3276: the caller's string, before Path('') becomes '.'.
+        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        if config_dir_problem is not None:
+            raise AuditError(config_dir_problem.message)
         report = audit(Path(args.config_dir), args.da_guard_binary, args.timeout)
         out = (json.dumps(report, ensure_ascii=False, default=str) if args.json
                else render_text(report))

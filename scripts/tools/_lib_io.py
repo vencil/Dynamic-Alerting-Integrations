@@ -1323,8 +1323,11 @@ def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Option
 
     * ``"dir"``: a directory. Only stat: whether its content can be listed
       is the reader's verdict (for a conf.d, da-guard's ``walk_error``).
-    * ``"file"``: anything but a directory, that opens for reading (a FIFO
-      too: opened non-blocking, never read).
+    * ``"file"``: a regular file that opens for reading — what
+      ``Path.is_file()`` answered, so a reader that still asks ``is_file()``
+      never sees a FIFO or a device it would take for "no file" (fail-open:
+      ``--policy /dev/null`` evaluating no policy). The open is made only on
+      a regular file: on a FIFO or a device it would have side effects.
     * ``"any"``: anything that stats.
     """
     # '' is SUPPLIED (an unset shell variable) and must stay visible.
@@ -1340,10 +1343,10 @@ def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Option
     if kind == "dir" and not stat.S_ISDIR(st.st_mode):
         return PathProblem("dir_not_found", f"{label}: not a directory", False)
     if kind == "file":
-        if stat.S_ISDIR(st.st_mode):
-            return PathProblem("file_not_found", f"{label}: is a directory, not a file", False)
+        if not stat.S_ISREG(st.st_mode):
+            return PathProblem("file_not_found", f"{label}: not a regular file", False)
         try:
-            os.close(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)))
+            os.close(os.open(path, os.O_RDONLY))
         except OSError as exc:
             return PathProblem("file_not_accessible", f"{label}: {exc.strerror}", False)
     return None

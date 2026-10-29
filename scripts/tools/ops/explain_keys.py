@@ -282,6 +282,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     expected = json.load(f)
             except (OSError, UnicodeDecodeError, ValueError) as e:
                 raise ExplainError(f"--assert: cannot read {args.assert_file}: {e}") from e
+        # #3276: the caller's string, before Path('') becomes '.'.
+        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        if config_dir_problem is not None:
+            raise ExplainError(config_dir_problem.message)
         doc = explain(Path(args.config_dir), args.tenant, args.at, args.da_guard_binary, args.timeout)
         diffs = compare(doc, expected) if expected is not None else []
     except ExplainError as e:
