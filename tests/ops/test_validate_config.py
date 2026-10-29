@@ -3109,9 +3109,10 @@ class TestRootDefaultsUnderscoreKeys:
 
 
 class TestScheduleNullHelpers:
-    """#2708: the route generator's schedule-null predicates (`_grar_validate`,
-    Go ``scheduleNullProblems``). The validate-config row that applied them is
-    gone (#3387): da-guard's schedule_null_value is the `guard_errors` row's."""
+    """#2708: the null-schedule predicates `describe_tenant` reads
+    (`_grar_validate.is_null_schedule` / `writes_nothing`, Go nullSchedule /
+    nullThreshold). A null inside a schedule with windows is da-guard's
+    schedule_null_value, the `guard_errors` row's (#3387)."""
 
     @pytest.mark.parametrize("value,null", [
         ({"default": None}, True),
@@ -3132,22 +3133,6 @@ class TestScheduleNullHelpers:
         assert is_null_schedule(value) is null
         assert writes_nothing("mysql_connections", value) is (value is None or null)
         assert writes_nothing("_state_x", value) is False
-
-    def test_schedule_null_problems_messages(self):
-        """#2708 r2: a null `window:` is not printed as a window; the same
-        strings as Go's TestScheduleNullProblems_Messages."""
-        from _grar_validate import schedule_null_problems
-        assert schedule_null_problems({
-            "default": None,
-            "overrides": [{"window": None, "value": None},
-                          {"window": "00:00-01:00", "value": None}, None],
-        }) == [
-            "`default:` is null beside 3 override window(s)",
-            "`overrides[0]` has `window: null`",
-            "`overrides[0]` has `value: null`",
-            '`overrides[1]` (window "00:00-01:00") has `value: null`',
-            "`overrides[2]` is null",
-        ]
 
 
 class TestJsonSchemaRow:

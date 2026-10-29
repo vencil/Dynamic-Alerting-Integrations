@@ -1213,35 +1213,6 @@ def writes_nothing(key: object, value: object) -> bool:
     return value is None or is_null_schedule(value)
 
 
-def schedule_null_problems(value: object) -> list[str]:
-    """Go ``scheduleNullProblems`` (pkg/config/schedule_null.go, #2708):
-    each null inside a schedule (a mapping with a ``default`` key) that has
-    override windows — a null ``default`` beside them, a null window entry,
-    or a window's ``window: null`` / ``value: null``. Empty for anything
-    else."""
-    if not isinstance(value, dict) or "default" not in value:
-        return []
-    windows = value.get("overrides")
-    if not isinstance(windows, list) or not windows:
-        return []
-    out = []
-    if value["default"] is None:
-        out.append(f"`default:` is null beside {len(windows)} override window(s)")
-    for i, w in enumerate(windows):
-        if w is None:
-            out.append(f"`overrides[{i}]` is null")
-            continue
-        if isinstance(w, dict) and "window" in w and w["window"] is None:
-            out.append(f"`overrides[{i}]` has `window: null`")
-        if isinstance(w, dict) and "value" in w and w["value"] is None:
-            win = w.get("window")
-            if isinstance(win, str):
-                out.append(f"`overrides[{i}]` (window {json.dumps(win)}) has `value: null`")
-            else:
-                out.append(f"`overrides[{i}]` has `value: null`")
-    return out
-
-
 def _canonical_tenant_key(key: str) -> tuple[str, bool]:
     """Canonical spelling for a tenant-config key (#1231 alias boundary).
 

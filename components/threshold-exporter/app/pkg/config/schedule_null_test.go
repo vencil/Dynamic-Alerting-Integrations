@@ -6,8 +6,8 @@ import (
 )
 
 // The exact problem strings (#2708): a null `window:` is not printed as a
-// window — the value line then names only the entry. The route generator's
-// Python copy (_grar_validate.schedule_null_problems) asserts the same strings.
+// window — the value line then names only the entry. validate-config reports
+// them through da-guard's schedule_null_value (guard_errors, #3387).
 func TestScheduleNullProblems_Messages(t *testing.T) {
 	t.Parallel()
 	got := scheduleNullProblems(map[string]any{
