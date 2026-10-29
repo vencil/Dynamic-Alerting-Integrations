@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -41,7 +40,9 @@ import (
 // values with it and composes `<<` merges by v3's rules (written.go).
 // rulefmt reads only the first YAML document and logs a warning for the
 // rest; Prometheus loads only the first, so a later document with content
-// (anything but `---`, comments or an explicit null) is refused here.
+// (anything but `---`, comments or an explicit null), or one that cannot be
+// read, is refused here. A null group or rule (`groups: [~]`) is dropped by
+// go-yaml v3 and so by rulefmt; the walk drops it too (decodedItems).
 
 // formatV3 spells values as rulefmt's YAML library does.
 var formatV3 = yamlFormat{marshal: yaml.Marshal, unmarshal: yaml.Unmarshal}
@@ -56,23 +57,29 @@ var (
 // readRuleFile returns the rule file *data* as Prometheus loads it: one JSON
 // document, the rule groups with only the keys the text writes.
 func readRuleFile(data []byte) ([]byte, error) {
+	groups, err := parseRules(data)
+	if err != nil {
+		return nil, asLoaderRefusal("Prometheus' rule file loader", err)
+	}
+	if extra, err := laterDocumentV3(data); extra > 0 {
+		return nil, laterDocumentError(extra, err, "Prometheus")
+	}
+	return walkDocument(data, reflect.ValueOf(groups), mergeV3, formatV3)
+}
+
+// parseRules is rulefmt.Parse with its errors joined and its panics
+// recovered.
+func parseRules(data []byte) (groups *rulefmt.RuleGroups, err error) {
+	defer loaderPanic("Prometheus' rule file loader", &err)
 	groups, errs := rulefmt.Parse(data, false, ruleNameValidation, ruleParser, promslog.NewNopLogger())
 	if len(errs) > 0 {
 		msgs := make([]string, len(errs))
 		for i, e := range errs {
 			msgs[i] = e.Error()
 		}
-		return nil, fmt.Errorf("refused by Prometheus' rule file loader: %s", strings.Join(msgs, "; "))
+		return nil, errors.New(strings.Join(msgs, "; "))
 	}
-	extra, err := laterDocumentV3(data)
-	if err != nil {
-		return nil, fmt.Errorf("refused by Prometheus' rule file loader: %v", err)
-	}
-	if extra > 0 {
-		return nil, fmt.Errorf("YAML document %d of the file has content; Prometheus loads only "+
-			"the first document of a rule file and drops the rest, so it is refused here", extra)
-	}
-	return walkDocument(data, reflect.ValueOf(groups), mergeV3, formatV3)
+	return groups, nil
 }
 
 // laterDocumentV3 is laterDocumentWithContent with rulefmt's go-yaml v3,
@@ -87,7 +94,7 @@ func laterDocumentV3(data []byte) (int, error) {
 			return 0, nil
 		}
 		if err != nil {
-			return 0, err
+			return n, err
 		}
 		if n > 1 && len(doc.Content) > 0 && !isNull(doc.Content[0]) {
 			return n, nil

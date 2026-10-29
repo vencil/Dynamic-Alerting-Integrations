@@ -35,31 +35,89 @@ import (
 // here: relative file paths stay as written (LoadFile joins them with the
 // file's directory) and the agent-mode checks are not made.
 //
-// Two refusals are this program's, not the loader's:
+// Three refusals are this program's, not the loader's:
 //
-//   - a YAML document after the first that has content: config.Load reads
-//     only the first document and drops the rest without a word;
+//   - a YAML document after the first that has content, or cannot be read:
+//     config.Load reads only the first document and drops the rest without
+//     a word;
 //   - a `global.external_labels` value that config.Load expands from the
 //     environment (`${VAR}`, `$VAR`; `$$` is a literal `$` and is kept): the
 //     value Prometheus serves comes from Prometheus' environment, which this
-//     program does not have, so any value it printed would be its own.
+//     program does not have, so any value it printed would be its own;
+//   - a non-empty `scrape_config_files`: config.Load leaves those files
+//     unread (Prometheus loads scrape configs from them later,
+//     Config.GetScrapeConfigs), so a reading of the file alone is not the
+//     set of scrape configs Prometheus runs, and a caller would take "not
+//     read" for "none".
+//
+// config.Load panics on some inputs (`alerting: {alertmanagers: [~]}`: a
+// nil *AlertmanagerConfig is dereferenced while checking it). That is
+// recovered and refused like a loader error (loaderPanic), without a
+// goroutine dump.
 
 // formatV2 spells values as Prometheus' config loader's YAML library does.
 var formatV2 = yamlFormat{marshal: yamlv2.Marshal, unmarshal: yamlv2.Unmarshal}
 
+// panicError is a consumer's loader panicking on the input.
+type panicError struct {
+	loader string
+	value  interface{}
+}
+
+func (e *panicError) Error() string {
+	return fmt.Sprintf("%s panicked on this input (a bug in the loader; the file is refused): %v",
+		e.loader, e.value)
+}
+
+// loaderPanic turns a panic of a consumer's loader into a *panicError.
+// Used as `defer loaderPanic("Prometheus' config loader", &err)`.
+func loaderPanic(loader string, err *error) {
+	if r := recover(); r != nil {
+		*err = &panicError{loader: loader, value: r}
+	}
+}
+
+// asLoaderRefusal is a loader's error as da-read reports it: a panic as is,
+// any other error prefixed "refused by <loader>".
+func asLoaderRefusal(loader string, err error) error {
+	var pe *panicError
+	if errors.As(err, &pe) {
+		return err
+	}
+	return fmt.Errorf("refused by %s: %v", loader, err)
+}
+
+// loadPrometheus is config.Load with its panics recovered.
+func loadPrometheus(data []byte) (cfg *config.Config, err error) {
+	defer loaderPanic("Prometheus' config loader", &err)
+	return config.Load(string(data), promslog.NewNopLogger())
+}
+
+// laterDocumentError is the refusal of a later YAML document: one with
+// content (err nil), or one that cannot be read.
+func laterDocumentError(n int, err error, consumer string) error {
+	if err != nil {
+		return fmt.Errorf("YAML document %d of the file cannot be read (%v); %s loads only the "+
+			"first document, and da-read refuses a file whose later documents are anything but "+
+			"empty", n, err, consumer)
+	}
+	return fmt.Errorf("YAML document %d of the file has content; %s loads only the first "+
+		"document and drops the rest without a word, so it is refused here", n, consumer)
+}
+
 // readPrometheus returns da-read's stdout for the prometheus.yml *data*.
 func readPrometheus(data []byte) ([]byte, error) {
-	cfg, err := config.Load(string(data), promslog.NewNopLogger())
+	cfg, err := loadPrometheus(data)
 	if err != nil {
-		return nil, fmt.Errorf("refused by Prometheus' config loader: %v", err)
+		return nil, asLoaderRefusal("Prometheus' config loader", err)
 	}
-	extra, err := laterDocumentV2(data)
-	if err != nil {
-		return nil, fmt.Errorf("refused by Prometheus' config loader: %v", err)
+	if extra, err := laterDocumentV2(data); extra > 0 {
+		return nil, laterDocumentError(extra, err, "Prometheus")
 	}
-	if extra > 0 {
-		return nil, fmt.Errorf("YAML document %d of the file has content; Prometheus reads only "+
-			"the first document and drops the rest without a word, so it is refused here", extra)
+	if len(cfg.ScrapeConfigFiles) > 0 {
+		return nil, fmt.Errorf("scrape_config_files %v: da-read does not read these files, and "+
+			"Prometheus loads scrape configs from them, so the scrape configs this file reads "+
+			"as are not the ones Prometheus runs; it is refused here", cfg.ScrapeConfigFiles)
 	}
 	if names, err := externalLabelsFromEnvironment(data); err != nil {
 		return nil, fmt.Errorf("refused by Prometheus' config loader: %v", err)
@@ -79,7 +137,9 @@ func readPrometheus(data []byte) ([]byte, error) {
 }
 
 // laterDocumentV2 is laterDocumentWithContent with the go-yaml v2 Prometheus'
-// config loader decodes with (go.yaml.in/yaml/v2).
+// config loader decodes with (go.yaml.in/yaml/v2): the position (2, 3, ...)
+// of the first later document that has content or cannot be read (then with
+// the reason), or 0. Called after config.Load read the first one.
 func laterDocumentV2(data []byte) (int, error) {
 	dec := yamlv2.NewDecoder(bytes.NewReader(data))
 	for n := 1; ; n++ {
@@ -89,7 +149,7 @@ func laterDocumentV2(data []byte) (int, error) {
 			return 0, nil
 		}
 		if err != nil {
-			return 0, err
+			return n, err
 		}
 		if n > 1 && v != nil {
 			return n, nil

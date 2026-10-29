@@ -124,7 +124,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		say(stderr, "%s: %v\n", programName, err)
 		return exitCallerErr
 	}
-	out, err := read(data)
+	out, err := guarded(read, data)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, name, err)
 		return exitCallerErr
@@ -148,6 +148,19 @@ func write(stdout, stderr io.Writer, out []byte, rc int) int {
 		return exitCallerErr
 	}
 	return rc
+}
+
+// guarded is read(data) with any panic turned into a refusal of the file:
+// a loader that panics on one input (Prometheus' config.Load does, on
+// `alerting: {alertmanagers: [~]}`; the readers name their own loader,
+// loaderPanic) refuses that file, with rc 2 and no goroutine dump.
+func guarded(read func([]byte) ([]byte, error), data []byte) (out []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, fmt.Errorf("da-read panicked while reading this file (a bug; the file is refused): %v", r)
+		}
+	}()
+	return read(data)
 }
 
 // ruleFile is one entry of `prometheus-rules`' output.
@@ -181,7 +194,7 @@ func runRules(files []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		entry := ruleFile{Path: name}
 		var doc []byte
 		if err == nil {
-			doc, err = readRuleFile(data)
+			doc, err = guarded(readRuleFile, data)
 		}
 		if err != nil {
 			entry.Problem = &problem{Message: err.Error()}

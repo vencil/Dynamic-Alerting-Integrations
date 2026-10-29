@@ -137,7 +137,7 @@ func TestPrometheusRefusesWhatPrometheusRefuses(t *testing.T) {
 		{"kubernetes-sd-role", "scrape_configs:\n- job_name: a\n  kubernetes_sd_configs: [{role: nope}]\n",
 			"unknown Kubernetes SD role"},
 		{"second-document", "global: {scrape_interval: 15s}\n---\nscrape_configs: []\n",
-			"YAML document 2 of the file has content; Prometheus reads only the first"},
+			"YAML document 2 of the file has content; Prometheus loads only the first"},
 		{"external-label-from-env", "global: {external_labels: {cluster: '${CLUSTER}', plain: x}}\n",
 			"global.external_labels [cluster]: Prometheus expands the value from its own environment"},
 		{"not-yaml", "global: [\n", "refused by Prometheus' config loader"},

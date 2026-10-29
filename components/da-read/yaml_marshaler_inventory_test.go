@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	commoncfg "github.com/prometheus/common/config"
 	promconfig "github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/model/rulefmt"
 )
@@ -79,9 +80,18 @@ func derefType(t reflect.Type) reflect.Type {
 func printedWholeWithWrittenStructs(roots ...reflect.Type) []string {
 	seen := map[reflect.Type]bool{}
 	found := map[string]bool{}
+	urlType := reflect.TypeOf(commoncfg.URL{})
 	leaf := func(t reflect.Type) {
 		if writtenStructInside(t) {
 			found[t.String()] = true
+		}
+		// A config.URL printed by go-yaml inside a whole value loses its
+		// password (Redacted); the walk only spells one it reaches itself
+		// (fullURL).
+		for _, in := range reachableTypes(t)[1:] {
+			if in == urlType {
+				found[t.String()+" (holds a config.URL)"] = true
+			}
 		}
 	}
 	var visit func(t reflect.Type)

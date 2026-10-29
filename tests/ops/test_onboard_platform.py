@@ -1158,6 +1158,19 @@ class TestParseScrapeConfigs:
             parse_scrape_configs(path)
         assert not exc_info.value.refused_by_reader
 
+    def test_main_missing_scrape_config_is_a_caller_error(self, config_dir, monkeypatch, capsys):
+        """`--scrape-config` 指向不存在的檔：讀不到輸入是呼叫端錯誤，rc 2 並點名該檔
+        （dev-rules §13）；以前是 rc 1（當成「沒有 scrape_configs」）。"""
+        import onboard_platform as op
+        missing = os.path.join(config_dir, "no-such-prometheus.yml")
+        monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--scrape-config", missing,
+                                         "--dry-run"])
+        with pytest.raises(SystemExit) as exc_info:
+            op.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert f"cannot read {missing}" in err, err
+
     def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
         """main：Phase 3 的設定被拒收時 rc 2，stderr 帶 Prometheus 的原因。"""
         import onboard_platform as op

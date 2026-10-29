@@ -520,7 +520,10 @@ jobs:
       # ADR-036 §12: `admin-config-schema-check`'s wrapper
       # (scripts/ops/with_admin_config_tools.sh) builds .build/tenant-api and
       # .build/da-crdecode the same way, so the tenant-api module is cached too.
-      - name: Set up Go (da-guard / tenant-api / da-crdecode for the lint hooks)
+      # #3206: a hook that reads a prometheus.yml builds .build/da-read
+      # (scripts/ops/with_da_read.sh) from its own module, so its go.sum
+      # keys the cache as well.
+      - name: Set up Go (da-guard / tenant-api / da-crdecode / da-read for the lint hooks)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
@@ -528,6 +531,7 @@ jobs:
           cache-dependency-path: |
             components/threshold-exporter/app/go.sum
             components/tenant-api/go.sum
+            components/da-read/go.sum
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker

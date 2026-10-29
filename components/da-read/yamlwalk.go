@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	commoncfg "github.com/prometheus/common/config"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -35,7 +36,11 @@ import (
 //     as written; the defaults Prometheus fills in are left out;
 //   - a list or a string-keyed map whose entries are structs is paired with
 //     the text entry by entry (a list must have the written length, a map
-//     the written keys);
+//     the written keys; a null entry go-yaml v3 drops is not counted,
+//     decodedItems);
+//   - a prometheus/common config.URL (`url`, `proxy_url`, `api_server`, ...)
+//     is printed whole with its password, not the `xxxxx` its MarshalYAML
+//     writes (fullURL): secrets are printed as their values;
 //   - every other value — a label map, a list of strings, a duration, a
 //     regexp, a secret (printed as its value), a scalar — is printed whole,
 //     as the loader's library marshals it and reads it back.
@@ -271,9 +276,68 @@ func (w *yamlWalker) key(i int, k string) error {
 	return nil
 }
 
+// decodedItems is the entries of the written sequence *n* that the loader's
+// decoder keeps in a list of *elem*. go-yaml v2 keeps every one (a null is
+// the element's zero value). go-yaml v3 drops a null entry unless the
+// element is an interface, pointer, map or slice (decoder.null returns
+// false for anything else, and decoder.sequence keeps only the entries that
+// decode): rulefmt reads `groups: [~]` as no group, and so does this walk.
+func (w *yamlWalker) decodedItems(n *yaml.Node, elem reflect.Type) []*yaml.Node {
+	if w.c.rules != mergeV3 {
+		return n.Content
+	}
+	switch elem.Kind() {
+	case reflect.Interface, reflect.Pointer, reflect.Map, reflect.Slice:
+		return n.Content
+	}
+	kept := make([]*yaml.Node, 0, len(n.Content))
+	for _, it := range n.Content {
+		if !isNull(deref(it)) {
+			kept = append(kept, it)
+		}
+	}
+	return kept
+}
+
+// fullURL is the URL a prometheus/common config.URL (or a pointer to one)
+// holds, password included. Its own MarshalYAML prints the password as
+// `xxxxx` (URL.Redacted), and the caller reads secrets as their values, as
+// the other secrets are printed (commoncfg.MarshalSecretValue). ok is false
+// for any other value.
+func fullURL(rv reflect.Value) (s *string, ok bool) {
+	if !rv.IsValid() || !rv.CanInterface() {
+		return nil, false
+	}
+	var u commoncfg.URL
+	switch v := rv.Interface().(type) {
+	case commoncfg.URL:
+		u = v
+	case *commoncfg.URL:
+		if v == nil {
+			return nil, true
+		}
+		u = *v
+	default:
+		return nil, false
+	}
+	if u.URL == nil {
+		return nil, true
+	}
+	text := u.String() // net/url's, promoted: config.URL defines no String
+	return &text, true
+}
+
 // walk prints the reading *rv* of the written node *node*.
 func (w *yamlWalker) walk(node *yaml.Node, rv reflect.Value, path []interface{}) error {
 	n := deref(node)
+	if s, ok := fullURL(rv); ok {
+		b, err := json.Marshal(s)
+		if err != nil {
+			return err
+		}
+		w.out.Write(b)
+		return nil
+	}
 	sv, ok, err := shape(rv)
 	if err != nil {
 		return fmt.Errorf("%s: the value read cannot be spelled: %v", pathString(path), err)
@@ -295,8 +359,26 @@ func (w *yamlWalker) walk(node *yaml.Node, rv reflect.Value, path []interface{})
 			return err
 		}
 		w.out.WriteByte('{')
-		for i, k := range wm.order {
+		for i, pk := range planKeys(sv, wm) {
+			k := pk.key
 			p := extend(path, k)
+			if pk.moved {
+				// The loader moved the value here (moves.go).
+				if err := w.key(i, k); err != nil {
+					return err
+				}
+				w.out.WriteByte('{')
+				for j, f := range pk.fields {
+					if err := w.key(j, f.key); err != nil {
+						return err
+					}
+					if err := w.leaf(f.value, extend(p, f.key)); err != nil {
+						return err
+					}
+				}
+				w.out.WriteByte('}')
+				continue
+			}
 			child, found := yamlField(sv, k)
 			if !found {
 				return fmt.Errorf("%s: %w (%s has no field %q)", pathString(p), errNotInReading, sv.Type(), k)
@@ -321,16 +403,17 @@ func (w *yamlWalker) walk(node *yaml.Node, rv reflect.Value, path []interface{})
 		if !structs {
 			return w.leaf(rv, path)
 		}
-		if len(n.Content) != sv.Len() {
+		items := w.decodedItems(n, sv.Type().Elem())
+		if len(items) != sv.Len() {
 			return fmt.Errorf("%s: %w: %d entries written, %d read", pathString(path), errNotInReading,
-				len(n.Content), sv.Len())
+				len(items), sv.Len())
 		}
 		w.out.WriteByte('[')
 		for i := 0; i < sv.Len(); i++ {
 			if i > 0 {
 				w.out.WriteByte(',')
 			}
-			if err := w.walk(n.Content[i], sv.Index(i), extend(path, i)); err != nil {
+			if err := w.walk(items[i], sv.Index(i), extend(path, i)); err != nil {
 				return err
 			}
 		}
