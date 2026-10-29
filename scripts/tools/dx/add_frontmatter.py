@@ -25,6 +25,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Files/paths excluded from front matter scanning.
 #
@@ -406,8 +407,11 @@ def main():
     args = parser.parse_args()
 
     base_dir = str(Path(args.base_dir).resolve())
-    if not Path(base_dir).is_dir():
-        logger.error(f"Base directory not found: {base_dir}")
+    # #3276: the shared judgement of a caller-given path.
+    problem = classify_path(base_dir, "dir", lang="en", flag="--base-dir")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        logger.error(f"Base directory {word}: {problem.message}")
         return EXIT_CALLER_ERROR
 
     # Find all markdown files

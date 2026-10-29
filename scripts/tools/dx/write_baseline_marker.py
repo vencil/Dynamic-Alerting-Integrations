@@ -52,9 +52,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 # (a `--help` crash on a cp950 console) shows up only on a legacy host.
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402  (#1789)
-from _lib_io import (  # noqa: E402  (#1789)
-    OutputWriteError, output_write, safe_label,
-)
+from _lib_io import OutputWriteError, output_write, safe_label  # noqa: E402  (#1789; #3276)
+from _lib_paths import PathProblem, classify_path  # noqa: E402  (#3276)
 
 # ⛔ Import, do not restate. See the module docstring: a copied regex is the
 # one way this design can silently start counting a different thing.
@@ -117,13 +116,23 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"Path to write the marker (conventionally {MARKER_FILE}).")
     args = ap.parse_args(argv)
 
-    if not args.baseline.is_file():
+    # #3276: the shared judgement of a caller-given path — a caller error
+    # (rc 2), no longer the rc 1 of a baseline that is not vouchable. "any"
+    # then a regular file, which is what `is_file()` asked: "file" would also
+    # open it, moving a file that does not open for reading from the read
+    # below (rc 1) to here.
+    problem = classify_path(args.baseline, "any", lang="en", flag="--baseline")
+    if problem is None and not args.baseline.is_file():
+        problem = PathProblem("file_not_found",
+                              f"--baseline {safe_label(str(args.baseline))}: not a regular file",
+                              False)
+    if problem is not None:
         # ⛔ Never write a marker for a file that is not there. The marker's
         # whole meaning is "I looked, and it was whole"; writing one here would
         # vouch for nothing and the consumer would trust it.
-        print(f"::error::{args.baseline} does not exist — refusing to write a "
+        print(f"::error::{problem.message} — refusing to write a "
               "completeness marker", file=sys.stderr)
-        return 1
+        return EXIT_CALLER_ERROR
 
     try:
         text = args.baseline.read_text(encoding="utf-8")
@@ -163,8 +172,9 @@ def main(argv: list[str] | None = None) -> int:
         # row in `tests/shared/test_output_path_write_failure.py` declares it
         # as this tool's head, so neither half can be dropped silently.
         #
-        # ⚠️ Only the WRITE moved to rc=2. The three input refusals above
-        # (`--baseline` missing / unreadable / no parseable rows) still return
+        # ⚠️ The WRITE moved to rc=2, and so did a `--baseline` that is not
+        # there or not a file (#3276: a caller-given path). The two other
+        # input refusals above (unreadable / no parseable rows) still return
         # 1: they are "this baseline is not vouchable", not "your output path
         # is wrong", and the exit-code SSOT classifies them differently.
         # ⛔ Not "the nightly distinguishes them": `bench-record.yaml` calls

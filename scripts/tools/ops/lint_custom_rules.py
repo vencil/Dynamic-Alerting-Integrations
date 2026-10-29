@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 # ---------------------------------------------------------------------------
@@ -544,7 +544,7 @@ def main():
             "scan target(s) not found or empty: ''"
             "\n  ⛔ Do not drop the path to clear this — an absent target "
             "is not a clean one, and '' is not the current directory.")
-    problems = [p for p in (classify_path(t, "any") for t in args.paths) if p is not None]
+    problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths) if p is not None]
     if problems:
         die_caller_error(
             "".join(f"ERROR: {p.message}\n" for p in problems)

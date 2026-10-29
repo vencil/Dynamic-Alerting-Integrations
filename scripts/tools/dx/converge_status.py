@@ -95,6 +95,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 LEDGER_NAME = "ROUNDS.jsonl"
 
@@ -525,8 +526,12 @@ def main(argv=None):
     try_utf8_stdout()
     args = build_parser().parse_args(argv)
 
-    if not os.path.exists(args.scope):
-        print(f"ERROR: scope not found: {args.scope}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path. "any": the scope is
+    # the ledger file itself or a directory holding ledgers.
+    problem = classify_path(args.scope, "any", lang="en", flag="--scope")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"ERROR: scope {word}: {problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     ledgers = find_ledgers(args.scope)

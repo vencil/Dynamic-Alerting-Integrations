@@ -45,6 +45,10 @@ BUILD_EXEMPT = frozenset({
     "_lib_atomic_write.py",  # #3107: library, not CLI
     "_lib_kubectl.py",  # #3207/#3210: cluster reader, library not CLI
     "_lib_io.py",
+    # #3276 — caller-path judgement (stdlib only) and safe_label, split out
+    # of _lib_io so tools without PyYAML can import them. Library, not CLI.
+    "_lib_paths.py",
+    "_lib_label.py",
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # operator_generate + migrate_to_operator. Library, not CLI.
     "_lib_yaml.py",

@@ -212,6 +212,10 @@ TOOL_FILES=(
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
     # ops/operator_check.py. Stdlib + _lib_exitcodes.
     _lib_kubectl.py
+    # #3276 — stdlib only: safe_label (re-exported by _lib_io) and the
+    # one judgement of a caller-given path (_lib_paths imports _lib_label).
+    _lib_label.py
+    _lib_paths.py
     _lib_io.py
     # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.

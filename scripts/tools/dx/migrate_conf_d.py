@@ -54,7 +54,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
@@ -382,8 +383,12 @@ def main() -> None:
     args = parser.parse_args()
 
     conf_d = Path(args.conf_d).resolve()
-    if not conf_d.exists():
-        print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path — a path under a
+    # parent the caller cannot enter is named, not a traceback.
+    problem = classify_path(conf_d, "dir", lang="en", flag="--conf-d")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"❌ conf.d/ {word}: {problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # A file the walk cannot read is a path da-guard validation names: the

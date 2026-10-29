@@ -62,7 +62,8 @@ from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
+from _lib_io import safe_label  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
 from _grar_validate import (  # noqa: E402
@@ -384,7 +385,7 @@ def load_base_config(path: str | None) -> dict:
     """
     if path is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
-    base_config_problem = classify_path(path, "file", flag="--base-config")  # #3276
+    base_config_problem = classify_path(path, "file", lang="en", flag="--base-config")  # #3276
     if base_config_problem is not None:
         raise BaseConfigInputError(
             f"{base_config_problem.message}\n"

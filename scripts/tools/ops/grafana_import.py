@@ -43,7 +43,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
-from _lib_io import classify_path, require_dir  # noqa: E402  (#3276)
+from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
 
@@ -74,7 +74,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
     results = []
 
     dashboard_p = Path(dashboard_path)
-    dashboard_problem = classify_path(dashboard_path, "file", flag="--dashboard")  # #3276
+    dashboard_problem = classify_path(dashboard_path, "file", lang="en", flag="--dashboard")  # #3276
     if dashboard_problem is not None:
         results.append({
             "action": "import",
@@ -295,7 +295,7 @@ def main():
         dashboards.append((args.dashboard, cm_name))
     elif args.dashboard_dir:
         dash_dir = Path(args.dashboard_dir)
-        require_dir(dash_dir, flag="--dashboard-dir")  # #3276
+        require_dir(dash_dir, lang="en", flag="--dashboard-dir")  # #3276
         for entry in sorted(dash_dir.glob("*.json")):
             fpath = str(entry)
             dashboards.append((fpath, auto_name(fpath)))

@@ -65,6 +65,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 # `../lint` 取 decode_python_source——依直譯器方式解碼（BOM / PEP 263
 # cookie），與 AST lint 共用同一份，不另抄第三份（#2641）。
@@ -169,8 +170,12 @@ def _require(entry: dict, keys, where: str) -> None:
 def load_rules(path: Path) -> dict:
     """載入並驗證 verify_diff_rules.yaml。schema 錯誤 → RulesError。"""
     import yaml
-    if not path.exists():
-        raise RulesError(f"rules 檔不存在: {path}")
+    # #3276: the shared judgement of a caller-given path ("any", as `exists()`
+    # was) — `exists()` raised on one under a parent the caller cannot enter.
+    problem = classify_path(path, "any", lang="zh", flag="--rules")
+    if problem is not None:
+        raise RulesError(f"rules 檔{'不存在' if problem.missing else '無法使用'}: "
+                         f"{problem.message}")
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):

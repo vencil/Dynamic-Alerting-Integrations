@@ -660,7 +660,9 @@ def test_safe_label_is_defined_exactly_once():
         if pattern.search(p.read_text(encoding="utf-8")):
             offenders.append(p.relative_to(REPO_ROOT).as_posix())
 
-    assert offenders == ["scripts/tools/_lib_io.py"], (
-        f"the control-char escaping rule must exist once, in _lib_io.safe_label. "
+    # #3276: the one definition moved to the stdlib-only `_lib_label` (which
+    # `_lib_io` re-exports), so a tool without PyYAML can escape a name too.
+    assert offenders == ["scripts/tools/_lib_label.py"], (
+        f"the control-char escaping rule must exist once, in _lib_label.safe_label. "
         f"Found inline copies in: {offenders}"
     )

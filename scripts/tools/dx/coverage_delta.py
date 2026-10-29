@@ -88,6 +88,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276: stdlib only)
 
 
 @dataclass(frozen=True)
@@ -138,8 +139,14 @@ def parse_cobertura(path: Path) -> CoverageReport:
     pytest-cov omits `lines-covered` / `lines-valid` from `<class>` —
     we synthesize them from the `<line>` children when missing.
     """
-    if not path.is_file():
-        raise FileNotFoundError(f"coverage report not found: {path}")
+    # #3276: the shared caller-path judgement (stdlib only: this tool's CI
+    # job has no PyYAML) — a report under a parent the caller cannot enter is
+    # named, not a traceback; nothing there keeps its own error.
+    problem = classify_path(path, "file", lang="en")
+    if problem is not None:
+        if problem.missing:
+            raise FileNotFoundError(f"coverage report not found: {path}")
+        raise ValueError(f"coverage report not usable: {problem.message}")
     try:
         tree = ET.parse(path)  # nosec B314  #input is pytest-cov-generated Cobertura XML on local FS, not external/untrusted (defusedxml dep avoided)
     except ET.ParseError as e:

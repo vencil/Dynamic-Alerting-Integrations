@@ -44,6 +44,8 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_prometheus.py",
     "_lib_atomic_write.py",  # #3107: the one atomic writer (was dx/_atomic_write.py)
     "_lib_kubectl.py",     # #3207/#3210: the one cluster reader (kubectl get -o json)
+    "_lib_label.py",       # #3276: safe_label, stdlib only (_lib_io re-exports it)
+    "_lib_paths.py",       # #3276: the one judgement of a caller-given path, stdlib only
     "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "_lib_exitcodes.py",   # #452 Track A: canonical 0/1/2 exit-code contract (SSOT)
