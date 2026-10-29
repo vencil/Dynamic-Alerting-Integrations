@@ -59,7 +59,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
-import yaml  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 CRITICAL_SUFFIX = "Critical"
 
@@ -82,17 +82,17 @@ T2_GLOB = ("k8s/03-monitoring", "configmap-rules-*.yaml")
 _BASE_SEVERITIES = ("warning", "info")
 
 
-def _load_yaml(path: Path):
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
 def collect_alerts(root: Path = PROJECT_ROOT) -> dict[str, dict]:
     """Return {alert_name: labels} across both trees.
 
     The 3-copy gate keeps T1/T2 semantically synced; where both trees define
     an alert, T1 labels win (first-seen otherwise). T2-only platform alerts
-    contribute their own labels."""
+    contribute their own labels.
+
+    Every rule file is read the way Prometheus' rule loader reads it (#3206,
+    ADR-036 §12: `da-read prometheus-rules`; a T2 ConfigMap's outer layer
+    the way kubectl reads it) — one run per tree. A rule file the loader
+    refuses raises `RuleFilesRefused`, which names it."""
     alerts: dict[str, dict] = {}
 
     def eat(doc, prefer: bool):
@@ -108,14 +108,16 @@ def collect_alerts(root: Path = PROJECT_ROOT) -> dict[str, dict]:
                     alerts[name] = labels
 
     t1_dir, t1_pat = T1_GLOB
-    for f in sorted((root / t1_dir).glob(t1_pat)):
-        eat(_load_yaml(f), prefer=True)
-
+    t1 = _lib_consumer_read.prometheus_rule_file_results(
+        sorted((root / t1_dir).glob(t1_pat)))
     t2_dir, t2_pat = T2_GLOB
-    for f in sorted((root / t2_dir).glob(t2_pat)):
-        cm = _load_yaml(f)
-        for _key, val in (cm.get("data") or {}).items():
-            eat(yaml.safe_load(val), prefer=False)
+    t2 = [rf for rf in _lib_consumer_read.manifest_rule_file_results(
+        sorted((root / t2_dir).glob(t2_pat))) if rf.kind == "ConfigMap"]
+    _lib_consumer_read.require_read(t1 + t2)
+    for rf in t1:
+        eat(rf.documents[0], prefer=True)
+    for rf in t2:
+        eat(rf.documents[0], prefer=False)
 
     return alerts
 
@@ -221,6 +223,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_check()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: a rule file Prometheus would not load (each named, with the
+        # loader's reason), or no da-read — malformed input, not a violation.
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: metric-group pair check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

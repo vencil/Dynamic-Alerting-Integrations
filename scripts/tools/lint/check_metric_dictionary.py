@@ -33,7 +33,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
 import _threshold_alerts  # noqa: E402  (rule pack 讀者索引，issue 1196)
 
@@ -84,11 +85,17 @@ def load_dictionary_golden_rules(path: Path) -> Set[str]:
 
 
 def extract_rule_pack_metrics(rule_packs_dir: Path,
-                               k8s_dir: Path) -> Dict[str, Set[str]]:
+                               k8s_dir: Path,
+                               refused: "List[str] | None" = None) -> Dict[str, Set[str]]:
     """Extract metric names used in Rule Pack YAML files.
 
     Returns dict mapping pack_name → set of metric names.
-    Scans both rule-packs/ source and k8s/ ConfigMaps.
+    Scans both rule-packs/ source and k8s/ ConfigMaps, each rule file read
+    the way Prometheus' rule loader reads it (#3206, ADR-036 §12: one
+    `da-read prometheus-rules` run for the packs, one for the ConfigMaps,
+    whose outer layer is read the way kubectl reads it). A rule file the
+    loader refuses is appended to *refused* (``<file>: <reason>``) — or,
+    without that list, raises ``RuleFilesRefused``.
     """
     packs: Dict[str, Set[str]] = {}
 
@@ -110,22 +117,28 @@ def extract_rule_pack_metrics(rule_packs_dir: Path,
                         if token not in _PROMQL_KEYWORDS and len(token) > 3:
                             metrics.add(token)
 
+    results = []
     # rule-packs/ directory
     if rule_packs_dir.is_dir():
-        for f in sorted(rule_packs_dir.glob("rule-pack-*.yaml")):
-            name = f.stem.replace("rule-pack-", "")
-            data = yaml.safe_load(f.read_text(encoding="utf-8"))
-            _extract_from_rules(data, name)
+        files = sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
+        results += [(f.stem.replace("rule-pack-", ""), rf) for f, rf in zip(
+            files, _lib_consumer_read.prometheus_rule_file_results(files))]
 
     # k8s/ ConfigMaps
     if k8s_dir.is_dir():
-        for f in sorted(k8s_dir.glob("configmap-rules-*.yaml")):
-            name = f.stem.replace("configmap-rules-", "")
-            data = yaml.safe_load(f.read_text(encoding="utf-8"))
-            if data and data.get("kind") == "ConfigMap":
-                for _key, inner_yaml in data.get("data", {}).items():
-                    inner = yaml.safe_load(inner_yaml)
-                    _extract_from_rules(inner, name)
+        files = sorted(k8s_dir.glob("configmap-rules-*.yaml"))
+        results += [(Path(rf.manifest).stem.replace("configmap-rules-", ""), rf)
+                    for rf in _lib_consumer_read.manifest_rule_file_results(files)
+                    if rf.kind == "ConfigMap"]
+
+    bad = [rf for _name, rf in results if rf.problem is not None]
+    if bad and refused is None:
+        raise _lib_consumer_read.RuleFilesRefused([rf for _n, rf in results])
+    for rf in bad:
+        refused.append(f"{rf.path}: {rf.problem}")
+    for name, rf in results:
+        if rf.problem is None:
+            _extract_from_rules(rf.documents[0], name)
 
     return packs
 
@@ -197,13 +210,21 @@ def rule_pack_alert_names() -> Set[str]:
     return names
 
 
+_READERS_INDEX: "Dict[tuple, dict]" = {}
+
+
 def alerts_reading_key(key: str):
     """讀 ``key`` 的告警，掃的是本 lint 的 RULE_PACKS_DIR（含經由 recording rule
-    間接讀，規則同 `_threshold_alerts.build_index`）。沒有 rule pack 時回 None。"""
-    packs = sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
+    間接讀，規則同 `_threshold_alerts.build_index`）。沒有 rule pack 時回 None。
+
+    索引對同一組 pack 只建一次：rule pack 經 da-read 讀（#3206），一次讀全部，
+    不是每個 key 一個子行程。"""
+    packs = tuple(sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")))
     if not packs:
         return None
-    return _threshold_alerts.build_index(packs).get(key, ())
+    if packs not in _READERS_INDEX:
+        _READERS_INDEX[packs] = _threshold_alerts.build_index(list(packs))
+    return _READERS_INDEX[packs].get(key, ())
 
 
 def check_dictionary_contract(dict_data, alert_names, readers_of) -> List[Dict]:
@@ -256,16 +277,30 @@ def main():
 
     dict_metrics = load_dictionary_metrics(METRIC_DICT)
     dict_rules = load_dictionary_golden_rules(METRIC_DICT)
-    rule_pack_metrics = extract_rule_pack_metrics(RULE_PACKS_DIR, K8S_RULES_DIR)
+    refused: List[str] = []
+    try:
+        rule_pack_metrics = extract_rule_pack_metrics(RULE_PACKS_DIR, K8S_RULES_DIR, refused)
+        issues = []
+        # #3206: a rule file Prometheus' rule loader refuses is an error that
+        # names it — its metrics are not counted around it.
+        for line in refused:
+            issues.append({
+                "severity": "error",
+                "check": "rule-file-refused",
+                "message": f"Prometheus' rule loader refuses {line}",
+            })
+        all_rp_metrics = set()
+        for metrics in rule_pack_metrics.values():
+            all_rp_metrics.update(metrics)
 
-    all_rp_metrics = set()
-    for metrics in rule_pack_metrics.values():
-        all_rp_metrics.update(metrics)
-
-    issues = check_dictionary_coverage(dict_metrics, dict_rules, rule_pack_metrics)
-    issues += check_dictionary_contract(
-        yaml.safe_load(METRIC_DICT.read_text(encoding="utf-8")) or {},
-        rule_pack_alert_names(), alerts_reading_key)
+        issues += check_dictionary_coverage(dict_metrics, dict_rules, rule_pack_metrics)
+        issues += check_dictionary_contract(
+            yaml.safe_load(METRIC_DICT.read_text(encoding="utf-8")) or {},
+            rule_pack_alert_names(), alerts_reading_key)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # no da-read / da-crdecode (or a pack refused while indexing readers)
+        print(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     errors = [i for i in issues if i["severity"] == "error"]
     warnings = [i for i in issues if i["severity"] == "warning"]

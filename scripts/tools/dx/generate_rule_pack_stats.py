@@ -26,11 +26,11 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 
-from _lib_io import safe_load as yaml_safe_load  # noqa: E402  (libyaml when available)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_atomic_write import atomic_write_text  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -230,45 +230,27 @@ def _replace_arch_block(content: str, body: str, rel: str) -> str:
     return _replace_block(content, body, rel, ARCH_SENTINEL_START, ARCH_SENTINEL_END)
 
 
-def count_rules_in_yaml(filepath: Path) -> tuple:
-    """Count recording and alert rules in a YAML file.
-
-    Returns (recording_count, alert_count).
-    """
-    data = yaml_safe_load(filepath.read_text(encoding="utf-8"))
+def _count(groups: list) -> tuple:
+    """(recording, alert) rules in *groups*, as Prometheus loads them."""
     rec = alert = 0
-    if data and "groups" in data:
-        for g in data["groups"]:
-            for r in g.get("rules", []):
-                if "alert" in r:
-                    alert += 1
-                elif "record" in r:
-                    rec += 1
-    return rec, alert
-
-
-def count_rules_in_configmap(filepath: Path) -> tuple:
-    """Count rules inside a Kubernetes ConfigMap YAML.
-
-    Returns (recording_count, alert_count).
-    """
-    data = yaml_safe_load(filepath.read_text(encoding="utf-8"))
-    rec = alert = 0
-    if data and data.get("kind") == "ConfigMap":
-        for _key, inner_yaml in data.get("data", {}).items():
-            inner = yaml_safe_load(inner_yaml)
-            if inner and "groups" in inner:
-                for g in inner["groups"]:
-                    for r in g.get("rules", []):
-                        if "alert" in r:
-                            alert += 1
-                        elif "record" in r:
-                            rec += 1
+    for g in groups:
+        for r in g.get("rules") or []:
+            if "alert" in r:
+                alert += 1
+            elif "record" in r:
+                rec += 1
     return rec, alert
 
 
 def gather_stats() -> dict:
     """Gather Rule Pack statistics from source YAML files.
+
+    The rule packs and the rules ConfigMaps are read the way their consumers
+    read them (#3206, ADR-036 §12): a pack by Prometheus' rule loader
+    (`da-read prometheus-rules`), a ConfigMap the way kubectl reads it and
+    each of its data values by the rule loader — one `da-read` run each. A
+    rule file the loader refuses raises `RuleFilesRefused` (a generator does
+    not count around it); a missing binary raises `ConsumerReadError`.
 
     Returns dict with pack_count, recording, alert, total, per_pack.
     """
@@ -280,22 +262,29 @@ def gather_stats() -> dict:
     _EXCLUDE = {"custom-alerts"}
 
     # rule-packs/ directory
-    for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
-        name = f.stem.replace("rule-pack-", "")
-        if name in _EXCLUDE:
-            continue
-        rec, alert = count_rules_in_yaml(f)
-        packs[name] = {"recording": rec, "alert": alert}
+    pack_files = [f for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
+                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
+        rec, alert = _count(rf.groups)
+        packs[f.stem.replace("rule-pack-", "")] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have additional alert rules)
-    for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
+    cm_files = [f for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml"))
+                if f.stem.replace("configmap-rules-", "") not in _EXCLUDE]
+    per_cm: dict = {str(f): [0, 0] for f in cm_files}
+    for rf in _lib_consumer_read.require_read(
+            _lib_consumer_read.manifest_rule_file_results(cm_files)):
+        if rf.kind == "ConfigMap":
+            r, a = _count(rf.groups)
+            per_cm[rf.manifest][0] += r
+            per_cm[rf.manifest][1] += a
+    for f in cm_files:
         name = f.stem.replace("configmap-rules-", "")
-        if name in _EXCLUDE:
-            continue
-        rec, alert = count_rules_in_configmap(f)
+        rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}
         else:
+            # Take max of both sources per pack
             packs[name]["recording"] = max(packs[name]["recording"], rec)
             packs[name]["alert"] = max(packs[name]["alert"], alert)
 
@@ -382,7 +371,11 @@ def main():
                         help="Output format: table (default) or summary (one-line badge)")
 
     args = parser.parse_args()
-    stats = gather_stats()
+    try:
+        stats = gather_stats()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     langs = ["zh", "en"] if args.lang == "all" else [args.lang]
 
     if args.json:

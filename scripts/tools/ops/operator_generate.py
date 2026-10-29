@@ -42,7 +42,8 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_exitcodes import arm_crash_envelope, die_caller_error  # noqa: E402
-from _lib_io import OutputWriteError, ensure_dir, load_yaml_file  # noqa: E402
+from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import TenantSetUnknown, tree_tenants  # noqa: E402  (#2906: parse-tree's tenant set)
@@ -623,29 +624,24 @@ def generate_crds(
     if components in ("all", "rules"):
         try:
             rule_pack_files = discover_rule_packs(rule_packs_dir)
-            for rule_pack_file in rule_pack_files:
-                try:
-                    rule_pack_data = load_yaml_file(str(rule_pack_file))
-                    if rule_pack_data and "groups" in rule_pack_data:
-                        rule_pack_name = rule_pack_file.stem.replace("rule-pack-", "")
-                        crd = build_prometheus_rule(
-                            rule_pack_name, rule_pack_data, namespace, selector_labels,
-                        )
-                        result["prometheus_rules"].append({
-                            "name": crd["metadata"]["name"],
-                            "file": rule_pack_file.name,
-                            "crd": crd,
-                        })
-                except Exception as exc:
-                    print(
-                        i18n_text(
-                            f"WARNING: 載入 {safe_label(rule_pack_file.name)} 失敗: "
-                            f"{safe_label(exc)}",
-                            f"WARNING: Failed to load {safe_label(rule_pack_file.name)}: "
-                            f"{safe_label(exc)}",
-                        ),
-                        file=sys.stderr,
+            # #3206 (ADR-036 §12): the packs are read the way Prometheus'
+            # rule loader reads them (`da-read prometheus-rules`, one run for
+            # all). A pack the loader refuses raises `RuleFilesRefused` and
+            # the generator stops (rc 2, naming it) — it used to be a WARNING
+            # and a CRD set with the pack missing.
+            rule_files = _lib_consumer_read.prometheus_rule_files(rule_pack_files)
+            for rule_pack_file, rule_file in zip(rule_pack_files, rule_files):
+                rule_pack_data = rule_file.documents[0]
+                if "groups" in rule_pack_data:
+                    rule_pack_name = rule_pack_file.stem.replace("rule-pack-", "")
+                    crd = build_prometheus_rule(
+                        rule_pack_name, rule_pack_data, namespace, selector_labels,
                     )
+                    result["prometheus_rules"].append({
+                        "name": crd["metadata"]["name"],
+                        "file": rule_pack_file.name,
+                        "crd": crd,
+                    })
         except FileNotFoundError as exc:
             print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
 
@@ -1103,6 +1099,10 @@ def main():
         # An unreadable tenant file or a duplicate id: the set cannot be
         # answered, named — the reason migrate_to_operator gives too.
         die_caller_error(f"ERROR: {safe_label(exc)}", reason="tenant_set_unknown")
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: a rule pack Prometheus' rule loader refuses, or no da-read.
+        die_caller_error(f"ERROR: rule packs: {safe_label(_lib_consumer_read.error_text(exc))}",
+                         reason="rule_packs_unreadable")
     except Exception as exc:  # noqa: BLE001 — the tool's own "no result"
         # #3115: through die_caller_error, so --json gets its one envelope.
         die_caller_error(f"ERROR: {safe_label(exc)}", reason="generate_failed")

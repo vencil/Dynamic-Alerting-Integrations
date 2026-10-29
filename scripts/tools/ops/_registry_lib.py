@@ -74,6 +74,7 @@ except ImportError:  # pragma: no cover - environments without jsonschema
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: spliced surfaces read back by their consumer)
 
 # ⛔ Found, not counted (#1501). This used to be `_THIS_DIR` + three `".."`,
 # which is the repo root in a checkout and `/` in the da-tools image (every
@@ -1882,6 +1883,9 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": os.path.join(root, *pack_meta["rule_pack_file"].split("/")),
             "indent": "",
             "body": render_pack_header_lines(doc, pack_name),
+            # a Prometheus rule file: read back by Prometheus' rule loader
+            # (`plan_surfaces`), not as a Kubernetes manifest
+            "rule_file": True,
         })
     for spec in specs:
         spec["block"] = render_block(spec["id"], spec["body"], spec["indent"])
@@ -2084,14 +2088,19 @@ def plan_surfaces(doc: dict) -> "list[tuple[str, str, bool]]":
     the try-local seed) are judged by ``da-guard write --dry-run`` (ADR-036
     §2: only Go writes conf.d): one batch per conf.d root, each spliced file
     a ``replace`` of its whole text (`_confd_batches`), the very batches
-    `write_planned` sends; any other YAML file is checked to still parse.
-    Raises ConfdWriteRefused, ValueError, and `_lib_parse_tree.ParseTreeError`
+    `write_planned` sends; any other YAML file is checked to still be read by
+    its consumer (#3206, ADR-036 §12): a rule pack by Prometheus' rule loader
+    (`da-read prometheus-rules`, all of them in one run), a Helm values file
+    the way Helm reads it (da-crdecode). Raises ConfdWriteRefused, ValueError
+    (a spliced file its consumer refuses), `_lib_parse_tree.ParseTreeError`
     when a conf.d file changes and there is no usable da-guard (a run that
-    changes no conf.d file needs none)."""
+    changes no conf.d file needs none), and `_lib_consumer_read.ConsumerReadError`
+    when da-read / da-crdecode cannot be had."""
     repo_root = os.path.realpath(
         _repo_path_or_raise(_REPO_ROOT, "the generated surfaces"))
     # path -> [original text, spliced text, [its conf.d specs]]
     planned: dict[str, list] = {}
+    rule_files: set = set()
     for spec in surface_specs(doc):
         # Containment: surface paths derive from committed registry fields
         # (e.g. rule_pack_file) that --regen consumes WITHOUT schema
@@ -2109,17 +2118,29 @@ def plan_surfaces(doc: dict) -> "list[tuple[str, str, bool]]":
         entry = planned[spec["path"]]
         if spec.get("confd"):
             entry[2].append(spec)
+        if spec.get("rule_file"):
+            rule_files.add(spec["path"])
         entry[1] = splice_surface(entry[1], spec)
     changed = [(p, new, bool(specs)) for p, (old, new, specs) in planned.items()
                if new != old]
+    # A spliced block that breaks the host document must fail loud BEFORE the
+    # write: the freshness gate string-compares and would not catch it (burned
+    # once — a two-element heading emitted a bare comment continuation line
+    # into 13 packs). These files (helm values, rule packs) are not conf.d;
+    # each is read back the way its consumer reads it.
+    packs = [(path, new) for path, new, confd in changed
+             if not confd and path in rule_files]
+    for rf in _lib_consumer_read.prometheus_rule_text_results(packs):
+        if rf.problem is not None:
+            raise ValueError(f"spliced rule pack {rf.path}: Prometheus' rule loader "
+                             f"refuses it: {rf.problem}")
     for path, new, confd in changed:
-        if not confd and path.endswith((".yaml", ".yml")):
-            # A spliced block that breaks the host document must fail loud
-            # BEFORE the write: the freshness gate string-compares and would
-            # not catch invalid YAML (burned once — a two-element heading
-            # emitted a bare comment continuation line into 13 packs). These
-            # files (helm values, rule packs) are not conf.d.
-            yaml.safe_load(new)
+        if not confd and path not in rule_files and path.endswith((".yaml", ".yml")):
+            try:
+                _lib_consumer_read.kubernetes_text_documents(new)
+            except _lib_consumer_read.InputRefused as exc:
+                raise ValueError(f"spliced {path}: Helm's reading refuses it: "
+                                 f"{_lib_consumer_read.error_text(exc)}") from None
     confd_files = [(p, new) for p, new, confd in changed if confd]
     if confd_files:
         _judge_confd(confd_files)

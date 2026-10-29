@@ -19,8 +19,6 @@ Functions:
 """
 from __future__ import annotations
 
-import base64
-import binascii
 import difflib
 import fnmatch
 import functools
@@ -51,6 +49,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_io import classify_path  # noqa: E402  (#3276)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
@@ -494,30 +493,6 @@ _FIRE_TIME_LABEL_VALUE = "any-tenant"
 _LABEL_TEMPLATE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 
 
-def _configmap_rule_bodies(doc: dict, skipped: "list[str] | None" = None):
-    """Every rule-file body a kubelet would project from *doc*, as text.
-
-    ``data`` values are already text. ``binaryData`` values are base64 and are
-    decoded here: a projected ConfigMap volume with explicit ``items`` falls back
-    to ``BinaryData`` when the key is absent from ``Data`` (kubelet's
-    ``MakePayload``), so a rules file parked there is served to Prometheus
-    exactly like a ``data`` one. Undecodable bytes are skipped rather than
-    raised on — one unreadable key must not blank the whole probe set, which is
-    the fail-open direction.
-    """
-    for section, decode in (("data", False), ("binaryData", True)):
-        for value in (doc.get(section) or {}).values():
-            if not decode:
-                yield str(value)
-                continue
-            try:
-                yield base64.b64decode(str(value), validate=True).decode("utf-8")
-            except (ValueError, UnicodeDecodeError, binascii.Error):
-                if skipped is not None:
-                    skipped.append("an undecodable binaryData key")
-                continue
-
-
 def platform_alert_identities(
         configmap_path: "Path | str | None" = None) -> tuple[dict, ...]:
     """Every platform self-monitoring alert's fire-time label identity.
@@ -561,9 +536,18 @@ def platform_alert_identities(
             _PLATFORM_DEGRADED_REASON = reason
             return identities
     try:
-        docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
-                if d and d.get("kind") == "ConfigMap"]
-        if not docs:
+        # #3206 (ADR-036 §12): the manifest is read the way kubectl reads it
+        # (da-crdecode) and every rule file its ConfigMaps hold — every
+        # `data` and `binaryData` key, every ConfigMap document — the way
+        # Prometheus' rule loader reads it (`da-read prometheus-rules`).
+        # A missing binary is not "unreachable": `ConsumerReadError` that is
+        # not a refusal propagates, the tool fails rather than degrade.
+        try:
+            rule_files = [rf for rf in _lib_consumer_read.manifest_rule_file_results([path])
+                          if rf.kind == "ConfigMap"]
+        except _lib_consumer_read.InputRefused as exc:
+            raise ValueError(_lib_consumer_read.error_text(exc)) from exc
+        if not rule_files:
             raise KeyError("no ConfigMap document")
         out: list[dict] = []
         # #1533 §3: every element skipped because its SHAPE is wrong. Such a
@@ -572,71 +556,66 @@ def platform_alert_identities(
         # the set partial. Well-formed rules that are simply not platform
         # alerts (recording rules, Watchdog) are not counted.
         skipped: list[str] = []
-        for doc in docs:
-            for body in _configmap_rule_bodies(doc, skipped):
-                # Per body: one unparseable key must not throw away what the
-                # other keys yielded (P1 keeps what was read).
-                try:
-                    rules_doc = yaml.safe_load(body) or {}
-                except yaml.YAMLError:
-                    skipped.append("a rules file that is not valid YAML")
+        for rule_file in rule_files:
+            # Per key: one refused key must not throw away what the other keys
+            # yielded (P1 keeps what was read).
+            if rule_file.problem is not None:
+                skipped.append(f"a rules file Prometheus' rule loader refuses "
+                               f"({rule_file.key}: {rule_file.problem.splitlines()[0]})")
+                continue
+            rules_doc = rule_file.documents[0]
+            groups = rules_doc.get("groups") or []
+            if not isinstance(groups, list):
+                skipped.append("`groups` that is not a list")
+                continue
+            for group in groups:
+                # ⛔ Per-element isolation, as per key above. Without it a
+                # single non-mapping element raises into the handler below and `identities` collapses to the
+                # six-entry fallback constant — the fail-OPEN direction this
+                # function's docstring warns about, reachable from one bad
+                # element anywhere in the tree. Measured: 41 identities -> 6.
+                if not isinstance(group, dict):
+                    skipped.append("a group that is not a mapping")
                     continue
-                if not isinstance(rules_doc, dict):
-                    skipped.append("a rules file that is not a mapping")
+                rules = group.get("rules") or []
+                if not isinstance(rules, list):
+                    skipped.append("`rules` that is not a list")
                     continue
-                groups = rules_doc.get("groups") or []
-                if not isinstance(groups, list):
-                    skipped.append("`groups` that is not a list")
-                    continue
-                for group in groups:
-                    # ⛔ Per-element isolation, matching `_configmap_rule_bodies`
-                    # above. Without it a single non-mapping element raises into
-                    # the handler below and `identities` collapses to the
-                    # six-entry fallback constant — the fail-OPEN direction this
-                    # function's docstring warns about, reachable from one bad
-                    # element anywhere in the tree. Measured: 41 identities -> 6.
-                    if not isinstance(group, dict):
-                        skipped.append("a group that is not a mapping")
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        skipped.append("a rule that is not a mapping")
                         continue
-                    rules = group.get("rules") or []
-                    if not isinstance(rules, list):
-                        skipped.append("`rules` that is not a list")
+                    if "alert" not in rule:
+                        # A recording rule is a legitimate skip; a rule
+                        # with neither key is malformed (Prometheus needs
+                        # one) and may be an alert whose key was mistyped.
+                        if "record" not in rule:
+                            skipped.append("a rule with neither `alert` "
+                                           "nor `record`")
                         continue
-                    for rule in rules:
-                        if not isinstance(rule, dict):
-                            skipped.append("a rule that is not a mapping")
-                            continue
-                        if "alert" not in rule:
-                            # A recording rule is a legitimate skip; a rule
-                            # with neither key is malformed (Prometheus needs
-                            # one) and may be an alert whose key was mistyped.
-                            if "record" not in rule:
-                                skipped.append("a rule with neither `alert` "
-                                               "nor `record`")
-                            continue
-                        labels = dict(rule.get("labels") or {})
-                        if labels.get("alert_source") != "platform":
-                            # Watchdog rides its own index-0 lane and deliberately
-                            # carries no discriminator;
-                            # assert_watchdog_inhibit_immunity covers it at the
-                            # same call sites. Keying on
-                            # the marker (not on the alertname) means a future
-                            # unmarked alert is excluded for the same stated reason
-                            # rather than by accident.
-                            continue
-                        # #2817: a templated value (`tenant: "{{ $labels.tenant }}"`)
-                        # is only known at fire time. Probing with the template
-                        # string itself made every regex target on that label
-                        # miss, so the full set flagged LESS than the fallback.
-                        # Probe it like an expr-derived tenant instead.
-                        for key, value in labels.items():
-                            if isinstance(value, str):
-                                labels[key] = _LABEL_TEMPLATE_RE.sub(
-                                    _FIRE_TIME_LABEL_VALUE, value)
-                        labels["alertname"] = rule["alert"]
-                        if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
-                            labels.setdefault("tenant", _FIRE_TIME_LABEL_VALUE)
-                        out.append(labels)
+                    labels = dict(rule.get("labels") or {})
+                    if labels.get("alert_source") != "platform":
+                        # Watchdog rides its own index-0 lane and deliberately
+                        # carries no discriminator;
+                        # assert_watchdog_inhibit_immunity covers it at the
+                        # same call sites. Keying on
+                        # the marker (not on the alertname) means a future
+                        # unmarked alert is excluded for the same stated reason
+                        # rather than by accident.
+                        continue
+                    # #2817: a templated value (`tenant: "{{ $labels.tenant }}"`)
+                    # is only known at fire time. Probing with the template
+                    # string itself made every regex target on that label
+                    # miss, so the full set flagged LESS than the fallback.
+                    # Probe it like an expr-derived tenant instead.
+                    for key, value in labels.items():
+                        if isinstance(value, str):
+                            labels[key] = _LABEL_TEMPLATE_RE.sub(
+                                _FIRE_TIME_LABEL_VALUE, value)
+                    labels["alertname"] = rule["alert"]
+                    if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
+                        labels.setdefault("tenant", _FIRE_TIME_LABEL_VALUE)
+                    out.append(labels)
         # The fallback names are a known subset of the shipped pack, so one
         # missing from a non-empty read is a well-formed loss the skip count
         # cannot see (e.g. its `alert_source` marker was removed).
@@ -670,7 +649,7 @@ def platform_alert_identities(
                            + ", ".join(sorted(set(skipped))) + ")")
             _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
-    except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
+    except (OSError, KeyError, StopIteration, AttributeError,
             TypeError, ValueError) as exc:
         reason = f"{path} unreadable: {type(exc).__name__}"
         _warn_probe_set_degraded(reason)

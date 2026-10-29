@@ -127,6 +127,65 @@ class TestLocatingThePacks:
         assert err.count("affected alerts unknown") == 1
 
 
+class TestUnreadablePacksAreUnknownInBothTools:
+    """#3206：pack 被 Prometheus 的 rule loader 拒收、或沒有 da-read，也是「不知道」，
+    而且兩支工具的輸出都看得到——不可當成「沒有告警讀這個 key」（那是 fail-OPEN）。"""
+
+    @pytest.fixture
+    def refused_pack(self, fresh_index, monkeypatch, tmp_path, da_read_env):
+        # `interval: 60` (a bare number) is a duration the loader refuses.
+        pack = tmp_path / "rule-pack-x.yaml"
+        pack.write_text(textwrap.dedent("""\
+            groups:
+              - name: g
+                interval: 60
+                rules:
+                  - alert: XHigh
+                    expr: tenant:x:max > on(tenant) tenant:alert_threshold:mysql_connections
+            """), encoding="utf-8")
+        monkeypatch.setattr(ta, "find_rule_pack_paths", lambda here=None: [pack])
+        return pack
+
+    @pytest.fixture
+    def no_da_read(self, fresh_index, monkeypatch, tmp_path):
+        monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
+
+    def test_a_refused_pack_is_unknown_and_named(self, refused_pack, capsys):
+        assert ta.alerts_for_key("mysql_connections") is None
+        err = capsys.readouterr().err
+        assert err.count("affected alerts unknown") == 1
+        assert str(refused_pack) in err
+
+    def test_no_da_read_is_unknown_and_named(self, no_da_read, capsys):
+        assert ta.alerts_for_key("mysql_connections") is None
+        err = capsys.readouterr().err
+        assert err.count("affected alerts unknown") == 1
+        assert "no-such-da-read" in err
+
+    @pytest.mark.parametrize("cause", ["refused_pack", "no_da_read"])
+    def test_config_diff_table_says_unknown(self, cause, request):
+        request.getfixturevalue(cause)
+        import config_diff as cd
+        lines = []
+        cd._render_thresholds({"db-a": [{"key": "mysql_connections", "old": 50,
+                                         "new": 70, "change": "modified"}]}, lines)
+        row = next(ln for ln in lines if "mysql_connections" in ln)
+        assert row.split("|")[5].strip() == "unknown", row
+
+    @pytest.mark.parametrize("cause", ["refused_pack", "no_da_read"])
+    def test_patch_config_diff_says_unknown(self, cause, request, capsys):
+        request.getfixturevalue(cause)
+        import patch_config as pc
+        assert pc.find_affected_alerts("mysql_connections") is None
+        pc.print_diff({"tenant": "t", "metric_key": "mysql_connections",
+                       "configmap_mode": "multi-file", "changed": True,
+                       "after": {"value": "70", "state": "custom: 70"},
+                       "affected_alerts": None})
+        out = capsys.readouterr().out
+        assert "Affected alerts: unknown" in out
+        assert "Affected alerts: none" not in out
+
+
 class TestImageShipsEveryPackThatReadsAThreshold:
     """image 裡 _threshold_alerts 讀的是 build.sh 搬進去的 pack。"""
 

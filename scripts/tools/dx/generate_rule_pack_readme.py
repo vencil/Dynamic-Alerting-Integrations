@@ -17,13 +17,13 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from validate_docs_versions import count_rule_packs  # noqa: E402
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
@@ -33,33 +33,16 @@ from validate_docs_versions import count_rule_packs  # noqa: E402
 DEFAULT_RULE_PACKS_DIR = Path(__file__).resolve().parents[3] / "rule-packs"
 
 
-def extract_rule_counts(yaml_file: Path) -> Tuple[int, int]:
-    """
-    Extract recording rules and alert rules from a YAML rule pack file.
-
-    Returns:
-        (recording_rules_count, alert_rules_count)
-    """
-    try:
-        with open(yaml_file, encoding="utf-8") as f:
-            content = yaml.safe_load(f)
-    except (yaml.YAMLError, IOError) as e:
-        print(f"Warning: Failed to parse {yaml_file}: {e}", file=sys.stderr)
-        return 0, 0
-
-    if not content or "groups" not in content:
-        return 0, 0
-
+def _rule_counts(groups: list) -> Tuple[int, int]:
+    """(recording_rules_count, alert_rules_count) in *groups*."""
     record_count = 0
     alert_count = 0
-
-    for group in content.get("groups", []):
-        for rule in group.get("rules", []):
+    for group in groups:
+        for rule in group.get("rules") or []:
             if "record" in rule:
                 record_count += 1
             elif "alert" in rule:
                 alert_count += 1
-
     return record_count, alert_count
 
 
@@ -84,7 +67,12 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
     total_records = 0
     total_alerts = 0
 
-    for yaml_file in yaml_files:
+    # #3206 (ADR-036 §12): the packs are read the way Prometheus' rule loader
+    # reads them (`da-read prometheus-rules`, one run for all). A pack the
+    # loader refuses raises `RuleFilesRefused` — it used to be a warning and
+    # a row of zeros.
+    rule_files = _lib_consumer_read.prometheus_rule_files(yaml_files)
+    for yaml_file, rule_file in zip(yaml_files, rule_files):
         # Extract name from filename: rule-pack-mariadb.yaml -> MariaDB
         pack_name = yaml_file.stem.replace("rule-pack-", "")
         display_name = pack_name.replace("-", " ").title()
@@ -92,7 +80,7 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
         # Special cases for acronyms
         display_name = display_name.replace("Jvm", "JVM").replace("Db2", "DB2")
 
-        records, alerts = extract_rule_counts(yaml_file)
+        records, alerts = _rule_counts(rule_file.groups)
         total = records + alerts
 
         total_records += records
@@ -301,6 +289,9 @@ def main():
         pack_count = count_preloaded_packs(args.rule_packs_dir)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"Error: rule files: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     generated_content = generate_readme_content(rows, total_records, total_alerts, pack_count)

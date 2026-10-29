@@ -213,11 +213,22 @@ def _committed_rules(out_path: Path) -> dict:
     has no content to protect, and regenerating it is the repair. Raising here would
     turn "your committed pack is corrupt" into "the compiler no longer runs", i.e. it
     would take away the only way out.
+
+    ⛔ …but only a pack that cannot be READ is that. #3206: the pack is read the
+    way Prometheus' rule loader reads it (da-read); a pack the loader refuses
+    is the corrupt pack above. No da-read to ask is not — answering {} then
+    turned `--check` into "drifted" and disarmed the erase guard, both without
+    a word — so that raises (`ConsumerReadError`, naming the binary).
     """
     if not out_path.exists():
         return {}
+    cr = sync._consumer_read()
     try:
         return sync._extract(sync._groups_from_rulepack(out_path))
+    except cr.InputRefused:
+        return {}
+    except cr.ConsumerReadError:
+        raise
     except Exception:
         return {}
 
@@ -590,7 +601,12 @@ def main() -> int:
               "prometheus` after a representative load test.", file=sys.stderr)
 
     produced = sync._extract(groups)
-    committed = _committed_rules(out_path)
+    cr = sync._consumer_read()
+    try:
+        committed = _committed_rules(out_path)
+    except cr.ConsumerReadError as exc:
+        print(f"ERROR: {cr.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     if args.check:
         findings = sync._diff_maps(produced, committed)

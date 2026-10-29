@@ -76,8 +76,6 @@ _LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
                 "load_yaml_file_exporter_keys"}
 
 LENIENT_BY_DESIGN: dict[str, str] = {
-    "lint/_rule_tree.py":
-        "reads rule-pack trees, not a tenant conf.d",
     "lint/check_md_yaml_drift.py":
         "the fence and CRD passes read YAML fences / k8s objects quoted in docs, not a "
         "tenant conf.d; its conf.d examples are read by da-guard parse-tree (ADR-036 "
@@ -85,8 +83,6 @@ LENIENT_BY_DESIGN: dict[str, str] = {
     "lint/check_threshold_unit_sanity.py":
         "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
         "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",
-    "ops/migrate_to_operator.py":
-        "parse_configmap_rules reads rule files for CRD generation, not a tenant conf.d",
 }
 
 

@@ -37,7 +37,8 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_io import OutputWriteError, ensure_dir, load_yaml_file, write_text_secure  # noqa: E402
+from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
@@ -206,10 +207,13 @@ def parse_configmap_rules(source_dir: Path,
         listing: its `list_source_dir` (taken here when None)
 
     Returns:
-        List of dicts: {name, file, rule_groups}
+        List of dicts: {name, file, rule_groups, cm_data_key}
 
     Raises:
         FileNotFoundError: If directory does not exist
+        _lib_consumer_read.ConsumerReadError: a rule file Prometheus' rule
+            loader refuses (RuleFilesRefused, naming each), or no
+            da-read / da-crdecode
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(
@@ -219,54 +223,64 @@ def parse_configmap_rules(source_dir: Path,
             )
         )
 
-    results = []
+    # #3206 (ADR-036 §12): each file is read the way kubectl reads it
+    # (da-crdecode); a rule file — a ConfigMap data value whose own Kubernetes
+    # reading declares `groups:`, or a plain file that does — is read the way
+    # Prometheus' rule loader reads it (`da-read prometheus-rules`, all of
+    # them in one run). A file kubectl's reading refuses is a WARN, as an
+    # unparsable file always was; a rule file the rule loader refuses raises
+    # `RuleFilesRefused` — no CRD is generated around it.
     # Top level only; `warn_nested` names what that leaves out.
     if listing is None:
         listing = list_source_dir(source_dir)
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
+    found: "list[tuple[dict, str | None, str]]" = []   # (entry, cm text | None, path)
     for yaml_file in [source_dir / e.path for e in listing.config_files() if e.depth == 0]:
         try:
-            data = load_yaml_file(str(yaml_file))
-            if not data:
+            docs = _lib_consumer_read.kubernetes_documents(str(yaml_file))
+        except _lib_consumer_read.InputRefused as exc:
+            print(
+                i18n_text(
+                    f"WARNING: 解析 {safe_label(yaml_file.name)} 失敗: "
+                    f"{safe_label('; '.join(exc.stderr_lines) or exc)}",
+                    f"WARNING: Failed to parse {safe_label(yaml_file.name)}: "
+                    f"{safe_label('; '.join(exc.stderr_lines) or exc)}",
+                ),
+                file=sys.stderr,
+            )
+            continue
+        for data in docs:
+            if not isinstance(data, dict):
                 continue
-
             # Check if this is a ConfigMap with rule data
             if data.get("kind") == "ConfigMap":
                 data_section = data.get("data", {})
                 if isinstance(data_section, dict):
                     for key, value in data_section.items():
-                        if isinstance(value, str):
-                            try:
-                                rule_data = yaml.safe_load(value)
-                                if rule_data and isinstance(rule_data, dict):
-                                    groups = rule_data.get("groups", [])
-                                    if groups:
-                                        results.append({
-                                            "name": data.get("metadata", {}).get("name", yaml_file.stem),
-                                            "file": yaml_file.name,
-                                            "rule_groups": groups,
-                                            "cm_data_key": key,
-                                        })
-                            except yaml.YAMLError:
-                                pass
+                        if isinstance(value, str) and \
+                                _lib_consumer_read.configmap_value_is_rule_file(value):
+                            found.append(({
+                                "name": (data.get("metadata") or {}).get("name", yaml_file.stem),
+                                "file": yaml_file.name,
+                                "cm_data_key": key,
+                            }, value, f"{yaml_file}#{key}"))
             # Also handle direct rule YAML files (not wrapped in ConfigMap)
-            elif isinstance(data, dict) and "groups" in data:
-                results.append({
+            elif data.get("groups"):
+                found.append(({
                     "name": yaml_file.stem,
                     "file": yaml_file.name,
-                    "rule_groups": data.get("groups", []),
                     "cm_data_key": None,
-                })
-        except Exception as exc:
-            print(
-                i18n_text(
-                    f"WARNING: 解析 {safe_label(yaml_file.name)} 失敗: {safe_label(exc)}",
-                    f"WARNING: Failed to parse {safe_label(yaml_file.name)}: "
-                    f"{safe_label(exc)}",
-                ),
-                file=sys.stderr,
-            )
-
+                }, None, str(yaml_file)))
+                break   # the file is the rule file, read once
+    plain = [path for _e, text, path in found if text is None]
+    texts = [(path, text) for _e, text, path in found if text is not None]
+    read = {r.path: r for r in _lib_consumer_read.require_read(
+        _lib_consumer_read.prometheus_rule_file_results(plain)
+        + _lib_consumer_read.prometheus_rule_text_results(texts))}
+    results = []
+    for entry, _text, path in found:
+        entry["rule_groups"] = read[path].groups
+        results.append(entry)
     return results
 
 
@@ -439,6 +453,11 @@ def analyze_migration(source_dir: Path, config_dir: Path,
         analysis["issues"].append(i18n_text(
             f"來源目錄錯誤: {exc}",
             f"Source directory error: {exc}",
+        ))
+    except _lib_consumer_read.ConsumerReadError as exc:
+        analysis["issues"].append(i18n_text(
+            f"規則檔讀取失敗: {_lib_consumer_read.error_text(exc)}",
+            f"Rule files unreadable: {_lib_consumer_read.error_text(exc)}",
         ))
 
     try:
@@ -753,6 +772,8 @@ def generate_migration(
                 )
     except FileNotFoundError as exc:
         result["errors"].append(str(exc))
+    except _lib_consumer_read.ConsumerReadError as exc:
+        result["errors"].append(_lib_consumer_read.error_text(exc))
 
     # Generate AlertmanagerConfig CRDs for tenants
     try:

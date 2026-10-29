@@ -159,7 +159,7 @@ CALLERS: dict[str, Caller] = {
         "generate_doc_map", "scripts/tools/dx/generate_doc_map.py:507", None,
         _setup_doc_map),
     "byo_rulepack_table": Caller(
-        "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:258",
+        "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:279",
         None, _setup_byo),
     "adr_index": Caller(
         "generate_adr_index", "scripts/dx/generate_adr_index.py:260", "--target",

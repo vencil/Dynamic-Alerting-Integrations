@@ -755,7 +755,7 @@ def test_suppress_write_outputs_with_suppression():
             content = f.read()
 
         # v1.2.0: alert YAML 應包含 metric_group label
-        assert "metric_group: connections" in content
+        assert 'metric_group: "connections"' in content   # #3206: always quoted
         # unless 數量: warning(1 maintenance) + critical(1 maintenance) = 2
         assert content.count("unless on(tenant)") == 2
 

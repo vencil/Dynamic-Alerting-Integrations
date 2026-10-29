@@ -85,49 +85,28 @@ def test_parse_declared_alert_and_record(tmp_path):
     assert len(declared) == 2
 
 
-def test_parse_declared_skips_rule_without_alert_or_record(tmp_path):
-    p = _rule_pack(tmp_path, "weird", """
-        groups:
-          - name: g
-            rules:
-              - expr: vector(1)        # neither alert nor record
-              - alert: Real
-                expr: up == 0
-    """)
-    declared = ra.parse_declared_rules([p])
-    assert list(declared) == [("g", "Real")]
-
-
-def test_parse_declared_malformed_raises_valueerror(tmp_path):
-    p = _write(tmp_path / "rule-pack-bad.yaml", "groups: [unterminated\n")
-    with pytest.raises(ValueError):
+# #3206: the packs are read the way Prometheus' rule loader reads them — the
+# loader this audit compares the runtime against. A pack it refuses is not
+# "skipped" any more (Prometheus does not load ANY rule of it): ValueError,
+# naming the pack and the loader's reason, the caller-error path.
+@pytest.mark.parametrize("name, text, reason", [
+    ("weird", "groups:\n- name: g\n  rules:\n  - expr: vector(1)\n"
+              "  - alert: Real\n    expr: up == 0\n",
+     "one of 'record' or 'alert' must be set"),
+    ("list", "- just\n- a\n- list\n", "cannot unmarshal !!seq"),
+    ("strgroups", 'groups: "not-a-list"\n', "cannot unmarshal !!str"),
+    ("mixed", "groups:\n- not-a-dict-group\n- name: g\n  rules:\n"
+              "  - not-a-dict-rule\n  - alert: Real\n    expr: up == 0\n",
+     "cannot unmarshal !!str"),
+    ("bad", "groups: [unterminated\n", "did not find expected"),
+])
+def test_parse_declared_a_pack_prometheus_refuses_raises_valueerror(tmp_path, name, text,
+                                                                    reason):
+    p = _write(tmp_path / f"rule-pack-{name}.yaml", text)
+    with pytest.raises(ValueError) as exc_info:
         ra.parse_declared_rules([p])
-
-
-def test_parse_declared_non_dict_doc_skipped(tmp_path):
-    p = _write(tmp_path / "rule-pack-list.yaml", "- just\n- a\n- list\n")
-    assert ra.parse_declared_rules([p]) == {}
-
-
-def test_parse_declared_non_list_groups_raises_valueerror(tmp_path):
-    # `groups: "string"` would otherwise iterate chars → cryptic AttributeError.
-    # Fail loud with a clear message instead (CodeRabbit PR #780).
-    p = _write(tmp_path / "rule-pack-strgroups.yaml", 'groups: "not-a-list"\n')
-    with pytest.raises(ValueError, match="must be a list"):
-        ra.parse_declared_rules([p])
-
-
-def test_parse_declared_non_dict_group_and_rule_skipped(tmp_path):
-    p = _write(tmp_path / "rule-pack-mixed.yaml", """
-        groups:
-          - "not-a-dict-group"
-          - name: g
-            rules:
-              - "not-a-dict-rule"
-              - alert: Real
-                expr: up == 0
-    """)
-    assert list(ra.parse_declared_rules([p])) == [("g", "Real")]
+    assert f"rule-pack-{name}.yaml" in str(exc_info.value)
+    assert reason in str(exc_info.value)
 
 
 # ─── parse_runtime_rules ──────────────────────────────────────────────

@@ -260,12 +260,13 @@ def test_lint_file_configmap_wrapper():
             "name": "wrapped_group",
             "rules": [{
                 "alert": "WrappedAlert",
-                "expr": 'holt_winters(my_metric[1h], 0.3, 0.7) > 100',
+                "expr": 'predict_linear(my_metric[1h], 3600) > 100',
                 "labels": {"severity": "critical"},
             }]
         }]
     })
-    content = {"data": {"rules.yaml": inner_yaml}}
+    content = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "r"},
+               "data": {"rules.yaml": inner_yaml}}
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.yaml', delete=False, encoding='utf-8'
     ) as f:
@@ -618,27 +619,30 @@ def test_override_scoped_to_path_only(compiled_forecast_pack, tmp_path):
 
 
 def test_override_keeps_other_checks_live(tmp_path):
-    """豁免檔內其餘 deny 照跑：holt_winters / 超過 forecast lookback 上限的 range 仍是 ERROR。"""
+    """豁免檔內其餘 deny 照跑：超過 forecast lookback 上限的 range 仍是 ERROR；
+    holt_winters 在 Prometheus 3 已不是函式，整檔被 rule loader 拒收，同樣是點名的
+    ERROR（#3206：檔案以 rulefmt 讀）。"""
     over = f"{parse_duration_seconds(FORECAST_MAX_LOOKBACK) + 1}s"   # 剛好超過豁免上限
-    text = (
-        "# GENERATED test fixture — mimics compile_custom_alerts header\n"
-        "groups:\n"
-        "- name: g\n"
-        "  rules:\n"
-        "  - record: custom:metric:x\n"
-        "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n"
-        "  - record: custom:metric:y\n"
-        f"    expr: avg_over_time(my_metric[{over}])\n"
-    )
+    header = ("# GENERATED test fixture — mimics compile_custom_alerts header\n"
+              "groups:\n"
+              "- name: g\n"
+              "  rules:\n")
     fpath = tmp_path / _GENERATED_PACK_RELPATH
     fpath.parent.mkdir(parents=True)
-    fpath.write_text(text, encoding="utf-8")
-    results, _ = lint_custom_rules.lint_file(
-        str(fpath), lint_custom_rules.DEFAULT_POLICY
-    )
-    messages = [r.message for r in results if r.severity == "ERROR"]
-    assert any("holt_winters" in m for m in messages)
-    assert any(f"range vector [{over}]" in m for m in messages)
+
+    def errors(rules):
+        fpath.write_text(header + rules, encoding="utf-8")
+        results, _ = lint_custom_rules.lint_file(
+            str(fpath), lint_custom_rules.DEFAULT_POLICY
+        )
+        return [r.message for r in results if r.severity == "ERROR"]
+
+    assert any(f"range vector [{over}]" in m for m in errors(
+        "  - record: custom:metric:y\n"
+        f"    expr: avg_over_time(my_metric[{over}])\n"))
+    refused = errors("  - record: custom:metric:x\n"
+                     "    expr: holt_winters(my_metric[1h], 0.3, 0.7)\n")
+    assert any("rule loader refuses" in m and "holt_winters" in m for m in refused), refused
 
 
 def test_committed_pack_and_policy_in_sync():
@@ -721,3 +725,110 @@ def test_lint_result_no_rule_name():
     """測試 LintResult 無規則名稱。"""
     r = lint_custom_rules.LintResult("test.yaml", None, None, "ERROR", "msg")
     assert str(r) == "ERROR: test.yaml - msg"
+
+
+# ── Which files are rule files (#3206) ─────────────────────────────
+# A plain file and a ConfigMap data value pass the same test before the rule
+# loader sees them: a document of the Kubernetes reading with a `groups` key
+# (`documents_declare_rule_groups`). A file without one — a recipe, the
+# registry beside the packs — is no rule file and is not read (as on main);
+# a file with one that the loader refuses is an ERROR naming it.
+
+_RECIPE = "recipe: threshold\nparams:\n  metric: {type: string}\n"
+_REGISTRY = "entries:\n- metric: mysql_up\n  default: 1\n"
+_OK_RULE = (
+    "groups:\n- name: g\n  rules:\n  - alert: Ok\n    expr: up{tenant=\"t\"} == 0\n"
+    "    labels: {tenant: t, severity: warning}\n"
+)
+
+
+def _run_main(argv, monkeypatch):
+    """main() 的 exit code：失敗時 sys.exit，乾淨時正常 return（= 0）。"""
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", *argv])
+    try:
+        lint_custom_rules.main()
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def test_yaml_without_groups_is_no_rule_file(tmp_path, monkeypatch, capsys):
+    """(a) 目錄內的非規則 YAML（無 `groups`）→ 不交給規則載入器、不報錯。"""
+    (tmp_path / "recipes").mkdir()
+    (tmp_path / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
+    (tmp_path / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "ERROR" not in out, out
+    results, count = lint_custom_rules.lint_file(
+        str(tmp_path / "recipes" / "threshold.yaml"), lint_custom_rules.DEFAULT_POLICY)
+    assert (results, count) == ([], 0)
+
+
+@pytest.mark.parametrize("text,why", [
+    # PromQL the loader does not parse
+    ("groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", "parse error"),
+    # a key Prometheus does not know
+    ("groups:\n- name: g\n  type: prometheus\n  rules: []\n", "field type not found"),
+    # a second document Prometheus would drop
+    (_OK_RULE + "---\nfoo: 1\n", "document 2"),
+    # neither kubectl's reading nor the loader reads it: never skipped
+    ("groups: [unclosed\n", "rule loader"),
+    # a tab in the indentation: both refuse it, so it cannot be ruled out
+    ("groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n",
+     "rule loader"),
+])
+def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text, why):
+    """(b) 有 `groups:` 但規則載入器拒收的 plain 檔 → ERROR，點名檔案。"""
+    bad = tmp_path / "broken.yaml"
+    bad.write_text(text, encoding="utf-8")
+    (tmp_path / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    errors = [line for line in out.splitlines() if line.startswith("ERROR")]
+    assert len(errors) == 1, errors
+    assert "broken.yaml" in errors[0] and "rule loader refuses" in errors[0], errors
+    assert why in out, out
+
+
+def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
+    """kubectl 的讀法（sigs.k8s.io/yaml）拒收、規則載入器會讀的檔：照樣 lint，
+    不因 Kubernetes 讀法拒收而略過。`.inf` 對 sigs.k8s.io/yaml 是 +Inf（無
+    JSON 表示），對 rulefmt 是字串 ".inf"。"""
+    rule = tmp_path / "inf.yaml"
+    rule.write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: Forecast\n"
+        "    expr: predict_linear(disk_free[1h], 3600) < 0\n"
+        "    annotations: {x: .inf}\n", encoding="utf-8")
+    import _lib_consumer_read
+    with pytest.raises(_lib_consumer_read.InputRefused):
+        _lib_consumer_read.kubernetes_documents(str(rule))
+    results, count = lint_custom_rules.lint_file(str(rule), lint_custom_rules.DEFAULT_POLICY)
+    assert count == 1
+    assert any(r.severity == "ERROR" and "predict_linear" in r.message
+               for r in results), [str(r) for r in results]
+
+
+def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
+    """(c) smoke：repo 真實的 rule-packs/（含 recipes/、threshold-registry.yaml）
+    以 CI 的 policy 跑 --ci → rc 0。"""
+    code = _run_main([os.path.join(_REPO_ROOT, "rule-packs"),
+                      "--policy", _REAL_POLICY, "--ci"], monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]
+
+
+def test_configmap_good_and_broken_rule_values(tmp_path, monkeypatch, capsys):
+    """ConfigMap 一好一壞兩個 data 值 → 壞的被點名、rc 非零。"""
+    good = _OK_RULE.replace("\n", "\n    ")
+    bad = "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n".replace(
+        "\n", "\n    ")
+    (tmp_path / "cm.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rules}\ndata:\n"
+        f"  good.yml: |\n    {good}\n  bad.yml: |\n    {bad}\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [line for line in capsys.readouterr().out.splitlines()
+              if line.startswith("ERROR")]
+    assert len(errors) == 1, errors
+    assert "cm.yaml" in errors[0] and "'bad.yml'" in errors[0], errors

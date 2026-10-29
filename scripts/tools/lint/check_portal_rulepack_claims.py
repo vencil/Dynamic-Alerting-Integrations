@@ -76,8 +76,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 try:
@@ -87,6 +85,7 @@ except Exception:  # pragma: no cover - compat shim optional
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import i18n_text  # noqa: E402
 
 PORTAL_REL = "tools/portal/src/interactive/tools/rule-pack-detail.jsx"
@@ -126,29 +125,39 @@ def _rules_from_groups(
 
 
 def collect_shipped_rules(repo: Path) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    """Index every alert AND recording rule across the three shipping trees."""
+    """Index every alert AND recording rule across the three shipping trees.
+
+    Every rule file is read the way Prometheus' rule loader reads it (#3206,
+    ADR-036 §12: `da-read prometheus-rules`): the packs directly; the
+    ConfigMaps' data values and the PrometheusRule specs after the manifest
+    is read the way kubectl reads it — two da-read runs. A rule file the
+    loader refuses raises `RuleFilesRefused`, naming it."""
     alerts: Dict[str, Dict[str, Any]] = {}
     records: Dict[str, Dict[str, Any]] = {}
 
-    for path in sorted((repo / "rule-packs").glob("rule-pack-*.yaml")):
-        pack = path.stem.replace("rule-pack-", "")
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        _rules_from_groups(doc, pack, alerts, records)
-
-    # ConfigMaps wrap one or more rule documents as strings under `data:`.
-    for path in sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml")):
-        pack = path.stem.replace("configmap-rules-", "")
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        for _key, val in (doc.get("data") or {}).items():
-            _rules_from_groups(yaml.safe_load(val) or {}, pack, alerts, records)
-
+    packs = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
+    pack_files = _lib_consumer_read.prometheus_rule_file_results(packs)
+    # ConfigMaps wrap one or more rule documents as strings under `data:`;
     # PrometheusRule CRD copies keep groups under `spec:`.
     op_dir = repo / "operator-manifests"
+    manifests = sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml"))
     if op_dir.is_dir():
-        for path in sorted(op_dir.glob("da-rule-pack-*.yaml")):
-            pack = path.stem.replace("da-rule-pack-", "")
-            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            _rules_from_groups(doc.get("spec") or {}, pack, alerts, records)
+        manifests += sorted(op_dir.glob("da-rule-pack-*.yaml"))
+    manifest_files = [rf for rf in _lib_consumer_read.manifest_rule_file_results(manifests)
+                      if (rf.kind == "ConfigMap"
+                          and Path(rf.manifest).name.startswith("configmap-rules-"))
+                      or (rf.kind == "PrometheusRule"
+                          and Path(rf.manifest).name.startswith("da-rule-pack-"))]
+    _lib_consumer_read.require_read(pack_files + manifest_files)
+
+    for path, rf in zip(packs, pack_files):
+        _rules_from_groups(rf.documents[0], path.stem.replace("rule-pack-", ""),
+                           alerts, records)
+    for rf in manifest_files:
+        stem = Path(rf.manifest).stem
+        pack = (stem.replace("configmap-rules-", "") if rf.kind == "ConfigMap"
+                else stem.replace("da-rule-pack-", ""))
+        _rules_from_groups(rf.documents[0], pack, alerts, records)
 
     return alerts, records
 
@@ -336,8 +345,10 @@ def main() -> int:
 
     try:
         findings, stats = check(repo)
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: a rule file Prometheus would not load (each named, with the
+        # loader's reason) — the parse-failure exit this lint always had.
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except (ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

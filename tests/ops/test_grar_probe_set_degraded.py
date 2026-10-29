@@ -357,21 +357,22 @@ def test_no_shipped_platform_alert_can_carry_metric_group():
     grouped = re.compile(r"\bby\s*\([^)]*\bmetric_group\b")
     reads_alerts = re.compile(r"\bALERTS\b")
     checked, offenders = 0, []
-    for doc in yaml.safe_load_all(pack.read_text(encoding="utf-8")):
-        if not doc or doc.get("kind") != "ConfigMap":
+    import _lib_consumer_read  # noqa: PLC0415  (#3206: as Prometheus reads it)
+    for rule_file in _lib_consumer_read.require_read(
+            _lib_consumer_read.manifest_rule_file_results([pack])):
+        if rule_file.kind != "ConfigMap":
             continue
-        for body in _VALIDATE._configmap_rule_bodies(doc):
-            for group in (yaml.safe_load(body) or {}).get("groups") or []:
-                for rule in group.get("rules") or []:
-                    labels = rule.get("labels") or {}
-                    if "alert" not in rule or labels.get(
-                            "alert_source") != "platform":
-                        continue
-                    checked += 1
-                    expr = str(rule.get("expr", ""))
-                    if ("metric_group" in labels or grouped.search(expr)
-                            or reads_alerts.search(expr)):
-                        offenders.append(rule["alert"])
+        for group in rule_file.groups:
+            for rule in group.get("rules") or []:
+                labels = rule.get("labels") or {}
+                if "alert" not in rule or labels.get(
+                        "alert_source") != "platform":
+                    continue
+                checked += 1
+                expr = str(rule.get("expr", ""))
+                if ("metric_group" in labels or grouped.search(expr)
+                        or reads_alerts.search(expr)):
+                    offenders.append(rule["alert"])
     assert checked >= len(_VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
     assert offenders == [], offenders
 
@@ -414,7 +415,21 @@ def _strip_marker(body, alertname):
 _FALLBACK_NAMES = {d["alertname"]
                    for d in _VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS}
 
-_PARTIAL_SHAPES = {
+def _group1_in_a_refused_second_file(cm):
+    """Move group 1 into a second data key whose file Prometheus refuses (a
+    group that is not a mapping beside it): the first file still loads."""
+    key = next(iter(cm["data"]))
+    body = yaml.safe_load(cm["data"][key])
+    moved = body["groups"].pop(1)
+    cm["data"][key] = yaml.safe_dump(body, sort_keys=False)
+    cm["data"]["extra.yaml"] = yaml.safe_dump({"groups": [moved, "oops"]}, sort_keys=False)
+
+
+# #3206: inside ONE rule file, a malformed element makes Prometheus' rule
+# loader refuse the whole file — none of its alerts load. So these shapes no
+# longer read "partly": the file is unread, and with the shipped pack's one
+# rules file that is the fallback constant (`test_a_file_prometheus_refuses_…`).
+_WHOLE_FILE_REFUSED = {
     "group0-not-mapping": dict(
         mutate_body=lambda b: b["groups"].__setitem__(0, "oops")),
     "group1-not-mapping": dict(
@@ -424,6 +439,13 @@ _PARTIAL_SHAPES = {
         mutate_body=lambda b: b["groups"][0]["rules"].__setitem__(1, "oops")),
     "rules-not-a-list": dict(
         mutate_body=lambda b: b["groups"][0].__setitem__("rules", "oops")),
+    "rule-with-neither-alert-nor-record": dict(
+        mutate_body=lambda b: b["groups"][0]["rules"][1].__setitem__(
+            "alrt", b["groups"][0]["rules"][1].pop("alert"))),
+}
+
+_PARTIAL_SHAPES = {
+    "group1-in-a-refused-second-file": dict(mutate_cm=_group1_in_a_refused_second_file),
     "undecodable-binarydata-key": dict(
         mutate_cm=lambda c: c.setdefault("binaryData", {}).__setitem__(
             "extra.yaml", "!!not base64!!")),
@@ -435,9 +457,6 @@ _PARTIAL_SHAPES = {
                                                   "groups: oops\n")),
     "extra-rules-file-not-valid-yaml": dict(
         mutate_cm=lambda c: c["data"].__setitem__("extra.yaml", "groups: [\n")),
-    "rule-with-neither-alert-nor-record": dict(
-        mutate_body=lambda b: b["groups"][0]["rules"][1].__setitem__(
-            "alrt", b["groups"][0]["rules"][1].pop("alert"))),
     # well-formed, so only the fallback-names check can see it
     "marker-removed-from-a-fallback-alert": dict(
         mutate_body=lambda b: _strip_marker(b, "ThresholdExporterDown")),
@@ -461,6 +480,21 @@ def test_a_partly_read_pack_is_degraded_and_keeps_what_it_read(
     assert len(ids) > len(_VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
     err = capsys.readouterr().err
     assert err.count("probe set is INCOMPLETE") == 1, err
+
+
+@pytest.mark.parametrize("shape", sorted(_WHOLE_FILE_REFUSED))
+def test_a_file_prometheus_refuses_is_wholly_unread(monkeypatch, capsys, tmp_path, shape):
+    """#3206: the rules file is read the way Prometheus' rule loader reads it;
+    one malformed element and the loader refuses the file, so none of its
+    alerts is in the set. The shipped pack holds one rules file: the set is
+    the fallback constant, degraded, and the warning names the refusal."""
+    path = _pack_copy(tmp_path, **_WHOLE_FILE_REFUSED[shape])
+    _use_pack(monkeypatch, path)
+    assert (_VALIDATE.platform_alert_identities()
+            is _VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS), shape
+    assert _VALIDATE.probe_set_is_degraded()
+    reason = _VALIDATE.probe_set_degraded_reason()
+    assert "rule loader refuses" in reason and "platform-alert.yml" in reason, reason
 
 
 def test_control_an_intact_copy_is_not_degraded(monkeypatch, capsys,
@@ -502,7 +536,7 @@ def test_a_partly_read_pack_still_refuses_an_unverifiable_render(
     operator-supplied tenant-triggered rule it cannot vouch for is rc 2."""
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
-    path = _pack_copy(pack_dir, **_PARTIAL_SHAPES["group1-not-mapping"])
+    path = _pack_copy(pack_dir, **_PARTIAL_SHAPES["group1-in-a-refused-second-file"])
     _use_pack(monkeypatch, path)
     # Targets an alert that lives only in the unread group and is not in the
     # fallback — the one the partial set cannot see. (A target in the part
@@ -521,7 +555,7 @@ def test_validate_says_the_set_was_only_partly_read(monkeypatch, capsys,
     pack_dir = tmp_path / "pack"
     pack_dir.mkdir()
     _use_pack(monkeypatch, _pack_copy(
-        pack_dir, **_PARTIAL_SHAPES["group0-not-mapping"]))
+        pack_dir, **_PARTIAL_SHAPES["group1-in-a-refused-second-file"]))
     rc = _main(monkeypatch, tmp_path, "--config-dir", str(tenant_dir),
                "--validate")
     out = capsys.readouterr().out

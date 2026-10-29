@@ -1645,12 +1645,15 @@ def test_a_failed_batch_leaves_no_output_directory(tmp_path):
 
 
 def test_migrate_rule_names_a_threshold_with_no_finite_value(tmp_path):
-    # 1e999 is inf: once written as `.inf`, it has no finite number the
-    # exporter's `defaults:` holds — rc 2 naming the key, nothing written.
+    # 1e999 is inf. #3206: the input rule file is read by Prometheus' rule
+    # loader, whose PromQL parser refuses the literal (out of range) — so the
+    # rule never reaches the snippet writer: rc 2 naming the file and the
+    # reason, nothing written. (The writer's own finite-number check stays as
+    # the second line; no rule Prometheus loads reaches it with inf.)
     r, out = _mr(tmp_path, "1e999")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert ("defaults-snippet.yaml: defaults.custom_app_queue_depth: "
-            "the float inf is not a finite number") in r.stderr, r.stderr
+    assert "rules.yml" in r.stderr and 'parsing "1e999": value out of range' in r.stderr, \
+        r.stderr
     assert not out.exists(), sorted(_bytes(out))
 
 

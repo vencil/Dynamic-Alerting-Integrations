@@ -18,9 +18,6 @@ spec:
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type
-          }})
-        summary_zh: 租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席
         description: No healthy up{job="tenant-exporters"}==1 target for tenant {{
           $labels.tenant }} (db_type={{ $labels.db_type }}) for 3m. Either the exporter
           pod is down (up=0, Service alive) or the tenant's scrape target was removed
@@ -30,3 +27,6 @@ spec:
           3 分鐘沒有健康的 up{job="tenant-exporters"}==1 目標。可能是 exporter pod 掛了 (up=0、Service
           還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除
           (否則這是殘留組態造成的假陽性)。
+        summary: Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type
+          }})
+        summary_zh: 租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席

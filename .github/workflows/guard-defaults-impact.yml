@@ -214,7 +214,9 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       # #2904: the route generator judges routing and domain policy, which
       # da-guard no longer does; same interpreter and PyYAML pin as
@@ -237,12 +239,17 @@ jobs:
               ./cmd/da-guard
           "$RUNNER_TEMP/da-guard" --version
 
-      # #3206 (ADR-036 §12): `generate-routes --validate` reads the ConfigMap it
-      # assembles back the way kubectl does (da-crdecode); without it the
-      # generator exits 2 by name.
-      - name: Build da-crdecode
+      # The route generator's platform probe set reads
+      # configmap-rules-platform.yaml.
+      # #3206 (ADR-036 §12): the rule files these steps read are read the way
+      # Prometheus' rule loader reads them (`da-read prometheus-rules`) and
+      # their ConfigMaps the way kubectl reads them (da-crdecode). Built from
+      # this checkout and exported; a failed build fails the job, and a tool
+      # without them fails by name — never a PyYAML fallback.
+      - name: Build da-read / da-crdecode
         run: |
-          make da-crdecode-build
+          make da-read-build da-crdecode-build
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
           echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Detect conf.d path

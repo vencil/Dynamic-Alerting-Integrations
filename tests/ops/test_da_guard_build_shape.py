@@ -52,3 +52,37 @@ def test_make_da_guard_build_builds_without_cgo():
     assert len(builds) == 1, proc.stdout
     before = builds[0].split("go build", 1)[0].split()
     assert "CGO_ENABLED=0" in before, builds[0]
+
+
+# #3206：產生器的判定在 RLIMIT_DATA 下也跑 da-read 與 da-crdecode（讀出貨的平台規則
+# ConfigMap），同一個理由：cgo 版在 CI 上以 `runtime/cgo: pthread_create failed` 中止，
+# 判定回 rc 2。測試建的、`make` 建的，都要與出貨同形。
+def test_the_test_session_consumer_binaries_are_built_without_cgo(
+        da_read_binary, da_crdecode_binary):
+    for binary in (da_read_binary, da_crdecode_binary):
+        assert _build_settings(binary).get("CGO_ENABLED") == "0", binary
+
+
+def test_the_session_wide_consumer_binaries_are_built_without_cgo():
+    """`_provide_session_consumer_binaries` 設進環境變數的那兩支（子行程用的就是它們）。"""
+    for env in ("VIBE_TEST_DA_READ_BINARY", "VIBE_TEST_DA_CRDECODE_BINARY"):
+        binary = os.environ.get(env, "")
+        assert binary and os.path.isfile(binary), f"${env} names no binary: {binary!r}"
+        assert _build_settings(binary).get("CGO_ENABLED") == "0", binary
+
+
+@pytest.mark.parametrize("target,package", [
+    ("da-read-build", "components/da-read"),
+    ("da-crdecode-build", "./cmd/da-crdecode"),
+])
+def test_make_consumer_builds_build_without_cgo(target, package):
+    make = shutil.which("make")
+    if make is None:
+        pytest.fail(f"`make` is not on PATH: the {target} recipe cannot be read")
+    proc = subprocess.run([make, "-n", "-s", "-C", REPO_ROOT, target],
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=False, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    builds = [ln for ln in proc.stdout.splitlines() if "go build" in ln and package in ln]
+    assert len(builds) == 1, proc.stdout
+    assert "CGO_ENABLED=0" in builds[0].split("go build", 1)[0].split(), builds[0]

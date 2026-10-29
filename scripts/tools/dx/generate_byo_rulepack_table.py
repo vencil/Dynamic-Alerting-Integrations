@@ -42,6 +42,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Deployment, read kubectl's way)
 from generate_rule_pack_stats import gather_stats  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: its errors, raised by gather_stats)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -148,10 +149,18 @@ def build_rows() -> list:
     return rows
 
 
+#: `main` 一次執行內的 `build_rows()` 結果：兩個語系的資料列逐字相同，規則檔
+#: 經 da-read 讀（#3206），只讀一次。`main` 開頭清空。
+_ROWS: "list | None" = None
+
+
 def render_table(lang: str) -> str:
     """整張表（表頭 + 分隔列 + 資料列）。只有表頭隨語系不同。"""
+    global _ROWS
+    if _ROWS is None:
+        _ROWS = build_rows()
     s = LANG_STRINGS[lang]
-    return "\n".join([s["header"], s["sep"], *build_rows()]) + "\n"
+    return "\n".join([s["header"], s["sep"], *_ROWS]) + "\n"
 
 
 def replace_sentinel_block(content: str, table: str, doc: Path) -> str:
@@ -207,8 +216,15 @@ def main() -> int:
 
     langs = ["zh", "en"] if args.lang == "all" else [args.lang]
 
+    global _ROWS
+    _ROWS = None
     try:
         rendered = {lang: render_table(lang) for lang in langs}
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: the rule files are counted the way Prometheus reads them; a
+        # refused one, or no da-read / da-crdecode, is a caller error by name.
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return 2
     except (ValueError, KeyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

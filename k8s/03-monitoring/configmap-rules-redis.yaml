@@ -46,16 +46,16 @@ data:
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
     \ 5m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Redis high memory usage on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Redis 記憶體使用率過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis memory threshold breached\
-    \ — evaluate maxmemory policy'\n      platform_summary_zh: '[{{ $labels.tier }}]\
-    \ {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策'\n      description:\
-    \ 'Memory usage: {{ $value | humanize1024 }}B'\n      description_zh: '記憶體使用量:\
-    \ {{ $value | humanize1024 }}B'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
-    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n  - alert:\
-    \ RedisHighConnections\n    expr: \"(\\n  (\\n    (\\n      tenant:redis_connected_clients:max\\\
-    n      > on(tenant) group_left\\n      tenant:alert_threshold:redis_connected_clients\\\
+    \    annotations:\n      description: 'Memory usage: {{ $value | humanize1024\
+    \ }}B'\n      description_zh: '記憶體使用量: {{ $value | humanize1024 }}B'\n      owner:\
+    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: Redis memory threshold breached — evaluate maxmemory policy'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Redis high memory\
+    \ usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 Redis\
+    \ 記憶體使用率過高'\n      tier: '{{ $labels.tier }}'\n  - alert: RedisHighConnections\n\
+    \    expr: \"(\\n  (\\n    (\\n      tenant:redis_connected_clients:max\\n   \
+    \   > on(tenant) group_left\\n      tenant:alert_threshold:redis_connected_clients\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    (\\n      tenant:redis_connected_clients:max\\n      >\
@@ -63,14 +63,14 @@ data:
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
     \ 5m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Redis high connection count on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Redis 連線數過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection count high — client\
-    \ pool review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: Redis 連線數過高 — 請檢查客戶端連線池'\n      description: '{{ $value }} connected clients'\n\
-    \      description_zh: '{{ $value }} 個已連線的客戶端'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: RedisHighKeyEvictions\n    expr: \"(\\n  (\\n    (\\n      tenant:redis_evicted_keys:rate5m\\\
+    \    annotations:\n      description: '{{ $value }} connected clients'\n     \
+    \ description_zh: '{{ $value }} 個已連線的客戶端'\n      owner: '{{ $labels.owner }}'\n\
+    \      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection\
+    \ count high — client pool review'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: Redis 連線數過高 — 請檢查客戶端連線池'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      summary: Redis high connection count on {{ $labels.tenant }}\n  \
+    \    summary_zh: '{{ $labels.tenant }} 的 Redis 連線數過高'\n      tier: '{{ $labels.tier\
+    \ }}'\n  - alert: RedisHighKeyEvictions\n    expr: \"(\\n  (\\n    (\\n      tenant:redis_evicted_keys:rate5m\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:redis_evicted_keys_rate\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
@@ -79,15 +79,15 @@ data:
     n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
     \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
     \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Redis high key eviction rate on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Redis Key 驅逐率過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: key eviction rate elevated — capacity\
-    \ review needed'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: Key 驅逐率提升 — 需要檢查容量'\n      description: '{{ $value | printf \"%.1f\" }}\
-    \ evictions/sec — consider increasing maxmemory'\n      description_zh: '{{ $value\
-    \ | printf \"%.1f\" }} 驅逐次數/秒 — 請考慮增加 maxmemory'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: RedisReplicationLag\n    expr: \"(\\n  (\\n    (\\n      tenant:redis_replication_lag:max\\\
+    \    annotations:\n      description: '{{ $value | printf \"%.1f\" }} evictions/sec\
+    \ — consider increasing maxmemory'\n      description_zh: '{{ $value | printf\
+    \ \"%.1f\" }} 驅逐次數/秒 — 請考慮增加 maxmemory'\n      owner: '{{ $labels.owner }}'\n\
+    \      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: key eviction\
+    \ rate elevated — capacity review needed'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: Key 驅逐率提升 — 需要檢查容量'\n      runbook_url: '{{ $labels.runbook_url\
+    \ }}'\n      summary: Redis high key eviction rate on {{ $labels.tenant }}\n \
+    \     summary_zh: '{{ $labels.tenant }} 的 Redis Key 驅逐率過高'\n      tier: '{{ $labels.tier\
+    \ }}'\n  - alert: RedisReplicationLag\n    expr: \"(\\n  (\\n    (\\n      tenant:redis_replication_lag:max\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:redis_replication_lag\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
@@ -96,25 +96,26 @@ data:
     \   unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
     \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 2m\n\
     \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: Redis replication lag on {{ $labels.tenant }}\n\
-    \      summary_zh: '{{ $labels.tenant }} 的 Redis 複製延遲'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis replication lag — check replica\
-    \ health'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: Redis 複製延遲 — 請檢查副本狀態'\n      description: 'Replication lag: {{ $value |\
-    \ printf \"%.1f\" }}s'\n      description_zh: '複製延遲: {{ $value | printf \"%.1f\"\
-    \ }}s'\n      runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: RedisLowHitRatio\n    expr:\
-    \ \"(\\n  (\\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  * on(tenant)\
-    \ group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\n)\\nor\\n(\\\
-    n  (\\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 10m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: Redis\
-    \ low hit ratio on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Redis 快取命中率過低'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: low cache hit ratio — cache strategy review'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 快取命中率過低 — 請檢查快取策略'\n      description:\
-    \ 'Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy'\n      description_zh:\
-    \ '命中率: {{ $value | printf \"%.2f\" }} — 請檢查快取策略'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n"
+    \    annotations:\n      description: 'Replication lag: {{ $value | printf \"\
+    %.1f\" }}s'\n      description_zh: '複製延遲: {{ $value | printf \"%.1f\" }}s'\n \
+    \     owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: Redis replication lag — check replica health'\n  \
+    \    platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 複製延遲\
+    \ — 請檢查副本狀態'\n      runbook_url: '{{ $labels.runbook_url }}'\n      summary: Redis\
+    \ replication lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Redis 複製延遲'\n      tier: '{{ $labels.tier }}'\n  - alert: RedisLowHitRatio\n\
+    \    expr: \"(\\n  (\\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    n)\\nor\\n(\\n  (\\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 10m\n    labels:\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy'\n\
+    \      description_zh: '命中率: {{ $value | printf \"%.2f\" }} — 請檢查快取策略'\n     \
+    \ owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}]\
+    \ {{ $labels.tenant }}: low cache hit ratio — cache strategy review'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: 快取命中率過低 — 請檢查快取策略'\n      runbook_url:\
+    \ '{{ $labels.runbook_url }}'\n      summary: Redis low hit ratio on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Redis 快取命中率過低'\n      tier: '{{\
+    \ $labels.tier }}'\n"

@@ -2078,8 +2078,8 @@ from _rule_tree import (  # noqa: E402
     _alert_names,
     _containers_from_text,
     _decode_manifest,
-    _documents,
     _expected_rule_files,
+    _kubernetes_reading,
     _generated_pack_names,
     _is_platform_cm_location,
     _is_rule_groups,
@@ -3711,15 +3711,17 @@ class TestContainerDiscovery:
             + f"binaryData:\n  r.yml: {shadow}\n")
         assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == {"FromData"}
 
-    def test_a_data_value_that_is_already_a_mapping_is_used_as_is(self):
-        """A data key does not have to be a `|` block.
+    def test_a_data_value_that_is_already_a_mapping_is_named(self):
+        """A data key written as nested YAML instead of a `|` block.
 
-        Written as nested YAML it arrives already parsed; discarding non-strings
-        drops the whole container, and the alerts in it are gated by nothing.
+        Discarding non-strings would drop the whole container with nothing
+        said. #3206: it is not read as rules either — the API server takes only
+        string values, so that ConfigMap does not deploy; the container is a
+        marker the sentinel names.
         """
         got = self._containers(
             self._CM + "data:\n  r.yml:\n" + self._indented("FromMapping", 4))
-        assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == {"FromMapping"}
+        assert [d for _w, d, _p in got] == [{"_data_value_not_a_string": "dict"}]
 
     def test_rule_group_shape_boundaries(self):
         """`groups:` is a popular word; the shape test is what makes it a criterion."""
@@ -3758,23 +3760,23 @@ class TestContainerDiscovery:
             _rule_tree._reset_caches()
         assert got == {"Survivor"}, got
 
-    def test_document_splitting_swallows_only_yaml_errors(self):
-        """The `except` is scoped on purpose.
+    def test_document_splitting_swallows_only_a_refusal(self, monkeypatch, tmp_path):
+        """The `except` is scoped on purpose (#3206: the documents are
+        kubectl's reading, from da-crdecode).
 
-        A malformed document is expected and skipped. Anything else — a bug in
-        this scanner, a recursion limit, a type error — must escape, because a
-        blanket `except Exception` turns every future defect into "that file has
-        no rules" and the contracts stay green over it.
+        A manifest kubectl's reading refuses is expected: it is reported as
+        (None, reason) for the sentinel. Anything else — no da-crdecode to ask,
+        a binary that cannot run — must escape, because folding it into "that
+        file has no rules" keeps every contract green over a scan that never
+        read anything.
         """
-        import _rule_tree  # noqa: PLC0415
-        original = _rule_tree.yaml.safe_load_all
-        try:
-            _rule_tree.yaml.safe_load_all = lambda _t: (_ for _ in ()).throw(
-                TypeError("scanner bug, not a malformed document"))
-            with pytest.raises(TypeError):
-                list(_documents("irrelevant: true\n"))
-        finally:
-            _rule_tree.yaml.safe_load_all = original
+        import _lib_consumer_read  # noqa: PLC0415
+        docs, why = _kubernetes_reading("a: [unclosed\n")
+        assert docs is None and why
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
+        with pytest.raises(_lib_consumer_read.ConsumerReadError) as exc_info:
+            _kubernetes_reading("irrelevant: true\n")
+        assert not isinstance(exc_info.value, _lib_consumer_read.InputRefused)
 
     def test_generator_header_does_not_cross_a_document_boundary(self):
         # A hand-authored document appended after `---` must not inherit the
@@ -4269,7 +4271,7 @@ class TestSilentZeroSentinel:
             assert _rules_shaped_at_any_depth(values) is None, (
                 f"{label} was mistaken for a Prometheus rule set: {values}")
 
-    def test_binarydata_decoding_is_strict_like_the_production_reader(self):
+    def test_binarydata_decoding_is_strict_like_the_production_reader(self, tmp_path):
         """⛔ Both readers of the same keys must agree on which ones decode.
 
         `base64.b64decode` without `validate=True` silently DROPS every
@@ -4280,7 +4282,7 @@ class TestSilentZeroSentinel:
         introduced inside the thing being cross-checked.
         """
         import base64 as _b64  # noqa: PLC0415
-        from _grar_validate import _configmap_rule_bodies  # noqa: PLC0415
+        import _lib_consumer_read  # noqa: PLC0415
 
         body = ("groups:\n  - name: g\n    rules:\n      - alert: A\n"
                 "        expr: up == 0\n")
@@ -4293,13 +4295,17 @@ class TestSilentZeroSentinel:
 
         scanner_keys = {w.split(":", 1)[1]
                         for w, _d, _p in _containers_from_text("k8s/x.yaml", cm)}
-        doc = yaml.safe_load(cm)
-        production_bodies = len(list(_configmap_rule_bodies(doc)))
+        # The production reader (`_grar_validate.platform_alert_identities`)
+        # takes the same keys from `manifest_rule_file_results` (#3206).
+        cm_path = tmp_path / "x.yaml"
+        cm_path.write_text(cm, encoding="utf-8")
+        production = {rf.key for rf in _lib_consumer_read.manifest_rule_file_results([cm_path])
+                      if rf.problem is None}
         assert scanner_keys == {"good.yml"}, (
             f"the scanner accepted a corrupt binaryData key: {scanner_keys}")
-        assert production_bodies == 1, (
-            "the two readers disagree about how many binaryData keys decode: "
-            f"scanner={sorted(scanner_keys)} production={production_bodies}")
+        assert production == scanner_keys, (
+            "the two readers disagree about which binaryData keys decode: "
+            f"scanner={sorted(scanner_keys)} production={sorted(production)}")
 
     def test_helm_is_actually_in_the_scan_surface(self):
         """⛔ The tripwire above only runs on files the scan surface reaches.
@@ -4389,7 +4395,8 @@ class TestSilentZeroSentinel:
         assert "rule-packs/rule-pack-broken.yaml" in got, (
             "a file that declares alerts and then fails to parse is the "
             f"loudest silent-zero there is, and it went unreported: {got}")
-        assert "will not parse" in got["rule-packs/rule-pack-broken.yaml"]
+        # #3206: "will not parse" is kubectl's reading (da-crdecode) refusing it
+        assert "kubectl's reading refuses it" in got["rule-packs/rule-pack-broken.yaml"]
 
 
 class TestScannerAnchorsAreFailClosed:
@@ -4715,10 +4722,14 @@ class TestPlatformReaderParity:
         path.write_text(yaml.safe_dump({
             "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "x"},
             "data": {"r.yml": body}}), encoding="utf-8")
-        names = {i["alertname"] for i in platform_alert_identities(path)}
-        assert names == {"RealPlatform"}, (
-            "one malformed element collapsed the probe set to the fallback "
-            f"constant instead of dropping only itself: {sorted(names)}")
+        # #3206: the rules file is read the way Prometheus' rule loader reads
+        # it, and the loader refuses a file with a malformed element WHOLE —
+        # RealPlatform does not load either. So the explicit-path read yields
+        # no platform alert: the fallback constant, flagged degraded (which
+        # makes an unverifiable render rc 2), not a set that silently dropped
+        # one element and claimed to be complete.
+        import _grar_validate  # noqa: PLC0415
+        assert platform_alert_identities(path) is _grar_validate.PLATFORM_ALERT_IDENTITY_LABELS
 
     def test_the_two_filename_readers_agree_on_LABELS_not_just_names(self):
         """Same alertnames is not the same probe set.

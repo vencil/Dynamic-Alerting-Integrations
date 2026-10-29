@@ -189,6 +189,7 @@ from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # parse as allowed_domains, and the comparison the generator container shares.
 from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: the platform rules as Prometheus reads them)
 import _lib_key_verdict  # noqa: E402  (ADR-038 §5: the shared key verdict)
 from _lib_confd import WARN_LIMIT  # noqa: E402
 
@@ -1425,6 +1426,19 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         policy = resolve_policy(args.policy)
     except PolicyInputError as exc:
         die_caller_error(str(exc))
+    # #3206 (ADR-036 §12): the platform probe set is read from the shipped
+    # rules ConfigMap through da-crdecode and `da-read prometheus-rules`.
+    # Without them that is a named rc 2 here, before any work — not a crash
+    # in the first guard that asks, and never another reading.
+    try:
+        platform_alert_identities()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(
+            "ERROR: cannot read the shipped platform rules — their ConfigMap is "
+            "read the way kubectl does (da-crdecode) and its rule files the way "
+            "Prometheus' rule loader does (da-read prometheus-rules); stopping "
+            "before any work (nothing was written): "
+            + _lib_consumer_read.error_text(exc))
     allowed_domains = policy.allowed_domains or []
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")

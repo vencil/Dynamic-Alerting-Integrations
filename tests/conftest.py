@@ -336,7 +336,7 @@ def da_crdecode_binary(tmp_path_factory):
         [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-crdecode"],
         cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         pytest.fail(f"go build da-crdecode failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -366,7 +366,7 @@ def da_read_binary(tmp_path_factory):
         [go, "build", "-buildvcs=false", "-o", str(out), "."],
         cwd=os.path.join(REPO_ROOT, "components", "da-read"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         pytest.fail(f"go build da-read failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -698,7 +698,9 @@ _SESSION_CONSUMER_DIRS: "list[str]" = []
 
 
 def _provide_session_consumer_binaries() -> None:
-    """da-crdecode 與 da-read，比照 `_provide_session_da_guard`：從本 checkout 建一次、
+    """da-crdecode 與 da-read，比照 `_provide_session_da_guard`：從本 checkout 建一次
+    （與出貨同形 CGO_ENABLED=0：產生器的判定在 RLIMIT_DATA 下也跑它們，見
+    tests/_da_guard_build.py）、
     設進環境變數（子行程與 xdist worker 繼承）；沒有 go 或建不起來就不設，要它的
     測試照樣以缺失失敗、不 skip。要量「沒有它」的測試自己 `monkeypatch.delenv`。"""
     import subprocess
@@ -716,7 +718,7 @@ def _provide_session_consumer_binaries() -> None:
             [go, "build", "-buildvcs=false", "-o", out, pkg],
             cwd=os.path.join(REPO_ROOT, *module),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            check=False, timeout=600)
+            check=False, timeout=600, env=go_build_env())
         if proc.returncode != 0:
             shutil.rmtree(d, ignore_errors=True)
             continue  # the session fixtures fail with go's message where asked for

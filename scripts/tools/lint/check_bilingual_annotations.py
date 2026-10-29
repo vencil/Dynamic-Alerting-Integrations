@@ -23,11 +23,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
-try:
-    import yaml
-except ImportError:
-    print("Error: PyYAML is required. Install with: pip install pyyaml", file=sys.stderr)
-    sys.exit(EXIT_CALLER_ERROR)
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 
 class BilingualAnnotationChecker:
@@ -43,6 +39,7 @@ class BilingualAnnotationChecker:
     def __init__(self, rule_pack_dir: Path):
         self.rule_pack_dir = rule_pack_dir
         self.results: Dict[str, Dict] = {}
+        self._read: Dict[Path, "_lib_consumer_read.RuleFile"] = {}
 
     def find_rule_packs(self, only_packs: List[str] = None) -> List[Path]:
         """Find all rule pack YAML files."""
@@ -80,15 +77,23 @@ class BilingualAnnotationChecker:
 
         return result
 
-    def check_rule_pack(self, pack_path: Path) -> Dict:
-        """Check all alerts in a rule pack file."""
-        with open(pack_path, "r", encoding="utf-8") as f:
-            try:
-                data = yaml.safe_load(f) or {}
-            except yaml.YAMLError as e:
-                return {"error": f"Failed to parse YAML: {e}"}
+    def read_rule_packs(self, packs: List[Path]) -> None:
+        """Read every pack of *packs* the way Prometheus' rule loader reads
+        it (#3206, ADR-036 §12: `da-read prometheus-rules`, one run for
+        all), for `check_rule_pack`. Raises ConsumerReadError when da-read
+        cannot be had."""
+        self._read = dict(zip(packs, _lib_consumer_read.prometheus_rule_file_results(packs)))
 
-        groups = data.get("groups", [])
+    def check_rule_pack(self, pack_path: Path) -> Dict:
+        """Check all alerts in a rule pack file (read as Prometheus' rule
+        loader reads it; a pack it refuses is an error naming the reason)."""
+        rule_file = self._read.get(pack_path)
+        if rule_file is None:
+            (rule_file,) = _lib_consumer_read.prometheus_rule_file_results([pack_path])
+        if rule_file.problem is not None:
+            return {"error": f"Prometheus' rule loader refuses it: {rule_file.problem}"}
+
+        groups = rule_file.groups
         pack_result = {
             "total_alerts": 0,
             "bilingual_alerts": 0,
@@ -128,6 +133,7 @@ class BilingualAnnotationChecker:
         if not packs:
             print("Error: No rule packs found", file=sys.stderr)
             return EXIT_CALLER_ERROR
+        self.read_rule_packs(packs)
 
         exit_code = EXIT_OK
         for pack_path in packs:
@@ -159,6 +165,8 @@ class BilingualAnnotationChecker:
         if not packs:
             print("Error: No rule packs found", file=sys.stderr)
             return
+        if not all(p in self._read for p in packs):
+            self.read_rule_packs(packs)
 
         print("\nBilingual Annotation Coverage Report\n")
         print(f"{'Pack Name':<40} {'Bilingual':<15} {'Coverage':<15}")
@@ -247,17 +255,21 @@ def main():
 
     checker = BilingualAnnotationChecker(rule_pack_dir)
 
-    if args.check:
-        return checker.run_check(only_packs)
-    elif args.coverage:
-        checker.print_coverage(only_packs)
-        return EXIT_OK
-    elif args.ci:
-        return checker.run_ci_mode(only_packs)
-    else:
-        # Default to coverage if no mode specified
-        checker.print_coverage(only_packs)
-        return EXIT_OK
+    try:
+        if args.check:
+            return checker.run_check(only_packs)
+        elif args.coverage:
+            checker.print_coverage(only_packs)
+            return EXIT_OK
+        elif args.ci:
+            return checker.run_ci_mode(only_packs)
+        else:
+            # Default to coverage if no mode specified
+            checker.print_coverage(only_packs)
+            return EXIT_OK
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"Error: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
 
 if __name__ == "__main__":

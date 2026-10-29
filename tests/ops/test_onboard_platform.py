@@ -680,7 +680,8 @@ class TestAnalyzeRuleFiles:
                             "labels": {"severity": "warning"}}],
             }],
         }
-        cm = {"data": {"rules.yaml": yaml.dump(inner_dict)}}
+        cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "r"},
+              "data": {"rules.yaml": yaml.dump(inner_dict)}}
         path = write_yaml(config_dir, "cm.yaml", yaml.dump(cm, default_flow_style=False))
         candidates, _, summary = analyze_rule_files([path])
         assert summary["alert_rules"] == 1
