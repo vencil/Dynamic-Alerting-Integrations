@@ -221,6 +221,12 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// cardinality guard below measures result[startIdx:] exactly once, so a
 		// row appended after it escapes the cap silently.
 		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect, logf, rec)...)
+		if rec != nil {
+			// #3378: the keys no phase above claimed are values no row phase
+			// reads (custom alerts below read `_custom_alerts` only, a `_`
+			// key noteUnclaimed leaves out).
+			rec.noteUnclaimed(tenant, canonOverrides)
+		}
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -486,7 +492,14 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		// emits (with the default) so this is fail-safe (more protection, never
 		// silent) and leaves the cardinality count unchanged; collectThresholdExpiries
 		// emits da_config_event so a cleanup PR removes the stale YAML.
-		if sv, exists := overrides[metricKey]; exists && !isThresholdExpired(sv, now) {
+		sv, exists := overrides[metricKey]
+		if exists && rec != nil {
+			// #3378: this phase reads the tenant's value of every key it walks
+			// — expired, switched off or unparseable included: each is its
+			// verdict below.
+			rec.claim(metricKey)
+		}
+		if exists && !isThresholdExpired(sv, now) {
 			override := sv.resolveValue(now, logf)
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
@@ -660,6 +673,11 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 
 		override := sv.resolveValue(now, logf)
 		if rec != nil {
+			// #3378: claimed here, past the skips — a shape skipped above is
+			// a sibling phase's to read or to leave unclaimed (a declared
+			// `x_critical` whose base `x` has no value: resolveCriticalRows
+			// drops it).
+			rec.claim(metricKey)
 			rec.noteInvalidWindows(tenant, metricKey, sv)
 		}
 		// State 3: disable. Note that for a declared key this is
@@ -723,6 +741,18 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		if !critical {
 			continue
 		}
+		if rec != nil {
+			// #3378: claimed only when the base lookup below can pass. With
+			// no base value the row is dropped ("has no matching default"),
+			// and the key is left for noteUnclaimed to record as
+			// NotServedUnconsumed — unless another phase reads it (a root
+			// `defaults:` that values the `_critical` key itself is walked by
+			// resolveBaseRows), which an unconditional note here could not
+			// see.
+			if _, exists := defaults[baseKey]; exists {
+				rec.claim(key)
+			}
+		}
 
 		// PREVENT #656 v1: `expires:` is intentionally NOT honored on _critical
 		// overrides — they have no platform default to fail-safe back to (reverting
@@ -740,7 +770,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// Verify that the base metric exists in defaults (otherwise ignore)
 		if _, exists := defaults[baseKey]; !exists {
 			logf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
-			continue
+			continue // unclaimed above: NotServedUnconsumed (#3378)
 		}
 
 		component, metric := parseMetricKey(baseKey)
@@ -801,6 +831,9 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		}
 		if baseRowsSkipKey(key) { // every `_` key (#3045)
 			continue
+		}
+		if rec != nil {
+			rec.claim(key) // #3378: whether or not the root declares its base
 		}
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
 			continue // the default above is served
