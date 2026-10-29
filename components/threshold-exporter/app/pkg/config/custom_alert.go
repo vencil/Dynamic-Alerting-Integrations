@@ -1342,18 +1342,16 @@ func customAlertSeriesCollision(rows []ResolvedThreshold, obj *ResolvedSloObject
 // two, an entry dropped as a duplicate none — counted before the per-tenant
 // metric limit (max_metrics_per_tenant) truncates them. The per-tenant cap
 // (MaxCustomRecipesDefault) is judged on it by da-guard's
-// custom_alert_over_cap and, through served-values' custom_alert_rows,
-// validate-config's custom_alert_cap (#3042).
+// custom_alert_over_cap (#3042; validate-config reports it, guard_errors).
 func CustomAlertRowCount(tenant string, overrides map[string]ScheduledValue) int {
 	rows, _, _, _ := resolveCustomAlertSpecs(tenant, overrides, nil)
 	return len(rows)
 }
 
 // MaxCustomRecipesDefault is the per-tenant cap on a tenant's OWN custom-alert
-// rows (S4, #3042), judged by tenant-api's write check, da-guard's
-// custom_alert_over_cap and validate-config's custom_alert_cap — the compiler
-// does not judge it. The number is the recipe contract's custom_alert_cap;
-// scripts/tools/_lib_constants.py::MAX_CUSTOM_RECIPES is generated from it.
+// rows (S4, #3042), judged by tenant-api's write check and da-guard's
+// custom_alert_over_cap (validate-config: guard_errors) — the compiler
+// does not judge it. The number is the recipe contract's custom_alert_cap.
 var MaxCustomRecipesDefault = contract.Cap
 
 // ValidateTenantCustomAlerts is the tenant-api shift-left preflight (ADR §S5):

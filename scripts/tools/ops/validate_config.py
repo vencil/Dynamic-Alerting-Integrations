@@ -43,12 +43,18 @@ Checks:
                     exporter from `tenants:`, so a mismatch (or a file that
                     declares several tenants) is a FAIL (#3157)
   10. Root defaults — `defaults:` in the root _defaults.yaml, as the
-                    exporter decodes it: a value that is not a number
-                    (`"70"`, `disable`, a mapping) makes the exporter drop
-                    every platform threshold, and an empty value becomes a 0
-                    threshold for every tenant (#1414); and no `_routing*`
+                    exporter decodes it: a mapping or a list as a value makes
+                    the exporter drop every platform threshold, and an empty
+                    value leaves the key undeclared (#1414, #2518); a scalar
+                    it refuses is da-guard's error (row 13); and no `_routing*`
                     key there — the route generator reads routing only from
                     top-level `_routing_defaults` (#2291)
+  13. Guard errors — every error finding of da-guard's own check
+                    (`da-guard --format json`, `report.findings` with
+                    `severity: error`), whatever its kind: da-guard is the one
+                    source of the severity (#3387). Its exit 3 (files the load
+                    drops) is a FAIL; its exit 4 (routing / domain policy,
+                    which the `routes` row judges) is not
   14. Unread keys  — every key of every tenant that no reader reads, by the
                     shared verdict (`_lib_key_verdict`, ADR-038): misspelt
                     keys, a `disable` that switches nothing off, a key read
@@ -189,14 +195,12 @@ import sys
 import yaml
 
 from _lib_python import (  # noqa: E402
-    load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
-    DOCS_SITE_BASE,
+    load_yaml_file, DOCS_SITE_BASE,
 )
 # #1577 / #2114: tenant declarations are scanned by
 # `_lib_confd.tenant_declarations` since #2315. `check_profiles` reads
 # `_profiles.yaml` through the exporter-key loader (#2297: a profile name is
 # its source text); the tenants' `_profile` refs come from da-guard (#2115).
-from _lib_io import YamlFileError  # noqa: E402  (#2297)
 # ADR-036 step 4 (#2906): every row's conf.d read is `da-guard parse-tree`'s,
 # one document per run (`_lib_parse_cache.session` in `main`), as the route
 # generator these rows ask reads it — never a PyYAML reading beside it.
@@ -207,13 +211,14 @@ from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 # #2115 0-B: the tenants as threshold-exporter reads them (`check_profiles`,
 # and the error row `check_policy_dsl` shares with it).
 from _lib_tenant_values import (  # noqa: E402
+    DA_GUARD_PREFIX,
+    GUARD_REPORT_SEVERITY_ERROR,
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
-    load_served_tree,
+    load_guard_report,
     print_load_error,
-    value_not_served_as_written,
 )
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
@@ -1121,16 +1126,6 @@ def check_custom_rules(
 # ============================================================
 # Check 6: Profile references (v1.12.0)
 # ============================================================
-def _is_reserved_key(key: str) -> bool:
-    """Check if a key is a reserved tenant config key (starts with _)."""
-    if key in VALID_RESERVED_KEYS:
-        return True
-    for prefix in VALID_RESERVED_PREFIXES:
-        if key.startswith(prefix):
-            return True
-    return False
-
-
 # #2115 0-B: when a row cannot read the tenants as threshold-exporter reads
 # them, the generic advice points at the wrong thing. One hint per cause; the
 # row names what it did not do.
@@ -1227,7 +1222,7 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
 
 
 # #2740: one `da-guard effective` run per validate-config run, shared by the
-# rows that read it (`yaml_quoting`, `profiles`, `values_not_served`). `main()`
+# rows that read it (`yaml_quoting`, `profiles`, `unread_keys`). `main()`
 # opens it for its rows and closes it after them; a check called on its own
 # (None) runs da-guard itself, so a test that edits the tree between calls
 # never reads a stale verdict. Key: the --config-dir string as passed.
@@ -2030,444 +2025,87 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
-def _root_defaults_refused_detail(rel: str, key: str, text: str, refused: str) -> str:
-    """One FAIL line for a root threshold whose value threshold-exporter
-    refuses (#3140, #3250): an entry of da-guard effective's
-    `root_defaults_refused`, `refused` its reason. What to write instead is
-    da-guard's root_default_refused finding; this line names it rather than
-    carry a second copy of that sentence."""
-    return (f"{rel}: `defaults.{key}` is `{text}`, which threshold-exporter refuses "
-            f"({refused}) and serves no default row for; `da-guard` (root_default_refused) "
-            f"says what to write instead")
+# ============================================================
+# Check 13: da-guard's error findings (#3387)
+# ============================================================
+_GUARD_ERRORS_TREE_UNREADABLE_HINT = (
+    "threshold-exporter cannot load this tree as the lines above say: repair "
+    "or remove the file they name (or the shape da-guard refuses), then re-run. "
+    "Any finding listed covers only the files the load kept.")
+_GUARD_ERRORS_NO_CONFIG_FILE_HINT = (
+    "There is no config file under --config-dir at all: point it at your conf.d "
+    "tree, then re-run. da-guard judged nothing.")
+_GUARD_ERRORS_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " da-guard judged nothing."
 
 
-#: `_`-prefixed keys another reader takes from the TOP level of a defaults
-#: file (#2386); the list lives in _lib_constants (shared with the policy
-#: readers since #2115 0-B).
-from _lib_constants import MAX_CUSTOM_RECIPES, TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
-
-#: Keys the defaults-chain merge drops at every level, so they act in no
-#: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by
-#: tests/shared/defaults_wrapper_matrix.json.
-MERGE_DROPPED_KEYS = frozenset({"_metadata"})
-
-
-def _root_decoded_keys() -> tuple[set[str], bool]:
-    """(the top-level fields the exporter's root decode reads, schema found).
-
-    They are the non-``_`` ``properties`` of platform-defaults.schema.json;
-    the Go test ``TestRootDecodedKeysMatchSchema`` pins them to the
-    exporter's ``ThresholdConfig`` fields, which da-guard reads for the same
-    judgements (#2386). Without the schema the set is empty and the callers
-    fail closed, saying so.
-    """
-    schema_path = _find_schema(_PLATFORM_SCHEMA)
-    if schema_path is None:
-        return set(), False
-    with open(schema_path, encoding="utf-8") as fh:
-        props = json.load(fh).get("properties", {})
-    return {k for k in props if not k.startswith("_")}, True
-
-
-def _schema_missing_note(found: bool) -> str:
-    return ("" if found else
-            f" ({_PLATFORM_SCHEMA} was not found, so fields the exporter "
-            f"does read may be listed)")
-
-
-def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
-    """(sorted top-level keys the defaults merge takes into a tenant's config
-    when it reads the whole document, schema found) — da-guard's
-    ``actsWhenMerged``, pinned to it by tests/shared/defaults_wrapper_matrix.json.
-
-    A threshold (no ``_`` prefix) or a reserved tenant key
-    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, generated with
-    Go's from the reserved-key registry, ADR-038). Excluded: ``defaults``;
-    a root-decode field (``_root_decoded_keys``); ``TOP_LEVEL_READ_ELSEWHERE``;
-    ``MERGE_DROPPED_KEYS``, which act in no shape; ``_routing*`` keys, which
-    the route generator does not read from a defaults file in any shape; and
-    any other ``_`` key (``_x: &x``, a key that only carries a YAML anchor).
-    """
-    known, found = _root_decoded_keys()
+def _guard_error_lines(findings) -> list[str]:
+    """One line per da-guard error finding — its kind, field, tenant(s) and
+    message as da-guard wrote them. Findings that differ only in the tenant
+    (the same kind, field and message: one file's key that every tenant
+    below it inherits) are one line listing the tenants, as `unread_keys`
+    lists them."""
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for f in findings:
+        if f.severity != GUARD_REPORT_SEVERITY_ERROR:
+            continue
+        tenants = groups.setdefault((f.kind, f.field, " ".join(f.message.split())), [])
+        if f.tenant_id and f.tenant_id not in tenants:
+            tenants.append(f.tenant_id)
     out = []
-    for key in raw:
-        k = str(key)
-        if (k == "defaults" or k in known or k in TOP_LEVEL_READ_ELSEWHERE
-                or k in MERGE_DROPPED_KEYS):
-            continue
-        if not k.startswith("_") or (
-                (k in VALID_RESERVED_KEYS
-                 or k.startswith(VALID_RESERVED_PREFIXES))
-                and not k.startswith("_routing")):
-            out.append(k)
-    return sorted(out), found
-
-
-_ROOT_NUMBERS_ONLY = (
-    "A threshold among them goes under `defaults:`; the root `defaults:` "
-    "holds numbers only (a mapping or a list there drops the whole block; a "
-    "scalar that is no number is refused for that key alone), "
-    "so another key has no place in this file.")
-
-# #3042: no reader takes custom alerts from a `_defaults.yaml` (the exporter
-# never served them; the compiler compiles what it serves) — where they go.
-_CUSTOM_ALERTS_ROOT_FIX = (
-    "`_custom_alerts`: no reader takes custom alerts from a `_defaults.yaml`; "
-    "write the list in each tenant's own entry under `tenants:`, in a root "
-    "platform file's `tenants:`, or in a profile its tenants select (#3042).")
-
-
-def _root_fix(keys: list[str]) -> str:
-    """The root file's fix sentence(s) for the keys a line names."""
-    if "_custom_alerts" in keys:
-        return f"{_ROOT_NUMBERS_ONLY} {_CUSTOM_ALERTS_ROOT_FIX}"
-    return _ROOT_NUMBERS_ONLY
-
-
-def _root_defaults_unwrapped_detail(rel: str, raw: dict) -> list[str]:
-    """The FAIL line for a root carrier with no `defaults:` mapping (#2386).
-
-    Called when ``defaults`` is absent or has no value: the defaults-chain
-    merge behind /effective then takes the whole document as the block and
-    shows its top-level keys, while threshold-exporter's root decode reads
-    platform thresholds only from a ``defaults:`` mapping and has no field
-    for the others. Measured: a top-level threshold was absent from /metrics,
-    and a top-level ``_severity_dedup: disable`` showed ``disable`` on
-    /effective while /metrics served ``enable``. Reported keys:
-    ``_keys_acting_when_merged``.
-    """
-    keys, found = _keys_acting_when_merged(raw)
-    if not keys:
-        return []
-    shown = ", ".join(f"`{k}`" for k in keys)
-    return [f"{rel}: no `defaults:` mapping, so /effective (the defaults-chain "
-            f"merge, which then reads the whole document) shows the top-level "
-            f"key(s) {shown}, but threshold-exporter's root decode does not "
-            f"read them: /metrics does not carry them from this file"
-            f"{_schema_missing_note(found)}. {_root_fix(keys)}"]
-
-
-def _defaults_toplevel_ignored_detail(rel: str, raw: dict,
-                                      root: bool) -> list[str]:
-    """The FAIL line for a carrier whose `defaults:` is a mapping while its
-    top level holds keys the merge would otherwise take (#2386).
-
-    With ``defaults:`` a mapping (``{}`` included), the defaults-chain merge
-    reads only that mapping; a ``defaults:`` with no value, or none at all,
-    makes it read the whole document (Go ``ExtractDefaultsBlock``). Reported
-    keys: ``_keys_acting_when_merged``. Measured on a subtree: wrapped this
-    way, a top-level threshold and ``_severity_dedup`` were no longer served
-    on /metrics; ``_silent_mode`` and ``_state_*`` changed /effective only.
-
-    ⛔ Below the root, a RESERVED key (``_is_reserved_key``) is not told to
-    move under ``defaults:`` (#2388): subtree defaults do not support reserved
-    keys, and moving one there — or leaving ``defaults:`` with no value, which
-    merges the whole document — only trades this line for da-guard's
-    ``subtree_default_reserved_key``. The per-key fix lives in da-guard; this
-    line names it rather than re-deriving it.
-    """
-    keys, found = _keys_acting_when_merged(raw)
-    if not keys:
-        return []
-    shown = ", ".join(f"`{k}`" for k in keys)
-    if root:
-        fix = _root_fix(keys)
-    else:
-        fix = _subtree_toplevel_fix(keys)
-    return [f"{rel}: `defaults:` is a mapping, so the defaults merge reads "
-            f"only the keys under it; the top-level key(s) {shown} are left "
-            f"out of every tenant's merged config (/effective), and a "
-            f"threshold among them is not served on /metrics"
-            f"{_schema_missing_note(found)}. {fix}"]
-
-
-def _subtree_toplevel_fix(keys: list[str]) -> str:
-    """The fix of a subtree carrier's `defaults_wrapper` line (#2388): the
-    generic "move them under `defaults:`" for the other keys — without "or
-    leave `defaults:` with no value" when a reserved key is present, since that
-    merges the reserved key too — and, for reserved keys, "delete or set it in
-    the tenant's own entry"."""
-    reserved = [k for k in keys if _is_reserved_key(k)]
-    other = [k for k in keys if k not in reserved]
-    parts = []
-    if other:
-        shown = ", ".join(f"`{k}`" for k in other)
-        if reserved:
-            parts.append(f"Move {shown} under `defaults:`.")
-        else:
-            parts.append(f"Move {shown} under `defaults:`, or leave "
-                         f"`defaults:` with no value so the whole document "
-                         f"is merged.")
-    if reserved:
-        shown = ", ".join(f"`{k}`" for k in reserved)
-        # ⛔ Not "or set them in each tenant's own entry" (#2388 r6): whether
-        # that is the fix depends on the key (an undeclared `_state_<f>` is
-        # read nowhere), which needs the root's `state_filters:` — da-guard's
-        # verdict, not re-derived here.
-        parts.append(
-            f"{shown}: reserved key(s), which subtree defaults do not support "
-            f"— do not move them under `defaults:`; delete them from this "
-            f"file (see da-guard's `subtree_default_reserved_key` for whether "
-            f"to set them in each tenant's own entry instead, #2388).")
-    return " ".join(parts)
-
-
-def _is_yaml_mapping(value: object) -> bool:
-    """Whether a `defaults:` value is a YAML mapping as yaml.v3 decodes it.
-
-    PyYAML turns ``!!set {a}`` — a mapping in YAML — into a Python ``set``;
-    yaml.v3 decodes it as a mapping (nil values), and the merge then reads
-    only it. ``!!omap`` / ``!!pairs`` are sequences on both sides. Pinned by
-    tests/shared/defaults_wrapper_matrix.json.
-    """
-    return isinstance(value, (dict, set, frozenset))
-
-
-#: `defaults_wrapper`'s hint when a SUBTREE carrier's listed keys include a
-#: reserved key (#2388 r6): the generic one's "or give `defaults:` no value"
-#: would merge that key into the subtree's defaults.
-_DEFAULTS_WRAPPER_RESERVED_HINT = (
-    "A `defaults:` mapping makes the defaults merge read only that mapping: "
-    "move the listed thresholds under `defaults:`; below the root, reserved "
-    "keys: see the detail.")
-
-
-def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
-    """Every level's `_defaults.yaml`: top-level keys a `defaults:` mapping
-    leaves out of the defaults merge (#2386).
-
-    One carrier per directory, the one parse-tree says the chain selects:
-    a carrier it lists in ``not_read`` is not read, and the row says so
-    (never a Python carrier selection here — a second implementation of the
-    rule; reading a file parse-tree does not select is rc 2, #2906 review).
-    A file that does not load as a mapping is left to ``yaml_syntax`` /
-    ``root_defaults``. Measured on a subtree: top-level
-    ``_severity_dedup: disable`` was served as ``disable`` with no wrapper
-    or with ``defaults:`` and no value, and as ``enable`` once
-    ``defaults: {}`` was added.
-    """
-    root = Path(config_dir)
-    reader = _lib_parse_cache.reader_for(config_dir)
-    # #3206: the carriers are the config files of class `defaults` in the
-    # run's listing (the entries of the document read below).
-    carriers, skipped = reader.split_not_read(
-        root / e.path for e in reader.listing().config_files() if e.cls == "defaults")
-    details: list[str] = []
-    checked = 0
-    subtree_reserved = False
-    for carrier in sorted(carriers, key=lambda p: (p.parent, p.name)):
-        d = carrier.parent
-        try:
-            raw = load_confd_file(config_dir, str(carrier), default={})
-        except YamlFileError:
-            continue  # yaml_syntax names a file that does not load
-        if not isinstance(raw, dict):
-            continue
-        checked += 1
-        if _is_yaml_mapping(raw.get("defaults")):
-            rel = carrier.relative_to(root).as_posix()
-            details += _defaults_toplevel_ignored_detail(rel, raw, d == root)
-            if d != root and any(_is_reserved_key(k)
-                                 for k in _keys_acting_when_merged(raw)[0]):
-                subtree_reserved = True
-    if details:
-        # ⛔ The generic hint says "or give `defaults:` no value": below the
-        # root that merges a reserved key into the subtree's defaults, which
-        # da-guard reports as subtree_default_reserved_key (#2388 r6).
-        return _make_result("defaults_wrapper", FAIL, details,
-                            hint=_DEFAULTS_WRAPPER_RESERVED_HINT
-                            if subtree_reserved else None)
-    return _make_result("defaults_wrapper", PASS, [
-        f"{checked} defaults file(s): no top-level key left out by a "
-        f"`defaults:` mapping{_not_read_note(root, skipped)}"])
-
-
-def _not_read_note(root: Path, skipped: "list[tuple[Path, str]]") -> str:
-    """A row's note on the files it did not read because parse-tree lists
-    them in ``not_read`` (``ConfdReader.split_not_read``); '' for none."""
-    if not skipped:
-        return ""
-    return "; not checked, no reader reads: " + ", ".join(
-        f"{p.relative_to(root).as_posix()} ({why})" for p, why in skipped)
-
-
-def _schedule_null_lines(rel: str, where: str, body: object) -> list[str]:
-    """One FAIL line per threshold key of *body* (a mapping) written as a
-    schedule with override windows and a null in it (#2708). Reserved
-    (``_``-prefixed) keys are not thresholds and are not judged."""
-    if not isinstance(body, dict):
-        return []
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    from _grar_validate import schedule_null_problems
-    out = []
-    for key in sorted(k for k in body if isinstance(k, str)):
-        if key.startswith("_"):
-            continue
-        problems = schedule_null_problems(body[key])
-        if problems:
-            out.append(f"{rel}: `{where}{key}`: {'; '.join(problems)}")
+    for (kind, field, message), tenants in groups.items():
+        where = f" `{field}`" if field else ""
+        ts = sorted(tenants)
+        who = (" — tenant(s) " + ", ".join(ts[:WARN_LIMIT])
+               + (f" (+{len(ts) - WARN_LIMIT} more)" if len(ts) > WARN_LIMIT else "")
+               if ts else "")
+        out.append(f"error: {kind}{where}{who}: {message}")
     return out
 
 
-def check_schedule_null(config_dir: str) -> dict[str, object]:
-    """A null inside a threshold schedule that has override windows (#2708).
+def check_guard_errors(config_dir: str) -> dict[str, object]:
+    """Every error finding of da-guard's own check (#3387): `da-guard
+    --config-dir <dir> --format json`, its `report.findings` with
+    `severity: error` — a FAIL whatever the kind, so the severity is
+    da-guard's alone and an error kind added to it is one here too. Its
+    warnings are not this row's.
 
-    A null window entry, a window's ``window: null`` / ``value: null``, or a
-    null ``default:`` beside windows has no defined meaning and is refused
-    (``_grar_validate.schedule_null_problems``, Go ``scheduleNullProblems``).
-    A schedule with no window and a null ``default:`` is plain null (no
-    write) and is not this row's (a null in a tenant file is
-    ``yaml_quoting``'s).
-
-    Files read: every tenant file's
-    ``tenants:`` entries; each directory's selected ``_defaults.yaml``
-    carrier's defaults block (its ``defaults:`` mapping, else the whole
-    document, as the chain merge reads it); and every ``_`` file at the root
-    other than an unselected carrier — its ``tenants:`` entries and
-    ``profiles:``. A ``_`` file below the root that is not the selected
-    carrier is read by no plane. A file that does not load is left to
-    ``yaml_syntax``. Which carrier is unselected is parse-tree's
-    ``not_read`` (named in the row), not a Python re-selection (#2906
-    review: reading one parse-tree does not select is rc 2).
-    """
-    root = Path(config_dir)
-    reader = _lib_parse_cache.reader_for(config_dir)
-    # #3206: the run's listing (Go's `role` and class), no second walk.
-    entries = {root / e.path: e for e in reader.listing().config_files()}
-    files, skipped = reader.split_not_read(entries)
-    details: list[str] = []
-    checked = 0
-    for p in sorted(files):
-        reserved = entries[p].reserved
-        at_root = p.parent == root
-        # Not in `not_read`: the directory's selected carrier (one parse-tree
-        # cannot read raises below and is left to `yaml_syntax`).
-        carrier = entries[p].cls == "defaults"
-        if reserved and not at_root and not carrier:
-            continue  # a nested `_` file: read by no plane
-        try:
-            raw = load_confd_file(config_dir, str(p), default={})
-        except YamlFileError:
-            continue
-        if not isinstance(raw, dict):
-            continue
-        checked += 1
-        rel = p.relative_to(root).as_posix()
-        if carrier:
-            block = raw.get("defaults")
-            details += _schedule_null_lines(
-                rel, "defaults.", block if isinstance(block, dict) else raw)
-        if not reserved or at_root:
-            tenants = raw.get("tenants")
-            if isinstance(tenants, dict):
-                for tid, body in tenants.items():
-                    details += _schedule_null_lines(rel, f"tenants.{tid}.", body)
-        if reserved and at_root:
-            profiles = raw.get("profiles")
-            if isinstance(profiles, dict):
-                for name, body in profiles.items():
-                    details += _schedule_null_lines(rel, f"profiles.{name}.", body)
-    if details:
-        return _make_result("schedule_null", FAIL, details)
-    return _make_result("schedule_null", PASS, [
-        f"{checked} file(s): no null inside a threshold schedule with "
-        f"override windows{_not_read_note(root, skipped)}"])
-
-
-_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT = (
-    "threshold-exporter cannot load this tree as the lines above say: repair "
-    "or remove the file they name (or the shape da-guard refuses), then re-run. "
-    "No threshold value was checked.")
-_VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT = (
-    "There is no config file under --config-dir at all: point it at your conf.d "
-    "tree, then re-run. No threshold value was checked.")
-_VALUES_NOT_SERVED_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No threshold value was checked."
-# #3209: the threshold keys were checked, the custom alerts' thresholds not.
-_VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT = (
-    "The threshold keys were checked; the custom alerts' `threshold:` values were not, "
-    "because `da-guard served-values` refuses this tree as the line above says. "
-    "Fix what it names and run again. Reported only, not blocking.")
-
-def check_values_not_served(config_dir: str) -> dict[str, object]:
-    """Threshold values /metrics does not serve as written (#2065).
-
-    Reads `da-guard effective`'s `not_served` — the exporter's own record of
-    the values its resolver cannot parse, the schedule windows it cannot
-    read, the subtree defaults values its build refuses and the second
-    spelling of a threshold one mapping writes twice — and keeps the
-    verdicts da-guard's `value_not_served` refuses
-    (`value_not_served_as_written`). No YAML is judged here. A tree
-    da-guard cannot load is the load-failure row `profiles` also uses.
-
-    #3209, #3234, #3235: also every `_custom_alerts` entry the exporter does
-    not serve that da-guard reports — `da-guard served-values` prints the
-    finding's kind on the entry (`custom_alerts[].finding`: value_not_served
-    for a refused `threshold:`, custom_alert_duplicate_series,
-    custom_alert_rejected for any other field; a block that does not decode:
-    `custom_alerts_finding`). The verdict is Go's
-    (`guard.CustomAlertFindingKind` / `CustomAlertBlockFindingKind`); this
-    row only lists it (a status Go adds still needs the reader's closed set,
-    `CUSTOM_ALERT_STATUSES`). A da-guard older than the field is a caller
-    error, not a WARN. A tree `effective` reads but served-values refuses (e.g. two
-    keys owning one series) keeps the threshold keys' verdict: the custom
-    alerts are then not checked, which turns a PASS into a WARN saying so,
-    never into a FAIL (the rows that read served-values report the tree).
+    da-guard's exit code (`load_guard_report`): 0 clean; 1 error findings,
+    a FAIL; 3 files the exporter's load drops or cannot read, a FAIL that
+    names them, beside any error finding in the rest of the tree; 4 routing
+    or domain policy in the tree, which da-guard does not judge — not a
+    FAIL (the `routes` row judges them), its findings read as for 0. A
+    da-guard that is missing, older than this tool or does not answer as
+    da-guard does, and exit 2, are the load-failure row `profiles` uses
+    (`_tenant_load_failure_row`).
     """
     try:
-        tree = _effective_tree(config_dir)
-    except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+        rep = load_guard_report(config_dir)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
         return _tenant_load_failure_row(
-            "values_not_served", exc, config_dir,
-            (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
-             _VALUES_NOT_SERVED_NO_DA_GUARD_HINT))
-    try:
-        served = load_served_tree(config_dir).tenants
-        unchecked = None
-    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, YamlFileError) as exc:
-        if isinstance(exc, DaGuardError) and exc.stale:
-            # #3234: a da-guard older than `custom_alerts[].finding` gives no
-            # custom-alert verdict at all — a caller error (exit 2), not a
-            # WARN under which every unserved custom alert passes.
-            return _tenant_load_failure_row(
-                "values_not_served", exc, config_dir,
-                (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
-                 _VALUES_NOT_SERVED_NO_DA_GUARD_HINT))
-        served, unchecked = {}, (f"custom alerts not checked: `da-guard served-values` did not read the tree "
-                                 f"({type(exc).__name__}: {' '.join(str(exc).split())})")
-    details: list[str] = []
-    for tid in sorted(tree.tenants):
-        te = tree.tenants[tid]
-        for key in sorted(te.not_served):
-            ns = te.not_served[key]
-            if not value_not_served_as_written(key, ns.reason):
-                continue
-            details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}")
-        src = te.key_sources.get("_custom_alerts")
-        if tid in served and served[tid].custom_alerts_finding is not None:
-            details.append(f"{src.file if src is not None else te.source_file}: tenant {tid}: "
-                           f"`_custom_alerts`: does not decode ({served[tid].custom_alerts_finding}): "
-                           f"{served[tid].custom_alerts_error}")
-        for e in (served[tid].custom_alerts or ()) if tid in served else ():
-            if e.finding is None:
-                continue
-            details.append(f"{src.file if src is not None else te.source_file}: tenant {tid}: "
-                           f"`_custom_alerts[{e.index}]` (`{e.spec.get('name')}`): {e.status} "
-                           f"({e.finding}): {e.reason}")
+            "guard_errors", exc, config_dir,
+            (_GUARD_ERRORS_TREE_UNREADABLE_HINT, _GUARD_ERRORS_NO_CONFIG_FILE_HINT,
+             _GUARD_ERRORS_NO_DA_GUARD_HINT))
+    details = _guard_error_lines(rep.findings)
+    if rep.parse_failed or rep.unreadable:
+        dropped = [f"{p} (does not decode)" for p in rep.parse_failed] + [
+            f"{u.file} ({u.reason})" for u in rep.unreadable]
+        details.append(f"da-guard (exit {rep.returncode}): the exporter's load drops "
+                       f"{len(dropped)} path(s): {', '.join(dropped)} — the findings cover "
+                       "only the rest of the tree")
+        # The exporter's reasons are in da-guard's stderr, as the load-failure
+        # rows show them (`print_load_error`).
+        details += [f"{DA_GUARD_PREFIX}{safe_label(ln)}" for ln in rep.stderr_lines]
+        return _make_result("guard_errors", FAIL, details,
+                            hint=_GUARD_ERRORS_TREE_UNREADABLE_HINT)
     if details:
-        return _make_result("values_not_served", FAIL, details + ([unchecked] if unchecked else []))
-    # #2725: not "serves every threshold value as written" — a value no
-    # defaults file declares is not served at all (served-values `unserved`),
-    # and this row, by its predicate, does not name it.
-    passed = [
-        f"{len(tree.tenants)} tenant(s): no threshold value the exporter refuses as written "
-        f"(a value /metrics does not serve for another reason, e.g. a key no defaults file "
-        f"declares, is not this row's finding)"]
-    if unchecked:
-        return _make_result("values_not_served", WARN, passed + [unchecked],
-                            hint=_VALUES_NOT_SERVED_CUSTOM_UNCHECKED_HINT)
-    return _make_result("values_not_served", PASS, passed)
+        return _make_result("guard_errors", FAIL, details)
+    warns = sum(f.severity != GUARD_REPORT_SEVERITY_ERROR for f in rep.findings)
+    passed = ["no error finding from da-guard"
+              + (f" ({warns} warning(s), not this row's)" if warns else "")]
+    if rep.returncode == 4:
+        passed.append(f"da-guard exit 4: {rep.undetermined} routing / domain-policy item(s) "
+                      "da-guard does not judge — the `routes` row judges them")
+    return _make_result("guard_errors", PASS, passed)
 
 
 # ADR-038: the row's own hints where the check-level one ("fix a misspelt
@@ -2536,9 +2174,9 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
     mapping or a list fails the decode and the exporter drops the whole
     file (``UNPARSEABLE``). A scalar is never judged here: since #3250 the
     exporter reads its text through parseThresholdNumber and refuses that key
-    alone — da-guard effective's `root_defaults_refused`, which `check_root_defaults`
-    reads, is that verdict. A file parse-tree cannot read (a repeated key,
-    several documents …) never gets here: its read fails first. The truth
+    alone — da-guard's root_default_refused, the `guard_errors` row's. A
+    file parse-tree cannot read (a repeated key, several documents …) never
+    gets here: its read fails first. The truth
     table is ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the
     Go test ``TestDefaultsCarrierOracle`` judges against the exporter."""
     block = root.get("defaults")
@@ -2556,78 +2194,19 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
     return out
 
 
-_CUSTOM_ALERT_CAP_HINT = (
-    "A tenant's own `_custom_alerts` (its tenant file, or its entry under a root "
-    "platform file's `tenants:`) may serve at most {cap} custom-alert rows: each "
-    "recipe of its own shape is a rule of its own. Remove recipes, or move ones "
-    "several tenants share into a profile — a profile's recipes are one shape for "
-    "all its tenants and are not counted (#3042). tenant-api refuses such a write "
-    "with the same count.")
-
-
-def check_custom_alert_cap(config_dir: str) -> dict[str, object]:
-    """#3042 decision 1: the per-tenant cap on custom alerts, judged where CI
-    runs it (tenant-api's write check is the other place).
-
-    Counted is what the tenant's list asks the exporter to serve, before the
-    per-tenant metric limit (`max_metrics_per_tenant`) truncates it — da-guard
-    served-values' `custom_alert_rows`, the count da-guard's
-    custom_alert_over_cap judges (pkg/config.CustomAlertRowCount): one per
-    `user_threshold` row — a switched-off recipe serves none, an
-    slo_burn_rate two, an entry dropped as a duplicate none. tenant-api's
-    write check (pkg/config.ValidateTenantCustomAlerts) refuses a duplicate
-    outright. Only a list the tenant owns counts: one whose source
-    (da-guard effective's `key_sources`) is the tenant file or a root
-    platform file's `tenants:`; a profile's is a shape its tenants share.
-    Over the cap is a FAIL. da-guard unavailable or failing is a WARN saying
-    nothing was counted, never a FAIL.
-    """
-    try:
-        sources = _effective_tree(config_dir).tenants
-        served = load_served_tree(config_dir).tenants
-    except Exception as exc:  # noqa: BLE001 — any failure is "not counted", never a refusal
-        return _make_result("custom_alert_cap", WARN, [
-            "not counted: the custom alerts the exporter serves were not read "
-            f"({type(exc).__name__}: {' '.join(str(exc).split())})"])
-    over = []
-    counted = 0
-    for t in sorted(served):
-        src = sources[t].key_sources.get("_custom_alerts") if t in sources else None
-        if src is None or src.layer not in ("tenant", "platform"):
-            continue
-        n = served[t].custom_alert_rows
-        if n is None:
-            return _make_result("custom_alert_cap", WARN, [
-                "not counted: da-guard served-values has no `custom_alert_rows` — this da-guard "
-                "is older than this tool: upgrade or rebuild it"])
-        counted += 1
-        if n > MAX_CUSTOM_RECIPES:
-            over.append(f"{src.file}: tenant {t} asks the exporter to serve {n} custom-alert rows from its own "
-                        f"`_custom_alerts`, over the per-tenant cap of {MAX_CUSTOM_RECIPES}")
-    if over:
-        return _make_result("custom_alert_cap", FAIL, over)
-    return _make_result("custom_alert_cap", PASS, [
-        f"{counted} tenant(s) writing their own `_custom_alerts`, each within the cap of "
-        f"{MAX_CUSTOM_RECIPES} rows"])
-
-
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
     Three rules, one row:
 
-    * #1414, #3250 — every value must be a number the exporter reads. A
-      mapping or a list fails the exporter's decode and it drops the root
-      file's whole ``defaults:`` — every platform threshold, while the load
-      is reported as successful; a scalar it does not read (``abc``,
-      ``0x10``, ``.nan``, ``disable``) refuses that key alone — no default
-      row, da-guard effective's ``root_defaults_refused`` — and a null / empty
+    * #1414 — a mapping or a list as a value fails the exporter's decode
+      and it drops the root file's whole ``defaults:`` — every platform
+      threshold, while the load is reported as successful; a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
-      not judged here. All FAIL. The structure is ``_root_defaults_verdicts``
-      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906);
-      a scalar's verdict is the exporter's own, read from da-guard effective;
-      both are checked against the truth table
+      not judged here. Both FAIL. The structure is ``_root_defaults_verdicts``
+      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906),
+      checked against the truth table
       ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
       ``TestDefaultsCarrierOracle`` judges. Every kind in
       ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
@@ -2636,18 +2215,15 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       the value rule.
     * #3045 — any other ``_`` key under ``defaults:`` whose value decodes
       is a WARN: no ``_`` key is a threshold (the exporter makes no row of
-      one) and no other reader reads one there, so it is dead config — a
-      root ``_metadata: 1`` used to fail served-values and now says nothing
-      anywhere else. A value that does not decode keeps the value rule's
-      FAIL line only.
-    * #2386 — a root carrier with no ``defaults:`` mapping (the key absent,
-      or present with no value) whose top level holds a key the merge takes
-      (``_keys_acting_when_merged``: a threshold, or a reserved key such as
-      ``_severity_dedup``) FAILs: /effective shows it, the exporter's root
-      decode does not read it (``_root_defaults_unwrapped_detail``). With no
-      such key it still PASSes as "nothing to check".
-      A ``defaults:`` mapping beside ignored top-level keys is the
-      ``defaults_wrapper`` row's finding, at every level.
+      one) and no other reader reads one there, so it is dead config. A
+      value that does not decode keeps the value rule's FAIL line only.
+
+    #3387: what da-guard reports as an error about this file is the
+    ``guard_errors`` row's, not this one's — a scalar the exporter refuses
+    (``abc``, ``0x10``, ``.nan``, ``disable``: root_default_refused), a
+    registered ``_`` key that reaches no tenant (root_defaults_reserved_key),
+    and a carrier with no ``defaults:`` mapping whose top level holds a key
+    the merge takes (root_defaults_unwrapped).
 
     ⚠️ A file parse-tree cannot read at all fails through
     ``load_confd_file`` and ``_run_check``'s input-error row;
@@ -2710,8 +2286,6 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
-    if raw.get("defaults") is None:
-        details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
     if not isinstance(block, dict):
         if details:
@@ -2724,38 +2298,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                 if isinstance(k, str) and k.startswith("_routing")]
     if details:
         return _make_result("root_defaults", FAIL, details)
-    # #3250: which scalar the exporter refuses is its own verdict — the
-    # build's `root_defaults_refused`, read off the run's one `da-guard
-    # effective` (#2740, #2115 F4: no second subcommand), for the keys this
-    # carrier writes — never a reading of the text here.
-    # Another file the load drops (exit 3) leaves this carrier judged: the
-    # verdicts stand in the document beside it (ParseFailedError).
-    try:
-        tree = _effective_tree(config_dir)
-        refused, reserved_keys = tree.root_defaults_refused, tree.root_defaults_reserved
-    except ParseFailedError as exc:
-        refused, reserved_keys, why = exc.root_defaults_refused, exc.root_defaults_reserved, exc
-    except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
-        refused = reserved_keys = None
-        why = exc
-    if refused is None or reserved_keys is None:
-        return _make_result("root_defaults", WARN, [
-            f"{rel}: which `defaults:` values threshold-exporter refuses was not judged: "
-            f"da-guard effective failed ({type(why).__name__}: {' '.join(str(why).split())})"])
-    written = {str(k) for k in block}
-    details = [_root_defaults_refused_detail(rel, e.key, e.text, e.refused)
-               for e in refused if e.key in written]
-    # #3250: a registered `_` key reaches no tenant from here — the build's
-    # own verdict (da-guard's root_defaults_reserved_key, an error); a
-    # `_routing*` one is FAILed above already.
-    reserved = {k for k in reserved_keys if k in written and not k.startswith("_routing")}
-    details += [f"{rel}: `defaults.{k}` reaches no tenant — threshold-exporter reads the root "
-                f"`defaults:` for thresholds only, while /effective shows the value as inherited "
-                f"(not_served: root_defaults_reserved); `da-guard` (root_defaults_reserved_key) "
-                f"says where `{k}` is read"
-                for k in sorted(reserved)]
-    if details:
-        return _make_result("root_defaults", FAIL, details)
+    # #3387: which scalar the exporter refuses (root_default_refused) and a
+    # registered `_` key that reaches no tenant (root_defaults_reserved_key)
+    # are da-guard's errors, the `guard_errors` row's — not judged here.
     dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
             "(threshold-exporter makes no row of one, #3045) and no other reader reads "
             "`_` keys under `defaults:`; delete it, or drop the `_` to make it a threshold"
@@ -2765,8 +2310,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     if dead:
         return _make_result("root_defaults", WARN, dead)
     return _make_result("root_defaults", PASS, [
-        f"{rel}: {len(block)} key(s) under `defaults:`, every value a number "
-        f"threshold-exporter decodes, no `_routing*` key"])
+        f"{rel}: {len(block)} key(s) under `defaults:`, no mapping, list or null value "
+        f"and no `_routing*` key (a value the exporter refuses: `guard_errors`)"])
 
 
 # ============================================================
@@ -2906,26 +2451,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "defaults are read from).",
         "docs/cli-reference.md#validate-config",
     ),
-    # #2708: the row names the file, the key and where the null is.
-    "schedule_null": (
-        "Give each listed schedule's default and every override window a "
-        "value. To leave that layer without a value for the key, remove the "
-        "key or write it as plain `null`.",
-        "docs/cli-reference.md#validate-config",
-    ),
-    # #2065: the row names the file, tenant, key and reason.
-    "values_not_served": (
-        "Fix each listed value: write a number (optionally `:warning` or "
-        "`:critical`; any other suffix, e.g. `70:high` or `70:`, is unreadable) or "
-        "`disable`; give each schedule window a UTC `HH:MM-HH:MM` whose start "
-        "differs from its end; write a subtree default as a number or a "
-        "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
-        "of a threshold a mapping writes twice (spelling_duplicate); write a "
-        "custom alert's `threshold:` the same way as a threshold value, fix the "
-        "custom-alert field its reason names, or delete a custom alert that "
-        "repeats an earlier one. `da-guard effective --config-dir <dir>` lists "
-        "each one under `not_served` (a custom alert: `da-guard served-values`, "
-        "`custom_alerts[].finding`).",
+    # #3387: each line is one of da-guard's error findings, as it wrote it.
+    "guard_errors": (
+        "Fix each finding as its own message says (each line is da-guard's "
+        "finding: its kind, the field, the tenants it affects). `da-tools guard "
+        "defaults-impact --config-dir <dir>` prints the same report.",
         "docs/cli-reference.md#validate-config",
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
@@ -2934,18 +2464,6 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "switches nothing off usually sits on a misspelt key. "
         "`da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. Reported only, not yet blocking (#3016).",
-        "docs/cli-reference.md#validate-config",
-    ),
-    # #3042: each line names the tenant, its file, the rows it serves and the cap.
-    "custom_alert_cap": (
-        _CUSTOM_ALERT_CAP_HINT.format(cap=MAX_CUSTOM_RECIPES),
-        "docs/cli-reference.md#validate-config",
-    ),
-    # #2386: the row names the file and keys; where they go depends on level.
-    "defaults_wrapper": (
-        "A `defaults:` mapping makes the defaults merge read only that "
-        "mapping: move the listed top-level keys under `defaults:` (in the "
-        "root file, thresholds only), or give `defaults:` no value.",
         "docs/cli-reference.md#validate-config",
     ),
     # #1653: not a check — the one row `main()` emits under --json when
@@ -3562,19 +3080,11 @@ def _main() -> None:
     results.append(_run_check("root_defaults", check_root_defaults,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 11. `defaults:` mapping beside ignored top-level keys (#2386), every
-    # level — unconditional: it changes what is served.
-    results.append(_run_check("defaults_wrapper", check_defaults_wrapper,
-                              args.config_dir, _config_dir=args.config_dir))
-
-    # 12. A null inside a threshold schedule with override windows (#2708),
-    # every layer — unconditional: da-guard refuses the same set.
-    results.append(_run_check("schedule_null", check_schedule_null,
-                              args.config_dir, _config_dir=args.config_dir))
-
-    # 13. Threshold values /metrics does not serve as written (#2065) —
-    # unconditional: da-guard refuses the same set (value_not_served).
-    results.append(_run_check("values_not_served", check_values_not_served,
+    # 13. Every error finding of da-guard's own check (#3387) — unconditional:
+    # the severity is da-guard's alone (it replaced the rows that copied one
+    # finding each: values_not_served, defaults_wrapper, schedule_null,
+    # custom_alert_cap, and root_defaults' share).
+    results.append(_run_check("guard_errors", check_guard_errors,
                               args.config_dir, _config_dir=args.config_dir))
 
     # 14. Keys no reader reads (ADR-038) — unconditional, report only:
@@ -3582,9 +3092,6 @@ def _main() -> None:
     results.append(_run_check("unread_keys", check_unread_keys,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 15. The per-tenant cap on a tenant's own custom alerts (#3042) — a FAIL.
-    results.append(_run_check("custom_alert_cap", check_custom_alert_cap,
-                              args.config_dir, _config_dir=args.config_dir))
     _effective_runs = None
 
     # Report

@@ -70,7 +70,6 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     def add(doc):
         doc["horizon"]["enum"].append("72h")
         doc["recipes"][1]["status"] = "deprecated"   # rate
-        doc["custom_alert_cap"] = 25
 
     _edit_contract(root, add)
     r = _cli(root, "--check")
@@ -87,7 +86,7 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     assert "72h" in props["horizon"]["enum"]
     assert "72h" in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["horizon"]
     assert json.loads((root / gen.PORTAL_STATUS_REL).read_text(encoding="utf-8"))["statuses"]["rate"] == "deprecated"
-    assert "MAX_CUSTOM_RECIPES: Final[int] = 25" in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
+    assert 'FORECAST_MAX_LOOKBACK: Final[str] = "144h"' in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
     forecast = yaml.safe_load((root / gen.RECIPES_DIR_REL / "forecast.yaml").read_text(encoding="utf-8"))
     assert "72h" in forecast["params"]["horizon"]["enum"]
     rate = yaml.safe_load((root / gen.RECIPES_DIR_REL / "rate.yaml").read_text(encoding="utf-8"))

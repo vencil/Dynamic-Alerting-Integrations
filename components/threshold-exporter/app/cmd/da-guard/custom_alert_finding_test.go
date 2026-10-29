@@ -16,8 +16,8 @@ import (
 // da-guard error — value_not_served (a refused `threshold:`, #3209),
 // custom_alert_duplicate_series, or custom_alert_rejected for any other
 // rejection (a bad window, quantile, objective, recipe, …) — and
-// served-values prints that same kind on the entry (custom_alerts[].finding),
-// which validate-config lists. A served or disabled entry, and a switched-off
+// served-values prints that same kind on the entry (custom_alerts[].finding).
+// validate-config lists the findings (guard_errors, #3387). A served or disabled entry, and a switched-off
 // one the exporter would reject switched back on (a valid opt-out it counts
 // no error for), are neither.
 func TestGuard_EveryUnservedCustomAlertIsAFinding(t *testing.T) {

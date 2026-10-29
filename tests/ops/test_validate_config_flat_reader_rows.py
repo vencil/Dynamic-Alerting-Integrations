@@ -106,8 +106,9 @@ _CORPUS = [
                            "    group_wait: \"30s\"\n")}, {
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"},
      [], False),
-    # #2386: a `defaults:` mapping beside a top-level reserved key — the
-    # defaults_wrapper row, which judges every level, so the moved twin
+    # #2386: a `defaults:` mapping beside a top-level reserved key — da-guard's
+    # defaults_toplevel_ignored (the guard_errors row, #3387), judged at every
+    # level, so the moved twin
     # (`prod/_defaults.yaml`) must FAIL as well.
     ("defaults-mapping-leaves-top-level-out", {
         "_defaults.yaml": _DEFAULTS + "_severity_dedup: disable\n"}, {
@@ -127,8 +128,8 @@ _CORPUS = [
                            "    severity: error\n")}, {
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
      [], True),
-    # #2708: a null inside a schedule with override windows — the
-    # schedule_null row, which reads the tenant files at every level.
+    # #2708: a null inside a schedule with override windows — da-guard's
+    # schedule_null_value (the guard_errors row, #3387), at every level.
     ("null-inside-a-schedule-with-windows", {}, {
         "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: {default: \"70\", "
                       "overrides: [{window: \"00:00-01:00\", value: null}]}\n")},
