@@ -214,7 +214,7 @@ def parse_declared_rules(
     try:
         rule_files = _lib_consumer_read.prometheus_rule_files(list(rule_pack_paths))
     except _lib_consumer_read.ConsumerReadError as exc:
-        raise ValueError("; ".join([str(exc), *exc.stderr_lines])) from exc
+        raise ValueError(exc.detail()) from exc
     for path, rule_file in zip(rule_pack_paths, rule_files):
         doc = rule_file.documents[0]
         # Fail loud on a structurally-wrong top-level `groups:` (e.g.

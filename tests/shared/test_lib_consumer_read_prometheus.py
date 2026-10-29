@@ -98,6 +98,27 @@ def test_a_second_document_with_content_is_refused(tmp_path) -> None:
     assert "YAML document 2 of the file has content" in r.problem
 
 
+@pytest.mark.parametrize("stderr", [
+    "panic: runtime error",          # a Go crash exits 2 too
+    "fatal error: out of memory",
+    "",                              # rc 2 without a reason
+])
+def test_a_rule_file_run_that_is_not_a_refusal_is_not_input_refused(tmp_path, stderr) -> None:
+    """The rule-file batch takes the same judgement of "refused" as every
+    other reading (`_refused`): rc 2 with JSON that refuses a file is still
+    no answer about the file when stderr is a crash or empty."""
+    a = _write(tmp_path, "a.yml", GOOD)
+    payload = ('{"files": [{"path": "%s", "documents": null, '
+               '"problem": {"message": "x"}}]}' % a)
+    fake = tmp_path / "fake-da-read"
+    say = f"echo '{stderr}' >&2; " if stderr else ""
+    fake.write_text(f"#!/bin/sh\necho '{payload}'; {say}exit 2\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        cr.prometheus_rule_file_results([a], binary=str(fake))
+    assert not isinstance(exc.value, cr.InputRefused)
+
+
 def _repo_rule_files(tmp_path: Path) -> "list[str]":
     files = sorted(glob.glob(str(REPO / "rule-packs" / "rule-pack-*.yaml")))
     assert len(files) >= 10, files

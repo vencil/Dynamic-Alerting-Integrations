@@ -120,8 +120,7 @@ def _index() -> "dict[str, tuple[str, ...]] | None":
             try:
                 _INDEX_CACHE = build_index(paths)
             except _lib_consumer_read.ConsumerReadError as exc:
-                _warn_once("rule packs unreadable: "
-                           + "; ".join([str(exc), *exc.stderr_lines]))
+                _warn_once(f"rule packs unreadable: {exc.detail()}")
     return _INDEX_CACHE
 
 
