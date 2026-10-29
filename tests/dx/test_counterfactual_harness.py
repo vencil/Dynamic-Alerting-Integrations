@@ -32,7 +32,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "scripts" / "tools" / "dx" / "analyze_probe.py"
-LIB = REPO / "scripts" / "tools" / "_lib_compat.py"
+LIBS = [REPO / "scripts" / "tools" / n
+        for n in ("_lib_compat.py", "_lib_paths.py", "_lib_label.py")]
 HARNESS = (REPO / "docs" / "internal" / "audit-reports" / "bench-probe-2026-09"
            / "counterfactual.py")
 
@@ -56,12 +57,13 @@ def copy_tool(tmp_path: Path, mutate=None) -> Path:
     """A copy of the tool in a layout it can import its sibling from.
 
     ⚠️ `analyze_probe.py` inserts its own parent directory on `sys.path` and
-    imports `_lib_compat` from there, so a bare copy is unimportable — which the
+    imports `_lib_compat` / `_lib_paths` from there, so a bare copy is unimportable — which the
     harness reports as rc 3, i.e. a mutation test written that way would pass for
     the wrong reason.
     """
     (tmp_path / "dx").mkdir()
-    shutil.copy(LIB, tmp_path / "_lib_compat.py")
+    for lib in LIBS:
+        shutil.copy(lib, tmp_path / lib.name)
     src = TOOL.read_text(encoding="utf-8")
     if mutate is not None:
         old, new = mutate
