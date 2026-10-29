@@ -63,7 +63,7 @@ import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_io import YamlFileError, safe_label  # noqa: E402
+from _lib_io import YamlFileError, classify_path, safe_label  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
@@ -102,8 +102,9 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
 
 def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
              timeout: float) -> dict[str, Any]:
-    if not conf_d.is_dir():
-        raise ExplainError(f"--config-dir is not a directory: {conf_d}")
+    conf_d_problem = classify_path(conf_d, "dir", flag="--config-dir")  # #3276
+    if conf_d_problem is not None:
+        raise ExplainError(conf_d_problem.message)
     # The verdict takes `_policies` from the root `_defaults.yaml` only, as
     # Policy-as-Code does; say which subdirectory ones it does not count.
     # #3206: ONE reader — one parse-tree document — for the note and the verdict.
@@ -281,6 +282,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     expected = json.load(f)
             except (OSError, UnicodeDecodeError, ValueError) as e:
                 raise ExplainError(f"--assert: cannot read {args.assert_file}: {e}") from e
+        # #3276: the caller's string, before Path('') becomes '.'.
+        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        if config_dir_problem is not None:
+            raise ExplainError(config_dir_problem.message)
         doc = explain(Path(args.config_dir), args.tenant, args.at, args.da_guard_binary, args.timeout)
         diffs = compare(doc, expected) if expected is not None else []
     except ExplainError as e:

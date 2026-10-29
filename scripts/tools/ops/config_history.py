@@ -34,6 +34,7 @@ from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -57,9 +58,10 @@ def _scan_config_dir(config_dir):
     """Scan config directory, return sorted list of (filename, content, hash)."""
     files = []
     config_path = Path(config_dir)
-    if not config_path.is_dir():
-        print(_t(f"錯誤：目錄不存在 {config_dir}", f"Error: directory not found {config_dir}"),
-              file=sys.stderr)
+    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    if config_dir_problem is not None:
+        print(_t(f"錯誤：目錄無法使用 {config_dir_problem.message}",
+                 f"Error: {config_dir_problem.message}"), file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Flat by design (the snapshot keys files by name); `warn_nested` names

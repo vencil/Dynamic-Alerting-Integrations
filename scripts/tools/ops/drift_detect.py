@@ -41,6 +41,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
+from _lib_io import classify_path, raise_path_problems, require_dir  # noqa: E402  (#3276)
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -570,10 +571,7 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         local_dir = dirs[0]
-        if not Path(local_dir).is_dir():
-            print(f"ERROR: directory not found: {local_dir}",
-                  file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+        require_dir(local_dir, flag="--dirs")  # #3276
 
         crd_manifest = compute_crd_manifest(
             namespace=args.namespace,
@@ -601,13 +599,8 @@ def main():
                       file=sys.stderr)
                 sys.exit(EXIT_CALLER_ERROR)
 
-        # Check directories exist
-        missing = [d for d in dirs if not Path(d).is_dir()]
-        if missing:
-            for m in missing:
-                print(f"ERROR: directory not found: {m}",
-                      file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+        # Check directories exist (#3276: the shared caller-path judgement)
+        raise_path_problems([classify_path(d, "dir", flag="--dirs") for d in dirs])
 
         reports = analyze_drift(dirs, labels=labels,
                                 ignore_prefixes=ignore_prefixes)

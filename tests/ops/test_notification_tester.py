@@ -1050,10 +1050,11 @@ class TestCLI:
 
     def test_missing_config_dir(self, tmp_path):
         """不存在的 config-dir 應 exit caller error。"""
+        from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
         with patch("sys.argv", ["notification_tester.py", "--config-dir", "/nonexistent/path"]):
-            with pytest.raises(SystemExit) as exc_info:
+            with pytest.raises(CallerError) as exc_info:
                 nt.main()
-            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert exc_info.value.reason == "dir_not_found"
 
     def test_ci_mode_exit_code_on_failure(self, tmp_path):
         """CI 模式下有失敗 receiver 應 exit 1。"""

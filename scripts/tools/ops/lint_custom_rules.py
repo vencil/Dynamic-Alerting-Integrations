@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
@@ -500,13 +501,19 @@ def main():
     # (an unset shell variable) silently linted the CURRENT DIRECTORY and
     # exited on whatever it found there. '' is supplied and unusable — same
     # family as a missing target, and `!r` makes it visible as ''.
-    missing = [p for p in args.paths if p == "" or not Path(p).exists()]
-    if missing:
+    # #3276: every other target is judged by the shared caller-path check —
+    # under a parent the caller cannot enter it is named, not a traceback.
+    if "" in args.paths:
         die_caller_error(
-            "scan target(s) not found or empty: "
-            + ", ".join(repr(p) for p in missing)
-            + "\n  ⛔ Do not drop the path to clear this — an absent target "
-              "is not a clean one, and '' is not the current directory.")
+            "scan target(s) not found or empty: ''"
+            "\n  ⛔ Do not drop the path to clear this — an absent target "
+            "is not a clean one, and '' is not the current directory.")
+    problems = [p for p in (classify_path(t, "any") for t in args.paths) if p is not None]
+    if problems:
+        die_caller_error(
+            "".join(f"ERROR: {p.message}\n" for p in problems)
+            + "  ⛔ Do not drop the path to clear this — an absent target "
+              "is not a clean one.", problems[0].reason)
 
     files = collect_files(args.paths)
 

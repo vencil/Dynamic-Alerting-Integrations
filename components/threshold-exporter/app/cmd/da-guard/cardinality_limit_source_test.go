@@ -125,10 +125,14 @@ func TestCardinalityLimit_ExplicitFlagOverridesRootCap(t *testing.T) {
 		t.Errorf("an explicit flag must not be reported as read from the tree: %q", stderr)
 	}
 
-	// An explicit larger value wins over the root cap.
+	// An explicit larger value replaces the budget, not the exporter's cut
+	// (#3380): 6 rows over the root cap of 3 are truncated whatever the
+	// budget, so they are still cardinality_exceeded, named as the cut to 3.
 	code, stdout, _ = runOnce(t, "--config-dir", dir, "--cardinality-limit", "100")
-	if code != exitOK || strings.Contains(stdout, "cardinality_") {
-		t.Errorf("explicit 100 must override root cap 3: exit=%d stdout=%q", code, stdout)
+	if code != exitFindings || !strings.Contains(stdout, "cardinality_exceeded") ||
+		!strings.Contains(stdout, "within the per-tenant cardinality limit of 100") ||
+		!strings.Contains(stdout, "truncate them to 3") {
+		t.Errorf("explicit 100 over a root cap of 3: exit=%d stdout=%q", code, stdout)
 	}
 }
 

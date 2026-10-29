@@ -629,7 +629,7 @@ class TestCLI:
         f.write_text("a: 1\n", encoding="utf-8")
         dirs = {"old": tmp_path / "d", "new": tmp_path / "d", side: f}
         p = _run_cli(dirs["old"], dirs["new"])
-        assert p.returncode == 2 and f"--{side}-dir is not a directory" in p.stderr, p.stderr
+        assert p.returncode == 2 and f"--{side}-dir {f}: not a directory" in p.stderr, p.stderr
 
     def test_new_dir_missing_is_not_computed(self, tmp_path):
         _write_tenant(tmp_path / "old", {"mysql_connections": "80"})

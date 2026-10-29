@@ -84,7 +84,7 @@ from _grar_merge import (  # noqa: E402
     visible_routing_profiles,
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import require_dir, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).
@@ -1389,10 +1389,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if not Path(args.config_dir).is_dir():
-        print(f"ERROR: config directory not found: {safe_label(args.config_dir)}",
-              file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    require_dir(args.config_dir, flag="--config-dir")  # #3276
 
     # #3142: the deployment policy, read by the generator's own resolver —
     # an unusable file or an unmet min_generator_version is rc 2.

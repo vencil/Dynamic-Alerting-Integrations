@@ -2560,10 +2560,10 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2。檔案先以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀：值是 Alertmanager 的讀法（`match: {tenant: 010}` 是租戶 `010`），只取原文寫了的鍵，Alertmanager 拒收的設定（例如沒有 `route`）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
-| `--da-crdecode-binary <PATH>` | Phase 1 用的 `da-crdecode` | `$DA_CRDECODE_BINARY`，否則 PATH（映像內建） |
-| `--da-read-binary <PATH>` | Phase 1 用的 `da-read` | `$DA_READ_BINARY`，否則 PATH（映像內建） |
+| `--da-crdecode-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-crdecode` | `$DA_CRDECODE_BINARY`，否則 PATH（映像內建） |
+| `--da-read-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-read` | `$DA_READ_BINARY`，否則 PATH（映像內建） |
 | `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`） | — |
-| `--scrape-config <FILE>` | Phase 3：Prometheus scrape config | — |
+| `--scrape-config <FILE>` | Phase 3：Prometheus 設定（`prometheus.yml`）。可以是設定檔本身，或 ConfigMap YAML（鍵名必須是 `prometheus.yml`）。讀法同 Phase 1：外層以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Prometheus 自己的載入函式（`da-read prometheus`，已註冊全部服務探索）讀，只取原文寫了的鍵、值是 Prometheus 的讀法（例如 relabel 的 `action: Keep` 是 `keep`）；Prometheus 拒收的設定（不認得的鍵、重複的 `job_name`、壞掉的 regex）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
 | `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
 | `--dry-run` | 只分析、不寫檔，印出各 phase 摘要 | false |
@@ -2598,8 +2598,8 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
-| `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs`。⚠️ `--scrape-config` 檔案不存在也是 1（`--alertmanager-config` 不存在則是 2） |
-| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）；`phase1-routing/<tenant>.yaml` 與 `phase2-rules/_defaults-suggestion.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；值沒有寫入契約的型別（例如 `inf`）、或要寫進註解的租戶 id、metric key、閾值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；要寫這兩種檔時找不到可用的 da-guard 也是 2；Alertmanager 設定讀不了（Alertmanager 拒收、ConfigMap 內嵌的 YAML 壞掉、找不到 `da-crdecode`／`da-read`）也是 2，stderr 印出原因。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs`。 |
+| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）；`phase1-routing/<tenant>.yaml` 與 `phase2-rules/_defaults-suggestion.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；值沒有寫入契約的型別（例如 `inf`）、或要寫進註解的租戶 id、metric key、閾值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；要寫這兩種檔時找不到可用的 da-guard 也是 2；Alertmanager 設定或 Prometheus 設定讀不了（Alertmanager／Prometheus 拒收、ConfigMap 內嵌的 YAML 壞掉、找不到 `da-crdecode`／`da-read`）也是 2，stderr 印出原因。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2879,7 +2879,7 @@ da-tools guard <subcommand> [flags]
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 | `--scope <path>` | 整棵樹 | 限定 `--config-dir` 底下（含其本身）的某個目錄（CI 傳變更的 `_` 開頭 YAML（如 `_defaults.yaml`、`_profiles.yaml`）所在目錄，相對於 `--config-dir`；同一根下改到多個目錄時傳 `.`）。相對路徑**相對於 `--config-dir`**，與目前工作目錄無關：`--config-dir conf.d/ --scope db/`（`.` 為整棵樹）；絕對路徑照用。解析後落在 `--config-dir` 之外為 exit 2（[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)） |
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV，對有效設定判定。第一段是路由層鍵（`_routing`、任何 `_routing` 開頭的鍵、`_severity_dedup`）的路徑直接回 exit 2 並說明（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；過去對解析後的 routing 判定），不會悄悄失效 |
-| `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
+| `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | 每租戶的列數上限：比的是 exporter 對該租戶實際會產生的 `user_threshold` 列數（取一天中最多的時段、在 exporter 自己的截斷之前；`_critical`、維度鍵、#1231 舊拼法的雙送列、custom alert 都照 exporter 的實際列數算，`disable` 與 exporter 不送的鍵不算，[#3380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3380)）；超過即 `cardinality_exceeded`（error），超過 warn-tier 即 `cardinality_warning`。這個值是 da-guard 的預算：exporter 只截斷超過它自己 `max_metrics_per_tenant` 的列，finding 會寫明那個上限會不會截斷（明確給的值低於它時，超過預算也不會被截斷）；列數超過 exporter 上限時不論預算設多少一律報 `cardinality_exceeded`（明確給的值高於上限也一樣，訊息寫明會截斷到多少與預算是多少）；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
 | `--baseline-config-dir <path>` | 空 | 變更前的同一棵 conf.d（CI 傳 PR 的 merge-base）；根 `_defaults.yaml` 的 `max_metrics_per_tenant` 被調高或關閉時，報告開頭加一則提示。不影響 exit code |
 | `--format md\|json` | md | 輸出格式 |

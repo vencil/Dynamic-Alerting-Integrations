@@ -270,7 +270,11 @@ func TestCallerErrors(t *testing.T) {
 	for name, args := range map[string][]string{
 		"no-args":      nil,
 		"no-file":      {"alertmanager"},
-		"unknown-kind": {"prometheus", "-"},
+		"unknown-kind": {"vmalert", "-"},
+		"prom-two":     {"prometheus", "a", "b"},
+		"rules-none":   {"prometheus-rules"},
+		"rules-help":   {"prometheus-rules", "a", "--help"},
+		"rules-empty":  {"prometheus-rules", ""},
 		"three-args":   {"alertmanager", "a", "b"},
 		"help":         {"alertmanager", "-h"},
 		"empty":        {"alertmanager", ""},
@@ -316,7 +320,7 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 		{"struct-list-length", "items: [{kept: a}, {kept: b}]\n",
 			map[string]interface{}{"items": []interface{}{map[string]interface{}{"kept": "a"}}},
 			reflect.ValueOf(withList{Items: []hidden{{Kept: "a"}}}),
-			`items: the text writes it, but Alertmanager's reading has no such entry: 2 entries written, 1 read`},
+			`items: the text writes it, but the loader's reading has no such entry: 2 entries written, 1 read`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
