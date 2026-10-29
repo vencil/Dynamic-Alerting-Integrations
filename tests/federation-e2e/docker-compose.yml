@@ -34,7 +34,7 @@ services:
     # from the harness commit (#544) until #1333, two minors behind what we
     # ship, and nothing noticed because a working Prometheus passes every
     # scenario regardless of version.
-    image: prom/prometheus:v3.15.0
+    image: prom/prometheus:v3.15.1
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:

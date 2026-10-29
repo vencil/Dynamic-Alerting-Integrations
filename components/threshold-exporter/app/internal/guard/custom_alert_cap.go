@@ -7,7 +7,7 @@ package guard
 // Counted is what the exporter serves (config.CustomAlertRowCount, the
 // resolver's own reading), as tenant-api's write check counts; a list a
 // profile fills in is a shape the profile's tenants share and is not
-// counted. validate-config's custom_alert_cap judges the same.
+// counted. validate-config reports it through its guard_errors row (#3387).
 //
 // ⛔ NO VERDICT OF ITS OWN: the counts are handed in as
 // CheckInput.CustomAlertsOverCap.

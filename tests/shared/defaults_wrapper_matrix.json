@@ -1,5 +1,5 @@
 {
-  "_comment": "#2386: which `_defaults.yaml` shapes are reported, judged by da-guard (Go: internal/guard TestDefaultsWrapperMatrix) and by validate-config (Python: tests/ops/test_validate_config.py TestDefaultsWrapperMatrix) from this one table. `expect` lists [finding kind, file]; root_defaults_unwrapped is validate-config's `root_defaults` row, defaults_toplevel_ignored its `defaults_wrapper` row. `top_level_read_elsewhere` is the key list both sides exempt (generated from the reserved-key registry, ADR-038). `merge_dropped_keys` is the list both sides leave out because the defaults merge drops it at every level (Go config.MergeDroppedKeys).",
+  "_comment": "#2386: which `_defaults.yaml` shapes are reported, judged by da-guard (Go: internal/guard TestDefaultsWrapperMatrix) from this table. `expect` lists [finding kind, file]. validate-config reports both kinds through its `guard_errors` row, da-guard's own findings (#3387: the Python copies of these predicates, its `root_defaults` share and `defaults_wrapper` row, are gone). `top_level_read_elsewhere` is the key list the check exempts (generated from the reserved-key registry, ADR-038). `merge_dropped_keys` is the list it leaves out because the defaults merge drops it at every level (Go config.MergeDroppedKeys).",
   "top_level_read_elsewhere": [
     "_policies",
     "_routing_defaults",

@@ -1,6 +1,9 @@
 # DEMO fixture — 一個過度配置 metric 閾值的租戶（QUICKSTART 用）。
-# da-guard 以 --cardinality-limit 為預算；此處 demo 設低（50），production 預設 500。
-# 每個 key = runtime 一條 resolved threshold series → 超量會被靜默截斷。
+# da-guard 以 --cardinality-limit 為預算；此處 demo 設低（50），未給時取根 _defaults.yaml 的
+# max_metrics_per_tenant（未設 = 500）。這些都是一般（非維度）閾值鍵，都在同目錄 _defaults.yaml
+# 的 optional_overrides: 宣告過，exporter 各送一條 resolved threshold series（一般鍵沒在根層宣告
+# 就不送，也不算，#3380）。60 列超過 demo 的預算 50，但沒超過 exporter 自己的上限 500，
+# 所以 runtime 不會截斷；超過 max_metrics_per_tenant 的部分才會被 exporter 靜默截斷。
 tenants:
   over-budget-tenant:
     metric_000: "70"

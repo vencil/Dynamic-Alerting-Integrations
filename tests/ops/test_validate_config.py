@@ -923,21 +923,6 @@ class TestCustomRulesExtended:
             assert result["status"] == vc.PASS
 
 
-class TestIsReservedKey:
-    """_is_reserved_key helper tests."""
-
-    def test_known_reserved(self):
-        assert vc._is_reserved_key("_routing") is True
-        assert vc._is_reserved_key("_severity_dedup") is True
-
-    def test_reserved_prefix(self):
-        assert vc._is_reserved_key("_state_maintenance") is True
-
-    def test_not_reserved(self):
-        assert vc._is_reserved_key("mysql_connections") is False
-        assert vc._is_reserved_key("custom_metric") is False
-
-
 # ============================================================
 # #1447 — what the report points at has to be openable by its reader.
 # ============================================================
@@ -2056,11 +2041,8 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         # tree turns this red on purpose — add its name here, and only if it
         # really does read `--config-dir`.
         assert carriers == {
-            # #3042. Reads the tree through da-guard (served-values and
-            # effective) under `--config-dir`.
-            "custom_alert_cap",
-            # #2386. Reads every level's `_defaults.yaml` under `--config-dir`.
-            "defaults_wrapper",
+            # #3387. Runs da-guard's own check over `--config-dir`.
+            "guard_errors",
             # #2695. Reads every file under `--config-dir`; a file that does
             # not parse stops it, and its row says no file was checked.
             "json_schema",
@@ -2069,9 +2051,6 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
             "root_defaults",
             "routes",
-            # #2708. Reads every file the exporter reads under `--config-dir`
-            # and skips the ones it cannot parse.
-            "schedule_null",
             "schema",
             # #3157. The same scan as `tenant_uniqueness` below, so the same
             # caveat: it skips what it cannot parse.
@@ -2082,11 +2061,8 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # declaration" about a tree it did not finish reading.
             "tenant_uniqueness",
             # ADR-038. Reads the tree through da-guard (served-values and
-            # effective) under `--config-dir`, like `values_not_served`.
+            # effective) under `--config-dir`, like `profiles`.
             "unread_keys",
-            # #2065. Reads the tree through `da-guard effective` under
-            # `--config-dir`, like `profiles`.
-            "values_not_served",
             # #2164. Reads every file under `--config-dir` and skips the
             # ones it cannot parse — same reason as the rows above.
             "yaml_quoting",
@@ -2804,12 +2780,18 @@ class TestRootDefaultsRouting:
 
     def test_a_dropped_carrier_is_not_judged_as_passing(self, tmp_path):
         """#3250 review N1: the carrier itself dropped (a top-level key its
-        decode refuses): which `defaults:` values the exporter refuses was
-        never judged — WARN, never "every value a number" PASS."""
+        decode refuses). #3387: which `defaults:` values the exporter refuses
+        is not this row's verdict, and its PASS line says so rather than
+        "every value a number"; da-guard names the dropped carrier (exit 3),
+        a `guard_errors` FAIL."""
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: abc\nstate_filters: 5\n")
         r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.WARN, r
-        assert "was not judged" in r["details"][0], r
+        assert r["status"] == vc.PASS, r
+        assert "every value a number" not in r["details"][0], r
+        assert "`guard_errors`" in r["details"][0], r
+        g = vc.check_guard_errors(str(d))
+        assert g["status"] == vc.FAIL, g
+        assert any("_defaults.yaml (does not decode)" in x for x in g["details"]), g
 
     def test_other_defaults_documents_are_not_the_carrier(self, tmp_path):
         """`_defaults-multidb.yaml` is not merged as the root defaults, so its
@@ -2962,20 +2944,19 @@ class TestRootDefaultsValues:
         ("0x10", "0x10", "unparsed"),
         ('"70:critical"', "70:critical", "unparsed"),
     ])
-    def test_refused_values_fail(self, tmp_path, value, text, why):
+    def test_refused_values_are_guard_errors_not_this_rows(self, tmp_path, value, text, why):
         """#3140, #3250: the exporter refuses these (its text through
-        parseThresholdNumber, served-values' root_defaults_refused) and serves
-        no default row for the key (da-guard's root_default_refused). The
-        file loads, so the line names the key only, never "drops ALL"."""
+        parseThresholdNumber) and serves no default row for the key —
+        da-guard's root_default_refused. #3387: that error is the
+        `guard_errors` row's alone; this row no longer copies it."""
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
                        f"  mysql_connections: {value}\n")
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.FAIL, r
-        detail = " ".join(r["details"])
-        assert (f"`defaults.mysql_connections` is `{text}`, which threshold-exporter "
-                f"refuses ({why})") in detail, detail
-        assert "da-guard` (root_default_refused)" in detail, detail
-        assert "container_cpu" not in detail and "drops ALL of it" not in detail, detail
+        assert vc.check_root_defaults(str(d))["status"] == vc.PASS
+        g = vc.check_guard_errors(str(d))
+        assert g["status"] == vc.FAIL, g
+        assert any(x.startswith("error: root_default_refused "
+                                "`_defaults.yaml:defaults.mysql_connections`")
+                   for x in g["details"]), g
 
     def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):
         """`_` keys are no threshold (#3045): `_x: .nan` is the dead-config WARN."""
@@ -2984,14 +2965,15 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.WARN, r
 
     def test_non_finite_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
-        """#3140: validate-config 0 → 1 for a root `.nan`."""
+        """#3140: validate-config 0 → 1 for a root `.nan` (#3387: through
+        da-guard's root_default_refused, the `guard_errors` row)."""
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: .nan\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             vc.main()
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
-        assert "[FAIL] root_defaults" in out, out
+        assert "[FAIL] guard_errors" in out, out
 
     def test_defaults_that_is_not_a_mapping_fails(self, tmp_path):
         """`defaults: 80` loads in PyYAML and is dropped whole by the exporter;
@@ -3045,12 +3027,18 @@ class TestRootDefaultsValues:
         r = vc._run_check("root_defaults", vc.check_root_defaults, str(d),
                           _config_dir=str(d))
         # #3140: a key the exporter decodes but serves no default row for (a
-        # non-finite number, `default_row: false`) FAILs too.
+        # non-finite number, `default_row: false`) FAILs too — since #3387
+        # through da-guard's root_default_refused, the `guard_errors` row:
+        # the verdict is the two rows' together.
+        g = vc._run_check("guard_errors", vc.check_guard_errors, str(d),
+                          _config_dir=str(d))
+        refused = any(x.startswith("error: root_default_refused ") for x in g["details"])
+        got = vc.FAIL if r["status"] == vc.FAIL or refused else vc.PASS
         want = _ORACLE_ROW_DEVIATIONS.get(
             case["name"],
             vc.PASS if case["exporter"] == "accepted" and case.get("default_row", True)
             else vc.FAIL)
-        assert r["status"] == want, (case, r)
+        assert got == want, (case, r, g)
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: disable\n")
@@ -3059,7 +3047,7 @@ class TestRootDefaultsValues:
             vc.main()
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
-        assert "[FAIL] root_defaults" in out, out
+        assert "[FAIL] guard_errors" in out, out
 
 
 class TestRootDefaultsUnderscoreKeys:
@@ -3088,19 +3076,20 @@ class TestRootDefaultsUnderscoreKeys:
 
     @pytest.mark.parametrize("body", ["  _namespaces: 1\n", "  _state_maintenance: 1\n",
                                       "  _silent_mode: warning\n", "  _severity_dedup: disable\n"])
-    def test_a_registered_reserved_key_fails(self, tmp_path, body):
+    def test_a_registered_reserved_key_fails_in_guard_errors(self, tmp_path, body):
         """#3250: a key the reserved-key registry lists reaches no tenant from the
         root `defaults:` while /effective shows it as inherited — da-guard's
-        root_defaults_reserved_key (an error), read off effective's
-        `root_defaults_reserved`, so this row FAILs with it (it WARNed as dead
-        config, and a non-numeric value dropped the file before #3250)."""
+        root_defaults_reserved_key (an error). #3387: that FAIL is the
+        `guard_errors` row's; this row keeps its #3045 dead-config WARN."""
         key = body.split(":")[0].strip()
-        r = vc.check_root_defaults(str(self._tree(tmp_path, body)))
-        assert r["status"] == vc.FAIL, r
-        assert r["details"] == [f"_defaults.yaml: `defaults.{key}` reaches no tenant — threshold-exporter "
-                                "reads the root `defaults:` for thresholds only, while /effective shows the "
-                                "value as inherited (not_served: root_defaults_reserved); `da-guard` "
-                                f"(root_defaults_reserved_key) says where `{key}` is read"], r
+        d = str(self._tree(tmp_path, body))
+        r = vc.check_root_defaults(d)
+        assert r["status"] == vc.WARN, r
+        assert any(f"`defaults.{key}` is read by nothing" in x for x in r["details"]), r
+        g = vc.check_guard_errors(d)
+        assert g["status"] == vc.FAIL, g
+        assert any(x.startswith(f"error: root_defaults_reserved_key `_defaults.yaml:defaults.{key}`")
+                   for x in g["details"]), g
 
     def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata:\n    owner: dba\n")))
@@ -3119,329 +3108,11 @@ class TestRootDefaultsUnderscoreKeys:
         assert r["status"] == vc.PASS, r
 
 
-class TestRootDefaultsWrapper:
-    """Check 10 (#2386): a root `_defaults.yaml` with no `defaults:` mapping
-    whose top level holds a threshold FAILs.
-
-    Measured before this rule: `mysql_connections: 80` written at the top of
-    the root file (no `defaults:` key, or `defaults:` with no value) printed
-    `nothing to check`, rc 0 — while `da-guard served-values` had no
-    `mysql_connections` series for the tenant and `/effective` showed 80.
-    """
-
-    _TENANT = "tenants:\n  tenant-x:\n    container_cpu: \"70\"\n"
-
-    @classmethod
-    def _tree(cls, tmp_path, defaults_body):
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
-        (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
-        return d
-
-    @pytest.mark.parametrize("body", [
-        "mysql_connections: 80\ncontainer_cpu: 60\n",
-        "defaults:\nmysql_connections: 80\ncontainer_cpu: 60\n",
-    ], ids=["no-defaults-key", "defaults-with-no-value"])
-    def test_unwrapped_root_threshold_fails(self, tmp_path, body):
-        d = self._tree(tmp_path, body)
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert len(r["details"]) == 1, r
-        assert "`container_cpu`, `mysql_connections`" in r["details"][0], r
-        assert "nothing to check" not in r["details"][0], r
-
-    def test_only_the_undecoded_keys_are_named(self, tmp_path):
-        """`state_filters` / `max_metrics_per_tenant` are fields the root
-        decode reads, `_routing_defaults` a reserved key: not named."""
-        d = self._tree(tmp_path, "state_filters: {}\nmax_metrics_per_tenant: 10\n"
-                       "_routing_defaults: {}\nmysql_connections: 80\n")
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert "key(s) `mysql_connections`, but" in r["details"][0], r
-
-    @pytest.mark.parametrize("body", [
-        "_severity_dedup: disable\n",
-        "defaults:\n_severity_dedup: disable\n",
-    ], ids=["no-defaults-key", "defaults-with-no-value"])
-    def test_unwrapped_root_reserved_key_fails(self, tmp_path, body):
-        """/effective shows `disable` (the merge reads the whole document);
-        /metrics serves `enable` (measured with da-guard served-values)."""
-        d = self._tree(tmp_path, body)
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert "key(s) `_severity_dedup`, but" in r["details"][0], r
-
-    def test_metadata_and_anchor_keys_are_not_named(self, tmp_path):
-        """`_metadata` is dropped by the merge at every level, so it reaches
-        neither /effective nor /metrics. `_x` is no reserved key; the row
-        leaves such `_`-prefixed keys out by design (they are the usual
-        holders of YAML anchors), whatever the merge does with them."""
-        d = self._tree(tmp_path, "_metadata:\n  owner: dba\n_x: &x 1\n")
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.PASS, r
-
-    @pytest.mark.parametrize("body", [
-        "defaults:\n  mysql_connections: 80\n",
-        "defaults:\nstate_filters: {}\n",
-        "state_filters: {}\n_routing_defaults: {}\n",
-        "# placeholder\n",
-    ], ids=["wrapped", "null-defaults", "decoded-and-reserved-only",
-            "comment-only"])
-    def test_must_stay_green(self, tmp_path, body):
-        d = self._tree(tmp_path, body)
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.PASS, r
-
-    def test_unwrapped_subtree_file_is_not_this_rows_finding(self, tmp_path):
-        """A subtree carrier is merged whole by the hierarchical plane and
-        served; ROOT only."""
-        d = self._tree(tmp_path, "defaults:\n  container_cpu: 60\n")
-        sub = d / "team"
-        sub.mkdir()
-        (sub / "_defaults.yaml").write_text("mysql_connections: 70\n",
-                                            encoding="utf-8")
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.PASS, r
-
-    def test_without_the_schema_every_plain_key_is_named(self, tmp_path,
-                                                         monkeypatch):
-        """Fail-closed: with no schema the decoded fields are unknown."""
-        monkeypatch.setattr(vc, "_find_schema", lambda name: None)
-        d = self._tree(tmp_path, "state_filters: {}\nmysql_connections: 80\n")
-        r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert "`mysql_connections`, `state_filters`" in r["details"][0], r
-        assert "was not found" in r["details"][0], r
-
-    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
-        d = self._tree(tmp_path, "mysql_connections: 80\n")
-        cli_argv("validate_config", "--config-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            vc.main()
-        out = capsys.readouterr().out
-        assert exc.value.code == 1, out
-        assert "[FAIL] root_defaults" in out, out
-
-
-class TestDefaultsWrapperRow:
-    """Check 11 (#2386): at any level, a `defaults:` mapping beside top-level
-    keys that would act if merged FAILs — the mapping makes the defaults
-    merge read only itself. Measured on a subtree: top-level
-    `_severity_dedup: disable` was served as `disable` with no wrapper or
-    with `defaults:` and no value, and as `enable` once `defaults: {}` was
-    added."""
-
-    _ROOT = "defaults:\n  mysql_connections: 80\n"
-    _TENANT = "tenants:\n  tx:\n    container_cpu: \"70\"\n"
-    _TOP = "_severity_dedup: disable\nmysql_connections: 70\n"
-
-    def _tree(self, tmp_path, sub_body, root_body=None):
-        d = tmp_path / "conf.d"
-        (d / "team").mkdir(parents=True)
-        (d / "_defaults.yaml").write_text(root_body or self._ROOT, encoding="utf-8")
-        if sub_body is not None:
-            (d / "team" / "_defaults.yaml").write_text(sub_body, encoding="utf-8")
-        (d / "team" / "tx.yaml").write_text(self._TENANT, encoding="utf-8")
-        return d
-
-    def test_subtree_empty_mapping_plus_top_keys_fails(self, tmp_path):
-        d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
-        r = vc.check_defaults_wrapper(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert len(r["details"]) == 1, r
-        line = r["details"][0]
-        assert line.startswith("team/_defaults.yaml: "), line
-        assert ("`_severity_dedup`, `mysql_connections` are left out of every "
-                "tenant's merged config (/effective)") in line, line
-        # #2388: the reserved key is not told to move under `defaults:`, and
-        # with it present there is no "leave `defaults:` with no value".
-        assert "Move `mysql_connections` under `defaults:`." in line, line
-        assert ("`_severity_dedup`: reserved key(s), which subtree defaults do "
-                "not support") in line, line
-        assert "delete them from this file" in line, line
-        assert "subtree_default_reserved_key" in line, line
-        # #2388 r6: whether the tenant entry is a fix is da-guard's call.
-        assert "or set them in each tenant's own entry" not in line, line
-        assert r["hint"] == vc._DEFAULTS_WRAPPER_RESERVED_HINT, r
-        assert "no value" not in r["hint"], r
-        assert "reserved keys: see the detail" in r["hint"], r
-        assert "Move `_severity_dedup`" not in line, line
-        assert "leave `defaults:` with no value" not in line, line
-
-    def test_subtree_top_thresholds_only_keep_generic_fix(self, tmp_path):
-        """#2388 control: no reserved key, the generic fix is unchanged."""
-        d = self._tree(tmp_path, "defaults: {}\nmysql_connections: 70\n")
-        r = vc.check_defaults_wrapper(str(d))
-        assert r["status"] == vc.FAIL, r
-        line = r["details"][0]
-        assert ("Move `mysql_connections` under `defaults:`, or leave "
-                "`defaults:` with no value") in line, line
-        assert "subtree_default_reserved_key" not in line, line
-        assert r["hint"] is None, r  # the generic hint applies
-
-    @pytest.mark.parametrize("sub", [
-        _TOP,
-        "defaults:\n" + _TOP,
-        "defaults:\n  _severity_dedup: disable\n  mysql_connections: 70\n",
-    ], ids=["unwrapped", "null-defaults", "keys-under-defaults"])
-    def test_shapes_the_merge_reads_whole_pass(self, tmp_path, sub):
-        """⛔ `defaults:` with no value is not a mapping: the merge still reads
-        the whole document, so it is the control this row must not fire on."""
-        d = self._tree(tmp_path, sub)
-        r = vc.check_defaults_wrapper(str(d))
-        assert r["status"] == vc.PASS, r
-
-    def test_root_mapping_plus_top_reserved_key_fails(self, tmp_path):
-        d = self._tree(tmp_path, None,
-                       root_body=self._ROOT + "_severity_dedup: disable\n")
-        r = vc.check_defaults_wrapper(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert r["details"][0].startswith("_defaults.yaml: "), r
-        assert "the root `defaults:` holds numbers only" in r["details"][0], r
-        assert "subtree_default_reserved_key" not in r["details"][0], r
-        assert r["hint"] is None, r  # root: the generic hint applies
-
-    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
-        d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
-        cli_argv("validate_config", "--config-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            vc.main()
-        out = capsys.readouterr().out
-        assert exc.value.code == 1, out
-        assert "[FAIL] defaults_wrapper" in out, out
-
-
-_WRAPPER_MATRIX = json.loads(
-    (pathlib.Path(__file__).resolve().parents[1] / "shared"
-     / "defaults_wrapper_matrix.json").read_text(encoding="utf-8"))
-
-
-class TestDefaultsWrapperMatrix:
-    """The table da-guard's TestDefaultsWrapperMatrix also runs: the two rows
-    FAIL exactly where da-guard reports, on the same files."""
-
-    def test_read_elsewhere_list_matches(self):
-        assert sorted(vc.TOP_LEVEL_READ_ELSEWHERE) == \
-            _WRAPPER_MATRIX["top_level_read_elsewhere"]
-
-    def test_merge_dropped_list_matches(self):
-        assert sorted(vc.MERGE_DROPPED_KEYS) == \
-            _WRAPPER_MATRIX["merge_dropped_keys"]
-
-    @pytest.mark.parametrize("case", _WRAPPER_MATRIX["cases"],
-                             ids=[c["name"] for c in _WRAPPER_MATRIX["cases"]])
-    def test_rows_match_da_guard(self, tmp_path, case):
-        d = tmp_path / "conf.d"
-        for rel, body in case["files"].items():
-            (d / rel).parent.mkdir(parents=True, exist_ok=True)
-            (d / rel).write_text(body, encoding="utf-8")
-        got = []
-        root = vc.check_root_defaults(str(d))
-        if any("no `defaults:` mapping, so /effective" in x for x in root["details"]):
-            got.append(["root_defaults_unwrapped", "_defaults.yaml"])
-        wrap = vc.check_defaults_wrapper(str(d))
-        if wrap["status"] == vc.FAIL:
-            got += [["defaults_toplevel_ignored", x.split(": ", 1)[0]]
-                    for x in wrap["details"]]
-        # ADR-036 step 4 (#2906): a file `da-guard parse-tree` cannot read
-        # (e.g. `!!set`, outside its tag whitelist) is not judged by these
-        # rows; `yaml_syntax` FAILs it, so the tree is refused all the same.
-        unread = set(vc.check_yaml_syntax(str(d)).get("unusable_files") or [])
-        want = [e for e in case["expect"] if e[1] not in unread]
-        assert sorted(got) == sorted(want), (root, wrap, unread)
-
-
-class TestScheduleNull:
-    """Check 12 (#2708): a null inside a threshold schedule that has override
-    windows — a window's `value: null`, or a null `default:` beside windows —
-    FAILs at every layer the exporter reads a threshold from: a tenant file,
-    a subtree `_defaults.yaml`, a root platform file's `tenants:` entry and a
-    profile. `{default: null}` with no window is plain null and is not this
-    row's. Measured on main 990f112f: the subtree, platform and profile
-    layers printed `Result: WARN (pass with warnings)`, rc 0 (only the tenant
-    file FAILed, through `yaml_quoting`)."""
-
-    _WINDOW_NULL = '{default: "50", overrides: [{window: "00:00-23:59", value: null}]}'
-    _DEFAULT_NULL = '{default: null, overrides: [{window: "00:00-01:00", value: "60"}]}'
-
-    @staticmethod
-    def _tree(tmp_path, layer, value):
-        files = {
-            "_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
-            "_profiles.yaml": "profiles:\n  std:\n    other: \"1\"\n",
-            "sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
-            "sub/tx.yaml": "tenants:\n  tx:\n    _profile: std\n",
-        }
-        line = f"    mysql_connections: {value}\n"
-        if layer == "tenant":
-            files["sub/tx.yaml"] += line
-            where = ("sub/tx.yaml", "tenants.tx.mysql_connections")
-        elif layer == "subtree":
-            files["sub/_defaults.yaml"] = f"defaults:\n  mysql_connections: {value}\n"
-            where = ("sub/_defaults.yaml", "defaults.mysql_connections")
-        elif layer == "platform":
-            files["_platform.yaml"] = "tenants:\n  tx:\n" + line
-            where = ("_platform.yaml", "tenants.tx.mysql_connections")
-        else:
-            files["_profiles.yaml"] = "profiles:\n  std:\n" + line
-            where = ("_profiles.yaml", "profiles.std.mysql_connections")
-        d = tmp_path / "conf.d"
-        for rel, body in files.items():
-            (d / rel).parent.mkdir(parents=True, exist_ok=True)
-            (d / rel).write_text(body, encoding="utf-8")
-        return d, where
-
-    @pytest.mark.parametrize("layer", ["tenant", "subtree", "platform", "profile"])
-    @pytest.mark.parametrize("value,problem", [
-        (_WINDOW_NULL, '`overrides[0]` (window "00:00-23:59") has `value: null`'),
-        (_DEFAULT_NULL, "`default:` is null beside 1 override window(s)"),
-        ('{default: "50", overrides: [{window: null, value: "60"}]}',
-         "`overrides[0]` has `window: null`"),
-        ('{default: "50", overrides: [~]}', "`overrides[0]` is null"),
-    ])
-    def test_a_null_beside_windows_fails_and_is_named(self, tmp_path, layer,
-                                                       value, problem):
-        d, (rel, where) = self._tree(tmp_path, layer, value)
-        r = vc.check_schedule_null(str(d))
-        assert r["status"] == vc.FAIL, r
-        assert r["details"] == [f"{rel}: `{where}`: {problem}"], r
-
-    @pytest.mark.parametrize("layer", ["subtree", "platform", "profile"])
-    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv, layer):
-        """Wired into ``main()``: on main these trees printed
-        ``Result: WARN (pass with warnings)``, rc 0."""
-        d, (rel, _where) = self._tree(tmp_path, layer, self._WINDOW_NULL)
-        cli_argv("validate_config", "--config-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            vc.main()
-        out = capsys.readouterr().out
-        assert exc.value.code == 1, out
-        assert "[FAIL] schedule_null" in out, out
-        assert rel in out, out
-
-    @pytest.mark.parametrize("layer", ["tenant", "subtree", "platform", "profile"])
-    @pytest.mark.parametrize("value", [
-        "null", "{default: null}", "{default: null, overrides: []}",
-        '{default: null, expires: "2099-01-01T00:00:00Z", reason: incident}',
-        '{default: "50", overrides: [{window: "00:00-23:59", value: "70"}]}',
-    ])
-    def test_no_window_null_and_numeric_schedules_pass(self, tmp_path, layer,
-                                                       value):
-        d, _ = self._tree(tmp_path, layer, value)
-        r = vc.check_schedule_null(str(d))
-        assert r["status"] == vc.PASS, r
-
-    def test_files_no_plane_reads_are_not_judged(self, tmp_path):
-        """A nested `_` file that is not the carrier, and an unselected root
-        carrier, are read by no plane (#1674): their nulls are not reported."""
-        d, _ = self._tree(tmp_path, "tenant", '"55"')
-        bad = f"tenants:\n  tx:\n    mysql_connections: {self._WINDOW_NULL}\n"
-        (d / "sub" / "_extra.yaml").write_text(bad, encoding="utf-8")
-        (d / "_defaults.yml").write_text(
-            f"defaults:\n  mysql_connections: {self._WINDOW_NULL}\n", encoding="utf-8")
-        r = vc.check_schedule_null(str(d))
-        assert r["status"] == vc.PASS, r
+class TestScheduleNullHelpers:
+    """#2708: the null-schedule predicates `describe_tenant` reads
+    (`_grar_validate.is_null_schedule` / `writes_nothing`, Go nullSchedule /
+    nullThreshold). A null inside a schedule with windows is da-guard's
+    schedule_null_value, the `guard_errors` row's (#3387)."""
 
     @pytest.mark.parametrize("value,null", [
         ({"default": None}, True),
@@ -3462,22 +3133,6 @@ class TestScheduleNull:
         assert is_null_schedule(value) is null
         assert writes_nothing("mysql_connections", value) is (value is None or null)
         assert writes_nothing("_state_x", value) is False
-
-    def test_schedule_null_problems_messages(self):
-        """#2708 r2: a null `window:` is not printed as a window; the same
-        strings as Go's TestScheduleNullProblems_Messages."""
-        from _grar_validate import schedule_null_problems
-        assert schedule_null_problems({
-            "default": None,
-            "overrides": [{"window": None, "value": None},
-                          {"window": "00:00-01:00", "value": None}, None],
-        }) == [
-            "`default:` is null beside 3 override window(s)",
-            "`overrides[0]` has `window: null`",
-            "`overrides[0]` has `value: null`",
-            '`overrides[1]` (window "00:00-01:00") has `value: null`',
-            "`overrides[2]` is null",
-        ]
 
 
 class TestJsonSchemaRow:

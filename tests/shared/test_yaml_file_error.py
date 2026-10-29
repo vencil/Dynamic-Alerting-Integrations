@@ -731,12 +731,15 @@ def test_scan_sees_the_known_population():
     # check_routing_profiles.py left with ADR-036 step 4 (#2906): it reads
     # conf.d through `da-guard parse-tree` (`_lib_io.load_confd_file`); its
     # row above pins the refusal. validate_config.py's own reads moved the
-    # same way; the lib load sites it keeps are guarded where they are.
+    # same way, and its last guarded lib load sites (the defaults_wrapper and
+    # schedule_null rows) left with #3387: da-guard's own check judges those
+    # findings now (`guard_errors`); `test_validate_config_unchanged_rc_1_named`
+    # above still pins its handling of an unreadable file.
     expected = {
         "analyze_rule_pack_gaps.py", "backtest_threshold.py",
         "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
-        "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
+        "policy_engine.py", "policy_opa_bridge.py",
         "blind_spot_discovery.py",
         "threshold_recommend.py",
         # maintenance_scheduler.py left in #2751: it reads the tree through

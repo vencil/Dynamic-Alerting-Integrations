@@ -661,7 +661,7 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
 # --- 9. cost guardrail: NOT this compiler's (#3042) ---------------------------
 # The per-tenant cap (max_custom_recipes, S4) used to be enforced here, by
 # quarantining the recipes over it. It now lives where a write is judged:
-# da-guard `custom_alert_over_cap`, validate-config `custom_alert_cap` and
+# da-guard `custom_alert_over_cap` (validate-config's `guard_errors`) and
 # tenant-api's write check. The compiler builds a rule for every entry the
 # exporter serves — a rule nobody's series joins is the only thing it could
 # save, and refusing to compile a served entry would silence a live alert.

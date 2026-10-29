@@ -17,8 +17,8 @@ every other copy is GENERATED from it:
   - Portal : tools/portal/src/interactive/tools/_common/data/recipe-enums.json
              and recipe-status.json (imported by recipe-builder)
   - Python : the block between the GENERATED markers in
-             scripts/tools/_lib_constants.py (the per-tenant custom-alert
-             cap validate-config judges, and the forecast's longest lookback)
+             scripts/tools/_lib_constants.py (the forecast's longest
+             lookback)
   - Policy : the compiled pack's forecast `max_range_duration` (the longest
              lookback a compiled forecast reads) in
              .github/custom-rule-policy.yaml and its copy in
@@ -303,7 +303,6 @@ def render_constants(c):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
-        f"MAX_CUSTOM_RECIPES: Final[int] = {c['custom_alert_cap']}",
         f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
         PY_END,
     ]) + "\n"

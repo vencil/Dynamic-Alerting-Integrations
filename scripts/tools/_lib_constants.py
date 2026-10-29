@@ -140,18 +140,13 @@ RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...
 # END GENERATED reserved keys
 
 # ============================================================
-# Custom alerts
+# Recipe contract
 # ============================================================
-# Per-tenant cap on the custom-alert rows a tenant's OWN `_custom_alerts`
-# serves — the list written in its tenant file or in a root platform file's
-# `tenants:` entry; one a profile gives it is a shape the profile's tenants
-# share and is not counted (#3042). A row is one `user_threshold` series the
-# exporter serves: a switched-off recipe serves none, an slo_burn_rate two.
-# The recipe contract's custom_alert_cap, which Go's
-# pkg/config.MaxCustomRecipesDefault (tenant-api's write check) also reads.
+# The forecast's longest lookback. (#3387: the per-tenant custom-alert cap is
+# no longer copied here — da-guard's custom_alert_over_cap judges it, and
+# validate-config reports that finding on its guard_errors row.)
 # BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
 # block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
-MAX_CUSTOM_RECIPES: Final[int] = 20
 FORECAST_MAX_LOOKBACK: Final[str] = "96h"
 # END GENERATED recipe contract
 

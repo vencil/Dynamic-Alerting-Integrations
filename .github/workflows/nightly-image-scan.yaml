@@ -238,26 +238,26 @@ jobs:
           - name: vector # helm/vector/values.yaml
             ref: "timberio/vector:0.57.0-distroless-libc@sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
           - name: victoria-logs # helm/victorialogs/values.yaml
-            ref: "victoriametrics/victoria-logs:v1.52.0@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
+            ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:8ee214843129f43e2ebf5e0ca9f2e4e6d8292143d1b8a6787f169b5898578884"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
-            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded"
+            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
           # docker.io, NOT quay.io: upstream released v0.14.0 on 2026-06-23 but never
           # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April
           # build. Staying on quay freezes x/net + prometheus lib at April versions.
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
             ref: "prometheuscommunity/prom-label-proxy:v0.15.1@sha256:186f9fe791158ef25d6f810109746ac0acdb35cb8401b554526c77c065483373"
           - name: mariadb # helm/mariadb-instance/values.yaml
-            ref: "mariadb:11.8.9@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68"
+            ref: "mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
-            ref: "prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e"
+            ref: "prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.12@sha256:83be3e511ede559bee80e2215bb1987cb1246075461cb961beb515b0341e7aea"
+            ref: "grafana/grafana:12.4.14@sha256:ae509d9ae8c1021ca32ec370a9ca975d40165eda9fccd1e1102d317ff8787cd7"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
-            ref: "prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"
+            ref: "prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
@@ -270,7 +270,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1@sha256:06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.2@sha256:a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
@@ -285,14 +285,14 @@ jobs:
           # (e.g. a deliberate `gh label create … || true`) are then reported as
           # offenders by the guards below.
           - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
-            ref: "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+            ref: "busybox:1.38@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e"
             # Static binaries only: Trivy finds no OS/language packages and omits
             # `Results`, which the summarizer otherwise treats as schema drift
             # (this was the nightly "1 unscanned" in #1243). Reported as "no
             # inventory", never as clean.
             no_inventory: true
           - name: alpine-git # helm/tenant-api/templates/deployment.yaml (git-clone / git-gc-off init containers, hardcoded in the template)
-            ref: "alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f"
+            ref: "alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0"
           # try-local demo stack ONLY (#1337 ①) — README points prospective customers
           # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
           # pulls these two, so the extractor cannot see them. The compose file keeps
@@ -300,9 +300,9 @@ jobs:
           # like every other row. Bound by repo:tag to try-local/docker-compose.yaml
           # in the drift guard, so a bump on one side alone goes red.
           - name: pushgateway # try-local/docker-compose.yaml
-            ref: "prom/pushgateway:v1.11.3@sha256:74fa117cef2d7e383112d25139ff1c2d2e309c35389a9e0554a47136a1482e48"
+            ref: "prom/pushgateway:v1.11.5@sha256:bf6442633f6129d3e3f9861fa14c77bc012d74b33a1dd213d7b458b89ce3cc5d"
           - name: curl # try-local/docker-compose.yaml (seed-metrics, mock-reconciler)
-            ref: "curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
+            ref: "curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)

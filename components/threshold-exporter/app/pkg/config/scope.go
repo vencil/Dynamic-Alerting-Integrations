@@ -152,8 +152,8 @@ type ScopedTenants struct {
 	// (filtered by undeliverableThresholds, the same filter as
 	// LoadReport.Undeliverable) it inherits from a subtree `_defaults.yaml`
 	// that the exporter's own build of this tree cannot deliver
-	// (FlatBuild.Unreachable, the map the exporter logs as an ERROR and
-	// counts on da_config_subtree_undeliverable_tenants): the root
+	// (FlatBuild.Undeliverable, the set the exporter logs as an ERROR and
+	// counts on da_config_subtree_undeliverable_tenants, #3379): the root
 	// `_defaults.yaml` and `optional_overrides:` do not declare the key, so
 	// /metrics never carries it although the tenant's effective config shows
 	// it. Only in-scope tenants are listed;
@@ -612,9 +612,9 @@ func anyDuplicated(scan *TreeScan, ids map[string]struct{}) bool {
 // is a `_` file in a directory above it (the root's platform files, a chain
 // `_defaults.yaml`) — those shape every tenant under the scope.
 //
-// unreachable is the threshold keys of the same build's unreachable set
-// (undeliverableThresholds over FlatBuild.UnreachableValues: tenantID → the
-// inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
+// unreachable is the threshold keys of the same build's undeliverable set
+// (FlatBuild.UndeliverableKeys: tenantID → the inherited subtree threshold
+// keys it cannot deliver), over the whole tree; the caller
 // keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
 // answers both, so the two cannot come from different readings of the tree.
 //
@@ -655,7 +655,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger) (
 		}
 		stateFilters[name] = true
 	}
-	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
+	return parseFailed, built.UndeliverableKeys(),
 		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters,
 		built.RootNullUndeclared, built, nil
 }

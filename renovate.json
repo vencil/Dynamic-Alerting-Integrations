@@ -129,6 +129,12 @@
       "groupName": "forge e2e GitLab CE"
     },
     {
+      "description": "#3385 — Vector gets its own PR: a bump is never image-only. tests/shared/test_vector_pin_parity.py binds the image to the CI / dev-container Vector CLI (with its tarball sha256) and Chart appVersion, and releases change kubernetes_logs' Kubernetes floor and config semantics the chart's VRL depends on. Riding the third-party group PR turns that PR red and hides the upgrade review. Majors still wait for the Dependency Dashboard via the docker major rule below.",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["timberio/vector"],
+      "groupName": "Vector"
+    },
+    {
       "description": "#902 L3 — MAJOR upgrades can break (grafana/prometheus/mariadb majors carry config/schema changes). Require an explicit tick on the Dependency Dashboard before Renovate opens the PR, rather than auto-flooding a breaking bump.",
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["major"],

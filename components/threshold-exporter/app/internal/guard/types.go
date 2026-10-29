@@ -44,13 +44,13 @@
 //     The number is kept so the check numbers below stay as cited.
 //
 //  4. Cardinality guard (PR-3; see cardinality.go)
-//     Predicts each tenant's post-merge metric count and flags
-//     tenants approaching or exceeding the configured per-tenant
-//     ceiling. Conservative upper-bound counter (doesn't model
-//     dimensional expansion); intent is to catch "this defaults
-//     change blows past the runtime truncation threshold" before
-//     it lands. Two tiers: SeverityWarn at WarnRatio×Limit (80%
-//     by default), SeverityError above Limit.
+//     Compares the user_threshold rows the exporter's resolver
+//     produces for each tenant (busiest minute of the day, before
+//     the cut; CheckInput.PredictedRowCounts, #3380) with the
+//     configured per-tenant ceiling; intent is to catch "this
+//     defaults change blows past the runtime truncation threshold"
+//     before it lands. Two tiers: SeverityWarn at WarnRatio×Limit
+//     (80% by default), SeverityError above Limit.
 //
 //  5. Defaults wrapper (#2386; see rootdefaults.go), both errors:
 //     the conf.d root `_defaults.yaml` with no `defaults:` mapping
@@ -269,8 +269,9 @@ type CheckInput struct {
 	RequiredFields []string `json:"required_fields,omitempty"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality
-	// check (PR-3) compares each tenant's predicted metric count
-	// against. ≤ 0 disables the cardinality check entirely.
+	// check (PR-3) compares each tenant's predicted row count
+	// (PredictedRowCounts) against. ≤ 0 disables the cardinality check
+	// entirely.
 	//
 	// Should equal the cap the exporter enforces for the tree:
 	// config.RootMaxMetricsPerTenant (the ROOT `_defaults.yaml`'s
@@ -287,6 +288,23 @@ type CheckInput struct {
 	// (errors only).
 	CardinalityWarnRatio float64 `json:"cardinality_warn_ratio,omitempty"`
 
+	// PredictedRowCounts maps tenant ID → the user_threshold rows the
+	// exporter's resolver produces for it over the exporter's build, at the
+	// busiest minute of the UTC day, before the max_metrics_per_tenant cut
+	// (config.ThresholdConfig.PeakTenantRowCounts, #3380). The cardinality
+	// check compares it with CardinalityLimit for a tenant in
+	// EffectiveConfigs; a tenant absent from it counts 0.
+	PredictedRowCounts map[string]int `json:"-"`
+
+	// ExporterRowCap is the per-tenant cap the exporter's resolver itself
+	// truncates at (config.EffectiveMaxMetricsPerTenant of the build's
+	// max_metrics_per_tenant): > 0 the cap, < 0 no truncation, 0 unknown.
+	// CardinalityLimit is the budget compared against and may differ from it
+	// (an explicit --cardinality-limit); the findings say whether the
+	// exporter truncates by this one, and a count over it is
+	// cardinality_exceeded whatever CardinalityLimit is (> 0) (#3380).
+	ExporterRowCap int `json:"-"`
+
 	// DefaultsFiles are the defaults carriers of the scan
 	// (config.ScopedTenants.DefaultsFiles), checked for the `defaults:`
 	// wrapper shapes (#2386, rootdefaults.go); nil skips the check.
@@ -299,7 +317,8 @@ type CheckInput struct {
 
 	// UndeliverableInherited maps tenant ID → the threshold keys it inherits from a
 	// subtree `_defaults.yaml` that the exporter's build cannot deliver
-	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Unreachable). Each
+	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Undeliverable —
+	// the set the exporter's ERROR and gauge read too, #3379). Each
 	// becomes a subtree_default_undeliverable error for a tenant in
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`
