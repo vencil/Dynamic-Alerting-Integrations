@@ -13,6 +13,7 @@ test_policy_engine.py — Policy-as-Code 引擎測試。
 """
 import json
 import os
+import subprocess
 import sys
 import pytest
 
@@ -712,6 +713,12 @@ class TestReports:
 # #2115 0-B: `--config-dir` reads tenants through da-guard, so a tenant is a
 # `tenants:` entry (a flat file is not one) and a threshold is what /metrics
 # serves — a key with no declared default is not served, hence the defaults.
+def _cli(*args):
+    """The CLI as shipped: its caller-error envelope is `run()`'s (#3276)."""
+    return subprocess.run([sys.executable, pe.__file__, *args], capture_output=True,
+                          text=True, encoding="utf-8", timeout=120)
+
+
 _THRESHOLD_DEFAULTS = "defaults:\n  mysql_threads_running: 70\n"
 _TENANT_A = "tenants:\n  tenant-a:\n    mysql_threads_running: '80'\n"
 
@@ -734,18 +741,18 @@ class TestCLI:
         `policy-engine --config-dir <typo> --ci && promote` 靜默放行。
         """
         missing = tmp_path / "does-not-exist"
-        exit_code = pe.main(["--config-dir", str(missing)])
-        assert exit_code == 2
-        assert "config directory not found" in capsys.readouterr().err
+        proc = _cli("--config-dir", str(missing))
+        assert proc.returncode == 2, proc.stderr
+        assert f"--config-dir {missing}: " in proc.stderr
 
     def test_main_nonexistent_config_dir_json_envelope(self, tmp_path, capsys):
         """不存在的 --config-dir + --json → stdout 仍恰一份 JSON（caller_error 信封）。"""
         missing = tmp_path / "does-not-exist"
-        exit_code = pe.main(["--config-dir", str(missing), "--json"])
-        assert exit_code == 2
-        doc = json.loads(capsys.readouterr().out)
+        proc = _cli("--config-dir", str(missing), "--json")
+        assert proc.returncode == 2, proc.stderr
+        doc = json.loads(proc.stdout)
         assert doc["status"] == "caller_error"
-        assert doc["reason"] == "config_dir_not_found"
+        assert doc["reason"] == "dir_not_found"  # #3276 (was config_dir_not_found)
         assert doc["passed"] is False
 
     # ── #1651: --policy supplied but not a file ──────────────────────
@@ -757,36 +764,31 @@ class TestCLI:
         found" + exit 0。'' 是 SUPPLIED（未設定的 shell 變數展開就是它）。
         """
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", ""])
-        assert exit_code == 2
-        err = capsys.readouterr().err
-        assert "''" in err
-        assert "--policy" in err
+        proc = _cli("--config-dir", str(tmp_path), "--policy", "")
+        assert proc.returncode == 2, proc.stderr
+        assert "--policy '': " in proc.stderr
 
     def test_main_policy_missing_file_is_caller_error(self, tmp_path, capsys):
         """`--policy <typo>` → 2 並指名路徑（之前 load_yaml_file → None → [] → 0）。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         missing = tmp_path / "nope.yaml"
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(missing)])
-        assert exit_code == 2
-        err = capsys.readouterr().err
-        assert repr(str(missing)) in err
-        assert "Do not drop the flag" in err or "不要靠拿掉" in err
+        proc = _cli("--config-dir", str(tmp_path), "--policy", str(missing))
+        assert proc.returncode == 2, proc.stderr
+        assert f"--policy {missing}: " in proc.stderr
+        assert "Do not drop the flag" in proc.stderr or "不要靠拿掉" in proc.stderr
 
     def test_main_policy_missing_file_json_envelope(self, tmp_path, capsys):
         """同上 + --json → stdout 恰一份 JSON，caller_error / policy_file_not_found。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         missing = tmp_path / "nope.yaml"
-        exit_code = pe.main(["--config-dir", str(tmp_path),
-                             "--policy", str(missing), "--json"])
-        assert exit_code == 2
-        captured = capsys.readouterr()
-        doc = json.loads(captured.out)
+        proc = _cli("--config-dir", str(tmp_path), "--policy", str(missing), "--json")
+        assert proc.returncode == 2, proc.stderr
+        doc = json.loads(proc.stdout)
         assert doc["status"] == "caller_error"
-        assert doc["reason"] == "policy_file_not_found"
+        assert doc["reason"] == "file_not_found"  # #3276 (was policy_file_not_found)
         assert doc["passed"] is False
         assert doc["violations"] == []
-        assert repr(str(missing)) in captured.err
+        assert f"--policy {missing}: " in proc.stderr
 
     # ── #1651 blind-review follow-up: --policy IS a file but cannot be read ──
     # Measured on HEAD before the fix (820c7785): `policies: [` and a cp950

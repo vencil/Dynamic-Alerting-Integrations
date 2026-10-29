@@ -106,6 +106,7 @@ from _lib_exitcodes import (  # noqa: E402
     arm_crash_envelope,
     disarm_crash_envelope,
 )
+from _lib_io import classify_path  # noqa: E402  (#3276)
 
 # Finding categories.
 MISSING = "MISSING"
@@ -332,7 +333,11 @@ class RuntimeAuditor:
 
     def _load_declared(self) -> Optional[dict]:
         rule_dir = Path(self.args.rule_packs_dir)
-        paths = sorted(rule_dir.glob("rule-pack-*.yaml")) if rule_dir.is_dir() else []
+        rule_dir_problem = classify_path(rule_dir, "dir", flag="--rule-packs-dir")  # #3276
+        if rule_dir_problem is not None:
+            self.caller_error = f"{i18n('err_rule_packs', self.lang)}: {rule_dir_problem.message}"
+            return None
+        paths = sorted(rule_dir.glob("rule-pack-*.yaml"))
         if not paths:
             self.caller_error = i18n("err_rule_packs", self.lang)
             return None

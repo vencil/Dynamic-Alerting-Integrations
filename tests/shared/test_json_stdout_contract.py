@@ -1147,10 +1147,10 @@ RECIPES: list[Recipe] = [
     # ── grafana_import ─────────────────────────────────────────────────────
     R("grafana_import", "dry-run",
       lambda t, s: ["--dashboard", str(DASHBOARD_JSON), "--dry-run", "--json"]),
-    # #3115: a hand-written rc 2 with no document of its own — generic reason.
+    # #3276: the shared caller-path judgement's reason (was the generic one).
     R("grafana_import", "dashboard-dir-missing",
       lambda t, s: ["--dashboard-dir", _out(t, "absent"), "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
+      expect_caller_error=True, doc_check=_caller_error_doc("dir_not_found")),
     R("grafana_import", "verify", lambda t, s: ["--verify", "--json"], needs_kubectl=True),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--verify`.
     # `--verify` wins; it is read-only, so nothing is lost by `--dry-run` being

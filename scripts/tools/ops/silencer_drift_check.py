@@ -137,6 +137,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
 from _lib_python import format_json_report  # noqa: E402
+from _lib_io import require_path  # noqa: E402  (#3276)
 
 try:
     import yaml
@@ -688,9 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     if silences is None:
         return EXIT_CALLER_ERROR
 
-    if not rule_source.exists():
-        print(f"ERROR: --rule-source path does not exist: {rule_source}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
+    require_path(rule_source, "any", flag="--rule-source")  # #3276
 
     alerts, errors = load_alerts(rule_source)
     if not alerts and errors:

@@ -6,6 +6,7 @@ kubectl is invoked.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
@@ -19,7 +20,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import grafana_import as gi  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ class TestImportDashboard:
         results = gi.import_dashboard(str(ghost), "cm", "ns")
         assert len(results) == 1
         assert results[0]["status"] == "fail"
-        assert "File not found" in results[0]["detail"]
+        assert results[0]["detail"] == f"--dashboard {ghost}: {os.strerror(errno.ENOENT)}"
 
     def test_invalid_json_returns_fail_result(self, tmp_path):
         f = tmp_path / "bad.json"
@@ -255,11 +256,10 @@ class TestMain:
     def test_dashboard_dir_not_found_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         ghost = tmp_path / "no-such-dir"
         cli_argv("grafana_import.py", "--dashboard-dir", str(ghost))
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(CallerError) as exc:  # rc 2 at run()'s exit (#3276)
             gi.main()
-        assert exc.value.code == EXIT_CALLER_ERROR
-        err = capsys.readouterr().err
-        assert "not found" in err.lower()
+        assert exc.value.reason == "dir_not_found"
+        assert str(ghost) in str(exc.value)
 
     def test_dashboard_dir_no_jsons_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         d = tmp_path / "empty-dir"

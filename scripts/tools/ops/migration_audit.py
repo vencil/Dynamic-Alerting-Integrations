@@ -78,7 +78,7 @@ from _lib_confd import (  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
+from _lib_io import classify_path, safe_label, strict_load_exporter_keys  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: the run's reader)
 import _lib_parse_tree  # noqa: E402
@@ -510,8 +510,9 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
 
 
 def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
-    if not root.is_dir():
-        raise AuditError(f"config directory not found: {root}")
+    root_problem = classify_path(root, "dir", flag="--config-dir")  # #3276
+    if root_problem is not None:
+        raise AuditError(root_problem.message)
     tree = run_parse_tree(root, binary, timeout)
     listing = _lib_parse_tree.listing_of(tree, root)
     # #3206: today's selection is asked of the same snapshot parse-tree read.
@@ -719,6 +720,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         # like the caller_error document below
         arm_crash_envelope(build=lambda: {**empty_report(), "config_dir": args.config_dir})
     try:
+        # #3276: the caller's string, before Path('') becomes '.'.
+        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        if config_dir_problem is not None:
+            raise AuditError(config_dir_problem.message)
         report = audit(Path(args.config_dir), args.da_guard_binary, args.timeout)
         out = (json.dumps(report, ensure_ascii=False, default=str) if args.json
                else render_text(report))

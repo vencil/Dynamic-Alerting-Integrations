@@ -103,10 +103,10 @@ from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope,
 )
 
 # Reuse the recommendation engine wholesale — threshold_govern is its active
@@ -1455,11 +1455,11 @@ def main() -> None:
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope(tool="threshold-govern")
 
-    if not os.path.isdir(args.config_dir):
-        msg = (f"配置目錄不存在: {args.config_dir}" if _LANG == "zh"
-               else f"Config directory not found: {args.config_dir}")
-        print(msg, file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    # #3276: the shared judgement of a caller-given path, in this tool's words.
+    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    if config_dir_problem is not None:
+        raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == "zh"
+                          else config_dir_problem.message, config_dir_problem.reason)
 
     if parse_duration_seconds(args.lookback) is None:
         msg = (f"無效的 lookback 值: {args.lookback}" if _LANG == "zh"

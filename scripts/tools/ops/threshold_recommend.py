@@ -54,7 +54,6 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
-from pathlib import Path
 from typing import Any, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -84,8 +83,8 @@ from _lib_tenant_values import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
-from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538 output-layer escaping; #1641)
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
+from _lib_io import OutputWriteError, classify_path, safe_label  # noqa: E402  (#1538; #1641; #3276)
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1650,10 +1649,11 @@ def main() -> None:
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if not Path(args.config_dir).is_dir():
-        msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
-        print(msg, file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    # #3276: the shared judgement of a caller-given path, in this tool's words.
+    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    if config_dir_problem is not None:
+        raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == 'zh'
+                          else config_dir_problem.message, config_dir_problem.reason)
 
     # Validate lookback
     lookback_secs = parse_duration_seconds(args.lookback)

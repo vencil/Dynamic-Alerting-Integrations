@@ -604,10 +604,11 @@ class TestCLI:
 
     def test_missing_config_dir(self):
         """不存在的 config-dir 應 exit caller error。"""
+        from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", "/nonexistent"]):
-            with pytest.raises(SystemExit) as exc_info:
+            with pytest.raises(CallerError) as exc_info:
                 tr.main()
-            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert exc_info.value.reason == "dir_not_found"
 
     def test_invalid_lookback(self, tmp_path):
         """無效的 lookback 應 exit caller error。"""

@@ -43,6 +43,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+from _lib_io import classify_path, require_dir  # noqa: E402  (#3276)
 
 
 def run_cmd(cmd, dry_run=False):
@@ -66,12 +67,13 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
     results = []
 
     dashboard_p = Path(dashboard_path)
-    if not dashboard_p.is_file():
+    dashboard_problem = classify_path(dashboard_path, "file", flag="--dashboard")  # #3276
+    if dashboard_problem is not None:
         results.append({
             "action": "import",
             "status": "fail",
             "caller_error": True,  # #452/#737: input/load precondition = caller-error (exit 2)
-            "detail": f"File not found: {dashboard_path}",
+            "detail": dashboard_problem.message,
         })
         return results
 
@@ -309,9 +311,7 @@ def main():
         dashboards.append((args.dashboard, cm_name))
     elif args.dashboard_dir:
         dash_dir = Path(args.dashboard_dir)
-        if not dash_dir.is_dir():
-            print(f"ERROR: Directory not found: {args.dashboard_dir}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+        require_dir(dash_dir, flag="--dashboard-dir")  # #3276
         for entry in sorted(dash_dir.glob("*.json")):
             fpath = str(entry)
             dashboards.append((fpath, auto_name(fpath)))

@@ -370,7 +370,7 @@ def test_main_missing_target_is_caller_error(tmp_path, monkeypatch, capsys, extr
         lint_custom_rules.main()
     assert exc.value.code == 2
     err = capsys.readouterr().err
-    assert repr(str(missing)) in err
+    assert f"ERROR: {missing}: " in err
     assert "Do not drop the path" in err
 
 
@@ -384,8 +384,8 @@ def test_main_missing_target_names_only_the_missing_one(tmp_path, monkeypatch, c
         lint_custom_rules.main()
     assert exc.value.code == 2
     err = capsys.readouterr().err
-    assert repr(str(missing)) in err
-    assert repr(str(real)) not in err
+    assert f"ERROR: {missing}: " in err
+    assert str(real) not in err
 
 
 @pytest.mark.parametrize("extra", [[], ["--ci"]], ids=["plain", "ci"])

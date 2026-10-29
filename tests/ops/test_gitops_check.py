@@ -98,7 +98,7 @@ class TestLocalDirMissingIsCallerError:
         assert "Traceback" not in proc.stderr
         assert proc.stderr.count("ERROR:") == 1, proc.stderr
         # named before da-guard is asked — not da-guard failing on no tree
-        assert "is not a directory" in proc.stderr or "不是目錄" in proc.stderr, proc.stderr
+        assert f"ERROR: --dir {missing}: {os.strerror(errno.ENOENT)}" in proc.stderr, proc.stderr
         if as_json:
             doc = json.loads(proc.stdout)
             assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_found")
