@@ -715,13 +715,22 @@ func optionalOverridesCanDeclare(key string) bool {
 	return !strings.HasPrefix(key, "_") || IsReservedKey(key)
 }
 
-// undeliverableThresholds is the part of the build's unreachable set that
-// #1976 reports to readers outside the exporter (LoadReport.Undeliverable,
-// ScopedTenants.Undeliverable — both go through here, so the two cannot
-// filter differently): the keys for which the finding's advice — declare the
-// key in the root `_defaults.yaml` (or, for a key not starting with `_`, in
-// `optional_overrides:`) — is the fix. nil when none is left.
-// FlatBuild.Unreachable (the exporter's ERROR and gauge) is not filtered.
+// undeliverableThresholds splits the build's unreachable set — every key a
+// tenant inherits from a subtree `_defaults.yaml` that nothing on the output
+// plane iterates (keyCanReachTheOutputPlane) — into the two answers a reader
+// gets (#1976, #3379). BuildFlatConfig is its only caller: the build stores
+// both as FlatBuild.Undeliverable and FlatBuild.DisabledUndeclared, and every
+// reader takes them from there — the exporter's ERROR and
+// da_config_subtree_undeliverable_tenants, LoadReport.Undeliverable,
+// ScopedTenants.Undeliverable (da-guard's subtree_default_undeliverable) and
+// the not_served `undeliverable` reason. One filter, so the exporter cannot
+// count a tenant da-guard passes, nor the reverse.
+//
+// undeliverable is the keys for which the finding's advice — declare the key
+// in the root `_defaults.yaml` (or, for a key not starting with `_`, in
+// `optional_overrides:`) — is the fix. disabled is exclusion 3 below: the
+// keys the subtree switches off although the root never declared them. Each
+// is nil when empty.
 //
 // Three exclusions, each taken from an existing authority rather than a
 // naming rule of its own:
@@ -738,45 +747,50 @@ func optionalOverridesCanDeclare(key string) bool {
 //     user_threshold row, a root `_metadata` makes served-values fail), and
 //     declaring it in `optional_overrides:` silences the verdict while the
 //     subtree value still does not take effect (measured, before #3295,
-//     with a scheduled `_state_maintenance`). Some were even listed although
-//     a deeper level delivers the key (before #3295, `_state_<f>` as a
-//     schedule at one level, a scalar below). Reported by
-//     subtreeReservedKeys instead (#2388).
+//     with a scheduled `_state_maintenance`). Since #3341 the overlay does
+//     not carry a reserved key at all (subtreeReservedUnsupported), so the
+//     only ones that still reach this set are the routing keys
+//     (`_routing_bogus: 5`): the route generator's checks own them
+//     (`--validate --strict`), so neither da-guard nor the exporter reports
+//     them (#3379).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
 //     row: every `_` key (#3045), whether declared or not — `_silent_bogus`,
 //     `_myth2` or `_namespaces` declared at the root still serves nothing, so
-//     the advice cannot help. Also reported by
-//     subtreeReservedKeys (#2388).
+//     the advice cannot help. Reported by subtreeReservedKeys instead
+//     (#2388); like 1, the overlay no longer carries them (#3341), so a
+//     subtree `_myth: 5` never reaches this set.
 //  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
-//     resolver's own disable test, on the default and every window). It is
-//     undelivered, but "that alert can never fire" is what the subtree asked
-//     for; declaring it at the root would instead start serving it for every
-//     tenant outside the subtree (measured). Not #2388's — just not reported.
+//     resolver's own disable test, on the default and every window). /metrics
+//     is the same as if the root declared it and the subtree disabled it, and
+//     declaring it at the root would instead start serving it for every
+//     tenant outside the subtree (measured). Not an undeliverable key; it is
+//     returned as disabled, which the exporter logs as one WARN (a disable of
+//     a key the root never declared changes nothing, so it may be a typo) —
+//     the level of ValidateTenantKeys' `unknown key … not in defaults`.
 //
-// ⚠️ A `_` key the registry does not list (`_myth: 5`) was a threshold to
-// the exporter before #3045 — a root `_myth` served a user_threshold row —
-// and was reported here. It now serves no row in any layer, so exclusion 2
-// leaves it out. It still stays in FlatBuild.Unreachable (the exporter's
-// ERROR and gauge) when the root does not declare it: resolveDeclaredRows
-// skips every `_` key, and declaredAnywhere asks that same skip
-// (optionalOverridesCanDeclare, #2707).
-func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
-	var out map[string]map[string]ScheduledValue
+// A key matching 1 or 2 is in neither return, whatever its value.
+func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) (undeliverable, disabled map[string]map[string]ScheduledValue) {
+	put := func(m *map[string]map[string]ScheduledValue, tenantID, k string, v ScheduledValue) {
+		if *m == nil {
+			*m = map[string]map[string]ScheduledValue{}
+		}
+		if (*m)[tenantID] == nil {
+			(*m)[tenantID] = map[string]ScheduledValue{}
+		}
+		(*m)[tenantID][k] = v
+	}
 	for tenantID, keys := range byTenant {
 		for k, v := range keys {
-			if subtreeDefaultsRefusedKey(k) || disabledEverywhere(v) {
-				continue
+			switch {
+			case subtreeDefaultsRefusedKey(k):
+			case disabledEverywhere(v):
+				put(&disabled, tenantID, k, v)
+			default:
+				put(&undeliverable, tenantID, k, v)
 			}
-			if out == nil {
-				out = map[string]map[string]ScheduledValue{}
-			}
-			if out[tenantID] == nil {
-				out[tenantID] = map[string]ScheduledValue{}
-			}
-			out[tenantID][k] = v
 		}
 	}
-	return out
+	return undeliverable, disabled
 }
 
 // subtreeDefaultsRefusedKey reports whether k is a key a subtree

@@ -317,7 +317,8 @@ type CheckInput struct {
 
 	// UndeliverableInherited maps tenant ID → the threshold keys it inherits from a
 	// subtree `_defaults.yaml` that the exporter's build cannot deliver
-	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Unreachable). Each
+	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Undeliverable —
+	// the set the exporter's ERROR and gauge read too, #3379). Each
 	// becomes a subtree_default_undeliverable error for a tenant in
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`

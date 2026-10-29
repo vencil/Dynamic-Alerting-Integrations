@@ -103,7 +103,8 @@ func swServed(t *testing.T, dir string) (map[string]ScheduledValue, string) {
 type swBuildView struct {
 	rejected     map[string]map[string]bool
 	tenantSets   map[string]map[string]map[string]bool
-	unreachable  map[string][]string
+	unreachable  map[string][]string            // FlatBuild.UndeliverableKeys
+	disabled     map[string][]string            // FlatBuild.DisabledUndeclared
 	reservedKeys map[string]map[string][]string // subtreeReservedKeys' files (da-guard subtree_default_reserved_key)
 	defaultOnly  []string
 	notApplied   []string
@@ -124,7 +125,7 @@ func swBuild(t *testing.T, dir string) swBuildView {
 	}
 	v := swBuildView{
 		rejected: built.RejectedChainValues, tenantSets: built.rejectedTenantSets,
-		unreachable: built.Unreachable,
+		unreachable: built.UndeliverableKeys(), disabled: built.DisabledUndeclared,
 	}
 	// The files only: the value each names is the file's own text, which
 	// differs between the windowed and the scalar form by construction.
@@ -189,6 +190,7 @@ func TestSubtreeScheduledReserved_IsItsDefaultAlone(t *testing.T) {
 						if !reflect.DeepEqual(wb.rejected, sb.rejected) ||
 							!reflect.DeepEqual(wb.tenantSets, sb.tenantSets) ||
 							!reflect.DeepEqual(wb.unreachable, sb.unreachable) ||
+							!reflect.DeepEqual(wb.disabled, sb.disabled) ||
 							!reflect.DeepEqual(wb.reservedKeys, sb.reservedKeys) {
 							t.Errorf("%s: build verdicts:\n windowed %+v\n scalar   %+v", p.name, wb, sb)
 						}
