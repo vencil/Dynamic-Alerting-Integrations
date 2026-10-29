@@ -253,8 +253,12 @@ type RootNullKey struct {
 //   - a critical-row key (criticalRowBase, resolveCriticalRows' own entry
 //     test) whose base, under either spelling, is root-null and absent from
 //     the canonical root defaults — the lookup resolveCriticalRows drops
-//     the row on. keyCanReachTheOutputPlane passes every `_critical` key
-//     (the resolver WARNs on its own), so it cannot answer this one. A
+//     the row on — and the `_critical` key itself not valued in the root
+//     defaults, where resolveBaseRows would serve it (the two readers
+//     keyCanReachTheOutputPlane asks of a `_critical` key, #3378). Only a
+//     key on the tenant side reaches this arm: a subtree `_critical` over a
+//     root-null base is not delivered at all (the overlay asks the same
+//     condition) and is subtree_default_undeliverable instead. A
 //     `_critical` whose base no root ever declared is not root-null-caused
 //     and is left out. A switched-off key is left out, as the resolver
 //     skips it before the lookup.
@@ -301,7 +305,9 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]Ro
 		for k, v := range overrides {
 			canon, _ := canonicalKeyFor(k)
 			if base, critical := criticalRowBase(canon); critical {
-				if _, declared := canonDefaults[base]; !declared && !disabledEverywhere(v) {
+				_, declared := canonDefaults[base]
+				_, valuedItself := canonDefaults[canon]
+				if !declared && !valuedItself && !disabledEverywhere(v) {
 					if rs := spelled(base); len(rs) > 0 {
 						add(tenantID, RootNullKey{Key: k, NullKey: base, RootSpellings: rs, CriticalRow: true})
 					}

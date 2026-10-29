@@ -758,9 +758,10 @@ func isDimensionalKey(k string) bool {
 	return strings.Contains(k, "{") && !reservedShapeWins(k)
 }
 
-// isCriticalRowKey is resolveCriticalRows' entry condition (the `_critical`
-// arm keyBypassesTheDeclaredSurface mirrors): a `<metric>_critical` key, in
-// either #1231 spelling, that is not a `_state_` / `_silent_` key.
+// isCriticalRowKey is the shape resolveCriticalRows takes a key in: a
+// `<metric>_critical` key, in either #1231 spelling, that is not a `_state_`
+// / `_silent_` key. Whether the row is then served also needs the base's
+// root value (criticalBaseValued, which the subtree overlay asks, #3378).
 func isCriticalRowKey(k string) bool {
 	return strings.HasSuffix(k, criticalKeySuffix) &&
 		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
