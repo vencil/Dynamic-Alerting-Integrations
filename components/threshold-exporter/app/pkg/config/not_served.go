@@ -60,6 +60,33 @@ package config
 //   - unregistered: a `_` key the reserved-key registry does not list
 //     (IsUnregisteredUnderscoreKey): nothing reads it, and no row phase
 //     reads any `_` key (baseRowsSkipKey, #3045).
+//   - unconsumed (#3378): a threshold key of the tenant's built map that no
+//     row phase reads (rejectRecorder: each phase claims the keys it reads,
+//     and resolveAtWithStats records the rest once the tenant's phases have
+//     run — noteUnclaimed). Two sources reach it: a flat key the root
+//     declares nowhere (neither in `defaults:` nor in
+//     `optional_overrides:`) that a tenant file, a platform `tenants:`
+//     entry or a profile writes — `redis_evicted_keys: "7"`, which only
+//     ValidateTenantKeys' "unknown key" line named before; and a
+//     `<base>_critical` whose base the root `defaults:` does not value —
+//     the row resolveCriticalRows drops ("has no matching default") — one
+//     the tenant side writes; a subtree `_defaults.yaml` never hands such a
+//     key down (the overlay asks the same condition, criticalBaseValued, and
+//     reports it undeliverable instead). Not recorded: a `_` key
+//     (unregistered and the reserved-key findings own those), a value
+//     switched off in every window (disabledEverywhere, the
+//     undeliverableThresholds rule: not serving it is what was asked), and a
+//     dimensional `x{…}` key, which resolveDimensionalRows serves whether the
+//     root declares `x` or not.
+//
+//     ⛔ unconsumed is NOT one of the reasons ValueNotServedAsWritten selects
+//     (#3378 owner ruling): it is named here, in `da-guard effective`'s
+//     not_served, and not by da-guard's value_not_served or the exporter's
+//     da_config_values_not_served. How severe a key nobody reads is belongs
+//     to ADR-038's one shared verdict — an error in a tenant file, a notice
+//     in a profile or a platform file — and #3016 leaves the key-name
+//     judgement with that verdict alone; a second, uniform error here would
+//     contradict it for the profile and platform layers.
 //
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
 // serves what effective shows": a profile-layer value applyProfiles discards
@@ -105,6 +132,10 @@ const (
 	// NotServedUnregistered (#3045): a `_` key the reserved-key registry does
 	// not list (IsUnregisteredUnderscoreKey); /metrics serves it in no layer.
 	NotServedUnregistered = "unregistered"
+	// NotServedUnconsumed (#3378): a threshold key of the tenant's built map
+	// that no row phase reads — undeclared at the root, or a `_critical`
+	// whose base the root `defaults:` does not value (noteUnclaimed).
+	NotServedUnconsumed = "unconsumed"
 )
 
 // NotServedKey is why /metrics does not serve one key of an effective config
@@ -231,20 +262,38 @@ type UnreadKey struct {
 
 // rejectRecorder collects, while the resolver runs, the tenant values it
 // cannot parse (#2296): tenant → canonical key → reason (NotServedValueUnparsed,
-// NotServedValueUnparsedDropped, or NotServedWindowInvalid from
-// recordInvalidWindows). nil = record nothing, which is what every scrape
+// NotServedValueUnparsedDropped, NotServedWindowInvalid from
+// noteInvalidWindows, or NotServedUnconsumed from noteUnclaimed). nil = record nothing, which is what every scrape
 // passes: the record sites sit inside the resolver's existing WARN branches,
 // so the steady state pays one nil check per unparseable value.
+//
+// #3378: it also collects, per tenant, the keys of the tenant's map a row
+// phase reads (claim) — each phase claims at the place it looks the key up —
+// and once the tenant's phases have run, resolveAtWithStats records every
+// threshold key none of them claimed as NotServedUnconsumed (noteUnclaimed).
+// The claim sites carry the same nil check, so a scrape pays one per read.
 type rejectRecorder struct {
 	byTenant map[string]map[string]string
+	// claimed is the keys of the tenant being resolved that a row phase has
+	// read; emptied by noteUnclaimed after each tenant.
+	claimed map[string]struct{}
 }
 
-// recordedRank orders the reasons a recorder keeps for one key: a dropped
-// row outranks a value the resolver fell back from, which outranks a window
-// that never applies (#2065) — a key read at several minutes, or with both a
-// bad value and a bad window, keeps the strongest verdict.
+// recordedRank orders the reasons a recorder keeps for one key: a value no
+// row phase reads (#3378) outranks a dropped row, which outranks a value
+// the resolver fell back from, which outranks a window that never applies
+// (#2065) — a key read at several minutes, or with both a bad value and a
+// bad window, keeps the strongest verdict. unconsumed is the strongest
+// because its fix is the key itself: no value written for it, at any
+// minute, can be served, while a dropped row is a value a phase read and
+// could serve once written as a number. (A key is unconsumed only when no
+// phase claimed it, and the phases record their other verdicts only on keys
+// they read, so the two meet only across readings of the day, where the
+// claims do not change — the rank is for completeness.)
 func recordedRank(reason string) int {
 	switch reason {
+	case NotServedUnconsumed:
+		return 4
 	case NotServedValueUnparsedDropped:
 		return 3
 	case NotServedValueUnparsed:
@@ -275,6 +324,35 @@ func (r *rejectRecorder) note(tenant, key, reason string) {
 	m[key] = reason
 }
 
+// claim records that a row phase read key (a canonical key of the tenant's
+// map) for the tenant being resolved (#3378). Called only with a recorder,
+// at the place the phase looks the key up: whether the phase then serves
+// it, falls back to the default, drops it or finds it switched off is that
+// phase's own verdict, recorded (or not) by note.
+func (r *rejectRecorder) claim(key string) {
+	if r.claimed == nil {
+		r.claimed = map[string]struct{}{}
+	}
+	r.claimed[key] = struct{}{}
+}
+
+// noteUnclaimed records NotServedUnconsumed for each key of overrides (the
+// tenant's canonical map, as the phases read it) that no phase claimed,
+// then forgets the claims for the next tenant (#3378). Left out: a `_` key
+// — no row phase reads one (baseRowsSkipKey), and NotServedUnregistered or
+// the reserved-key findings name it — and a value switched off in every
+// window (disabledEverywhere, the rule undeliverableThresholds' exclusion 3
+// applies): `disable` asks for no row.
+func (r *rejectRecorder) noteUnclaimed(tenant string, overrides map[string]ScheduledValue) {
+	for k, sv := range overrides {
+		if _, read := r.claimed[k]; read || baseRowsSkipKey(k) || disabledEverywhere(sv) {
+			continue
+		}
+		r.note(tenant, k, NotServedUnconsumed)
+	}
+	clear(r.claimed)
+}
+
 // ValueNotServedAsWritten reports whether a NotServed verdict on key is about
 // a threshold value as written that /metrics does not serve as written
 // (#2065): reason is value_unparsed, value_unparsed_dropped, window_invalid,
@@ -285,6 +363,14 @@ func (r *rejectRecorder) note(tenant, key, reason string) {
 // generator's routing findings for a routing key). The
 // exporter's da_config_values_not_served and da-guard's value_not_served
 // both select with it.
+//
+// ⛔ NOT unconsumed (#3378, owner ruling): a value no row phase reads is a
+// key nobody reads, and how severe that is belongs to ADR-038's one shared
+// verdict — an error in a tenant file, a notice in a profile or a platform
+// file; #3016 keeps the key-name judgement in that verdict alone. Selecting
+// unconsumed here would make it a uniform error (value_not_served) and a
+// gauge count beside that verdict, contradicting it for the profile and
+// platform layers. TestValueNotServedAsWritten_NotUnconsumed pins it.
 func ValueNotServedAsWritten(key, reason string) bool {
 	if strings.HasPrefix(key, "_") {
 		return false
@@ -300,7 +386,7 @@ func ValueNotServedAsWritten(key, reason string) bool {
 // valueNotServedReasons is the reasons ValueNotServedAsWritten selects: the
 // ones whose cause is a value as written. spelling_duplicate (#2031): a
 // spelling of a threshold the same map also writes under the spelling
-// /metrics serves.
+// /metrics serves. Not unconsumed (#3378; see ValueNotServedAsWritten).
 var valueNotServedReasons = []string{
 	NotServedValueUnparsed, NotServedValueUnparsedDropped, NotServedWindowInvalid,
 	NotServedValueRejected, NotServedSpellingDuplicate,
@@ -317,7 +403,8 @@ func ValueNotServedReasons() []string {
 // ValuesNotServed is what the resolver behind /metrics records about the
 // tenant values of c it does not serve as written, over the whole UTC day:
 // tenant → canonical key → NotServedValueUnparsed,
-// NotServedValueUnparsedDropped or NotServedWindowInvalid (#2065). It is
+// NotServedValueUnparsedDropped, NotServedWindowInvalid (#2065) or
+// NotServedUnconsumed (#3378: no row phase reads the key). It is
 // the table `da-guard effective`'s not_served reads. Silent; c is not
 // modified. nil when nothing is recorded.
 //
@@ -547,6 +634,15 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			reason = NotServedUndeliverable
 		case v.rootNull[tenantID][k]:
 			reason = NotServedRootNullUndeclared
+		case unparsed[canon] == NotServedUnconsumed:
+			// #3378. After root_null_undeclared: a tenant value for a key
+			// the root writes as null is one no phase reads, so the resolver
+			// records it unconsumed too — but its cause is the root null,
+			// which has a finding of its own (root_default_null_undeclared,
+			// a warning): one cause, one report. undeliverable cannot meet it:
+			// the overlay never writes an undeliverable key into the map the
+			// resolver reads.
+			reason = NotServedUnconsumed
 		default:
 			continue
 		}
