@@ -423,8 +423,8 @@ auditLog:
       # (tests/shared/test_federation_audit_metrics.py binds the two).
       # renovate: datasource=docker depName=timberio/vector
       repository: timberio/vector
-      tag: "0.60.0-distroless-libc"
-      digest: "sha256:a9ed9a4710bdc2efa66e94c1e8edc7b439709e6e50079f1e1b2b1bf479d387da"
+      tag: "0.57.0-distroless-libc"
+      digest: "sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
       pullPolicy: IfNotPresent
     port: 3903
     resources:

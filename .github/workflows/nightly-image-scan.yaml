@@ -236,7 +236,7 @@ jobs:
         # alert (NOT a silent clean) — add a docker/login-action step then.
         include:
           - name: vector # helm/vector/values.yaml
-            ref: "timberio/vector:0.60.0-distroless-libc@sha256:a9ed9a4710bdc2efa66e94c1e8edc7b439709e6e50079f1e1b2b1bf479d387da"
+            ref: "timberio/vector:0.57.0-distroless-libc@sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
