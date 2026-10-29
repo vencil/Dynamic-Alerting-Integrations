@@ -20,7 +20,9 @@ package main
 // dimensional key) — loud through a different channel, so the gate does not
 // repeat it. A `_` key other than a routing key is not carried by a subtree
 // at all (#3341): never written, and named by da-guard's
-// subtree_default_reserved_key error instead (verdictNotCarried).
+// subtree_default_reserved_key error instead (verdictNotCarried). A routing
+// key is not written and is left to the route generator's checks, as da-guard
+// leaves it (verdictRouteGenerator, #3379).
 //
 // ⛔ WHAT THIS CATCHES THAT A PER-SHAPE TEST CANNOT. `verdictSilent` is not a
 // case anyone writes on purpose; it is what a NEW bypass arm produces when its
@@ -57,6 +59,11 @@ const (
 	// written, whatever the value, and named by da-guard's
 	// subtree_default_reserved_key (config.ScopedTenants.SubtreeReserved).
 	verdictNotCarried
+	// verdictRouteGenerator: a routing key (config.IsRoutingKey) — not
+	// written, and left to the route generator's checks (`--validate
+	// --strict`), as da-guard leaves it (#3379): neither the exporter's
+	// undeliverable set nor subtree_default_reserved_key names it.
+	verdictRouteGenerator
 	// verdictSilent: written, changes nothing, nobody warns, not the inert case.
 	// Never licensed. Present so the table can say so out loud.
 	verdictSilent
@@ -74,6 +81,8 @@ func (v reachVerdict) String() string {
 		return "written, inert (== absent)"
 	case verdictNotCarried:
 		return "not carried, named by subtree_default_reserved_key"
+	case verdictRouteGenerator:
+		return "not written, a routing key the route generator judges"
 	default:
 		return "SILENT (written, no reader, no report)"
 	}
@@ -134,7 +143,7 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"a subtree carries no reserved key (#3341)"},
 		{"junk under the silent prefix", "  _silent_bogus: disable\n", "_silent_bogus", verdictNotCarried, "",
 			"a subtree carries no `_` key but a routing key (#3341)"},
-		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRefused, "",
+		{"junk under the routing prefix", "  _routing_bogus: 5\n", "_routing_bogus", verdictRouteGenerator, "",
 			"ResolveRouting reads the exact key _routing, and `_routing` is a valid reserved PREFIX so nothing warns"},
 
 		// ⛔ THE OVERLAPPING SHAPES. Each of these matches TWO arms of
@@ -149,7 +158,7 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"a subtree carries no reserved key (#3341); before, resolveCriticalRows' own `_state_` skip made it refused"},
 		{"a dimensional key under an undeclared state filter", "  _state_bogus{env=\"x\"}: 5\n", "_state_bogus{env=\"x\"}", verdictNotCarried, "",
 			"a subtree carries no reserved key (#3341)"},
-		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRefused, "",
+		{"a dimensional key under the routing prefix", "  _routing_bogus{env=\"x\"}: 5\n", "_routing_bogus{env=\"x\"}", verdictRouteGenerator, "",
 			"resolveDimensionalRows skips `_routing`-prefixed keys itself"},
 		{"a dimensional key under the silent prefix", "  _silent_bogus{env=\"x\"}: 5\n", "_silent_bogus{env=\"x\"}", verdictNotCarried, "",
 			"a subtree carries no `_` key but a routing key (#3341)"},
@@ -159,8 +168,8 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 			"a subtree carries no reserved key (#3341); before, ResolveSeverityDedup WARNed on it"},
 		{"a state filter carrying a time window", "  _state_maintenance:\n    default: disable\n    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", "_state_maintenance", verdictNotCarried, "",
 			"a subtree carries no reserved key, windowed or not (#3341)"},
-		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictRefused, "",
-			"resolveCriticalRows reads no `_` key (criticalRowBase, #3045), so the overlay asks no critical condition of it (#3378) and refuses it as any undeclared routing key"},
+		{"a critical tier under the routing prefix", "  _routing_bogus_critical: 5\n", "_routing_bogus_critical", verdictRouteGenerator, "",
+			"resolveCriticalRows reads no `_` key (criticalRowBase, #3045), so the overlay asks no critical condition of it (#3378) and refuses it as any undeclared routing key, which the route generator reports (#3379)"},
 		{"a critical tier on the dedup key", "  _severity_dedup_critical: 5\n", "_severity_dedup_critical", verdictNotCarried, "",
 			"a subtree carries no `_` key but a routing key (#3341); before, resolveCriticalRows read it and WARNed"},
 	}
@@ -225,6 +234,8 @@ func classifyInheritedKey(t *testing.T, root, line, key string) (reachVerdict, s
 	switch {
 	case !written && !reported && named:
 		return verdictNotCarried, ev
+	case !written && !reported && !named && config.IsRoutingKey(key):
+		return verdictRouteGenerator, ev
 	case written && observable:
 		return verdictDelivered, ev
 	case !written && reported:

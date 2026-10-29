@@ -139,8 +139,9 @@ func TestServedValues_UndeliverableKeyIsUnserved(t *testing.T) {
 
 // #1976 r2/r3: which refused keys the finding and `unserved` report. Reserved
 // keys and keys the exporter never serves as a row and keys the subtree
-// switches off are not reported — the exporter's build still refuses them
-// (its ERROR and gauge are unchanged). The first two kinds are reported as
+// switches off are not reported — nor counted by the exporter's ERROR and
+// gauge, which read the same set since #3379 (a switched-off key is the
+// exporter's WARN instead). The first two kinds are reported as
 // subtree_default_reserved_key instead (#2388, wantReserved): one predicate
 // splits the two findings, so no key is in both. An unrecognised `_` key is a
 // threshold to the exporter and is reported; declared at the root (the
@@ -237,9 +238,9 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			wantReserved: []string{"_metadata", "_profile", "_state_maintenance"},
 		},
 		{
-			// A schedule at finance/ (refused), a scalar below (delivered):
-			// the shallow refusal stays in the exporter's set (the review's
-			// exC); it is not reported here.
+			// A schedule at finance/, a scalar below: since #3341 a subtree
+			// carries neither (the review's exC); subtree_default_reserved_key
+			// reports it.
 			name: "schedule-then-scalar-state",
 			files: map[string]string{
 				"_defaults.yaml":            "defaults:\n  mysql_connections: 80\n" + stateFilters,
@@ -348,5 +349,85 @@ func TestServedValues_RootDeclaredKeyIsServed(t *testing.T) {
 	wantValue(t, doc, "tenant-a", "redis_evicted_keys", 100)
 	if u := doc.Tenants["tenant-a"].Unserved; len(u) != 0 {
 		t.Errorf("tenant-a unserved = %v, want none", u)
+	}
+}
+
+// #3379: the shapes on which the exporter's ERROR and gauge used to disagree
+// with this finding, through the real CLI. The exporter side of the same
+// fixtures (gauge, log, /metrics, and its tenant set equal to this finding's)
+// is TestSubtreeUndeliverable_ExporterAndGuardReadOneSet in package main.
+func TestUndeliverable_DisableAndRoutingShapes(t *testing.T) {
+	t.Parallel()
+	const root = "defaults:\n  mysql_connections: 80\n"
+	fin := func(rootBody, sub string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml":         rootBody,
+			"finance/_defaults.yaml": sub,
+			"finance/t-fin.yaml":     "tenants:\n  t-fin: {}\n",
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  []string // tenants reported; nil = none
+		// exit is checked when set: a routing key makes the run exit 4
+		// (undetermined, the route generator's), whatever this finding says.
+		exit int
+	}{
+		{name: "A1 disable", files: fin(root, "defaults:\n  redis_evicted_keys: disable\n"), exit: exitOK},
+		{
+			name: "A2 schedule disabled in part of the day",
+			files: fin(root, "defaults:\n  redis_evicted_keys:\n    default: disable\n"+
+				"    overrides:\n      - window: \"01:00-02:00\"\n        value: 50\n"),
+			want: []string{"t-fin"}, exit: exitFindings,
+		},
+		{
+			name: "A2b schedule disabled all day",
+			files: fin(root, "defaults:\n  redis_evicted_keys:\n    default: disable\n"+
+				"    overrides:\n      - window: \"01:00-02:00\"\n        value: disable\n"),
+			exit: exitOK,
+		},
+		{
+			name: "A8 value above, disable below",
+			files: map[string]string{
+				"_defaults.yaml":            root,
+				"finance/_defaults.yaml":    "defaults:\n  redis_evicted_keys: 100\n",
+				"finance/t-fin.yaml":        "tenants:\n  t-fin: {}\n",
+				"finance/us/_defaults.yaml": "defaults:\n  redis_evicted_keys: disable\n",
+				"finance/us/t-fin-us.yaml":  "tenants:\n  t-fin-us: {}\n",
+			},
+			want: []string{"t-fin"}, exit: exitFindings,
+		},
+		{
+			name: "critical over a declared-only base",
+			files: fin("defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_evicted_keys\n",
+				"defaults:\n  redis_evicted_keys_critical: 200\n"),
+			want: []string{"t-fin"}, exit: exitFindings,
+		},
+		{name: "routing key", files: fin(root, "defaults:\n  _routing_bogus: 5\n"), exit: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			tree := map[string]string{}
+			for k, v := range tc.files {
+				tree["conf.d/"+k] = v
+			}
+			testutil.WriteTree(t, tmp, tree)
+			code, got := undeliverableFindings(t, "--config-dir", filepath.Join(tmp, "conf.d"))
+			var tenants []string
+			for _, f := range got {
+				if f.Severity != guard.SeverityError {
+					t.Errorf("finding %+v is not an error", f)
+				}
+				tenants = append(tenants, f.TenantID)
+			}
+			if !reflect.DeepEqual(tenants, tc.want) {
+				t.Errorf("reported tenants = %v, want %v", tenants, tc.want)
+			}
+			if tc.exit >= 0 && code != tc.exit {
+				t.Errorf("exit = %d, want %d", code, tc.exit)
+			}
+		})
 	}
 }

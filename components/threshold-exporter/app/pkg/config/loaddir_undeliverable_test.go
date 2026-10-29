@@ -2,7 +2,7 @@ package config
 
 // loaddir_undeliverable_test.go — #1976: a key only a subtree `_defaults.yaml`
 // names (not the root `_defaults.yaml`, not `optional_overrides:`) is one the
-// build cannot deliver (FlatBuild.Unreachable). LoadReport.Undeliverable and
+// build cannot deliver (FlatBuild.Undeliverable). LoadReport.Undeliverable and
 // ScopedTenants.Undeliverable carry that build's verdict to the readers
 // outside package main; the control is the same tree with the key declared
 // at the root, which delivers it and reports nothing.
@@ -102,7 +102,7 @@ func TestLoadDirReport_UndeliverableValueIsTheDeepestLevels(t *testing.T) {
 }
 
 // LoadReport.Undeliverable is the build's own map, not a second judgement:
-// the same keys as FlatBuild.Unreachable on the same scan.
+// FlatBuild.Undeliverable on the same scan, values included (#3379).
 func TestLoadDirReport_UndeliverableIsTheBuildsUnreachable(t *testing.T) {
 	t.Parallel()
 	dir := undeliverableTree(t, false)
@@ -118,8 +118,8 @@ func TestLoadDirReport_UndeliverableIsTheBuildsUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := unreachableKeys(rep.Undeliverable); !reflect.DeepEqual(got, built.Unreachable) {
-		t.Errorf("LoadReport keys %v, FlatBuild.Unreachable %v", got, built.Unreachable)
+	if rep.Undeliverable == nil || !reflect.DeepEqual(rep.Undeliverable, built.Undeliverable) {
+		t.Errorf("LoadReport %v, FlatBuild.Undeliverable %v", rep.Undeliverable, built.Undeliverable)
 	}
 }
 
@@ -154,9 +154,10 @@ func TestScopeEffective_UndeliverableKeepsInScopeTenants(t *testing.T) {
 
 // #1976 r2/r3: the report keeps only keys for which "declare it at the
 // root or in optional_overrides:" is the fix (undeliverableThresholds). The
-// shapes below are measured in FlatBuild.Unreachable (the exporter's ERROR
-// and gauge, unchanged) first; then LoadReport.Undeliverable and
-// ScopedTenants.Undeliverable — both through the one filter — are checked.
+// shapes below are checked in FlatBuild.Undeliverable (the exporter's ERROR
+// and gauge read it since #3379) and FlatBuild.DisabledUndeclared (the
+// exporter's WARN), then in LoadReport.Undeliverable and
+// ScopedTenants.Undeliverable — all four from the one build.
 // Each exclusion has a case only it catches, so dropping any one of them
 // turns a case red: routing-key (subtreeDefaultsRefusedKey — since #3341 a
 // subtree hands no other `_` key down, so a routing key is the only `_` key
@@ -181,7 +182,7 @@ const plainRoot = "defaults:\n  mysql_connections: 80\n"
 
 // scheduleThenScalarStateFiles: `_state_maintenance` as a schedule at
 // finance/ and a scalar `disable` at finance/us/. Before #3295 the shallow
-// schedule was refused as unreachable and stayed in FlatBuild.Unreachable
+// schedule was refused as unreachable and stayed in the exporter's set
 // although the deeper `disable` was delivered; since #3341 a subtree carries
 // neither, so it is in no unreachable set at all.
 func scheduleThenScalarStateFiles() map[string]string {
@@ -205,8 +206,10 @@ func subtreeTree(root, subtree string) map[string]string {
 	}
 }
 
-// buildUnreachable is the build's own, unfiltered set for dir.
-func buildUnreachable(t *testing.T, dir string) map[string][]string {
+// buildUnreachable is the build's own two answers for dir: the undeliverable
+// keys (the exporter's ERROR and gauge) and the switched-off undeclared keys
+// (its WARN).
+func buildUnreachable(t *testing.T, dir string) (undeliverable, disabled map[string][]string) {
 	t.Helper()
 	scan, err := ScanDirTree(dir, nil, nil, discardLogger)
 	if err != nil {
@@ -216,7 +219,7 @@ func buildUnreachable(t *testing.T, dir string) map[string][]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return built.Unreachable
+	return built.UndeliverableKeys(), built.DisabledUndeclared
 }
 
 func TestUndeliverable_ReportedKeys(t *testing.T) {
@@ -227,8 +230,8 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		files        map[string]string
-		wantUnreach  []string // tenant-a's FlatBuild.Unreachable (precondition)
-		wantReported []string // tenant-a's reported keys; nil = tenant absent
+		wantDisabled []string // tenant-a's FlatBuild.DisabledUndeclared (the exporter's WARN)
+		wantReported []string // tenant-a's reported keys (exporter and da-guard); nil = tenant absent
 	}{
 		{
 			// #3341: a subtree carries none of these, listed in
@@ -250,10 +253,10 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			// Only subtreeDefaultsRefusedKey leaves it out: a routing key a
 			// subtree still hands down (the route generator's checks own
 			// it), unreachable — `ResolveRouting` reads only `_routing` — and
-			// declaring it at the root is no fix.
-			name:        "routing-key",
-			files:       subtreeTree(plainRoot, "defaults:\n  _routing_bogus: 5\n"),
-			wantUnreach: []string{"_routing_bogus"},
+			// declaring it at the root is no fix. Since #3379 the exporter
+			// does not count it either, and a disabled one is no WARN.
+			name:  "routing-key",
+			files: subtreeTree(plainRoot, "defaults:\n  _routing_bogus: 5\n  _routing_off: disable\n"),
 		},
 		{
 			name:  "schedule-then-scalar-state",
@@ -271,7 +274,7 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 				"  redis_s:\n    default: disable\n    overrides:\n"+
 				"      - window: \"01:00-02:00\"\n        value: 50\n"+
 				"  redis_u: Disable\n  redis_v: \" DISABLE \"\n"),
-			wantUnreach:  []string{"redis_evicted_keys", "redis_q", "redis_r", "redis_s", "redis_u", "redis_v"},
+			wantDisabled: []string{"redis_evicted_keys", "redis_u", "redis_v"},
 			wantReported: []string{"redis_q", "redis_r", "redis_s"},
 		},
 		{
@@ -294,19 +297,22 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			// A threshold key beside the `_` ones: the filter is per key.
 			name:         "mixed",
 			files:        subtreeTree(reservedOnlyRoot, reservedOnlySubtree+"  redis_evicted_keys: 100\n"),
-			wantUnreach:  []string{"redis_evicted_keys"},
 			wantReported: []string{"redis_evicted_keys"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := writeUndeliverableTree(t, tc.files)
-			if got := buildUnreachable(t, dir)["tenant-a"]; !reflect.DeepEqual(got, tc.wantUnreach) {
-				t.Fatalf("precondition: FlatBuild.Unreachable[tenant-a] = %v, want %v", got, tc.wantUnreach)
-			}
 			var want map[string][]string
 			if tc.wantReported != nil {
 				want = map[string][]string{"tenant-a": tc.wantReported}
+			}
+			undeliverable, disabled := buildUnreachable(t, dir)
+			if !reflect.DeepEqual(undeliverable, want) {
+				t.Errorf("FlatBuild.UndeliverableKeys = %v, want %v", undeliverable, want)
+			}
+			if got := disabled["tenant-a"]; !reflect.DeepEqual(got, tc.wantDisabled) {
+				t.Errorf("FlatBuild.DisabledUndeclared[tenant-a] = %v, want %v", got, tc.wantDisabled)
 			}
 			_, rep, err := LoadDirReport(dir, nil)
 			if err != nil {
