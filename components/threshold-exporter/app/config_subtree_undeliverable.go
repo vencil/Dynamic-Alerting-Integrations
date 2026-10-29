@@ -35,12 +35,13 @@ package main
 // subtree_default_undeliverable reads — so the gauge counts a tenant exactly
 // when da-guard reports it. Left out: a routing key (`_routing_bogus: 5`; the
 // route generator's `--validate --strict` reports it) and a key the subtree
-// switches off in every window although the root never declares it. That
-// disable changes no output — /metrics is the same as when the root declares
-// the key and the subtree disables it — so it is one WARN
-// (warnSubtreeDisabledUndeclared, config.FlatBuild.DisabledUndeclared), the
+// switches off in every window although the root gives it no value to
+// serve. That disable changes no output — /metrics is the same as when the
+// root serves the key and the subtree disables it — so it is a WARN
+// (auditSubtreeDisabledUndeclared, config.FlatBuild.DisabledUndeclared), the
 // level of ValidateTenantKeys' `unknown key … not in defaults`, not this
-// ERROR. Before #3379 the exporter read the unfiltered set: it paged on such a
+// ERROR. Both lines are written once per change of their set (the same
+// undeliverableLogState, one instance each), not once per reload. Before #3379 the exporter read the unfiltered set: it paged on such a
 // disable while da-guard passed the tree.
 //
 // ⛔ HISTORY, because the gauge had another cause until #1957. It was the
@@ -293,16 +294,38 @@ func (d *undeliverableLogState) recordAndDecide(
 	return true
 }
 
-// warnSubtreeDisabledUndeclared logs one WARN when a subtree `_defaults.yaml`
-// switches off, in every window, a key the conf.d root `_defaults.yaml` and
-// `optional_overrides:` never declare (disabled: tenantID → sorted keys,
+// auditSubtreeDisabledUndeclared writes warnSubtreeDisabledUndeclared's
+// WARN when disabled (config.FlatBuild.DisabledUndeclared) differs from the
+// set it last wrote, through the same memory the undeliverable ERROR uses
+// (undeliverableLogState.recordAndDecide, its own instance): an idle reload
+// or one that edits only a tenant file writes nothing, a changed set writes
+// the line again, and an empty set clears the memory, so a relapse after a
+// fix — or a fresh process — writes it again. There is no gauge for this set.
+// Returns whether the line was written.
+func (m *ConfigManager) auditSubtreeDisabledUndeclared(disabled map[string][]string) bool {
+	tenants := make([]string, 0, len(disabled))
+	for tid := range disabled {
+		tenants = append(tenants, tid)
+	}
+	sort.Strings(tenants)
+	if !m.disabledUndeclared.recordAndDecide(tenants, nil, disabled, func(int) {}) {
+		return false
+	}
+	warnSubtreeDisabledUndeclared(m.getLogger(), disabled, m.path)
+	return true
+}
+
+// warnSubtreeDisabledUndeclared formats and logs the WARN for a subtree
+// `_defaults.yaml` switching off, in every window, a key the conf.d root
+// gives no value to serve (disabled: tenantID → sorted keys,
 // config.FlatBuild.DisabledUndeclared — pkg/config undeliverableThresholds'
-// exclusion 3, not a rule of this file). /metrics is the same as if the root
-// declared the key and the subtree disabled it, so this is not the
-// undeliverable ERROR and the gauge does not count it (#3379); a disable of a
-// key nothing declares may still be a typo of one that is. Once per build
-// (commitFlatFrom), like ValidateTenantKeys' WARN once per commit. Nothing
-// when disabled is empty.
+// switched-off rule, not a rule of this file): a key neither the root
+// `defaults:` nor `optional_overrides:` declares, or a `<base>_critical` whose
+// base and itself have no value in the root `defaults:` (criticalBaseValued /
+// rootDefaultsHold). /metrics is the same as if the root served the key and
+// the subtree disabled it, so this is not the undeliverable ERROR and the
+// gauge does not count it (#3379); a disable of a key nothing serves may
+// still be a typo of one that is. Nothing when disabled is empty.
 func warnSubtreeDisabledUndeclared(logger interface{ Print(...any) }, disabled map[string][]string, root string) {
 	if len(disabled) == 0 {
 		return
@@ -315,9 +338,10 @@ func warnSubtreeDisabledUndeclared(logger interface{ Print(...any) }, disabled m
 	var b strings.Builder
 	fmt.Fprintf(&b,
 		"WARN: conf.d subtree default disables an undeclared key: %d tenant(s) under %s inherit `disable` "+
-			"from a subtree `_defaults.yaml` for a key the conf.d ROOT `_defaults.yaml` and `optional_overrides:` "+
-			"do not declare. The disable changes no output (the key has no series to switch off); if the key "+
-			"is misspelled, correct it. Affected:",
+			"from a subtree `_defaults.yaml` for a key the conf.d ROOT gives no value to serve (neither its "+
+			"`defaults:` nor `optional_overrides:` declares it; for a `<base>_critical`, the root `defaults:` "+
+			"values neither the base nor the key). The disable changes no output (the key has no series to "+
+			"switch off); if the key is misspelled, correct it. Affected:",
 		len(tenants), root)
 	shown := tenants
 	if len(shown) > undeliverableLogSampleLimit {

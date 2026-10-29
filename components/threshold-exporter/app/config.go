@@ -227,6 +227,10 @@ type ConfigManager struct {
 	// the log, so a persistent condition is stated once per change instead of
 	// once per config commit. See config_subtree_undeliverable.go.
 	undeliverable undeliverableLogState
+	// disabledUndeclared is the same memory for the WARN about a subtree
+	// `disable` of a key with no root value to serve (#3379): stated once
+	// per change of that set, like the ERROR above.
+	disabledUndeclared undeliverableLogState
 
 	// valuesNotServed tracks what the values-not-served audit last put in
 	// the log (#2065); see config_values_not_served.go.
@@ -1626,9 +1630,10 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 				"(conf.d subdirectories declare defaults; without this the series "+
 				"would carry the root value while /effective reports the subtree's)", n)
 	}
-	// #3379: a subtree `disable` of a key the root never declares — no
-	// output changes, so a WARN (maybe a typo), not the audit's ERROR.
-	warnSubtreeDisabledUndeclared(m.getLogger(), built.DisabledUndeclared, m.path)
+	// #3379: a subtree `disable` of a key with no root value to serve — no
+	// output changes, so a WARN (maybe a typo), not the audit's ERROR; once
+	// per change of the set, like the ERROR.
+	m.auditSubtreeDisabledUndeclared(built.DisabledUndeclared)
 	// Published before the commit so `installConfig` can hand it to the audit
 	// from the same lock window that yields tenantSources.
 	m.mu.Lock()

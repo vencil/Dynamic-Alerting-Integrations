@@ -81,13 +81,14 @@ type FlatBuild struct {
 	// paged on a subtree `disable` da-guard passed.
 	Undeliverable map[string]map[string]ScheduledValue
 	// DisabledUndeclared is tenantID → the sorted keys the tenant inherits
-	// from a subtree `_defaults.yaml` that the root never declares and that
-	// the subtree switches off in every window (undeliverableThresholds'
-	// exclusion 3, disabledEverywhere): /metrics is the same as if the root
-	// declared the key and the subtree disabled it. Not undeliverable — the
-	// exporter logs one WARN for it (a disable of a key the root never
-	// declared changes no output; it may be a typo) and does not count it on
-	// the gauge (#3379). nil when there is none.
+	// from a subtree `_defaults.yaml` that nothing on the output plane
+	// iterates (as for Undeliverable) and that the subtree switches off all
+	// day — the default and every window disabled (disabledEverywhere):
+	// /metrics is the same as if the root served the key and the subtree
+	// disabled it. Not undeliverable — the exporter logs a WARN for it when
+	// the set changes (a disable of a key with no root value changes no
+	// output; it may be a typo) and does not count it on the gauge (#3379).
+	// nil when there is none.
 	DisabledUndeclared map[string][]string
 	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
 	// order, which is sorted) of the files that contribute nothing to Config
