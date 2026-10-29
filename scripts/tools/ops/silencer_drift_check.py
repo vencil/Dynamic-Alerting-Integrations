@@ -137,7 +137,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
 from _lib_python import format_json_report  # noqa: E402
-from _lib_io import require_path  # noqa: E402  (#3276)
+from _lib_paths import require_path  # noqa: E402  (#3276)
 
 try:
     import yaml

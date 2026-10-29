@@ -86,7 +86,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402

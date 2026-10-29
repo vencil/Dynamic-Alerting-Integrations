@@ -93,7 +93,8 @@ from _lib_python import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)

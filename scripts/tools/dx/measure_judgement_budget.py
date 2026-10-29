@@ -235,7 +235,8 @@ _REPO = os.path.abspath(os.path.join(_TOOLS, "..", ".."))
 sys.path.insert(0, _TOOLS)
 sys.path.insert(0, os.path.join(_TOOLS, "ops"))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
+from _lib_io import safe_label  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 #: ADR-036 §3's pass rule (the owner's decision rule, not a limit): peak
 #: memory ≤ 75 % of the judgement limit, wall time ≤ half the deadline.

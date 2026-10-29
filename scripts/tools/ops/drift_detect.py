@@ -41,7 +41,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
-from _lib_io import classify_path, raise_path_problems, require_dir  # noqa: E402  (#3276)
+from _lib_paths import classify_path, raise_path_problems, require_dir  # noqa: E402  (#3276)
 
 # ---------------------------------------------------------------------------
 # Bilingual help text

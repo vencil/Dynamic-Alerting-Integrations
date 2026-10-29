@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _version_patterns import DOCS_TREE_SYMLINK_ALIAS_PATHS  # noqa: E402
 
 

@@ -74,7 +74,7 @@ from _lib_exitcodes import (  # noqa: E402
     CallerError,
     die_caller_error,
 )
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 
 # ---------------------------------------------------------------------------

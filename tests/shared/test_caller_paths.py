@@ -1,7 +1,7 @@
 """#3276: a caller-given path the run cannot use is named, never a traceback.
 
 Every path a CLI takes from its caller is judged by one check,
-`_lib_io.classify_path` (``os.stat`` and its errno): nothing there is
+`_lib_paths.classify_path` (``os.stat`` and its errno): nothing there is
 ``*_not_found``, anything else — a path under a parent the caller cannot
 enter — is ``*_not_accessible``. Before it each tool asked ``Path.is_dir()``
 / ``exists()`` / ``is_file()`` (a ``PermissionError`` traceback on 3.13, a
@@ -30,7 +30,7 @@ from _platform_fs import unprivileged_sandbox  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
-from _lib_io import classify_path  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 DENIED = os.strerror(errno.EACCES)
 
@@ -141,6 +141,11 @@ DX_SITES = [
     ("analyze-probe --from-log", "dx/analyze_probe.py", ["--from-log", "{F}"],
      "--from-log {F}", 2),
     ("analyze-probe --archive", "dx/analyze_probe.py", ["--archive", "{D}"], "--archive {D}", 2),
+    # #3276: stdlib-only tools, reached once the judgement left `_lib_io`.
+    ("coverage-delta before", "dx/coverage_delta.py", ["{F}", "{F}"],
+     "coverage report not usable: {F}", 2),
+    ("pr-preflight --check-commit-msg", "dx/pr_preflight.py", ["--check-commit-msg", "{F}"],
+     "--check-commit-msg {F}", 2),
     ("pair-bench-ratio --reference", "dx/pair_bench_ratio.py",
      ["--reference", "{F}", "--main", "{BOX}/silences.json", "--reference-tag", "x",
       "--out", "{BOX}/pair.json"], "--reference {F}", 2),
@@ -455,3 +460,35 @@ def test_policy_on_dev_null_is_refused(tmp_path):
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert f"--policy {os.devnull}: not a regular file" in proc.stderr
+
+
+def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
+    """`_lib_paths` is for every tool, including those that run without
+    PyYAML (pr-preflight, coverage-delta's CI job) and without the crash hook
+    (analyze-probe): importing it pulls in neither, and a refusal still raises
+    the named CallerError."""
+    import subprocess
+    probe = (
+        "import builtins, sys\n"
+        "real = builtins.__import__\n"
+        "def guard(name, *a, **k):\n"
+        "    if name.split('.')[0] == 'yaml':\n"
+        "        raise ImportError('yaml is not installed here')\n"
+        "    return real(name, *a, **k)\n"
+        "builtins.__import__ = guard\n"
+        f"sys.path.insert(0, {str(REPO / 'scripts' / 'tools')!r})\n"
+        "hook = sys.excepthook\n"
+        "import _lib_paths\n"
+        "assert '_lib_exitcodes' not in sys.modules, 'imported _lib_exitcodes'\n"
+        "assert sys.excepthook is hook, 'installed a crash hook'\n"
+        "assert _lib_paths.classify_path('/nonexistent/x', 'dir').missing\n"
+        "try:\n"
+        "    _lib_paths.require_dir('/nonexistent/x', flag='--x')\n"
+        "except Exception as exc:\n"
+        "    print(type(exc).__name__, exc.reason)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "CallerError dir_not_found", proc.stdout
+

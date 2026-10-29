@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 # ADR-036 step 4 (#2906): every conf.d read on this path is `da-guard
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).

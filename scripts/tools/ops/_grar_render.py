@@ -55,7 +55,8 @@ from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
+from _lib_io import safe_label  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,

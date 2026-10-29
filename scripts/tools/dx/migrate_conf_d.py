@@ -54,8 +54,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import (  # noqa: E402  (#1789; #3276)
-    classify_path, exit_on_output_write_error, output_write)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)

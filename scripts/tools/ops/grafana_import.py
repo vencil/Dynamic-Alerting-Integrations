@@ -43,7 +43,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
-from _lib_io import classify_path, require_dir  # noqa: E402  (#3276)
+from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 
 
 def run_cmd(cmd, dry_run=False):

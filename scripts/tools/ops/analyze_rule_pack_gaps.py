@@ -36,7 +36,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import YamlFileError  # noqa: E402
-from _lib_io import classify_path, raise_path_problems  # noqa: E402  (#3276)
+from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tree)
 from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
 from _lib_python import (  # noqa: E402

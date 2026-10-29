@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_io import classify_path, require_dir, safe_label  # noqa: E402  (#1538; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
+from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_request_with_retry,

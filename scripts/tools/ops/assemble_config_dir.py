@@ -62,7 +62,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import require_dir  # noqa: E402  (#3276)
+from _lib_paths import require_dir  # noqa: E402  (#3276)
 from _lib_io import claim_stdout, targets_stdout, write_operator_output  # noqa: E402  (#3107)
 import _lib_confedit  # noqa: E402  (#3206: da-guard write puts the files in place)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)

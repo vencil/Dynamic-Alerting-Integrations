@@ -24,7 +24,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from validate_docs_versions import count_rule_packs  # noqa: E402
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →

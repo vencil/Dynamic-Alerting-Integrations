@@ -45,7 +45,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
+from _lib_io import safe_label  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 # ⛔ ONE base resolver for the whole repo. This file used to carry a second
 # one (`default_cap_base` + `_ref_exists`), and the two disagreed in the
 # direction nothing can notice: off a PR run the local one answered "HEAD",

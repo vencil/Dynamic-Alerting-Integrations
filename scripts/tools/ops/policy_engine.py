@@ -92,9 +92,11 @@ except ImportError:
 # file (`--policy`, validate-config's `--policy-dsl`) in parse-tree's file
 # mode, in no tree. A key written twice is a file parse-tree cannot read.
 try:
-    from _lib_io import classify_path, load_confd_file
+    from _lib_io import load_confd_file
+    from _lib_paths import classify_path
 except ImportError:
-    from scripts.tools._lib_io import classify_path, load_confd_file  # type: ignore[no-redef]
+    from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
+    from scripts.tools._lib_paths import classify_path  # type: ignore[no-redef]
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402

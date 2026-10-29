@@ -79,7 +79,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import find_project_root  # noqa: E402  (#2852)
-from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:

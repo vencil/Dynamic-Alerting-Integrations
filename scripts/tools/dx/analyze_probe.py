@@ -45,7 +45,6 @@ established now. The enumeration itself is recorded in dev/trk-373/ROUNDS.jsonl.
 
 import argparse
 import contextlib
-import errno
 import io
 import functools
 import os
@@ -65,6 +64,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276: stdlib only)
 
 # #1497's three same-day dispatches read M/W = +30.38% / +4.85% / +3.98%. The
 # swing to be explained is the gap between the modes, in percentage points.
@@ -86,12 +86,6 @@ _CF_HARNESS = "docs/internal/audit-reports/bench-probe-2026-09/counterfactual.py
 # hard-codes the word "three" in its prose.
 RUNS = ["probe-run1.txt", "probe-run2.txt", "probe-run3.txt"]
 
-# Nothing at the path: the errnos `Path.exists()` answered False for, and
-# `_lib_io.classify_path`'s *_not_found (#3276). That judgement is not
-# imported here: `_lib_io` needs PyYAML, which the bench workflow's bare
-# runner python is not promised, and installs the crash hook, which would
-# move every other uncaught error of this tool from rc 1 to 2.
-_MISSING = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 
 # ⛔ Divergence 2: records are NOT anchored at line start. `go test` prefixes the
 # first output line of each invocation with `BenchmarkProbeWriteLatency-4   \t`,
@@ -673,19 +667,22 @@ def main(argv=None):
 
     if args.from_log is not None:
         path = args.from_log
-        # #3276: what is at --from-log is decided by the read and its errno,
-        # not `exists()` (which raised on a path under a parent the caller
-        # cannot enter): nothing there is the missing-file refusal, a path
-        # that cannot be read as a file (a directory, EACCES) is named — rc 2
-        # either way, never the traceback (rc 1) it was. A FIFO or a process
-        # substitution is read as before.
+        # #3276: what is at --from-log is the shared caller-path judgement's
+        # (`_lib_paths`, stdlib only — no PyYAML, no crash hook), not
+        # `exists()`, which raised on a path under a parent the caller cannot
+        # enter: nothing there is the missing-file refusal, anything else it
+        # refuses is named. A FIFO or a process substitution passes (kind
+        # "any") and is read as before; a path that cannot be read as a file
+        # (a directory, mode 000) is named too — rc 2, never a traceback.
+        problem = classify_path(path, "any", flag="--from-log")
+        if problem is not None:
+            print(f"::error::missing data file {path}" if problem.missing
+                  else f"::error::{problem.message}")
+            return 2
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
-            if exc.errno in _MISSING:
-                print(f"::error::missing data file {path}")
-            else:
-                print(f"::error::--from-log {path}: {exc.strerror}")
+            print(f"::error::--from-log {path}: {exc.strerror}")
             return 2
         session = load(text, path.name)
         err = reject(session)
@@ -704,27 +701,27 @@ def main(argv=None):
     # update that prose too.
     # ⚠️ Inherited, not chosen here: a `probe-run4.txt` in DIR is IGNORED rather
     # than rejected, because the original ignored it. Pinned by a test.
-    # #3276: a DIR the caller cannot look at is named, not a traceback (rc 1);
-    # nothing there is each file's missing-file refusal below, as before.
-    try:
-        os.stat(args.archive)
-    except OSError as exc:
-        if exc.errno not in _MISSING:
-            print(f"::error::--archive {args.archive}: {exc.strerror}")
-            return 2
+    # #3276: a DIR the caller cannot look at is named (the shared judgement),
+    # not a traceback (rc 1); nothing there is each file's missing-file
+    # refusal below, as before.
+    problem = classify_path(args.archive, "dir", flag="--archive")
+    if problem is not None and not problem.missing:
+        print(f"::error::{problem.message}")
+        return 2
     sessions = []
     for name in RUNS:
         path = args.archive / name
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            if exc.errno in _MISSING:
-                print(f"::error::missing data file {path}")
-                return 2
-            if isinstance(exc, PermissionError):
-                print(f"::error::--archive {path}: {exc.strerror}")
-                return 2
-            raise  # anything else (a directory named probe-runN.txt) as before
+        # Nothing there is the missing-file refusal, as before; a file DIR
+        # does not let the caller reach (DIR itself mode 000) is named (#3276,
+        # E3). A file that is there but cannot be read (a directory named
+        # probe-runN.txt, mode 000) raises as it always did — not in #3276's
+        # approved rc changes.
+        problem = classify_path(path, "any")
+        if problem is not None:
+            print(f"::error::missing data file {path}" if problem.missing
+                  else f"::error::--archive {problem.message}")
+            return 2
+        text = path.read_text(encoding="utf-8")
         session = load(text, path.name)
         err = reject(session, thin_msg=lambda s: (
             f"::error::parsed {len(s.rows)} measurement rows, need >= 2"))

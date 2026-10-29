@@ -32,7 +32,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------

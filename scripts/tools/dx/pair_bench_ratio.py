@@ -104,8 +104,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_io import (  # noqa: E402  (#1789; #3276)
-    classify_path, exit_on_output_write_error, output_write)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Same shape analyze_bench_history.py parses, deliberately: both read the raw
 # `go test -bench` stdout that bench_interleave.sh appends per round.

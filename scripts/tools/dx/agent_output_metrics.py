@@ -44,7 +44,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 DEFAULT_CHANGELOG = "CHANGELOG.md"
 DEFAULT_SECTION = "Unreleased"

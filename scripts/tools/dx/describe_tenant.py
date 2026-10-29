@@ -52,7 +52,8 @@ from _lib_compat import try_utf8_stdout, find_project_root  # noqa: E402
 from _lib_confd import duplicate_declarations, tenant_declarations  # noqa: E402  (#2049)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789; #3276)
-    YamlFileError, classify_path, exit_on_output_write_error, output_write, safe_label)
+    YamlFileError, exit_on_output_write_error, output_write, safe_label)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: one parse-tree document per run)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402

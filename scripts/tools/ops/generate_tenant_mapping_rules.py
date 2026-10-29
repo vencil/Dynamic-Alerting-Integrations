@@ -46,7 +46,8 @@ from _lib_python import (  # noqa: E402
     load_yaml_file,
     write_text_or_die,
 )
-from _lib_io import YamlFileError, require_dir, require_file  # noqa: E402  (#3276)
+from _lib_io import YamlFileError  # noqa: E402  (#3276)
+from _lib_paths import require_dir, require_file  # noqa: E402  (#3276)
 # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402

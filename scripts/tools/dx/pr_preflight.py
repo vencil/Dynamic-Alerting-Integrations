@@ -39,6 +39,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276: stdlib only)
 
 
 class Status(Enum):
@@ -607,8 +608,13 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     hint — commitlint would otherwise emit a confusing cascade of
     header-trim / subject-empty / type-empty errors.
     """
-    if not path.exists():
-        print(f"error: commit-msg file not found: {path}", file=sys.stderr)
+    # #3276: the shared caller-path judgement (stdlib only: this tool must run
+    # without PyYAML) — under a parent the caller cannot enter it is named,
+    # not a traceback; nothing there keeps its own message.
+    problem = classify_path(path, "any", flag="--check-commit-msg")
+    if problem is not None:
+        print(f"error: commit-msg file not found: {path}" if problem.missing
+              else f"error: {problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     # BOM detection runs BEFORE text-decoding: a BOM slipping through as U+FEFF

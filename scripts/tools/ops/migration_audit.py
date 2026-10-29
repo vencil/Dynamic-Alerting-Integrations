@@ -78,7 +78,8 @@ from _lib_confd import (  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_io import classify_path, safe_label, strict_load_exporter_keys  # noqa: E402
+from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: the run's reader)
 import _lib_parse_tree  # noqa: E402

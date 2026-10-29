@@ -85,7 +85,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
-from _lib_io import OutputWriteError, classify_path, safe_label  # noqa: E402  (#1789; #3276)
+from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402

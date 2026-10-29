@@ -52,9 +52,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 # (a `--help` crash on a cp950 console) shows up only on a legacy host.
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402  (#1789)
-from _lib_io import (  # noqa: E402  (#1789; #3276)
-    OutputWriteError, PathProblem, classify_path, output_write, safe_label,
-)
+from _lib_io import OutputWriteError, output_write, safe_label  # noqa: E402  (#1789; #3276)
+from _lib_paths import PathProblem, classify_path  # noqa: E402  (#3276)
 
 # ⛔ Import, do not restate. See the module docstring: a copied regex is the
 # one way this design can silently start counting a different thing.

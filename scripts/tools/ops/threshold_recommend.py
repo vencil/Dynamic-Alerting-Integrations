@@ -83,7 +83,8 @@ from _lib_tenant_values import (  # noqa: E402
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
-from _lib_io import OutputWriteError, classify_path, safe_label  # noqa: E402  (#1538; #1641; #3276)
+from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 

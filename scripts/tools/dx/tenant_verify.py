@@ -261,7 +261,7 @@ def main() -> int:
     # leaves through `run()` at this tool's caller-error code — 1 (set
     # below), the inverted contract (#3393). Imported here: importing this
     # module must not change the importing process (see the guard below).
-    from _lib_io import require_dir
+    from _lib_paths import require_dir
     require_dir(conf_d, flag="--conf-d")
 
     describe_mod = _load_describe_module()

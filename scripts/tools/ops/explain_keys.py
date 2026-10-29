@@ -63,7 +63,8 @@ import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_io import YamlFileError, classify_path, safe_label  # noqa: E402
+from _lib_io import YamlFileError, safe_label  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402

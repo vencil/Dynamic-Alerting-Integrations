@@ -80,11 +80,23 @@ modules:
       positive_int_seconds: "#2966 argparse type: accepts a value iff int() parses it to a number from 1 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestPositiveIntSeconds"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
+  scripts/tools/_lib_label.py:
+    covered:
+      - safe_label
+
+  scripts/tools/_lib_paths.py:
+    excluded:
+      classify_path: "#3276 os.stat + errno (and a read-only open, for a regular file) on a caller-given path: I/O-bound, table-pinned per kind/case in tests/shared/test_caller_paths.py::test_classify_path and, through every migrated CLI, ::test_a_path_under_a_parent_it_cannot_enter_is_named"
+      require_path: "#3276 raises CallerError over classify_path; no value computation"
+      require_dir: "#3276 require_path for a directory"
+      require_file: "#3276 require_path for a file"
+      raise_path_problems: "#3276 raises one CallerError over classify_path results; no value computation"
+      _caller_error: "#3276 builds _lib_exitcodes.CallerError, imported only for a refusal (the module stays stdlib-only); no value computation"
+
   scripts/tools/_lib_io.py:
     covered:
       - load_yaml_file
       - format_json_report
-      - safe_label
     excluded:
       load_yaml_file_exporter_keys: "load_yaml_file's I/O + error contract over _lib_yaml_keys' loader (#2114); the key rule is table-pinned against the exporter's decode in tests/shared/test_tenant_id_yaml_spelling_parity.py (22 spellings, Go half asserts the same table), not a value computation this function owns"
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
@@ -96,11 +108,6 @@ modules:
       ensure_dir_or_die: "Side-effecting I/O + sys.exit wrapper over ensure_dir (#1641); same gate"
       _die_on_write_error: "print-to-stderr + sys.exit; no value computation (#1641)"
       read_onboard_hints: "I/O-bound; covered by integration test"
-      classify_path: "#3276 os.stat + errno (and a non-blocking open for a file) on a caller-given path: I/O-bound, table-pinned per kind/case in tests/shared/test_caller_paths.py::test_classify_path and, through every migrated CLI, ::test_a_path_under_a_parent_it_cannot_enter_is_named"
-      require_path: "#3276 raises CallerError over classify_path; no value computation"
-      require_dir: "#3276 require_path for a directory"
-      require_file: "#3276 require_path for a file"
-      raise_path_problems: "#3276 raises one CallerError over classify_path results; no value computation"
       claim_stdout: "run-scoped stdout owner (#3107 v2) over _lib_exitcodes.claim_stdout_owner; conflict and per-run reset pinned in tests/shared/test_lib_io_operator_output.py"
       _is_our_stdout: "fstat comparison against fd 1 (#3107 v2 R3); side-effect free but environment-bound, exercised via open_operator_output in tests/shared/test_lib_io_operator_output.py"
       targets_stdout: "path → _is_our_stdout predicate (#3107 v2); environment-bound, same file"

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from _lib_io import classify_path  # #3276
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 KEY_GROUPS = "_groups.yaml"
 KEY_VIEWS = "_views.yaml"

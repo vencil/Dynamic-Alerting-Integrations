@@ -47,7 +47,8 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
-from _lib_io import classify_path, raise_path_problems, safe_label  # noqa: E402  (#1538; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
+from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error)

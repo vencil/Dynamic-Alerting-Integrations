@@ -95,7 +95,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 LEDGER_NAME = "ROUNDS.jsonl"
 

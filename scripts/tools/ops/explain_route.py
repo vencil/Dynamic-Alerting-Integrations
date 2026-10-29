@@ -84,7 +84,8 @@ from _grar_merge import (  # noqa: E402
     visible_routing_profiles,
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_io import require_dir, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import require_dir  # noqa: E402  (#3276)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).

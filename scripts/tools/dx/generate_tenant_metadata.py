@@ -46,7 +46,8 @@ from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_SET,
     receiver_field_state,
 )
-from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
     load_served_tree,

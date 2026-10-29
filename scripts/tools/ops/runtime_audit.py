@@ -106,7 +106,7 @@ from _lib_exitcodes import (  # noqa: E402
     arm_crash_envelope,
     disarm_crash_envelope,
 )
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Finding categories.
 MISSING = "MISSING"

@@ -91,8 +91,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789; #3276)
-    OutputWriteError, classify_path, exit_on_output_write_error, output_write, safe_label,
-)
+    OutputWriteError, exit_on_output_write_error, output_write, safe_label)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
 # Metrics we extract from /metrics (Prometheus text format).

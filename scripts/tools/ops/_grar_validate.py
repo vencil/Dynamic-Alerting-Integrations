@@ -50,7 +50,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
     TENANT_ROUTING_KEYS,
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)

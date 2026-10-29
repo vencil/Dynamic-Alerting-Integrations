@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
