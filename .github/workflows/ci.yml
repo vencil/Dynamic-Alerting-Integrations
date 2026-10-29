@@ -2495,9 +2495,11 @@ jobs:
     name: Go Tests — da-read
     runs-on: ubuntu-24.04
     # #3206 (ADR-036 §12): `da-read alertmanager` reads an Alertmanager config
-    # with Alertmanager's own loader for onboard_platform, and ships in the
-    # da-tools image. It is its own module (components/da-read) so the
-    # alertmanager dependency stays out of the exporter module, so neither
+    # with Alertmanager's own loader for onboard_platform, `da-read
+    # prometheus` / `prometheus-rules` a prometheus.yml and rule files with
+    # Prometheus' own, and it ships in the da-tools image. It is its own
+    # module (components/da-read) so those dependencies stay out of the
+    # exporter module, so neither
     # Go leg above runs it. Path-gated like the other split Go jobs; the `go`
     # filter carries components/da-read/**. Its tests write their inputs to
     # temp dirs and read no repo file.

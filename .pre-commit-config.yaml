@@ -1654,7 +1654,13 @@ repos:
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"
-        entry: python3 -X utf8 scripts/tools/lint/check_scrape_reachability.py --ci
+        # #3206 (ADR-036 §12): the Prometheus ConfigMap is read the way kubectl
+        # reads it (da-crdecode) and its prometheus.yml the way Prometheus does
+        # (`da-read prometheus`); the wrappers build both as for
+        # retire-drift-check, and a run without go or the binaries fails by
+        # name — never a PyYAML fallback. The da-read module, the reader and
+        # the wrappers are in `files:`: they change the answer.
+        entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_scrape_reachability.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
@@ -1672,7 +1678,7 @@ repos:
         # warns about — an edit that never runs the gate. (CI runs it with
         # `--all-files`, so the gap was local-only — and local is where it
         # is supposed to be cheap to find out.)
-        files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability)\.py)$
+        files: ^(k8s/.*\.ya?ml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/generate_rule_pack_split|lint/check_scrape_reachability|_lib_consumer_read)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/cmd/da-crdecode/.*)$
 
       - id: image-pin-capability-check
         name: "image-pin capability — a pinned da-tools image must CONTAIN the program the workload runs"

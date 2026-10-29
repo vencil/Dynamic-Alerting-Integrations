@@ -50,7 +50,7 @@ import (
 // A struct written as null (`global:`) writes no field and is printed as {}.
 
 // errNotInReading wraps a written key or list the reading has no place for.
-var errNotInReading = errors.New("the text writes it, but Alertmanager's reading has no such entry")
+var errNotInReading = errors.New("the text writes it, but the loader's reading has no such entry")
 
 // readAlertmanager returns da-read's stdout for the Alertmanager config *data*.
 func readAlertmanager(data []byte) ([]byte, error) {

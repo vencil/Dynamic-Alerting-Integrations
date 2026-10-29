@@ -13,6 +13,7 @@ import yaml
 from factories import make_am_config, make_am_receiver, write_yaml
 from onboard_platform import (
     AlertmanagerConfigError,
+    PrometheusConfigError,
     parse_alertmanager_config,
     flatten_route_tree,
     reverse_map_receiver,
@@ -1102,6 +1103,71 @@ class TestParseScrapeConfigs:
         """空抓取設定檔案回傳空列表。"""
         path = write_yaml(config_dir, "empty.yaml", "")
         assert parse_scrape_configs(path) == []
+
+    # #3206（ADR-036 §12）：prometheus.yml 以 Prometheus 自己的 config.Load 讀
+    # （`da-read prometheus`）；讀不了就拋 PrometheusConfigError、點名原因，不回 []。
+
+    def test_values_are_prometheus_reading_and_only_written_keys(self, config_dir):
+        """relabel 的 action 照 Prometheus 轉小寫；Prometheus 補的預設值（regex、
+        separator、scrape_timeout…）不出現；kubernetes_sd_configs 照讀。"""
+        path = write_yaml(config_dir, "prom.yml", (
+            "scrape_configs:\n- job_name: k\n  kubernetes_sd_configs: [{role: pod}]\n"
+            "  relabel_configs:\n  - source_labels: [__meta_kubernetes_namespace]\n"
+            "    target_label: tenant\n    action: Replace\n"))
+        assert parse_scrape_configs(path) == [{
+            "job_name": "k", "kubernetes_sd_configs": [{"role": "pod"}],
+            "relabel_configs": [{"source_labels": ["__meta_kubernetes_namespace"],
+                                 "target_label": "tenant", "action": "replace"}]}]
+
+    def test_configmap_two_layers(self, config_dir):
+        """外層以 Kubernetes 讀法取出字串，內層經 stdin 交給 Prometheus 的載入函式。"""
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: prom}\n"
+            "data:\n  prometheus.yml: |\n"
+            "    scrape_configs:\n    - job_name: a\n      static_configs: [{targets: [h]}]\n"))
+        assert parse_scrape_configs(path) == [
+            {"job_name": "a", "static_configs": [{"targets": ["h"]}]}]
+
+    @pytest.mark.parametrize("text,reason", [
+        ("scrape_configz: []\n", "field scrape_configz not found"),
+        ("scrape_configs:\n- {job_name: a}\n- {job_name: a}\n", "found multiple scrape configs"),
+        ("just a string\n", "cannot unmarshal"),
+    ])
+    def test_what_prometheus_refuses_is_refused(self, config_dir, text, reason):
+        """#3206：以前照 PyYAML 讀、Prometheus 不收的設定也拿來分析；現在拒收並帶原因。"""
+        path = write_yaml(config_dir, "prom.yml", text)
+        with pytest.raises(PrometheusConfigError) as exc_info:
+            parse_scrape_configs(path)
+        assert exc_info.value.refused_by_reader
+        assert "Prometheus' config loader cannot read" in str(exc_info.value)
+        assert any(reason in ln for ln in exc_info.value.detail_lines), (
+            exc_info.value.detail_lines)
+
+    def test_configmap_without_the_key_is_refused(self, config_dir):
+        path = write_yaml(config_dir, "cm.yaml", (
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: p}\ndata:\n  other.yml: 'x'\n"))
+        with pytest.raises(PrometheusConfigError, match="no `data.prometheus.yml` key"):
+            parse_scrape_configs(path)
+
+    def test_missing_da_read_is_an_error(self, config_dir, monkeypatch, tmp_path):
+        """找不到 da-read：拒收並說明怎麼取得，不退回自己解析。"""
+        monkeypatch.delenv("DA_READ_BINARY", raising=False)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        path = write_yaml(config_dir, "prom.yml", "scrape_configs: []\n")
+        with pytest.raises(PrometheusConfigError, match="da-read was not found") as exc_info:
+            parse_scrape_configs(path)
+        assert not exc_info.value.refused_by_reader
+
+    def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
+        """main：Phase 3 的設定被拒收時 rc 2，stderr 帶 Prometheus 的原因。"""
+        import onboard_platform as op
+        path = write_yaml(config_dir, "prom.yml", "scrape_configz: []\n")
+        monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--scrape-config", path,
+                                         "--dry-run"])
+        with pytest.raises(SystemExit) as exc_info:
+            op.main()
+        assert exc_info.value.code == 2
+        assert "field scrape_configz not found" in capsys.readouterr().err
 
 
 class TestAnalyzeRelabelConfigs:
