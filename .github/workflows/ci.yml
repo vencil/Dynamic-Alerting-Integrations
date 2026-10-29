@@ -2367,6 +2367,21 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
+      # #3206 (ADR-036 §12): generator_real_test.go / batch_patch_diff_test.go
+      # start the REAL Python generator, which reads back the ConfigMap it
+      # emits the way kubectl does (da-crdecode) and the config the way
+      # Alertmanager loads it (da-read alertmanager). The tests build only
+      # da-guard themselves; without these two the generator exits 2 and the
+      # test reports `run_failed`. Absolute paths: `go test` runs in each
+      # package directory. Same Go as above (all three go.mod pin one
+      # version); the actions/cache key above hashes `**/go.sum`, so
+      # da-read's and threshold-exporter's modules are already in it.
+      - name: Build da-crdecode and da-read (the real generator's readers)
+        run: |
+          make da-crdecode-build da-read-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
+
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
