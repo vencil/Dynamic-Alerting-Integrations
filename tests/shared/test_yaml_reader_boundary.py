@@ -253,6 +253,13 @@ def test_debt_lists_by_reading() -> None:
         assert all(DEBT[k][1] is cls for k in keys)
 
 
+def test_no_prometheus_config_reader_is_left() -> None:
+    """Class B is done (#3206): every reader of a `prometheus.yml` asks
+    `da-read prometheus` (`_lib_consumer_read.prometheus_config`). A new
+    PyYAML reader of one is not filed as DEBT — it asks the consumer."""
+    assert debt_by_class()[Reading.B] == []
+
+
 # ── the detector (synthetic sources, no repo file) ───────────────────
 
 _LIB_IO = (

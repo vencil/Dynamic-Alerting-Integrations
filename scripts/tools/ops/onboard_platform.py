@@ -122,12 +122,12 @@ for _rtype, _spec in RECEIVER_TYPES.items():
 # Phase 1: Alertmanager Config Reverse Analysis
 # ============================================================
 
-class AlertmanagerConfigError(Exception):
-    """The Alertmanager config cannot be read. ``detail_lines`` is the
-    reader's own reason (its stderr), and ``str()`` is one line that carries
-    it. ``refused_by_reader`` is true when a reader looked at the file and
-    refused it, false when there was no reader to ask (no binary) or the file
-    could not be opened."""
+class ConsumerConfigError(Exception):
+    """A config file cannot be read the way its consumer reads it.
+    ``detail_lines`` is the reader's own reason (its stderr), and ``str()`` is
+    one line that carries it. ``refused_by_reader`` is true when a reader
+    looked at the file and refused it, false when there was no reader to ask
+    (no binary) or the file could not be opened."""
 
     def __init__(self, message, detail_lines=None, refused_by_reader=False):
         self.detail_lines = list(detail_lines or [])
@@ -137,14 +137,25 @@ class AlertmanagerConfigError(Exception):
         super().__init__(message)
 
 
+class AlertmanagerConfigError(ConsumerConfigError):
+    """The Alertmanager config (Phase 1) cannot be read."""
+
+
+class PrometheusConfigError(ConsumerConfigError):
+    """The Prometheus config (Phase 3) cannot be read."""
+
+
 #: The ConfigMap key Alertmanager's config is mounted from.
 _AM_CONFIGMAP_KEY = "alertmanager.yml"
+#: The ConfigMap key Prometheus' config is mounted from.
+_PROM_CONFIGMAP_KEY = "prometheus.yml"
 
 
-def _configmap_inner(documents, path):
-    """The ``alertmanager.yml`` string of the ConfigMap among *documents*
-    (Kubernetes' reading of the file), or None when no document is a
-    ConfigMap — then the file is the Alertmanager config itself."""
+def _configmap_inner(documents, path, key=_AM_CONFIGMAP_KEY, error=AlertmanagerConfigError,
+                     mounter="Alertmanager"):
+    """The *key* string of the ConfigMap among *documents* (Kubernetes'
+    reading of the file), or None when no document is a ConfigMap — then the
+    file is the config itself."""
     holders = []
     configmaps = 0
     for doc in documents:
@@ -153,25 +164,51 @@ def _configmap_inner(documents, path):
         data = doc.get("data")
         if doc.get("kind") == "ConfigMap":
             configmaps += 1
-        if isinstance(data, dict) and _AM_CONFIGMAP_KEY in data:
-            holders.append(data[_AM_CONFIGMAP_KEY])
+        if isinstance(data, dict) and key in data:
+            holders.append(data[key])
     if len(holders) > 1:
-        raise AlertmanagerConfigError(
-            f"{path}: {len(holders)} documents hold `data.{_AM_CONFIGMAP_KEY}`; "
-            "pass the one Alertmanager mounts", refused_by_reader=True)
+        raise error(
+            f"{path}: {len(holders)} documents hold `data.{key}`; "
+            f"pass the one {mounter} mounts", refused_by_reader=True)
     if holders:
         inner = holders[0]
         if not isinstance(inner, str):
             # kubectl refuses a ConfigMap whose data value is not a string.
-            raise AlertmanagerConfigError(
-                f"{path}: `data.{_AM_CONFIGMAP_KEY}` is not a string in "
+            raise error(
+                f"{path}: `data.{key}` is not a string in "
                 "Kubernetes' reading of the file (kubectl refuses such a ConfigMap); "
-                "write it as a block string (`alertmanager.yml: |`)", refused_by_reader=True)
+                f"write it as a block string (`{key}: |`)", refused_by_reader=True)
         return inner
     if configmaps:
-        raise AlertmanagerConfigError(
-            f"{path}: the ConfigMap has no `data.{_AM_CONFIGMAP_KEY}` key", refused_by_reader=True)
+        raise error(f"{path}: the ConfigMap has no `data.{key}` key", refused_by_reader=True)
     return None
+
+
+def _config_text(path, crdecode_binary, key, error, mounter):
+    """The config text of the file at *path*: the ConfigMap's *key* string
+    when Kubernetes' reading of the file (``da-crdecode``) is a ConfigMap,
+    else the whole file. Returns ``(text, inner, k8s_refusal)``: *inner* is
+    True when the text came out of a ConfigMap, *k8s_refusal* the
+    ConsumerReadError Kubernetes' reading refused a plain file with."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as e:
+        raise error(f"cannot read {path}: {e}") from e
+    try:
+        documents = _lib_consumer_read.kubernetes_documents(path, binary=crdecode_binary)
+    except _lib_consumer_read.ConsumerReadError as e:
+        if not e.stderr_lines:
+            # The binary is missing or broken — not an answer about the file.
+            raise error(str(e)) from e
+        # Kubernetes' reading refuses the file. A ConfigMap it refuses is
+        # refused by kubectl too; a plain config file is not Kubernetes' to
+        # read, and the consumer's loader gives the verdict. A ConfigMap never
+        # passes that loader (apiVersion / kind / data are not its fields),
+        # so nothing is taken that should not be.
+        return raw, False, e
+    inner = _configmap_inner(documents, path, key, error, mounter)
+    return (raw, False, None) if inner is None else (inner, True, None)
 
 
 def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
@@ -196,32 +233,12 @@ def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
     """
     del tenant_label  # the reading does not depend on it
     path = str(path)
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError as e:
-        raise AlertmanagerConfigError(f"cannot read {path}: {e}") from e
-    inner = None
-    k8s_refusal = None
-    try:
-        documents = _lib_consumer_read.kubernetes_documents(path, binary=crdecode_binary)
-    except _lib_consumer_read.ConsumerReadError as e:
-        if not e.stderr_lines:
-            # The binary is missing or broken — not an answer about the file.
-            raise AlertmanagerConfigError(str(e)) from e
-        # Kubernetes' reading refuses the file. A ConfigMap it refuses is
-        # refused by kubectl too; a plain alertmanager.yml is not Kubernetes'
-        # to read, and Alertmanager's loader (below) gives the verdict. A
-        # ConfigMap never passes that loader (apiVersion / kind / data are
-        # not Alertmanager fields), so nothing is taken that should not be.
-        k8s_refusal = e
-    else:
-        inner = _configmap_inner(documents, path)
-    text = raw if inner is None else inner
+    text, inner, k8s_refusal = _config_text(path, crdecode_binary, _AM_CONFIGMAP_KEY,
+                                            AlertmanagerConfigError, "Alertmanager")
     try:
         return _lib_consumer_read.alertmanager_config(text, binary=da_read_binary)
     except _lib_consumer_read.ConsumerReadError as e:
-        where = f"{path} (data.{_AM_CONFIGMAP_KEY})" if inner is not None else path
+        where = f"{path} (data.{_AM_CONFIGMAP_KEY})" if inner else path
         detail = list(e.stderr_lines)
         if k8s_refusal is not None:
             detail += [f"(read as a Kubernetes manifest it was refused too: {k8s_refusal})",
@@ -969,28 +986,39 @@ def write_migration_csv(candidates, output_path):
 # Phase 3: Prometheus Scrape Config Analysis
 # ============================================================
 
-def parse_scrape_configs(path):
-    """Parse Prometheus config and extract scrape_configs.
+def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None):
+    """The ``scrape_configs`` of the Prometheus config at *path*, as
+    Prometheus loads it.
 
-    Handles both raw prometheus.yml and ConfigMap-wrapped YAML.
-    Returns list of scrape_config dicts.
+    ADR-036 §12 (#3206), as Phase 1 reads the Alertmanager config: the file is
+    first read the way Kubernetes reads a manifest (``da-crdecode``) to tell
+    whether it is a ConfigMap; if it is, its ``data["prometheus.yml"]`` string
+    is the config, otherwise the whole file is. The config goes to ``da-read
+    prometheus`` — Prometheus' own loader, every service discovery registered —
+    which returns only the keys the text writes, each value Prometheus'
+    reading (a relabel ``action`` lower-cased, a duration in Prometheus'
+    spelling, a secret as its value). A config Prometheus refuses (an unknown
+    key, a duplicate job name, an invalid regex) is refused here.
+
+    Returns the list of scrape configs (``[]`` when the config has none, an
+    empty file among them). Raises :class:`PrometheusConfigError` when the
+    config cannot be read — never returns "nothing" for it.
     """
-    data = load_yaml_file(path)
-    if data is None:
-        return []
-
-    # ConfigMap wrapper
-    if "data" in data and isinstance(data["data"], dict):
-        prom_yml = data["data"].get("prometheus.yml")
-        if prom_yml and isinstance(prom_yml, str):
-            data = yaml.safe_load(prom_yml)
-        elif prom_yml and isinstance(prom_yml, dict):
-            data = prom_yml
-
-    if not isinstance(data, dict):
-        return []
-
-    return data.get("scrape_configs", [])
+    path = str(path)
+    text, inner, k8s_refusal = _config_text(path, crdecode_binary, _PROM_CONFIGMAP_KEY,
+                                            PrometheusConfigError, "Prometheus")
+    try:
+        config = _lib_consumer_read.prometheus_config(text, binary=da_read_binary)
+    except _lib_consumer_read.ConsumerReadError as e:
+        where = f"{path} (data.{_PROM_CONFIGMAP_KEY})" if inner else path
+        detail = list(e.stderr_lines)
+        if k8s_refusal is not None:
+            detail += [f"(read as a Kubernetes manifest it was refused too: {k8s_refusal})",
+                       *k8s_refusal.stderr_lines]
+        raise PrometheusConfigError(
+            f"Prometheus' config loader cannot read {where}: {e}", detail,
+            refused_by_reader=bool(e.stderr_lines)) from e
+    return config.get("scrape_configs") or []
 
 
 def analyze_relabel_configs(scrape_config, tenant_label=DEFAULT_TENANT_LABEL):
@@ -1506,11 +1534,12 @@ def main():
     parser.add_argument("--scrape-config",
                         help="Phase 3: Prometheus scrape config file")
     parser.add_argument("--da-crdecode-binary", default=None,
-                        help="Phase 1: da-crdecode, which reads a ConfigMap the way "
+                        help="Phases 1 and 3: da-crdecode, which reads a ConfigMap the way "
                              "kubectl does (default: $DA_CRDECODE_BINARY, else PATH)")
     parser.add_argument("--da-read-binary", default=None,
-                        help="Phase 1: da-read, which reads the config with "
-                             "Alertmanager's own loader (default: $DA_READ_BINARY, else PATH)")
+                        help="Phases 1 and 3: da-read, which reads the config with "
+                             "Alertmanager's / Prometheus' own loader "
+                             "(default: $DA_READ_BINARY, else PATH)")
     parser.add_argument("--tenant-label", default=DEFAULT_TENANT_LABEL,
                         help=f"Custom tenant label name (default: {DEFAULT_TENANT_LABEL})")
     parser.add_argument("-o", "--output-dir", default="onboard_output",
@@ -1610,7 +1639,17 @@ def main():
     # Phase 3: Scrape config
     if args.scrape_config:
         print(f"Phase 3: Analyzing scrape config: {args.scrape_config}", file=sys.stderr)
-        scrape_configs = parse_scrape_configs(args.scrape_config)
+        try:
+            scrape_configs = parse_scrape_configs(
+                args.scrape_config, crdecode_binary=args.da_crdecode_binary,
+                da_read_binary=args.da_read_binary)
+        except PrometheusConfigError as e:
+            if e.refused_by_reader:
+                # As Phase 1: the file is there and Prometheus' loader (or
+                # kubectl's reading of the ConfigMap) refused it.
+                raise YamlFileError(args.scrape_config, e) from e
+            print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         if not scrape_configs:
             print(f"  WARN: No scrape_configs found in: {args.scrape_config}",
                   file=sys.stderr)

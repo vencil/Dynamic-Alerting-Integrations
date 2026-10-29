@@ -391,8 +391,10 @@ done
 
 # #3206 (ADR-036 §12): da-read reads a config with its consumer's own loader
 # (`da-read alertmanager`: Alertmanager's config.Load, the amtool version
-# below). It is its own Go module, components/da-read, so the Alertmanager
-# dependency stays out of the exporter module; onboard_platform runs it.
+# below; `da-read prometheus` / `prometheus-rules`: Prometheus' config.Load
+# and rulefmt, the deployed Prometheus' version). It is its own Go module,
+# components/da-read, so those dependencies stay out of the exporter module;
+# onboard_platform runs it.
 DA_READ_APP="$PROJECT_ROOT/components/da-read"
 if [ ! -d "$DA_READ_APP" ]; then
     echo "  ✗ da-read source not found at $DA_READ_APP" >&2
