@@ -60,6 +60,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 EXTRACTOR = REPO / "scripts" / "ops" / "check_image_refs_resolve.py"
 
@@ -125,7 +127,10 @@ def test_the_dropped_collector_reports_what_it_must() -> None:
 
     assert dropped_of({"image": "nginx"}) == {"nginx"}
     assert dropped_of({"image": {"repository": "nginx", "tag": ""}}) == {"nginx (tag: '')"}
-    assert dropped_of({"image": {"repository": "mariadb", "tag": 11}}) == {"mariadb (tag: 11)"}
+    # #3407 review: a tag that is not text (`tag: 11`) is no longer a quiet
+    # drop — it raises, naming the key path, so the ref cannot go unchecked.
+    with pytest.raises(_cir.NonStringImageField, match=r"image\.tag"):
+        dropped_of({"image": {"repository": "mariadb", "tag": 11}})
     assert dropped_of({"image": {"repository": "nginx", "digest": ""}}) == {"nginx (tag: None)"}
     for clean in ({"image": "nginx:1.27.0"},
                   {"image": "{{ .Values.image }}"},

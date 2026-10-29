@@ -190,11 +190,27 @@ def test_a_file_kubectls_reading_refuses_stops_the_run(tmp_path: Path) -> None:
 
 
 def test_a_tag_is_kubectls_reading_of_it(tmp_path: Path) -> None:
-    """An unquoted `tag: 1.10` is the number 1.1 to Helm (and was to PyYAML),
-    so it is no usable tag; a quoted one is the text."""
-    _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: foo/bar\n  tag: 1.10\n")
+    """A quoted `tag: "1.10"` is the text."""
     _write(tmp_path / "helm/b/values.yaml", 'image:\n  repository: foo/baz\n  tag: "1.10"\n')
     assert _list_refs(tmp_path) == {"foo/baz:1.10"}
+
+
+@pytest.mark.parametrize("values, key_path", [
+    ("image:\n  repository: foo/bar\n  tag: 1.10\n", "image.tag"),     # the number 1.1
+    ("app:\n  image:\n    repository: foo/bar\n    tag: 1e3\n", "app.image.tag"),  # 1000
+    ("c:\n  - image: 7\n", "c[0].image"),
+])
+def test_a_non_text_image_field_stops_the_run_naming_it(tmp_path: Path, values, key_path) -> None:
+    """#3407 review: an unquoted `tag: 1.10` / `1e3` is a number to Helm, so
+    no ref can be built from it. It used to be skipped silently — a ref never
+    checked; now rc 2 naming the file and the key path."""
+    _write(tmp_path / "helm/a/values.yaml", values)
+    _write(tmp_path / "helm/b/values.yaml", 'image:\n  repository: foo/baz\n  tag: "1.10"\n')
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "helm/a/values.yaml" in proc.stderr and key_path in proc.stderr, proc.stderr
 
 
 def test_no_da_crdecode_is_exit_2_not_a_pyyaml_reading(tmp_path: Path) -> None:

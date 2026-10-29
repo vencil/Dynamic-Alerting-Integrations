@@ -61,8 +61,10 @@ except ImportError:
 # the way kubectl reads it — `da-crdecode` (sigs.k8s.io/yaml), the text handed
 # over on stdin — not with PyYAML. That reading takes prometheus-operator's
 # literal `- =` as the string "=" (PyYAML needed a private `!!value`
-# constructor for it), and refuses a tag it does not know
-# (`!!python/object/apply`) instead of constructing anything.
+# constructor for it). A tag it does not know (`!!python/object/apply:...`)
+# constructs nothing: it is not refused either — the node is read as the
+# plain value under the tag (a sequence stays a sequence of strings), as
+# kubectl reads it.
 import _lib_consumer_read  # noqa: E402
 
 
@@ -169,7 +171,7 @@ def run(check_only: bool) -> int:
         try:
             found, missing = _schemas_from(raw, src["kinds"])
         except _lib_consumer_read.ConsumerReadError as e:
-            detail = " | ".join([str(e), *e.stderr_lines])
+            detail = e.detail()
             print(f"ERROR: {sid}: CRD could not be read the way kubectl reads it ({detail})",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
