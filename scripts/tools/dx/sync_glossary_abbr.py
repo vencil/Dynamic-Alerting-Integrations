@@ -86,7 +86,7 @@ def extract_abbreviations_from_glossary(glossary_path: Path) -> dict:
 
     # #3276: the shared judgement of a caller-given path ("any", as `exists()`
     # was: a non-regular file is still read as before).
-    problem = classify_path(glossary_path, "any", flag="--glossary")
+    problem = classify_path(glossary_path, "any", lang="en", flag="--glossary")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: Glossary file {word}: {problem.message}", file=sys.stderr)

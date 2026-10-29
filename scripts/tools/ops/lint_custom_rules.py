@@ -508,7 +508,7 @@ def main():
             "scan target(s) not found or empty: ''"
             "\n  ⛔ Do not drop the path to clear this — an absent target "
             "is not a clean one, and '' is not the current directory.")
-    problems = [p for p in (classify_path(t, "any") for t in args.paths) if p is not None]
+    problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths) if p is not None]
     if problems:
         die_caller_error(
             "".join(f"ERROR: {p.message}\n" for p in problems)

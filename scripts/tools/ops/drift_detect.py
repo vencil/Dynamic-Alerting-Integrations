@@ -571,7 +571,7 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         local_dir = dirs[0]
-        require_dir(local_dir, flag="--dirs")  # #3276
+        require_dir(local_dir, lang="en", flag="--dirs")  # #3276
 
         crd_manifest = compute_crd_manifest(
             namespace=args.namespace,
@@ -600,7 +600,7 @@ def main():
                 sys.exit(EXIT_CALLER_ERROR)
 
         # Check directories exist (#3276: the shared caller-path judgement)
-        raise_path_problems([classify_path(d, "dir", flag="--dirs") for d in dirs])
+        raise_path_problems([classify_path(d, "dir", lang="en", flag="--dirs") for d in dirs])
 
         reports = analyze_drift(dirs, labels=labels,
                                 ignore_prefixes=ignore_prefixes)

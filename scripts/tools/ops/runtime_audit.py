@@ -333,7 +333,7 @@ class RuntimeAuditor:
 
     def _load_declared(self) -> Optional[dict]:
         rule_dir = Path(self.args.rule_packs_dir)
-        rule_dir_problem = classify_path(rule_dir, "dir", flag="--rule-packs-dir")  # #3276
+        rule_dir_problem = classify_path(rule_dir, "dir", lang=self.lang, flag="--rule-packs-dir")  # #3276
         if rule_dir_problem is not None:
             self.caller_error = f"{i18n('err_rule_packs', self.lang)}: {rule_dir_problem.message}"
             return None

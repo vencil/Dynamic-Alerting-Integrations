@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     # then a regular file, which is what `is_file()` asked: "file" would also
     # open it, moving a file that does not open for reading from the read
     # below (rc 1) to here.
-    problem = classify_path(args.baseline, "any", flag="--baseline")
+    problem = classify_path(args.baseline, "any", lang="en", flag="--baseline")
     if problem is None and not args.baseline.is_file():
         problem = PathProblem("file_not_found",
                               f"--baseline {safe_label(str(args.baseline))}: not a regular file",

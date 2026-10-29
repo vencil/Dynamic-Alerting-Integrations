@@ -336,7 +336,7 @@ def load_base_config(path: str | None) -> dict:
     """
     if path is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
-    base_config_problem = classify_path(path, "file", flag="--base-config")  # #3276
+    base_config_problem = classify_path(path, "file", lang="en", flag="--base-config")  # #3276
     if base_config_problem is not None:
         raise BaseConfigInputError(
             f"{base_config_problem.message}\n"

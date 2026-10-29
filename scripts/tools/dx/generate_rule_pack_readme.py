@@ -267,7 +267,7 @@ def count_preloaded_packs(rule_packs_dir: Path) -> int:
     k8s_rules_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
     # #3276: the shared judgement of a path derived from --rule-packs-dir —
     # one under a parent the caller cannot enter is named, not a traceback.
-    problem = classify_path(k8s_rules_dir, "dir")
+    problem = classify_path(k8s_rules_dir, "dir", lang="en")
     if problem is not None:
         raise FileNotFoundError(
             f"{problem.message} — the pack count needs {k8s_rules_dir} beside "
@@ -303,7 +303,7 @@ def main():
     # #3276: the shared judgement of a caller-given path — a glob of a
     # directory the caller cannot enter finds nothing, which read as "no rule
     # pack YAML files".
-    problem = classify_path(args.rule_packs_dir, "dir", flag="--rule-packs-dir")
+    problem = classify_path(args.rule_packs_dir, "dir", lang="en", flag="--rule-packs-dir")
     if problem is not None:
         print(f"Error: {problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

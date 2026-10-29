@@ -142,7 +142,7 @@ def collect_rule_files(rules_path: str) -> list[str]:
     p = Path(rules_path)
     # #3276: the shared judgement of a caller-given path ("any": a file or a
     # directory) — one under a parent the caller cannot enter is named.
-    problem = classify_path(rules_path, "any", flag="--rules")
+    problem = classify_path(rules_path, "any", lang="zh", flag="--rules")
     if problem is not None:
         raise InjectError(f"--rules 路徑{'不存在' if problem.missing else '無法使用'}："
                           f"{problem.message}")
@@ -512,7 +512,7 @@ def run_pipeline(args, pack: dict, parsed_rules: dict) -> dict:
         # #3276: the shared judgement of a caller-given path. "any" then a
         # regular file, not "file": a binary need only be executable, and
         # "file" also opens it for reading.
-        problem = classify_path(args.vmalert, "any", flag="--vmalert")
+        problem = classify_path(args.vmalert, "any", lang="zh", flag="--vmalert")
         if problem is not None:
             raise InjectError(f"--vmalert 指定的 binary "
                               f"{'不存在' if problem.missing else '無法使用'}：{problem.message}")

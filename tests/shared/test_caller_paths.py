@@ -33,6 +33,30 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 DENIED = os.strerror(errno.EACCES)
+#: The same refusal in a tool that speaks Chinese: the wording is
+#: `_lib_paths._DETAIL["zh"]`, so the line it lands in is one language.
+DENIED_ZH = "無法存取（EACCES）"
+
+#: The tools whose refusal lines are Chinese (fixed, not by `DA_LANG`); every
+#: other row's tool speaks English unless `DA_LANG=zh` (BILINGUAL below).
+SPEAKS_ZH = {"ops/deprecate_rule.py", "dx/inject_waveform.py",
+             "dx/list_subprocess_only_modules.py", "dx/verify_diff.py"}
+
+#: OPS_SITES rows whose tool follows `DA_LANG` for its refusal line: run
+#: again under `DA_LANG=zh`, the detail is Chinese too.
+BILINGUAL = {"gitops-check", "policy-engine --config-dir", "policy-engine --policy",
+             "threshold-govern --config-dir", "notification-tester --config-dir",
+             "threshold-recommend --config-dir", "runtime-audit --rule-packs-dir"}
+
+
+def _denied(script: str, lang: str = "en") -> str:
+    return DENIED_ZH if script in SPEAKS_ZH or lang == "zh" else DENIED
+
+
+def _one_language(out: str, script: str, lang: str = "en") -> None:
+    """A Chinese refusal line carries no English strerror (#3276 review)."""
+    if _denied(script, lang) == DENIED_ZH:
+        assert DENIED not in out, out[-3000:]
 
 #: (id, script under scripts/tools/ops, argv, the flag the message names,
 #: the ``--json`` reason when the tool answers with an envelope, else None —
@@ -244,15 +268,28 @@ def _expand(arg: str, subst: dict) -> str:
 @pytest.mark.parametrize("script, argv, flag, reason",
                          [c[1:] for c in OPS_SITES], ids=[c[0] for c in OPS_SITES])
 def test_a_path_under_a_parent_it_cannot_enter_is_named(box, script, argv, flag, reason):
+    _ops_row(box, script, argv, flag, reason, "en")
+
+
+@pytest.mark.parametrize("script, argv, flag, reason",
+                         [c[1:] for c in OPS_SITES if c[0] in BILINGUAL],
+                         ids=[c[0] for c in OPS_SITES if c[0] in BILINGUAL])
+def test_a_bilingual_tool_names_it_in_chinese_under_da_lang_zh(box, script, argv, flag, reason):
+    _ops_row(box, script, argv, flag, reason, "zh")
+
+
+def _ops_row(box, script, argv, flag, reason, lang):
     root, run, subst = box
     args = [_expand(a, subst) for a in argv]
     path = subst["{F}"] if "{F}" in " ".join(argv) else subst["{D}"]
-    proc = run([sys.executable, str(root / "scripts" / "tools" / "ops" / script), *args])
+    proc = run(["env", f"DA_LANG={lang}", sys.executable,
+                str(root / "scripts" / "tools" / "ops" / script), *args])
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, out[-3000:]
     assert "Traceback" not in out, out[-3000:]
     named = f"{flag} {path}" if flag else path
-    assert f"{named}: {DENIED}" in out, out[-3000:]
+    assert f"{named}: {_denied('ops/' + script, lang)}" in out, out[-3000:]
+    _one_language(out, "ops/" + script, lang)
     if reason is not None:
         assert json.loads(proc.stdout)["reason"] == reason, proc.stdout
 
@@ -267,7 +304,8 @@ def test_a_dx_path_under_a_parent_it_cannot_enter_is_named(box, script, argv, na
     out = proc.stdout + proc.stderr
     assert proc.returncode == rc, out[-3000:]
     assert "Traceback" not in out, out[-3000:]
-    assert f"{_expand(named, subst)}: {DENIED}" in out, out[-3000:]
+    assert f"{_expand(named, subst)}: {_denied(script)}" in out, out[-3000:]
+    _one_language(out, script)
 
 
 def test_a_what_if_hint_under_a_locked_parent_is_no_traceback(box):
@@ -321,7 +359,7 @@ def test_list_subprocess_only_modules_coverage_data(too_long):
     lsom = _dx("list_subprocess_only_modules")
     with pytest.raises(RuntimeError) as exc:
         lsom.read_coverage_data(too_long)
-    assert f"--coverage-data {too_long}: {TOO_LONG}" in str(exc.value)
+    assert f"--coverage-data {too_long}: 無法存取（ENAMETOOLONG）" in str(exc.value)
 
 
 def test_describe_tenant_replaces(tmp_path):
@@ -404,7 +442,7 @@ def tree(tmp_path):
     ("any", "nope", "path_not_found", True),
 ])
 def test_classify_path(tree, kind, name, reason, missing):
-    problem = classify_path(tree / name, kind, flag="--x")
+    problem = classify_path(tree / name, kind, lang="en", flag="--x")
     if reason is None:
         assert problem is None
         return
@@ -414,7 +452,7 @@ def test_classify_path(tree, kind, name, reason, missing):
 
 def test_an_empty_path_is_shown_as_supplied(tmp_path):
     """'' is what an unset shell variable expands to: named, never blank."""
-    assert classify_path("", "file", flag="--policy").message.startswith("--policy '': ")
+    assert classify_path("", "file", lang="en", flag="--policy").message.startswith("--policy '': ")
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
@@ -430,7 +468,7 @@ def test_a_file_is_a_regular_file(tmp_path):
     held = os.open(fifo, os.O_RDWR)
     try:
         for p in (fifo, os.devnull):
-            problem = classify_path(p, "file", flag="--policy")
+            problem = classify_path(p, "file", lang="en", flag="--policy")
             assert problem is not None, p
             assert (problem.reason, problem.missing) == ("file_not_found", False), p
             assert problem.message == f"--policy {p}: not a regular file"
@@ -440,6 +478,7 @@ def test_a_file_is_a_regular_file(tmp_path):
 
 @pytest.mark.parametrize("lang, words", [("zh", "--dir 無法使用："), ("en", "ERROR: --dir ")])
 def test_a_tool_keeps_its_own_words(tmp_path, lang, words):
+    """…and the judgement's detail is said in that language too."""
     """The judgement is shared; each tool's language for it stays its own."""
     import subprocess
     proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / "gitops_check.py"),
@@ -447,7 +486,8 @@ def test_a_tool_keeps_its_own_words(tmp_path, lang, words):
                           capture_output=True, text=True, encoding="utf-8", timeout=120,
                           env={**os.environ, "DA_LANG": lang})
     assert proc.returncode == 2, proc.stderr
-    assert f"{words}" in proc.stderr and f"{tmp_path / 'nope'}: " in proc.stderr, proc.stderr
+    detail = "不存在" if lang == "zh" else os.strerror(errno.ENOENT)
+    assert f"{words}" in proc.stderr and f"{tmp_path / 'nope'}: {detail}" in proc.stderr, proc.stderr
 
 
 def test_policy_on_dev_null_is_refused(tmp_path):
@@ -481,9 +521,9 @@ def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
         "import _lib_paths\n"
         "assert '_lib_exitcodes' not in sys.modules, 'imported _lib_exitcodes'\n"
         "assert sys.excepthook is hook, 'installed a crash hook'\n"
-        "assert _lib_paths.classify_path('/nonexistent/x', 'dir').missing\n"
+        "assert _lib_paths.classify_path('/nonexistent/x', 'dir', lang='en').missing\n"
         "try:\n"
-        "    _lib_paths.require_dir('/nonexistent/x', flag='--x')\n"
+        "    _lib_paths.require_dir('/nonexistent/x', lang='en', flag='--x')\n"
         "except Exception as exc:\n"
         "    print(type(exc).__name__, exc.reason)\n"
     )
@@ -492,3 +532,35 @@ def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "CallerError dir_not_found", proc.stdout
 
+
+
+@pytest.mark.parametrize("kind, name, detail", [
+    ("dir", "nope", "不存在"),
+    ("dir", "f", "不是目錄"),
+    ("file", "d", "不是一般檔案"),
+    ("any", "nope", "不存在"),
+])
+def test_the_chinese_wording(tree, kind, name, detail):
+    """`lang="zh"`: the same verdicts, said in Chinese — no English strerror."""
+    problem = classify_path(tree / name, kind, lang="zh", flag="--x")
+    assert problem.message == f"--x {tree / name}: {detail}"
+
+
+def test_every_language_words_every_verdict():
+    """A wording added to one language and not the other is a KeyError the
+    first time that verdict is reached in the other language."""
+    import _lib_paths
+    keys = {lang: set(table) for lang, table in _lib_paths._DETAIL.items()}
+    assert len(set(map(frozenset, keys.values()))) == 1, keys
+
+
+def test_the_language_is_never_implied(tree):
+    """No default: a caller that forgot `lang` would put English inside a
+    Chinese line without anyone noticing — it is a TypeError instead."""
+    import _lib_paths
+    for call in (lambda: classify_path(tree / "nope", "dir"),
+                 lambda: _lib_paths.require_dir(tree / "nope"),
+                 lambda: _lib_paths.require_file(tree / "nope"),
+                 lambda: _lib_paths.require_path(tree / "nope", "any")):
+        with pytest.raises(TypeError, match="lang"):
+            call()

@@ -549,7 +549,7 @@ def main():
     repo_root = Path(args.repo_root).resolve()
     # #3276: the shared judgement of a caller-given path. A directory: a file
     # given here used to pass `exists()` and report a coverage of nothing.
-    problem = classify_path(repo_root, "dir", flag="--repo-root")
+    problem = classify_path(repo_root, "dir", lang="en", flag="--repo-root")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: Repository root {word}: {problem.message}", file=sys.stderr)

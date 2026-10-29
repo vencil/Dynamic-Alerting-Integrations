@@ -385,7 +385,7 @@ def main() -> None:
     conf_d = Path(args.conf_d).resolve()
     # #3276: the shared judgement of a caller-given path — a path under a
     # parent the caller cannot enter is named, not a traceback.
-    problem = classify_path(conf_d, "dir", flag="--conf-d")
+    problem = classify_path(conf_d, "dir", lang="en", flag="--conf-d")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"❌ conf.d/ {word}: {problem.message}", file=sys.stderr)

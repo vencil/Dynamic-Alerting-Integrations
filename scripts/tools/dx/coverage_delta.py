@@ -142,7 +142,7 @@ def parse_cobertura(path: Path) -> CoverageReport:
     # #3276: the shared caller-path judgement (stdlib only: this tool's CI
     # job has no PyYAML) — a report under a parent the caller cannot enter is
     # named, not a traceback; nothing there keeps its own error.
-    problem = classify_path(path, "file")
+    problem = classify_path(path, "file", lang="en")
     if problem is not None:
         if problem.missing:
             raise FileNotFoundError(f"coverage report not found: {path}")

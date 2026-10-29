@@ -833,7 +833,7 @@ def _preflight(a: argparse.Namespace) -> str:
                           "(the container answers VALIDATOR_UNAVAILABLE)")
     # #3276: the shared judgement of a caller-given path — `os.path.isdir`
     # said "not a directory" for one under a parent the caller cannot enter.
-    problem = None if a.tree is None else classify_path(a.tree, "dir", flag="--tree")
+    problem = None if a.tree is None else classify_path(a.tree, "dir", lang="en", flag="--tree")
     if problem is not None:
         raise NotMeasured(problem.message)
     if a.work_dir is not None and os.path.lexists(a.work_dir):

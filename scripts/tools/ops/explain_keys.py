@@ -103,7 +103,7 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
 
 def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
              timeout: float) -> dict[str, Any]:
-    conf_d_problem = classify_path(conf_d, "dir", flag="--config-dir")  # #3276
+    conf_d_problem = classify_path(conf_d, "dir", lang="en", flag="--config-dir")  # #3276
     if conf_d_problem is not None:
         raise ExplainError(conf_d_problem.message)
     # The verdict takes `_policies` from the root `_defaults.yaml` only, as
@@ -284,7 +284,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             except (OSError, UnicodeDecodeError, ValueError) as e:
                 raise ExplainError(f"--assert: cannot read {args.assert_file}: {e}") from e
         # #3276: the caller's string, before Path('') becomes '.'.
-        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
         if config_dir_problem is not None:
             raise ExplainError(config_dir_problem.message)
         doc = explain(Path(args.config_dir), args.tenant, args.at, args.da_guard_binary, args.timeout)

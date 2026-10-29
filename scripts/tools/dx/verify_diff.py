@@ -172,7 +172,7 @@ def load_rules(path: Path) -> dict:
     import yaml
     # #3276: the shared judgement of a caller-given path ("any", as `exists()`
     # was) — `exists()` raised on one under a parent the caller cannot enter.
-    problem = classify_path(path, "any", flag="--rules")
+    problem = classify_path(path, "any", lang="zh", flag="--rules")
     if problem is not None:
         raise RulesError(f"rules 檔{'不存在' if problem.missing else '無法使用'}: "
                          f"{problem.message}")

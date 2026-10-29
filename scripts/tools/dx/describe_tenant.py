@@ -396,7 +396,7 @@ def what_if_result(scanner: ConfDScanner, tid: str, draft: Path,
         target = conf_d / rel
         # #3276: the shared judgement of a caller-given path, in this tool's
         # words (a WhatIfError, the document the --what-if mode answers with).
-        problem = classify_path(target, "file", flag="--replaces")
+        problem = classify_path(target, "file", lang="en", flag="--replaces")
         if problem is not None:
             raise WhatIfError(
                 f"--replaces {replaces} is not a file of the scanned tree {conf_d} "
@@ -594,7 +594,7 @@ def main() -> None:
 
     # #3276: the shared judgement of a caller-given path (or the one found
     # for the caller, named without the flag it did not give).
-    problem = classify_path(conf_d, "dir", flag="--conf-d" if args.conf_d else None)
+    problem = classify_path(conf_d, "dir", lang="en", flag="--conf-d" if args.conf_d else None)
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"❌ conf.d/ {word}: {problem.message}", file=sys.stderr)
@@ -609,7 +609,7 @@ def main() -> None:
         given = Path(args.what_if)
         # #3276: a hint only — `is_file()` raised on a path under a parent
         # the caller cannot enter (3.13), ending in a traceback.
-        if classify_path(given, "file") is None:
+        if classify_path(given, "file", lang="en") is None:
             try:
                 rel = tree_rel(conf_d.resolve(), given)
                 hint = (f". {args.what_if} is in the scanned tree: to try an edit of "
@@ -624,7 +624,7 @@ def main() -> None:
     draft = None
     if args.what_if is not None:
         draft = Path(args.what_if).resolve()
-        problem = classify_path(draft, "file", flag="--what-if")  # #3276
+        problem = classify_path(draft, "file", lang="en", flag="--what-if")  # #3276
         if problem is not None:
             word = "not found" if problem.missing else "not usable"
             print(f"❌ --what-if file {word}: {problem.message}", file=sys.stderr)

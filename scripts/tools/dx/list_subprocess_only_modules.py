@@ -230,7 +230,7 @@ def read_coverage_data(path: Path):
 
     # #3276: the shared judgement of a caller-given path ("any", as `exists()`
     # was); only a path with nothing there gets the how-to-make-it hint.
-    problem = classify_path(path, "any", flag="--coverage-data")
+    problem = classify_path(path, "any", lang="zh", flag="--coverage-data")
     if problem is not None and problem.missing:
         raise RuntimeError(
             f"找不到 coverage 資料檔：{path}。先跑 `pytest tests/ --cov` 產生它"
@@ -402,10 +402,10 @@ def main(argv: "list[str] | None" = None) -> int:
     # #3276: the shared judgement of a caller-given path — `exists()` raised
     # on one under a parent the caller cannot enter (3.13). `.git` is "any":
     # in a worktree it is a file.
-    problem = classify_path(repo, "dir", flag="--repo")
+    problem = classify_path(repo, "dir", lang="zh", flag="--repo")
     if problem is not None:
         return unmeasurable(problem.message)
-    dot_git = classify_path(repo / ".git", "any")
+    dot_git = classify_path(repo / ".git", "any", lang="zh")
     if dot_git is not None:
         return unmeasurable(f"{repo} 不是 git repo" if dot_git.missing else dot_git.message)
     data_path = Path(args.coverage_data) if args.coverage_data else repo / ".coverage"

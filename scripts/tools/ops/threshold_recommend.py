@@ -1651,7 +1651,7 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     # #3276: the shared judgement of a caller-given path, in this tool's words.
-    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    config_dir_problem = classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
     if config_dir_problem is not None:
         raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == 'zh'
                           else config_dir_problem.message, config_dir_problem.reason)

@@ -931,7 +931,7 @@ def _main():
 
 def _deprecate(args):
     """The run, once the arguments are parsed."""
-    require_dir(args.config_dir, flag="--config-dir")  # #3276
+    require_dir(args.config_dir, lang="zh", flag="--config-dir")  # #3276
 
     mode = "執行" if args.execute else "預覽"
 

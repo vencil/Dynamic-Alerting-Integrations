@@ -58,7 +58,7 @@ def _scan_config_dir(config_dir):
     """Scan config directory, return sorted list of (filename, content, hash)."""
     files = []
     config_path = Path(config_dir)
-    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    config_dir_problem = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")  # #3276
     if config_dir_problem is not None:
         print(_t(f"錯誤：目錄無法使用 {config_dir_problem.message}",
                  f"Error: {config_dir_problem.message}"), file=sys.stderr)

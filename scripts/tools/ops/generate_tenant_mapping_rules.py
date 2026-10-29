@@ -424,7 +424,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config_dir = args.config_dir
-    require_dir(config_dir, flag="--config-dir")  # #3276
+    require_dir(config_dir, lang="en", flag="--config-dir")  # #3276
 
     # Find mapping file
     mapping_path = find_mapping_file(config_dir)
@@ -446,7 +446,7 @@ def main() -> None:
         # Auto-detect from metric-dictionary.yaml
         dict_path = args.metric_dictionary
         if dict_path:
-            require_file(dict_path, flag="--metric-dictionary")  # #3276
+            require_file(dict_path, lang="en", flag="--metric-dictionary")  # #3276
         else:
             this_dir = Path(_THIS_DIR)
             candidate = this_dir.parent / "metric-dictionary.yaml"

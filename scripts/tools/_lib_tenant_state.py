@@ -217,7 +217,7 @@ def _read(path: str | os.PathLike[str], source: str) -> bytes:
     # #3276: the shared judgement of a caller-given path ("any": a FIFO or a
     # process substitution is read as before). `is_dir()` raised on a path
     # under a parent the caller cannot enter (3.13): a traceback.
-    problem = classify_path(path, "any", flag="--state")
+    problem = classify_path(path, "any", lang="en", flag="--state")
     if problem is not None:
         raise StateInputError(problem.message)
     p = Path(path)

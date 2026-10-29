@@ -611,7 +611,7 @@ def check_commit_msg_file(path: Path, repo_root: Path) -> int:
     # #3276: the shared caller-path judgement (stdlib only: this tool must run
     # without PyYAML) — under a parent the caller cannot enter it is named,
     # not a traceback; nothing there keeps its own message.
-    problem = classify_path(path, "any", flag="--check-commit-msg")
+    problem = classify_path(path, "any", lang="en", flag="--check-commit-msg")
     if problem is not None:
         print(f"error: commit-msg file not found: {path}" if problem.missing
               else f"error: {problem.message}", file=sys.stderr)

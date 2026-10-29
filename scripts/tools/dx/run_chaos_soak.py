@@ -279,7 +279,7 @@ def main() -> int:
 
     config_dir = Path(args.config_dir)
     # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(config_dir, "dir", flag="--config-dir")
+    problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"[error] config-dir {word}: "

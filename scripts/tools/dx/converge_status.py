@@ -528,7 +528,7 @@ def main(argv=None):
 
     # #3276: the shared judgement of a caller-given path. "any": the scope is
     # the ledger file itself or a directory holding ledgers.
-    problem = classify_path(args.scope, "any", flag="--scope")
+    problem = classify_path(args.scope, "any", lang="en", flag="--scope")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: scope {word}: {problem.message}", file=sys.stderr)

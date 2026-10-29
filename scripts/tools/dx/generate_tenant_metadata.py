@@ -535,7 +535,7 @@ def main():
 
     # Validate config directory
     # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: Config directory {word}: {problem.message}", file=sys.stderr)

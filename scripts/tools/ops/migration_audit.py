@@ -511,7 +511,7 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
 
 
 def _audit(root: Path, binary: Optional[str], timeout: float) -> dict:
-    root_problem = classify_path(root, "dir", flag="--config-dir")  # #3276
+    root_problem = classify_path(root, "dir", lang="en", flag="--config-dir")  # #3276
     if root_problem is not None:
         raise AuditError(root_problem.message)
     tree = run_parse_tree(root, binary, timeout)
@@ -722,7 +722,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         arm_crash_envelope(build=lambda: {**empty_report(), "config_dir": args.config_dir})
     try:
         # #3276: the caller's string, before Path('') becomes '.'.
-        config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+        config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
         if config_dir_problem is not None:
             raise AuditError(config_dir_problem.message)
         report = audit(Path(args.config_dir), args.da_guard_binary, args.timeout)

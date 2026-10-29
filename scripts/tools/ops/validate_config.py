@@ -1077,7 +1077,7 @@ def check_custom_rules(
     if rule_packs_dir is None:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
-    rule_packs_problem = classify_path(rule_packs_dir, "dir", flag="--rule-packs")
+    rule_packs_problem = classify_path(rule_packs_dir, "dir", lang="en", flag="--rule-packs")
     if rule_packs_problem is not None:
         result = _make_result(
             "custom_rules", FAIL,
@@ -1536,7 +1536,7 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # argparse default is None, so nothing else reaches the else side. Same
     # split as #1616's --base-config.
     if policy_dsl_file is not None:
-        policy_dsl_problem = classify_path(policy_dsl_file, "file", flag="--policy-dsl")
+        policy_dsl_problem = classify_path(policy_dsl_file, "file", lang="en", flag="--policy-dsl")
         if policy_dsl_problem is not None:
             return _argv_error_row("policy_dsl", policy_dsl_problem.message,
                                    _POLICY_DSL_INPUT_HINT)
@@ -2980,7 +2980,7 @@ def _main() -> None:
 
     # #3276: the shared judgement of a caller-given path — a directory under
     # a parent the caller cannot enter is named as such, not "not found".
-    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
     if config_dir_problem is not None:
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         # #1653: under --json this path used to leave stdout EMPTY, so a

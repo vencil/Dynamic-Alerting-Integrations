@@ -391,7 +391,7 @@ def main():
     # at rc=0 — indistinguishable from a real, clean scan (issue 1513).
     # #3276: judged by the shared caller-path check — under a parent the
     # caller cannot enter it is named as such, not "no such directory".
-    raise_path_problems([classify_path(path, kind, flag=flag)
+    raise_path_problems([classify_path(path, kind, lang="en", flag=flag)
                          for flag, path, kind in (("--config-dir", args.config_dir, "dir"),
                                                   ("--tenant-config", args.tenant_config, "file"),
                                                   ("--metric-dictionary", args.metric_dictionary,

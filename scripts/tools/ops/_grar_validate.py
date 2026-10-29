@@ -1034,7 +1034,7 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
     # so nothing else reaches this branch. Same split as #1616's --base-config.
     if policy_path is None:
         return PolicyDocument([], None)
-    policy_problem = classify_path(policy_path, "file", flag="--policy")  # #3276
+    policy_problem = classify_path(policy_path, "file", lang="en", flag="--policy")  # #3276
     if policy_problem is not None:
         raise PolicyInputError(
             f"{policy_problem.message}\n"

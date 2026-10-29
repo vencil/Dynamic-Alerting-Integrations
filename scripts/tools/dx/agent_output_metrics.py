@@ -470,7 +470,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.metric == "changelog":
         path = Path(args.path)
         # #3276: the shared judgement of a caller-given path.
-        problem = classify_path(args.path, "file", flag="--path")
+        problem = classify_path(args.path, "file", lang="en", flag="--path")
         if problem is not None:
             word = "not found" if problem.missing else "not usable"
             return _fail(f"CHANGELOG {word}: {problem.message}")

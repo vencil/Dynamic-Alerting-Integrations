@@ -1390,7 +1390,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    require_dir(args.config_dir, flag="--config-dir")  # #3276
+    require_dir(args.config_dir, lang="en", flag="--config-dir")  # #3276
 
     # #3142: the deployment policy, read by the generator's own resolver —
     # an unusable file or an unmet min_generator_version is rc 2.

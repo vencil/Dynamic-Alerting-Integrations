@@ -509,7 +509,7 @@ def main():
     rule_packs_dir = str(Path(args.output_dir).resolve())
 
     # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(rule_packs_dir, "dir", flag="--output-dir")
+    problem = classify_path(rule_packs_dir, "dir", lang="en", flag="--output-dir")
     if problem is not None:
         print(f"Error: rule packs directory is not a directory: {problem.message}",
               file=sys.stderr)

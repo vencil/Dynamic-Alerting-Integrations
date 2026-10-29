@@ -674,7 +674,7 @@ def main(argv=None):
         # refuses is named. A FIFO or a process substitution passes (kind
         # "any") and is read as before; a path that cannot be read as a file
         # (a directory, mode 000) is named too — rc 2, never a traceback.
-        problem = classify_path(path, "any", flag="--from-log")
+        problem = classify_path(path, "any", lang="en", flag="--from-log")
         if problem is not None:
             print(f"::error::missing data file {path}" if problem.missing
                   else f"::error::{problem.message}")
@@ -704,7 +704,7 @@ def main(argv=None):
     # #3276: a DIR the caller cannot look at is named (the shared judgement),
     # not a traceback (rc 1); nothing there is each file's missing-file
     # refusal below, as before.
-    problem = classify_path(args.archive, "dir", flag="--archive")
+    problem = classify_path(args.archive, "dir", lang="en", flag="--archive")
     if problem is not None and not problem.missing:
         print(f"::error::{problem.message}")
         return 2
@@ -716,7 +716,7 @@ def main(argv=None):
         # E3). A file that is there but cannot be read (a directory named
         # probe-runN.txt, mode 000) raises as it always did — not in #3276's
         # approved rc changes.
-        problem = classify_path(path, "any")
+        problem = classify_path(path, "any", lang="en")
         if problem is not None:
             print(f"::error::missing data file {path}" if problem.missing
                   else f"::error::--archive {problem.message}")

@@ -168,7 +168,7 @@ def parse_mapping(path: Path) -> list[Entry]:
     """Parse TSV mapping; validate non-empty."""
     # #3276: the shared judgement of a caller-given path; a caller error
     # (rc 2, one line), no longer the rc 1 of `SystemExit(<text>)`.
-    problem = classify_path(path, "file")
+    problem = classify_path(path, "file", lang="en")
     if problem is not None:
         raise CallerError(f"mapping file {problem.message}", problem.reason)
 

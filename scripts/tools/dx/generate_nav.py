@@ -167,7 +167,7 @@ def main():
     docs_dir = repo_root / 'docs'
 
     # #3276: the shared judgement of a path derived from --repo-root.
-    problem = classify_path(docs_dir, "dir")
+    problem = classify_path(docs_dir, "dir", lang="en")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f'Error: docs directory {word}: {problem.message}', file=sys.stderr)

@@ -1275,7 +1275,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    repo_problem = classify_path(settings.repo, "dir", flag="--repo")  # #3276
+    repo_problem = classify_path(settings.repo, "dir", lang="en", flag="--repo")  # #3276
     if repo_problem is not None:
         print(f"ERROR: {repo_problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR

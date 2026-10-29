@@ -140,9 +140,9 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     # #3276: the shared judgement of a caller-given path (and of the two
     # files read from it, "any" as `exists()` was) — `exists()` raised on a
     # path under a parent the caller cannot enter (3.13).
-    problems = [classify_path(input_dir, "dir", flag="--input-dir")]
+    problems = [classify_path(input_dir, "dir", lang="en", flag="--input-dir")]
     if problems[0] is None:
-        problems = [classify_path(p, "any") for p in (run_config_path, csv_path)]
+        problems = [classify_path(p, "any", lang="en") for p in (run_config_path, csv_path)]
     if any(p is not None and not p.missing for p in problems):
         named = "".join(f"Error: {p.message}\n" for p in problems if p is not None)
         return named, EXIT_CALLER_ERROR

@@ -38,10 +38,27 @@ class PathProblem(NamedTuple):
 #: cannot enter, EIO, …) is not-accessible — never folded into "not found".
 _STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
 
+#: The wording after ``<flag> <path>:``, per language — the one place it is
+#: written. ``en`` keeps the OS's strerror; ``zh`` says the same in Chinese
+#: and keeps the errno's name (``EACCES``) so the cause stays searchable.
+_DETAIL = {
+    "en": {"missing": lambda e: e.strerror, "inaccessible": lambda e: e.strerror,
+           "not_dir": "not a directory", "not_regular": "not a regular file"},
+    "zh": {"missing": lambda e: "不存在",
+           "inaccessible": lambda e: f"無法存取（{errno.errorcode.get(e.errno, e.errno)}）",
+           "not_dir": "不是目錄", "not_regular": "不是一般檔案"},
+}
 
-def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Optional[PathProblem]:
+
+def classify_path(path: Any, kind: str, *, lang: str,
+                  flag: Optional[str] = None) -> Optional[PathProblem]:
     """None when *path* (given by the caller, via *flag*) is usable as a
     *kind* — ``"dir"``, ``"file"`` or ``"any"`` — else the `PathProblem`.
+
+    *lang* (``"en"`` / ``"zh"``) is the language of the line the message
+    lands in — the tool's own (a bilingual tool passes its
+    ``detect_cli_lang()``). It has no default: a caller that forgot it
+    would put English inside a Chinese line without anyone noticing.
 
     #3276. The one judgement of a caller-given path, replacing each tool's
     ``Path.is_dir()`` / ``exists()`` / ``is_file()`` and ``os.path.*``:
@@ -63,40 +80,43 @@ def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Option
     shown = safe_label(str(path)) if str(path) else "''"
     label = f"{flag} {shown}" if flag else shown
     noun = {"dir": "dir", "file": "file", "any": "path"}[kind]
+    detail = _DETAIL[lang]
     try:
         st = os.stat(path)
     except OSError as exc:
         missing = exc.errno in _STAT_MISSING
+        said = detail["missing" if missing else "inaccessible"](exc)
         return PathProblem(f"{noun}_not_{'found' if missing else 'accessible'}",
-                           f"{label}: {exc.strerror}", missing)
+                           f"{label}: {said}", missing)
     if kind == "dir" and not stat.S_ISDIR(st.st_mode):
-        return PathProblem("dir_not_found", f"{label}: not a directory", False)
+        return PathProblem("dir_not_found", f"{label}: {detail['not_dir']}", False)
     if kind == "file":
         if not stat.S_ISREG(st.st_mode):
-            return PathProblem("file_not_found", f"{label}: not a regular file", False)
+            return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         try:
             os.close(os.open(path, os.O_RDONLY))
         except OSError as exc:
-            return PathProblem("file_not_accessible", f"{label}: {exc.strerror}", False)
+            return PathProblem("file_not_accessible",
+                               f"{label}: {detail['inaccessible'](exc)}", False)
     return None
 
 
-def require_path(path: Any, kind: str, *, flag: Optional[str] = None) -> None:
+def require_path(path: Any, kind: str, *, lang: str, flag: Optional[str] = None) -> None:
     """`classify_path`, raising `CallerError` (rc 2 under ``run()``, the
     reason in the ``--json`` envelope) when *path* is not usable."""
-    problem = classify_path(path, kind, flag=flag)
+    problem = classify_path(path, kind, lang=lang, flag=flag)
     if problem is not None:
         raise _caller_error(problem.message, problem.reason)
 
 
-def require_dir(path: Any, *, flag: Optional[str] = None) -> None:
+def require_dir(path: Any, *, lang: str, flag: Optional[str] = None) -> None:
     """`require_path` for a directory."""
-    require_path(path, "dir", flag=flag)
+    require_path(path, "dir", lang=lang, flag=flag)
 
 
-def require_file(path: Any, *, flag: Optional[str] = None) -> None:
+def require_file(path: Any, *, lang: str, flag: Optional[str] = None) -> None:
     """`require_path` for a file."""
-    require_path(path, "file", flag=flag)
+    require_path(path, "file", lang=lang, flag=flag)
 
 
 def raise_path_problems(problems: "list[Optional[PathProblem]]") -> None:

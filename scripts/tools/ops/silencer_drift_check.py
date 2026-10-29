@@ -689,7 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     if silences is None:
         return EXIT_CALLER_ERROR
 
-    require_path(rule_source, "any", flag="--rule-source")  # #3276
+    require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
     alerts, errors = load_alerts(rule_source)
     if not alerts and errors:

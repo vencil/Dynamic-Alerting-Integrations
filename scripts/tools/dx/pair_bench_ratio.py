@@ -335,7 +335,7 @@ def main() -> int:
 
     # #3276: the shared judgement of a caller-given path.
     for flag, p in (("--reference", args.reference), ("--main", args.main)):
-        problem = classify_path(p, "file", flag=flag)
+        problem = classify_path(p, "file", lang="en", flag=flag)
         if problem is not None:
             print(f"[pair_bench_ratio] not a file: {problem.message}", file=sys.stderr)
             return 2

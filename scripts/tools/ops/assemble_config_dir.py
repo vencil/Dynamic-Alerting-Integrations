@@ -211,7 +211,7 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     Raises CallerError (rc 2) for a source that is not a usable
     directory (#3276: the shared judgement of a caller-given path).
     """
-    require_dir(source_dir, flag="--sources")
+    require_dir(source_dir, lang="en", flag="--sources")
     # ⛔ Same listing as `iter_config_files` (which `carriers_already_in`
     # and the residue question already use), not a second spelling of it:
     # a hidden carrier the exporter will never read must not reach the copy,
@@ -235,7 +235,7 @@ def discover_entries(source_dir: Path) -> "Tuple[List[Tuple[Path, Any]], str | N
     and the root carrier the source's own chain selects (Go's
     `defaults_carriers`, None when it has none). Raises CallerError as
     `discover_yamls`."""
-    require_dir(source_dir, flag="--sources")
+    require_dir(source_dir, lang="en", flag="--sources")
     listing = config_listing(source_dir)
     named = list_visible_config_entries(source_dir, listing)
     selected = None if listing is None else listing.defaults_carriers.get(".")

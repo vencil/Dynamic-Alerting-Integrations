@@ -262,7 +262,7 @@ def main() -> int:
     # below), the inverted contract (#3393). Imported here: importing this
     # module must not change the importing process (see the guard below).
     from _lib_paths import require_dir
-    require_dir(conf_d, flag="--conf-d")
+    require_dir(conf_d, lang="en", flag="--conf-d")
 
     describe_mod = _load_describe_module()
     try:

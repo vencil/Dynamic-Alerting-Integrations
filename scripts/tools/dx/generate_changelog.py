@@ -833,7 +833,7 @@ def main() -> int:
         # also open it, and a fragment that does not open is the lint's
         # finding (rc 1), not this refusal.
         flag = "--fragments" if args.fragments else None
-        problems = [classify_path(p, "any", flag=flag) for p in paths]
+        problems = [classify_path(p, "any", lang="en", flag=flag) for p in paths]
         bad = [pr.message if pr is not None
                else f"{f'{flag} ' if flag else ''}{safe_label(str(p))}: not a regular file"
                for p, pr in zip(paths, problems) if pr is not None or not p.is_file()]
@@ -872,7 +872,7 @@ def main() -> int:
             # not the named one-line caller error below).
             p = Path(target)
             # #3276: the shared judgement of a caller-given path.
-            problem = classify_path(target, "file", flag="--lint")
+            problem = classify_path(target, "file", lang="en", flag="--lint")
             if problem is not None:
                 print(f"ERROR: not a readable file: {problem.message}", file=sys.stderr)
                 return EXIT_CALLER_ERROR

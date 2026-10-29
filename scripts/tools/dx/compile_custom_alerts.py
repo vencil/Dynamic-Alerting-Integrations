@@ -512,7 +512,7 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(config_dir, "dir", flag="--config-dir" if args.config_dir else None)
+    problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir" if args.config_dir else None)
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: config dir {word}: {problem.message}", file=sys.stderr)

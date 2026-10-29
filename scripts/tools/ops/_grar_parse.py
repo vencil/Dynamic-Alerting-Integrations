@@ -1177,7 +1177,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "duplicate_tenants": {},
     }
 
-    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    config_dir_problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")  # #3276
     if config_dir_problem is not None:
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

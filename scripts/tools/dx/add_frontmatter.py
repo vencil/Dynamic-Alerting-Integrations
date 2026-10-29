@@ -408,7 +408,7 @@ def main():
 
     base_dir = str(Path(args.base_dir).resolve())
     # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(base_dir, "dir", flag="--base-dir")
+    problem = classify_path(base_dir, "dir", lang="en", flag="--base-dir")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         logger.error(f"Base directory {word}: {problem.message}")
