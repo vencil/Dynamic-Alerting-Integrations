@@ -210,10 +210,17 @@ def test_a_file_is_a_regular_file(tmp_path):
     fifo = tmp_path / "p"
     os.mkfifo(fifo)
     assert stat.S_ISFIFO(os.stat(fifo).st_mode)
-    for p in (fifo, os.devnull):
-        problem = classify_path(p, "file", flag="--policy")
-        assert (problem.reason, problem.missing) == ("file_not_found", False), p
-        assert problem.message == f"--policy {p}: not a regular file"
+    # Held open read-write by the test (never blocks on Linux), so a check
+    # that wrongly opens the FIFO returns at once and fails here — not hangs.
+    held = os.open(fifo, os.O_RDWR)
+    try:
+        for p in (fifo, os.devnull):
+            problem = classify_path(p, "file", flag="--policy")
+            assert problem is not None, p
+            assert (problem.reason, problem.missing) == ("file_not_found", False), p
+            assert problem.message == f"--policy {p}: not a regular file"
+    finally:
+        os.close(held)
 
 
 @pytest.mark.parametrize("lang, words", [("zh", "--dir 無法使用："), ("en", "ERROR: --dir ")])
