@@ -21,6 +21,9 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import grafana_import as gi  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
+import _lib_kubectl  # noqa: E402
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
+from _lib_kubectl import KubectlError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +74,23 @@ class TestRunCmd:
             raise subprocess.CalledProcessError(1, "kubectl", stderr="err")
         monkeypatch.setattr(gi.subprocess, "check_output", boom)
         assert gi.run_cmd(["kubectl", "get"]) is None
+
+    @pytest.mark.parametrize("raised, why", [
+        (FileNotFoundError(errno.ENOENT, "No such file or directory", "kubectl"),
+         "kubectl is not on PATH"),
+        (subprocess.TimeoutExpired("kubectl", 120), "no answer within 120s"),
+    ], ids=["not-on-path", "timeout"])
+    def test_no_kubectl_or_no_answer_is_kubectl_error(self, monkeypatch, raised, why):
+        """#3349: the environment, named (rc 2, reason kubectl_error) — these
+        escaped as a traceback before; a kubectl that answered non-zero is
+        still None (the caller's own fail row)."""
+        def boom(*args, **kwargs):
+            raise raised
+        monkeypatch.setattr(gi.subprocess, "check_output", boom)
+        with pytest.raises(KubectlError, match=why) as exc:
+            gi.run_cmd(["kubectl", "create", "configmap", "x"])
+        assert exc.value.reason == "kubectl_error"
+        assert "kubectl create configmap" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -160,27 +180,41 @@ class TestImportDashboard:
 # ---------------------------------------------------------------------------
 # verify_dashboards — kubectl get parser
 # ---------------------------------------------------------------------------
-class TestVerifyDashboards:
-    def test_kubectl_failure_returns_fail_check(self, monkeypatch):
-        monkeypatch.setattr(gi, "run_cmd", lambda *a, **kw: None)
-        checks = gi.verify_dashboards("monitoring")
-        assert len(checks) == 1
-        assert checks[0]["status"] == "fail"
+def _kubectl_lists(monkeypatch, rc=0, stdout="", stderr=""):
+    """The `_lib_kubectl` runner's kubectl answers as given; returns the
+    recorded argv list (#3349: verify reads through `kubectl_list`)."""
+    calls = []
 
-    def test_invalid_json_returns_fail(self, monkeypatch):
-        monkeypatch.setattr(gi, "run_cmd", lambda *a, **kw: "{not json")
-        checks = gi.verify_dashboards("monitoring")
-        assert len(checks) == 1
-        assert checks[0]["status"] == "fail"
-        assert "parse" in checks[0]["detail"].lower()
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
+    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
+    return calls
+
+
+class TestVerifyDashboards:
+    def test_kubectl_failure_raises_kubectl_error(self, monkeypatch):
+        """#3349: a list that got no answer is KubectlError (rc 2 at run()'s
+        exit), not a `caller_error` fail row beside the dashboard checks."""
+        _kubectl_lists(monkeypatch, rc=1, stdout=json.dumps({"kind": "List", "items": []}),
+                       stderr="Error from server (Forbidden): configmaps is forbidden")
+        with pytest.raises(KubectlError, match=r"\(exit 1\).*Forbidden") as exc:
+            gi.verify_dashboards("monitoring")
+        assert exc.value.reason == "kubectl_error"
+
+    def test_invalid_json_raises_kubectl_error(self, monkeypatch):
+        _kubectl_lists(monkeypatch, stdout="{not json")
+        with pytest.raises(KubectlError, match="not JSON"):
+            gi.verify_dashboards("monitoring")
 
     def test_no_items_returns_warning(self, monkeypatch):
-        monkeypatch.setattr(gi, "run_cmd",
-                            lambda *a, **kw: json.dumps({"items": []}))
+        calls = _kubectl_lists(monkeypatch, stdout=json.dumps({"items": []}))
         checks = gi.verify_dashboards("monitoring")
         assert len(checks) == 1
         assert checks[0]["status"] == "warn"
         assert "No ConfigMaps" in checks[0]["detail"]
+        assert calls == [["kubectl", "get", "configmap", "-n", "monitoring",
+                          "-l", "grafana_dashboard=1", "-o", "json"]]
 
     def test_valid_items_pass(self, monkeypatch):
         kubectl_output = json.dumps({
@@ -196,7 +230,7 @@ class TestVerifyDashboards:
                 },
             ],
         })
-        monkeypatch.setattr(gi, "run_cmd", lambda *a, **kw: kubectl_output)
+        _kubectl_lists(monkeypatch, stdout=kubectl_output)
         checks = gi.verify_dashboards("monitoring")
         assert len(checks) == 1
         assert checks[0]["status"] == "pass"
@@ -209,7 +243,7 @@ class TestVerifyDashboards:
                 {"metadata": {"name": "bad"}, "data": {"x.json": "{not json"}},
             ],
         })
-        monkeypatch.setattr(gi, "run_cmd", lambda *a, **kw: kubectl_output)
+        _kubectl_lists(monkeypatch, stdout=kubectl_output)
         checks = gi.verify_dashboards("monitoring")
         assert any(c["status"] == "fail" for c in checks)
 
@@ -282,3 +316,48 @@ class TestMain:
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "DRY RUN" in out
+
+
+# ---------------------------------------------------------------------------
+# --verify through the real CLI, kubectl without an answer (#3349)
+# ---------------------------------------------------------------------------
+def _verify_cli(tmp_path, path):
+    return subprocess.run(
+        [sys.executable, os.path.join(_TOOLS_DIR, "grafana_import.py"), "--verify", "--json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(tmp_path),
+        env={**os.environ, "PATH": path})
+
+
+class TestVerifyWithoutAnAnswer:
+    """`--verify --json` when kubectl gives no answer: rc 2, one envelope with
+    reason `kubectl_error`, no traceback — not a verify report."""
+
+    def test_forbidden_kubectl(self, tmp_path):
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        exe = bindir / "kubectl"
+        exe.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            "sys.stdout.write('{\"apiVersion\": \"v1\", \"kind\": \"List\", \"items\": []}\\n')\n"
+            "sys.stderr.write('Error from server (Forbidden): configmaps is forbidden: '\n"
+            "                 'User \"nobody\" cannot list resource \"configmaps\"\\n')\n"
+            "sys.exit(1)\n", encoding="utf-8")
+        exe.chmod(0o755)
+        r = _verify_cli(tmp_path, f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert "Traceback" not in r.stderr
+        doc = json.loads(r.stdout)
+        assert doc["reason"] == "kubectl_error", doc
+        assert "Forbidden" in doc["error"]
+        assert "checks" not in doc   # no verify report under the envelope
+
+    def test_no_kubectl_on_path(self, tmp_path):
+        empty = tmp_path / "no-kubectl"
+        empty.mkdir()
+        r = _verify_cli(tmp_path, str(empty))
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert "Traceback" not in r.stderr
+        doc = json.loads(r.stdout)
+        assert doc["reason"] == "kubectl_error", doc
+        assert "kubectl is not on PATH" in doc["error"]

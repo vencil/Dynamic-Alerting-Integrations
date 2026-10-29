@@ -8,6 +8,7 @@ kubectl 卡住時，單跑 `diagnose` 曾經等滿 120 秒再以 traceback 結�
 再 sleep 會留下 sleep 孫程序，subprocess 殺不到，量到的是測試自己造的孤兒。
 """
 
+import io
 import json
 import os
 import random
@@ -19,6 +20,9 @@ import time
 
 import pytest
 
+import _lib_exitcodes
+import _lib_kubectl
+from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 import batch_diagnose as bd
 import diagnose
 
@@ -74,52 +78,59 @@ def stuck_kubectl(tmp_path, monkeypatch):
 # ── 單跑 diagnose ──────────────────────────────────────────────────
 
 
-class TestRunCmdTimeout:
+class TestKubectlBudget:
+    """The timeout each kubectl read gets (`kubectl_budget`, #3349: was inside
+    run_cmd) and what the `_lib_kubectl` runner makes of running out of it."""
+
     @staticmethod
     def _record(monkeypatch):
+        """kubectl answers at once with an empty List; records its kwargs."""
         seen = {}
 
         def fake(cmd, **kw):
             seen.update(kw)
-            return "ok"
-        monkeypatch.setattr(diagnose.subprocess, "check_output", fake)
+            return subprocess.CompletedProcess(cmd, 0, '{"items": []}', "")
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
         return seen
 
     def test_timeout_expired_is_an_environment_error(self, monkeypatch):
         def stuck(cmd, **kw):
             raise subprocess.TimeoutExpired(cmd, kw["timeout"])
-        monkeypatch.setattr(diagnose.subprocess, "check_output", stuck)
-        with pytest.raises(diagnose.CommandTimeoutError, match=r"^kubectl timed out"):
-            diagnose.run_cmd(["kubectl", "get", "pods"])
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", stuck)
+        with pytest.raises(_lib_kubectl.KubectlError, match=r"no answer within 120s"):
+            diagnose.pod_phase("t1")
 
     def test_not_a_file_not_found_error(self):
-        """batch_diagnose's OSError branch reports rc 1; a CommandNotFoundError
+        """batch_diagnose's OSError branch reports rc 1; a FileNotFoundError
         subclass would slip into it unnamed. It must be named explicitly."""
         assert not issubclass(diagnose.CommandTimeoutError, FileNotFoundError)
 
     def test_no_deadline_keeps_the_120s_cap(self, monkeypatch):
         seen = self._record(monkeypatch)
-        diagnose.run_cmd(["kubectl"])
-        assert seen["timeout"] == diagnose.KUBECTL_TIMEOUT_S == 120
+        assert diagnose.kubectl_budget() == diagnose.KUBECTL_TIMEOUT_S == 120
+        diagnose.pod_phase("t1")
+        assert seen["timeout"] == 120
 
     def test_deadline_shortens_the_timeout_by_the_grace(self, monkeypatch):
         seen = self._record(monkeypatch)
         with diagnose.deadline(time.monotonic() + 5, grace=0.5):
-            diagnose.run_cmd(["kubectl"])
+            diagnose.pod_phase("t1")
         assert 4.0 < seen["timeout"] <= 4.5
 
     def test_the_cap_still_bounds_a_far_deadline(self, monkeypatch):
         seen = self._record(monkeypatch)
         with diagnose.deadline(time.monotonic() + 10_000, grace=0.5):
-            diagnose.run_cmd(["kubectl"])
+            diagnose.pod_phase("t1")
         assert seen["timeout"] == diagnose.KUBECTL_TIMEOUT_S
 
     def test_past_the_deadline_starts_nothing(self, monkeypatch):
-        monkeypatch.setattr(diagnose.subprocess, "check_output",
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run",
                             lambda *a, **kw: pytest.fail("a process was started"))
         with diagnose.deadline(time.monotonic(), grace=0.5):
             with pytest.raises(diagnose.CommandTimeoutError, match="not run"):
-                diagnose.run_cmd(["kubectl"])
+                diagnose.pod_phase("t1")
+            with pytest.raises(diagnose.CommandTimeoutError, match="not run"):
+                diagnose.mariadb_logs("t1")
 
     def test_deadline_is_reset_on_exit(self):
         with diagnose.deadline(time.monotonic() + 5, grace=0.5):
@@ -165,32 +176,50 @@ class TestQueryPrometheusDeadline:
         assert results is None and "deadline" in err
 
 
+def _run_cli():
+    """`diagnose.main()` the way the CLI enters it — through `run()`, the one
+    exit path, which turns a raised `KubectlError` into rc 2, one `ERROR:`
+    line and, armed for --json (diagnose's default), one envelope. That
+    envelope goes straight to fd 1, so the caller reads it with `capfd`."""
+    with pytest.raises(SystemExit) as exc:
+        _lib_exitcodes.run(diagnose.main)
+    return exc.value.code
+
+
+def _is_the_kubectl_error_envelope(out):
+    """stdout is the caller-error envelope (reason kubectl_error), not a
+    health document."""
+    doc = json.loads(out)
+    assert doc["reason"] == "kubectl_error", doc
+    assert "issues" not in doc and "tenant" not in doc, doc
+    return doc
+
+
 class TestSingleDiagnoseCli:
-    def test_stuck_kubectl_exits_2_with_one_line(self, monkeypatch, capsys, cli_argv):
+    def test_stuck_kubectl_exits_2_with_one_line(self, monkeypatch, capfd, cli_argv):
         monkeypatch.setattr(diagnose, "query_prometheus", _prom_mariadb_up)
 
         def stuck(cmd, **kw):
             raise subprocess.TimeoutExpired(cmd, kw["timeout"])
-        monkeypatch.setattr(diagnose.subprocess, "check_output", stuck)
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", stuck)
         cli_argv("diagnose", "t1", "--prometheus", "http://prom:9090")
-        with pytest.raises(SystemExit) as exc:
-            diagnose.main()
-        assert exc.value.code == 2
-        captured = capsys.readouterr()
-        assert captured.out == ""                    # no JSON document
+        assert _run_cli() == 2
+        captured = capfd.readouterr()
+        _is_the_kubectl_error_envelope(captured.out)  # no health document
         lines = captured.err.splitlines()
-        assert len(lines) == 1 and "timed out" in lines[0], captured.err
+        assert len(lines) == 1 and "no answer within 120s" in lines[0], captured.err
 
     def test_a_real_stuck_kubectl_is_killed_and_exits_2(self, stuck_kubectl, monkeypatch,
-                                                         capsys, cli_argv):
+                                                         capfd, cli_argv):
         monkeypatch.setattr(diagnose, "KUBECTL_TIMEOUT_S", 1)   # 120s in production
         cli_argv("diagnose", "t1", "--prometheus", "http://prom:9090")
         start = time.monotonic()
-        with pytest.raises(SystemExit) as exc:
-            diagnose.main()
-        assert exc.value.code == 2
+        assert _run_cli() == 2
         assert time.monotonic() - start < 10
-        assert "Traceback" not in capsys.readouterr().err
+        captured = capfd.readouterr()
+        assert "Traceback" not in captured.err
+        assert "no answer within 1s" in captured.err, captured.err
+        _is_the_kubectl_error_envelope(captured.out)
         assert _alive(stuck_kubectl) == []
 
     def test_a_logs_timeout_keeps_the_finding(self, monkeypatch, capsys, cli_argv):
@@ -198,11 +227,12 @@ class TestSingleDiagnoseCli:
         turn that finding (rc 1) into an environment error (rc 2)."""
         monkeypatch.setattr(diagnose, "query_prometheus", _prom_mariadb_up)
 
-        def run_cmd(cmd):
+        def kubectl(cmd, **kw):
             if cmd[1] == "logs":
-                raise diagnose.CommandTimeoutError("kubectl timed out after 120s")
-            return "CrashLoopBackOff"
-        monkeypatch.setattr(diagnose, "run_cmd", run_cmd)
+                raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+            pods = {"items": [{"status": {"phase": "CrashLoopBackOff"}}]}
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(pods), "")
+        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(kubectl))
         cli_argv("diagnose", "t1", "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc:
             diagnose.main()
@@ -210,21 +240,31 @@ class TestSingleDiagnoseCli:
         doc = json.loads(capsys.readouterr().out)
         assert doc["issues"] == ["Pod status is CrashLoopBackOff"]
         assert doc["recent_logs"] == []
-        assert "timed out" in doc["recent_logs_error"]
+        assert "no answer within 120s" in doc["recent_logs_error"]
 
-
-    def test_a_missing_kubectl_for_the_logs_still_raises(self, monkeypatch):
-        """Only the timeout is absorbed: any other failure of the logs call
-        reaches the CLI as it always did."""
+    @pytest.mark.parametrize("failure", [
+        _lib_kubectl.KubectlError("`kubectl logs deploy/mariadb` in namespace 't1': "
+                                  "kubectl is not on PATH"),
+        _lib_kubectl.KubectlError("`kubectl logs deploy/mariadb` in namespace 't1' failed "
+                                  "(exit 1): Error from server (Forbidden): pods \"x\" is "
+                                  "forbidden"),
+        diagnose.CommandTimeoutError("kubectl not run: the deadline has passed"),
+    ], ids=["not-on-path", "forbidden", "past-the-deadline"])
+    def test_any_logs_failure_is_recorded_and_keeps_the_finding(self, monkeypatch, failure):
+        """#3349: not only the timeout — every logs read that got no answer is
+        recorded in `recent_logs_error` beside the finding (rc 1), never raised
+        over it. A missing kubectl here used to reach the CLI (rc 2)."""
         monkeypatch.setattr(diagnose, "query_prometheus", _prom_mariadb_up)
+        monkeypatch.setattr(diagnose, "pod_phase", lambda tenant: "CrashLoopBackOff")
 
-        def run_cmd(cmd):
-            if cmd[1] == "logs":
-                raise diagnose.CommandNotFoundError("kubectl not found on PATH")
-            return "CrashLoopBackOff"
-        monkeypatch.setattr(diagnose, "run_cmd", run_cmd)
-        with pytest.raises(diagnose.CommandNotFoundError):
-            diagnose.check("t1", "http://prom:9090")
+        def logs(tenant):
+            raise failure
+        monkeypatch.setattr(diagnose, "mariadb_logs", logs)
+        doc = diagnose.check("t1", "http://prom:9090", out=io.StringIO())
+        assert doc["issues"] == ["Pod status is CrashLoopBackOff"]
+        assert doc["recent_logs"] == []
+        assert doc["recent_logs_error"] == str(failure)
+        assert diagnose.exit_code(doc) == 1
 
 
 # ── batch-diagnose ─────────────────────────────────────────────────
@@ -263,7 +303,9 @@ class TestBatchDeadline:
     def test_kubectl_is_killed_before_the_join_gives_up(self, stuck_kubectl):
         result = bd.run_diagnose_for_tenant("t1", "http://prom", timeout_sec=1.5)
         assert result["_environment_error"] is True
-        assert result["issues"][0].startswith("kubectl timed out"), result
+        # kubectl's own budget ran out (the runner killed it), not the join's.
+        assert "kubectl get pods" in result["issues"][0], result
+        assert "no answer within" in result["issues"][0], result
         assert _alive(stuck_kubectl) == []
 
     def test_a_timeout_below_the_grace_still_runs_kubectl(self, stuck_kubectl):
@@ -273,7 +315,8 @@ class TestBatchDeadline:
         min(0.5, timeout/4) branch is what this measures (grace 0.125s)."""
         result = bd.run_diagnose_for_tenant("t1", "http://prom", timeout_sec=0.5)
         assert result["_environment_error"] is True
-        assert result["issues"][0].startswith("kubectl timed out"), result
+        assert "no answer within" in result["issues"][0], result   # it ran
+        assert "not run" not in result["issues"][0], result
         assert _alive(stuck_kubectl) == []
 
     def test_cli_leaves_no_orphan_and_exits_2(self, stuck_kubectl, cli_argv, capsys):
@@ -286,4 +329,4 @@ class TestBatchDeadline:
             issue = doc["tenants"][tenant]["issues"][0]
             # The kubectl timeout, not the join's "timed out after 1s": the
             # child gave up first and the run is still rc 2.
-            assert issue.startswith("kubectl timed out"), doc
+            assert "kubectl get pods" in issue and "no answer within" in issue, doc
