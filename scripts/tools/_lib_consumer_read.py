@@ -9,6 +9,13 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   split as ``kubectl apply -f`` splits them). One entry per document kubectl
   would apply, in file order; an empty file has none. ``instance: 010`` is
   the number 8 here, as it is to kubectl.
+* ``kubernetes_text_documents(text)`` — the same reading of text held in
+  memory (a manifest ``kubectl ... -o yaml`` or ``helm template`` printed, a
+  ConfigMap a tool assembled), handed over on standard input.
+* ``kubernetes_documents_of(paths)`` / ``kubernetes_text_documents_each(texts)``
+  — the same for several files / texts. da-crdecode reads one input per run,
+  so these run one per input, a few at a time (``PARALLEL_RUNS``), and return
+  them in the order given.
 * ``alertmanager_config(text)`` — an Alertmanager config as Alertmanager
   loads it: ``da-read alertmanager`` (Alertmanager's own ``config.Load``, at
   the amtool version the da-tools image ships), keeping only the keys the
@@ -48,6 +55,7 @@ import json
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 CRDECODE_BINARY_NAME = "da-crdecode"
@@ -136,6 +144,91 @@ def kubernetes_documents(path: str, binary: str | None = None) -> list[Any]:
     out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
                [os.path.abspath(path)], None)
     return out["documents"]
+
+
+def kubernetes_text_documents(text: str | bytes, binary: str | None = None) -> list[Any]:
+    """The documents of the Kubernetes manifest *text*, as kubectl reads them
+    (``da-crdecode -``): for text a tool holds rather than a file."""
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
+               ["-"], data)
+    return out["documents"]
+
+
+#: How many da-crdecode runs ``kubernetes_documents_of`` keeps going at once.
+PARALLEL_RUNS = 8
+
+
+def kubernetes_documents_of(paths: Iterable[Any], binary: str | None = None, *,
+                            keep_refusals: bool = False
+                            ) -> "dict[str, list[Any] | ConsumerReadError]":
+    """``kubernetes_documents`` for every path in *paths*, keyed by
+    ``str(path)`` in the order given. The first path (in that order) whose
+    reading cannot be had raises its :class:`ConsumerReadError`; the message
+    names the path. With *keep_refusals*, a file da-crdecode refuses (its
+    reason on stderr) is not raised: its value is the error, for a caller
+    that reports per file. A run that gave no reason (no binary, it could not
+    run, it printed no JSON contract) is raised either way — that is not an
+    answer about the file."""
+    keys = [str(p) for p in paths]
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+
+    def one(path: str) -> "list[Any] | ConsumerReadError":
+        try:
+            return kubernetes_documents(path, binary=resolved)
+        except ConsumerReadError as e:
+            return e
+
+    if not keys:
+        return {}
+    if not resolved:
+        # the "not found" message of a single read, once, before any run
+        _run(None, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build", [], None)
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        results = list(pool.map(one, keys))
+    out: "dict[str, list[Any]]" = {}
+    for path, res in zip(keys, results):
+        if isinstance(res, ConsumerReadError):
+            if keep_refusals and _is_refusal(res):
+                out[path] = res
+                continue
+            raise ConsumerReadError(f"{path}: {res}", res.stderr_lines) from res
+        out[path] = res
+    return out
+
+
+def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
+                                   keep_refusals: bool = False
+                                   ) -> "list[list[Any] | ConsumerReadError]":
+    """``kubernetes_text_documents`` for every text in *texts*, in order, a
+    few runs at a time. Errors as :func:`kubernetes_documents_of` (by
+    position instead of path)."""
+    items = list(texts)
+    if not items:
+        return []
+    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
+    if not resolved:
+        _run(None, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build", [], None)
+
+    def one(text: str | bytes) -> "list[Any] | ConsumerReadError":
+        try:
+            return kubernetes_text_documents(text, binary=resolved)
+        except ConsumerReadError as e:
+            return e
+
+    with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
+        results = list(pool.map(one, items))
+    for i, res in enumerate(results):
+        if isinstance(res, ConsumerReadError) and not (
+                keep_refusals and _is_refusal(res)):
+            raise ConsumerReadError(f"text #{i + 1}: {res}", res.stderr_lines) from res
+    return results
+
+
+def _is_refusal(e: ConsumerReadError) -> bool:
+    """da-crdecode ran and refused the input, its reason on stderr."""
+    return bool(e.stderr_lines) and str(e).startswith(f"{CRDECODE_BINARY_NAME} exited")
 
 
 def alertmanager_config(text: str | bytes, binary: str | None = None) -> dict:

@@ -297,7 +297,7 @@ def _source_line(path: str, name: str) -> str:
 
 def read_limits(chart: str, values: "list[str]") -> dict:
     """The generator container's judgement limits, as the chart renders them."""
-    import yaml  # rendered Kubernetes manifests, not conf.d
+    import _lib_consumer_read  # ADR-036 §12: the rendered manifests, read kubectl's way
     if shutil.which("helm") is None:
         raise NotMeasured("helm is not on PATH: the limits are read from the rendered chart")
     cmd = ["helm", "template", "m", chart]
@@ -307,8 +307,13 @@ def read_limits(chart: str, values: "list[str]") -> dict:
     if proc.returncode != 0:
         raise NotMeasured(f"helm template exited {proc.returncode}: "
                           f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+    try:
+        rendered = _lib_consumer_read.kubernetes_text_documents(proc.stdout)
+    except _lib_consumer_read.ConsumerReadError as e:
+        raise NotMeasured("the rendered chart could not be read the way kubectl reads it: "
+                          + " | ".join([str(e), *e.stderr_lines])) from e
     container = None
-    for doc in yaml.safe_load_all(proc.stdout):
+    for doc in rendered:
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
         for c in doc["spec"]["template"]["spec"].get("containers", []):

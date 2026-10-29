@@ -253,11 +253,35 @@ def test_debt_lists_by_reading() -> None:
         assert all(DEBT[k][1] is cls for k in keys)
 
 
-def test_no_prometheus_config_reader_is_left() -> None:
-    """Class B is done (#3206): every reader of a `prometheus.yml` asks
-    `da-read prometheus` (`_lib_consumer_read.prometheus_config`). A new
-    PyYAML reader of one is not filed as DEBT — it asks the consumer."""
-    assert debt_by_class()[Reading.B] == []
+#: The readings whose migration is done: no DEBT row may move to them again.
+#: A later step adds its letter here when its last row goes (it is a set so two
+#: steps landing in either order merge by union). B: every reader of a
+#: `prometheus.yml` asks `da-read prometheus`; C: every reader of an
+#: Alertmanager config asks `da-read alertmanager`.
+CLEARED: "frozenset[Reading]" = frozenset({Reading.B, Reading.C})
+#: A class not cleared yet but down to these rows only — the rows an owner
+#: decision holds back. Empty for a class once it moves to CLEARED.
+REMAINING: "dict[Reading, frozenset[tuple[str, str]]]" = {
+    # Helm templates with their Go actions stripped, then read: the method is
+    # the owner's call (#3206 12d-3); da-crdecode has no reading of a template.
+    Reading.D: frozenset({
+        ("scripts/tools/lint/check_image_pin_capability.py", "_StrictLoader"),
+        ("scripts/tools/lint/check_image_pin_capability.py", "load_all_strict"),
+        ("scripts/tools/lint/check_image_pin_capability.py", "load_strict"),
+    }),
+}
+
+
+def test_cleared_readings_have_no_debt() -> None:
+    """ADR-036 §12 step 12: a reading whose migration is done keeps no DEBT
+    row, and a class held back by an owner decision keeps only those rows."""
+    by = debt_by_class()
+    left = {cls.name: by[cls] for cls in CLEARED if by[cls]}
+    assert not left, f"DEBT rows in a cleared reading: {left}"
+    for cls, allowed in REMAINING.items():
+        extra = sorted(set(by[cls]) - allowed)
+        assert not extra, f"DEBT {cls.name} rows beyond the held-back ones: {extra}"
+    assert not CLEARED & set(REMAINING), "a cleared reading cannot hold rows back"
 
 
 # ── the detector (synthetic sources, no repo file) ───────────────────

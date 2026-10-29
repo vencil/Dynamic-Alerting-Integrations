@@ -121,15 +121,21 @@ class TestRenderOutput:
 # them (emptying an inline parametrize list was measured to be free). `cause` is
 # the substring that branch must contribute: the three raise branches were
 # interchangeable until each had to name its own.
+# #3206: --base-config is read by Alertmanager's own loader (da-read), so the
+# cause each shape names is the loader's words.
 _NOT_A_MAPPING_SHAPES = [
-    ("empty", b"", "NoneType"),
-    ("comment_only", b"# nothing but a comment\n", "NoneType"),
-    ("scalar", b"just a string\n", "str"),
-    ("sequence", b"- a\n- b\n", "list"),
-    ("invalid_yaml", b"global: [unclosed\n  bad: : :\n", "not valid YAML"),
+    ("empty", b"", "no route provided in config"),
+    ("comment_only", b"# nothing but a comment\n", "no route provided in config"),
+    ("scalar", b"just a string\n", "cannot unmarshal !!str"),
+    ("sequence", b"- a\n- b\n", "cannot unmarshal !!seq"),
+    ("invalid_yaml", b"global: [unclosed\n  bad: : :\n", "did not find expected"),
     ("not_utf8", "global:\n  smtp_smarthost: 中文\n".encode("cp950"),
      "not valid UTF-8"),
 ]
+
+
+#: The least Alertmanager's loader accepts (#3206): a route and the receiver it names.
+_MIN_AM = {"route": {"receiver": "r"}, "receivers": [{"name": "r"}]}
 
 
 class TestLoadBaseConfig:
@@ -280,20 +286,23 @@ class TestLoadBaseConfig:
         a["route"]["receiver"] = "POISON"
         # and via the partial-file fill branch, which is a second copy site
         p = tmp_path / "partial.yaml"
-        p.write_text("global: {}\n", encoding="utf-8")
+        p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
         b = load_base_config(str(p))
-        b["receivers"].append({"name": "POISON2"})
+        b["global"]["POISON2"] = True
+        b["inhibit_rules"].append({"POISON2": True})
         assert render._DEFAULT_BASE_CONFIG == before, (
             "load_base_config handed out objects that alias the module default")
-        assert not any(r.get("name", "").startswith("POISON")
-                       for r in load_base_config(None)["receivers"])
+        fresh = load_base_config(None)
+        assert not any(r.get("name", "").startswith("POISON") for r in fresh["receivers"])
+        assert "POISON2" not in fresh["global"]
+        assert {"POISON2": True} not in fresh["inhibit_rules"]
 
     def test_control_a_well_formed_base_config_still_loads(self, tmp_path):
         """⛔ Without this, every assertion above is satisfied by a
         `load_base_config` that raises on everything."""
         p = tmp_path / "base.yaml"
         p.write_text(
-            yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+            yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
             encoding="utf-8")
         base = load_base_config(str(p))
         assert base["global"]["smtp_smarthost"] == "mail.example:587"
@@ -342,14 +351,49 @@ class TestLoadBaseConfig:
         assert base["route"]["receiver"] == "custom-default"
 
     def test_partial_file_fills_defaults(self, tmp_path):
-        """File with missing keys gets defaults filled in."""
-        config = {"global": {"resolve_timeout": "3m"}}
+        """A config without `global` / `inhibit_rules` gets them filled in."""
         p = tmp_path / "partial.yaml"
-        p.write_text(yaml.dump(config), encoding="utf-8")
+        p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
         base = load_base_config(str(p))
-        assert base["global"]["resolve_timeout"] == "3m"
-        assert "route" in base
-        assert "receivers" in base
+        assert base["route"] == {"receiver": "r"}
+        import _grar_render as render
+        assert base["global"] == render._DEFAULT_BASE_CONFIG["global"]
+        assert base["inhibit_rules"] == render._DEFAULT_BASE_CONFIG["inhibit_rules"]
+
+    def test_a_file_without_route_is_refused_by_alertmanagers_loader(self, tmp_path):
+        """#3206 (breaking): a base without `route` used to be filled with the
+        built-in route; Alertmanager's loader refuses such a config, and so
+        does --base-config now — in the loader's words, rc 2."""
+        p = tmp_path / "partial.yaml"
+        p.write_text(yaml.dump({"global": {"resolve_timeout": "3m"}}), encoding="utf-8")
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(p))
+        assert "Alertmanager's config loader refuses" in str(exc.value)
+        assert "no route" in str(exc.value)
+
+    def test_values_are_alertmanagers_reading(self, tmp_path):
+        """#3206: a value is what Alertmanager's loader makes of it — a
+        duration in its spelling, `.nan` a label value string (PyYAML: a
+        float) — not the text's YAML 1.1 reading."""
+        p = tmp_path / "base.yaml"
+        p.write_text("global: {resolve_timeout: 300s}\n"
+                     "route: {receiver: r, group_wait: 90s}\nreceivers: [{name: r}]\n"
+                     "inhibit_rules:\n- source_match: {v: .nan}\n  target_match: {s: x}\n",
+                     encoding="utf-8")
+        base = load_base_config(str(p))
+        assert base["global"]["resolve_timeout"] == "5m"
+        assert base["route"]["group_wait"] == "1m30s"
+        assert base["inhibit_rules"][0]["source_match"] == {"v": ".nan"}
+
+    def test_no_da_read_is_a_caller_error_not_a_pyyaml_reading(self, tmp_path, monkeypatch):
+        """#3206: without da-read there is no reading of the base: rc 2,
+        naming the binary — never PyYAML's reading in its place."""
+        monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
+        p = tmp_path / "base.yaml"
+        p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config(str(p))
+        assert "the way Alertmanager does" in str(exc.value)
 
 
 # ============================================================
@@ -572,14 +616,15 @@ class TestOutputAndClusterExitCodes:
     _APPLY_FAILURES = [
         ("no_key", json.dumps({"data": {"other": "x"}}),
          "no 'alertmanager.yml' key"),
+        # #3206: read by Alertmanager's loader (da-read) — its words.
         ("comment_only", json.dumps({"data": {"alertmanager.yml": "# nothing\n"}}),
-         "parses to NoneType"),
+         "no route provided in config"),
         ("whitespace_only", json.dumps({"data": {"alertmanager.yml": "   \n"}}),
-         "parses to NoneType"),
+         "no route provided in config"),
         ("not_a_mapping", json.dumps({"data": {"alertmanager.yml": "- a\n- b\n"}}),
-         "parses to list"),
+         "cannot unmarshal !!seq"),
         ("bad_yaml", json.dumps({"data": {"alertmanager.yml": "a: [unclosed\n"}}),
-         "not valid YAML"),
+         "did not find expected"),
         ("not_json", "this is not json", "not JSON"),
         ("json_null", "null", "not an object"),
         ("json_list", "[1, 2]", "not an object"),
@@ -613,7 +658,7 @@ class TestOutputAndClusterExitCodes:
         ("leaf_empty_list", json.dumps({"data": {"alertmanager.yml": []}}),
          "'alertmanager.yml' is list"),
         ("leaf_empty_string", json.dumps({"data": {"alertmanager.yml": ""}}),
-         "parses to NoneType"),
+         "no route provided in config"),
     ]
 
     @pytest.mark.parametrize("case,stdout,expected", _APPLY_FAILURES,
@@ -867,7 +912,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
 
     def test_control_the_mode_that_reads_it_still_works(self, _tenant_dir, tmp_path):
         p = tmp_path / "base.yaml"
-        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
                      encoding="utf-8")
         r = _gar(["--config-dir", str(_tenant_dir), "--output-configmap",
                   "--base-config", str(p)])
@@ -915,7 +960,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
             "thresholds:\n  mysql_connections:\n    warning: 100\n",
             encoding="utf-8")
         good = tmp_path / "base.yaml"
-        good.write_text(yaml.dump({"global": {"resolve_timeout": "9m"}}),
+        good.write_text(yaml.dump({"global": {"resolve_timeout": "9m"}, **_MIN_AM}),
                         encoding="utf-8")
         r = _gar(["--config-dir", str(conf_d), "--output-configmap",
                   "--base-config", str(good)])
@@ -982,7 +1027,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
         following the advice fixes the problem. So follow it once, and check the
         base config is HONOURED, not merely that the run stops complaining."""
         p = tmp_path / "base.yaml"
-        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
                      encoding="utf-8")
         r = _gar(["--config-dir", str(_tenant_dir), "--output-configmap",
                   "--base-config", str(p)])
@@ -995,7 +1040,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
     def test_supplying_it_where_it_is_ignored_is_a_caller_error(
             self, _tenant_dir, tmp_path, mode):
         p = tmp_path / "base.yaml"
-        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}}),
+        p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
                      encoding="utf-8")
         mode_id, argv = mode
         r = _gar(["--config-dir", str(_tenant_dir), *argv,
@@ -3178,8 +3223,13 @@ class TestApplyToConfigmap:
     def _mock_subprocess(self, monkeypatch, kubectl_get_stdout, kubectl_get_rc=0,
                          kubectl_create_rc=0, kubectl_apply_rc=0, curl_rc=0):
         calls = []
+        real_run = subprocess.run
 
         def mock_run(cmd, **kwargs):
+            # #3206: da-read / da-crdecode are the readers, not the cluster —
+            # they run for real.
+            if os.path.basename(str(cmd[0])) in ("da-read", "da-crdecode"):
+                return real_run(cmd, **kwargs)
             calls.append(cmd)
             result = MagicMock()
             result.stderr = ""

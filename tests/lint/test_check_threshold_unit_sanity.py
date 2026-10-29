@@ -210,7 +210,18 @@ def test_non_finite_number_in_platform_data_and_a_rule_pack_stays_out_of_domain(
     _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: .inf\n")
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("OUT-OF-DOMAIN" in e and "platform-data.json" in e and "-inf" in e for e in errs), errs
-    assert any("OUT-OF-DOMAIN" in e and "values.yaml" in e and "inf" in e for e in errs), errs
+    # #3206: the values file is read the way Helm reads it (da-crdecode), and
+    # Helm refuses `.inf` (JSON has no infinity) — the file Helm cannot read
+    # is another gate's job, as unparseable YAML always was here.
+    assert not any("values.yaml" in e for e in errs), errs
+
+
+def test_a_values_file_is_read_as_helm_reads_it(tmp_path):
+    """#3206: control for the test above — a values file Helm reads (through
+    da-crdecode) is still judged: an out-of-domain number in it is reported."""
+    _write(tmp_path, "helm/threshold-exporter/values.yaml", "thresholds:\n  pct: -5\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("OUT-OF-DOMAIN" in e and "values.yaml" in e and "pct = -5" in e for e in errs), errs
 
 
 def test_dimensional_key_resolves_to_its_base(tmp_path):

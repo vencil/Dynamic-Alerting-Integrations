@@ -94,7 +94,9 @@ jobs:
         with:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
 
       - name: Build da-guard
         run: |
@@ -105,6 +107,15 @@ jobs:
               -o "$RUNNER_TEMP/da-guard" \
               ./cmd/da-guard
           "$RUNNER_TEMP/da-guard" --version
+
+      # #3206 (ADR-036 §12): the routes view reads the generator's ConfigMap
+      # the way kubectl does (da-crdecode) and its alertmanager.yml the way
+      # Alertmanager loads it (da-read alertmanager).
+      - name: Build da-crdecode and da-read
+        run: |
+          make da-crdecode-build da-read-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v6

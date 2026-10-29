@@ -174,3 +174,34 @@ def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> 
                                       "--root", str(tmp_path), "--timeout", "7"])
     assert _cir.main() == 0
     assert seen == [7] and type(seen[0]) is int
+
+
+# ── #3206 (ADR-036 §12): the sources are read as kubectl / Helm read them ──
+def test_a_file_kubectls_reading_refuses_stops_the_run(tmp_path: Path) -> None:
+    """It used to be a `::warning::` and a skip — a clean-looking run that
+    checked less. Now exit 2, naming the file."""
+    _write(tmp_path / "helm/a/values.yaml", 'image:\n  repository: foo/bar\n  tag: "1.0"\n')
+    _write(tmp_path / "k8s/bad.yaml", "--- kind: x\n")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "bad.yaml" in proc.stderr and "the way kubectl does" in proc.stderr
+
+
+def test_a_tag_is_kubectls_reading_of_it(tmp_path: Path) -> None:
+    """An unquoted `tag: 1.10` is the number 1.1 to Helm (and was to PyYAML),
+    so it is no usable tag; a quoted one is the text."""
+    _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: foo/bar\n  tag: 1.10\n")
+    _write(tmp_path / "helm/b/values.yaml", 'image:\n  repository: foo/baz\n  tag: "1.10"\n')
+    assert _list_refs(tmp_path) == {"foo/baz:1.10"}
+
+
+def test_no_da_crdecode_is_exit_2_not_a_pyyaml_reading(tmp_path: Path) -> None:
+    import os
+    _write(tmp_path / "helm/a/values.yaml", 'image:\n  repository: foo/bar\n  tag: "1.0"\n')
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--list"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        env={**os.environ, "DA_CRDECODE_BINARY": str(tmp_path / "no-such-da-crdecode")})
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)

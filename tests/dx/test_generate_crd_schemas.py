@@ -122,13 +122,12 @@ def test_the_crd_reader_still_accepts_the_value_tag() -> None:
 
 
 def test_the_crd_reader_cannot_construct_python_objects() -> None:
-    """The ONLY guard on `_load_crd_docs`'s safety: it drives a SafeLoader
-    subclass by hand, which is outside bandit B506's predicate. The control
-    beside it is `test_the_crd_reader_still_accepts_the_value_tag`."""
-    yaml = pytest.importorskip("yaml")
+    """#3206: the CRD is read the way kubectl reads it (da-crdecode, JSON
+    out), so a Python tag constructs nothing — the reading is plain data. The
+    control beside it is `test_the_crd_reader_still_accepts_the_value_tag`."""
     payload = "!!python/object/apply:os.system ['true']\n"
-    with pytest.raises(yaml.constructor.ConstructorError):
-        list(MODULE._load_crd_docs(payload))
+    docs = MODULE._load_crd_docs(payload)
+    assert docs == [["true"]]
 
 
 def test_importing_the_tool_leaves_the_global_safe_loader_alone() -> None:

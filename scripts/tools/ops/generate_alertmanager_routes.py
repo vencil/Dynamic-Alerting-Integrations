@@ -150,6 +150,10 @@ from _grar_render import (  # noqa: E402
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
 from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
+# #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
+from _grar_render import (  # noqa: E402
+    ConsumerReadError, alertmanager_reading, consumer_read_message, emitted_alertmanager_yml,
+)
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the whole --validate verdict, shared with validate-config's routes
@@ -183,7 +187,6 @@ from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # #2901 (ADR-036 §6): the policy's min_generator_version, read in the same
 # parse as allowed_domains, and the comparison the generator container shares.
 from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
-import yaml  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 
 
@@ -436,15 +439,37 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # value got folded into a line break, so only a round trip of the emitted
     # text sees what the cluster will see. Gated before every emission
     # (file, stdout, dry-run preview): a rejected config is not written.
-    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    # ADR-036 §12 (#3206): the round trip is Kubernetes' reading of the
+    # emitted text (da-crdecode), the config Alertmanager's (da-read).
+    try:
+        am_yml = emitted_alertmanager_yml(cm_yaml)
+    except ConsumerReadError as exc:
+        print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
+              f"to write it to {target} (nothing was written): "
+              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     rc = amtool_gate(am_yml,
                      what="the ConfigMap's alertmanager.yml",
                      refusing=f"write it to {target} (nothing was written)")
     if rc is not None:
         sys.exit(rc)
     # #2660: on the same emitted text amtool checked, so a --base-config's
-    # own root receiver is what is judged, not the built-in one.
-    warn_if_root_receiver_without_integration(yaml.safe_load(am_yml))
+    # own root receiver is what is judged, not the built-in one. Alertmanager's
+    # loader refusing it (amtool absent, so nothing refused it yet) is the
+    # verdict amtool would give: rc 1, nothing written.
+    try:
+        emitted = alertmanager_reading(am_yml)
+    except ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            print(f"ERROR: cannot read the ConfigMap's alertmanager.yml the way "
+                  f"Alertmanager does — refusing to write it to {target} (nothing was "
+                  f"written): {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        print(f"FAIL: Alertmanager's config loader refuses the ConfigMap's alertmanager.yml "
+              f"— refusing to write it to {target} (nothing was written): "
+              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    warn_if_root_receiver_without_integration(emitted)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)

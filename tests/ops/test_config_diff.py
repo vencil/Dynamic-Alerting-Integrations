@@ -742,7 +742,8 @@ class TestAcceptance:
         doc = _json(_run_cli(old, new, "--format", "json"))
         assert doc["exit_code"] == 1
         assert doc["route_changes"] == [{
-            "change": "changed", "fields": {"group_wait": {"old": "30s", "new": "99s"}},
+            # #3206: Alertmanager's reading — 99s is its spelling 1m39s
+            "change": "changed", "fields": {"group_wait": {"old": "30s", "new": "1m39s"}},
             "tenants": ["db-a", "es-prod"], "paths": [['tenant="db-a"'], ['tenant="es-prod"']]}]
         assert doc["threshold_changes"] == [] and doc["uncovered_files"] == []
         assert [(r["file"], r["key"], r["status"]) for r in doc["platform_settings"]] == [

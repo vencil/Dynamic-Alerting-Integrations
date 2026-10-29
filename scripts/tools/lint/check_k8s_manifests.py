@@ -83,6 +83,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests read kubectl's way)
 from check_iac_helm import (  # noqa: E402
     KUBE_LINTER_IMAGE,
     SKIP_DIR_PARTS,
@@ -199,29 +200,28 @@ def pss_label_findings(doc: object, relpath: str) -> list[str]:
 def collect_pss_findings(files: list[Path] | None = None) -> list[str]:
     """PSS-label findings across raw manifests (default: the L4 file set).
 
-    PyYAML-absent and per-file parse failures degrade to an EXPLICIT note in
-    the returned list (still WARN-routed) — an informational rule must never
-    silently skip, but must also never take the whole L4 run down."""
-    try:
-        import yaml
-    except ImportError:
-        return [
-            "[pss] PyYAML unavailable — namespace PSS-label rule (#1018) "
-            "skipped (pip install pyyaml; CI installs it)"]
+    Each file is read the way kubectl reads it (`da-crdecode`, ADR-036 §12,
+    #3206). A file that reading refuses degrades to an EXPLICIT note in the
+    returned list (still WARN-routed) — an informational rule must never
+    silently skip, but must also never take the whole L4 run down. No
+    da-crdecode at all is not a note: it raises ConsumerReadError, which the
+    caller reports as a caller error (no reading, no rule — and no PyYAML
+    reading in its place)."""
     if files is None:
         files = find_manifest_files()
+    read = _lib_consumer_read.kubernetes_documents_of(files, keep_refusals=True)
     out: list[str] = []
     for p in files:
         try:
             rel = p.relative_to(REPO_ROOT).as_posix()
         except ValueError:
             rel = p.name
-        try:
-            docs = list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
-        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+        docs = read[str(p)]
+        if isinstance(docs, _lib_consumer_read.ConsumerReadError):
+            reason = docs.stderr_lines[0] if docs.stderr_lines else str(docs)
             out.append(
-                f"[pss] {rel}: unreadable/unparseable "
-                f"({e.__class__.__name__}) — PSS-label rule skipped this file")
+                f"[pss] {rel}: kubectl's reading refuses it ({reason}) — "
+                "PSS-label rule skipped this file")
             continue
         for doc in docs:
             out.extend(pss_label_findings(doc, rel))
@@ -294,7 +294,12 @@ def collect_findings(strict: bool) -> dict[str, list[str]]:
     # PSS namespace-label rule (#1018): engine-independent, so it runs BEFORE
     # (and regardless of) kube-linter availability. WARN-only by design —
     # soak-stage discipline, never blocks (--ci exit unaffected).
-    findings["WARN"].extend(collect_pss_findings())
+    try:
+        findings["WARN"].extend(collect_pss_findings())
+    except _lib_consumer_read.ConsumerReadError as exc:
+        findings["CALLER_ERROR"].append(
+            f"[pss] cannot read the manifests the way kubectl does: {exc}")
+        findings["__caller_error__"] = ["1"]
 
     if not engine_available():
         msg = ("kube-linter required but unavailable "

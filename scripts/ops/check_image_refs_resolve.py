@@ -9,8 +9,10 @@ ones in `values.yaml`, so a values typo (or matrix↔values drift) slips through
 This lint closes that gap — it parses the actual deployment sources and checks
 each concrete ref against the registry.
 
-Parsing (NOT grep — comments/prose would yield phantom refs): yaml.safe_load each
-file and walk the tree, collecting
+Parsing (NOT grep — comments/prose would yield phantom refs): each file is read
+the way kubectl / Helm read it (`da-crdecode`, ADR-036 §12, #3206; a file either
+refuses stops the run at rc 2 — it is never skipped) and the tree is walked,
+collecting
   * any mapping with string `repository` + non-empty `tag` -> "<registry>/<repo>:<tag>"
   * any `image:` key whose value is a "repo:tag" string
 Empty / templated ({{ ... }}) tags are SKIPPED: first-party `tag: ""` resolves to
@@ -55,11 +57,23 @@ from pathlib import Path
 # bad", and a reader of a CI log must be able to tell those apart.
 EXIT_NO_RESOLVER = 3
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover - pyyaml is a hard dep in CI / pre-commit
-    print("check_image_refs_resolve: PyYAML not installed", file=sys.stderr)
-    sys.exit(2)
+
+def _consumer_read():
+    """`scripts/tools/_lib_consumer_read.py` (stdlib only), loaded by file so
+    this module adds nothing to `sys.path` (see `_positive_timeout`)."""
+    import importlib.util
+    name = "_cir_lib_consumer_read"
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().parents[1] / "tools" / "_lib_consumer_read.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check_image_refs_resolve: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
 
 # Globs of the deployment sources humans hand-edit image refs into.
 # ⛔ `values*.yaml`, not `values.yaml` (#1302). A `-f values-tier2.yaml` overlay is
@@ -381,17 +395,25 @@ def _keep(r: str) -> bool:
 
 
 def _walk_sources(root: Path, dropped: set[str] | None = None) -> set[str]:
+    """Refs in every SOURCE_GLOBS file, each read as kubectl / Helm read it
+    (`da-crdecode`, ADR-036 §12). A file that cannot be read that way — or no
+    da-crdecode — ends the run at rc 2: a skipped file is a clean-looking run
+    that checked less (it used to be a `::warning::` and a skip)."""
+    cr = _consumer_read()
+    paths = [path for pattern in SOURCE_GLOBS for path in sorted(root.glob(pattern))]
+    try:
+        read = cr.kubernetes_documents_of(paths)
+    except cr.ConsumerReadError as exc:
+        print(f"check_image_refs_resolve: cannot read a deployment source the way kubectl "
+              f"does: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        raise SystemExit(2) from exc
     refs: set[str] = set()
-    for pattern in SOURCE_GLOBS:
-        for path in sorted(root.glob(pattern)):
-            try:
-                docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
-            except yaml.YAMLError as exc:
-                print(f"::warning:: skipping unparseable {path}: {exc}", file=sys.stderr)
-                continue
-            for doc in docs:
-                if doc is not None:
-                    refs |= _refs_from_node(doc, dropped)
+    for docs in read.values():
+        for doc in docs:
+            if doc is not None:
+                refs |= _refs_from_node(doc, dropped)
     return refs
 
 

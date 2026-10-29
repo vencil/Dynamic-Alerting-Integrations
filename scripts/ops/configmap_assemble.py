@@ -79,11 +79,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
-
 _THIS_DIR = Path(__file__).resolve().parent
 _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: kubectl's own manifest, read kubectl's way)
 import _lib_io  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
@@ -186,7 +185,7 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     asked for, or a value whose length is not the file's.
 
     ⚠️ It does NOT compare the value BYTES, only their count: that would
-    assert a YAML round-trip through kubectl's emitter and this loader is
+    assert a YAML round-trip through kubectl's emitter and kubectl's reading is
     the identity — and it is NOT. A length mismatch therefore has a second cause
     with nothing to do with the path; `main` names both.
 
@@ -196,12 +195,21 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
     written: "could not measure" wearing rc 1, the same code a measured
     disagreement uses.
     """
+    # ADR-036 §12 (#3206): the manifest as `kubectl apply` will read it
+    # (da-crdecode on stdin), not PyYAML. A refusal by that reading is a
+    # disagreement (the artifact would not apply as this tree); no
+    # da-crdecode raises ConsumerReadError with no stderr — "could not
+    # measure", which `main` reports at rc 2.
     try:
-        doc = _lib_io.safe_load(manifest)
-    except yaml.YAMLError as exc:
-        return [f"kubectl's output is not parseable YAML: {exc}"], {}
-    if not isinstance(doc, dict):
-        return ["kubectl's output is not a YAML mapping"], {}
+        docs = _lib_consumer_read.kubernetes_text_documents(manifest)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            raise
+        return [f"kubectl's own reading refuses its output: {exc}: "
+                + " | ".join(exc.stderr_lines)], {}
+    if len(docs) != 1 or not isinstance(docs[0], dict):
+        return [f"kubectl's output is {len(docs)} document(s), expected one ConfigMap"], {}
+    doc = docs[0]
 
     data = doc.get("data") or {}
     binary = doc.get("binaryData") or {}
@@ -423,7 +431,12 @@ def main(argv: list[str] | None = None) -> int:
     # ⛔ Read back the manifest we are ABOUT to write (`write_repo_artifact` is
     # further down, and never runs if this disagrees). Everything above this
     # line is an intention; this is the only place the artifact answers.
-    disagreements, measured = measure_artifact(proc.stdout, carriers)
+    try:
+        disagreements, measured = measure_artifact(proc.stdout, carriers)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: cannot read kubectl's manifest the way kubectl does, so it was "
+              f"not measured and nothing was written: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if disagreements:
         print(
             f"ERROR: the manifest `kubectl` produced does not match the "
@@ -448,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
             f"       2) CONTENT layer — the key set is right and only a "
             f"LENGTH differs. Then the path is innocent and moving the tree "
             f"changes nothing: the value did not survive kubectl's YAML "
-            f"emitter and this loader byte for byte.\n"
+            f"emitter and kubectl's own reading byte for byte.\n"
             f"       -> diff the manifest's value against the file itself, "
             f"not the path: `kubectl create configmap ... --dry-run=client "
             f"-o yaml` and compare that key's value with the carrier.",

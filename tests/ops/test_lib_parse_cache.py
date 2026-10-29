@@ -63,15 +63,10 @@ _YAML_ONLY = {"safe_load", "safe_load_all", "load", "load_all", "compose", "comp
 # (file, enclosing function) of the PyYAML calls that read something other
 # than a conf.d file — each one named with what it reads.
 NOT_CONFD = {
-    # the generated Alertmanager config / ConfigMap (this run's own output)
-    ("_grar_render.py", "evaluate_generated_config"),
-    ("_grar_render.py", "apply_to_configmap"),
-    ("generate_alertmanager_routes.py", "_output_configmap_mode"),
-    # --apply: the ConfigMap read back from the cluster (kubectl)
-    ("_grar_render.py", "_read_existing_configmap"),
-    # --base-config / --policy: operator files outside conf.d (ADR-036 §3:
-    # the deployment policy is read fresh for every judgement)
-    ("_grar_render.py", "load_base_config"),
+    # (#3206: the generated ConfigMap, the cluster's, and --base-config are
+    # read by da-crdecode / da-read now — no PyYAML call left for them.)
+    # --policy: an operator file outside conf.d (ADR-036 §3: the deployment
+    # policy is read fresh for every judgement)
     ("_grar_validate.py", "load_policy_document"),
     # the platform rules pack shipped beside the tool
     ("_grar_validate.py", "platform_alert_identities"),

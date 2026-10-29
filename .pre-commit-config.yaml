@@ -220,7 +220,9 @@ repos:
       #   pre-commit run k8s-manifests-sast-check --hook-stage manual --all-files
       - id: k8s-manifests-sast-check
         name: "Container SAST L4: raw k8s manifests (kube-linter + Vibe wrapper)"
-        entry: python3 -X utf8 scripts/tools/lint/check_k8s_manifests.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_k8s_manifests.py --ci
         # language: python (not system) — `system` would hit the MS Store
         # python3 shim on Windows hosts (windows-mcp-playbook trap #63).
         language: python
@@ -229,7 +231,7 @@ repos:
         # WARN, but the hook venv should carry it so the rule actually runs.
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: '^k8s/.*\.ya?ml$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_(k8s_manifests|iac_helm)\.py$'
+        files: '^k8s/.*\.ya?ml$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_(k8s_manifests|iac_helm)\.py$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
         stages: [manual]
 
       # --- Fast drift checks (< 5s each) ---
@@ -320,12 +322,14 @@ repos:
         # alerts). Now generated from the projected volume + rule sources.
         # `files:` covers BOTH the source YAML and the docs themselves, so a hand
         # edit to the generated table is rejected too, not just source drift.
-        entry: python3 -X utf8 scripts/tools/dx/generate_byo_rulepack_table.py --check --lang all
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/dx/generate_byo_rulepack_table.py --check --lang all
         language: python
         pass_filenames: false
         # 也涵蓋生成器本身：只改 render 邏輯（例如欄位格式）而不碰來源時，
         # 若 hook 不觸發，committed 表格就會與新實作不一致（外審抓到）。
-        files: ^(rule-packs/|k8s/03-monitoring/.*\.yaml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py)
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/|k8s/03-monitoring/.*\.yaml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py)
         additional_dependencies: ['pyyaml']
 
       - id: alert-reference-check
@@ -552,7 +556,9 @@ repos:
         # .build/da-guard (`make da-guard-build`); without go that build fails
         # by name and so does this hook. No other fallback: a run without
         # da-guard must not pass.
-        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
         language: python
         pass_filenames: false
         # ⛔ The last entry is the portal's OFFLINE fallback, which this tool now
@@ -565,7 +571,7 @@ repos:
         # alone must reach this hook too, and so must a change to how the
         # exporter resolves that tree (the whole Go module: served-values reads
         # what the collector's scrape resolved) or how da-guard is dispatched.
-        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check
@@ -1113,10 +1119,12 @@ repos:
       # crd-schemas`, deliberately NOT a hook.
       - id: md-yaml-crd-check
         name: Markdown embedded k8s objects ↔ real CRD schema
-        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
         language: python
         pass_filenames: false
-        files: ^(docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e
@@ -1194,11 +1202,13 @@ repos:
 
       - id: single-writer-invariant
         name: "ADR-023: tenant-api write plane must stay single-writer (replicaCount=1 + strategy Recreate)"
-        entry: python3 -X utf8 scripts/tools/lint/check_single_writer_invariant.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_single_writer_invariant.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
         # FATAL: the write plane (internal/gitops/Writer) is a single writer —
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
@@ -1208,11 +1218,13 @@ repos:
 
       - id: cross-ns-url-check
         name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns, recipe-preview → monitoring)"
-        entry: python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
         # FATAL: past drift shipped charts/docs pinning `tenant-api.monitoring.
         # svc…` while raw manifests deployed tenant-api into its dedicated
         # `tenant-api` ns, and recipe-preview called bare `http://tenant-api:8080`
@@ -1285,11 +1297,13 @@ repos:
 
       - id: configmap-mount-completeness
         name: "Every configmap-rules-* must be mounted in Prometheus projected volume (#869 dead-rule guard)"
-        entry: python3 -X utf8 scripts/tools/lint/check_configmap_mount_completeness.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_configmap_mount_completeness.py --ci
         language: python
         pass_filenames: false
         additional_dependencies: ['pyyaml']
-        files: ^k8s/03-monitoring/(configmap-rules-.*\.yaml|deployment-prometheus\.yaml)$
+        files: '^k8s/03-monitoring/(configmap-rules-.*\.yaml|deployment-prometheus\.yaml)$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
 
       - id: rulepack-configmap-drift
         name: "ADR-024: configmap-rules-*.yaml must match rule-packs/ source (Commit 4 hard gate)"
@@ -1492,11 +1506,13 @@ repos:
 
       - id: ksm-version-allowlist
         name: "ADR-024: kube-state-metrics must allowlist app.kubernetes.io/version (test/rulepack-e2e)"
-        entry: python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_ksm_version_allowlist.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^k8s/.*kube-state-metrics.*\.ya?ml$
+        files: '^k8s/.*kube-state-metrics.*\.ya?ml$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
         # The kubernetes rule pack's (0a) version join needs
         # kube_pod_labels{label_app_kubernetes_io_version}, which KSM emits only
         # with --metric-labels-allowlist=pods=[app.kubernetes.io/version]. Static
@@ -1535,7 +1551,9 @@ repos:
         name: "threshold key reachability — every alert-demanded key must be producible by platform defaults (TRK-337)"
         # #2906: the tracked defaults artifacts are read through `da-guard
         # parse-tree` (with_da_guard.sh builds one; the Go module changes the answer).
-        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_threshold_reachability.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_threshold_reachability.py --ci
         language: python
         # jsonschema joins pyyaml for the #1443 schema witness (the same pairing
         # threshold-registry-check already carries). The gate imports it INSIDE
@@ -1607,7 +1625,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|parse_cache|parse_tree|prometheus|python|validation|write_check|yaml_keys)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|parse_cache|parse_tree|prometheus|python|validation|write_check|yaml_keys)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
@@ -1635,7 +1653,9 @@ repos:
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
         # #2906: its conf.d trees are read through `da-guard parse-tree` (with_da_guard.sh).
-        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
+        # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
+        # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
@@ -1650,7 +1670,7 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_(cache|tree)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_(cache|tree)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"

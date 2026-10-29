@@ -101,6 +101,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+# ADR-036 §12 (#3206): values files and manifests, read Helm's / kubectl's way.
+import _lib_consumer_read  # noqa: E402
 
 SKIP_DIR_PARTS = {".claude", ".git", "node_modules", ".venv", "venv"}
 
@@ -340,14 +342,14 @@ def _find_line(text: str, fragment: str) -> Optional[int]:
     return None
 
 
-def _scan_yaml_docs(path: Path, rel: str, context_for_doc,
-                    apply_bare: bool) -> List[Finding]:
-    """Scan every YAML doc's string scalars. `context_for_doc(doc)` supplies
+def _scan_docs(text: str, docs: list, rel: str, context_for_doc,
+               apply_bare: bool) -> List[Finding]:
+    """Scan every document's string scalars. `context_for_doc(doc)` supplies
     the R2 namespace context per document (fixed for values files, per-doc
-    metadata.namespace for raw k8s manifests)."""
-    text = path.read_text(encoding="utf-8")
+    metadata.namespace for raw k8s manifests); *text* is the file, for the
+    line a fragment sits on."""
     findings: List[Finding] = []
-    for doc in yaml.safe_load_all(text):
+    for doc in docs:
         if doc is None:
             continue
         ctx = context_for_doc(doc)
@@ -358,23 +360,38 @@ def _scan_yaml_docs(path: Path, rel: str, context_for_doc,
     return findings
 
 
-def scan_helm_values(path: Path, rel: str, chart: str) -> List[Finding]:
+def _kubernetes_docs(path: Path, docs: Optional[list]) -> list:
+    """*docs* when the caller already read *path*, else Kubernetes' / Helm's
+    reading of it (da-crdecode, ADR-036 §12). Raises ConsumerReadError."""
+    if docs is not None:
+        return docs
+    return _lib_consumer_read.kubernetes_documents(str(path))
+
+
+def scan_helm_values(path: Path, rel: str, chart: str,
+                     docs: Optional[list] = None) -> List[Finding]:
     ctx = CHART_CONTEXT_NS.get(chart)  # unmapped chart -> None (conservative)
-    return _scan_yaml_docs(path, rel, lambda _doc: ctx, apply_bare=True)
+    return _scan_docs(path.read_text(encoding="utf-8"), _kubernetes_docs(path, docs),
+                      rel, lambda _doc: ctx, apply_bare=True)
 
 
-def scan_k8s_manifest(path: Path, rel: str) -> List[Finding]:
+def scan_k8s_manifest(path: Path, rel: str, docs: Optional[list] = None) -> List[Finding]:
     def ctx(doc):
         meta = doc.get("metadata") if isinstance(doc, dict) else None
         ns = meta.get("namespace") if isinstance(meta, dict) else None
         return ns if isinstance(ns, str) else None
-    return _scan_yaml_docs(path, rel, ctx, apply_bare=True)
+    return _scan_docs(path.read_text(encoding="utf-8"), _kubernetes_docs(path, docs),
+                      rel, ctx, apply_bare=True)
 
 
 def scan_compose(path: Path, rel: str) -> List[Finding]:
     # R1 only: inside compose's single network every bare service name
     # resolves, so R2 has nothing to say there (module docstring, target 4).
-    return _scan_yaml_docs(path, rel, lambda _doc: None, apply_bare=False)
+    # ⚠️ Still PyYAML: docker compose (compose-go) has no reading da-tools
+    # ships; registered in the reader baseline's ALLOWED with that reason.
+    text = path.read_text(encoding="utf-8")
+    return _scan_docs(text, list(yaml.safe_load_all(text)), rel, lambda _doc: None,
+                      apply_bare=False)
 
 
 def scan_nginx_conf(path: Path, rel: str,
@@ -400,29 +417,35 @@ def match_exemption(rel: str, scalar: str) -> Optional[Tuple[str, str, str]]:
 
 def check_repo(repo: Path) -> Tuple[List[str], List[str], int]:
     """Run all scans. Returns (violation_lines, exempt_info_lines, n_files).
-    Raises yaml.YAMLError on an unparseable target (caller-error in main)."""
+    Raises ConsumerReadError when a values file or manifest cannot be read
+    the way Helm / kubectl read it, yaml.YAMLError on an unparseable compose
+    file (both caller-error in main)."""
     findings: List[Finding] = []
-    n_files = 0
+
+    def _targets(patterns, files_only: bool) -> List[Tuple[Path, str]]:
+        out = []
+        for pattern in patterns:
+            for p in sorted(repo.glob(pattern)):
+                if files_only and not p.is_file():
+                    continue
+                rel = p.relative_to(repo).as_posix()
+                if any(part in SKIP_DIR_PARTS for part in Path(rel).parts):
+                    continue
+                out.append((p, rel))
+        return out
 
     # 1. helm/*/values*.yaml (+ .yml for hook-scope parity, cf. L3)
-    for pattern in ("helm/*/values*.yaml", "helm/*/values*.yml"):
-        for p in sorted(repo.glob(pattern)):
-            rel = p.relative_to(repo).as_posix()
-            if any(part in SKIP_DIR_PARTS for part in Path(rel).parts):
-                continue
-            n_files += 1
-            findings.extend(scan_helm_values(p, rel, chart=p.parent.name))
-
+    values = _targets(("helm/*/values*.yaml", "helm/*/values*.yml"), files_only=False)
     # 2. k8s/**/*.yaml — raw manifests, per-doc metadata.namespace context
-    for pattern in ("k8s/**/*.yaml", "k8s/**/*.yml"):
-        for p in sorted(repo.glob(pattern)):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(repo).as_posix()
-            if any(part in SKIP_DIR_PARTS for part in Path(rel).parts):
-                continue
-            n_files += 1
-            findings.extend(scan_k8s_manifest(p, rel))
+    manifests = _targets(("k8s/**/*.yaml", "k8s/**/*.yml"), files_only=True)
+    # ADR-036 §12 (#3206): read as Helm / kubectl read them (da-crdecode), all
+    # files in one batch so the per-file runs overlap.
+    read = _lib_consumer_read.kubernetes_documents_of(p for p, _ in values + manifests)
+    n_files = len(values) + len(manifests)
+    for p, rel in values:
+        findings.extend(scan_helm_values(p, rel, chart=p.parent.name, docs=read[str(p)]))
+    for p, rel in manifests:
+        findings.extend(scan_k8s_manifest(p, rel, docs=read[str(p)]))
 
     # 3 + 4. fixed targets (existence pre-checked in main)
     nginx = repo / _NGINX_CONF
@@ -498,6 +521,12 @@ def main() -> int:
 
     try:
         violations, infos, n_files = check_repo(repo)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: cannot read a values file or manifest the way Helm / kubectl "
+              f"do: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except yaml.YAMLError as exc:
         print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

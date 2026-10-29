@@ -26,6 +26,13 @@ Functions:
     amtool_gate(...)                      → amtool_check, printed; None = go on,
                                            int = exit code
 
+  Reading Alertmanager configs (ADR-036 §12, #3206) — never PyYAML:
+    emitted_alertmanager_yml(cm_yaml)     → the `alertmanager.yml` string of an
+                                           assembled ConfigMap, as kubectl reads
+                                           it (da-crdecode)
+    alertmanager_reading(text)            → the config as Alertmanager loads it
+                                           (da-read alertmanager)
+
   The --validate verdict (#2311, shared with validate-config's routes row):
     evaluate_generated_config(...)        → GeneratedConfigVerdict; never
                                            prints, never exits
@@ -56,6 +63,8 @@ from _grar_routes import (  # noqa: E402
     _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import classify_path, safe_label  # noqa: E402  (#3276)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
+from _lib_consumer_read import ConsumerReadError  # noqa: E402, F401  (re-exported)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -308,6 +317,45 @@ class BaseConfigInputError(ValueError):
     """
 
 
+#: The ConfigMap key Alertmanager's config is mounted from.
+AM_CONFIGMAP_KEY = "alertmanager.yml"
+
+
+def emitted_alertmanager_yml(cm_yaml: str) -> str:
+    """The ``data["alertmanager.yml"]`` string of the ConfigMap *cm_yaml*, as
+    kubectl reads it (``da-crdecode``, ADR-036 §12) — what the cluster will
+    mount, not what this process meant to write.
+
+    Raises :class:`ConsumerReadError` when Kubernetes' reading cannot be had
+    (no da-crdecode, or it refuses the text) or is not one ConfigMap holding
+    that key as a string: either way there is no text to hand Alertmanager."""
+    docs = _lib_consumer_read.kubernetes_text_documents(cm_yaml)
+    if len(docs) != 1 or not isinstance(docs[0], dict):
+        raise ConsumerReadError(
+            f"the assembled ConfigMap is {len(docs)} document(s) in Kubernetes' reading, "
+            "expected one object")
+    data = docs[0].get("data")
+    inner = data.get(AM_CONFIGMAP_KEY) if isinstance(data, dict) else None
+    if not isinstance(inner, str):
+        raise ConsumerReadError(
+            f"the assembled ConfigMap has no string `data.{AM_CONFIGMAP_KEY}` in "
+            "Kubernetes' reading")
+    return inner
+
+
+def alertmanager_reading(text: str) -> dict:
+    """*text* as Alertmanager loads it (``da-read alertmanager``, ADR-036
+    §12): only the keys the text writes, each value Alertmanager's reading of
+    it. Raises :class:`ConsumerReadError` — ``stderr_lines`` empty when there
+    was no da-read to ask, else the loader's refusal."""
+    return _lib_consumer_read.alertmanager_config(text)
+
+
+def consumer_read_message(exc: ConsumerReadError) -> str:
+    """One line for *exc*: its message and the reader's own reason."""
+    return " | ".join([str(exc), *exc.stderr_lines])
+
+
 def load_base_config(path: str | None) -> dict:
     """Load the base Alertmanager config that generated routes merge into.
 
@@ -322,16 +370,17 @@ def load_base_config(path: str | None) -> dict:
     routes it into the omitted branch, which is the whole defect.
 
     Everything past the omitted branch reduces to two re-derivable predicates —
-    *the value names a file*, and *that file parses to a mapping* — so no shape
-    is enumerated and an unanticipated spelling lands on an existing branch.
+    *the value names a file*, and *Alertmanager's loader accepts it*
+    (``da-read alertmanager``, ADR-036 §12) — so no shape is enumerated and an
+    unanticipated spelling lands on an existing branch.
 
     ⚠️ NOT closed: the CONTENT axis (``--policy`` closed its own in #1649;
     this one stays open). A file that IS a mapping but whose ``global:`` is empty or
     wrong still merges silently — except a credential a conf.d receiver would
     inherit (#3257), which ``assert_base_global_inherits_no_credentials``
-    refuses as a config violation (rc 1), not here. Partial files are legitimate (absent top-level
-    keys fall back per key, pinned by ``test_partial_file_fills_defaults``), so
-    "is a mapping" is as far as the path axis reaches.
+    refuses as a config violation (rc 1), not here. A file without ``global:``
+    or ``inhibit_rules:`` is legitimate (they fall back per key); one without
+    ``route:`` is not — Alertmanager refuses it (#3206).
     """
     if path is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
@@ -345,28 +394,34 @@ def load_base_config(path: str | None) -> dict:
             "the built-in placeholder `global:` for yours, which is the exact "
             "silent failure this error exists to stop.")
     try:
-        with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise BaseConfigInputError(
             f"--base-config: {path!r} is not valid UTF-8: {exc}") from exc
-    except yaml.YAMLError as exc:
-        raise BaseConfigInputError(
-            f"--base-config: {path!r} is not valid YAML: {exc}") from exc
     except OSError as exc:
         raise BaseConfigInputError(
             f"--base-config: cannot read {path!r}: {exc}") from exc
-    if not isinstance(data, dict):
-        # ⛔ No remedy sentence here, deliberately. This branch fires for an
-        # empty file AND for one holding a top-level list or scalar, and "omit
-        # --base-config" is right for the first and reproduces #1616 for the
-        # second. ``load_policy``'s equivalent branch states the type and stops
-        # for the same reason; ``validate_config`` carries a comment about the
-        # third time a shared remedy sentence was wrong for one of its rows.
+    # ADR-036 §12 (#3206): the base is an Alertmanager config, so it is read
+    # the way Alertmanager loads it (da-read alertmanager), not with PyYAML.
+    # ⛔ That makes the base a WHOLE config Alertmanager accepts on its own:
+    # `route` (and the receivers it names) must be there — Alertmanager's
+    # loader refuses a config without them, and so does this. `global` and
+    # `inhibit_rules` may still be left out and fall back below. An empty
+    # file, a top-level list or scalar, an unknown key: the loader's refusal,
+    # in its own words.
+    try:
+        data = alertmanager_reading(raw)
+    except ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            raise BaseConfigInputError(
+                f"--base-config: cannot read {path!r} the way Alertmanager does: {exc}") from exc
         raise BaseConfigInputError(
-            f"--base-config: top level of {path!r} is {type(data).__name__}, "
-            "expected a mapping with `global:` / `route:` / `receivers:` / "
-            "`inhibit_rules:` (any subset; absent keys fall back).")
+            f"--base-config: Alertmanager's config loader refuses {path!r}: "
+            f"{consumer_read_message(exc)}\n"
+            "  --base-config takes a complete Alertmanager config (at least `route:` and "
+            "the `receivers:` it names); `global:` / `inhibit_rules:` may be left out.") from exc
     # Ensure required keys exist. deepcopy so a caller mutating the result
     # cannot reach into _DEFAULT_BASE_CONFIG's nested lists and change what
     # every later call in this process returns.
@@ -841,7 +896,17 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
     verdict.warnings = captured.getvalue().splitlines()
     if cm_yaml is None:
         return verdict
-    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+    try:
+        am_yml = emitted_alertmanager_yml(cm_yaml)
+    except ConsumerReadError as exc:
+        # No text for amtool: an environment failure (no da-crdecode), never
+        # a verdict on the config — the "unusable" status, rc 2.
+        verdict.amtool = AmtoolCheck(
+            AMTOOL_UNUSABLE, EXIT_CALLER_ERROR,
+            "ERROR: cannot read the assembled ConfigMap the way kubectl does, so "
+            "Alertmanager's parser was not asked — refusing to report the config as "
+            f"valid: {safe_label(consumer_read_message(exc))}")
+        return verdict
     verdict.amtool = amtool_check(
         am_yml, what=VALIDATE_AMTOOL_WHAT,
         refusing="report the config as valid",
@@ -929,10 +994,9 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
         return None, warnings
     existing_yml = data["alertmanager.yml"]
     if not isinstance(existing_yml, str):
-        # ⛔ `yaml.safe_load` treats a non-str argument as a STREAM and calls
-        # `.read()` on it, so a non-string value left here as an uncaught
-        # AttributeError at rc=1 with no diagnostic — the exact picture the
-        # guards above were added to remove, one layer further in. The
+        # ⛔ The reader below takes text; a non-string value reaching it was
+        # once an uncaught error at rc=1 with no diagnostic — the exact
+        # picture the guards above were added to remove, one layer further in. The
         # Kubernetes API forces `data` values to be strings, so this is not
         # operator-reachable through a real cluster; it is guarded because it
         # is exactly as reachable as the two shapes just above it, and a
@@ -943,27 +1007,28 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
             f"{type(existing_yml).__name__}, expected a string")
         return None, warnings
 
+    # ADR-036 §12 (#3206): the cluster's config as Alertmanager loads it
+    # (da-read alertmanager). A text its loader refuses — not YAML, empty,
+    # comments only, no route — is refused here in the loader's words; the
+    # cluster's Alertmanager is not running it either.
     try:
-        existing = yaml.safe_load(existing_yml)
-    except yaml.YAMLError as exc:
-        warnings.append(
-            f"ERROR: ConfigMap key 'alertmanager.yml' is not valid YAML: {exc}")
-        return None, warnings
-    if not isinstance(existing, dict):
-        # ⛔ The parenthetical is a GUESS, so it is gated on evidence rather
-        # than on the parse result. An unconditional version was measured
-        # firing for list / str / int values, where the key holds something and
-        # the guess is wrong. Gating on `existing is None` was still too wide:
-        # `null`, `~`, `---` and `Null` also parse to None while the key does
-        # hold text. The predicate below reads the TEXT — blank, or nothing but
-        # comments — which is the thing the sentence actually claims.
+        existing = alertmanager_reading(existing_yml)
+    except ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            warnings.append(
+                f"ERROR: cannot read ConfigMap key 'alertmanager.yml' the way "
+                f"Alertmanager does: {exc}")
+            return None, warnings
+        # ⛔ The parenthetical is a GUESS, so it is gated on evidence: it reads
+        # the TEXT — blank, or nothing but comments — which is the thing the
+        # sentence claims (`null`, `~`, `---` hold text and are refused too).
         stripped = [ln.strip() for ln in existing_yml.splitlines()]
         looks_empty = all(not ln or ln.startswith("#") for ln in stripped)
         hint = (" — the key exists but holds nothing usable (comments or "
                 "whitespace only)") if looks_empty else ""
         warnings.append(
-            f"ERROR: ConfigMap key 'alertmanager.yml' parses to "
-            f"{type(existing).__name__}, expected a mapping{hint}")
+            f"ERROR: Alertmanager's config loader refuses ConfigMap key "
+            f"'alertmanager.yml'{hint}: {consumer_read_message(exc)}")
         return None, warnings
     return existing, warnings
 
@@ -1166,8 +1231,23 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     if rc is not None:
         raise AlertmanagerConfigRejected(rc)
     # #2660: the root route + receivers here are the CLUSTER's, kept by the
-    # merge — the config about to be applied, so warn on it.
-    warn_if_root_receiver_without_integration(yaml.safe_load(merged_yml))
+    # merge — the config about to be applied, so warn on it, as Alertmanager
+    # reads it (ADR-036 §12). Its loader refusing the text amtool did not
+    # check (amtool absent) is the same verdict amtool would give: nothing is
+    # applied. No da-read is no verdict: nothing is applied either.
+    try:
+        merged = alertmanager_reading(merged_yml)
+    except ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            print(f"ERROR: cannot read the merged alertmanager.yml the way Alertmanager "
+                  f"does — refusing to apply it (nothing was applied): {exc}",
+                  file=sys.stderr)
+            return False
+        print(f"FAIL: Alertmanager's config loader refuses the merged alertmanager.yml for "
+              f"{namespace}/{configmap_name} — refusing to apply it (nothing was applied): "
+              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+        raise AlertmanagerConfigRejected(EXIT_VIOLATION) from exc
+    warn_if_root_receiver_without_integration(merged)
 
     # 4. Apply updated ConfigMap
     if not _apply_merged_configmap(merged_yml, namespace, configmap_name):

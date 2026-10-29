@@ -59,7 +59,8 @@ from generate_alertmanager_routes import (  # noqa: E402
     tree_refusal,
 )
 from _grar_render import (  # noqa: E402
-    _run_binary, assemble_configmap, receiver_integration_kinds,
+    ConsumerReadError, _run_binary, alertmanager_reading, assemble_configmap,
+    consumer_read_message, emitted_alertmanager_yml, receiver_integration_kinds,
 )
 from _grar_validate import (  # noqa: E402
     PlatformProbeSetUnverifiable,
@@ -759,15 +760,20 @@ def _receiver_type(name: str, receivers: dict[str, dict],
     return "+".join(kinds) if kinds else "none"
 
 
-INHIBIT_NOTE = ("Inhibit rules of the assembled config, verbatim; whether one "
+INHIBIT_NOTE = ("Inhibit rules of the assembled config, as Alertmanager loads them; whether one "
                 "suppresses this alert depends on which alerts are firing at "
                 "the same time, which the trace does not evaluate")
-INHIBIT_NOTE_ZH = ("組好設定裡的 inhibit rules（原文）；是否抑制取決於執行時同時 "
+INHIBIT_NOTE_ZH = ("組好設定裡的 inhibit rules（Alertmanager 載入後的讀法）；是否抑制取決於執行時同時 "
                    "firing 的告警，trace 不評估")
 
 
 class UnassemblableBase(ValueError):
     """``assemble_configmap`` crashed on the --base-config (not a refusal)."""
+
+
+class AssemblyRefusedByAlertmanager(Exception):
+    """Alertmanager's loader (``da-read alertmanager``) refuses the assembled
+    config: there is no tree Alertmanager would route with (#3206)."""
 
 
 def build_trace_tree(parsed: dict, base: dict | None = None,
@@ -804,8 +810,18 @@ def build_trace_tree(parsed: dict, base: dict | None = None,
         # receiver without `name`, `receivers` not a list). Only this call:
         # the trace's own bugs must surface, not read as a bad base.
         raise UnassemblableBase(f"{type(exc).__name__}: {exc}") from exc
-    am_yml = yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
-    am = yaml.safe_load(am_yml)
+    # ADR-036 §12 (#3206): the ConfigMap as kubectl reads it, the config as
+    # Alertmanager loads it — the tree below is Alertmanager's reading (its
+    # durations, its matcher spelling), not this process's dict. No reader is
+    # rc 2 (CallerError); a refusal is AssemblyRefusedByAlertmanager.
+    try:
+        am_yml = emitted_alertmanager_yml(cm_yaml)
+        am = alertmanager_reading(am_yml)
+    except ConsumerReadError as exc:
+        if not exc.stderr_lines:
+            raise CallerError(f"the trace reads the assembled config the way kubectl and "
+                              f"Alertmanager do: {exc}", reason="reader_unavailable") from exc
+        raise AssemblyRefusedByAlertmanager(consumer_read_message(exc)) from exc
     by_name = {r["name"]: r for r in am.get("receivers") or []}
     return am_yml, am["route"], by_name, _conf_receiver_types(
         routing_configs, enforced, tenants)
@@ -971,7 +987,7 @@ def trace_alert_routing(
       1. The tenant's merged routing config
       2. The route path(s) and receiver(s) Alertmanager delivers to
       3. Whether the enforced NOC route takes a copy (only when it matches)
-      4. The inhibit rules of the assembled config, verbatim (not evaluated:
+      4. The inhibit rules of the assembled config, as Alertmanager loads them (not evaluated:
          suppression depends on which alerts fire at runtime)
       5. Receiver-type constraints of the domain policies listing the tenant
 
@@ -1051,6 +1067,8 @@ def trace_alert_routing(
                   f"--base-config?): {exc}")
         except ValueError as exc:
             _warn(f"the generator refuses to assemble this config: {exc}")
+        except AssemblyRefusedByAlertmanager as exc:
+            _warn(f"Alertmanager's config loader refuses the assembled config: {exc}")
         except PlatformProbeSetUnverifiable as exc:
             # #1533: not a ValueError on purpose (the generator exits 2 on it,
             # not 1); here it is the same "no trace" outcome, not a traceback.
@@ -1151,7 +1169,7 @@ def trace_alert_routing(
             opts = _inherited(top["nodes"])
             timing = {key: opts[key] for key in _TIMING_KEYS}
 
-    # Step 4: the inhibit rules Alertmanager would load, verbatim (#2293).
+    # Step 4: the inhibit rules Alertmanager would load, in its reading (#2293, #3206).
     # Whether one suppresses this alert depends on which alerts are firing
     # at the same time — the trace does not evaluate it.
     if not assembled:
@@ -1160,9 +1178,9 @@ def trace_alert_routing(
                                  f"({unknown})"),
                       "inhibit_rules_yaml": None})
     else:
-        # As YAML text, dumped like the generator writes alertmanager.yml:
-        # a base rule may hold values JSON cannot carry (dates, !!binary).
-        rules = yaml.safe_load(am_yml).get("inhibit_rules") or []
+        # As Alertmanager loads them (#3206), dumped as YAML text like the
+        # generator writes alertmanager.yml.
+        rules = alertmanager_reading(am_yml).get("inhibit_rules") or []
         steps.append({
             "step": 4, "action": "inhibit_rules",
             "detail": INHIBIT_NOTE,

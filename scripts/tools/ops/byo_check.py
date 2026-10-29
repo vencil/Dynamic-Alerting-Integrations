@@ -28,8 +28,6 @@ import os
 import re
 import sys
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
@@ -46,6 +44,8 @@ from _lib_exitcodes import (  # noqa: E402
 # generator's fail-closed invariant); reuse it here so the BYO runtime check and
 # the generation-time guard can never disagree on "is this equal-label gated".
 from _grar_validate import find_ungated_equal_label_inhibits  # noqa: E402
+# #3206 (ADR-036 §12): the running config is read as Alertmanager loads it.
+import _lib_consumer_read  # noqa: E402
 
 # The orchestrator's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -752,14 +752,23 @@ def check_alertmanager(args):
                       if has_inhibit
                       else "No inhibit_rules found",
         })
-        # Parse the config for the semantic inhibit check appended after step 3
-        # (it enriches with live-alert data fetched there). safe_load only —
-        # never execute the customer's config.
+        # Read the config for the semantic inhibit check appended after step 3
+        # (it enriches with live-alert data fetched there) as Alertmanager
+        # loads it (`da-read alertmanager`, ADR-036 §12, #3206) — not PyYAML.
+        # No da-read is no reading: a failed check (exit 2), never a skip.
         try:
-            parsed_cfg = yaml.safe_load(config_str) or {}
-            inhibit_rules = parsed_cfg.get("inhibit_rules", []) if isinstance(parsed_cfg, dict) else []
-        except yaml.YAMLError as exc:
-            inhibit_parse_err = str(exc)
+            parsed_cfg = _lib_consumer_read.alertmanager_config(config_str)
+            inhibit_rules = parsed_cfg.get("inhibit_rules") or []
+        except _lib_consumer_read.ConsumerReadError as exc:
+            if exc.stderr_lines:
+                inhibit_parse_err = " | ".join([str(exc), *exc.stderr_lines])
+            else:
+                checks.append({
+                    "check": "alertmanager_inhibit_semantics",
+                    "status": "fail",
+                    "caller_error": True,
+                    "detail": f"Cannot read the Alertmanager config as Alertmanager does: {exc}",
+                })
 
     # 3. Check current alerts
     # #3133: alerts not read are a failed check (exit 2) — they used to be a
@@ -795,8 +804,8 @@ def check_alertmanager(args):
         checks.append({
             "check": "alertmanager_inhibit_semantics",
             "status": "warn",
-            "detail": f"Could not parse Alertmanager config YAML to analyze inhibit rules: "
-                      f"{inhibit_parse_err[:80]}",
+            "detail": f"Alertmanager's config loader refuses the running config, so its "
+                      f"inhibit rules were not analyzed: {inhibit_parse_err[:160]}",
         })
     elif inhibit_rules:
         checks.append(_judge_inhibit_semantics(inhibit_rules, alerts_by_alertname))

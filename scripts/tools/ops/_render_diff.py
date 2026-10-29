@@ -64,9 +64,8 @@ for _p in (_TOOLS, _TOOLS.parent):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import yaml  # noqa: E402
-
 import _lib_confd  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the generator's ConfigMap, read its consumers' way)
 import _lib_tenant_values as tv  # noqa: E402
 from _lib_redact import REDACTED, Secrets, credential_values, is_secret_field  # noqa: E402
 
@@ -232,12 +231,24 @@ def render_routes(conf_d: str | os.PathLike[str], *,
             # A tree with no tenant: the generator exits 0 and writes nothing
             # ("No tenants found in config directory.").
             return dict(EMPTY_ROUTES)
+        # ADR-036 §12 (#3206): the ConfigMap as kubectl reads it (da-crdecode),
+        # its alertmanager.yml as Alertmanager loads it (da-read alertmanager).
+        # The generator already put that text past Alertmanager's loader, so
+        # any failure here is the tool's, never the configuration's.
         try:
-            doc = yaml.safe_load(out.read_text(encoding="utf-8"))
-            cfg = yaml.safe_load(doc["data"]["alertmanager.yml"])
-            if not isinstance(cfg, dict) or not isinstance(cfg.get("route"), dict):
+            docs = _lib_consumer_read.kubernetes_documents(str(out))
+            data = docs[0].get("data") if len(docs) == 1 and isinstance(docs[0], dict) else None
+            inner = data.get("alertmanager.yml") if isinstance(data, dict) else None
+            if not isinstance(inner, str):
+                raise ValueError("no string data.alertmanager.yml in one ConfigMap")
+            cfg = _lib_consumer_read.alertmanager_config(inner)
+            if not isinstance(cfg.get("route"), dict):
                 raise ValueError("no route tree")
-        except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError) as e:
+        except _lib_consumer_read.ConsumerReadError as e:
+            raise RenderError(RenderFailure(
+                "tool", "route generator output could not be read its consumers' way ("
+                + " | ".join([str(e), *e.stderr_lines]) + ")")) from e
+        except ValueError as e:
             raise RenderError(RenderFailure(
                 "tool", f"route generator output is not an Alertmanager ConfigMap ({e})")) from e
         return cfg

@@ -474,3 +474,37 @@ class TestThePortalOfflineFallbackIsGenerated:
 
         # Must-not-fire control: the real pair is accepted.
         assert mod.build_fallback(data)["packOrder"] == good_order
+
+
+class TestChartAppVersionIsHelmsReading:
+    """#3206 (ADR-036 §12): Chart.yaml is read the way Helm reads it
+    (da-crdecode), not with PyYAML."""
+
+    def _chart(self, tmp_path, monkeypatch, app_version_line):
+        mod = _load_module()
+        chart = tmp_path / "helm" / "x"
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: x\nversion: 0.1.0\n{app_version_line}\n",
+            encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        return mod
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    def test_a_quoted_app_version_is_read(self, tmp_path, monkeypatch):
+        mod = self._chart(tmp_path, monkeypatch, 'appVersion: "1.10"')
+        assert mod._chart_app_version("x") == "1.10"
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    def test_an_app_version_helm_reads_as_a_number_is_refused(self, tmp_path, monkeypatch):
+        """`appVersion: 1.10` is the number 1.1 to Helm; it used to be
+        str()-ed into "1.1" and composed into an image tag nobody wrote."""
+        mod = self._chart(tmp_path, monkeypatch, "appVersion: 1.10")
+        with pytest.raises(SystemExit, match="not a string"):
+            mod._chart_app_version("x")
+
+    def test_no_da_crdecode_is_refused_by_name(self, tmp_path, monkeypatch):
+        mod = self._chart(tmp_path, monkeypatch, 'appVersion: "1.0.0"')
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-da-crdecode"))
+        with pytest.raises(SystemExit, match="the way Helm does"):
+            mod._chart_app_version("x")

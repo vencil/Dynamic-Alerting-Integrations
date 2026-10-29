@@ -255,13 +255,28 @@ class TestPssLabelRule:
         assert len(out) == 2
         assert all("ns/?" in x for x in out)
 
-    def test_pyyaml_missing_is_explicit_warn_not_silent(self, monkeypatch):
-        """Fail-visible contract: PyYAML absent => ONE explicit WARN note,
-        never a silent empty result (a silently skipped lint is fail-open).
-        sys.modules['yaml']=None makes `import yaml` raise ImportError."""
-        monkeypatch.setitem(sys.modules, "yaml", None)
-        out = k8s.collect_pss_findings()
-        assert len(out) == 1 and "PyYAML unavailable" in out[0]
+    def test_no_da_crdecode_is_a_caller_error_not_silent(self, monkeypatch, tmp_path):
+        """#3206 (ADR-036 §12): the manifests are read as kubectl reads them
+        (da-crdecode). Without it there is no reading — a caller error (exit
+        2), never a silent empty result and never a PyYAML reading."""
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-da-crdecode"))
+        with pytest.raises(k8s._lib_consumer_read.ConsumerReadError):
+            k8s.collect_pss_findings()
+        _stub_engine(monkeypatch, [])
+        f = k8s.collect_findings(strict=True)
+        assert any("[pss]" in x and "the way kubectl does" in x for x in f["CALLER_ERROR"])
+        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        assert k8s.main() == 2
+
+    def test_a_label_is_kubectls_reading_of_it(self, tmp_path):
+        """#3206: an unquoted `warn: yes` is the boolean true to kubectl (and
+        was to PyYAML), not the level string — still a missing label."""
+        ns = tmp_path / "ns.yaml"
+        ns.write_text(
+            "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: n\n  labels:\n"
+            "    pod-security.kubernetes.io/warn: restricted\n"
+            "    pod-security.kubernetes.io/audit: restricted\n", encoding="utf-8")
+        assert k8s.collect_pss_findings([ns]) == []
 
     def test_collector_positive_canary(self, tmp_path):
         """FILE-level positive canary: a real on-disk Namespace manifest
@@ -297,7 +312,7 @@ class TestPssLabelRule:
         bad.write_bytes(b"\xff\xfe kind: Namespace\n")
         out = k8s.collect_pss_findings([bad])
         assert len(out) == 1 and "skipped this file" in out[0]
-        assert "UnicodeDecodeError" in out[0]
+        assert "kubectl's reading refuses it" in out[0]
 
     def test_repo_namespaces_all_labeled(self):
         """Live baseline: every Namespace manifest under k8s/ ships labeled

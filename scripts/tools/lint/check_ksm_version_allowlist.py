@@ -40,8 +40,6 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 try:
@@ -51,6 +49,7 @@ except Exception:  # pragma: no cover
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests read kubectl's way)
 
 REQUIRED_LABEL = "app.kubernetes.io/version"
 _PODS_LIST = re.compile(r"pods=\[([^\]]*)\]")
@@ -63,8 +62,10 @@ def _repo_root() -> Path:
 
 
 def _iter_docs(path: Path):
-    """Yield every YAML document (manifests are often multi-doc)."""
-    for doc in yaml.safe_load_all(path.read_text(encoding="utf-8")):
+    """Yield every document (manifests are often multi-doc), as kubectl reads
+    the file (da-crdecode). Raises ConsumerReadError when that reading cannot
+    be had."""
+    for doc in _lib_consumer_read.kubernetes_documents(str(path)):
         if isinstance(doc, dict):
             yield doc
 
@@ -136,8 +137,10 @@ def main() -> int:
             for name, reason in check_file(path):
                 violations += 1
                 print(f"  ❌ {path.relative_to(repo)} [{name}]: {reason}")
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: cannot read a manifest the way kubectl does: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if violations:

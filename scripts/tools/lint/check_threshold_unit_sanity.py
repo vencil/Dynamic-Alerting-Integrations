@@ -83,6 +83,7 @@ from _lib_validation import (  # noqa: E402
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: values / manifests read Helm's / kubectl's way)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
@@ -282,8 +283,12 @@ _MD_YAML_RE = re.compile(r"```ya?ml\n(.*?)```", re.S)
 
 # Structured artifacts that carry threshold values. Markdown docs are scanned
 # separately (best-effort fenced-YAML) because a fragment may not parse.
+# The registry is the repo's own data (read by `_registry_lib.load_registry`,
+# Python only); every other entry is a Helm values file or a manifest, read
+# the way Helm / kubectl read it (da-crdecode, ADR-036 §12, #3206).
+_REGISTRY_REL = "rule-packs/threshold-registry.yaml"
 _YAML_GLOBS = [
-    "rule-packs/threshold-registry.yaml",
+    _REGISTRY_REL,
     "helm/threshold-exporter/values.yaml",
     "environments/local/threshold-exporter.yaml",
     "environments/ci/threshold-exporter.yaml",
@@ -365,13 +370,24 @@ def _collect(root: str) -> list[tuple[str, str, float, bool]]:
         for key, val in _walk_values(doc):
             found.append((rel, key, val, True))
 
-    for rel, path in _iter_yaml_files(root):
-        try:
-            doc = yaml.safe_load(_read(path))
-        except Exception:
-            continue  # unparseable YAML is another gate's job
-        for key, val in _walk_values(doc):
-            found.append((rel, key, val, True))
+    files = list(_iter_yaml_files(root))
+    # No da-crdecode raises ConsumerReadError (a caller error in `main`); a
+    # file its reading refuses is another gate's job, as unparseable YAML was.
+    read = _lib_consumer_read.kubernetes_documents_of(
+        [path for rel, path in files if rel != _REGISTRY_REL], keep_refusals=True)
+    for rel, path in files:
+        if rel == _REGISTRY_REL:
+            try:
+                docs = [registry_lib.load_registry(path)]
+            except Exception:
+                continue  # unparseable YAML is another gate's job
+        else:
+            docs = read[path]
+            if isinstance(docs, _lib_consumer_read.ConsumerReadError):
+                continue
+        for doc in docs:
+            for key, val in _walk_values(doc):
+                found.append((rel, key, val, True))
 
     # docs/assets JSON: platform-data (value+unit), recommendation-data
     # (percentiles + recommended + unit), template-data (embedded tenant YAML).
