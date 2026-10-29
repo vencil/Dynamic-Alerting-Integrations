@@ -341,7 +341,7 @@ func TestValidateTenantCustomAlerts(t *testing.T) {
 }
 
 // #3042: the per-tenant cap is judged on CustomAlertRowCount in CI (da-guard
-// custom_alert_over_cap, validate-config custom_alert_cap) and on
+// custom_alert_over_cap, which validate-config's guard_errors reports) and on
 // ValidateTenantCustomAlerts' own count at tenant-api's write. Both count one
 // per user_threshold row; they part only on a duplicate, which the exporter
 // drops (so CustomAlertRowCount does not count it) and the write check

@@ -21,7 +21,8 @@ func repoFile(t *testing.T, rel ...string) []byte {
 	return data
 }
 
-// #2386: the shared table both da-guard and validate-config are judged by.
+// #2386: the shapes table (validate-config reports these findings through its
+// guard_errors row, #3387).
 func TestDefaultsWrapperMatrix(t *testing.T) {
 	t.Parallel()
 	var m struct {
@@ -136,8 +137,8 @@ func TestCheckDefaultsImpact_DefaultsWrapperFindingsCountAsErrors(t *testing.T) 
 
 // rootDecodedKeys (reflected from config.ThresholdConfig) and the non-`_`
 // properties of platform-defaults.schema.json are the two spellings of "a
-// top-level key the root decode reads": da-guard uses the first,
-// validate-config the second. They must be one set.
+// top-level key the root decode reads": da-guard uses the first, the
+// schema's readers the second. They must be one set.
 func TestRootDecodedKeysMatchSchema(t *testing.T) {
 	t.Parallel()
 	var schema struct {

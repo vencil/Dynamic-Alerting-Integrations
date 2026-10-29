@@ -454,27 +454,6 @@ def test_effective_without_not_served_is_named_too_old(tmp_path):
     assert ei.value.stale and "older than this tool" in str(ei.value)
 
 
-@pytest.mark.parametrize("key,reason,want", [
-    ("mysql_connections", "value_unparsed", True),
-    ("mysql_connections_critical", "value_unparsed_dropped", True),
-    ("mysql_connections", "window_invalid", True),
-    ("mysql_connections", "value_rejected", True),
-    ('mysql_connections{q="a"}', "spelling_duplicate", True),  # #2031
-    # #3378：unconsumed 只在 not_served 指名，等級交 ADR-038 共用判決。
-    ("redis_evicted_keys", "unconsumed", False),
-    ("_routing_defaults", "value_rejected", False),
-    ("_state_maintenance", "window_invalid", False),
-    ("mysql_connections", "undeliverable", False),
-    ("mysql_connections", "parse_failed", False),
-    ("mysql_connections", "root_null_undeclared", False),
-    ("pg_connections", "root_defaults_unwrapped", False),
-])
-def test_value_not_served_as_written(key, reason, want):
-    """Go ValueNotServedAsWritten 的 Python 副本；兩邊經 da-guard 的比對在
-    tests/ops/test_validate_config_values_not_served.py。"""
-    assert tv.value_not_served_as_written(key, reason) is want
-
-
 def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):
     monkeypatch.setenv("DA_LANG", "en")
     monkeypatch.delenv("DA_GUARD_BINARY", raising=False)

@@ -7,7 +7,8 @@ package config
 // anywhere in a schedule that HAS windows — a window's `value: null` or
 // `window: null`, a null window entry, or a null `default:` beside windows —
 // is refused at validation time
-// (da-guard schedule_null_value, validate-config schedule_null). No runtime
+// (da-guard schedule_null_value, which validate-config's guard_errors row
+// reports; the route generator's own check). No runtime
 // meaning is defined for it: what /metrics and the walker do with such a
 // value is left exactly as it was.
 //
