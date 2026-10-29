@@ -40,11 +40,14 @@ _STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
 
 #: The wording after ``<flag> <path>:``, per language — the one place it is
 #: written. ``en`` keeps the OS's strerror; ``zh`` says the same in Chinese
-#: and keeps the errno's name (``EACCES``) so the cause stays searchable.
+#: and keeps the errno's name (``EACCES``) so the cause stays searchable —
+#: for "nothing there" too, unless it is the plain ENOENT: a symlink loop
+#: (ELOOP) or a file used as a directory (ENOTDIR) is listed by ``ls``.
 _DETAIL = {
     "en": {"missing": lambda e: e.strerror, "inaccessible": lambda e: e.strerror,
            "not_dir": "not a directory", "not_regular": "not a regular file"},
-    "zh": {"missing": lambda e: "不存在",
+    "zh": {"missing": lambda e: ("不存在" if e.errno == errno.ENOENT
+                                 else f"不存在（{errno.errorcode.get(e.errno, e.errno)}）"),
            "inaccessible": lambda e: f"無法存取（{errno.errorcode.get(e.errno, e.errno)}）",
            "not_dir": "不是目錄", "not_regular": "不是一般檔案"},
 }

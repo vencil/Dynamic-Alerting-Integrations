@@ -211,6 +211,12 @@ DX_SITES = [
      ["--config-dir", "{D}", "--check"], "--config-dir {D}", 2),
     ("render-soak-diff --input-dir", "dx/render_soak_diff.py", ["--input-dir", "{D}"],
      "--input-dir {D}", 2),
+    # {NX}: a directory that stats but cannot be entered — what is under it
+    # is judged by its own check, past the one on the flag.
+    ("list-subprocess-only-modules .git", "dx/list_subprocess_only_modules.py",
+     ["--repo", "{NX}"], "{NX}/.git", 2),
+    ("analyze-probe --archive run file", "dx/analyze_probe.py", ["--archive", "{NX}"],
+     "--archive {NX}/probe-run1.txt", 2),
     # Not rows — the locked case does not reach their check; each is pinned
     # below by a path whose stat fails with ENAMETOOLONG (not "nothing
     # there"), which the old checks raised on or called missing:
@@ -233,6 +239,8 @@ def box():
         locked = root / "locked"
         (locked / "x").mkdir(parents=True)
         (locked / "f.yaml").write_text("a: 1\n", encoding="utf-8")
+        nx = root / "nx"
+        nx.mkdir()
         for src, dst in ((REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d", "conf.d"),
                          (REPO / "components" / "threshold-exporter" / "config" / "conf.d"
                           / "examples", "mapped")):
@@ -250,13 +258,14 @@ def box():
         # 000, not 0700: the owner is root, but a non-root CI runs the table
         # as itself — and an owner still cannot enter a 000 directory.
         locked.chmod(0)
+        nx.chmod(0o644)   # r, no x: the directory stats, nothing under it does
         probe = run([sys.executable, "-c", "import os, sys; os.stat(sys.argv[1])",
                      str(locked / "x")])
         assert probe.returncode != 0, ("the uid can enter the locked parent: every row "
                                        "below would be vacuous")
         yield root, run, {"{D}": str(locked / "x"), "{F}": str(locked / "f.yaml"),
                           "{CONF}": str(root / "conf.d"), "{MAP}": str(root / "mapped"),
-                          "{WF}": str(root / "wf"), "{BOX}": str(root)}
+                          "{WF}": str(root / "wf"), "{BOX}": str(root), "{NX}": str(nx)}
 
 
 def _expand(arg: str, subst: dict) -> str:
@@ -478,8 +487,8 @@ def test_a_file_is_a_regular_file(tmp_path):
 
 @pytest.mark.parametrize("lang, words", [("zh", "--dir 無法使用："), ("en", "ERROR: --dir ")])
 def test_a_tool_keeps_its_own_words(tmp_path, lang, words):
-    """…and the judgement's detail is said in that language too."""
-    """The judgement is shared; each tool's language for it stays its own."""
+    """The judgement is shared; each tool's language for it stays its own —
+    the judgement's detail included."""
     import subprocess
     proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / "gitops_check.py"),
                            "local", "--dir", str(tmp_path / "nope")],
@@ -536,14 +545,35 @@ def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
 
 @pytest.mark.parametrize("kind, name, detail", [
     ("dir", "nope", "不存在"),
+    ("dir", "f/below", "不存在（ENOTDIR）"),
+    ("any", "loop", "不存在（ELOOP）"),
     ("dir", "f", "不是目錄"),
     ("file", "d", "不是一般檔案"),
     ("any", "nope", "不存在"),
 ])
 def test_the_chinese_wording(tree, kind, name, detail):
     """`lang="zh"`: the same verdicts, said in Chinese — no English strerror."""
+    if name == "loop":
+        os.symlink(tree / "loop", tree / "loop")
     problem = classify_path(tree / name, kind, lang="zh", flag="--x")
     assert problem.message == f"--x {tree / name}: {detail}"
+
+
+@pytest.mark.parametrize("lang, line", [
+    ("zh", "錯誤：目錄無法使用 --config-dir {p}: 不存在"),
+    ("en", "Error: --config-dir {p}: " + os.strerror(errno.ENOENT)),
+])
+def test_config_history_says_it_in_its_own_language(tmp_path, lang, line):
+    """config-history is no OPS_SITES row (a locked parent never reaches its
+    check); a missing --config-dir does, in both of its languages."""
+    p = tmp_path / "nope"
+    proc = subprocess.run([sys.executable,
+                           str(REPO / "scripts" / "tools" / "ops" / "config_history.py"),
+                           "--config-dir", str(p), "snapshot"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          env={**os.environ, "DA_LANG": lang})
+    assert proc.returncode == 2, proc.stderr
+    assert line.format(p=p) in proc.stderr, proc.stderr
 
 
 def test_every_language_words_every_verdict():
