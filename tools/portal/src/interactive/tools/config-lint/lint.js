@@ -21,6 +21,12 @@ purpose: |
   ESM-imported from ../_common/validation/yaml-parser.js.
 ---
 
+// ⚠️ PREVIEW ONLY (ADR-036 §2, §12). `parseYaml` below is a hand-written,
+// lenient line parser — neither js-yaml nor yaml.v3 — and what this engine
+// reports is a browser-side preview: no write and no CI check is gated on it.
+// How a conf.d file is read is decided by da-tools (`da-guard parse-tree`,
+// the exporter's yaml.v3 reading); where the two disagree, da-tools is right.
+
 import { parseDuration } from '../_common/validation/yaml-parser.js';
 
 // i18n fallback — rule categories + finding messages are bilingual.

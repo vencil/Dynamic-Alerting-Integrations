@@ -460,6 +460,8 @@ def test_effective_without_not_served_is_named_too_old(tmp_path):
     ("mysql_connections", "window_invalid", True),
     ("mysql_connections", "value_rejected", True),
     ('mysql_connections{q="a"}', "spelling_duplicate", True),  # #2031
+    # #3378：unconsumed 只在 not_served 指名，等級交 ADR-038 共用判決。
+    ("redis_evicted_keys", "unconsumed", False),
     ("_routing_defaults", "value_rejected", False),
     ("_state_maintenance", "window_invalid", False),
     ("mysql_connections", "undeliverable", False),

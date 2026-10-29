@@ -596,10 +596,19 @@ class TestTheGuardDecidesFromTheConfigMap:
         """Y5／Y6：CLI 路徑不還原 handler（還原後才到的信號會讓 rc 與 envelope
         不符）；行程內要還原只能走 SIGNALS.reset()。"""
         c = FakeCluster(_multi())
-        assert _run(c, "t-a", "mysql_connections", "65") == 0
-        assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
-        pc.SIGNALS.reset()
-        assert signal.getsignal(signal.SIGTERM) != signal.SIG_IGN
+        # A handler of the test's own as the one to keep: the disposition
+        # pytest started with may itself be SIG_IGN (a wrapper that ignores
+        # SIGTERM, #3297), and then "not SIG_IGN" could not be told apart.
+        def mine(*_):
+            pass
+        before = signal.signal(signal.SIGTERM, mine)
+        try:
+            assert _run(c, "t-a", "mysql_connections", "65") == 0
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+            pc.SIGNALS.reset()
+            assert signal.getsignal(signal.SIGTERM) is mine
+        finally:
+            signal.signal(signal.SIGTERM, before)
 
 
 class _Raises:
