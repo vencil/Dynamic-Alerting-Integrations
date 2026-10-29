@@ -267,7 +267,7 @@ type RootNullKey struct {
 //
 // ⛔ ONE CAUSE, ONE REPORT. A key a subtree `_defaults.yaml` hands down is
 // never in a tenant's map when it cannot be delivered — the overlay records
-// it in Unreachable instead (subtree_default_undeliverable) — so the two
+// it in its unreachable set instead (subtree_default_undeliverable) — so the two
 // sets cannot share a (tenant, key).
 func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]RootNullKey {
 	if len(rootNull) == 0 {

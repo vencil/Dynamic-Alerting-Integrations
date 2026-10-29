@@ -29,6 +29,20 @@ package main
 // `unreachableInherited` — is what this file publishes, as the gauge
 // da_config_subtree_undeliverable_tenants plus an ERROR log.
 //
+// ⛔ THE SET IS DA-GUARD'S, NOT A SECOND ONE (#3379). It is
+// config.FlatBuild.UndeliverableKeys: the build's unreachable keys filtered
+// by pkg/config's undeliverableThresholds — the same field da-guard's
+// subtree_default_undeliverable reads — so the gauge counts a tenant exactly
+// when da-guard reports it. Left out: a routing key (`_routing_bogus: 5`; the
+// route generator's `--validate --strict` reports it) and a key the subtree
+// switches off in every window although the root never declares it. That
+// disable changes no output — /metrics is the same as when the root declares
+// the key and the subtree disables it — so it is one WARN
+// (warnSubtreeDisabledUndeclared, config.FlatBuild.DisabledUndeclared), the
+// level of ValidateTenantKeys' `unknown key … not in defaults`, not this
+// ERROR. Before #3379 the exporter read the unfiltered set: it paged on such a
+// disable while da-guard passed the tree.
+//
 // ⛔ HISTORY, because the gauge had another cause until #1957. It was the
 // "dual-scanner divergence" audit (#1521), and its cause (a) was a tenant the
 // hierarchical walker registered but the merged config lacked: the walker
@@ -277,4 +291,47 @@ func (d *undeliverableLogState) recordAndDecide(
 	}
 	d.last = key
 	return true
+}
+
+// warnSubtreeDisabledUndeclared logs one WARN when a subtree `_defaults.yaml`
+// switches off, in every window, a key the conf.d root `_defaults.yaml` and
+// `optional_overrides:` never declare (disabled: tenantID → sorted keys,
+// config.FlatBuild.DisabledUndeclared — pkg/config undeliverableThresholds'
+// exclusion 3, not a rule of this file). /metrics is the same as if the root
+// declared the key and the subtree disabled it, so this is not the
+// undeliverable ERROR and the gauge does not count it (#3379); a disable of a
+// key nothing declares may still be a typo of one that is. Once per build
+// (commitFlatFrom), like ValidateTenantKeys' WARN once per commit. Nothing
+// when disabled is empty.
+func warnSubtreeDisabledUndeclared(logger interface{ Print(...any) }, disabled map[string][]string, root string) {
+	if len(disabled) == 0 {
+		return
+	}
+	tenants := make([]string, 0, len(disabled))
+	for tid := range disabled {
+		tenants = append(tenants, tid)
+	}
+	sort.Strings(tenants)
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"WARN: conf.d subtree default disables an undeclared key: %d tenant(s) under %s inherit `disable` "+
+			"from a subtree `_defaults.yaml` for a key the conf.d ROOT `_defaults.yaml` and `optional_overrides:` "+
+			"do not declare. The disable changes no output (the key has no series to switch off); if the key "+
+			"is misspelled, correct it. Affected:",
+		len(tenants), root)
+	shown := tenants
+	if len(shown) > undeliverableLogSampleLimit {
+		shown = shown[:undeliverableLogSampleLimit]
+	}
+	for i, tid := range shown {
+		sep := " "
+		if i > 0 {
+			sep = ", "
+		}
+		fmt.Fprintf(&b, "%s%s (disabled undeclared key(s): %s)", sep, tid, strings.Join(disabled[tid], ", "))
+	}
+	if len(tenants) > len(shown) {
+		fmt.Fprintf(&b, ", and %d more", len(tenants)-len(shown))
+	}
+	logger.Print(b.String())
 }

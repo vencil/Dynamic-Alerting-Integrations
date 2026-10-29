@@ -41,7 +41,7 @@ package config
 //     matches at no minute (#2065; rejectRecorder, at the phases' resolveValue
 //     call, the read that WARNs).
 //   - undeliverable: a subtree key the output plane never iterates (#1976,
-//     FlatBuild.UnreachableValues through undeliverableThresholds).
+//     FlatBuild.Undeliverable, undeliverableThresholds' filter).
 //   - root_null_undeclared: the root writes the key as null (#2518,
 //     FlatBuild.RootNullUndeclared).
 //   - root_default_refused: the root `defaults:` writes the key as a value
@@ -477,7 +477,7 @@ type servedVerdicts struct {
 	rootUnread    map[string]bool                       // root carrier keys (FlatBuild.RootDefaultsUnread)
 	rejected      map[string]map[string]bool            // file → keys (FlatBuild.RejectedChainValues)
 	tenantSets    map[string]map[string]map[string]bool // tenant → file → keys of rejected it sets (FlatBuild.rejectedTenantSets)
-	undeliverable map[string]map[string]bool            // tenant → keys (undeliverableThresholds)
+	undeliverable map[string]map[string]bool            // tenant → keys (FlatBuild.Undeliverable)
 	rootNull      map[string]map[string]bool            // tenant → keys (FlatBuild.RootNullUndeclared)
 	rootRefused   map[string]string                     // root `defaults:` keys (ThresholdConfig.RefusedRootDefaults)
 	rootReserved  map[string]bool                       // root `defaults:` keys (ThresholdConfig.ReservedRootDefaults)
@@ -529,7 +529,7 @@ func newServedVerdicts(built *FlatBuild, all bool, now time.Time) *servedVerdict
 		v.rootUnread[u.Key] = true
 	}
 	v.rejected, v.tenantSets = built.RejectedChainValues, built.rejectedTenantSets
-	for tenantID, keys := range undeliverableThresholds(built.UnreachableValues) {
+	for tenantID, keys := range built.Undeliverable {
 		if v.undeliverable == nil {
 			v.undeliverable = map[string]map[string]bool{}
 		}

@@ -54,27 +54,41 @@ type FlatBuildInput struct {
 
 // FlatBuild is BuildFlatConfig's result: the merged config the collector
 // serves, the per-file partials it was merged from (the next commit's
-// PriorConfigs), applySubtreeDefaults' two returns, and the files this build
-// dropped because they did not parse.
+// PriorConfigs), applySubtreeDefaults' returns (the filled count, and its
+// unreachable set as undeliverableThresholds splits it), and the files this
+// build dropped because they did not parse.
 type FlatBuild struct {
 	Config        ThresholdConfig
 	FileConfigs   map[string]ThresholdConfig
 	SubtreeFilled int
-	// Unreachable is tenantID → the sorted keys the tenant inherits from a
-	// subtree `_defaults.yaml` that nothing on the output plane iterates
+	// Undeliverable is tenantID → each threshold key the tenant inherits from
+	// a subtree `_defaults.yaml` that nothing on the output plane iterates
 	// (keyCanReachTheOutputPlane): the key is in neither the root defaults
-	// nor `optional_overrides:`, so /metrics never carries it. The exporter
-	// logs it as an ERROR and counts the tenant on
-	// da_config_subtree_undeliverable_tenants; da-guard reports the part
-	// undeliverableThresholds keeps as the subtree_default_undeliverable
-	// finding (#1976). nil when there is none.
-	Unreachable map[string][]string
-	// UnreachableValues is Unreachable with each key's value: the one of the
-	// deepest defaults level that writes the key in a threshold shape (a
-	// deeper level writing it in another shape, e.g. a YAML bool, is skipped),
-	// normalised by scheduledValueFromRaw (a YAML `1e6` is "1e+06") — not the
-	// file's text. Same tenants and keys as Unreachable.
-	UnreachableValues map[string]map[string]ScheduledValue
+	// nor `optional_overrides:`, so /metrics never carries it — filtered by
+	// undeliverableThresholds (no reserved or routing key, no key
+	// resolveBaseRows never serves, no key the subtree switches off). The
+	// value is the one of the deepest defaults level that writes the key in
+	// a threshold shape (a deeper level writing it in another shape, e.g. a
+	// YAML bool, is skipped), normalised by scheduledValueFromRaw (a YAML
+	// `1e6` is "1e+06") — not the file's text. nil when there is none.
+	//
+	// ⛔ THE ONE SET (#3379). The exporter's ERROR and
+	// da_config_subtree_undeliverable_tenants (UndeliverableKeys), da-guard's
+	// subtree_default_undeliverable (ScopedTenants.Undeliverable), `da-guard
+	// served-values` (LoadReport.Undeliverable) and the not_served
+	// `undeliverable` reason all read this field; the unfiltered set stays
+	// inside BuildFlatConfig. Before, the exporter read the unfiltered set and
+	// paged on a subtree `disable` da-guard passed.
+	Undeliverable map[string]map[string]ScheduledValue
+	// DisabledUndeclared is tenantID → the sorted keys the tenant inherits
+	// from a subtree `_defaults.yaml` that the root never declares and that
+	// the subtree switches off in every window (undeliverableThresholds'
+	// exclusion 3, disabledEverywhere): /metrics is the same as if the root
+	// declared the key and the subtree disabled it. Not undeliverable — the
+	// exporter logs one WARN for it (a disable of a key the root never
+	// declared changes no output; it may be a typo) and does not count it on
+	// the gauge (#3379). nil when there is none.
+	DisabledUndeclared map[string][]string
 	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
 	// order, which is sorted) of the files that contribute nothing to Config
 	// because they failed to parse: a tenant file the walker rejected
@@ -278,9 +292,10 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	merged.applyProfiles(profileLogf)
 
 	n, unreachable, rejected := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
+	undeliverable, disabledUndeclared := undeliverableThresholds(unreachable)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
-		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
+		Undeliverable: undeliverable, DisabledUndeclared: unreachableKeys(disabledUndeclared),
 		ParseFailed:          parseFailed,
 		RootNullUndeclared:   rootNullUndeclared(&merged, rootNull),
 		RootDefaultsUnread:   rootUnread,
@@ -290,6 +305,13 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		rejectedTenantSets:   rejected.tenantSets,
 		respelledChain:       respelledChainFiles(in.ParsedDefaults),
 	}, nil
+}
+
+// UndeliverableKeys is Undeliverable's keys per tenant, sorted (a stable
+// order for the exporter's ERROR line and da-guard's findings); nil when
+// there is none.
+func (b *FlatBuild) UndeliverableKeys() map[string][]string {
+	return unreachableKeys(b.Undeliverable)
 }
 
 // decodeBuildFile is the decode BuildFlatConfig hands one file's bytes to,

@@ -99,11 +99,11 @@ type LoadReport struct {
 	// (#2627). The walk's own WARN for the root is not logged then: this
 	// error carries the same reason.
 	RootListErr error
-	// Undeliverable is the build's FlatBuild.UnreachableValues filtered by
-	// undeliverableThresholds (reserved keys, keys resolveBaseRows never
+	// Undeliverable is the build's FlatBuild.Undeliverable (filtered by
+	// undeliverableThresholds: reserved keys, keys resolveBaseRows never
 	// serves and switched-off keys left out): tenantID → each key the tenant inherits
 	// from a subtree `_defaults.yaml` that the root `_defaults.yaml` and
-	// `optional_overrides:` do not declare, with UnreachableValues' value
+	// `optional_overrides:` do not declare, with its value
 	// (the deepest threshold-shaped one, normalised). The exporter serves no
 	// series for such a key, logs an ERROR and counts the tenant on
 	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
@@ -193,7 +193,7 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	built = &b
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
-	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
+	rep.Undeliverable = built.Undeliverable
 	rep.RootDefaultsUnread = built.RootDefaultsUnread
 	rep.RootDefaultsRefused = built.RootDefaultsRefused
 	rep.RootDefaultsUnjudged = built.RootDefaultsUnjudged
