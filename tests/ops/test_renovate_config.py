@@ -309,6 +309,24 @@ def test_forge_e2e_gitlab_has_its_own_group_and_gated_majors():
     assert major.get("dependencyDashboardApproval") is True, major
 
 
+def test_vector_has_its_own_group_and_gated_majors():
+    """A Vector bump also moves the CI / dev-container Vector CLI and Chart
+    appVersion (test_vector_pin_parity.py), so it cannot ride the third-party
+    image group PR (#3385); a major waits for the Dashboard."""
+    cfg = _load_config()
+    image_group = _resolve(cfg, manager="custom.regex", dep="grafana/grafana",
+                           datasource="docker", update="minor").get("groupName")
+    for update in ("patch", "minor", "digest"):
+        got = _resolve(cfg, manager="custom.regex", dep="timberio/vector",
+                       datasource="docker", update=update)
+        assert got["enabled"] is True, got
+        assert got.get("groupName") and got["groupName"] != image_group, (update, got)
+        assert not got.get("dependencyDashboardApproval"), (update, got)
+    major = _resolve(cfg, manager="custom.regex", dep="timberio/vector",
+                     datasource="docker", update="major")
+    assert major.get("dependencyDashboardApproval") is True, major
+
+
 def test_grafana_plugin_bumps_have_their_own_group_and_gated_majors():
     """TRK-2605: a plugin version is not an image and is not in the scan matrix, so
     it must not ride the third-party image group PR; a major waits for the Dashboard."""
