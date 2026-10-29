@@ -204,6 +204,22 @@ FINDING_KINDS: dict[str, str] = {
     "timing_value_replaced":
         "A timing value Alertmanager cannot read, rendered as the platform "
         "default.",
+    # ADR-038 §5: the shared key verdict, under --validate. Reported only
+    # (`blocks: never`) until the gates block (#3016).
+    "key_unread":
+        "A key no reader reads, by the shared key verdict (ADR-038); the line "
+        "names the verdict's own severity.",
+    "key_disable_noop":
+        "A `disable` that switches nothing off (ADR-038 decision 8).",
+    "key_disable_partial":
+        "A `disable` whose family is still served from another file (ADR-038 "
+        "decision 8).",
+    "key_undecidable":
+        "No root platform file was read, so the threshold keys were not "
+        "judged (ADR-038 decision 7).",
+    "key_verdict_incomplete":
+        "The shared key verdict could not be given (da-guard failing); the "
+        "keys were not judged and the run's verdict is unchanged.",
 }
 
 

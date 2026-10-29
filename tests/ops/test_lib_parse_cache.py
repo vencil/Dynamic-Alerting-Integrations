@@ -118,11 +118,13 @@ def test_the_modes_are_the_named_ones_and_distinct():
     assert "text_sequences=('tenants',)" in pc.TENANT_LISTS_AS_TEXT.name
 
 
-def _quiet_main(argv):
+def _quiet_main(argv, *, key_verdict=False):
+    """The generator as the container runs it (`_gsvc_child`: no key verdict
+    inside it, ADR-038 §5); `key_verdict=True` is the CLI."""
     with contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):
         try:
-            gar.main(argv)
+            gar.main(argv, key_verdict=key_verdict)
         except SystemExit as exc:
             return gar._exit_code_of(exc)
     return 0
@@ -177,7 +179,8 @@ def test_runtime_no_pyyaml_reader_is_built_for_a_confd_file(tmp_path, monkeypatc
     monkeypatch.setattr(yaml.reader.Reader, "__init__", rec)
     monkeypatch.setattr(pt, "load", spy)
     _lib_confd.reset_warned_for_test()
-    _quiet_main(["--config-dir", str(d), "--validate", "--strict"])
+    # The CLI: its key verdict reads the same tree-mode document too.
+    _quiet_main(["--config-dir", str(d), "--validate", "--strict"], key_verdict=True)
     assert runs == [d]  # one tree-mode document for the whole run
     confd = [s for s in built if (isinstance(s, str) and (s in texts or s.startswith(str(d))))]
     assert confd == [], confd

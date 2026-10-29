@@ -333,6 +333,31 @@ def profile_layer_findings(profiles_by_file: dict[str, dict[str, Any]],
             for (file, key), (reason, tenants) in found.items()]
 
 
+def finding_line(f: Finding, limit: int) -> str:
+    """The one line a report prints for `f` (validate-config's `unread_keys`
+    row, the route generator's `--validate`): the file, the severity, the
+    kind, the key, the tenants it reaches (at most `limit` named)."""
+    who = ", ".join(f.tenants[:limit]) + (
+        f" (+{len(f.tenants) - limit} more)" if len(f.tenants) > limit else "")
+    why = f" ({f.reason})" if f.reason else ""
+    fam = ("; still served: " + ", ".join(
+        f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
+        if f.served_family else "")
+    # A profile key no tenant binds names none (#3042).
+    who = f"tenant(s) {who}" if who else "no tenant"
+    return f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — {who}"
+
+
+def undecidable_line(verdict: TreeVerdict) -> str | None:
+    """The line saying the threshold keys were not judged (decision 7), or
+    None when a root platform file was read."""
+    if not verdict.undecidable:
+        return None
+    n = sum(v.verdict == UNDECIDABLE for vs in verdict.keys.values() for v in vs)
+    return (f"no root platform file was read: {n} threshold key(s) cannot be judged "
+            "(undecidable)")
+
+
 def _sorted_findings(findings: list[Finding]) -> list[Finding]:
     order = {ERROR: 0, WARNING: 1, NOTICE: 2}
     return sorted(findings, key=lambda f: (order.get(f.severity, 3), f.file or "", f.key, f.kind, f.tenants))
