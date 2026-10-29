@@ -1,4 +1,6 @@
-"""產生器的路由層鍵判斷涵蓋登錄表宣告為產生器讀的每個鍵（ADR-038 決定 2）。
+"""產生器的路由層鍵判斷涵蓋登錄表宣告為產生器讀的每個鍵。
+
+登錄表見 ADR-038 決定 2；da-guard 的 exit 4 涵蓋只有產生器判得了的內容見決定 5。
 
 `_grar_parse._is_routing_layer_key` 是手寫的（Go 的 `config.IsRoutingLayerKey`
 是它的雙胞胎，由 `registered_readers_test.go` 依同一條規則守住），不由登錄表產生。
@@ -25,5 +27,9 @@ def test_the_registry_declares_generator_keys():
 @pytest.mark.parametrize("key", GENERATOR_KEYS + [p + "zz_probe" for p in GENERATOR_PREFIXES])
 def test_every_key_the_generator_reads_is_a_routing_layer_key(key):
     assert _grar_parse._is_routing_layer_key(key), (
-        f"the registry says the route generator reads {key!r}: extend "
-        "_grar_parse._is_routing_layer_key and Go's config.IsRoutingLayerKey")
+        f"the registry says the route generator reads {key!r}, but it is no routing-layer key: "
+        "decide whether it is one (da-guard exit 4, no threshold row, never filled from a "
+        "profile, routing_in_unread_location); if so extend _grar_parse._is_routing_layer_key "
+        "and Go's config.IsRoutingLayerKey (and _unread_routing_fix's advice for it); if another "
+        "reader reads it in the profile layer, the predicate would stop that, so it needs its own "
+        "rule instead")

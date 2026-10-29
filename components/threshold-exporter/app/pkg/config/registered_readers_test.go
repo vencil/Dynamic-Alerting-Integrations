@@ -104,7 +104,10 @@ func TestIsRoutingLayerKey_CoversEveryKeyTheGeneratorReads(t *testing.T) {
 		n++
 		if !IsRoutingLayerKey(k) {
 			t.Errorf("the registry says the route generator reads %q, but IsRoutingLayerKey(%q) is false: "+
-				"extend IsRoutingLayerKey and _grar_parse._is_routing_layer_key", k, k)
+				"decide whether it is a routing-layer key (exit 4, no threshold row, never filled from a "+
+				"profile, routing_in_unread_location); if so extend IsRoutingLayerKey and "+
+				"_grar_parse._is_routing_layer_key; if another reader reads it in the profile layer, "+
+				"the predicate would stop that, so it needs its own rule instead", k, k)
 		}
 	}
 	for p, e := range reg.Prefixes {
@@ -113,7 +116,8 @@ func TestIsRoutingLayerKey_CoversEveryKeyTheGeneratorReads(t *testing.T) {
 		}
 		n++
 		if k := p + "zz_probe"; !IsRoutingLayerKey(k) {
-			t.Errorf("the registry says the route generator reads prefix %q, but IsRoutingLayerKey(%q) is false", p, k)
+			t.Errorf("the registry says the route generator reads prefix %q, but IsRoutingLayerKey(%q) is false "+
+				"(see the key case above for what to decide)", p, k)
 		}
 	}
 	if n == 0 {
