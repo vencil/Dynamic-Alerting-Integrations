@@ -313,3 +313,40 @@ func TestPercentOf_ZeroLimitIsSafe(t *testing.T) {
 		t.Errorf("percentOf(50, 0) = %d, want 0 (must not panic, must not divide)", got)
 	}
 }
+
+// #3380: the limit is a budget; whether the exporter truncates is its own
+// cap's call (ExporterRowCap), and the finding says which.
+func TestCheckCardinality_SaysWhetherTheExporterTruncates(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		count, limit, xcap int
+		kind               findingkind.Kind
+		want, notWant      string
+	}{
+		// --cardinality-limit below the exporter's cap: over budget, not cut.
+		{"limit below the exporter's cap", 60, 50, 500, findingkind.FindingCardinalityExceeded,
+			"the exporter's own max_metrics_per_tenant (500) truncates none of them", "truncate them"},
+		// The limit is the exporter's cap: over it is cut.
+		{"limit equals the exporter's cap", 101, 100, 100, findingkind.FindingCardinalityExceeded,
+			"the exporter would silently truncate them to its max_metrics_per_tenant of 100", "truncates none"},
+		// Under a raised budget but over the exporter's cap: still cut.
+		{"count over the exporter's cap, under the limit", 900, 1000, 100, findingkind.FindingCardinalityWarning,
+			"the exporter would silently truncate them to its max_metrics_per_tenant of 100", "truncates none"},
+		{"exporter cap negative", 60, 50, -1, findingkind.FindingCardinalityExceeded,
+			"is negative (no cap), so it truncates none of them", "truncate them"},
+		{"exporter cap unknown", 60, 50, 0, findingkind.FindingCardinalityExceeded,
+			"exceeds the per-tenant cardinality limit of 50", "max_metrics_per_tenant"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := one(tc.count, tc.limit)
+			in.ExporterRowCap = tc.xcap
+			got := checkCardinality(in)
+			if len(got) != 1 || got[0].Kind != tc.kind {
+				t.Fatalf("got %v, want one %s", got, tc.kind)
+			}
+			if !strings.Contains(got[0].Message, tc.want) || strings.Contains(got[0].Message, tc.notWant) {
+				t.Errorf("message %q: want %q, not %q", got[0].Message, tc.want, tc.notWant)
+			}
+		})
+	}
+}

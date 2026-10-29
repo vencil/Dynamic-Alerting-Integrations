@@ -9,7 +9,7 @@
 | **Why / 為什麼** | 在 CI **攔截高基數 / 惡意配置**，在它炸掉 Prometheus 前擋下。*Catch cardinality bombs in CI.* |
 | **Who / 給誰** | Platform Engineer / SRE / CI owner |
 | **Try（≤2 min）** | 見下方——**對一份「過量配置」fixture 跑 da-guard** |
-| **→ You'll see** | da-guard **紅字攔截**：指出哪個租戶會超出 cardinality 預算、runtime 會被靜默截斷，**exit 1**。*da-guard red-flags the over-budget tenant and exits 1.* |
+| **→ You'll see** | da-guard **紅字攔截**：指出哪個租戶的列數超出 cardinality 預算，並說明 exporter 自己的上限（`max_metrics_per_tenant`）會不會截斷它，**exit 1**。*da-guard red-flags the over-budget tenant and exits 1.* |
 
 > 🎯 **這個 demo 給誰**：Platform Engineer / SRE / CI owner（把 da-guard 接成 CI 護欄）。其他角色（Domain Expert / Tenant）的上手路徑見 [角色導引](../../../docs/getting-started/README.md)。
 
@@ -17,7 +17,7 @@
 
 ## Try it（從本目錄 `components/da-tools/app/` 執行）
 
-內附 fixture [`examples/cardinality-demo/conf.d/`](examples/cardinality-demo/conf.d/) 是一個**故意過度配置**的租戶（60 個 metric 閾值，都在根 `_defaults.yaml` 的 `optional_overrides:` 宣告過，所以 exporter 每個 key 送一條 series；da-guard 數的就是 exporter 實際會產生的列數，[#3380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3380)）。對它跑 da-guard，預算設低 50（production 預設 500）：
+內附 fixture [`examples/cardinality-demo/conf.d/`](examples/cardinality-demo/conf.d/) 是一個**故意過度配置**的租戶（60 個 metric 閾值，都在根 `_defaults.yaml` 的 `optional_overrides:` 宣告過，所以 exporter 每個 key 送一條 series；da-guard 數的就是 exporter 實際會產生的列數，[#3380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3380)）。對它跑 da-guard，預算設低 50（`--cardinality-limit` 只是 da-guard 的預算；exporter 自己的上限是根 `_defaults.yaml` 的 `max_metrics_per_tenant`，未設即 500，所以這 60 列在 runtime 不會被截斷——demo 示範的是把超出預算的變更擋在 CI）：
 
 ```sh
 docker run --rm -v "$(pwd)/examples:/work:ro" ghcr.io/vencil/da-tools:v2.9.0 \
@@ -40,14 +40,16 @@ docker run --rm -v "$(pwd)/examples:/work:ro" ghcr.io/vencil/da-tools:v2.9.0 \
 
 | Tenant | Field | Kind | Message |
 |--------|-------|------|---------|
-| over-budget-tenant | — | cardinality_exceeded | tenant "over-budget-tenant": the exporter would produce 60 user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of 50; it would silently truncate the excess (max_metrics_per_tenant) |
+| over-budget-tenant | — | cardinality_exceeded | tenant "over-budget-tenant": the exporter would produce 60 user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of 50; the exporter's own max_metrics_per_tenant (500) truncates none of them |
 ```
+
+⚠️ v2.9.0 映像裡的 da-guard 對這棵樹判定相同（`cardinality_exceeded`、exit 1），但數的是租戶 effective config 的頂層鍵，報 61（`optional_overrides` 也被算成一個鍵），訊息也仍是舊寫法：`predicted metric count 61 exceeds the per-tenant cardinality limit of 50; runtime would silently truncate the excess (config_resolve.go::ResolveAt)`。<!-- image-caveat: v2.9.0 -->
 
 ```sh
 echo $?      # → 1（errors > 0 即 block merge）
 ```
 
-這就是 da-guard 的價值：在配置進 Prometheus**之前**，於 CI 算出它會撐爆 per-tenant cardinality 預算、並以非零 exit code 擋下 merge——把一場「半夜被 call 起床」的事故消滅在 PR 階段。
+這就是 da-guard 的價值：在配置進 Prometheus**之前**，於 CI 算出它會超出 per-tenant cardinality 預算、並以非零 exit code 擋下 merge——把一場「半夜被 call 起床」的事故消滅在 PR 階段。
 
 ## 各子工具一句定位
 - **`da-guard`** — conf.d 安全把關：schema + **cardinality** guard（上面 demo 的就是它；路由與 domain policy 自 #2904 起交給 `generate-routes --validate --strict`，樹上有這類內容時 exit 4）

@@ -296,6 +296,14 @@ type CheckInput struct {
 	// EffectiveConfigs; a tenant absent from it counts 0.
 	PredictedRowCounts map[string]int `json:"-"`
 
+	// ExporterRowCap is the per-tenant cap the exporter's resolver itself
+	// truncates at (config.EffectiveMaxMetricsPerTenant of the build's
+	// max_metrics_per_tenant): > 0 the cap, < 0 no truncation, 0 unknown.
+	// CardinalityLimit is the budget compared against and may differ from it
+	// (an explicit --cardinality-limit); the findings say whether the
+	// exporter truncates by this one (#3380).
+	ExporterRowCap int `json:"-"`
+
 	// DefaultsFiles are the defaults carriers of the scan
 	// (config.ScopedTenants.DefaultsFiles), checked for the `defaults:`
 	// wrapper shapes (#2386, rootdefaults.go); nil skips the check.

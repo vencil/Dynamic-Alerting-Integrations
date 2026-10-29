@@ -182,7 +182,8 @@ func TestCardinality_OverTheExportersCapIsPredictedUncut(t *testing.T) {
 	}
 	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--format", "md")
 	if code != exitFindings || !strings.Contains(stdout, "would produce 5 user_threshold rows") ||
-		!strings.Contains(stdout, "cardinality_exceeded") {
+		!strings.Contains(stdout, "cardinality_exceeded") ||
+		!strings.Contains(stdout, "truncate them to its max_metrics_per_tenant of 2") {
 		t.Errorf("exit = %d, want %d with 5 rows over the cap of 2. stdout=%q stderr=%q", code, exitFindings, stdout, stderr)
 	}
 }
@@ -358,5 +359,22 @@ func TestCardinality_ExpiresIsReadAtTheRunsInstant(t *testing.T) {
 				t.Errorf("predicted %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// An explicit --cardinality-limit below the exporter's own cap is a budget:
+// the finding says the exporter truncates none of the rows (#3380).
+func TestCardinality_ExplicitLimitBelowTheExportersCapSaysNoTruncation(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  m1: 1\n  m2: 2\n  m3: 3\n",
+		"tx.yaml":        "tenants:\n  tx: {}\n",
+	})
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "2", "--format", "md")
+	if code != exitFindings || !strings.Contains(stdout, "exceeds the per-tenant cardinality limit of 2") ||
+		!strings.Contains(stdout, "max_metrics_per_tenant (500) truncates none of them") ||
+		strings.Contains(stdout, "truncate them") {
+		t.Errorf("exit = %d, want %d: over the budget, not truncated by the cap of 500. stdout=%q stderr=%q",
+			code, exitFindings, stdout, stderr)
 	}
 }

@@ -31,6 +31,11 @@ package guard
 // schedule that adds rows at some time of day is counted at its busiest
 // minute — the cut truncates there.
 //
+// The limit compared against (CardinalityLimit) is a budget: an explicit
+// --cardinality-limit may differ from the exporter's own cap
+// (CheckInput.ExporterRowCap), so each finding says whether that cap
+// truncates the rows, rather than assuming the budget is the cap.
+//
 // ⛔ NO COUNT OF ITS OWN: before #3380 this file counted the top-level keys
 // of the effective config, less a hand-kept skip-list of reserved prefixes;
 // a key the exporter never serves (a subtree default the root does not
@@ -76,8 +81,8 @@ func checkCardinality(input CheckInput) []Finding {
 				TenantID: tenantID,
 				Field:    "",
 				Message: fmt.Sprintf(
-					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of %d; it would silently truncate the excess (max_metrics_per_tenant)",
-					tenantID, count, input.CardinalityLimit),
+					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, which exceeds the per-tenant cardinality limit of %d",
+					tenantID, count, input.CardinalityLimit) + exporterCapClause(count, input.ExporterRowCap),
 			})
 		case count > warnFloor:
 			out = append(out, Finding{
@@ -86,12 +91,30 @@ func checkCardinality(input CheckInput) []Finding {
 				TenantID: tenantID,
 				Field:    "",
 				Message: fmt.Sprintf(
-					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, %d%% of the cardinality limit (%d) — only %d slots before runtime truncation",
-					tenantID, count, percentOf(count, input.CardinalityLimit), input.CardinalityLimit, input.CardinalityLimit-count),
+					"tenant %q: the exporter would produce %d user_threshold rows at its busiest minute of the day, %d%% of the cardinality limit (%d), %d below it",
+					tenantID, count, percentOf(count, input.CardinalityLimit), input.CardinalityLimit, input.CardinalityLimit-count) +
+					exporterCapClause(count, input.ExporterRowCap),
 			})
 		}
 	}
 	return out
+}
+
+// exporterCapClause says what the exporter's own cut (exporterCap,
+// CheckInput.ExporterRowCap) does to count rows — the cardinality limit is a
+// budget that may differ from it (an explicit --cardinality-limit), so a
+// finding only claims truncation when count is over the exporter's cap.
+// "" when the cap is unknown (0).
+func exporterCapClause(count, exporterCap int) string {
+	switch {
+	case exporterCap > 0 && count > exporterCap:
+		return fmt.Sprintf("; the exporter would silently truncate them to its max_metrics_per_tenant of %d", exporterCap)
+	case exporterCap > 0:
+		return fmt.Sprintf("; the exporter's own max_metrics_per_tenant (%d) truncates none of them", exporterCap)
+	case exporterCap < 0:
+		return "; the exporter's max_metrics_per_tenant is negative (no cap), so it truncates none of them"
+	}
+	return ""
 }
 
 // percentOf returns ⌊count / limit × 100⌋. Defensive division —

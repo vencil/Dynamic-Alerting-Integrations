@@ -1,6 +1,7 @@
 # DEMO fixture — 平台層宣告（QUICKSTART 用）。
-# exporter 只送根 `_defaults.yaml` 宣告過的閾值：這裡以 optional_overrides 宣告 60 個 key
-# （只宣告、不給預設值），租戶寫了值才各送一條 series（#3380）。
+# 一般（非維度）閾值鍵，exporter 只送根 `_defaults.yaml` 宣告過的（維度鍵 `key{label="v"}`
+# 不在此限）：這裡以 optional_overrides 宣告 demo 租戶的 60 個 key（只宣告、不給預設值），
+# 租戶寫了值才各送一條 series（#3380）。
 optional_overrides:
   - metric_000
   - metric_001

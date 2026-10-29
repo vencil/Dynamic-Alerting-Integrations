@@ -570,8 +570,14 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 	}
 	refused, rejected, blockErrs := customAlertVerdicts(scoped)
 	var rowCounts map[string]int
+	exporterCap := 0
 	if f.cardinalityLimit > 0 {
 		rowCounts = predictedRowCounts(scoped, now)
+		if scoped.Config != nil {
+			// The cap the resolver itself cuts at (#3380): the findings say
+			// whether it truncates, whatever --cardinality-limit is.
+			exporterCap = config.EffectiveMaxMetricsPerTenant(scoped.Config.MaxMetricsPerTenant)
+		}
 	}
 
 	return guard.CheckInput{
@@ -584,6 +590,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags, now time.Time) guar
 		CardinalityWarnRatio: f.cardinalityWarnRatio,
 		// #3380: what the exporter's own resolver produces, not a key count.
 		PredictedRowCounts: rowCounts,
+		ExporterRowCap:     exporterCap,
 		DefaultsFiles:      scoped.DefaultsFiles,
 		ParseFailed:        scoped.ParseFailed,
 		// #1976: the exporter's own build's undeliverable set, in-scope
