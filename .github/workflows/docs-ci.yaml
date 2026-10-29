@@ -124,6 +124,13 @@ jobs:
               # strace (subprocesses included); its per-leg results are there.
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"
               - "components/threshold-exporter/README.md"
+              # #3206 (ADR-036 §12): `drift-checks` builds da-crdecode
+              # (`make da-crdecode-build`, invisible to the coverage guard —
+              # `make` is not an interpreter it follows) and validate_all's
+              # `byo_rulepack_table` reads the Prometheus Deployment through
+              # it, so a change to that reading can change the table. Same
+              # entry image-ref-resolve.yaml carries for the same binary.
+              - "components/threshold-exporter/app/cmd/da-crdecode/**"
               # The mkdocs hooks `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
               # executes them on every build, so breaking one fails that
               # required check. `test_docs_filter_covers_every_mkdocs_hook`
@@ -480,6 +487,23 @@ jobs:
           # measurement — that measurement showed it was LOADED, which is not
           # the same as needed.)
           pip install pyyaml promql-parser croniter -c requirements/ci-constraints.txt
+
+      # #3206 (ADR-036 §12): `byo_rulepack_table` reads the Prometheus
+      # Deployment the way kubectl does (da-crdecode); without it the check
+      # exits 2 by name. It is the only check in the `--only` list below that
+      # needs a reader binary — each was run with none on PATH and no
+      # DA_*_BINARY set, and every other one passed — so da-read is not built.
+      - name: Set up Go (da-crdecode for byo_rulepack_table)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-crdecode
+        run: |
+          make da-crdecode-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)
         env:
