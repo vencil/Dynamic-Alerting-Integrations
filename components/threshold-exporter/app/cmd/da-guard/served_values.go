@@ -984,8 +984,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = v
 		}
 		// #1976: the build's own verdict (LoadReport.Undeliverable:
-		// FlatBuild.Unreachable minus what undeliverableThresholds leaves
-		// out), never re-judged here. Invariant, so no membership check: such
+		// FlatBuild.Undeliverable, undeliverableThresholds' filter — the set
+		// the exporter's ERROR and gauge read, #3379), never re-judged here. Invariant, so no membership check: such
 		// a key is in neither Unserved nor Values. Not in Unserved — Unserved
 		// above comes from the tenant's merged map, and the build judges only
 		// keys the tenant's map lacks under every spelling

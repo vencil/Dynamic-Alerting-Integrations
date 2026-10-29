@@ -8,7 +8,6 @@
 - 對照組：可用的 da-guard 拒收的樹（F0）仍是樹的問題（caller_error False）。
 - policy_dsl 列：`--policy-dsl` 載入失敗時不說規則來自它；根 `_defaults.yaml` 是斷掉的
   symlink 時不說「沒有根載體」；沒有閾值被評估到／有 unserved 值時說出來。
-- values_not_served 的 PASS 不再說「/metrics 照寫送出每一個閾值值」。
 - 空的 `--config-dir` 是 caller error（rc 2）。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
@@ -50,7 +49,7 @@ _LTE_80 = "policies:\n  - name: cap\n    target: mysql_connections\n    operator
 _ROWS = {
     "profiles": lambda conf_d, pol: vc.check_profiles(conf_d),
     "policy_dsl": lambda conf_d, pol: vc.check_policy_dsl(conf_d, pol),
-    "values_not_served": lambda conf_d, pol: vc.check_values_not_served(conf_d),
+    "guard_errors": lambda conf_d, pol: vc.check_guard_errors(conf_d),
 }
 
 
@@ -162,7 +161,8 @@ def test_control_a_tree_a_working_da_guard_refuses_stays_the_trees(row, tmp_path
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n",
     }))
     got = _ROWS[row](conf_d, _policy(tmp_path))
-    # effective（profiles／values_not_served）不拒收 F0；served-values（policy_dsl）拒收。
+    # effective（profiles）與 da-guard 的檢查（guard_errors：F0 只是 warning）不拒收 F0；
+    # served-values（policy_dsl）拒收。
     assert (got["status"] == vc.FAIL) is (row == "policy_dsl"), got
     assert got["caller_error"] is False, got
     # getattr：對照組在沒有這兩個提示的版本上也要能跑（反事實時它須綠）。
@@ -224,7 +224,7 @@ def test_dangling_root_carrier_is_not_called_absent(root, tmp_path):
         assert "there is no root defaults carrier" in line[0], row
 
 
-# ── 4：沒有閾值被評估到時說出來；values_not_served 不說「每個值都照寫送出」──────────
+# ── 4：沒有閾值被評估到時說出來 ──────────────────────────────────────────────
 
 @pytest.mark.parametrize("root", [True, False], ids=["root-defaults", "no-root-defaults"])
 def test_pass_says_when_no_threshold_was_compared(root, tmp_path):
@@ -241,14 +241,6 @@ def test_pass_says_when_no_threshold_was_compared(root, tmp_path):
         assert "/metrics serves no threshold value for any tenant" in text, row
         assert "1 threshold value(s) are configured but not served" in text, row
         assert "tenant-a: mysql_connections" in text, row
-
-
-def test_values_not_served_pass_does_not_claim_every_value_is_served(tmp_path):
-    conf_d = str(_tree(tmp_path / "t", {"tenant-a.yaml": _CLEAN["tenant-a.yaml"]}))
-    assert tv.load_served_values(conf_d)["tenant-a"].unserved   # served-values：沒送
-    row = vc.check_values_not_served(conf_d)
-    assert row["status"] == vc.PASS, row
-    assert not any("serves every threshold value" in d for d in row["details"]), row
 
 
 # ── 5：空的 --config-dir 是 caller error ─────────────────────────────────────────

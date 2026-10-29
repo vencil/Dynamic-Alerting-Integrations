@@ -12,10 +12,11 @@ package guard
 // is the fix: not the reserved keys, not the keys the exporter never serves
 // as a threshold row (`_silent_*`, `_state_*`, …; both reported by
 // checkSubtreeReservedKeys, #2388), and not keys
-// the subtree switches off (pkg/config undeliverableThresholds).
+// the subtree switches off (pkg/config undeliverableThresholds). Since #3379
+// the exporter's ERROR and gauge count exactly this set.
 //
 // ⛔ NO VERDICT OF ITS OWN. Which keys are undeliverable is the exporter's
-// build's answer (pkg/config FlatBuild.Unreachable, judged by
+// build's answer (pkg/config FlatBuild.Undeliverable, judged by
 // keyCanReachTheOutputPlane, filtered by pkg/config's
 // undeliverableThresholds), handed in by the caller as
 // CheckInput.UndeliverableInherited; nothing here re-derives it.

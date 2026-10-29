@@ -30,7 +30,6 @@ import contextvars
 import inspect
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -47,6 +46,7 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
 from _lib_tenant_values import (  # noqa: E402
@@ -95,23 +95,15 @@ def _h(key: str) -> str:
     return _HELP[key].get(_LANG, _HELP[key]['en'])
 
 
-class CommandNotFoundError(FileNotFoundError):
-    """The external command (kubectl) is not on PATH.
-
-    A FileNotFoundError subclass so batch_diagnose, which catches OSError per
-    tenant, keeps recording it as that tenant's issue; the CLI turns it into
-    rc=2 plus one line instead of the traceback it used to be (issue 1513).
-    """
-
-
 class CommandTimeoutError(OSError):
-    """The external command (kubectl) did not finish within its time budget.
+    """The caller's deadline had passed before kubectl could be started.
 
-    An environment failure like CommandNotFoundError (rc 2), not a finding
-    about the tenant (#2968): the CLI prints one line, batch_diagnose marks
-    the tenant `_environment_error`. Deliberately NOT a FileNotFoundError
+    An environment failure like `KubectlError` (rc 2), not a finding about
+    the tenant (#2968): the CLI prints one line, batch_diagnose marks the
+    tenant `_environment_error`. Deliberately NOT a FileNotFoundError
     subclass, so batch_diagnose has to name it rather than let it fall into
-    its generic OSError branch (rc 1).
+    its generic OSError branch (rc 1). A kubectl that was started and gave no
+    answer in its budget is `KubectlError` (#3349).
     """
 
 
@@ -152,7 +144,7 @@ PROMETHEUS_TIMEOUT_S = inspect.signature(
 
 @contextlib.contextmanager
 def deadline(at: float, *, grace: float = DEADLINE_GRACE_S):
-    """Bound every run_cmd / query_prometheus in this context (this thread
+    """Bound every kubectl read / query_prometheus in this context (this thread
     only — see _DEADLINE) by `at`, a time.monotonic() value; a subprocess is
     given up to `grace` seconds less."""
     token = _DEADLINE.set((at, grace))
@@ -171,29 +163,29 @@ def _time_left(with_grace: bool) -> float | None:
     return at - time.monotonic() - (grace if with_grace else 0.0)
 
 
-def run_cmd(cmd: list[str]) -> str | None:
-    """Execute a command safely using list arguments only (no shell=True).
-
-    Args:
-        cmd: Command as a list of strings. String input is rejected
-             to prevent potential command injection via shlex parsing.
-    """
-    if not isinstance(cmd, list):
-        raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
+def kubectl_budget() -> float:
+    """The timeout for the next kubectl read: its own cap, or less under a
+    caller's deadline (minus its grace). Raises CommandTimeoutError when the
+    deadline has passed: never start a process the caller stopped waiting for."""
     left = _time_left(with_grace=True)
     if left is not None and left <= 0:
-        # Never start a process the caller has already stopped waiting for.
-        raise CommandTimeoutError(f"{cmd[0]} not run: the deadline has passed")
-    budget = KUBECTL_TIMEOUT_S if left is None else min(KUBECTL_TIMEOUT_S, left)
-    try:
-        return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL, timeout=budget).strip()
-    except subprocess.CalledProcessError:
-        return None
-    except FileNotFoundError as exc:
-        raise CommandNotFoundError(f"{cmd[0]} not found on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        # check_output has already killed and reaped the child (#2968).
-        raise CommandTimeoutError(f"{cmd[0]} timed out after {budget:.3g}s") from exc
+        raise CommandTimeoutError("kubectl not run: the deadline has passed")
+    return KUBECTL_TIMEOUT_S if left is None else min(KUBECTL_TIMEOUT_S, left)
+
+
+def pod_phase(tenant: str) -> str | None:
+    """The phase of the tenant's first MariaDB Pod, None when kubectl answered
+    and lists none. #3349: a read that got no answer (forbidden, unreachable,
+    no kubectl, its budget out) is `KubectlError` (rc 2) — never "not found"."""
+    pods = kubectl_list("pods", namespace=tenant, selector="app=mariadb",
+                        timeout=kubectl_budget())
+    return ((pods[0].get("status") or {}).get("phase") or None) if pods else None
+
+
+def mariadb_logs(tenant: str) -> str:
+    """The last 20 lines of the MariaDB container's log, or `KubectlError`."""
+    return kubectl_logs(tenant, "deploy/mariadb", container="mariadb", tail=20,
+                        timeout=kubectl_budget())
 
 
 # The Pod and exporter checks below are written for MariaDB (`app=mariadb`,
@@ -488,8 +480,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
     if is_mariadb:
         # 1. 檢查 Pod 狀態
-        pod_status = run_cmd(["kubectl", "get", "pods", "-n", tenant, "-l", "app=mariadb",
-                              "-o", "jsonpath={.items[0].status.phase}"])
+        pod_status = pod_phase(tenant)
         if not pod_status:
             errors.append("Pod not found")
         elif pod_status != "Running":
@@ -560,14 +551,14 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
         print(json.dumps(result), file=stream)
     else:
         # 只有異常時，嘗試抓取最近的 error log（MariaDB 的 deploy 名稱）
-        # #2968: an extra the findings above do not depend on — its timeout is
-        # recorded beside them, never raised over them (that turned a finding,
-        # rc 1, into an environment error, rc 2).
+        # #2968: an extra the findings above do not depend on — a log read that
+        # got no answer is recorded beside them, never raised over them (that
+        # turned a finding, rc 1, into an environment error, rc 2). #3349: any
+        # such read, not only a timeout — it used to read as "no log" unnamed.
         logs_error = None
         try:
-            logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb",
-                            "--tail=20"]) if is_mariadb else None
-        except CommandTimeoutError as exc:
+            logs = mariadb_logs(tenant) if is_mariadb else None
+        except (KubectlError, CommandTimeoutError) as exc:
             logs, logs_error = None, str(exc)
         error_logs = [line for line in (logs or "").split('\n') if 'ERROR' in line]
 
@@ -634,15 +625,15 @@ def main() -> None:
 
     try:
         result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
-    except CommandNotFoundError as exc:
-        # issue 1513: this was a traceback at rc=1. The Pod check needs kubectl
-        # and a cluster context; the da-tools image ships neither.
-        print(f"ERROR: {exc}; the MariaDB Pod check needs kubectl and cluster "
-              "access", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    except KubectlError as exc:
+        # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
+        # missing (the da-tools image ships none), forbidden, unreachable or
+        # out of time — is the environment: rc 2 and one line, the reason
+        # `kubectl_error` under --json; never "Pod not found" (rc 1).
+        raise KubectlError(f"{exc}; the MariaDB Pod check needs kubectl and a cluster "
+                           "that answers") from None
     except CommandTimeoutError as exc:
-        # #2968: a kubectl that does not answer is the environment, like a
-        # missing one: rc 2 and one line, not a traceback at rc 1.
+        # #2968: the caller's deadline passed before kubectl could start.
         print(f"ERROR: {exc}; the MariaDB Pod check needs kubectl and a cluster "
               "that answers", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

@@ -45,15 +45,14 @@ import (
 // (config.RootDecodedKeys: the yaml tags of config.ThresholdConfig, the set
 // the build's own FlatBuild.RootDefaultsUnread is judged by, #2296).
 // TestRootDecodedKeysMatchSchema pins them to the non-`_` properties of
-// platform-defaults.schema.json, which validate-config reads for the same
-// judgement.
+// platform-defaults.schema.json.
 var rootDecodedKeys = config.RootDecodedKeys()
 
 // TopLevelReadElsewhere are the `_`-prefixed keys another reader takes from
 // the top level of a defaults file (config.TopLevelReadElsewhere, the one
 // list; #2296 moved it so the exporter's build judges the same keys).
-// They are never reported. The same list is validate-config's
-// (tests/shared/defaults_wrapper_matrix.json pins both).
+// They are never reported (tests/shared/defaults_wrapper_matrix.json pins
+// the list).
 var TopLevelReadElsewhere = config.TopLevelReadElsewhere()
 
 var readElsewhere = toSet(TopLevelReadElsewhere)
@@ -112,8 +111,7 @@ const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root
 
 // customAlertsRootFix: no reader takes custom alerts from a `_defaults.yaml`
 // (the exporter never served them; the compiler compiles what it serves,
-// #3042) — where they go. validate_config.py's _CUSTOM_ALERTS_ROOT_FIX is the
-// same sentence.
+// #3042) — where they go.
 const customAlertsRootFix = "`_custom_alerts`: no reader takes custom alerts from a `_defaults.yaml`; " +
 	"write the list in each tenant's own entry under `tenants:`, in a root platform file's `tenants:`, " +
 	"or in a profile its tenants select (#3042)."

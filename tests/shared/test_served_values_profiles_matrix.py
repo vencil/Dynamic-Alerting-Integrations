@@ -306,10 +306,10 @@ def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
 ])
 def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, files, reason):
     """`_with_exporter_reasons` 曾在 effective 失敗後補跑 served-values 借原因文字；
-    `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles 與
-    values_not_served 兩列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫
-    `effective`（以計數 wrapper 記錄子命令；ADR-036 步驟 4 起另有讀樹的一次
-    `parse-tree`）。"""
+    `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles
+    列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫 `effective`（以計數 wrapper
+    記錄子命令；ADR-036 步驟 4 起另有讀樹的一次 `parse-tree`，#3387 起另有 guard_errors
+    的一次 da-guard 檢查）——沒有 served-values。"""
     require_shebang_scripts()  # the counting wrapper is a `#!` script
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
@@ -326,9 +326,14 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
                         str(conf_d), "--json"], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=300)
     rows = {r["check"]: r for r in json.loads(p.stdout)}
-    for check in ("profiles", "values_not_served"):
-        row = rows[check]
-        assert row["status"] == vc.FAIL and row["caller_error"] is False, row
-        assert any(d.startswith("  da-guard| ") and reason in d for d in row["details"]), row
-    # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective.
-    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective"]
+    row = rows["profiles"]
+    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+    assert any(d.startswith("  da-guard| ") and reason in d for d in row["details"]), row
+    # #3387: guard_errors runs da-guard's own check (argv `--config-dir …`, no
+    # subcommand) and names the dropped file from its exit 3.
+    row = rows["guard_errors"]
+    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+    assert any(d.startswith("da-guard (exit 3): ") for d in row["details"]), row
+    # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective
+    # (no served-values to borrow the reason from), then da-guard's check.
+    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective", "--config-dir"]

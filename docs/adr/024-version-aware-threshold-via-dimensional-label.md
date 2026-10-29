@@ -160,7 +160,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 編譯器把 recipe + 參數生成**向量化 `group_left` 規則**：一條 `app_metric > on(tenant[,version]) group_left(...) <該 recipe 的 user_threshold>` 涵蓋所有宣告該 recipe 的租戶——**規則數 = recipe 形狀數（shape），非租戶數**。
 
-**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 per-tenant cap 封頂（已實作：tenant-api 寫入檢查拒收、da-guard `custom_alert_over_cap` 與 validate-config `custom_alert_cap` 在 CI 擋）；(b) 全域 rule-count budget（**規劃中、未實作**——其值待以實測 rule-eval-duration 反推，故與該 benchmark 一同 defer）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate（已實作）。
+**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 per-tenant cap 封頂（已實作：tenant-api 寫入檢查拒收、da-guard `custom_alert_over_cap` 在 CI 擋，validate-config 在 `guard_errors` 列報它）；(b) 全域 rule-count budget（**規劃中、未實作**——其值待以實測 rule-eval-duration 反推，故與該 benchmark 一同 defer）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate（已實作）。
 
 **部署源 = live conf.d**：編譯源必須是 exporter 實際服務的同一份 conf.d，否則生成規則的 shape 對不上 exporter emit 的 `user_threshold` series → 規則永不 fire（靜默失效）。custom-alert pack 是**租戶自訂、非平台覆蓋**，故從平台的 rule-pack / alert count 統計排除（badge 不變）。
 
@@ -240,7 +240,6 @@ portal 的 recipe 表單在瀏覽器裡執行，不跑 Go：它只做即時提�
 |---|---|
 | `tenant-config.schema.json` 的 `_custom_alerts` 條目定義（列舉、格式、預設值與各 recipe 的必填規則） | 編輯器提示、validate-config 的 schema 檢查 |
 | portal 的 `recipe-enums.json`、`recipe-status.json` | recipe builder 的選項與狀態標示 |
-| validate-config 讀的每租戶自訂告警上限（`_lib_constants.py`） | `custom_alert_cap` 列 |
 | `rule-packs/recipes/*.yaml` 的生命週期狀態、參數必填與否、列舉與預設值 | 給人讀的治理文件 |
 
 自訂規則 lint（`lint_custom_rules.py`）的查詢範圍上限與 recipe-preview 的 `for` 分鐘數對照目前仍各自手寫；兩者預定在 recipe-preview 改走 Go 時改由契約產生（前者由 horizon 最大值推得）。

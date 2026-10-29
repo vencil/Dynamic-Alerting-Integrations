@@ -148,9 +148,9 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   `not_served` reasons, e.g. `value_unparsed`, `window_invalid`) and `file`
   (relative to `conf_d`; "" when no single file applies). Empty when /metrics
   serves every key as shown. A da-guard whose effective document lacks the
-  field is named as older than this tool (#2065). The keys da-guard's
-  `value_not_served` refuses are those `value_not_served_as_written`
-  selects.
+  field is named as older than this tool (#2065). Which of them da-guard's
+  `value_not_served` refuses is da-guard's to say (its check's findings,
+  `load_guard_report`, #3387), not re-derived here.
 
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
@@ -267,6 +267,9 @@ __all__ = [
     "DaGuardError",
     "DaGuardNotFoundError",
     "EffectiveError",
+    "GuardFinding",
+    "GuardReport",
+    "GuardReportError",
     "KeySchedule",
     "KeySource",
     "NotServedKey",
@@ -289,20 +292,19 @@ __all__ = [
     "NotCompiledEntry",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
-    "VALUE_NOT_SERVED_REASONS",
     "ParseFailedError",
     "canonical_key",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
     "load_effective",
     "load_effective_tree",
+    "load_guard_report",
     "load_custom_alert_pack",
     "load_key_refs",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
     "print_load_warnings",
-    "value_not_served_as_written",
     "written_config",
 ]
 
@@ -546,21 +548,6 @@ class KeySource(NamedTuple):
 class NotServedKey(NamedTuple):
     reason: str
     file: str
-
-
-# The not_served reasons whose cause is a written threshold value (#2065) —
-# pkg/config ValueNotServedAsWritten's set (spelling_duplicate: #2031).
-VALUE_NOT_SERVED_REASONS = ("value_unparsed", "value_unparsed_dropped", "window_invalid", "value_rejected",
-                            "spelling_duplicate")
-
-
-def value_not_served_as_written(key: str, reason: str) -> bool:
-    """Whether a not_served verdict on `key` is one da-guard's
-    `value_not_served` refuses (#2065): one of VALUE_NOT_SERVED_REASONS on a
-    threshold key (not `_`-prefixed). The Python copy of pkg/config
-    ValueNotServedAsWritten; tests/ops/test_validate_config_values_not_served.py
-    compares the two through da-guard."""
-    return not key.startswith("_") and reason in VALUE_NOT_SERVED_REASONS
 
 
 class TenantEffective(NamedTuple):
@@ -1653,3 +1640,128 @@ def written_config(effective: TenantEffective, served: TenantValues) -> dict[str
         if written:
             out["_metadata"] = written
     return out
+
+
+# #3387: da-guard's own check (no subcommand, `--format json`) — its findings
+# as it judges them, for a reader that takes the severity from Go rather than
+# from a Python copy of one finding's predicate (validate-config `guard_errors`).
+GUARD_REPORT_SEVERITY_ERROR = "error"
+# da-guard's check exit codes (cmd/da-guard/main.go, the stable contract):
+# 0 clean; 1 an error finding; 2 caller error, or a tree the load rejects;
+# 3 files the exporter's load drops or cannot read (the report still names
+# what it judged in the rest); 4 routing / domain policy in the tree, which
+# da-guard does not judge (the route generator does). Precedence 3 > 1 > 4 > 0.
+_GUARD_EXIT_FINDINGS = 1
+_GUARD_EXIT_UNDETERMINED = 4
+GUARD_REPORT_EXIT_CODES = frozenset({_EXIT_OK, _GUARD_EXIT_FINDINGS, _EXIT_PARSE_FAILED,
+                                     _GUARD_EXIT_UNDETERMINED})
+
+
+class GuardFinding(NamedTuple):
+    severity: str   # "error" | "warn"
+    kind: str       # the finding kind (internal/guard/findingkind)
+    tenant_id: str  # "" for a finding about no one tenant
+    field: str      # "" when the finding names no field; may carry `<file>:`
+    message: str
+
+
+class GuardReport(NamedTuple):
+    findings: list[GuardFinding]       # every finding, in da-guard's order
+    returncode: int                    # one of GUARD_REPORT_EXIT_CODES
+    parse_failed: list[str]            # files the exporter's load drops (exit 3)
+    unreadable: list[UnreadableFile]   # paths the load cannot read (exit 3)
+    undetermined: int                  # items only the route generator judges (exit 4)
+    stderr_lines: list[str]            # every non-empty line of da-guard's stderr, as written
+
+
+class GuardReportError(DaGuardError):
+    """da-guard's check (no subcommand) failed."""
+
+
+def _guard_finding(f: Any) -> GuardFinding:
+    if not isinstance(f, dict):
+        raise TypeError(f"a finding that is not an object: {f!r}")
+    sev, kind, msg = f["severity"], f["kind"], f["message"]
+    tenant, field = f.get("tenant_id", ""), f.get("field", "")
+    if not all(isinstance(v, str) for v in (sev, kind, msg, tenant, field)):
+        raise TypeError(f"a finding whose fields are not strings: {f!r}")
+    return GuardFinding(sev, kind, tenant, field, msg)
+
+
+def load_guard_report(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> GuardReport:
+    """`da-guard --config-dir <conf_d> --format json` — da-guard's check over
+    the whole tree, its `report.findings` as written.
+
+    Exit 0, 1, 3 and 4 are answers: the report is read and returned with the
+    exit code; under 3 the files the load drops are in `parse_failed` /
+    `unreadable` and the findings cover the rest (a run stopped by a file
+    that does not decode has `report: null`: no finding). An answer that
+    contradicts its exit code (1 with no error finding, 0 / 4 with one, 3
+    naming no file) is output that is not da-guard's.
+
+    Raises `DaGuardNotFoundError` (no binary) and `GuardReportError`, the
+    error contract the loaders above share (#2725): exit 2 from a da-guard
+    that does not accept these flags (`-h` with the same argv) is `stale`,
+    exit 2 otherwise the tree's or the caller's (no config file, a path that
+    is not valid UTF-8); an exit code the check never uses, a binary that
+    cannot be run, or output that is not its JSON is `broken`; a timeout or a
+    signal is not classified."""
+    dispatcher = guard_dispatch.DISPATCHER
+    exe = dispatcher.resolve_binary(binary)
+    if exe is None:
+        raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
+    cmd = [exe, "--config-dir", str(conf_d), "--format", "json"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise GuardReportError(f"da-guard did not finish within {timeout}s", None,
+                               _stderr_text(e.stderr)) from e
+    except OSError as e:
+        raise GuardReportError(f"da-guard could not be run ({exe}): {e}", None, "", broken=True) from e
+    rc = proc.returncode
+    stderr = _stderr_text(proc.stderr)
+    if rc == _EXIT_CALLER_ERR:
+        if not _accepts(cmd, timeout):
+            raise GuardReportError(
+                f"da-guard exited {rc}, and this da-guard does not accept --config-dir with "
+                "--format json — it is older than this tool: upgrade or rebuild it", rc, stderr, stale=True)
+        raise GuardReportError(f"da-guard exited {rc}", rc, stderr)
+    if rc < 0:
+        raise GuardReportError(f"da-guard exited {rc}", rc, stderr)
+    if rc not in GUARD_REPORT_EXIT_CODES:
+        raise GuardReportError(f"da-guard exited {rc}, an exit code its check never uses "
+                               "(0, 1, 2, 3 or 4): this binary does not run as da-guard does",
+                               rc, stderr, broken=True)
+    try:
+        doc = json.loads(proc.stdout.decode("utf-8"))
+        report = doc["report"]
+        if report is None:
+            findings: list[GuardFinding] = []
+        elif isinstance(report, dict):
+            findings = [_guard_finding(f) for f in (report["findings"] or [])]
+        else:
+            raise TypeError(f"report is {type(report).__name__}")
+        parse_failed = [str(f) for f in (doc.get("parse_failed") or [])]
+        unreadable = [UnreadableFile(str(e["file"]), str(e["reason"]))
+                      for e in (doc.get("unreadable") or [])]
+        undetermined = len(doc["undetermined"])
+    except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
+        raise GuardReportError(f"da-guard exited {rc} without the expected JSON ({e})",
+                               rc, stderr, broken=True) from e
+    has_error = any(f.severity == GUARD_REPORT_SEVERITY_ERROR for f in findings)
+    dropped = bool(parse_failed or unreadable)
+    contradiction = (
+        "exit 1 with no error finding" if rc == _GUARD_EXIT_FINDINGS and not has_error
+        else f"exit {rc} with an error finding" if rc in (_EXIT_OK, _GUARD_EXIT_UNDETERMINED) and has_error
+        else "exit 3 with no file in parse_failed or unreadable" if rc == _EXIT_PARSE_FAILED and not dropped
+        else f"exit {rc} naming files in parse_failed or unreadable" if rc != _EXIT_PARSE_FAILED and dropped
+        else "exit 4 with nothing undetermined" if rc == _GUARD_EXIT_UNDETERMINED and not undetermined
+        else None)
+    if contradiction:
+        raise GuardReportError(f"da-guard answered {contradiction}: this binary does not run as "
+                               "da-guard does", rc, stderr, broken=True)
+    return GuardReport(findings, rc, parse_failed, unreadable, undetermined, _nonempty_lines(stderr))

@@ -92,7 +92,7 @@ _custom_alerts:
 
 ### 3. 護欄
 
-1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **計 2**（cap 數的是清單要 exporter 送出的 `user_threshold` 列，tenant-api 寫入檢查、da-guard `custom_alert_over_cap` 與 validate-config `custom_alert_cap` 同一個數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 是選用它的租戶共用的 shape，不計入 cap。
+1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **計 2**（cap 數的是清單要 exporter 送出的 `user_threshold` 列，tenant-api 寫入檢查與 da-guard `custom_alert_over_cap`（validate-config 經 `guard_errors` 列報它）同一個數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 是選用它的租戶共用的 shape，不計入 cap。
 2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate 全數繼承；壞宣告由 exporter 逐條拒收，編譯器不為它產生規則、其餘照編（同其他 recipe）。
 3. **通知風暴（infra 全局震盪）**：**量測永不抑制**；抑制通知 fan-out——`vibe_slo_burn="true"` 標籤（命名照 pack 標籤慣例實作期覆核）+ 文件化 infra-outage sentinel inhibit pattern。
 4. **維護窗（三態）交互——刻意取捨**：SLO **alert** 沿用 pack 慣例，維護窗期間 `unless` 抑制（三態對租戶的承諾就是「維護窗零告警干擾」）；SLI **recording rules 不受 unless 影響、持續評估**——預算燒蝕在 TSDB 全程留痕，「量測永不抑制」哲學由 recording 層承擔，alert 層的抑制是通知承諾、不是量測缺口。此取捨明寫進 recipe 文件。

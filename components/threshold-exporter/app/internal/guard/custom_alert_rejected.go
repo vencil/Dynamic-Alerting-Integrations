@@ -8,8 +8,8 @@ package guard
 // one already serves (#2031), custom_alert_rejected for any other rejection —
 // is CustomAlertFindingKind: da-guard's refused / rejected inputs are
 // dispatched by it and `da-guard served-values` prints it per entry
-// (`custom_alerts[].finding`), which validate-config lists without judging
-// anything itself. The duplicate findings are still built from
+// (`custom_alerts[].finding`); validate-config lists the findings without
+// judging anything itself (guard_errors, #3387). The duplicate findings are still built from
 // config.CustomAlertDuplicates (the same walk);
 // TestGuard_EveryUnservedCustomAlertIsAFinding pins the two to one answer.
 //
