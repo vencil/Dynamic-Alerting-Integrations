@@ -660,7 +660,9 @@ DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINA
 
 # da-read／da-crdecode（#3206，ADR-036 §12）：onboard-analyze 讀 Alertmanager 設定，
 # 外層 ConfigMap 交給 da-crdecode（kubectl 的讀法）、設定本身交給 `da-read
-# alertmanager`（Alertmanager 自己的載入函式）；check_admin_config_schema 也以
+# alertmanager`（Alertmanager 自己的載入函式），Phase 3 的 prometheus.yml 與
+# check_scrape_reachability 讀的 Prometheus ConfigMap 內層交給 `da-read prometheus`
+# （Prometheus 自己的 config.Load）；check_admin_config_schema 也以
 # da-crdecode 讀 Helm values。與 da-guard 同一套：環境變數
 # 已設就用它、不建；否則從本 checkout 建到 .build/。da-read 是獨立的 Go module
 # （components/da-read），不在 exporter module 裡。
@@ -668,7 +670,7 @@ DA_READ_BUILD := $(CURDIR)/.build/da-read
 DA_CRDECODE_BUILD := $(CURDIR)/.build/da-crdecode
 
 .PHONY: da-read-build
-da-read-build: ## 從本 repo Go 原始碼建 da-read 到 .build/da-read（onboard-analyze 需要；da-tools 映像已內建）
+da-read-build: ## 從本 repo Go 原始碼建 da-read 到 .build/da-read（onboard-analyze 與 scrape-reachability-check 需要；da-tools 映像已內建）
 	@command -v go >/dev/null 2>&1 || { \
 		echo "ERROR: go is not on PATH, so da-read cannot be built from this checkout." >&2; \
 		echo "       Install Go (version: components/da-read/go.mod), or set" >&2; \
@@ -725,7 +727,7 @@ validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證（各檢查列見 d
 		--version-check
 
 .PHONY: onboard-analyze
-onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for onboarding（Alertmanager 設定經 da-crdecode／da-read 讀：DA_CRDECODE_BINARY／DA_READ_BINARY，未設就建到 .build/）
+onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for onboarding（Alertmanager 設定與 prometheus.yml 經 da-crdecode／da-read 讀：DA_CRDECODE_BINARY／DA_READ_BINARY，未設就建到 .build/）
 	@$(DA_READ_ENV) python3 scripts/tools/ops/onboard_platform.py $(ARGS)
 
 # 這個 target 是 pre-tag 唯一的版號閘門——`make pre-tag` 不跑 pytest，所以

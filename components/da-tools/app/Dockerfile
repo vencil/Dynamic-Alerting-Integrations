@@ -78,8 +78,11 @@ RUN chmod +x /usr/local/bin/da-parser
 # its consumers do. da-crdecode reads a Kubernetes manifest (the ConfigMap
 # holding alertmanager.yml) as kubectl does; da-read reads the config itself
 # with Alertmanager's loader, built from components/da-read at the amtool
-# version below. Both are found on PATH (or $DA_CRDECODE_BINARY /
-# $DA_READ_BINARY).
+# version below. `da-read prometheus` / `da-read prometheus-rules` read a
+# prometheus.yml and rule files with Prometheus' own loaders, at the version
+# of the deployed Prometheus (k8s/03-monitoring/deployment-prometheus.yaml),
+# every service discovery registered — which is most of this binary's size.
+# Both are found on PATH (or $DA_CRDECODE_BINARY / $DA_READ_BINARY).
 COPY da-crdecode.${TARGETARCH} /usr/local/bin/da-crdecode
 RUN chmod +x /usr/local/bin/da-crdecode
 

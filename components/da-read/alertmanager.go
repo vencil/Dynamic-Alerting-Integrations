@@ -48,9 +48,13 @@ import (
 // text writes that cannot be found that way is refused, never dropped.
 //
 // A struct written as null (`global:`) writes no field and is printed as {}.
+//
+// A key the loader moves to another key and clears (`bearer_token` →
+// `authorization`, moves.go) is printed where the loader put it, not as the
+// cleared key; the YAML walk (yamlwalk.go) does the same.
 
 // errNotInReading wraps a written key or list the reading has no place for.
-var errNotInReading = errors.New("the text writes it, but Alertmanager's reading has no such entry")
+var errNotInReading = errors.New("the text writes it, but the loader's reading has no such entry")
 
 // readAlertmanager returns da-read's stdout for the Alertmanager config *data*.
 func readAlertmanager(data []byte) ([]byte, error) {
@@ -446,14 +450,22 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			return err
 		}
 		w.out.WriteByte('{')
-		for i, key := range wm.order {
+		for i, pk := range planKeys(sv, wm) {
+			key := pk.key
 			p := extend(path, key)
+			if i > 0 {
+				w.out.WriteByte(',')
+			}
+			if pk.moved {
+				// The loader moved the value here (moves.go).
+				if err := w.printMoved(key, pk.fields); err != nil {
+					return err
+				}
+				continue
+			}
 			val, child, err := valueOf(key, v, sv, p)
 			if err != nil {
 				return err
-			}
-			if i > 0 {
-				w.out.WriteByte(',')
 			}
 			kb, err := json.Marshal(key)
 			if err != nil {

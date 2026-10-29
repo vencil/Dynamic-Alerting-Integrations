@@ -145,6 +145,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml as Prometheus reads it)
 # The repo's one content-based rule-tree scanner. Same directory, zero
 # import cost — see collect_rule_trees for why this file no longer globs.
 from _rule_tree import _rule_containers  # noqa: E402
@@ -391,8 +392,15 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
     annotation/namespace target-selection keeps (relabel_configs), and the
     __name__-level keep/drop rules plus other label keep/drops
     (metric_relabel_configs).
+
+    ADR-036 §12 (#3206): the text is read the way Prometheus reads it —
+    ``da-read prometheus`` (Prometheus' own ``config.Load``) — which returns
+    only the keys the text writes, each value Prometheus' reading (a relabel
+    ``action`` lower-cased, a regex as Prometheus prints it). A key it leaves
+    out is Prometheus' default, which the ``.get`` defaults below spell. A
+    config Prometheus refuses raises ``_lib_consumer_read.ConsumerReadError``.
     """
-    prom = yaml.safe_load(prom_yaml_text)
+    prom = _lib_consumer_read.prometheus_config(prom_yaml_text)
     jobs: list[dict] = []
     for sc in prom.get("scrape_configs", []) or []:
         job = {
@@ -430,9 +438,24 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
     return jobs
 
 
+#: The ConfigMap key Prometheus' config is mounted from.
+PROM_CONFIGMAP_KEY = "prometheus.yml"
+
+
 def load_repo_jobs() -> list[dict]:
-    cm = yaml.safe_load(PROM_CONFIGMAP.read_text(encoding="utf-8"))
-    return parse_scrape_jobs(cm["data"]["prometheus.yml"])
+    """The scrape jobs of the repo's Prometheus ConfigMap: the outer layer
+    read the way kubectl reads it (``da-crdecode``), the ``prometheus.yml``
+    string inside it the way Prometheus does (``parse_scrape_jobs``)."""
+    holders = [doc["data"][PROM_CONFIGMAP_KEY]
+               for doc in _lib_consumer_read.kubernetes_documents(str(PROM_CONFIGMAP))
+               if isinstance(doc, dict) and doc.get("kind") == "ConfigMap"
+               and isinstance(doc.get("data"), dict) and PROM_CONFIGMAP_KEY in doc["data"]]
+    rel = PROM_CONFIGMAP.relative_to(PROJECT_ROOT).as_posix()
+    if len(holders) != 1 or not isinstance(holders[0], str):
+        raise _lib_consumer_read.ConsumerReadError(
+            f"{rel}: expected exactly one ConfigMap with a string `data.{PROM_CONFIGMAP_KEY}` "
+            f"in kubectl's reading of the file, found {len(holders)}")
+    return parse_scrape_jobs(holders[0])
 
 
 def name_passes(metric: str, name_rules: list[tuple[str, str]]) -> bool:
@@ -735,6 +758,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_check()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # No da-read / da-crdecode, or Prometheus (or kubectl) refuses the
+        # config: no verdict, and no falling back to reading it ourselves.
+        print(f"ERROR: cannot read the Prometheus config: {exc}", file=sys.stderr)
+        for line in exc.stderr_lines:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: scrape-reachability check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

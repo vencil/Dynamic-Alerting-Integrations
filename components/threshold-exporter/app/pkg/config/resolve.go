@@ -66,6 +66,12 @@ type ResolveStats struct {
 	// valid slo declaration; objective:"disable" contributes none (data-plane
 	// opt-out, matching its absent user_threshold rows).
 	SloObjectives []ResolvedSloObjective
+	// #3380: per-tenant count of the user_threshold rows the phases produced
+	// (base, critical, dimensional, declared, custom-alert, #1231 legacy
+	// twins), BEFORE the max_metrics_per_tenant cut — the count the cut is
+	// judged against. Every visited tenant has an entry. da-guard's
+	// cardinality check reads it (PeakTenantRowCounts).
+	PerTenantRowCount map[string]int
 }
 
 // ResolveAt applies three-state logic at now. There is no wall-clock variant
@@ -145,7 +151,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 
 	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
 	limit := EffectiveMaxMetricsPerTenant(c.MaxMetricsPerTenant)
-	tenantCount := make(map[string]int)
+	tenantCount := make(map[string]int, len(c.Tenants))
 	// #652: per-tenant over-limit magnitudes for the
 	// da_tenant_metrics_over_limit gauge. Populated for every visited
 	// tenant — compliant tenants get 0 so a tenant that just dropped back
@@ -310,6 +316,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		PerTenantCustomAlertErrors: perTenantCustomAlertErrors,
 		PerTenantDeprecatedKeys:    perTenantDeprecatedKeys,
 		SloObjectives:              sloObjectives,
+		PerTenantRowCount:          tenantCount,
 	}
 }
 

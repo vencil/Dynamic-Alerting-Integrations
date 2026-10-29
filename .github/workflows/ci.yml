@@ -520,7 +520,10 @@ jobs:
       # ADR-036 §12: `admin-config-schema-check`'s wrapper
       # (scripts/ops/with_admin_config_tools.sh) builds .build/tenant-api and
       # .build/da-crdecode the same way, so the tenant-api module is cached too.
-      - name: Set up Go (da-guard / tenant-api / da-crdecode for the lint hooks)
+      # #3206: a hook that reads a prometheus.yml builds .build/da-read
+      # (scripts/ops/with_da_read.sh) from its own module, so its go.sum
+      # keys the cache as well.
+      - name: Set up Go (da-guard / tenant-api / da-crdecode / da-read for the lint hooks)
         uses: actions/setup-go@v6
         with:
           go-version-file: components/threshold-exporter/app/go.mod
@@ -528,6 +531,7 @@ jobs:
           cache-dependency-path: |
             components/threshold-exporter/app/go.sum
             components/tenant-api/go.sum
+            components/da-read/go.sum
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
@@ -2495,9 +2499,11 @@ jobs:
     name: Go Tests — da-read
     runs-on: ubuntu-24.04
     # #3206 (ADR-036 §12): `da-read alertmanager` reads an Alertmanager config
-    # with Alertmanager's own loader for onboard_platform, and ships in the
-    # da-tools image. It is its own module (components/da-read) so the
-    # alertmanager dependency stays out of the exporter module, so neither
+    # with Alertmanager's own loader for onboard_platform, `da-read
+    # prometheus` / `prometheus-rules` a prometheus.yml and rule files with
+    # Prometheus' own, and it ships in the da-tools image. It is its own
+    # module (components/da-read) so those dependencies stay out of the
+    # exporter module, so neither
     # Go leg above runs it. Path-gated like the other split Go jobs; the `go`
     # filter carries components/da-read/**. Its tests write their inputs to
     # temp dirs and read no repo file.

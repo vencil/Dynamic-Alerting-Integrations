@@ -2,9 +2,10 @@ package main
 
 // effective_view_gate_test.go — #2115 round 2 (E1): /effective's effective
 // config is now laid per threshold (pkg/config effectiveView: one spelling
-// per threshold). da-guard's main gate — schema / required fields,
-// cardinality — keeps judging the leaf-by-leaf merge (EffectiveConfig.
-// MergedConfig): #2115 changes no finding of the main report.
+// per threshold). da-guard's main gate — schema / required fields — keeps
+// judging the leaf-by-leaf merge (EffectiveConfig.MergedConfig): #2115
+// changes no finding of the main report. (Cardinality reads neither since
+// #3380: it counts the rows the exporter produces.)
 //
 // Measured on 26229806 (the gate fed the view): the tree below with
 // `--required-fields mysql_threads_running` gave missing_required, rc 1 —
@@ -21,8 +22,8 @@ import (
 )
 
 // effectiveViewGateTree: root canonical, subtree retired spelling, the
-// tenant writing only the retired spelling's `_critical` key. Keys the
-// cardinality counter sees: the merge has 3, the per-threshold view 2.
+// tenant writing only the retired spelling's `_critical` key. The merge has
+// 3 keys, the per-threshold view 2; /metrics serves tx 4 series.
 var effectiveViewGateTree = map[string]string{
 	"conf.d/_defaults.yaml":     "defaults:\n  mysql_threads_running: 30\n",
 	"conf.d/sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n",
@@ -52,18 +53,23 @@ func TestMainGate_RequiredFieldsJudgeTheMergeNotTheView(t *testing.T) {
 	}
 }
 
-func TestMainGate_CardinalityCountsTheMergeNotTheView(t *testing.T) {
+// Since #3380 the cardinality check counts neither the merge's keys nor the
+// view's: it counts the user_threshold rows the exporter produces — here the
+// threshold and its `_critical`, each with its #1231 legacy twin.
+func TestMainGate_CardinalityCountsWhatMetricsServes(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, effectiveViewGateTree)
 	dir := filepath.Join(tmp, "conf.d")
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", true); served != 4 {
+		t.Fatalf("control: /metrics serves %d series of tx, want 4", served)
+	}
 
-	// Limit 2: the merge's 3 keys exceed it; the view's 2 would not.
-	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "2", "--format", "md")
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "3", "--format", "md")
 	if code != exitFindings {
 		t.Errorf("exit = %d, want %d. stdout=%q stderr=%q", code, exitFindings, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "predicted metric count 3 exceeds") {
-		t.Errorf("want the merge's count (3) over the limit: %q", stdout)
+	if !strings.Contains(stdout, "would produce 4 user_threshold rows") {
+		t.Errorf("want /metrics' count (4) over the limit: %q", stdout)
 	}
 }
